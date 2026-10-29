@@ -1,0 +1,33 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "post_merge": {
+   "enabled": false
+  },
+  "review": {
+   "max_rounds": 5
+  }
+ },
+ "global_yaml_left": false,
+ "project": {
+  "review": {
+   "max_rounds": 3
+  }
+ },
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "post_merge.enabled",
+   "new_value": false,
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "project",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

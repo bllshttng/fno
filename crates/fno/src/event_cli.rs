@@ -1,10 +1,10 @@
-//! Native storage-level verbs under `fno doctor event`.
+//! Native storage-level commands under `fno doctor event`.
 //!
 //! The Python `fno doctor event emit` keeps its rich surface (validation,
 //! attestation stamping, mirrors, parent push) and delegates storage to
 //! `emit-envelope` here. `find`/`audit`/`gc` routing follows in the reader
 //! cutover wave, intercepted by the same predicate; until then the Python
-//! implementations stay authoritative for those names. No top-level verb
+//! implementations stay authoritative for those names. No top-level command
 //! exists (law d-fe66560a); the group stays nested under `doctor`.
 
 use std::ffi::OsString;
@@ -17,7 +17,7 @@ mod recovery;
 #[path = "event_store_recovery.rs"]
 mod copy_recovery;
 
-/// The verbs the native surface serves. `find` joins natively only when the
+/// The commands the native surface serves. `find` joins natively only when the
 /// caller names stores explicitly (`--events`); a bare `find` keeps
 /// forwarding to Python, whose front door resolves the journals and calls
 /// back in with one `--events` per store. `audit`/`gc` join when their
@@ -30,6 +30,7 @@ pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
     "prune",
     "recover",
     "signals",
+    "fanout",
 ];
 
 /// Classify `fno doctor event <sub> ...` for the front door: `Some(rest)`
@@ -71,11 +72,32 @@ pub fn run(args: &[OsString]) -> i32 {
         }
         "recover" => recovery::run(rest),
         "signals" => crate::event_signals::run(rest),
+        "fanout" => run_fanout(rest),
         _ => {
             eprintln!(
                 "error: expected a subcommand (emit-envelope | export | import | rows | prune | find | signals)"
             );
             2
+        }
+    }
+}
+
+/// `fno doctor event fanout tick [--dry-run|-N]`: the status-sink fanout
+/// tick. The whole fanout body lives in the fno-agents binary (the mutex, the
+/// config reader and the plan-doc writer are that crate's); this door execs
+/// it with the carried tail and propagates the exit code. Not a porcelain
+/// crossing: the runtime binary, not the Python CLI.
+fn run_fanout(rest: &[OsString]) -> i32 {
+    let bin = crate::digest_overlay::fno_agents_bin();
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg("status");
+    cmd.arg("--fanout");
+    cmd.args(rest);
+    match cmd.status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("fno doctor event fanout: the fno-agents binary is missing: {e}");
+            1
         }
     }
 }

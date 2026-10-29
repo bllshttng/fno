@@ -47,7 +47,7 @@ GLOBAL_EVENTS="$TMP/global-events.jsonl"
 : > "$GLOBAL_EVENTS"
 rm -f "$TMP/global-events.db"
 # The store commit is the write boundary: a receipt lands in events.db beside
-# the journal, so every read here goes through the rows verb and a reset
+# the journal, so every read here goes through the rows command and a reset
 # removes the sibling store too.
 ROWS_BIN="${FNO_BIN:-}"
 if [[ -z "$ROWS_BIN" ]]; then
@@ -164,7 +164,7 @@ if [[ $rc -eq 0 && "${PREFLIGHT_TEST_SIGNAL_LOCK:-0}" == "1" \
 fi
 exit "$rc"
 EOF
-# preflight calls `uv run --project cli fno-py doctor test smoke [flags]`; stub uv to
+# preflight calls `fno-agents test-run doctor smoke [flags]`; stub the binary to
 # behave like the retired smoke.sh stub (red iff POISON is checked out).
 # The changed packet is a distinct invocation (--changed) and must be stubbable
 # independently of the full run: several cases below turn one red while the
@@ -182,7 +182,34 @@ esac
 if [[ -f POISON ]]; then echo "smoke: POISON step failed"; exit 1; fi
 echo "smoke: all green (stub)"; exit 0
 EOF
-chmod +x "$BIN/fno" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
+cat > "$BIN/fno-agents" <<'EOF'
+#!/usr/bin/env bash
+# preflight invokes the native runner directly since the test-command family
+# ported (`test-run doctor smoke --changed`): route the smoke tail through the
+# uv stub so the scenario sentinel files keep working. Every OTHER call passes
+# through to the real binary: the wait-queue scenarios assert on the real
+# `claim queue` tickets, and a stubbed silence passes the capability probe
+# while no ticket can ever land. $BIN is this test's own first PATH entry, so
+# stripping it finds the job's build - which smoke-setup deliberately keeps
+# OFF PATH, so usually there is none: then `claim queue` answers exit 2 (the
+# documented old-binary code), the capability probe reads QUEUE_OK=0 and the
+# queue scenarios SKIP the way they do with no binary at all, and every other
+# command keeps preflight's uncontended degrade.
+case " $* " in
+  *" smoke "*)
+    shift 3
+    exec "$(dirname "$0")/uv" "$@" ;;
+esac
+real="$(PATH="${PATH#*:}" command -v fno-agents 2>/dev/null || true)"
+if [[ -n "$real" ]]; then
+    exec "$real" "$@"
+fi
+case " $* " in
+  *" claim queue "*) exit 2 ;;
+esac
+exit 0
+EOF
+chmod +x "$BIN/fno" "$BIN/fno-agents" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
 export PATH="$BIN:$PATH"
 
 # --- build the fixture repo -------------------------------------------------
@@ -206,7 +233,7 @@ EOF
 cat > "$FIX/scripts/ci/check-tracker-consumers.sh" <<'EOF'
 #!/usr/bin/env bash
 [[ -f POISON ]] && { echo "check-tracker-consumers: POISON step failed"; exit 1; }
-echo "check-tracker-consumers: OK - verbs classified, reads attributed, self-test green (stub)"
+echo "check-tracker-consumers: OK - commands classified, reads attributed, self-test green (stub)"
 EOF
 # File-budget gate stub: the leg runs the CANONICAL tree's copy, and this
 # fixture repo IS its own canonical root - without a stub the leg exits 127
@@ -261,8 +288,8 @@ QUEUE_BIN="$(command -v fno-agents 2>/dev/null || true)"
 QUEUE_OK=0
 if [[ -n "$QUEUE_BIN" ]]; then
     "$QUEUE_BIN" claim queue front --dir "$TMP/qcap-probe.d" >/dev/null 2>&1
-    # 0/1 = the verb exists (1 is "not at the front"); 2 = an old binary
-    # without the queue verbs. A capable probe read never creates the dir.
+    # 0/1 = the command exists (1 is "not at the front"); 2 = an old binary
+    # without the queue commands. A capable probe read never creates the dir.
     [[ $? -le 1 ]] && QUEUE_OK=1
 fi
 need_queue() {

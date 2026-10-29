@@ -5,11 +5,84 @@
 
 use super::*;
 
-/// The persisted manual-order and pin lists the Manual column and the
-/// pin-first rank read. Borrowed per sort pass.
+/// The persisted manual-order list the Manual column reads. Borrowed per
+/// sort pass.
 pub(super) struct AgentOrder<'a> {
     pub manual: &'a [String],
-    pub pinned: &'a [String],
+}
+
+/// Pin or unpin the agent row under the selector cursor; a non-agent row
+/// notices why.
+pub(super) fn toggle_pin(view: &mut View, cur: usize) {
+    let agent = match view.display_rows().get(cur) {
+        Some(DisplayRow::Agent(a)) => (*a).clone(),
+        _ => {
+            view.set_notice("pin works on an agent row".into());
+            return;
+        }
+    };
+    pin_agent(view, &agent);
+}
+
+/// The one-time notice for pins saved before a pin became the session's keep
+/// mark: those rows no longer sort first until pinned again.
+pub(super) fn legacy_pin_notice(n: usize) -> (String, Instant) {
+    let text = format!(
+        "{n} old sideline pin(s) were cleared: pins now keep the session; pin again with ctrl+t"
+    );
+    (text, Instant::now())
+}
+
+/// The `fno-agents reap` argv that flips a row's pin. The pin IS the keep
+/// mark every reaper reads, keyed by session id, so a row with no session
+/// yet has nothing to pin.
+pub(super) fn pin_argv(a: &AgentRow) -> Result<Vec<String>, String> {
+    let sid = a
+        .harness_session_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("{} has no session id to pin yet", a.name))?;
+    let flag = if a.pinned { "--unkeep" } else { "--keep" };
+    Ok(vec!["reap".into(), flag.into(), sid])
+}
+
+/// Flip a row's pin off the UI loop. The sideline shows the new state when
+/// the next layout reads the marker; the notice carries the command's own
+/// answer, so a refusal is never painted as a pin.
+pub(super) fn pin_agent(view: &mut View, a: &AgentRow) {
+    let argv = match pin_argv(a) {
+        Ok(argv) => argv,
+        Err(why) => {
+            view.set_notice(why);
+            return;
+        }
+    };
+    let word = if a.pinned { "unpinning" } else { "pinning" };
+    view.set_notice(format!("{word} {}", a.name));
+    if cfg!(test) {
+        return;
+    }
+    let notice_tx = view.reply_notice_tx.clone();
+    tokio::spawn(async move {
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+                .args(&argv)
+                .stdin(std::process::Stdio::null())
+                .output(),
+        )
+        .await;
+        let first = |b: &[u8]| String::from_utf8_lossy(b).lines().next().map(str::to_owned);
+        let text = match outcome {
+            Ok(Ok(o)) if o.status.success() => first(&o.stdout).unwrap_or_default(),
+            Ok(Ok(o)) => format!("pin refused: {}", first(&o.stderr).unwrap_or_default()),
+            Ok(Err(e)) => format!("pin did not start: {e}"),
+            Err(_) => "pin is still running; the row shows it when it lands".into(),
+        };
+        if let Some(tx) = notice_tx {
+            let _ = tx.send(text);
+        }
+    });
 }
 
 #[allow(clippy::type_complexity)]
@@ -110,9 +183,8 @@ fn compare_agent_rows(
     now_secs: u64,
     order: &AgentOrder<'_>,
 ) -> Ordering {
-    // Pin rank leads every column: a pinned row keeps its seat first. The
-    // name lists are tiny (tens of entries), so the linear scans stay cheap.
-    let pin = order_rank(&a.name, order.pinned).cmp(&order_rank(&b.name, order.pinned));
+    // A pinned row leads every column.
+    let pin = b.pinned.cmp(&a.pinned);
     let order = match sort.column {
         AgentSortColumn::Status => {
             let a_key = attention_key(a, need_a);

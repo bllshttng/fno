@@ -1,4 +1,4 @@
-//! The `team` front verb: broadcast one message to a scope of the fleet.
+//! The `team` front command: broadcast one message to a scope of the fleet.
 //!
 //! Port of the Python `cmd_team` leaf: vet the body (forged envelope, brevity
 //! cap, style), stamp the sender from the owned identity, then re-exec this
@@ -18,6 +18,9 @@ use crate::spawn_context::{resolve_self_identity, OwnedDisposition, OwnedIdentit
 use serde_json::json;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
+
+/// `announce send` flags that take a value.
+const WRITER_VALUE_FLAGS: [&str; 2] = ["--subject", "--expires"];
 
 const USAGE: &str = "usage: fno agents mail team --scope <all|leads|<role>|project:<p>> <message>";
 
@@ -86,6 +89,29 @@ pub fn run_team(args: &[String]) -> i32 {
         }
         if arg == "--json" || arg == "-J" {
             json_out = true;
+            i += 1;
+            continue;
+        }
+        // The announce writer parses only the space form, so each valued
+        // writer flag relays as one flag-value pair, whichever form came in.
+        if let Some(flag) = WRITER_VALUE_FLAGS.iter().find(|f| *f == arg) {
+            match args.get(i + 1) {
+                Some(v) => {
+                    passthrough.extend([flag.to_string(), v.clone()]);
+                    i += 2;
+                }
+                None => {
+                    eprintln!("Error: Option '{flag}' requires an argument.");
+                    return 2;
+                }
+            }
+            continue;
+        }
+        if let Some((flag, v)) = arg
+            .split_once('=')
+            .filter(|(f, _)| WRITER_VALUE_FLAGS.contains(f))
+        {
+            passthrough.extend([flag.to_string(), v.to_string()]);
             i += 1;
             continue;
         }
@@ -216,7 +242,7 @@ fn print_help() {
     println!("  --scope <all|leads|<role>|project:<p>>  fleet scope for the broadcast");
     println!("  --from-name <name>                      envelope identity (see send)");
     println!("  -J, --json                              send receipt as JSON");
-    println!("  writer flags relay to announce send: --subject=S --expires=45m|24h|7d --urgent");
+    println!("  writer flags relay to announce send: --subject S --expires 45m|24h|7d --urgent");
 }
 
 /// `_team_sender_kind_and_from`: the kind is `agent` only for an owned self
@@ -246,14 +272,9 @@ fn stamp_from_identity(from_name: Option<&str>, ident: &OwnedIdentity) -> (&'sta
     ) && ident.session_id.as_deref().is_some_and(|s| !s.is_empty())
         && ident.harness.as_deref().is_some_and(|h| !h.is_empty());
     let kind = if owned { "agent" } else { "operator" };
-    let sender = match from_name {
-        Some(name) => name.to_string(),
-        None if owned => {
-            let sid = ident.session_id.clone().unwrap_or_default();
-            crate::identity::canonical_handle(&sid)
-        }
-        None => "fno".to_string(),
-    };
+    let sender = crate::system_sender::stamp_or_unknown(from_name, || {
+        owned.then(|| crate::identity::canonical_handle(ident.session_id.as_deref().unwrap_or("")))
+    });
     (kind, sender)
 }
 
@@ -276,7 +297,7 @@ mod tests {
     }
 
     /// The oracle matrix: kind follows the owned proof; the sender is the
-    /// explicit name, else the canonical handle, else `fno`.
+    /// explicit name, else the canonical handle, else `unknown`.
     #[test]
     fn sender_stamp_matches_oracle_matrix() {
         let owned = ident(
@@ -302,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             stamp_from_identity(None, &unowned),
-            ("operator", "fno".to_string())
+            ("operator", "unknown".to_string())
         );
     }
 }

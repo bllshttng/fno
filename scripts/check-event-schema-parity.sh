@@ -366,6 +366,10 @@ dual_owner_kinds = {
     # worktree_removed: the archive path emits it (Python) and the merge
     # reaper emits it (Rust) at the same removal boundary.
     "worktree_removed",
+    # termination: the Python emit schema still declares the terminal row,
+    # and the standalone research round writes its DoneAdvisory row (Rust)
+    # under the same entry.
+    "termination",
     "control_plane_tick",
     "state_reap",
     # role_manifest_arm_failed: the manifest rebind at a promoted row's
@@ -407,16 +411,18 @@ dual_owner_kinds = {
     "team_succession_release_unproven",
     "team_succession_retro_filed",
     "team_succession_retro_unmeasured",
+    "team_succession_taken_over",
+    "team_succession_take_over_mail_failed",
     # merge_cleanup_skipped: the merge mint (Python) is the only emitter; the
     # Rust known-kind table carries it so the daemon accepts the row, the way
     # the evals pair above does.
     "merge_cleanup_skipped",
-    # lead_checkin: the Rust emit_row is the one writer (the verb's beat plus
+    # lead_checkin: the Rust emit_row is the one writer (the command's beat plus
     # the lead stop hook's missed-beat row); the Python hand leg
     # (`fno doctor event emit`) still writes rows until its port, and
     # schema.yaml validates both spellings.
     "lead_checkin",
-    # lead_term: the Rust lead-shape/loop-check verbs are the one writer
+    # lead_term: the Rust lead-shape/loop-check commands are the one writer
     # (declare/extend and the Stop-hook gate's reached/unreadable reading);
     # the Python hand leg (`fno doctor event emit`) can still write a row,
     # the same generic-emit shape as lead_checkin above.
@@ -470,7 +476,7 @@ dual_owner_kinds = {
     "reconcile_done",
     "startup_reconcile_done",
     # agent_mail_drained: the prompt-submit drain boundary moved from the
-    # Python mail-notify verb to the Rust mail-notify-self verb; both
+    # Python mail-notify command to the Rust mail-notify-self command; both
     # emitters run until the Python leg retires.
     "agent_mail_drained",
     # review_invocation + review_attestation: the review send/verdict family.
@@ -484,6 +490,31 @@ dual_owner_kinds = {
     # gate on the non-raw sends; both emitters run until the Python leg
     # retires.
     "style_refusal",
+    # The routed-stem writer cutover: the attention answer and delivery
+    # ladders, the day-boundary question index, and the journal retire
+    # receipt moved to the Rust store emitters (attention_arm,
+    # attention_reply, day, state_layout_sqlite); schema.yaml keeps the rows
+    # for the validator and `doctor event find`, the way pr_watch_unparked
+    # above does.
+    "attention_answer",
+    "attention_delivery",
+    "day_boundary",
+    "legacy_journal_retired",
+    # The observer family port: the skill-eval sweep now emits these from
+    # Rust (observer/mod.rs). schema.yaml keeps the rows for the validator.
+    "skill_eval_finding",
+    "skill_eval_run_complete",
+    # session_registered: the Rust register command is the one writer; the
+    # Python side carries it in schema.yaml for the validator and
+    # `doctor event find`, the way pr_watch_unparked above does.
+    "session_registered",
+    # lead_woken / lead_wake_refused / lead_spawned_successor: the daemon's
+    # lead_wake arm is the one writer; the Python side carries them in
+    # schema.yaml for the validator and `doctor event find`, the way
+    # session_registered above does.
+    "lead_spawned_successor",
+    "lead_wake_refused",
+    "lead_woken",
 }
 collisions -= dual_owner_kinds
 if collisions:

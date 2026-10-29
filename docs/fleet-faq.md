@@ -2,13 +2,13 @@
 
 Questions a lead or an orchestrating agent hits while running workers, and the answer that survived contact. Every entry here cost a real session something. For run-level failures (a run that will not converge, a run that will not stop) see [troubleshooting.md](troubleshooting.md). For the coordination model see [architecture/coordination.md](architecture/coordination.md). For why a reaping sweep kept a session row, see [reaping-faq.md](reaping-faq.md).
 
-This is a FAQ, not a command reference. The full verb surface is `fno agents --help` and [../skills/lead/references/cli-commands.md](../skills/lead/references/cli-commands.md).
+This is a FAQ, not a command reference. The full command surface is `fno agents --help` and [../skills/lead/references/cli-commands.md](../skills/lead/references/cli-commands.md).
 
 ## Is this page for you?
 
 You run workers and hit a receipt, a lane, or a liveness answer that says one thing and means another. This list owns the questions real sessions paid for, each with a specimen and a retirement contract. Misreading it costs the same session twice: yours, then the next reader's.
 
-Not for: verb syntax and run-level failure triage. Those are `fno agents --help` and [troubleshooting.md](troubleshooting.md).
+Not for: command syntax and run-level failure triage. Those are `fno agents --help` and [troubleshooting.md](troubleshooting.md).
 
 ## What this list is for
 
@@ -68,11 +68,11 @@ Resolving the directory is only half of it. One worktree directory held four ses
 
 Use the FULL id. Three codex rows read as `01a0741a`, `01a07f26` and `01a07f26` at eight characters. Two of them looked like one session held by two names, which reads as a roster defect. At full length they are three distinct sessions. Codex mints ids sharing a long `01a0` prefix, so a short key collides where a claude key does not.
 
-*Graduates to:* one liveness verb with a decisive answer, so four readers stop disagreeing, and a transcript path resolver every caller shares.
+*Graduates to:* one liveness command with a decisive answer, so four readers stop disagreeing, and a transcript path resolver every caller shares.
 
 ## How do I get a worker back?
 
-Three verbs, and they are not interchangeable.
+Three commands, and they are not interchangeable.
 
 - **`fno agents session attach <name>`** joins a session that is *running* and gives you interactive control of it. It needs a live process. Use it to talk to a worker or to take it over.
 - **`fno agents session resume <name>`** re-enters a session that is idle, in its recorded cwd, through the provider's own resume path. It accepts a short id or the name. Add `--print-command` to see the resolved command without firing it. That form is route inspection only. `run_resume` prints the argv and returns before it validates the cwd. It never contacts the provider. A printed command is not evidence that anything is alive.
@@ -152,7 +152,7 @@ A tool reports what it did not see. A reader treats that as what is not there. T
 
 The shapes, each measured:
 
-**A missing verb reads as an empty list.** `fno inbox outstanding list` does not exist. The command printed a usage error, a grep filtered it to nothing, and the shell exited 0. When 283 questions were open, the read looked like none.
+**A missing command reads as an empty list.** `fno inbox outstanding list` does not exist. The command printed a usage error, a grep filtered it to nothing, and the shell exited 0. When 283 questions were open, the read looked like none.
 
 **A path in an error is a path from somewhere.** CI reported `ERROR collecting tests/unit/test_lead_scope.py`. That path exists nowhere in the tree. The file is at `cli/tests/unit/test_lead_scope.py`, because CI reports relative to the root it runs pytest from. A session nearly filed the check as stale.
 
@@ -164,7 +164,7 @@ The shapes, each measured:
 
 **A guard that lists a wrong value as legal lets it pass.** A lead wrote this arm for one session. It is not shipped machinery, so do not go looking for the file. That arm read the commit status API and printed `main:pending` every tick. Its guard allowed `success|pending|failure|error` and made anything else UNREADABLE, so a permanently wrong value passed as a legal one. This repo publishes check-runs, not commit statuses, and the status API returns `state` pending with zero statuses forever. Measured directly it read `{"state":"pending","total":0}` while the check-runs API read 21 success and 6 skipped, none failing and none running. Zero statuses is the tell: a ref with no statuses is not pending, it is unmeasured by that API. Every caller of that endpoint found in the tree reads `.statuses[]` rather than the top-level `state`, which is the correct read. The hand-rolled arm was the only thing that got it wrong.
 
-**A killed subprocess surfaces as a traceback.** `ClaimVerdictError: fno-agents claim sweep failed with exit -9: no diagnostic`. Exit -9 is SIGKILL, and a killed process writes no stderr, which is why the message ends in `no diagnostic`. Run the sweep alone before accepting the traceback. It returned exit 0 and 5,610 bytes. The next run of the verb then gave the ordinary refusal the crash had hidden.
+**A killed subprocess surfaces as a traceback.** `ClaimVerdictError: fno-agents claim sweep failed with exit -9: no diagnostic`. Exit -9 is SIGKILL, and a killed process writes no stderr, which is why the message ends in `no diagnostic`. Run the sweep alone before accepting the traceback. It returned exit 0 and 5,610 bytes. The next run of the command then gave the ordinary refusal the crash had hidden.
 
 **A peer's zero is still a zero.** A control can also validate the wrong thing. A lead proposed widening a lint's scope to the code tree, calling it free that day. The stated grounds were zero hits repo-wide, with controls passing. Measured before acting, the code tree held thousands of hits across more than a thousand files. Most are synthetic test fixtures, and real ids sit among them. The change turns those files red.
 
@@ -219,9 +219,9 @@ Holding is cheap and reversible. A worker killed to satisfy the wrong side of an
 
 **Answer.** You can edit the blocker list. `fno backlog update <id>` teaches `blocked_by=` to replace, `blocked_by+=` to append, and `blocked_by-=` to drop one. Use those first.
 
-What has no pair is the STATE. Every other side state is paired. The pairs: defer/undefer, supersede/unsupersede, queue/unqueue, claim/unclaim, done/reopen, archive/unarchive. Blocked has no entry verb and no exit verb. Emptying the blocker list does not by itself return a node to ready. `requeue` is the near miss and it only covers a node wedged `in_progress` by a dead worker.
+What has no pair is the STATE. Every other side state is paired. The pairs: defer/undefer, supersede/unsupersede, queue/unqueue, claim/unclaim, done/reopen, archive/unarchive. Blocked has no entry command and no exit command. Emptying the blocker list does not by itself return a node to ready. `requeue` is the near miss and it only covers a node wedged `in_progress` by a dead worker.
 
-**Specimen.** Across all 72 backlog verbs, zero mention block, against a control of three that mention defer. `fno backlog update` has no `status=`. It answers `No such option: --status (Possible options: --tag)`. One node has read `blocked` with `blocked_by=[]` all night and counts as undelivered forever.
+**Specimen.** Across all 72 backlog commands, zero mention block, against a control of three that mention defer. `fno backlog update` has no `status=`. It answers `No such option: --status (Possible options: --tag)`. One node has read `blocked` with `blocked_by=[]` all night and counts as undelivered forever.
 
 *Graduates to:* Give blocked its pair, or widen `requeue` to a node whose worker died before it reached `in_progress`.
 
@@ -231,13 +231,13 @@ What has no pair is the STATE. Every other side state is paired. The pairs: defe
 
 **Specimen.** `target: REFUSED: harness session id held by live row '<the row the spawn just wrote>'`. Three occurrences, on 09-04, 09-06 and 09-08. All three were written only to codex rollout summaries, which no other harness reads. On the same night a worker ran the identical template and shipped eleven commits and a merged PR, because its worktree already existed.
 
-*Graduates to:* a spawn that does not hold the identity its own payload needs. Or a target start that reads the spawn's own row as itself, since the row names the session asking. Do not add a bypass flag: the verb's own help says precedence alone launders an inherited marker into ownership.
+*Graduates to:* a spawn that does not hold the identity its own payload needs. Or a target start that reads the spawn's own row as itself, since the row names the session asking. Do not add a bypass flag: the command's own help says precedence alone launders an inherited marker into ownership.
 
 ## My row has no provider stamp and something told me to re-register
 
 **Answer.** Re-registering does not stamp it. There is no self-service fix.
 
-**Specimen.** `fno agents registry register` returned `{"registered": true, "name": "af8e03f2", "harness": "claude"}` and the row still read `provider=None`. Across the whole agents surface the only verb mentioning provider is `reconcile`, whose help is about syncing status. A hand-started claude session mints an unstamped row and cannot repair it.
+**Specimen.** `fno agents registry register` returned `{"registered": true, "name": "af8e03f2", "harness": "claude"}` and the row still read `provider=None`. Across the whole agents surface the only command mentioning provider is `reconcile`, whose help is about syncing status. A hand-started claude session mints an unstamped row and cannot repair it.
 
 *Graduates to:* Make `register` stamp the provider it already resolves, since it resolves the harness in the same call.
 
@@ -319,7 +319,7 @@ Until the fix merges, confirm ownership against the worker roster. Do not trust 
 
 **Specimen, the clean case.** A worker shipped its pull request and the pull request merged. The node closed with its claim released. The loop reported the terminal reason `DonePRGreen`. Its row then read `parked` rather than disappearing, and the share stayed full. Four terminal events, and none released the lane. Nothing further is available to that worker to give the slot back.
 
-**Specimen, the stop verb.** `fno agents session stop` is the lever that works, and its receipt is incomplete. It printed `stopped: <name> (<session>)` for two finished workers, and `ps` confirmed both processes dead. The share freed, and a dispatch that had refused for hours went through at once. Both registry rows still read `parked` afterwards, and the row count did not change. So the row outlives the worker while the slot returns. A lead reading the roster still sees a full role. Two readers disagree here. Trust the lane. A peer confirmed the lane read 9 of 10, with both rows absent from its holders. The roster still listed them as `parked`.
+**Specimen, the stop command.** `fno agents session stop` is the lever that works, and its receipt is incomplete. It printed `stopped: <name> (<session>)` for two finished workers, and `ps` confirmed both processes dead. The share freed, and a dispatch that had refused for hours went through at once. Both registry rows still read `parked` afterwards, and the row count did not change. So the row outlives the worker while the slot returns. A lead reading the roster still sees a full role. Two readers disagree here. Trust the lane. A peer confirmed the lane read 9 of 10, with both rows absent from its holders. The roster still listed them as `parked`.
 
 *Graduates to:* a lane released on delivery, rather than on an exit event that never arrives.
 
@@ -337,7 +337,7 @@ A rebase is destructive on a branch carrying attestations, and it does nothing a
 
 **Answer.** Read the gate, not the sentence that names it. A citation is a claim about behavior, and it drifts from behavior for free.
 
-**Specimen.** Principle 6 in AGENTS.md read "Never ticket/PR/node IDs (`scripts/ci/check-no-internal-refs.sh` fails on them)". That script blocks four leak classes, named in its own header: a vault path, a node id, a session URL, and a competitor name. It has no ticket pattern and no PR pattern. Its own help also says the code tree is not scanned, which holds for three of the four classes. The competitor class scans every tracked file, code included. Principle 6 governs code comments. So the rule named a gate that catches one of its three targets, in the one place the rule does not apply.
+**Specimen.** Principle 6 in AGENTS.md read "Never ticket/PR/node IDs (`scripts/ci/check-no-internal-refs.sh` fails on them)". At the time, that script blocked four leak classes, named in its own header: a vault path, a node id, a session URL, and a competitor name. The session-URL class is retired now. It has no ticket pattern and no PR pattern. Its own help also said the code tree is not scanned, which held for three of the four classes. The competitor class scans every tracked file, code included. Principle 6 governs code comments. So the rule named a gate that catches one of its three targets, in the one place the rule does not apply.
 
 Two leads acted on the false half within an hour. One warned the other that PR numbers fail the gate. The other stripped real PR numbers out of quoted specimens on that warning, then had to be told to keep them.
 
@@ -385,7 +385,7 @@ Grep the name and you can still miss one. A third copy lived in `scripts/ci/chec
 
 **Specimen.** `cli/src/fno/agents/spawn_defaults.py` derives the dispatch role from the node's `plan_path`. No node means no plan_path, so a planned node bills at the planning tier. On 2026-09-08 a spawn carrying the id only in its payload printed the note "planless target". It launched a Rust port on opus, against a standing rule that bars opus for implementation. The same spawn with the id passed as `--node` resolved the target lane and a flash model. The node had a 27.8K plan on disk throughout.
 
-*Graduates to:* the router parsing the node id out of the payload it already reads. A target verb whose node the router cannot see must refuse rather than reroute.
+*Graduates to:* the router parsing the node id out of the payload it already reads. A target command whose node the router cannot see must refuse rather than reroute.
 
 ## The orphan warning cannot see the workers most likely to be orphaned
 
@@ -401,7 +401,7 @@ Grep the name and you can still miss one. A third copy lived in `scripts/ci/chec
 
 **Specimen.** The standing two-review law says a scoped fix and its verify is not a round. A reviewer was asked to verify a three-commit fix delta and post dispositions. It verified all three fixes and then refused to emit, because the branch diff was 456 lines and it had read the delta. The script's own header says running it over unresolved findings "makes the gate the whole board trusts tell a lie, and nothing downstream can tell that apart from a real pass." The reviewer was right to refuse. The honest action and the mechanically available action were different actions.
 
-**The half that costs more.** A findings chain is keyed by branch NAME. A DIFFERENT reviewer on the same PR worked from a locally fetched copy, so its attestation recorded a review-only branch name. That row carried four findings the PR's own chain never saw, while that chain carried six of its own. `_coverage_gate.py` builds `findings_by_key` from the chain, so disposing findings against the wrong chain is inert rather than wrong. That is worse, because it looks like progress.
+**The half that costs more.** A findings chain is keyed by branch NAME. A DIFFERENT reviewer on the same PR worked from a locally fetched copy, so its attestation recorded a review-only branch name. That row carried four findings the PR's own chain never saw, while that chain carried six of its own. The gate builds `findings_by_key` from the chain, so disposing findings against the wrong chain is inert rather than wrong. That is worse, because it looks like progress.
 
 Review on the PR's own branch, in a worktree that has it checked out. A review done on a fetched copy is invisible to the gate forever.
 
@@ -445,7 +445,7 @@ An earlier version of this entry cited a task reader here, and that citation was
 
 The source field cannot be fixed by hand either. `fno doctor event emit -s lead-<id>` is refused, because the enum is closed and carries no lead value. Its one extensible pattern is `worker:` or `stream-worker:`. So a lead defaults to `test`, borrows a mechanism name like `loop`, or dresses as a worker. None of those is the truth.
 
-*Graduates to:* a check-in verb that stamps source, role scope and session. Add a reader that lists this session's live monitors. Add a pre-compact hook that re-arms the beat, or names every arm it lost.
+*Graduates to:* a check-in command that stamps source, role scope and session. Add a reader that lists this session's live monitors. Add a pre-compact hook that re-arms the beat, or names every arm it lost.
 
 ## A stacked pull request does not stand out in `fno do pr list`
 
@@ -463,7 +463,7 @@ The same read reported both branches as 32 commits behind `main`. That is the no
 
 **Specimen.** `fno backlog note` exited 124 at a 40s budget and again at 60s, and the report went out as "graph writes hang while reads answer". Writes were landing the whole time. Ten measured writes that night: 34.7s, 41.4s, 44.6s, 46.7s, 51.9s, 53.2s, 66.3s, 87.6s, 102.4s, 150.9s. One write the operator interrupted at 400s had already been recorded on the node. Five reports of a hang were one slow subsystem and a short timeout.
 
-*Graduates to:* a receipt from the graph verbs naming the elapsed time, so a caller can tell a slow write from a lost one.
+*Graduates to:* a receipt from the graph commands naming the elapsed time, so a caller can tell a slow write from a lost one.
 
 ## Retired
 

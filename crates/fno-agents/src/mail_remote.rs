@@ -1,10 +1,10 @@
-//! `mail-remote`: the cross-host relay verb.
+//! `mail-remote`: the cross-host relay command.
 //!
 //! The front door claims an `@host` target on `agents mail send` and
-//! `agents peek` and execs this verb on the sibling `fno-agents` binary. The
+//! `agents peek` and execs this command on the sibling `fno-agents` binary. The
 //! store path writes one bus row (see [`crate::mail_bus`]); each host's
 //! daemon pull arm hands the payload to the receiver's own local send, so
-//! lane selection, holds, and receipts stay the local verb's. When no
+//! lane selection, holds, and receipts stay the local command's. When no
 //! `store.remote_url` is configured, send and peek relay over ssh: the
 //! remote machine's own `fno` answers, and its exit code and receipt pass
 //! through byte-verbatim.
@@ -54,7 +54,7 @@ pub fn split_target(target: &str) -> Result<(String, String), String> {
     Ok((name.to_string(), host.to_string()))
 }
 
-/// Whether a send target without `@` is a plain name this verb may resolve:
+/// Whether a send target without `@` is a plain name this command may resolve:
 /// letters/digits/dots/dashes/underscores, 2+ chars. Session shapes stay out
 /// (an 8-hex short id, a 32+-char hex or dashed uuid is a full id, a path
 /// separator is a typo), so the resolution below never rewrites an
@@ -83,7 +83,7 @@ pub fn is_plain_name_target(token: &str) -> bool {
 
 /// Whether a LIVE registry row names `token` on this machine. The conservative
 /// pre-filter for bare-name sends: a hit forwards byte-verbatim to the local
-/// verb, whose resolution ladder stays the authority.
+/// command, whose resolution ladder stays the authority.
 fn local_live_row_names(token: &str) -> bool {
     let path = crate::paths::AgentsHome::from_env().registry_json();
     let Ok(Some(registry)) = crate::state::try_load_registry(&path) else {
@@ -97,12 +97,12 @@ fn local_live_row_names(token: &str) -> bool {
 
 /// The bare-name resolution: a clean local miss consults the shared store's
 /// name-to-host binding (the bus itself, `latest_host_for_name`), and a hit
-/// re-enters this verb with the `@host` target spelled. No store, an
+/// re-enters this command with the `@host` target spelled. No store, an
 /// unreachable store, or no binding forwards byte-verbatim, so the local
-/// verb's refusal (exit 16) stays the only voice for a name it knows.
+/// command's refusal (exit 16) stays the only voice for a name it knows.
 fn cmd_send_bare(target: &str, rest: &[String]) -> i32 {
     if local_live_row_names(target) {
-        return run_pass_through(&local_send_pass_argv(target, rest));
+        return exec_forward(&local_send_pass_argv(target, rest), "fno agents mail", true);
     }
     let bound = match store_path() {
         StorePath::Primary(remote) => {
@@ -114,7 +114,7 @@ fn cmd_send_bare(target: &str, rest: &[String]) -> i32 {
         _ => None,
     };
     let Some(host) = bound else {
-        return run_pass_through(&local_send_pass_argv(target, rest));
+        return exec_forward(&local_send_pass_argv(target, rest), "fno agents mail", true);
     };
     let rewritten = format!("{target}@{host}");
     let mut reentered = vec![rewritten];
@@ -123,7 +123,7 @@ fn cmd_send_bare(target: &str, rest: &[String]) -> i32 {
 }
 
 /// The byte-verbatim local forward for a bare-name target: the same argv the
-/// caller typed, exec'd through the `fno` front door so the local verb's
+/// caller typed, exec'd through the `fno` front door so the local command's
 /// ladder, holds, and refusal voice stay the only path.
 fn local_send_pass_argv(target: &str, rest: &[String]) -> Vec<OsString> {
     let mut argv = vec![fno_binary()];
@@ -138,7 +138,7 @@ fn local_send_pass_argv(target: &str, rest: &[String]) -> Vec<OsString> {
 }
 
 /// The ssh fallback's remote argv, with the sender resolved and stamped on
-/// the SENDING machine in the full `<user>@<host>/<name>` form the bus lane
+/// the SENDING machine in the full `<user>:<host>/<name>` form the bus lane
 /// passes (`local_send_argv`, consumed at mail_arm.rs:457), so the remote
 /// registry read degrades nothing: the @host part carries provenance. Pure,
 /// so the both-lanes-same-form contract is testable.
@@ -151,7 +151,7 @@ fn relay_words_with_sender(
 ) -> Vec<String> {
     let name_part = match from_name {
         FromName::Given(v) | FromName::SelfName(v) => v.clone(),
-        FromName::OsUser(v) => v.clone(),
+        FromName::Person(v) => v.clone(),
     };
     let mut words = vec![
         "agents".to_string(),
@@ -175,8 +175,8 @@ pub fn sh_quote(word: &str) -> String {
 }
 
 /// The ssh relay command: the remote login shell resolves `fno` via its
-/// profile (the cargo bin dir), then execs the verb with the words as
-/// positional arguments. `$0` is `sh`, so `"$@"` is the verb tail. Every
+/// profile (the cargo bin dir), then execs the command with the words as
+/// positional arguments. `$0` is `sh`, so `"$@"` is the command tail. Every
 /// element rides sh-quoted, including the script itself: ssh joins argv
 /// with spaces and the remote shell parses the joined line.
 pub fn ssh_argv(host: &str, words: &[String]) -> Vec<String> {
@@ -201,8 +201,8 @@ pub enum FromName {
     /// The ambient session's own name, from `--from-self` or the ambient
     /// value, or the session's registry row: the replier's role name.
     SelfName(String),
-    /// No identity above the OS user resolved: the plain-shell form.
-    OsUser(String),
+    /// No identity above the person resolved: the plain-shell form.
+    Person(String),
 }
 
 /// Read the passthrough flags a send carries. The tail rides the relay (or
@@ -236,84 +236,60 @@ pub fn parse_send_tail(args: &[String]) -> Result<SendTail, String> {
     Ok(tail)
 }
 
-/// Resolve the from_id name part from an explicit ambient value and
-/// registry-row name, so the rule is testable without env or file
-/// mutation. `--from-self` is fail-loud, matching the local verb's
-/// contract: no ambient session identity, no send. The default order:
-/// `--from-self` (strict), `--from-name`, the ambient session's own name,
-/// the session's registry row, then the OS user.
+/// Resolve the from_id name part from the proven own session id, so the
+/// rule is testable without env mutation. It is the local command's rule
+/// (`stamp_from`): `--from-self` is fail-loud and takes the canonical
+/// handle of the proven session. `--from-name` wins verbatim, except an
+/// 8-hex session handle that is not this session's own. Then the proven
+/// own handle, then the person (`identity::person`).
 pub fn resolve_from_name_with(
-    ambient: Option<&str>,
-    row_name: Option<&str>,
+    own_session: Option<&str>,
     tail: &SendTail,
 ) -> Result<FromName, String> {
+    let own = own_session
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(crate::identity::canonical_handle);
     if tail.from_self {
-        let value = ambient.unwrap_or_default().trim();
-        if value.is_empty() {
-            return Err(
-                "--from-self: no ambient fno session identity in this shell \
-(exit 2, the same floor the local verb applies)"
+        return match own {
+            Some(handle) => Ok(FromName::SelfName(handle)),
+            None => Err(
+                "--from-self: no ambient harness identity - cannot self-stamp \
+(exit 2, the same floor the local command applies)"
                     .to_string(),
-            );
-        }
-        return Ok(FromName::SelfName(value.to_string()));
+            ),
+        };
     }
     if let Some(given) = &tail.from_name {
+        let is_handle = given.len() == 8 && given.chars().all(|c| c.is_ascii_hexdigit());
+        if let Some(own) = &own {
+            if is_handle && !given.eq_ignore_ascii_case(own) {
+                return Err(format!(
+                    "--from-name {given} names another session; this session is {own}. \
+Omit --from-name to self-stamp."
+                ));
+            }
+        }
         return Ok(FromName::Given(given.clone()));
     }
-    if let Some(value) = ambient.map(str::trim).filter(|v| !v.is_empty()) {
-        return Ok(FromName::SelfName(value.to_string()));
+    if let Some(handle) = own {
+        return Ok(FromName::SelfName(handle));
     }
-    if let Some(value) = row_name.map(str::trim).filter(|v| !v.is_empty()) {
-        return Ok(FromName::SelfName(value.to_string()));
-    }
-    Ok(FromName::OsUser(os_user()))
+    Ok(FromName::Person(crate::identity::person_token()))
 }
 
-/// The CLI form: reads the ambient identity from the process environment
-/// and the session's registry row from the live store.
+/// The CLI form: reads the proven own session id from the same resolver
+/// the local command stamps from.
 pub fn resolve_from_name(tail: &SendTail) -> Result<FromName, String> {
-    resolve_from_name_with(
-        std::env::var("FNO_AGENT_SELF").ok().as_deref(),
-        session_row_name().as_deref(),
-        tail,
-    )
+    let own = crate::mail_cli::send::own_identity().map(|(sid, _harness)| sid);
+    resolve_from_name_with(own.as_deref(), tail)
 }
 
-/// The registry row name for the ambient session, when this shell is one.
-/// The canonical resolver proves session id and harness; the row is found
-/// by that pair, so a renamed agent answers with its current name and a
-/// plain shell (no identity) falls through to the OS user.
-fn session_row_name() -> Option<String> {
-    let get = |name: &str| std::env::var(name).ok();
-    let identity = crate::spawn_context::resolve_self_identity(
-        &get,
-        None,
-        None,
-        &crate::paths::AgentsHome::from_env(),
-    );
-    let session = identity.session_id.as_deref()?.trim();
-    let harness = identity.harness.as_deref()?.trim();
-    if session.is_empty() || harness.is_empty() {
-        return None;
-    }
-    let path = crate::paths::AgentsHome::shared_registry_json();
-    let registry = crate::state::try_load_registry(&path).ok()??;
-    registry
-        .find_by_session(harness, session)
-        .map(|row| row.name.clone())
-}
-
-fn os_user() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
-}
-
-/// `<user>@<host>/<name>`: the sender identity stamped into `from_id`
-/// (informational provenance; a reply addresses `<name>@<host>`).
+/// `<user>:<host>/<name>`: the sender identity stamped into `from_id`
+/// (informational provenance; a reply addresses `<name>@<host>`). The
+/// colon keeps the label to no `@`, so it never reads as a send target.
 pub fn sender_id(user: &str, host: &str, name: &str) -> String {
-    format!("{user}@{}/{}", mail_bus::normalize_host(host), name)
+    format!("{user}:{}/{}", mail_bus::normalize_host(host), name)
 }
 
 /// Resolve the `fno` front door to exec on this machine. The daemon's pull
@@ -323,7 +299,7 @@ pub fn fno_binary() -> OsString {
 }
 
 /// The local send the same-host rewrite and the daemon pull arm both run:
-/// the receiver's own verb answers, so lane selection, holds and receipts
+/// the receiver's own command answers, so lane selection, holds and receipts
 /// stay the local path's. `from` is the bus row's sender identity, stamped
 /// with `--from-name` so the envelope carries the real sender, not the
 /// delivering machine.
@@ -360,7 +336,7 @@ fn store_path() -> StorePath {
 }
 
 /// The ssh fallback's refusal of `--from-self`: that flag resolves identity
-/// on whatever machine runs the verb, and the fallback runs it remotely.
+/// on whatever machine runs the command, and the fallback runs it remotely.
 pub fn fallback_from_self_refusal() -> String {
     "--from-self over the ssh fallback would stamp the remote machine's \
 identity; pass --from-name instead"
@@ -390,7 +366,7 @@ fn cmd_send(args: &[String]) -> i32 {
     let local_host = mail_bus::normalize_host(&crate::claims::hostname());
     if mail_bus::normalize_host(&host) == local_host {
         // A same-host target needs no bus row and no ssh hop: forward the
-        // stripped argv to the local verb, every flag the caller passed
+        // stripped argv to the local command, every flag the caller passed
         // intact.
         let mut argv = vec![fno_binary()];
         argv.push(OsString::from("agents"));
@@ -400,7 +376,7 @@ fn cmd_send(args: &[String]) -> i32 {
         for word in &words[1..] {
             argv.push(OsString::from(word));
         }
-        return run_pass_through(&argv);
+        return exec_forward(&argv, "fno agents mail", true);
     }
 
     match store_path() {
@@ -414,9 +390,9 @@ fn cmd_send(args: &[String]) -> i32 {
                 return 2;
             }
             // Message shape: the caller passes the message as the last
-            // positional arg (the local verb's shape), and it rides the relay
+            // positional arg (the local command's shape), and it rides the relay
             // verbatim. The sender is resolved HERE, on the sending machine,
-            // and stamped in the full `<user>@<host>/<name>` form the bus
+            // and stamped in the full `<user>:<host>/<name>` form the bus
             // lane passes (local_send_argv); the remote registry read then
             // degrades nothing - the @host part carries provenance.
             let from_name = match resolve_from_name(&tail) {
@@ -426,8 +402,13 @@ fn cmd_send(args: &[String]) -> i32 {
                     return 2;
                 }
             };
-            let relay_words =
-                relay_words_with_sender(&name, &tail.rest, &from_name, &os_user(), &local_host);
+            let relay_words = relay_words_with_sender(
+                &name,
+                &tail.rest,
+                &from_name,
+                &crate::identity::person_token(),
+                &local_host,
+            );
             // The original message arg: everything after the target that is
             // not a flag was kept in rest in order, so the message is there.
             relay(&host, &relay_words)
@@ -442,7 +423,7 @@ fn cmd_send(args: &[String]) -> i32 {
             };
             let name_part = match &from_name {
                 FromName::Given(v) | FromName::SelfName(v) => v.clone(),
-                FromName::OsUser(v) => v.clone(),
+                FromName::Person(v) => v.clone(),
             };
             let payload = match payload_of(&tail) {
                 Some(p) if !p.is_empty() => p,
@@ -466,7 +447,7 @@ the message directly after the target; none was found"
                 );
                 return 2;
             }
-            let from_id = sender_id(&os_user(), &local_host, &name_part);
+            let from_id = sender_id(&crate::identity::person_token(), &local_host, &name_part);
             // Sender-side style check: the receiver's door refuses an
             // unvetted body after transit, where only the sender's `mail
             // status` shows the loss. A refused body exits 1 having
@@ -493,7 +474,7 @@ body; nothing was sent"
     }
 }
 
-/// The message body: the first word after the target (the local verb's
+/// The message body: the first word after the target (the local command's
 /// shape is `mail send <target> <message> [flags...]`), so a flag value can
 /// never be mistaken for the payload. `None` when that word is missing or
 /// is itself a flag; the caller refuses naming the shape.
@@ -619,7 +600,7 @@ fn cmd_peek(args: &[String]) -> i32 {
         for word in &words[1..] {
             argv.push(OsString::from(word));
         }
-        return run_pass_through(&argv);
+        return exec_forward(&argv, "fno agents mail", true);
     }
     let mut relay_words = vec!["agents".to_string(), "peek".to_string(), name];
     relay_words.extend(words[1..].iter().cloned());
@@ -627,7 +608,8 @@ fn cmd_peek(args: &[String]) -> i32 {
 }
 
 /// Where a reply to `from` (the answered message's raw sender address)
-/// goes. The cross-host form `<user>@<host>/<name>` answers at
+/// goes. The cross-host form `<user>:<host>/<name>` (or the older
+/// `<user>@<host>/<name>` still on the bus) answers at
 /// `<name>@<host>`; an OS-user label (`name` equals `user`) predates role
 /// names, so it refuses naming the send form instead of guessing; every
 /// other shape forwards to the Python reply, which owns local routing.
@@ -642,16 +624,21 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
     let Some((head, name)) = from.rsplit_once('/') else {
         return ReplyRoute::Forward;
     };
-    let Some((user, host)) = head.split_once('@') else {
+    let Some((user, host)) = head.split_once(':').or_else(|| head.split_once('@')) else {
         return ReplyRoute::Forward;
     };
-    // Strictness: only the form sender_id writes. Anything else (a bare
-    // handle, a nested slash, a second @) is not the relay's label, so the
-    // Python reply decides.
+    // Strictness: only the forms sender_id writes or wrote. Anything else (a
+    // bare handle, a nested slash, a second separator) is not the relay's
+    // label, so the Python reply decides.
     if user.is_empty() || name.is_empty() || host.is_empty() {
         return ReplyRoute::Forward;
     }
-    if host.contains('/') || host.contains('@') || user.contains('/') {
+    if host.contains(['/', '@', ':']) || user.contains(['/', '@']) {
+        return ReplyRoute::Forward;
+    }
+    // A colon is common in other ids, so the user part must read as an OS
+    // user name before `a:b/c` counts as the relay's label.
+    if !crate::identity::is_sender_token(user) {
         return ReplyRoute::Forward;
     }
     let host = mail_bus::normalize_host(host);
@@ -676,7 +663,7 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
 /// The cross-host branch of `mail reply`: when the answered message's raw
 /// sender is a foreign-host identity, the reply is a cross-host send to
 /// `<name>@<host>` and this returns the exit code. `None` hands the reply
-/// back to the Python verb (local sender, missing row, any other address
+/// back to the Python command (local sender, missing row, any other address
 /// shape). A flag the store lane cannot carry is refused here, naming it,
 /// rather than dropped. The mail port's later native reply leaf calls this
 /// before its local logic, so the branch stays one function.
@@ -703,9 +690,9 @@ pub(crate) fn reply_cross_host(
             }
             let label = resolve_from_name(&SendTail::default())
                 .map(|f| match f {
-                    FromName::Given(v) | FromName::SelfName(v) | FromName::OsUser(v) => v,
+                    FromName::Given(v) | FromName::SelfName(v) | FromName::Person(v) => v,
                 })
-                .unwrap_or_else(|_| os_user());
+                .unwrap_or_else(|_| crate::identity::person_token());
             if kind {
                 eprintln!("note: a cross-host reply carries no kind; --kind dropped");
             }
@@ -721,7 +708,7 @@ pub(crate) fn reply_cross_host(
 
 /// The tail parser for `mail reply`. Only the forms the cross-host lane
 /// owns are lifted; everything else rides to the Python reply verbatim,
-/// which keeps its refusals and exit codes identical to the local verb's
+/// which keeps its refusals and exit codes identical to the local command's
 /// (a duplicated body, an unknown flag, a missing --to).
 #[derive(Default)]
 struct ReplyTail {
@@ -854,7 +841,7 @@ fn cmd_status(_args: &[String]) -> i32 {
     match store_path() {
         StorePath::Primary(remote) => {
             if let Err(e) = mail_bus::ensure_schema(&remote) {
-                eprintln!("fno agents mail status: {e}");
+                eprintln!("fno-agents mail-remote status: {e}");
                 return 1;
             }
             let host = mail_bus::normalize_host(&crate::claims::hostname());
@@ -866,20 +853,20 @@ fn cmd_status(_args: &[String]) -> i32 {
                     0
                 }
                 Err(e) => {
-                    eprintln!("fno agents mail status: {e}");
+                    eprintln!("fno-agents mail-remote status: {e}");
                     1
                 }
             }
         }
         StorePath::None => {
             eprintln!(
-                "fno agents mail status: no shared store configured; sends a \
+                "fno-agents mail-remote status: no shared store configured; sends a \
 cross-host target answered over the ssh fallback leave no bus rows"
             );
             2
         }
         StorePath::Malformed(e) => {
-            eprintln!("fno agents mail status: {e}");
+            eprintln!("fno-agents mail-remote status: {e}");
             2
         }
     }
@@ -888,6 +875,11 @@ cross-host target answered over the ssh fallback leave no bus rows"
 /// Binary-direct entry from `fno-agents mail-remote <send|peek|status|reply> ...`.
 /// The dispatcher holds `Vec<String>`, so the tail rides as `&[String]`.
 pub fn run(args: &[String]) -> i32 {
+    let depth = hop_depth(std::env::var(HOP_ENV).ok().as_deref());
+    if depth >= HOP_LIMIT {
+        eprintln!("{}", hop_refusal(depth));
+        return 2;
+    }
     match args.first().map(|a| a.as_str()) {
         Some("send") => cmd_send(&args[1..]),
         Some("peek") => cmd_peek(&args[1..]),
@@ -903,19 +895,53 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 /// The marker a same-host forward carries. The front door's intercept claims
-/// a plain-name `mail send`, so without it the forward re-enters this verb
+/// a plain-name `mail send`, so without it the forward re-enters this command
 /// and every send recurses until the process table fills.
 pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
 
-/// Exec an argv, inherit stdio, return the exit code (same-host forwards).
-fn run_pass_through(argv: &[OsString]) -> i32 {
+/// The relay depth a mail forward stamps on the process it starts. The
+/// front door clears it on every route but the relay's own, so only a
+/// forward that re-enters the relay counts up. The re-entry marker above is
+/// the first guard; this count is the backstop when a new route loses it.
+pub const HOP_ENV: &str = "FNO_MAIL_HOP";
+
+/// The depth the relay refuses at: one forward is the design, a second is
+/// already a bug, a third never runs.
+pub const HOP_LIMIT: u32 = 3;
+
+/// This entry's depth: the stamped count plus one. A missing or malformed
+/// count reads as a first entry.
+pub fn hop_depth(stamped: Option<&str>) -> u32 {
+    stamped
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+pub fn hop_refusal(depth: u32) -> String {
+    format!(
+        "fno agents mail: relay hop limit: this send entered the mail relay at depth \
+{depth} ({HOP_ENV}={}); a forward looped back into the relay, so it stops here \
+instead of filling the process table",
+        depth - 1
+    )
+}
+
+/// The relay family's shared same-host forward: exec an argv, inherit stdio,
+/// return the exit code. `mail_env` stamps the mail-only re-entry marker and
+/// this entry's hop depth.
+pub fn exec_forward(argv: &[OsString], label: &str, mail_env: bool) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
-    cmd.env(LOCAL_FORWARD_ENV, "1");
+    if mail_env {
+        cmd.env(LOCAL_FORWARD_ENV, "1");
+        let depth = hop_depth(std::env::var(HOP_ENV).ok().as_deref());
+        cmd.env(HOP_ENV, depth.to_string());
+    }
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents mail: local forward failed: {e}");
+            eprintln!("{label}: local forward failed: {e}");
             1
         }
     }
@@ -939,6 +965,14 @@ mod tests {
         assert!(split_target("@imac2d2").is_err());
         assert!(split_target("nemo@").is_err());
         assert!(split_target("nemo").is_err());
+        // Hop depth: an unstamped entry is depth 1, a garbled stamp reads
+        // as unstamped, and the refusal names the limit and the env.
+        assert_eq!(hop_depth(None), 1);
+        assert_eq!(hop_depth(Some("garbage")), 1);
+        assert_eq!(hop_depth(Some("2")), HOP_LIMIT);
+        let refusal = hop_refusal(HOP_LIMIT);
+        assert!(refusal.contains("relay hop limit"), "{refusal}");
+        assert!(refusal.contains("FNO_MAIL_HOP=2"), "{refusal}");
         // Remote-shell quoting: plain words wrap; the quote escapes; the
         // -lc script itself rides quoted so ssh's space-join cannot split
         // it (the round-1 regression).
@@ -983,37 +1017,25 @@ mod tests {
                 "hello world".to_string()
             ]
         );
-        // --from-self is fail-loud without ambient identity (the same floor
-        // the local verb applies); the ambient rides in as a parameter, so
+        // --from-self is fail-loud without a proven session (the same floor
+        // the local command applies); the session rides in as a parameter, so
         // no env mutation races the parallel tests.
         let selfy = SendTail {
             from_self: true,
             ..SendTail::default()
         };
-        assert!(resolve_from_name_with(None, None, &selfy).is_err());
-        assert!(resolve_from_name_with(Some("  "), Some("row"), &selfy).is_err());
-        assert!(resolve_from_name_with(Some("nemo"), Some("row"), &selfy).is_ok());
-        // The default label tiers: --from-name wins over both identity
-        // tiers, the ambient session's own name wins over the registry row,
-        // and the row wins over the OS user. A shell with none of the
-        // three keeps the plain `<user>@<host>/<user>` form.
+        assert!(resolve_from_name_with(None, &selfy).is_err());
+        assert!(resolve_from_name_with(Some("  "), &selfy).is_err());
+        // A shell with no proven session keeps the plain
+        // `<user>:<host>/<user>` form.
         let plain = SendTail::default();
         assert_eq!(
-            resolve_from_name_with(None, Some("Quinlan"), &plain),
-            Ok(FromName::SelfName("Quinlan".to_string()))
-        );
-        assert_eq!(
-            resolve_from_name_with(Some("quinlan"), Some("Quinlan"), &plain),
-            Ok(FromName::SelfName("quinlan".to_string())),
-            "the ambient session name outranks the registry row"
-        );
-        assert_eq!(
-            resolve_from_name_with(None, None, &plain),
-            Ok(FromName::OsUser(os_user())),
-            "no identity tiers resolves to the OS user"
+            resolve_from_name_with(None, &plain),
+            Ok(FromName::Person(crate::identity::person_token())),
+            "no proven session resolves to the person"
         );
         // The ssh fallback stamps the sender locally in the full
-        // `<user>@<host>/<name>` form, the same shape the bus lane passes,
+        // `<user>:<host>/<name>` form, the same shape the bus lane passes,
         // and keeps the caller's flags and message in order after it.
         let words = relay_words_with_sender(
             "Quinlan",
@@ -1034,39 +1056,39 @@ mod tests {
                 "send".to_string(),
                 "Quinlan".to_string(),
                 "--from-name".to_string(),
-                "bb16@mbp3/Ellery".to_string(),
+                "bb16:mbp3/Ellery".to_string(),
                 "--subject".to_string(),
                 "hi".to_string(),
                 "hello".to_string(),
             ]
         );
-        // The OsUser floor keeps the same form.
+        // The Person floor keeps the same form.
         let floored = relay_words_with_sender(
             "nemo",
             &[],
-            &FromName::OsUser("operator".to_string()),
+            &FromName::Person("operator".to_string()),
             "bb16",
             "mbp3",
         );
-        assert_eq!(floored[5], "bb16@mbp3/operator");
+        assert_eq!(floored[5], "bb16:mbp3/operator");
         let named = SendTail {
             from_name: Some("rowan".to_string()),
             ..SendTail::default()
         };
         assert_eq!(
-            resolve_from_name_with(Some("ambient"), Some("Quinlan"), &named),
+            resolve_from_name_with(Some("3912a97c-c37b-4663-a8f1-e6772ba85586"), &named),
             Ok(FromName::Given("rowan".to_string())),
-            "--from-name outranks every identity tier"
+            "--from-name outranks the proven session"
         );
-        // Blank ambient and row values fall through, never stamp a blank.
+        // A blank session falls through, never stamps a blank.
         assert_eq!(
-            resolve_from_name_with(Some("  "), Some("  "), &plain),
-            Ok(FromName::OsUser(os_user()))
+            resolve_from_name_with(Some("  "), &plain),
+            Ok(FromName::Person(crate::identity::person_token()))
         );
         // Sender identity normalizes the host part.
         assert_eq!(
             sender_id("bb16", "iMac2D2.local", "nemo"),
-            "bb16@imac2d2/nemo"
+            "bb16:imac2d2/nemo"
         );
         // The pull arm's argv carries the name, the sender, and the payload.
         let argv = local_send_argv("nemo", "hello there", false, "rowan@mbp3/r");
@@ -1335,6 +1357,27 @@ mod tests {
             }
         );
         assert_eq!(
+            reply_route("bb16:some-remote/nemo"),
+            ReplyRoute::Send {
+                name: "nemo".to_string(),
+                host: "some-remote".to_string()
+            },
+            "the colon label sender_id writes routes the same"
+        );
+        assert_eq!(
+            reply_route("bb16:imac2d2-peer/ed2495bd"),
+            ReplyRoute::Send {
+                name: "ed2495bd".to_string(),
+                host: "imac2d2-peer".to_string()
+            },
+            "an 8-hex session handle is a routable name"
+        );
+        assert_eq!(
+            reply_route("fmail session:h/x"),
+            ReplyRoute::Forward,
+            "a user part that is no OS user name is not the relay's label"
+        );
+        assert_eq!(
             reply_route(&format!("a@{test_host}/b")),
             ReplyRoute::Forward,
             "the local host forwards to the Python reply"
@@ -1382,11 +1425,11 @@ mod tests {
         };
         assert!(
             !dup.routable(),
-            "a duplicated body forwards to the Python verb"
+            "a duplicated body forwards to the Python command"
         );
         // The reply parser terminates on the positional form (a missing
         // advance here hung on the most common shape) and forwards the
-        // missing-value shapes to the Python verb.
+        // missing-value shapes to the Python command.
         let parsed = parse_reply_tail(&[
             "--to".to_string(),
             "fmail-x".to_string(),
@@ -1400,5 +1443,41 @@ mod tests {
         let starved = parse_reply_tail(&["--to".to_string()]);
         assert!(!starved.routable(), "a --to with no value forwards");
         assert_eq!(starved.extra, vec!["--to".to_string()]);
+    }
+
+    #[test]
+    fn specimen_x31b6_sender_stamps_the_proven_session() {
+        let own = "3912a97c-c37b-4663-a8f1-e6772ba85586";
+        let plain = SendTail::default();
+        assert_eq!(
+            resolve_from_name_with(Some(own), &plain),
+            Ok(FromName::SelfName("3912a97c".to_string())),
+            "a default send signs the proven session, never a registry row"
+        );
+        let selfy = SendTail {
+            from_self: true,
+            ..SendTail::default()
+        };
+        assert_eq!(
+            resolve_from_name_with(Some(own), &selfy),
+            Ok(FromName::SelfName("3912a97c".to_string())),
+            "--from-self needs no ambient name variable"
+        );
+        let foreign = SendTail {
+            from_name: Some("ed2495bd".to_string()),
+            ..SendTail::default()
+        };
+        let err = resolve_from_name_with(Some("d1aec0d9-4c60-4246-a51b-24ac8c83560a"), &foreign)
+            .expect_err("a copied foreign handle refuses");
+        assert!(err.contains("d1aec0d9"), "the refusal names the own handle");
+        let role = SendTail {
+            from_name: Some("Quinlan".to_string()),
+            ..SendTail::default()
+        };
+        assert_eq!(
+            resolve_from_name_with(Some(own), &role),
+            Ok(FromName::Given("Quinlan".to_string())),
+            "a role name still passes verbatim"
+        );
     }
 }

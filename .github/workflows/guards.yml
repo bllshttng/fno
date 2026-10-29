@@ -45,6 +45,9 @@ name: guards
 
 on:
   workflow_dispatch:
+  # merge-queue-gate.yml runs these jobs on a merge queue batch. The event
+  # it passes in is workflow_dispatch, so the PR-only jobs skip.
+  workflow_call:
   # `edited` is load-bearing for guards-pr: oos-tracked.yml triggered on
   # [opened, synchronize, reopened, edited] on purpose, because its fix path
   # IS a PR-body edit that cites a tracked node, with no
@@ -69,7 +72,7 @@ permissions:
 
 jobs:
   plugin-tree:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +89,7 @@ jobs:
   # regression that breaks either arm must fail CI rather than surface on a
   # user's upgraded OpenCode.
   extension-suites:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -117,7 +120,7 @@ jobs:
 
   main-python-static:
     name: Python static correctness (495 sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -135,7 +138,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/ci/check-python-static.sh
 
-      # The verb x harness doc is a projection of the capability table and
+      # The command x harness doc is a projection of the capability table and
       # skills/*/SKILL.md frontmatter, and since the renderer moved into the
       # fno-agents binary it takes one build from this checkout: the renderer
       # must be the same parser that validates the table, or the freshness
@@ -170,16 +173,20 @@ jobs:
         # store aggregate, each carrying its first contract test. 6: the
         # OTLP exporter is a new native module whose four tests are its
         # first contracts, plus two regressions in existing owners (the
-        # preview-flag refusal and the old-spelling vacate).
-        run: fno-agents test-delta --base "$TEST_BASE" --max-net 6
+        # preview-flag refusal and the old-spelling vacate). 22: the pane
+        # spawn spine is a brand-new native module whose tests are its
+        # first contracts, each pinning one golden-parity or reconcile
+        # behavior the dual-implementation protocol requires to stay
+        # byte-true until the Python leg deletes.
+        run: fno-agents test-delta --base "$TEST_BASE" --max-net 22
 
-      - name: Verb matrix fresh
+      - name: Command matrix fresh
         if: ${{ !cancelled() }}
         working-directory: cli
         run: |
           set -euo pipefail
           uv run fno-py doctor harness-matrix --write
-          git diff --exit-code -- ../docs/harnesses/verb-matrix.md
+          git diff --exit-code -- ../docs/harnesses/command-matrix.md
 
       # hooks/write-gate.sh refuses edits only to generated copies
       # that generated-artifacts.tsv or skill-bundles.yaml names. The census
@@ -210,6 +217,18 @@ jobs:
           bash tests/ci/test_seam_crossings.sh
           (cd cli && uv run fno-py doctor lint seam-crossings)
 
+      # The JSON-stdout house contract: a -J command prints exactly one JSON
+      # document on stdout ([] on empty, {ok:false} on a refused read), so an
+      # agent parses output without a wrapper. Selftest first, so the checker
+      # is positive-controlled before it is trusted on the real table.
+      - name: JSON-stdout contract (selftest, then check)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          bash scripts/ci/check-json-stdout.sh --selftest
+          bash scripts/ci/check-json-stdout.sh
+
       # Flag + env-var registries (x-72fc): the flag check measures the
       # change against its own base (merge base on a PR, the previous tip on
       # push), so two PRs from one base cannot race on a stored count; every
@@ -231,11 +250,10 @@ jobs:
   # PR-only: every member here originally triggered on `pull_request` alone
   # (no `push`), several because they read PR-only context (PR_BODY,
   # BASE_REF, PR_TITLE, PR_BASE_SHA/PR_HEAD_SHA) that does not exist on a push
-  # event. Sourced from: control-plane-doc-colocation.yml, oos-tracked.yml,
-  # session-url-scan.yml.
+  # event. Sourced from: control-plane-doc-colocation.yml, oos-tracked.yml.
   guards-pr:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -285,24 +303,20 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/tests/test_corrections_insights_tag.sh
 
+      - name: Autocorrect review leaves a receipt pair
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/tests/test_autocorrect_review_receipts.sh
+
+      - name: Autocorrect installer weekly schedule contract
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/tests/test_autocorrect_install_dryrun.sh
+
       - name: PR-create out-of-scope tracking contract
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/skills/test_pr_oos_tracking_contract.sh
-
-      # From session-url-scan.yml (check-no-session-urls job). PR-controlled
-      # text (title/body) reaches the script via env ONLY - never
-      # interpolated inline into `run:`, which would be a shell-injection
-      # hole.
-      - name: No claude.ai/code session URLs in commits / title / body
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: bash scripts/ci/check-no-session-urls.sh
 
   # From pr-node-closure.yml (check-pr-node-closure + self-test jobs, folded
   # into one job sharing a single fno-agents build). PR-only: the gate reads
@@ -311,7 +325,7 @@ jobs:
   # matches (closure-trailer signature) is unchanged.
   check-pr-node-closure:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
@@ -358,7 +372,7 @@ jobs:
   # review-invocation-single-source.yml, skill-local-evals.yml,
   # tracker-partition.yml, uv-install-bytecode.yml.
   guards:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -430,14 +444,6 @@ jobs:
         run: |
           bash scripts/ci/check-disposable-rm.sh
           bash tests/ci/test-check-disposable-rm.sh
-
-      # The commit-msg session-URL strip: the CI gate (check-no-session-urls)
-      # only catches the trailer after a push, where a force-push does not
-      # retract it, so the strip has to happen at commit time.
-      - name: Session-URL strip commit-msg hook test
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash tests/test-strip-claude-session.sh
 
       # The state canary's own positive control. `verify` is not run here: it
       # needs a planted HOME with a suite run between plant and verify, and the
@@ -535,7 +541,7 @@ jobs:
         run: bash tests/ci/test_check_pytest_skips.sh
 
       # From plan-rung-authority.yml.
-      - name: One readiness authority (Python table, shell verb, Rust delegation)
+      - name: One readiness authority (Python table, shell command, Rust delegation)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash scripts/ci/check-plan-rung-authority.sh
@@ -567,9 +573,9 @@ jobs:
         timeout-minutes: 5
         run: bash tests/ci/test_check_file_budget.sh
 
-      # Law d-fe66560a: top-level verbs are not allowed at all, hidden ones
+      # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
       # included. The fno-agents binary's action list may only shrink; the
-      # verb ratchet reads all of fno-agents as ONE baseline leaf, so nothing
+      # command ratchet reads all of fno-agents as ONE baseline leaf, so nothing
       # else notices the list growing. Same base contract as the file budget
       # step above.
       - name: fno-agents action list is shrink-only
@@ -668,6 +674,20 @@ jobs:
           bash scripts/ci/check-reachable-paths.sh --self-test
           bash scripts/ci/check-reachable-paths.sh
 
+      - name: Every registered hook declares its class
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-hook-classes.sh --self-test
+          bash scripts/ci/check-hook-classes.sh
+
+      - name: Every registered hook picks a pack or mux profile
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-pack-profiles.sh --self-test
+          bash scripts/ci/check-pack-profiles.sh
+
       # From the installed-tree import crash: parents[N]/scripts joins in
       # cli/src/fno escape the package root and the wheel never ships them.
       - name: Package-root path escapes + self-test
@@ -686,7 +706,7 @@ jobs:
       # The growth-studio pack declares its scenarios in plugin.yaml, and pack
       # verification only checks that each command is runnable - it never
       # executes one. So the pack's own behavior assertions ran nowhere, and a
-      # verb rename in SKILL.md left the activation gate asserting a string
+      # command rename in SKILL.md left the activation gate asserting a string
       # that no longer existed while every check stayed green.
       #
       # The commands are read from the manifest rather than hardcoded here: a
@@ -749,6 +769,15 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: bash scripts/ci/check-no-internal-refs.sh
+
+      # The fno concept is "command", in identifiers, paths and prose alike:
+      # the gate scans the whole tree. The self-test watches it fail first.
+      - name: No "verb" wording anywhere in the tree
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-no-verb-wording.sh --self-test
+          bash scripts/ci/check-no-verb-wording.sh
 
       # From internal-refs.yml. A gate a rule cites must be watched failing:
       # the selftest plants one leak per class/scope and asserts each is

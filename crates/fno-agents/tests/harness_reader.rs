@@ -269,28 +269,13 @@ fn the_live_spawn_takes_the_declared_headless_form_for_a_paneless_harness() {
     assert_eq!(probe_substrate(&contract, "zcode"), Some("headless"));
     // A harness with an interactive create form keeps the spawn default.
     assert_eq!(probe_substrate(&contract, "claude"), None);
-    // The provider flag is a claude route. Any other harness takes the
-    // provider as the model id's prefix, never doubled.
-    let args = |h, p, m| probe_route_args(h, p, m).join(" ");
-    assert_eq!(
-        args("claude", Some("zai"), Some("glm-x")),
-        "--provider zai --model glm-x"
-    );
-    assert_eq!(
-        args("footnote", Some("zai"), Some("glm-x")),
-        "--model zai/glm-x"
-    );
-    assert_eq!(
-        args("footnote", Some("zai"), Some("zai/glm-x")),
-        "--model zai/glm-x"
-    );
-    assert_eq!(args("footnote", None, Some("glm-x")), "--model glm-x");
-    assert_eq!(args("footnote", Some("zai"), None), "");
-    // A harness with no provider/model spelling takes the model as given.
-    assert_eq!(
-        args("codex", Some("openai"), Some("gpt-x")),
-        "--model gpt-x"
-    );
+    // The probe routes through the one surviving spelling, `--route
+    // provider,model`, never doubling a prefix; a lone half has no spelling.
+    let args = |p, m| probe_route_args(p, m).join(" ");
+    assert_eq!(args(Some("zai"), Some("glm-x")), "--route zai,glm-x");
+    assert_eq!(args(Some("zai"), Some("zai/glm-x")), "--route zai,glm-x");
+    assert_eq!(args(None, Some("glm-x")), "");
+    assert_eq!(args(Some("zai"), None), "");
 }
 
 #[test]

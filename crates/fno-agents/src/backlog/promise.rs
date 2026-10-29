@@ -5,9 +5,13 @@
 //! gate, and the fail-open here is what let a node whose frontmatter the
 //! parser rejected close with its promise gate skipped. Fails open only on
 //! an absent plan_path (no promise declared), so a plan-less node closes
-//! normally. `--force --reason` is the operator override.
+//! normally - unless it records a split (condition S): numbered
+//! additional_prs hold the node open until every listed PR merges, so the
+//! first merge of a split closes nothing. `--force --reason` is the
+//! operator override.
 
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::merge_evidence::{node_pr_refs, query_pr_state, repo_slug_from_url, PrReadError};
@@ -145,12 +149,28 @@ fn promise_refusal_d(node_id: &str, deferred: &[Value]) -> String {
 }
 
 /// The resolve_promise_evidence twin: decide whether a node's plan promised
-/// work that has not all shipped.
+/// work that has not all shipped, and whether a recorded split still waits
+/// on an unmerged PR.
 pub(crate) fn resolve_promise_evidence(
     node: &Value,
     cwd: Option<&str>,
     extra_refs: &[(i64, Option<String>)],
 ) -> PromiseVerdict {
+    resolve_promise_evidence_with(node, cwd, extra_refs, &query_pr_state)
+}
+
+/// The seam variant: the same decision with the PR-state read injectable.
+/// The split hold fires on every multi-PR node, so tests drive this form
+/// with a stub instead of gh.
+pub(crate) fn resolve_promise_evidence_with<Q>(
+    node: &Value,
+    cwd: Option<&str>,
+    extra_refs: &[(i64, Option<String>)],
+    query: &Q,
+) -> PromiseVerdict
+where
+    Q: Fn(i64, Option<&str>, Option<&str>) -> Result<(String, Option<String>), PrReadError>,
+{
     let node_id = node.get("id").and_then(Value::as_str).unwrap_or("");
     // Condition D (checked first; independent of the plan): an unharvested
     // `deferred` carve-out is declared scope that did not ship, and it
@@ -166,6 +186,61 @@ pub(crate) fn resolve_promise_evidence(
             reason: Some(promise_refusal_d(node_id, &deferred)),
             warning: None,
         };
+    }
+
+    // The deduplicated ref set: primary first, then additional_prs, then
+    // any explicit ref the caller is binding at close time. One union so
+    // the split hold and the promise count cannot disagree about what the
+    // node's PR set even is.
+    let mut refs = node_pr_refs(node);
+    let mut seen: Vec<i64> = refs.iter().map(|(n, _)| *n).collect();
+    for (num, url) in extra_refs {
+        if !seen.contains(num) {
+            refs.push((*num, url.clone()));
+            seen.push(*num);
+        }
+    }
+
+    // Condition S (checked before the plan read; independent of the plan):
+    // numbered additional_prs entries record a split - the node ships
+    // across several PRs. The first merge closes nothing: every listed ref
+    // merges before the node does. A plan-less split row is held exactly
+    // like a plan-bound one.
+    if refs.len() >= 2 {
+        let (unmerged, failure) = split_unmerged_refs(&refs, cwd.as_deref(), query);
+        if !unmerged.is_empty() {
+            return PromiseVerdict {
+                outcome: PromiseOutcome::Unmet,
+                reason: Some(promise_refusal_s(node_id, refs.len(), &unmerged)),
+                warning: None,
+            };
+        }
+        if let Some(f) = &failure {
+            if f.retryable() {
+                return PromiseVerdict {
+                    outcome: PromiseOutcome::Unknown,
+                    reason: Some(format!(
+                        "Unknown: {node_id} is split across {n} PRs and the \
+                         state read for one of them failed: {msg}\n\
+                         \x20 The read failed retryably; the node stays open. \
+                         Retry with `fno backlog reconcile --node {node_id}` \
+                         once GitHub answers.",
+                        n = refs.len(),
+                        msg = f.message,
+                    )),
+                    warning: None,
+                };
+            }
+            return PromiseVerdict {
+                outcome: PromiseOutcome::Unmet,
+                reason: Some(format!(
+                    "Refused: {node_id} could not verify its split ships: {}\n  {}",
+                    f.message,
+                    f.remedy_for(0, None)
+                )),
+                warning: None,
+            };
+        }
     }
 
     let plan_path = node.get("plan_path").and_then(Value::as_str).unwrap_or("");
@@ -308,15 +383,7 @@ pub(crate) fn resolve_promise_evidence(
     // Condition C: the promised ship count vs. merged refs. Only the rare
     // multi-ship plan pays for gh I/O here; a 1-PR plan never reaches it.
     if let Some(expected) = expected.filter(|e| *e >= 2) {
-        let mut refs = node_pr_refs(node);
-        let mut seen: Vec<i64> = refs.iter().map(|(n, _)| *n).collect();
-        for (num, url) in extra_refs {
-            if !seen.contains(num) {
-                refs.push((*num, url.clone()));
-                seen.push(*num);
-            }
-        }
-        let (merged, failure) = count_merged_refs(&refs, expected, cwd);
+        let (merged, failure) = count_merged_refs(&refs, expected, cwd, query);
         if merged < expected {
             let retryable = failure.as_ref().map(|f| f.retryable()).unwrap_or(false);
             if retryable {
@@ -392,15 +459,99 @@ fn promise_refusal_c(node_id: &str, plan_display: &str, expected: i64, merged: i
     )
 }
 
+fn promise_refusal_s(node_id: &str, total: usize, unmerged: &[i64]) -> String {
+    let named = unmerged
+        .iter()
+        .map(|n| format!("#{n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Refused: {node_id} is split across {total} PRs; still unmerged: {named}.\n\
+         \x20 additional_prs records the split; the node stays open until every \
+         listed PR merges - the first merge closes nothing.\n\
+         \n\
+         \x20 Two legal exits:\n\
+         \x20   wait for the rest to merge (reconcile closes the node then); or\n\
+         \x20   close with --force --reason \"remaining split PRs filed as <id>\""
+    )
+}
+
+/// The rollup close paths' promise hold: candidate id -> the gate verdict.
+/// The epic rollup and the parent cascade run inside the store mutation,
+/// where gh I/O must not, so the caller judges its rollup candidates
+/// BEFORE the lock and passes the verdicts in. Absent = held (fail
+/// closed): a plan-having parent the pre-lock warm never judged stays
+/// open rather than closing on an unseen promise. A candidate with no
+/// plan_path holds nothing here: `has_own_plan_work` already keeps a
+/// plan-holding parent open on every rollup path, and this fold exists
+/// for its blind spot - a plan plus a merged PR of its own clears that
+/// hold while the plan's `expected_url_count` stays unmet - the
+/// multi-slice shape this fold exists to hold.
+pub(crate) type RollupVerdicts = BTreeMap<String, PromiseVerdict>;
+
+/// True when the row carries a plan binding: the rollup gate's candidate
+/// test, shared by the fold and the hold check.
+pub(crate) fn rollup_holds_plan(row: &Value) -> bool {
+    row.get("plan_path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty())
+}
+
+pub(crate) fn rollup_hold_set(
+    candidates: &[Value],
+    gate: &mut dyn FnMut(&Value) -> PromiseVerdict,
+) -> RollupVerdicts {
+    let mut held = RollupVerdicts::new();
+    for node in candidates.iter().filter(|n| rollup_holds_plan(n)) {
+        let Some(id) = node.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        held.entry(id.to_string()).or_insert_with(|| gate(node));
+    }
+    held
+}
+
+/// The rollup hold verdict for one parent row under the fail-closed rule:
+/// a plan-having parent with no warm verdict holds.
+pub(crate) fn rollup_holds(parent: &Value, warm: &RollupVerdicts) -> bool {
+    if !rollup_holds_plan(parent) {
+        return false;
+    }
+    let Some(id) = parent.get("id").and_then(Value::as_str) else {
+        return true;
+    };
+    warm.get(id).is_none_or(|v| !v.satisfied())
+}
+
+/// The gate cwd for one node row: the project-resolved cwd when it is a
+/// live directory, else None (the plan resolves repo-relative from the
+/// caller's cwd). Shared by the closeable gate, the rollup warm, and the
+/// done command's parent warm, so one node reads one verdict everywhere.
+pub(crate) fn gate_cwd_for(node: &Value) -> Option<String> {
+    let resolved = crate::backlog::drift_scan::effective_reconcile_cwd(
+        node.get("cwd").and_then(Value::as_str).unwrap_or(""),
+        node.get("project").and_then(Value::as_str),
+    );
+    if Path::new(&resolved).is_dir() {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
 /// Count MERGED refs; return (merged, first typed failure). Stops early at
 /// the ceiling: once enough ships are confirmed, the remaining refs cannot
 /// change the verdict. An unreachable ref is reported separately from a
 /// genuinely unmerged one.
-fn count_merged_refs(
+fn count_merged_refs<Q>(
     refs: &[(i64, Option<String>)],
     ceiling: i64,
     cwd: Option<&str>,
-) -> (i64, Option<PrReadError>) {
+    query: &Q,
+) -> (i64, Option<PrReadError>)
+where
+    Q: Fn(i64, Option<&str>, Option<&str>) -> Result<(String, Option<String>), PrReadError>,
+{
     let mut merged = 0i64;
     let mut failure: Option<PrReadError> = None;
     let mut repo: Option<String> = None;
@@ -410,7 +561,7 @@ fn count_merged_refs(
             repo = pr_repo.clone();
         }
         let pr_cwd = if pr_repo.is_none() { cwd } else { None };
-        match query_pr_state(*pr_number, pr_repo.as_deref(), pr_cwd) {
+        match query(*pr_number, pr_repo.as_deref(), pr_cwd) {
             Err(exc) => {
                 let replaces = failure
                     .as_ref()
@@ -439,6 +590,57 @@ fn count_merged_refs(
         }
     }
     (merged, failure)
+}
+
+/// The split hold's read: every numbered ref's state, the not-yet-merged
+/// ones named. Like count_merged_refs but collects the unmerged set
+/// instead of counting to a ceiling - the hold names the PRs it waits on,
+/// so it reads every ref: the last one decides. An unreachable ref is
+/// reported separately from a genuinely unmerged one.
+fn split_unmerged_refs<Q>(
+    refs: &[(i64, Option<String>)],
+    cwd: Option<&str>,
+    query: &Q,
+) -> (Vec<i64>, Option<PrReadError>)
+where
+    Q: Fn(i64, Option<&str>, Option<&str>) -> Result<(String, Option<String>), PrReadError>,
+{
+    let mut unmerged: Vec<i64> = Vec::new();
+    let mut failure: Option<PrReadError> = None;
+    let mut repo: Option<String> = None;
+    for (pr_number, pr_url) in refs {
+        let pr_repo = repo_slug_from_url(pr_url.as_deref()).or_else(|| repo.clone());
+        if repo.is_none() {
+            repo = pr_repo.clone();
+        }
+        let pr_cwd = if pr_repo.is_none() { cwd } else { None };
+        match query(*pr_number, pr_repo.as_deref(), pr_cwd) {
+            Err(exc) => {
+                let replaces = failure
+                    .as_ref()
+                    .map(|f| f.retryable() && !exc.retryable())
+                    .unwrap_or(true);
+                if replaces {
+                    failure = Some(PrReadError::new(
+                        format!("PR #{pr_number}: {}", exc.message),
+                        &exc.kind,
+                    ));
+                }
+            }
+            Ok((state, _url)) if state == "UNKNOWN" => {
+                failure = Some(PrReadError::new(
+                    "REST reader returned UNKNOWN state",
+                    "malformed",
+                ));
+            }
+            Ok((state, _url)) => {
+                if state != "MERGED" {
+                    unmerged.push(*pr_number);
+                }
+            }
+        }
+    }
+    (unmerged, failure)
 }
 
 /// The plan's declared ship count, tri-state: `Absent` (single-ship by
@@ -620,5 +822,122 @@ mod tests {
         assert!(text.contains("would close with 7 unharvested"), "{text}");
         assert!(text.contains("...and 2 more"), "{text}");
         assert!(!text.contains("c5:"), "{text}");
+    }
+
+    fn verdict(outcome: PromiseOutcome) -> PromiseVerdict {
+        PromiseVerdict {
+            outcome,
+            reason: (outcome != PromiseOutcome::Ok).then(|| "promised N; only M merged".into()),
+            warning: None,
+        }
+    }
+
+    #[test]
+    fn the_rollup_hold_gates_only_plan_having_candidates() {
+        let candidates = vec![
+            serde_json::json!({"id": "ab-planless", "pr_number": 1}),
+            serde_json::json!({"id": "ab-planned", "plan_path": "plans/multi.md", "pr_number": 3606}),
+        ];
+        let mut asked: Vec<String> = Vec::new();
+        let held = rollup_hold_set(&candidates, &mut |node| {
+            asked.push(node["id"].as_str().unwrap_or("").to_string());
+            verdict(PromiseOutcome::Unmet)
+        });
+        // The plan-less candidate never reaches the gate: has_own_plan_work
+        // keeps holding plan-less-PR parents, so gating it would double-hold.
+        assert_eq!(asked, vec!["ab-planned".to_string()]);
+        assert!(held.contains_key("ab-planned"));
+        assert!(!held.contains_key("ab-planless"));
+    }
+
+    #[test]
+    fn a_satisfied_gate_does_not_hold_the_rollup() {
+        let candidates = vec![serde_json::json!({
+            "id": "ab-multi",
+            "plan_path": "plans/multi.md",
+            "pr_number": 3606,
+        })];
+        let held = rollup_hold_set(&candidates, &mut |_node| verdict(PromiseOutcome::Ok));
+        // The map holds every warm verdict, Ok included: the hold reads
+        // verdict.satisfied(), not key presence (rollup_holds).
+        assert!(held["ab-multi"].satisfied());
+        assert!(!rollup_holds(&candidates[0], &held));
+    }
+
+    #[test]
+    fn split_hold_keeps_the_node_open_until_every_listed_pr_merges() {
+        // The recorded incident shape: the primary merged while an
+        // additional_prs entry was still open. The first merge closes
+        // nothing.
+        let node = serde_json::json!({
+            "id": "ab-1234abcd",
+            "status": "in_progress",
+            "pr_number": 3658,
+            "pr_url": "https://github.com/owner/repo/pull/3658",
+            "additional_prs": [{"number": 3708}],
+        });
+        let v = resolve_promise_evidence_with(&node, None, &[], &|pr, _, _| {
+            if pr == 3658 {
+                Ok(("MERGED".into(), None))
+            } else {
+                Ok(("OPEN".into(), None))
+            }
+        });
+        assert!(!v.satisfied());
+        assert_eq!(v.exit_code(), 6);
+        let reason = v.reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("split across 2 PRs"), "{reason}");
+        assert!(reason.contains("#3708"), "{reason}");
+        assert!(reason.contains("--force --reason"), "{reason}");
+
+        // CLOSED unmerged waits too: the split is not delivered.
+        let v = resolve_promise_evidence_with(&node, None, &[], &|pr, _, _| {
+            if pr == 3658 {
+                Ok(("MERGED".into(), None))
+            } else {
+                Ok(("CLOSED".into(), None))
+            }
+        });
+        assert!(!v.satisfied());
+        assert!(v.reason.as_deref().unwrap_or_default().contains("#3708"));
+
+        // Every listed PR merged: the hold lifts, and the plan-less node
+        // closes with no other condition firing.
+        let v =
+            resolve_promise_evidence_with(&node, None, &[], &|_, _, _| Ok(("MERGED".into(), None)));
+        assert!(v.satisfied(), "{:?}", v.reason);
+    }
+
+    #[test]
+    fn split_hold_reads_a_retryable_outage_as_unknown_and_skips_single_ref_nodes() {
+        let node = serde_json::json!({
+            "id": "ab-1234abcd",
+            "status": "in_progress",
+            "pr_number": 3658,
+            "additional_prs": [{"number": 3708}],
+        });
+        let v = resolve_promise_evidence_with(&node, None, &[], &|_, _, _| {
+            Err(PrReadError::new("gh unavailable", "availability"))
+        });
+        assert!(!v.satisfied());
+        assert_eq!(v.exit_code(), 4);
+        let reason = v.reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("Unknown:"), "{reason}");
+        assert!(reason.contains("reconcile --node"), "{reason}");
+
+        // A single-ref node never pays for the read: the stub would fail
+        // the verdict if it fired, so a passing one proves the skip.
+        let single = serde_json::json!({
+            "id": "ab-1234abcd",
+            "status": "in_progress",
+            "pr_number": 3658,
+        });
+        let v = resolve_promise_evidence_with(&single, None, &[], &|_, _, _| {
+            Err(PrReadError::new(
+                "the read must not fire on one ref",
+                "availability",
+            ))
+        });
+        assert!(v.satisfied());
     }
 }

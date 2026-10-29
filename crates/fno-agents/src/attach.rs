@@ -3,7 +3,7 @@
 //! every harness; then a harness's own declared attach form, then pi's
 //! join; claude attaches inline under its re-entry plan; every other row is
 //! asked of the capability table's `features.attach` claim and refused by
-//! name. Split out of `client_verbs.rs`, which is over the file budget.
+//! name. Split out of `client_commands.rs`, which is over the file budget.
 
 use std::path::Path;
 
@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::claude_ask::ClaudeHome;
 use crate::claude_resume::claude_attach_pointer;
-use crate::client_verbs::{
+use crate::client_commands::{
     append_agents_event, echo_extra, is_codex_thread_row, py_repr_str, read_registry_entries,
     resolve_entry_with_heal, trace_events_path, validate_lifecycle_name, which_on_path,
 };
@@ -21,7 +21,7 @@ use crate::paths::AgentsHome;
 /// front door like the pane relaunch above: the fno crate is a dev-only
 /// dependency here, so the reach is a process, not a call. `None` falls
 /// through to the inline path: no live server, usage (a deployed mux older
-/// than the verb), an unanswered verb, or no `fno` binary at all. Any
+/// than the command), an unanswered command, or no `fno` binary at all. Any
 /// other non-zero exit is the server refusing; surface it verbatim and
 /// never double-attach.
 fn attach_via_mux_thread(name: &str, harness: &str, events_path: &Path) -> Option<i32> {
@@ -124,7 +124,7 @@ fn attach_feature_state(harness: &str) -> String {
 /// lane nor a declared form took: `(event reason, exit code, message)`.
 /// `native` means the harness can be attached to and the wired arm is the
 /// mux thread portal the caller already tried, so the lane is down: exit 24,
-/// the same code the portal verb uses for "no live mux server". Any other
+/// the same code the portal command uses for "no live mux server". Any other
 /// state refuses by name with the key, the state and the probe that settles
 /// the row, exit 13.
 fn attach_table_refusal(harness: &str, name: &str) -> (String, i32, String) {
@@ -482,33 +482,52 @@ then attach again."
 /// `fno-agents attach <name>` -- interactive attach to a running claude agent,
 /// a codex thread, or a pi session (every other harness is refused). Mirrors
 /// Python `dispatch.attach_agent` + the `cmd_attach` Typer wrapper.
-pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
+/// Parsed `attach` argv: one NAME (plus the retired store-heal no-op flag,
+/// accepted and ignored). Extracted so the
+/// flag grammar is unit-testable without a registry fixture, the way
+/// resume_args did for resume.
+#[derive(Debug)]
+pub(crate) struct AttachArgs {
+    pub name: String,
+}
+
+pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, String)> {
     let mut name: Option<String> = None;
+    // Retired (d-460ea8c7): the store heal is machine-wide; the flag rides
+    // along as a silent no-op so the old taught remedy still parses.
     for a in rest {
         match a.as_str() {
+            "--cross-project" => {}
             other if other.starts_with("--") => {
-                eprintln!("fno-agents: unknown attach flag: {other}");
-                return 2;
+                return Err((2, format!("fno-agents: unknown attach flag: {other}")));
             }
             other => {
                 if name.is_some() {
-                    eprintln!(
-                        "fno-agents: attach takes one NAME (got extra: {}).",
-                        echo_extra(other)
-                    );
-                    return 2;
+                    return Err((
+                        2,
+                        format!(
+                            "fno-agents: attach takes one NAME (got extra: {}).",
+                            echo_extra(other)
+                        ),
+                    ));
                 }
                 name = Some(other.to_string());
             }
         }
     }
-    let name = match name {
-        Some(n) => n,
-        None => {
-            eprintln!("fno-agents: attach needs a <name>");
-            return 2;
+    let name = name.ok_or((2, "fno-agents: attach needs a <name>".to_string()))?;
+    Ok(AttachArgs { name })
+}
+
+pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
+    let parsed = match parse_attach_args(rest) {
+        Ok(p) => p,
+        Err((code, msg)) => {
+            eprintln!("{msg}");
+            return code;
         }
     };
+    let name = parsed.name;
 
     if let Err((code, msg)) = validate_lifecycle_name(&name) {
         eprintln!("{msg}");
@@ -570,7 +589,7 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 
     // Every other non-claude harness is asked of the table: features.attach
-    // answers reachability, never the verb inventory and never a gap in this
+    // answers reachability, never the command inventory and never a gap in this
     // file. `!= "claude"` instead of an allowlist so a provider added to the
     // roster inherits the read rather than falling through to a
     // claude-shaped attach (US1).
@@ -590,6 +609,18 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 
     let short_id = entry.get("short_id").and_then(Value::as_str).unwrap_or("");
+
+    // A cloud row attaches by teleport: the session runs on claude.ai, and
+    // the CLI pulls its pushed branch into this checkout. The pre-checks
+    // mirror what the CLI itself enforces (same repository, clean working
+    // tree), each refusal naming its unmet requirement before any exec; a
+    // failed teleport surfaces the CLI's own error.
+    if entry.get("substrate").and_then(Value::as_str) == Some("cloud") {
+        if let Some(code) = attach_cloud_teleport(entry, &name, &events_path) {
+            return code;
+        }
+    }
+
     if short_id.is_empty() {
         eprintln!(
             "registry entry {} has no short id on file; cannot attach.",
@@ -661,7 +692,9 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 
     // This client can lazily birth the claude supervisor; make sure a clean
-    // one is up first. The client command is never touched.
+    // one is up first. The client drops its route keys in case it wins a
+    // birth race anyway.
+    crate::claude_supervisor::strip_route_carriers(&mut command);
     crate::claude_supervisor::guard_birth_for_plan(&plan.env);
 
     // Inherit stdio so the claude TUI takes over; mirror its exit code.
@@ -703,13 +736,191 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     }
 }
 
+/// A directory's repository identity: the git common dir, shared by every
+/// worktree of one repository. `None` when the directory is outside any
+/// repo, unreadable, or git is missing.
+fn repo_identity(dir: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args([
+            "-C",
+            dir,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!root.is_empty()).then_some(root)
+}
+
+/// The teleport pre-checks, measured here so each refusal names its unmet
+/// requirement before any exec: the checkout must be the repository the
+/// session worked in (any worktree of it), and its tree must be clean -
+/// teleport checks out the session's pushed branch over this tree.
+fn teleport_precheck(row_cwd: &str, here: &std::path::Path) -> Result<(), (i32, String)> {
+    let here_str = here.to_string_lossy().to_string();
+    let (Some(row_repo), Some(here_repo)) = (repo_identity(row_cwd), repo_identity(&here_str))
+    else {
+        return Err((
+            2,
+            "teleport needs a checkout of the session's repository: the row's \
+             cwd or this directory does not resolve to a git repository"
+                .to_string(),
+        ));
+    };
+    if row_repo != here_repo {
+        return Err((
+            2,
+            format!(
+                "teleport refused: this checkout ({here_repo}) is not the \
+                 repository the session worked in ({row_repo}); run from that \
+                 repo"
+            ),
+        ));
+    }
+    let clean = std::process::Command::new("git")
+        .args(["-C", &here_str, "status", "--porcelain"])
+        .output()
+        .map(|out| out.status.success() && out.stdout.is_empty())
+        .unwrap_or(false);
+    if !clean {
+        return Err((
+            2,
+            "teleport refused: the working tree is dirty; commit or stash \
+             first - the teleport checks out the session's branch over this \
+             tree"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Attach a cloud row by teleporting its session into this checkout: the
+/// measured CLI form `claude --teleport <session-id>`, run in this
+/// directory after the pre-checks, mirroring the claude attach arm's exit
+/// contract (stdio inherited, exit code mirrored, outcome event).
+fn attach_cloud_teleport(entry: &Value, name: &str, events_path: &Path) -> Option<i32> {
+    let session_id = entry
+        .get("harness_session_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            entry
+                .get("short_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })?;
+    let row_cwd = entry.get("cwd").and_then(Value::as_str).unwrap_or("");
+    if let Err((code, msg)) = teleport_precheck(row_cwd, &std::env::current_dir().ok()?) {
+        eprintln!("{msg}");
+        append_agents_event(
+            events_path,
+            "agent_attach_refused",
+            &[
+                ("name", Value::String(name.to_string())),
+                ("provider", Value::String("claude".to_string())),
+                ("reason", Value::String("teleport-precheck".to_string())),
+                ("detail", Value::String(msg)),
+            ],
+        );
+        return Some(code);
+    }
+    if !which_on_path("claude") {
+        eprintln!("claude CLI not on PATH");
+        return Some(14);
+    }
+    let mut command = std::process::Command::new("claude");
+    command.arg("--teleport").arg(session_id);
+    match command.status() {
+        Ok(status) => {
+            let exit_code = status.code().unwrap_or(1);
+            append_agents_event(
+                events_path,
+                "agent_attached",
+                &[
+                    ("name", Value::String(name.to_string())),
+                    ("provider", Value::String("claude".to_string())),
+                    ("substrate", Value::String("cloud".to_string())),
+                    ("session_id", Value::String(session_id.to_string())),
+                    ("claude_exit", Value::from(exit_code)),
+                ],
+            );
+            Some(exit_code)
+        }
+        Err(exc) if exc.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("claude CLI not on PATH");
+            Some(14)
+        }
+        Err(exc) => {
+            eprintln!("claude --teleport failed: {exc}");
+            Some(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // The attach-refusal family, a file of its own beside this verb.
+    // The attach-refusal family, a file of its own beside this command.
     #[path = "x296f_attach_refusals.rs"]
     mod x296f_attach_refusals;
+
+    #[test]
+    fn teleport_precheck_refuses_by_name() {
+        // AC6 shape: the same-repo and dirty-tree refusals name their
+        // requirement, and a clean same-repo tree passes.
+        let base = std::env::temp_dir().join(format!("fno-teleport-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("repo")).expect("mkdir");
+        let git = |args: &[&str], cwd: &std::path::Path| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .expect("git runs")
+        };
+        let repo = base.join("repo");
+        assert!(git(&["init", "-q"], &repo).status.success());
+        let here = base.join("repo");
+        // Clean, same repo: passes.
+        assert!(teleport_precheck(&here.to_string_lossy(), &here).is_ok());
+        // A different repo (fresh init) fails the same-repo check.
+        let other = base.join("other");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        assert!(git(&["init", "-q"], &other).status.success());
+        assert!(
+            teleport_precheck(&other.to_string_lossy(), &here).is_err(),
+            "a foreign repo refuses"
+        );
+        // Dirty tree: refuses naming the stash requirement.
+        std::fs::write(repo.join("dirty.txt"), b"x").expect("write");
+        let (code, msg) = teleport_precheck(&here.to_string_lossy(), &here).expect_err("refuses");
+        assert_eq!(code, 2);
+        assert!(msg.contains("dirty"), "names the dirt: {msg}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn attach_still_accepts_the_retired_cross_project_flag() {
+        // Retired (d-460ea8c7): the flag is a silent no-op now; the old
+        // surface died with "unknown attach flag" before any resolution ran.
+        let a = parse_attach_args(&["cx".to_string(), "--cross-project".to_string()]).unwrap();
+        assert_eq!(a.name, "cx");
+        let err = parse_attach_args(&["cx".to_string(), "--nope".to_string()]).unwrap_err();
+        assert_eq!(
+            err,
+            (2, "fno-agents: unknown attach flag: --nope".to_string())
+        );
+        let err = parse_attach_args(&[]).unwrap_err();
+        assert_eq!(err, (2, "fno-agents: attach needs a <name>".to_string()));
+        let err = parse_attach_args(&["a".to_string(), "b".to_string()]).unwrap_err();
+        assert!(err.1.contains("attach takes one NAME"), "{err:?}");
+    }
 
     #[test]
     fn mux_thread_fallthrough_exits_match_the_mux() {

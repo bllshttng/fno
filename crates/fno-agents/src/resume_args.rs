@@ -1,12 +1,12 @@
 //! The `fno agents resume` argv parser.
 //!
-//! LIVES OUTSIDE client_verbs for the same reason usage.rs does: the file
+//! LIVES OUTSIDE client_commands for the same reason usage.rs does: the file
 //! is over the 5,000-line budget and shrink-only, and this parser is what
 //! every wake touches. The row's recorded launch account stays the binding
 //! authority; `--account` parses so the seam's appended flag never exits 2
 //! at argv (run_resume validates the value it carries).
 
-use crate::client_verbs::{echo_extra, expand_eq};
+use crate::client_commands::{echo_extra, expand_eq};
 
 /// One resume invocation's parsed argv. A struct rather than a tuple since
 /// the substrate-conversion flags landed: nine positional elements is a
@@ -19,13 +19,12 @@ pub struct ResumeArgs {
     /// Internal fallback marker: the caller already accepted this message in
     /// the durable mail queue, so a Working route must not enqueue it again.
     pub message_already_queued: bool,
-    pub cross_project: bool,
     pub cwd: Option<String>,
     pub account: Option<String>,
     /// `--substrate thread`: convert this live pane into a persistent
     /// thread instead of re-entering it. `None` is an ordinary resume.
     /// `thread` is the only accepted value, because thread-to-pane is not
-    /// built and a pane-to-pane resume is what the bare verb already does.
+    /// built and a pane-to-pane resume is what the bare command already does.
     pub substrate: Option<String>,
     /// Print the conversion plan and change nothing.
     pub dry_run: bool,
@@ -41,7 +40,7 @@ pub struct ResumeArgs {
 
 /// Parse the argv and validate what argv alone can settle. The replacement
 /// cwd is checked HERE rather than in `run_resume` for the reason this
-/// module exists: client_verbs is over the line budget and shrink-only, and
+/// module exists: client_commands is over the line budget and shrink-only, and
 /// a check on a parsed field belongs beside the parser that produced it.
 pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
     let parsed = parse_resume_args(rest)?;
@@ -49,7 +48,7 @@ pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
         if !std::path::Path::new(path).is_dir() {
             eprintln!(
                 "fno agents resume: replacement cwd {} is not an existing directory.",
-                crate::client_verbs::py_repr_str(path)
+                crate::client_commands::py_repr_str(path)
             );
             return Err(13);
         }
@@ -57,21 +56,22 @@ pub fn parse_and_validate(rest: &[String]) -> Result<ResumeArgs, i32> {
     Ok(parsed)
 }
 
-/// Expanded from client_verbs.rs where it lived beside `run_resume`; the
+/// Expanded from client_commands.rs where it lived beside `run_resume`; the
 /// move is mechanical, the shape unchanged.
 pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
     let mut parsed = ResumeArgs::default();
     let mut name: Option<String> = None;
-    // Every sibling parser in this file (`parse_trace_args`, `parse_logs_args`)
-    // expands `--flag=value` into `--flag value` before iterating; without it
-    // `--message=continue` falls into the `starts_with("--")` unknown-flag arm
-    // instead of being recognized.
+    // Every sibling parser (`parse_trace_args`, `parse_logs_args` in
+    // logs_args.rs) expands `--flag=value` into `--flag value` before
+    // iterating; without it `--message=continue` falls into the
+    // `starts_with("--")` unknown-flag arm instead of being recognized.
     let rest = expand_eq(rest);
     let mut iter = rest.iter();
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--print-command" => parsed.print_command = true,
-            "--cross-project" => parsed.cross_project = true,
+            // Retired (d-460ea8c7): healing is machine-wide; silent no-op.
+            "--cross-project" => {}
             "--dry-run" => parsed.dry_run = true,
             "--allow-new-id" => parsed.allow_new_id = true,
             "--message-already-queued" => parsed.message_already_queued = true,
@@ -107,7 +107,7 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
                 // --substrate thread` converts a live pane into a persistent
                 // thread under its own session id. `thread` is the only
                 // member - thread-to-pane is unbuilt, and pane-to-pane is
-                // what the bare verb already does - so any other value
+                // what the bare command already does - so any other value
                 // refuses by name rather than resuming something the caller
                 // did not ask for.
                 let value = match iter.next() {
@@ -121,7 +121,7 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
                     eprintln!(
                         "fno-agents: resume --substrate takes only 'thread' (got {}); \
                          thread-to-pane conversion is not built, and a pane-to-pane \
-                         resume is the bare verb",
+                         resume is the bare command",
                         echo_extra(&value)
                     );
                     return Err(2);
@@ -229,15 +229,9 @@ pub fn reentry_argv_for_unpaned_conversion(
         return None;
     }
     let registry = home.registry_json();
-    let entries = crate::client_verbs::read_registry_entries(&registry).ok()?;
-    let entry = crate::client_verbs::resolve_entry_with_heal_scoped(
-        &entries,
-        &parsed.name,
-        &registry,
-        parsed.cross_project,
-        None,
-    )
-    .ok()?;
+    let entries = crate::client_commands::read_registry_entries(&registry).ok()?;
+    let entry =
+        crate::client_commands::resolve_entry_with_heal(&entries, &parsed.name, &registry).ok()?;
     if matches!(
         entry.get("substrate").and_then(serde_json::Value::as_str),
         Some("pane" | "thread")
@@ -354,13 +348,11 @@ mod tests {
         assert_eq!(parsed.name, "alpha");
         assert!(!parsed.print_command);
         assert_eq!(parsed.message.as_deref(), Some("continue please"));
-        assert!(!parsed.cross_project);
         assert_eq!(parsed.cwd, None);
 
         let parsed = parse_resume_args(&args(&["-m", "hi", "beta"])).unwrap();
         assert_eq!(parsed.name, "beta");
         assert_eq!(parsed.message.as_deref(), Some("hi"));
-        assert!(!parsed.cross_project);
         assert_eq!(parsed.cwd, None);
 
         // No --message given: still parses, message is None (unchanged
@@ -369,7 +361,6 @@ mod tests {
         assert_eq!(parsed.name, "gamma");
         assert!(parsed.print_command);
         assert_eq!(parsed.message, None);
-        assert!(!parsed.cross_project);
         assert_eq!(parsed.cwd, None);
     }
 

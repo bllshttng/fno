@@ -245,7 +245,7 @@ pub fn classify_rows(text: &str, expected_rev: Option<&str>) -> Value {
 /// Load a `cohorts.yaml` declaration: YAML -> JSON, missing role keys default
 /// to empty lists, `bank_rev` must be a non-empty string. The semantic rules
 /// stay in `validate_cohorts`; this is shape only.
-fn load_cohorts_yaml(path: &str) -> Result<Value, String> {
+pub(crate) fn load_cohorts_yaml(path: &str) -> Result<Value, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let raw: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&text).map_err(|e| format!("malformed YAML in {path}: {e}"))?;
@@ -268,6 +268,9 @@ fn load_cohorts_yaml(path: &str) -> Result<Value, String> {
 
 /// True when the bank files are unchanged from *rev* in the repo at *dir*.
 /// The split pins the bank, not the whole repo; an unreadable rev voids it.
+/// The declaration file itself is excluded from the diff: cohorts.yaml names
+/// its own pin, so a commit that only redeclares the split would otherwise
+/// void every later pin forever.
 fn bank_unchanged(dir: &str, rev: &str) -> bool {
     let verify = std::process::Command::new("git")
         .args([
@@ -282,8 +285,28 @@ fn bank_unchanged(dir: &str, rev: &str) -> bool {
         Ok(o) if o.status.success() => {}
         _ => return false,
     }
+    bank_same(dir, rev, "HEAD")
+}
+
+/// True when the bank files at *a* and *b* carry identical task content in
+/// the repo at *dir* (same pathspec exclusion as `bank_unchanged`). Equal
+/// revs short-circuit without a git call: history rows carry the run-time
+/// HEAD, so the climb fold's per-rev cache hits equality only for rows run
+/// at the pin itself, and equality needs no process to prove.
+pub(crate) fn bank_same(dir: &str, a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
     let diff = std::process::Command::new("git")
-        .args(["diff", "--quiet", rev, "HEAD", "--", "evals/bank"])
+        .args([
+            "diff",
+            "--quiet",
+            a,
+            b,
+            "--",
+            "evals/bank",
+            ":(exclude)evals/bank/cohorts.yaml",
+        ])
         .current_dir(dir)
         .output();
     matches!(diff, Ok(o) if o.status.success())
@@ -484,9 +507,7 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         "SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created";
     let mut best: Option<(i64, String)> = None;
     for db in dbs {
-        let Ok(conn) =
-            rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
+        let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
         let Ok(mut stmt) = conn.prepare(SESSION_SQL) else {
@@ -511,9 +532,7 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
     let mut model: Option<String> = None;
     let mut usage: Option<UsageSum> = None;
     for db in dbs {
-        let Ok(conn) =
-            rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
+        let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
         let Ok(mut stmt) = conn.prepare(MESSAGE_SQL) else {
@@ -905,7 +924,7 @@ pub fn run_evals_attempt(args: &[String]) -> i32 {
         }
     }
     if args.is_empty() {
-        // stdin classify: a JSON payload on stdin (the verb_call shape),
+        // stdin classify: a JSON payload on stdin (the command_call shape),
         // `{"op": "classify", "row": {...}, "expected_rev": "..."}`.
         use std::io::Read;
 

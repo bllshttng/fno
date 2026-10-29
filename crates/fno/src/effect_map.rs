@@ -135,6 +135,11 @@ pub fn map_tool_call(tool_name: &str, tool_input: &Value) -> Option<MappedEffect
     if !tool_name.starts_with("mcp__") {
         return None;
     }
+    // An artifact starts private to its owner, so publishing files to it is
+    // not an outside effect; the name holding "publish" is not the test.
+    if tool_name.starts_with("mcp__claude-artifacts__") {
+        return None;
+    }
     if lower.contains("send") || lower.contains("post_message") {
         return Some(mapped(
             "external.communication",

@@ -5,7 +5,7 @@
 //! shrink-only, and this family is self-contained - its own fixture (a real
 //! graph under a temp home, stub gh/fno-py/fno on PATH), its own spawn
 //! helper, and exactly one read still served by a mock (the escalation
-//! verb). The board itself is read in process, so the canned-payload mocks
+//! command). The board itself is read in process, so the canned-payload mocks
 //! are gone; a spec names the graph the fixture writes instead.
 
 use std::fs;
@@ -31,7 +31,7 @@ fn event_text(path: &Path) -> String {
 // ── the lead driver arm ───────────────────────────────────────────────────────
 //
 // A lead has no PR, so none of the target conjuncts above apply. These drive
-// the same verb with `--driver lead` over a lead manifest and a mocked board.
+// the same command with `--driver lead` over a lead manifest and a mocked board.
 
 /// A `created_at` inside every default `span:96h` term, so a fixture that
 /// declares no term of its own never trips the Stop-hook term gate: these
@@ -199,22 +199,10 @@ fn lead_prepare_fixture(cwd: &Path, home: &Path, board_spec: &Path) {
     // this stub every fire pays a real installed-CLI cold start and probes the
     // operator's live sessions - slow AND non-hermetic.
     fs::write(stubs.join("fno"), "#!/bin/sh\necho '{}'\n").unwrap();
-    let outstanding = if home.join("questions.jsonl").is_file() {
-        r#"{"questions":[{"id":"q-k-question","question":"choose","ts":"2026-09-06T00:00:00Z","session_id":"k-question"}]}"#
-    } else {
-        "{}"
-    };
-    // The board folds undispatched and ready in-process now, so this stub
-    // serves the one queue read that still rides a subprocess: the operator
-    // questions. The `*)` arm answers {} for every other verb the board or
-    // the truth probe shells.
-    fs::write(
-        stubs.join("fno-py"),
-        format!(
-            "#!/bin/sh\ncase \"$*\" in\n  *\"inbox outstanding\"*) echo '{outstanding}';;\n  *) echo '{{}}';;\nesac\n"
-        ),
-    )
-    .unwrap();
+    // Every queue read folds in-process now (the operator questions read
+    // `questions.jsonl` under this home), so the fno-py stub only answers {}
+    // for whatever the truth probe still shells.
+    fs::write(stubs.join("fno-py"), "#!/bin/sh\necho '{}'\n").unwrap();
     // Stage the default mock only when absent: lead_escalate_bin stages its
     // argv-recording version FIRST, and this fixture prep runs after it.
     let mock = home.join("escalate-mock");
@@ -279,7 +267,7 @@ fn lead_spawn_with(
         events.to_str().unwrap(),
     ]);
     // The board is read in process, so the fixture `fno` serves exactly one
-    // live read: the escalation verb. Its mock is staged by the fixture and
+    // live read: the escalation command. Its mock is staged by the fixture and
     // overwritten by tests that need the argv recorder.
     cmd.arg("--fno-bin").arg(home.join("escalate-mock"));
     cmd.args(extra);
@@ -624,7 +612,7 @@ fn an_unreadable_question_source_blocks_a_clean_board() {
     let bin_dir = TempDir::new().unwrap();
     let spec = org_board_bin(bin_dir.path(), BOARD_CLEAN, 0);
     lead_prepare_fixture(cwd, bin_dir.path(), &spec);
-    write_unreadable_questions_stub(bin_dir.path());
+    make_questions_unreadable(cwd);
 
     let (code, d) = lead_spawn(&state, cwd, &events, bin_dir.path());
 
@@ -640,20 +628,11 @@ fn an_unreadable_question_source_blocks_a_clean_board() {
     );
 }
 
-/// The stub every fire of an unreadable-questions test needs. `lead_fire`
-/// rewrites the fixture's fno-py on every call, so the override happens once,
-/// after the fixture is prepared, and the test spawns directly.
-fn write_unreadable_questions_stub(bin_dir: &Path) {
-    fs::write(
-        bin_dir.join("stubs").join("fno-py"),
-        "#!/bin/sh\ncase \"$*\" in\n  *\"inbox outstanding\"*) exit 1;;\n  *\"backlog ready\"*) echo '[]';;\n  *) echo '{}';;\nesac\n",
-    )
-    .unwrap();
-    fs::set_permissions(
-        bin_dir.join("stubs").join("fno-py"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
+/// What every unreadable-questions test needs: the outstanding read fails
+/// whole on a carve-out ledger it cannot read, and a directory at the
+/// ledger path stays unreadable across fires (no fire recreates it).
+fn make_questions_unreadable(cwd: &Path) {
+    fs::create_dir_all(cwd.join(".fno").join("carveouts.jsonl")).unwrap();
 }
 
 #[test]
@@ -1188,7 +1167,7 @@ fn lead_escalate_bin(dir: &Path, payload: &str, log: &Path) -> PathBuf {
 /// function and not the destination.
 ///
 /// The second half, that repeated calls over one stalled set yield exactly ONE
-/// operator question, is `test_lead_escalate.py`: the dedupe lives in the verb,
+/// operator question, is `test_lead_escalate.py`: the dedupe lives in the command,
 /// and a mock `fno` here records no questions to count. Neither test alone is
 /// the verification; the seam between them is the `--stalled` argument.
 #[test]
@@ -1228,7 +1207,7 @@ fn every_lead_noprogress_terminal_escalates() {
 
     // Terminal 2: a board that never answers. There are no ids to name, so the
     // escalation carries an EMPTY set rather than being skipped. An operator
-    // told nothing is the failure this verb exists to prevent, and a lead that
+    // told nothing is the failure this command exists to prevent, and a lead that
     // cannot see its board is the case most worth telling them about.
     let blind_tmp = TempDir::new().unwrap();
     let blind_cwd = blind_tmp.path();
@@ -1341,10 +1320,10 @@ fn a_clean_lead_terminal_does_not_ask_the_operator_anything() {
     );
 }
 
-/// Exactly the `fno inbox outstanding` read never answers; every other read
-/// of the same binary answers clean, so the timeout is attributable to ONE
-/// slice. (The ready selection and the undispatched fold answer in-process
-/// now; a wedged source must be one that still rides a subprocess.)
+/// Exactly the `gh pr list` read never answers; every other read answers
+/// clean, so the timeout is attributable to ONE slice. (The questions, ready
+/// and undispatched reads answer in-process now; a wedged source must be one
+/// that still rides a subprocess.)
 #[test]
 fn external_read_timeout_dies_at_its_slice_and_is_named() {
     let tmp = TempDir::new().unwrap();
@@ -1356,11 +1335,7 @@ fn external_read_timeout_dies_at_its_slice_and_is_named() {
     lead_prepare_fixture(cwd, bin_dir.path(), &spec);
 
     let stubs = bin_dir.path().join("stubs");
-    fs::write(
-        stubs.join("fno-py"),
-        "#!/bin/sh\ncase \"$*\" in\n  *\"inbox outstanding\"*) exec sleep 30;;\n  *) echo '{}';;\nesac\n",
-    )
-    .unwrap();
+    fs::write(stubs.join("gh"), "#!/bin/sh\nexec sleep 30\n").unwrap();
 
     let started = std::time::Instant::now();
     let (code, json) = lead_spawn_with(
@@ -1417,13 +1392,10 @@ fn external_read_timeout_dies_at_its_slice_and_is_named() {
         .unwrap();
     let board: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    let outstanding_err = board["sources"]["outstanding"]["error"]
-        .as_str()
-        .unwrap_or("");
+    let prs_err = board["sources"]["prs"]["error"].as_str().unwrap_or("");
     assert!(
-        outstanding_err.contains("killed at its")
-            && outstanding_err.contains("slice of the board budget"),
-        "the killed source is named in the payload as a budget kill: {outstanding_err} :: sources={}",
+        prs_err.contains("killed at its") && prs_err.contains("slice of the board budget"),
+        "the killed source is named in the payload as a budget kill: {prs_err} :: sources={}",
         board["sources"]
     );
 }
@@ -1523,7 +1495,7 @@ fn an_unreadable_question_source_is_bounded_not_eternal() {
     let bin_dir = TempDir::new().unwrap();
     let spec = org_board_bin(bin_dir.path(), BOARD_CLEAN, 0);
     lead_prepare_fixture(cwd, bin_dir.path(), &spec);
-    write_unreadable_questions_stub(bin_dir.path());
+    make_questions_unreadable(cwd);
 
     let mut last = (0, serde_json::Value::Null);
     for _ in 0..3 {

@@ -139,6 +139,15 @@ fn read_body(path: &Path) -> Body {
     }
 }
 
+/// Decode the image at `path` with the viewer's caps, for another surface's
+/// thumbnails. `None` for a non-image or a file the decoder refuses.
+pub(super) fn decode_image(path: &Path) -> Option<image::DynamicImage> {
+    match read_image(path, sniff_image(path)?) {
+        Body::Image(pic) => Some(pic.img),
+        _ => None,
+    }
+}
+
 /// The image format the first bytes name, among the four the viewer decodes.
 fn sniff_image(path: &Path) -> Option<image::ImageFormat> {
     use image::ImageFormat as F;
@@ -840,7 +849,7 @@ async fn open_outside(view: &mut View) {
         .await
         .unwrap_or_else(|_| Err("opener task failed".to_string()));
     match outcome {
-        Ok(()) => view.set_notice(format!("opened {shown}")),
+        Ok(done) => view.set_notice(done.notice(&shown)),
         Err(e) => view.set_notice(format!("open failed: {e}")),
     }
 }

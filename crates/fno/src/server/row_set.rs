@@ -397,7 +397,7 @@ impl Core {
                             );
                             AgentRow {
                                 harness: a.harness.clone(),
-                                model: a.model.clone(),
+                                model: self.row_model(a),
                                 route: a.route.clone(),
                                 spawned_by_session: a.spawned_by_session.clone(),
                                 lineage_kind: a.lineage_kind.clone(),
@@ -415,6 +415,7 @@ impl Core {
                                 exited,
                                 dnd: a.dnd,
                                 held_conversation: a.held_conversation,
+                                pinned: a.pinned,
                                 unmeasured,
                                 liveness_measured_at: a.liveness_measured_at,
                                 context_used_pct: a.context_used_pct,
@@ -512,6 +513,7 @@ impl Core {
                                     || e.is_some_and(|entry| entry.refused_worker.is_some()),
                                 dnd: false,
                                 held_conversation: false,
+                                pinned: false,
                                 unmeasured: false,
                                 liveness_measured_at: None,
                                 context_used_pct: None,
@@ -611,7 +613,7 @@ impl Core {
                     );
                     out.push(AgentRow {
                         harness: a.harness.clone(),
-                        model: a.model.clone(),
+                        model: self.row_model(a),
                         route: a.route.clone(),
                         spawned_by_session: a.spawned_by_session.clone(),
                         lineage_kind: a.lineage_kind.clone(),
@@ -633,6 +635,7 @@ impl Core {
                         },
                         dnd: a.dnd,
                         held_conversation: a.held_conversation,
+                        pinned: a.pinned,
                         unmeasured: false,
                         liveness_measured_at: None,
                         context_used_pct: a.context_used_pct,
@@ -701,7 +704,7 @@ impl Core {
                     );
                     out.push(AgentRow {
                         harness: a.harness.clone(),
-                        model: a.model.clone(),
+                        model: self.row_model(a),
                         route: a.route.clone(),
                         spawned_by_session: a.spawned_by_session.clone(),
                         lineage_kind: a.lineage_kind.clone(),
@@ -720,6 +723,7 @@ impl Core {
                         exited: a.exited,
                         dnd: a.dnd,
                         held_conversation: a.held_conversation,
+                        pinned: a.pinned,
                         unmeasured: a.liveness == agents_view::Liveness::Unmeasured,
                         liveness_measured_at: a.liveness_measured_at,
                         context_used_pct: a.context_used_pct,
@@ -880,6 +884,7 @@ impl Core {
                 exited,
                 dnd: false,
                 held_conversation: false,
+                pinned: false,
                 unmeasured: false,
                 liveness_measured_at: None,
                 context_used_pct: None,

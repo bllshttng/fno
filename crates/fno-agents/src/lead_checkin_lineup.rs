@@ -12,12 +12,17 @@ use serde_json::{json, Value};
 
 /// The reads `render_lines` needs to build the lineup. A failed graph read
 /// replaces the table with `READER FAILED lineup:`; a failed registry read
-/// prints the line and keeps the table with `-` model cells.
+/// prints the line and keeps the table with `-` model cells. `live` holds
+/// the beat's workers-payload rows: a seated node whose live worker answers
+/// shows the worker's observed harness/model, because the registry row
+/// carries the dispatch default the spawn stamped, which is exactly what
+/// the column must not read as the truth.
 pub(crate) struct LineupSources<'a> {
     pub(crate) queue: &'a [String],
     pub(crate) graph: Result<&'a [Value], &'a str>,
     pub(crate) registry: Option<&'a Registry>,
     pub(crate) registry_error: Option<&'a str>,
+    pub(crate) live: &'a [Value],
     pub(crate) planned: &'a dyn Fn(&str, &str) -> Option<String>,
 }
 
@@ -32,6 +37,7 @@ impl<'a> LineupSources<'a> {
             graph: Ok(&[]),
             registry: None,
             registry_error: None,
+            live: &[],
             planned: &NO_PLANNED,
         }
     }
@@ -43,16 +49,30 @@ fn graph_row<'a>(graph_rows: &'a [Value], id: &str) -> Option<&'a Value> {
         .find(|g| g.get("id").and_then(Value::as_str) == Some(id))
 }
 
-/// The seated model, as `harness/model`. The registry row is picked the way
-/// the seat is held: the org row's session first, then its worker name
-/// within the node, then the node alone - a retried node's predecessor row
-/// must never read as the active seat.
+/// The seated model, as `harness/model`. The live worker's observed seat
+/// wins: its `harness`/`model` are what the harness actually serves, while
+/// the registry row carries the dispatch default the spawn stamped. The
+/// registry row is picked the way the seat is held - the org row's session
+/// first, then its worker name within the node, then the node alone - and
+/// serves as the fallback for a seated node no live row answers (the
+/// "only when no worker runs" leg).
 fn seated_model(
+    live: &[Value],
     registry: Option<&Registry>,
     id: &str,
     worker: Option<&str>,
     session: Option<&str>,
 ) -> Option<String> {
+    if let Some(row) = live
+        .iter()
+        .find(|w| w.get("node").and_then(Value::as_str) == Some(id))
+    {
+        let harness = crate::lead_checkin::s_str(row, "harness").filter(|h| !h.is_empty());
+        let model = crate::lead_checkin::s_str(row, "model").filter(|m| !m.is_empty());
+        if let (Some(harness), Some(model)) = (harness, model) {
+            return Some(format!("{harness}/{model}"));
+        }
+    }
     let reg = registry?;
     let by_node = || reg.entries.iter().filter(|e| e.node.as_deref() == Some(id));
     let entry = session
@@ -78,6 +98,7 @@ pub(crate) fn lineup_rows(
     queue: &[String],
     graph_rows: &[Value],
     registry: Option<&Registry>,
+    live: &[Value],
     planned: impl Fn(&str, &str) -> Option<String>,
 ) -> Vec<Value> {
     let mut rows: Vec<Value> = Vec::new();
@@ -94,6 +115,7 @@ pub(crate) fn lineup_rows(
                 .and_then(|g| g.get("pr_number"))
                 .or_else(|| row.get("pr_number")),
             "model": seated_model(
+                live,
                 registry,
                 id,
                 row.get("worker").and_then(Value::as_str),
@@ -152,4 +174,70 @@ pub(crate) fn render_lineup(rows: &[Value]) -> Vec<String> {
         out.push(format!("  ... {hidden} more rows cut"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::RegistryEntry;
+
+    fn registry_entry(name: &str, node: &str, harness: &str, model: &str) -> RegistryEntry {
+        RegistryEntry {
+            name: name.to_string(),
+            node: Some(node.to_string()),
+            harness: Some(harness.to_string()),
+            model: Some(model.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The seated cell reads the live worker's observed seat: the registry
+    /// row carries the dispatch default the spawn stamped, which is exactly
+    /// the value the column must not pass off as what the harness serves
+    /// (observed 2026-10-24: the lead read `zai/...` for a worker the
+    /// harness was serving on claude).
+    #[test]
+    fn a_live_row_names_the_observed_model_over_the_registry_row() {
+        let reg = Registry {
+            entries: vec![registry_entry("t-x-1-a", "x-1", "zai", "glm-4.6-route")],
+            ..Default::default()
+        };
+        let org =
+            json!([{"id": "x-1", "worker": "t-x-1-a", "session": "sess-1", "status": "live"}]);
+        let graph = json!([{"id": "x-1", "title": "the node", "difficulty": "M"}]);
+        let live = json!([{"node": "x-1", "harness": "claude", "model": "glm-5.3-flash"}]);
+        let rows = lineup_rows(
+            org.as_array().unwrap(),
+            &[],
+            graph.as_array().unwrap(),
+            Some(&reg),
+            live.as_array().unwrap(),
+            |_, _| None,
+        );
+        assert_eq!(rows[0]["model"], json!("claude/glm-5.3-flash"), "{rows:?}");
+    }
+
+    /// A seated node no live row answers keeps the registry cell (the
+    /// only-when-no-worker-runs leg), and a live row for a different node
+    /// never crosses over.
+    #[test]
+    fn a_seated_node_without_a_live_answer_keeps_the_registry_cell() {
+        let reg = Registry {
+            entries: vec![registry_entry("t-x-1-a", "x-1", "zai", "glm-4.6-route")],
+            ..Default::default()
+        };
+        let org =
+            json!([{"id": "x-1", "worker": "t-x-1-a", "session": "sess-1", "status": "live"}]);
+        let graph = json!([{"id": "x-1", "title": "the node", "difficulty": "M"}]);
+        let foreign = json!([{"node": "x-2", "harness": "codex", "model": "5.5"}]);
+        let rows = lineup_rows(
+            org.as_array().unwrap(),
+            &[],
+            graph.as_array().unwrap(),
+            Some(&reg),
+            foreign.as_array().unwrap(),
+            |_, _| None,
+        );
+        assert_eq!(rows[0]["model"], json!("zai/glm-4.6-route"), "{rows:?}");
+    }
 }

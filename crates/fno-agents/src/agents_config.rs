@@ -44,12 +44,12 @@ pub(crate) fn global_config_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| Path::new(&h).join(".fno/config.toml"))
 }
 
-/// Python `_apply_search_ceiling` (config_io.py): under `FNO_CONFIG_SEARCH_ROOT`
-/// (an os.pathsep list), a DISCOVERED config file outside every root is not
-/// read. `fno.hermetic.neutralise` sets it so the git-derived canonical climb,
-/// which no HOME redirect can bound, cannot reach a real checkout. Unset, empty,
-/// or no resolvable root: no ceiling. An explicit `FNO_CONFIG` is exempt, as in
-/// Python.
+/// The one config search ceiling: under `FNO_CONFIG_SEARCH_ROOT` (an
+/// os.pathsep list), a DISCOVERED config file outside every root is not read.
+/// `fno.hermetic.neutralise` sets it for test runs, beside
+/// `FNO_NO_CANONICAL_CONFIG=1`, so no discovered file outside the sandbox
+/// reaches a Rust reader. The Python loader has no ceiling. Unset, empty, or
+/// no resolvable root: no ceiling. An explicit `FNO_CONFIG` is exempt.
 pub(crate) fn within_search_ceiling(path: &Path) -> bool {
     let Some(raw) = non_empty_env("FNO_CONFIG_SEARCH_ROOT") else {
         return true;
@@ -153,7 +153,7 @@ pub(crate) fn parse_config(content: &str) -> Option<toml::Table> {
 }
 
 /// First candidate config.toml that yields `Some(T)` via `extract`.
-fn resolve<T>(cwd: &Path, extract: impl Fn(&toml::Table) -> Option<T>) -> Option<T> {
+pub(crate) fn resolve<T>(cwd: &Path, extract: impl Fn(&toml::Table) -> Option<T>) -> Option<T> {
     for path in config_candidates(cwd) {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Some(table) = parse_config(&content) {
@@ -346,7 +346,7 @@ fn resolve_state_path(raw: &str, cwd: &Path) -> Option<PathBuf> {
 }
 
 /// Configured Python state root, including its `~/.fno` default. `FNO_STATE_DIR`
-/// first: the carrier `fno.paths.state_dir` resolves and `seal_state_root` pins,
+/// first: the carrier `fno.paths.state_dir` resolves and `credentials::seal` pins,
 /// so a sealed read serves the root its parent wrote.
 pub fn state_dir(cwd: &Path) -> Option<PathBuf> {
     if let Some(root) = non_empty_env("FNO_STATE_DIR") {
@@ -361,20 +361,25 @@ pub fn state_dir(cwd: &Path) -> Option<PathBuf> {
 }
 
 /// Config-independent plan/quota lock directory used by Python's `locks_dir`.
+/// The root keeps the config-free chain (`FNO_STATE_DIR`, else `$HOME/.fno`);
+/// the folder itself answers from the layout table's `locks` row, so the
+/// state-root fold retargets every taker at once when that row moves.
 pub fn machine_locks_dir() -> Option<PathBuf> {
-    if let Some(root) = non_empty_env("FNO_STATE_DIR") {
-        return Some(PathBuf::from(root).join("locks"));
-    }
-    Some(PathBuf::from(std::env::var_os("HOME")?).join(".fno/locks"))
+    let root = if let Some(root) = non_empty_env("FNO_STATE_DIR") {
+        PathBuf::from(root)
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".fno")
+    };
+    Some(crate::state_layout::place(&root, "locks"))
 }
 
 /// `state-root`: the seal-handshake door. A parent that pins
-/// `FNO_STATE_DIR` around a moved HOME (Python `seal_state_root`) execs
+/// `FNO_STATE_DIR` around a moved HOME (`accounts::credentials::seal`) execs
 /// this binary before relying on the pin and reads this door's one-line
 /// answer: the state root the inherited env actually resolves. A binary
 /// built before the carrier existed fails the echo check, and the parent
 /// refuses instead of letting the reads strand under the moved HOME.
-/// Transport-only (registers no verb; the shrink law allows none) and
+/// Transport-only (registers no command; the shrink law allows none) and
 /// matched in main() before the runtime builds, so a probe is microseconds.
 pub fn run_state_root_probe() -> i32 {
     match state_root_probe_line() {
@@ -464,6 +469,30 @@ pub fn default_diff_budget(cwd: &Path) -> u32 {
     config_lookup(cwd, &["plan", "default_diff_budget"])
         .and_then(|v| v.as_integer().and_then(|i| u32::try_from(i).ok()))
         .unwrap_or(DEFAULT_PLAN_DIFF_BUDGET)
+}
+
+/// Default wall bound for one merge-path gh read (the pr-worktree resolve
+/// that backs the merge gate and the push command): the 30s the call sites
+/// hardcoded, now one config key. The shim's own stall under load is the
+/// reason reads missed it; a longer bound hides a stall, it does not fix
+/// one.
+pub const DEFAULT_MERGE_GH_READ_SECS: u64 = 30;
+
+/// Resolve `bounds.merge_gh_read_secs` with the shared precedence: env
+/// override, config, default. 0 reads as unset (a zero bound would refuse
+/// every read).
+pub fn merge_gh_read_secs(cwd: &Path) -> u64 {
+    if let Some(v) = non_empty_env("FNO_MERGE_GH_READ_SECS")
+        .and_then(|s| s.to_str().and_then(|s| s.trim().parse::<u64>().ok()))
+        .filter(|v| *v > 0)
+    {
+        return v;
+    }
+    config_lookup(cwd, &["bounds", "merge_gh_read_secs"])
+        .and_then(|v| v.as_integer())
+        .and_then(|i| u64::try_from(i).ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MERGE_GH_READ_SECS)
 }
 
 /// Apply the shared headless confinement boundary for harnesses whose own argv
@@ -802,6 +831,24 @@ fn table_max_cargo_runs(t: &toml::Table) -> Option<u32> {
         .filter(|v| *v > 0)
 }
 
+/// The default for [`max_local_runs`]: how many direct-set `fno doctor test`
+/// runs an agent may hold on the machine at once.
+pub const DEFAULT_MAX_LOCAL_RUNS: u32 = 2;
+
+/// Resolve `test.max_local_runs`, the local test slot pool, with the same
+/// fail-open degrade as [`max_cargo_runs`].
+pub fn max_local_runs(cwd: &Path) -> u32 {
+    resolve(cwd, |t| {
+        t.get("test")?
+            .as_table()?
+            .get("max_local_runs")?
+            .as_integer()
+            .and_then(|i| u32::try_from(i).ok())
+            .filter(|v| *v > 0)
+    })
+    .unwrap_or(DEFAULT_MAX_LOCAL_RUNS)
+}
+
 #[cfg(test)]
 pub(crate) fn read_max_cargo_runs(content: &str) -> Option<u32> {
     table_max_cargo_runs(&parse_config(content)?)
@@ -828,8 +875,9 @@ pub fn reap_receipt_retain_days(cwd: &Path) -> u64 {
 /// today's behavior: only rows whose provenance resolves and whose work is
 /// done. `All` widens to resolved rows with open work. `Off` retires nothing.
 /// The one rule no value can cross: an unowned session retires only on an
-/// fno-ownership marker (a sessions[] row fno wrote, or a reap receipt an
-/// earlier retirement staged), so a session with no marker at all is
+/// fno-ownership marker (a sessions[] row fno wrote, a reap receipt an
+/// earlier retirement staged, or a claimed launch record naming the
+/// launcher session), so a session with no marker at all is
 /// unreachable by construction, not by default value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RosterScope {
@@ -1123,7 +1171,7 @@ pub fn worker_qos_enabled(cwd: &Path) -> bool {
 /// "true", "yes", "1", "on". It was deliberately stricter while it read only
 /// for the native arm. Now `fno do pr merge` resolves its own standing switch
 /// through here, so a stricter reader would refuse a documented spelling that
-/// the same verb honored a release ago. Any change to either spelling set
+/// the same command honored a release ago. Any change to either spelling set
 /// must move both readers and the git-protection hook, or the gates split on
 /// exactly that spelling.
 pub fn auto_merge_enabled(cwd: &Path) -> bool {
@@ -1213,7 +1261,7 @@ fn affirmative(value: &toml::Value) -> bool {
 /// This is now the ONE enforcement arm of that floor: the Python twin
 /// (`automerge_floor_refusal` in `fno/review_capability.py`) deleted with the
 /// module, which had no production caller left. Without this arm a
-/// below-floor repo that can never pass the merge verb could still hand the
+/// below-floor repo that can never pass the merge command could still hand the
 /// merge to GitHub at the green terminal.
 ///
 /// The below-floor set is derived from the legacy-inference mirror in
@@ -1323,7 +1371,7 @@ const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
 
 /// Resolve `merge.visual_paint_paths`, the render-surface paths whose PRs
 /// hold for the user's visual approval until an answered question page names
-/// the PR. A configured list wins, and an explicit empty list disarms the
+/// the PR at its head. A configured list wins, and an explicit empty list disarms the
 /// gate. With no key in any tier, a checkout that carries the mux client gets
 /// the built-in paint list, so a stock footnote tree holds its own UI PRs;
 /// any other project stays disarmed until it names its paint surface here.
@@ -1425,7 +1473,7 @@ pub fn auto_merge_require_checks_pass(cwd: &Path) -> bool {
 }
 
 /// Resolve `[auto_merge] remediation` (default `attempt`). The only other
-/// legal value is `verify_only`, which the verify verb's remediation arm
+/// legal value is `verify_only`, which the verify command's remediation arm
 /// refuses on; anything else coerces to `attempt`, exactly the Python
 /// validator's stance - a config error never grants a merge attempt.
 pub fn auto_merge_remediation(cwd: &Path) -> String {
@@ -1441,7 +1489,7 @@ pub fn auto_merge_remediation(cwd: &Path) -> String {
 }
 
 /// Resolve `[auto_merge] delete_branch_on_merge` (default ON). The verify
-/// remediation's post-merge cleanup reads the same switch the merge verb does,
+/// remediation's post-merge cleanup reads the same switch the merge command does,
 /// so both executors treat cleanup identically.
 pub fn auto_merge_delete_branch_on_merge(cwd: &Path) -> bool {
     resolve(cwd, |t| {
@@ -1547,6 +1595,18 @@ pub fn notify_arm_starved_after_s(cwd: &Path) -> u64 {
     .min(retention_s)
 }
 
+/// `[pr_watch] enabled` (default false): whether the launchd PR watcher runs,
+/// the one scheduler behind heal and every other launchd arm.
+pub fn pr_watch_enabled(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("pr_watch")?
+            .as_table()?
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+    })
+    .unwrap_or(false)
+}
+
 /// `[auto_heal] enabled` (default false): whether the CI healer drive loop is armed.
 pub fn auto_heal_enabled(cwd: &Path) -> bool {
     resolve(cwd, |t| {
@@ -1625,7 +1685,7 @@ pub fn slot_cutover_threshold_pct(cwd: &Path) -> f64 {
 
 /// `recovery.self_heal.enabled` (default ON): the arm_watch tick runs the
 /// safe repairs (dead flight holds, the launchd refresh, the install from
-/// main) before it pages. Off, the rows still name the repair verb.
+/// main) before it pages. Off, the rows still name the repair command.
 pub fn self_heal_enabled(cwd: &Path) -> bool {
     resolve(cwd, |t| {
         t.get("recovery")?
@@ -1813,7 +1873,7 @@ mod tests {
         );
         assert_eq!(
             machine_locks_dir(),
-            Some(PathBuf::from("/pinned-state/locks"))
+            Some(PathBuf::from("/pinned-state/state/locks"))
         );
 
         match prior {
@@ -2147,6 +2207,9 @@ mod tests {
 
     fn clear_config_env() {
         std::env::remove_var("FNO_CONFIG");
+        // `fno doctor test rust` runs under fno.hermetic.neutralise, which
+        // drops the canonical candidate the linked-worktree test reads.
+        std::env::remove_var("FNO_NO_CANONICAL_CONFIG");
         // Point the global tier at an empty directory rather than unsetting it:
         // an unset FNO_GLOBAL_SETTINGS_PATH falls back to the REAL
         // $HOME/.fno/config.toml, so every "absent key -> default" assertion
@@ -2171,6 +2234,55 @@ mod tests {
         let f = dir.join("explicit.toml");
         std::fs::write(&f, body).unwrap();
         f
+    }
+
+    /// The merge-path gh read bound reads `bounds.merge_gh_read_secs` and
+    /// falls back to the 30s default when nothing is set.
+    #[test]
+    fn merge_gh_read_secs_reads_config_over_the_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let bare = write_project_settings("merge-read-bare", "schema_version = 1\n");
+        assert_eq!(
+            merge_gh_read_secs(&bare),
+            DEFAULT_MERGE_GH_READ_SECS,
+            "no key anywhere reads the default"
+        );
+        let project =
+            write_project_settings("merge-read-config", "[bounds]\nmerge_gh_read_secs = 90\n");
+        assert_eq!(merge_gh_read_secs(&project), 90);
+        clear_config_env();
+    }
+
+    /// The env outranks the config, and a zero reads as unset in both
+    /// tiers - a zero bound would refuse every read.
+    #[test]
+    fn merge_gh_read_secs_env_outranks_config_and_zero_reads_unset() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let project =
+            write_project_settings("merge-read-env", "[bounds]\nmerge_gh_read_secs = 90\n");
+        std::env::set_var("FNO_MERGE_GH_READ_SECS", "5");
+        assert_eq!(
+            merge_gh_read_secs(&project),
+            5,
+            "the env outranks the config"
+        );
+        std::env::set_var("FNO_MERGE_GH_READ_SECS", "0");
+        assert_eq!(
+            merge_gh_read_secs(&project),
+            90,
+            "a zero env reads as unset"
+        );
+        std::env::remove_var("FNO_MERGE_GH_READ_SECS");
+        let zeroed =
+            write_project_settings("merge-read-zero", "[bounds]\nmerge_gh_read_secs = 0\n");
+        assert_eq!(
+            merge_gh_read_secs(&zeroed),
+            DEFAULT_MERGE_GH_READ_SECS,
+            "a zero config reads as unset"
+        );
+        clear_config_env();
     }
 
     // --- guardrail presets --------------------------------------
@@ -2247,7 +2359,7 @@ mod tests {
     #[test]
     fn auto_merge_enabled_accepts_the_python_affirmative_spellings() {
         // This reader now decides `fno do pr merge` too. A stricter set here
-        // would refuse `enabled = "true"` at the verb that honored it before.
+        // would refuse `enabled = "true"` at the command that honored it before.
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for (i, literal) in ["true", "\"true\"", "\"yes\"", "\"1\"", "\"ON\"", "1"]
             .iter()

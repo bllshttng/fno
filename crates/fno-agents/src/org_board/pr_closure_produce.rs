@@ -1,8 +1,8 @@
-//! The produce half of the `pr-closure-*` verb family: branch-ids, ensure,
-//! trailer, bind-created, and context. Each verb reads one JSON payload on
+//! The produce half of the `pr-closure-*` command family: branch-ids, ensure,
+//! trailer, bind-created, and context. Each command reads one JSON payload on
 //! stdin (trailer is argv-driven; bind-created takes its payload as one
 //! JSON argv element, matching its CLI door) and answers with the exact
-//! bytes the Python verbs printed, pinned by `tests/golden/pr_closure_produce/`.
+//! bytes the Python commands printed, pinned by `tests/golden/pr_closure_produce/`.
 //!
 //! Envelopes are hand-built strings, not `serde_json::json!`, because key
 //! order is part of the parity contract (`json!` sorts keys; Python dicts
@@ -27,17 +27,17 @@ use crate::node_branch::node_ids;
 type Leg = fn(&serde_json::Value) -> (i32, String, String);
 
 pub(crate) fn run(args: &[String]) -> i32 {
-    let verb = args.first().map(String::as_str).unwrap_or("");
-    match verb {
+    let command = args.first().map(String::as_str).unwrap_or("");
+    match command {
         "pr-closure-trailer" => leg_trailer(&args[1..]),
-        "pr-closure-branch-ids" => run_case_verb(verb, leg_branch_ids),
-        "pr-closure-ensure" => run_case_verb(verb, leg_ensure),
-        "pr-closure-bind-created" => run_argv_verb(
-            verb,
+        "pr-closure-branch-ids" => run_case_command(command, leg_branch_ids),
+        "pr-closure-ensure" => run_case_command(command, leg_ensure),
+        "pr-closure-bind-created" => run_argv_command(
+            command,
             leg_bind,
             args.get(1).map(String::as_str).unwrap_or(""),
         ),
-        "pr-closure-context" => run_case_verb(verb, leg_context),
+        "pr-closure-context" => run_case_command(command, leg_context),
         _ => {
             eprint!(
                 "usage: fno-agents pr-closure-<parse|render|branch-ids|ensure|trailer|bind-created|context>\n"
@@ -49,16 +49,16 @@ pub(crate) fn run(args: &[String]) -> i32 {
 
 /// One JSON payload on stdin, one leg, streams printed verbatim. Every
 /// golden stream ends in a newline, so the line-buffered writers flush.
-fn run_case_verb(verb: &str, leg: Leg) -> i32 {
+fn run_case_command(command: &str, leg: Leg) -> i32 {
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() {
-        eprint!("{verb}: cannot read stdin\n");
+        eprint!("{command}: cannot read stdin\n");
         return 2;
     }
     let parsed: serde_json::Value = match serde_json::from_str(&payload) {
         Ok(v) => v,
         Err(e) => {
-            eprint!("{verb}: stdin was not JSON: {e}\n");
+            eprint!("{command}: stdin was not JSON: {e}\n");
             return 2;
         }
     };
@@ -69,11 +69,11 @@ fn run_case_verb(verb: &str, leg: Leg) -> i32 {
 /// element (the authorized-merge pattern), because the shared
 /// `_forward_to_binary` passthrough inherits the caller's stdin and a TTY
 /// there would hang a stdin read.
-fn run_argv_verb(verb: &str, leg: Leg, payload: &str) -> i32 {
+fn run_argv_command(command: &str, leg: Leg, payload: &str) -> i32 {
     let parsed: serde_json::Value = match serde_json::from_str(payload) {
         Ok(v) => v,
         Err(e) => {
-            eprint!("{verb}: argv payload was not JSON: {e}\n");
+            eprint!("{command}: argv payload was not JSON: {e}\n");
             return 2;
         }
     };
@@ -388,10 +388,14 @@ fn leg_ensure(payload: &serde_json::Value) -> (i32, String, String) {
 
 fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     if external_backend_selected() {
-        return bind_envelope(
-            &refused(Some("graph backend is not active".to_string())),
-            &[],
-        );
+        let name = crate::tracker::backend_name(None);
+        return match crate::tracker::backend(&name) {
+            Ok(tracker) => {
+                let root = crate::tracker::sidecar::root(&current_dir());
+                bind_external(payload, tracker.as_ref(), &root)
+            }
+            Err(e) => bind_envelope(&refused(Some(e.to_string())), &[]),
+        };
     }
     let url = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let node = payload.get("node").and_then(|v| v.as_str());
@@ -451,6 +455,51 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
         }
     }
     bind_envelope(&bound, &matched)
+}
+
+/// The external-backend bind: the PR lands on the sidecar of the named id.
+/// No branch inference - an external id is never derived from a branch name.
+fn bind_external(
+    payload: &serde_json::Value,
+    tracker: &dyn crate::tracker::Tracker,
+    sidecar_root: &Path,
+) -> (i32, String, String) {
+    let Some(id) = payload
+        .get("node")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return bind_envelope(
+            &refused(Some(
+                "an external tracker backend needs the item named: pass --node <external id>"
+                    .to_string(),
+            )),
+            &[],
+        );
+    };
+    let url = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(pr_number) = pr_number_from_url(Some(url)) else {
+        return bind_envelope(&refused(Some(format!("not a PR url: {url:?}"))), &[]);
+    };
+    if let Err(e) = tracker.read(id) {
+        return bind_envelope(&refused(Some(e.to_string())), &[]);
+    }
+    let mut fields = serde_json::Map::new();
+    fields.insert("pr_number".into(), serde_json::Value::from(pr_number));
+    fields.insert("pr_url".into(), serde_json::Value::String(url.to_string()));
+    let claimed = [id.to_string()];
+    match crate::tracker::sidecar::save(sidecar_root, id, &fields) {
+        Ok(_) => bind_envelope(
+            &PrRowBindResult {
+                outcome: "bound",
+                bindings: Vec::new(),
+                refusal: None,
+            },
+            &claimed,
+        ),
+        Err(e) => bind_envelope(&refused(Some(e.to_string())), &claimed),
+    }
 }
 
 fn leg_trailer(argv: &[String]) -> i32 {
@@ -580,7 +629,7 @@ fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
         cmd.push(r.to_string());
     }
     cmd.push("--json".to_string());
-    cmd.push("number,body,url,state,mergedAt,files".to_string());
+    cmd.push("number,body,url,state,mergedAt,files,headRefName".to_string());
     let out = match run_with_timeout_full(&cmd, Path::new("."), Duration::from_secs_f64(30.0)) {
         Ok(o) => o,
         Err(RunFailure::KilledAtSlice(_)) => {
@@ -675,14 +724,49 @@ fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
             }
         }
     }
+    // The head ref is the branch binding key the plan-hold door reads.
+    let head_ref_json = match row.get("headRefName") {
+        Some(serde_json::Value::String(s)) => escape_json_string(s),
+        _ => "\"\"".to_string(),
+    };
     let out = format!(
-        "{{\"number\":{},\"body\":{},\"url\":{},\"state\":{},\"merged_at\":{},\"changed_files\":{}}}\n",
+        "{{\"number\":{},\"body\":{},\"url\":{},\"state\":{},\"merged_at\":{},\"changed_files\":{},\"head_ref\":{}}}\n",
         number_json,
         body_json,
         url_json,
         state_json,
         merged_json,
-        str_array_json(&files)
+        str_array_json(&files),
+        head_ref_json
     );
     (0, out, String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_external_bind_records_the_pr_on_the_named_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = crate::tracker::FakeTracker(&["o/r#1"]);
+        let url = "https://github.com/o/r/pull/7";
+        let (code, out, _) = bind_external(
+            &serde_json::json!({"url": url, "node": "o/r#1"}),
+            &fake,
+            dir.path(),
+        );
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("\"outcome\":\"bound\""), "{out}");
+        let got = crate::tracker::sidecar::load(dir.path(), "o/r#1").unwrap();
+        assert_eq!(got["pr_number"], serde_json::json!(7));
+        assert_eq!(got["pr_url"], serde_json::json!(url));
+
+        let (code, out, _) = bind_external(&serde_json::json!({"url": url}), &fake, dir.path());
+        assert_eq!(code, 1);
+        assert!(
+            out.contains("\"refused\"") && out.contains("--node"),
+            "{out}"
+        );
+    }
 }

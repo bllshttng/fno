@@ -1,0 +1,11 @@
+{
+  "detail": null,
+  "reason": "stale_context",
+  "reference": "brief:company-brief",
+  "role": {
+    "function_id": "marketing",
+    "id": "owner"
+  },
+  "source_id": "briefs/company-brief.md",
+  "source_layer": "company"
+}

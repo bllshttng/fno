@@ -43,11 +43,6 @@ pub(crate) fn watching_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r"<watching[>\s]").unwrap())
 }
 
-pub(crate) fn help_re() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"<help[>\s]").unwrap())
-}
-
 pub(crate) fn api_error_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"^API Error\b").unwrap())
@@ -91,10 +86,14 @@ pub(crate) enum Signal {
 
 impl Signal {
     pub(crate) fn of(text: &str) -> Self {
-        if watching_re().is_match(text) {
+        // One blank pass serves the two opener arms; the help arm blanks
+        // again inside the parser, which is idempotent on already-blanked
+        // text.
+        let blanked = crate::distress::blank_code_spans_and_fences(text);
+        if watching_re().is_match(&blanked) {
             return Signal::Watching;
         }
-        if promise_re().is_match(text) {
+        if promise_re().is_match(&blanked) {
             return Signal::Promise;
         }
         if api_error_re().is_match(text.trim_start()) {
@@ -102,7 +101,10 @@ impl Signal {
         }
         let stripped = text.trim_end();
         if stripped.ends_with('?')
-            || help_re().is_match(text)
+            // The shared distress parser, not a bare opener regex: a tag the
+            // turn merely quotes in code is prose, so truth and the loop
+            // runtime (which blanks before its own match) agree.
+            || crate::distress::extract_help_distress(text).is_some()
             || option_prompt_re().is_match(stripped)
         {
             return Signal::Question;
@@ -443,6 +445,19 @@ fn extract_text(content: Option<&Value>) -> String {
     }
 }
 
+/// A record the harness or control plane injected, never the worker's own
+/// voice. A skill/command injection opens with the command-framing tags and
+/// carries the whole skill body, protocol tags quoted throughout; a
+/// `<local-command-stdout>` record is the harness's output, not the
+/// worker's. Tool-result blocks already drop in `extract_text`; this
+/// catches the injected record that DOES carry text.
+pub(crate) fn injected_record_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("<command-message>")
+        || t.starts_with("<command-name>")
+        || t.starts_with("<local-command-stdout>")
+}
+
 /// A claude transcript `user`/`assistant` line, else `None`.
 fn parse_claude_record(v: &Value) -> Option<TruthRecord> {
     let kind = v.get("type").and_then(Value::as_str)?;
@@ -522,9 +537,7 @@ fn ambient_opencode_db() -> PathBuf {
 /// `None`. `time_updated` is epoch millis. A locked or schema-drifted store
 /// answers `None` (age-unknown), never an error.
 fn opencode_activity_epoch(db: &Path, session_id: &str) -> Option<f64> {
-    let conn =
-        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .ok()?;
+    let conn = crate::graph_store::open_read_only_wal_safe(db)?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
     conn.query_row(
         "SELECT MAX(time_updated) FROM message WHERE session_id = ?1",
@@ -541,12 +554,9 @@ fn opencode_activity_epoch(db: &Path, session_id: &str) -> Option<f64> {
 /// text, `tool` parts render `[tool_use: name]`, no renderable text drops
 /// the turn.
 fn opencode_records_db(db: &Path, session_id: &str, n: usize) -> Vec<TruthRecord> {
-    let conn =
-        match rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        {
-            Ok(conn) => conn,
-            Err(_) => return Vec::new(),
-        };
+    let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
+        return Vec::new();
+    };
     let _ = conn.busy_timeout(std::time::Duration::from_secs(2));
     let Ok(mut stmt) = conn.prepare(
         "SELECT id, data FROM message WHERE session_id = ?1 \
@@ -1023,14 +1033,10 @@ fn claude_holder_proven(session_id: &str) -> bool {
 /// 120 chars classify, and with no HTTP status the only swap-triggering
 /// class reachable is the quota one. The error-class strings stay verbatim.
 fn provider_refusal_of(last_text: &str) -> Option<String> {
-    const QUOTA_MARKERS: [&str; 3] = ["rate limit", "quota exceeded", "usage limit"];
+    use crate::accounts::error_class::{matches_quota_body, ErrorClass};
     let collapsed: String = last_text.split_whitespace().collect::<Vec<_>>().join(" ");
     let lead: String = collapsed.chars().take(120).collect();
-    let lead_lower = lead.to_lowercase();
-    QUOTA_MARKERS
-        .iter()
-        .find(|marker| lead_lower.contains(*marker))
-        .map(|_| "provider_4xx_quota".to_string())
+    matches_quota_body(&lead).then(|| ErrorClass::Provider4xxQuota.as_str().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1362,9 +1368,7 @@ fn opencode_summary<C: CursorAccess>(
 /// A cheap change marker for one opencode session: newest part write and
 /// part count. `None` when the store cannot answer, which always rebuilds.
 fn opencode_version(db: &Path, session_id: &str) -> Option<i64> {
-    let conn =
-        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .ok()?;
+    let conn = crate::graph_store::open_read_only_wal_safe(db)?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
     let (newest, count): (Option<i64>, i64) = conn
         .query_row(
@@ -1376,16 +1380,17 @@ fn opencode_version(db: &Path, session_id: &str) -> Option<i64> {
     Some(newest?.wrapping_mul(1_000_003).wrapping_add(count))
 }
 
-/// The transcript file for a resolved session: the row's own stamp when it
-/// carries one, else the harness lookup (claude projects store; codex
+/// The transcript file for a resolved session: the row's own stamp when the
+/// file is there, else the harness lookup (claude projects store; codex
 /// sessions tree), cached so a sweep lists neither store per row. opencode
-/// has none.
+/// has none. A stamp can name the launch cwd's project dir while the session
+/// wrote under its worktree's, so a missing file falls through to the scan.
 fn transcript_for<C: CursorAccess>(
     session: &TruthSession,
     stores: &Stores,
     cursors: &mut C,
 ) -> Option<PathBuf> {
-    if let Some(path) = session.transcript_path.as_ref() {
+    if let Some(path) = session.transcript_path.as_ref().filter(|p| p.exists()) {
         return Some(path.clone());
     }
     match session.agent.as_str() {
@@ -1495,6 +1500,48 @@ mod tests {
 
     const NOW: f64 = 1_791_460_800.0; // 2026-10-08T12:00:00Z
 
+    /// A command-framed record (the skill body rides one string) and a
+    /// local-command output are injections, never the worker's own report;
+    /// the worker's text is not.
+    #[test]
+    fn an_injected_command_record_is_not_worker_text() {
+        assert!(injected_record_text(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\nbody quoting <help class=\"stuck\" reason=\"ci\">"
+        ));
+        assert!(injected_record_text(
+            "<local-command-stdout>ok</local-command-stdout>"
+        ));
+        assert!(!injected_record_text("RESULT: SUCCESS shipped the fix"));
+    }
+
+    /// The question signal reads only a REAL help block: a turn quoting the
+    /// tag in inline code stays plain, a real block asks for the lead's move.
+    #[test]
+    fn a_quoted_help_tag_is_not_a_question_but_a_real_block_is() {
+        let quoted = "Re-arming; `<help class=\"held\">` only if this wedges";
+        assert_eq!(Signal::of(quoted), Signal::Plain);
+        let real =
+            "blocked on the ruling: <help class=\"question\" reason=\"grid\">which band?</help>";
+        assert_eq!(Signal::of(real), Signal::Question);
+    }
+
+    /// The done and watching signals also blank code spans first, exactly as
+    /// the loop runtime's intent match does: a quoted promise or watching
+    /// tag is prose, a real one still signals.
+    #[test]
+    fn a_quoted_promise_or_watching_tag_does_not_signal_but_a_real_one_does() {
+        let quoted = "the gate reads `<promise>MISSION COMPLETE</promise>` from external truth";
+        assert_ne!(Signal::of(quoted), Signal::Promise);
+        assert_eq!(
+            Signal::of("<promise>MISSION COMPLETE: shipped</promise>"),
+            Signal::Promise
+        );
+        assert_eq!(
+            Signal::of("<watching reason=\"ci\" pr=\"4081\">"),
+            Signal::Watching
+        );
+    }
+
     /// Until the warm pass rebuilds a session, truth answers `warming`, and
     /// the decoded probe is neither live nor dead. After the rebuild the same
     /// handle answers its real state.
@@ -1571,6 +1618,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A stamped transcript that is not on disk falls through to the store
+    /// scan, so the session still answers an age.
+    #[test]
+    fn a_missing_stamped_transcript_falls_back_to_the_store() {
+        let dir = tmp("stamp-gone");
+        let sid = "abcd1234-0000-0000-0000-000000000000";
+        let mut gone = row("g1", "claude", &dir.join("launch-cwd").join("gone.jsonl"));
+        gone.harness_session_id = Some(sid.to_string());
+        let stores = stores(&dir);
+        let project = stores.projects_root.join("-worktree");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join(format!("{sid}.jsonl")),
+            r#"{"type":"assistant","timestamp":"2026-10-08T11:59:00Z","message":{"role":"assistant","model":"claude-opus-5-5","content":"reading"}}"#.to_string() + "\n",
+        )
+        .unwrap();
+        let mut cursors = TruthCursors::new();
+        let rows = vec![gone];
+        let payload = resolve_payload(Some(&rows), "g1", NOW, &stores, &mut cursors);
+        assert!(payload["last_activity_age_s"].is_number(), "{payload}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn compact_case(agent: &str, before: &str, boundary: &str, after: &str) -> Value {
         let dir = tmp(&format!("compact-{agent}"));
         let path = dir.join("t.jsonl");
@@ -1610,5 +1680,30 @@ mod tests {
         );
         assert_eq!(payload["state"], "working", "{payload}");
         assert_eq!(payload["observed_model"]["model"], "claude-opus-5-5");
+    }
+
+    #[test]
+    fn opencode_reader_reads_a_wal_store_whose_shm_is_gone() {
+        // The exact state a daemon's clean exit leaves: the header stays WAL
+        // while the checkpoint removed the -wal and -shm sidecars. The plain
+        // read-only open refuses it, which degraded every opencode truth read
+        // to age-unknown. The immutable retry must answer.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;\n\
+             CREATE TABLE message (session_id TEXT, time_updated REAL);\n\
+             INSERT INTO message VALUES ('s-1', 1791460800000.0);\n\
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!dir.path().join("opencode.db-shm").exists());
+        assert_eq!(
+            opencode_activity_epoch(&db, "s-1"),
+            Some(1791460800.0),
+            "the immutable retry must read the checkpointed store"
+        );
     }
 }

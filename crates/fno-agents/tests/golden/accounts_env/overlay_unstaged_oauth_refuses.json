@@ -1,0 +1,1 @@
+{"op": "overlay", "id": "o1", "config": "[[accounts.records]]\nid = \"o1\"\nname = \"o1\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\n", "dirs": ["creds"], "expect": {"error": "account 'o1' is not staged; run `fno config accounts register`/stage before spawning against it"}}

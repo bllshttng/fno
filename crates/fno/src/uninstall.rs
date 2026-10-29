@@ -1,7 +1,7 @@
 //! `fno uninstall`: find everything an fno install put on this machine, list
-//! it, and remove each item through its own uninstall verb.
+//! it, and remove each item through its own uninstall command.
 //!
-//! Native on purpose: the verb removes the Python wheel half way through, so
+//! Native on purpose: the command removes the Python wheel half way through, so
 //! it must never depend on that wheel. `~/.fno` stays unless `--purge` is
 //! passed and the user types the confirmation word on a terminal.
 
@@ -18,6 +18,11 @@ use crate::process_admission::{std_command, std_spawn};
 /// `fno uninstall`'s flags.
 #[derive(Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Opts {
+    /// Print this help
+    // A field, not clap's help flag: a clap help request reaches the front
+    // door as a parse error and exits 2.
+    #[arg(short = 'h', long)]
+    pub help: bool,
     /// Remove without asking (required when stdin is not a terminal)
     #[arg(long)]
     pub yes: bool,
@@ -34,16 +39,19 @@ const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
 const SCCACHE_DIR_KEY: &str = "SCCACHE_DIR";
 const RC_MARK: &str = "# fno: cargo build-dir";
 /// The first line of the block `fno config setup cli-hooks` appends to codex.
-const CODEX_BLOCK_MARK: &str = "# Added by `fno config setup cli-hooks`";
+pub(crate) const CODEX_BLOCK_MARK: &str = "# Added by `fno config setup cli-hooks`";
 const PURGE_WORD: &str = "purge";
 /// The uv tool name the wheel installs under (a directory in `uv tool dir`).
 const UV_TOOL: &str = "fno";
+const UV_INSTALLED_MARKER: &str = "uv-installed-by-fno";
 /// The crontab block `scripts/install-autocorrect-cron.sh` writes on Linux.
 const CRON_BEGIN: &str = "# BEGIN autocorrect-managed";
 const CRON_END: &str = "# END autocorrect-managed";
 /// The plugin name agy knows: the repo plugin.json "name", the same name
 /// `scripts/install/agy-plugin.sh` installs and `agy plugin uninstall` takes.
 const AGY_PLUGIN: &str = "footnote";
+/// The plugin marketplace name, then the name it had before the rename.
+const MARKETPLACE_NAMES: [&str; 2] = ["fno", "footnote"];
 
 enum Action {
     Run(Vec<String>),
@@ -100,6 +108,17 @@ fn on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
+}
+
+/// Where Astral's installer put uv: `$XDG_BIN_HOME`, else `~/.local/bin`.
+/// Never a PATH lookup: the first `uv` on PATH can be the user's own copy.
+fn uv_install_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_BIN_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([home().join(".local/bin")])
+        .find(|dir| dir.join("uv").is_file())
 }
 
 fn read(path: &Path) -> String {
@@ -305,7 +324,7 @@ fn join_lines(lines: &[&str]) -> String {
 }
 
 /// Line-based, so a codex config keeps its comments and layout. Drops the
-/// marked SessionStart block, the `fno@footnote` hook trust tables and the
+/// marked SessionStart block, the `fno@fno` and `fno@footnote` hook trust tables and the
 /// build-dir and sccache exports. `None` when nothing matched.
 pub(crate) fn strip_codex_toml(text: &str) -> Option<String> {
     let mut out = Vec::new();
@@ -336,7 +355,9 @@ pub(crate) fn strip_codex_toml(text: &str) -> Option<String> {
             continue;
         }
         if t.starts_with('[') && t.ends_with(']') {
-            in_trust_table = t.starts_with("[hooks.state.\"fno@footnote:");
+            in_trust_table = MARKETPLACE_NAMES
+                .iter()
+                .any(|name| t.starts_with(&format!("[hooks.state.\"fno@{name}:")));
         }
         let env_export = [BUILD_DIR_KEY, SCCACHE_DIR_KEY]
             .iter()
@@ -421,25 +442,26 @@ fn discover() -> Vec<Item> {
         }
     }
 
+    // An install made before the marketplace moved to "fno" still carries
+    // the old "footnote" name, so both are removed.
     let claude = env_dir("CLAUDE_CONFIG_DIR", ".claude");
     if on_path("claude").is_some() {
-        if read(&claude.join("plugins/installed_plugins.json")).contains("\"fno@footnote\"") {
-            add(
-                "Claude Code plugin fno@footnote".into(),
-                Action::Run(argv(&["claude", "plugin", "uninstall", "fno@footnote"])),
-            );
-        }
-        if read(&claude.join("plugins/known_marketplaces.json")).contains("\"footnote\"") {
-            add(
-                "Claude Code marketplace footnote".into(),
-                Action::Run(argv(&[
-                    "claude",
-                    "plugin",
-                    "marketplace",
-                    "remove",
-                    "footnote",
-                ])),
-            );
+        let installed = read(&claude.join("plugins/installed_plugins.json"));
+        let known = read(&claude.join("plugins/known_marketplaces.json"));
+        for name in MARKETPLACE_NAMES {
+            let id = format!("fno@{name}");
+            if installed.contains(&format!("\"{id}\"")) {
+                add(
+                    format!("Claude Code plugin {id}"),
+                    Action::Run(argv(&["claude", "plugin", "uninstall", id.as_str()])),
+                );
+            }
+            if known.contains(&format!("\"{name}\"")) {
+                add(
+                    format!("Claude Code marketplace {name}"),
+                    Action::Run(argv(&["claude", "plugin", "marketplace", "remove", name])),
+                );
+            }
         }
     }
 
@@ -447,23 +469,20 @@ fn discover() -> Vec<Item> {
     let codex_config = codex.join("config.toml");
     if on_path("codex").is_some() {
         let text = read(&codex_config);
-        if text.contains("[plugins.\"fno@footnote\"]") {
-            add(
-                "Codex plugin fno@footnote".into(),
-                Action::Run(argv(&["codex", "plugin", "remove", "fno@footnote"])),
-            );
-        }
-        if text.contains("[marketplaces.footnote]") {
-            add(
-                "Codex marketplace footnote".into(),
-                Action::Run(argv(&[
-                    "codex",
-                    "plugin",
-                    "marketplace",
-                    "remove",
-                    "footnote",
-                ])),
-            );
+        for name in MARKETPLACE_NAMES {
+            let id = format!("fno@{name}");
+            if text.contains(&format!("[plugins.\"{id}\"]")) {
+                add(
+                    format!("Codex plugin {id}"),
+                    Action::Run(argv(&["codex", "plugin", "remove", id.as_str()])),
+                );
+            }
+            if text.contains(&format!("[marketplaces.{name}]")) {
+                add(
+                    format!("Codex marketplace {name}"),
+                    Action::Run(argv(&["codex", "plugin", "marketplace", "remove", name])),
+                );
+            }
         }
     }
 
@@ -532,6 +551,21 @@ fn discover() -> Vec<Item> {
                 "Python CLI (uv tool fno)".into(),
                 Action::Run(argv(&["uv", "tool", "uninstall", UV_TOOL])),
             );
+        }
+    }
+    if crate::bootstrap::sentinel_dir()
+        .join(UV_INSTALLED_MARKER)
+        .is_file()
+    {
+        // uv has no self-uninstall; its documented removal deletes the two
+        // binaries its installer wrote.
+        if let Some(dir) = uv_install_dir() {
+            for bin in ["uv", "uvx"].into_iter().filter(|b| dir.join(b).is_file()) {
+                add(
+                    format!("{bin} installed by fno"),
+                    Action::RemovePath(dir.join(bin)),
+                );
+            }
         }
     }
     let brewed = on_path("brew").is_some()
@@ -724,12 +758,50 @@ fn residue() -> Vec<String> {
             "agy plugin {AGY_PLUGIN}: agy plugin uninstall {AGY_PLUGIN}"
         ));
     }
+    for cache in MARKETPLACE_NAMES.iter().flat_map(|name| {
+        [
+            env_dir("CLAUDE_CONFIG_DIR", ".claude")
+                .join("plugins/cache")
+                .join(name),
+            env_dir("CODEX_HOME", ".codex")
+                .join("plugins/cache")
+                .join(name),
+        ]
+    }) {
+        if cache.exists() {
+            left.push(format!("plugin cache remains: {}", cache.display()));
+        }
+    }
     if let Ok(Some(text)) = crontab_list() {
         if strip_crontab(&text).is_some() {
             left.push(format!("crontab: {} block still present", CRON_BEGIN));
         }
     }
     left
+}
+
+/// The PATH lines `uv tool update-shell` writes (fno.sh runs it). Other uv
+/// tools share them, so uninstall names them for the user and never strips
+/// them; they are not residue and do not change the exit.
+fn shared_path_lines() -> Vec<String> {
+    let mut lines = Vec::new();
+    for rc in [
+        ".zshrc",
+        ".zprofile",
+        ".zshenv",
+        ".bashrc",
+        ".bash_profile",
+        ".profile",
+    ] {
+        let path = home().join(rc);
+        let text = read(&path);
+        for (n, line) in text.lines().enumerate() {
+            if line.contains(".local/bin") && !line.trim_start().starts_with('#') {
+                lines.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+            }
+        }
+    }
+    lines
 }
 
 fn ask(prompt: &str) -> String {
@@ -741,6 +813,10 @@ fn ask(prompt: &str) -> String {
 }
 
 pub fn run_uninstall(opts: Opts) -> i32 {
+    if opts.help {
+        print!("{}", crate::cli_args::render_path_help(&["uninstall"]));
+        return 0;
+    }
     // Every path below hangs off HOME. A relative one would point --purge at
     // the .fno dir of whatever project the user stands in.
     if !home().is_absolute() {
@@ -844,6 +920,13 @@ pub fn run_uninstall(opts: Opts) -> i32 {
             println!("  - {line}");
         }
     }
+    let shared = shared_path_lines();
+    if !shared.is_empty() {
+        println!("fno uninstall: kept, shared with other uv tools (remove by hand if unused):");
+        for line in &shared {
+            println!("  - {line}");
+        }
+    }
     if failed > 0 || !left.is_empty() {
         1
     } else {
@@ -883,7 +966,7 @@ mod tests {
             })
         );
 
-        let codex = "model = \"x\"\n\n# Added by `fno config setup cli-hooks` - footnote SessionStart context injection.\n# Codex treats this as an UNMANAGED hook: approve/trust it in Codex before it\n# runs. Remove this block to uninstall.\n[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"env FNO_PLATFORM=codex /p/hooks/session-start.sh\"\n[shell_environment_policy.set]\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n[hooks.state.\"fno@footnote:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"abc\"\n[plugins.\"other@x\"]\nenabled = true\n";
+        let codex = "model = \"x\"\n\n# Added by `fno config setup cli-hooks` - footnote SessionStart context injection.\n# Codex treats this as an UNMANAGED hook: approve/trust it in Codex before it\n# runs. Remove this block to uninstall.\n[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"env FNO_PLATFORM=codex /p/hooks/session-start.sh\"\n[shell_environment_policy.set]\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n[hooks.state.\"fno@footnote:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"abc\"\n[hooks.state.\"fno@fno:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"def\"\n[plugins.\"other@x\"]\nenabled = true\n";
         assert_eq!(
             strip_codex_toml(codex).as_deref(),
             Some("model = \"x\"\n\n[shell_environment_policy.set]\n[plugins.\"other@x\"]\nenabled = true\n")

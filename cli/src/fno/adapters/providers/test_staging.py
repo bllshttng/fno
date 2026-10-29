@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from fno.adapters.providers.model import ProviderRecord, ProviderStagingError
-from fno.adapters.providers.staging import stage, unstage, verify_staged
+from fno.adapters.providers.staging import stage, verify_staged
 
 
 @pytest.fixture()
@@ -159,32 +159,8 @@ def test_stage_missing_credentials_source_raises(
 
 
 # ---------------------------------------------------------------------------
-# verify_staged / unstage
+# verify_staged
 # ---------------------------------------------------------------------------
-
-def test_verify_staged_returns_true_after_stage(
-    oauth_record: ProviderRecord, staging_root: Path
-) -> None:
-    """verify_staged() returns True for a properly staged oauth_dir record."""
-    stage(oauth_record, root=staging_root)
-    assert verify_staged(oauth_record, root=staging_root) is True
-
-
-def test_verify_staged_returns_false_after_unstage(
-    oauth_record: ProviderRecord, staging_root: Path
-) -> None:
-    """verify_staged() returns False after unstage() removes the dir."""
-    stage(oauth_record, root=staging_root)
-    unstage(oauth_record, root=staging_root)
-    assert verify_staged(oauth_record, root=staging_root) is False
-
-
-def test_unstage_is_noop_when_not_staged(
-    oauth_record: ProviderRecord, staging_root: Path
-) -> None:
-    """unstage() is a no-op when the record was never staged."""
-    # Should not raise.
-    unstage(oauth_record, root=staging_root)
 
 
 def test_verify_staged_api_key_marker_dir(
@@ -193,8 +169,6 @@ def test_verify_staged_api_key_marker_dir(
     """verify_staged() returns True for api_key when marker dir exists."""
     stage(api_key_record, root=staging_root)
     assert verify_staged(api_key_record, root=staging_root) is True
-    unstage(api_key_record, root=staging_root)
-    assert verify_staged(api_key_record, root=staging_root) is False
 
 
 # ---------------------------------------------------------------------------

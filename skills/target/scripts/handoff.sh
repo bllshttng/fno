@@ -118,6 +118,14 @@ _handoff_agents_bin() {
       return 0
     fi
   done
+  # The CI smoke job exports the built binary by path (smoke-setup), and a
+  # sandbox cwd hides the build tree from the git walk above, so this leg is
+  # the only one that finds the binary from a handoff sandbox. The hooks read
+  # the same export (context-nudge.sh and friends).
+  if [ -n "${FNO_AGENTS_FRONT:-}" ] && [ -x "${FNO_AGENTS_FRONT}" ]; then
+    printf '%s' "$FNO_AGENTS_FRONT"
+    return 0
+  fi
   _bin="$(command -v fno-agents 2>/dev/null || true)"
   [ -n "$_bin" ] && printf '%s' "$_bin"
 }
@@ -136,7 +144,7 @@ EVENTS_FILE="$FNO_DIR/events.jsonl"
 # cwd-relative defaults above parked every self-handoff from a space-keyed
 # worktree ("manifest .fno/target-state.md not found", exit 10). An explicit
 # FNO_DIR is the test override and keeps the cwd-relative layout verbatim; an
-# fno-agents that cannot answer (missing binary, pre-verb install) falls back
+# fno-agents that cannot answer (missing binary, pre-command install) falls back
 # to the same layout rather than parking blind.
 if [ -z "$_FNO_DIR_EXPLICIT" ]; then
   _AGENTS_BIN="$(_handoff_agents_bin)"
@@ -240,7 +248,7 @@ _parse_manifest_field() {
 # (unterminated frontmatter) or the field is absent from the body, we fall back
 # to a whole-file scan so the false-park modes stay fixed. Mirrors
 # the placement-independent, shape-validated reader in
-# cli/src/fno/cost/_register.py.
+# crates/fno-agents/src/ledger_register.rs.
 _parse_body_field() {
   local file="$1" key="$2" line raw close
   set +o pipefail
@@ -276,7 +284,8 @@ _parse_body_field() {
 # like `ab-old (deprecated)`, or any CR/quote residue - is echoed back as empty
 # so it routes to the genuine-missing park and is NEVER carried into the
 # node:<id> claim lookup or the ${NODE_ID:3:8} child-name slice. Mirrors the
-# _GRAPH_NODE_ID_SHAPE gate in cli/src/fno/cost/_register.py.
+# node-shape gate in crates/fno-agents/src/ledger_register.rs, stricter here:
+# the canonical body allows an optional hyphen, this grep requires it.
 _validate_node_id() {
   local raw="$1"
   if printf '%s\n' "$raw" | grep -Eq '^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$'; then
@@ -368,8 +377,8 @@ set -o pipefail
 if [ "$_RUNG_EC" -ne 0 ]; then
   _RUNG="$(printf '%s' "$_RUNG_OUT" | sed -n 's/^rung=//p' | head -1)"
   if [ -z "$_RUNG" ]; then
-    # No `rung=` line at all: the verb did not answer. An installed fno older
-    # than this verb exits 2 the same way a usage error does, so name the
+    # No `rung=` line at all: the command did not answer. An installed fno older
+    # than this command exits 2 the same way a usage error does, so name the
     # likely cause - a bare "rung 'unknown'" would send the operator hunting
     # through the plan for a problem that is in their PATH.
     echo "parked $NODE_ID reason=\"'fno do plan rung' did not answer; installed fno may predate it - run 'fno doctor update' or 'fno doctor --fix'\""
@@ -442,7 +451,7 @@ _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
 # sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
 # is distinguishable from a manual t- worker. The generation rides as the
 # never-shaved discriminator. A mint refusal parks the handoff loudly.
-_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --verb t \
+_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --command t \
   "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
 _CHILD_NAME_RC=$?
 if [ "$_CHILD_NAME_RC" -ne 0 ]; then
@@ -473,7 +482,7 @@ _SPAWN_EFFORT_ARGS=()
 _ASK_RC=0
 _ASK_OUT=""
 _ASK_ERR_FILE="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/handoff-spawn-$$.err")"
-_ASK_OUT="$(fno agents spawn --substrate pane \
+_ASK_OUT="$(fno agents spawn \
   --harness "$DEST_HARNESS" --model "$DEST_MODEL" \
   ${_SPAWN_ACCOUNT_ARGS[@]+"${_SPAWN_ACCOUNT_ARGS[@]}"} \
   ${_SPAWN_EFFORT_ARGS[@]+"${_SPAWN_EFFORT_ARGS[@]}"} \
@@ -628,7 +637,7 @@ if ${_TC_EMBED:+FNO_TASK_CONTEXT_FILE="$_TASK_CONTEXT_FILE"} fno do resume recei
       --worktree "$PWD" \
       --branch "${_RECEIPT_BRANCH:-}" \
       --head "${_RECEIPT_HEAD:-}" \
-      --next-verb "/fno:target" \
+      --next-command "/fno:target" \
       --next-target "$NODE_ID" \
       >/dev/null 2>"$_TMP_RECEIPT_ERR"; then
   :
@@ -695,34 +704,21 @@ PLAN_ARTIFACTS_DIR="${PLAN_PATH}.artifacts"
 ARCHIVED_STATE="$PLAN_ARTIFACTS_DIR/target-state-${SESSION_ID}.md"
 
 _PREPARE_RC=0
-# Bootstrap the interpreter the way every other Python-delegating script does
-# (scripts/lib/fno-python.sh): a PYTHONPATH sourced from an env var that only
-# test harness files set left production running the leg with an empty path.
-_HANDOFF_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$_HANDOFF_REPO_ROOT" ]; then
-  # Non-repo cwd (the handoff smoke sandbox): the script's own location still
-  # names this checkout, so the shared bootstrap stays reachable.
-  _HANDOFF_REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." 2>/dev/null && pwd || true)"
-fi
-_HANDOFF_PYTHON="python3"
-_HANDOFF_PKG_SRC=""
-if [ -n "$_HANDOFF_REPO_ROOT" ] && [ -f "$_HANDOFF_REPO_ROOT/scripts/lib/fno-python.sh" ]; then
-  # shellcheck source=scripts/lib/fno-python.sh
-  . "$_HANDOFF_REPO_ROOT/scripts/lib/fno-python.sh"
-  fno_python_init "$_HANDOFF_REPO_ROOT"
-  _HANDOFF_PYTHON="${FNO_PYTHON:-python3}"
-  _HANDOFF_PKG_SRC="${_HANDOFF_REPO_ROOT}/cli/src"
-fi
 _HANDOFF_PREPARE_LOG="$(mktemp "${TMPDIR:-/tmp}/fno-handoff-prepare.XXXXXX")"
-FNO_CLAIMS_ROOT="$HOME" PYTHONPATH="${_HANDOFF_PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}" \
-  "$_HANDOFF_PYTHON" -m fno.state.target_handoff prepare \
+# The prepare op is native now: target-handoff-prepare under the fno-agents
+# binary serves the same contract and exits (0/10/12). The binary resolves
+# through the same resolver the hooks use, so the smoke job's FRONT export
+# (the built checkout binary) wins over a stale installed release that
+# predates the op.
+_PREPARE_AGENTS="$(_handoff_agents_bin)"
+FNO_CLAIMS_ROOT="$HOME" "${_PREPARE_AGENTS:-fno-agents}" target-gates target-handoff-prepare \
   --state "$STATE_FILE" \
   --archive "$ARCHIVED_STATE" \
   --claim-key "node:$NODE_ID" \
   --holder "$CLAIM_HOLDER" >"$_HANDOFF_PREPARE_LOG" 2>&1 || _PREPARE_RC=$?
-# A nonzero code the module did NOT emit (10/12 are its own outcomes) means
-# the module never ran to its own error handling: the interpreter or the
-# import failed. The two classes get different reasons and details, so an
+# A nonzero code the op did NOT emit (10/12 are its own outcomes) means the
+# door never ran to its own error handling: the binary was missing or the
+# dispatch failed. The two classes get different reasons and details, so an
 # operator reading the event can tell a broken bootstrap from a real
 # handoff refusal.
 _HANDOFF_PREPARE_STDOUT="$(cat "$_HANDOFF_PREPARE_LOG" 2>/dev/null)"
@@ -802,14 +798,14 @@ fi
 SPAWN_FLAGS="$(printf '%s' "$SPAWN_FLAGS" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
 
 case "$DEST_HARNESS" in
-  codex) _TARGET_VERB='$fno:target' ;;
-  opencode) _TARGET_VERB='/fno:target' ;;
-  *) _TARGET_VERB='/fno:target' ;;
+  codex) _TARGET_COMMAND='$fno:target' ;;
+  opencode) _TARGET_COMMAND='/fno:target' ;;
+  *) _TARGET_COMMAND='/fno:target' ;;
 esac
 if [ -n "$SPAWN_FLAGS" ]; then
-  CHILD_CMD="$_TARGET_VERB $SPAWN_FLAGS $NODE_ID"
+  CHILD_CMD="$_TARGET_COMMAND $SPAWN_FLAGS $NODE_ID"
 else
-  CHILD_CMD="$_TARGET_VERB $NODE_ID"
+  CHILD_CMD="$_TARGET_COMMAND $NODE_ID"
 fi
 
 _ASK_RC=0
@@ -959,7 +955,7 @@ _emit_event "session_satisfied" \
 # 8c. Delegating session's ledger session-record (step 6, / AC7-EDGE).
 # The manifest was archived in Step 4, so the stop-hook shim's finalize cannot
 # read it (and in fact the shim exits early on the now-missing manifest). Write
-# the paper-trail row HERE via the `finalize` verb against the ARCHIVED manifest,
+# the paper-trail row HERE via the `finalize` command against the ARCHIVED manifest,
 # with termination_reason=delegated. `delegated` is a non-ship reason, so finalize
 # writes ONLY the ledger row (stamp/graduate/handoff stay the SUCCESSOR's job)
 # and emits session_finalized for observability. Best-effort: failure never

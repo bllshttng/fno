@@ -1,0 +1,34 @@
+{
+  "ctx": {
+    "kind": "role",
+    "name": "tidy"
+  },
+  "env": {},
+  "expected": {
+    "notices": [
+      "model-routing: no API key for provider 'zai' (role 'tidy'); falling back to the primary Anthropic model"
+    ],
+    "route": null
+  },
+  "expected_providers": {
+    "zai": {
+      "api_key_env": "ZAI_API_KEY",
+      "api_key_file": "~/.fno/.env",
+      "base_url": "https://api.z.ai/api/anthropic",
+      "key": {
+        "checked": [
+          "ZAI_API_KEY",
+          "~/.fno/.env"
+        ],
+        "satisfying": null
+      },
+      "protocol": "anthropic",
+      "tier_models": {
+        "haiku": "glm-4.7"
+      }
+    }
+  },
+  "model": "glm-5.3",
+  "name": "missing-key-role",
+  "provider": "zai"
+}

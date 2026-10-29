@@ -52,12 +52,12 @@ fn grok_headless_fails_closed_until_live_create_and_resume_are_measured() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "grok-worker",
             "hello",
             "--harness",
             "grok",
-            "--substrate",
-            "headless",
+            "--once",
         ])
         .arg("--cwd")
         .arg(cwd)

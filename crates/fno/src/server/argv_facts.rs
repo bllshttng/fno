@@ -71,20 +71,42 @@ pub(super) fn agent_self_from_argv(argv: &[String]) -> Option<String> {
 /// re-anchors (taskpolicy -c utility -- claude). An argument can never name
 /// the command, so `man claude` and `bash -c '... claude ...'` do not match.
 pub(super) fn argv_runs_claude(argv: &[String]) -> bool {
+    claude_token_index(argv).is_some()
+}
+
+/// The argv index of the claude command token, by the rule
+/// [`argv_runs_claude`] states.
+fn claude_token_index(argv: &[String]) -> Option<usize> {
     let start = env_assignments_start(argv).unwrap_or(0);
     let rest = &argv[start..];
     let is_claude = |t: &str| t.rsplit('/').next() == Some("claude");
-    let body = match rest.iter().position(|a| !a.contains('=')) {
-        Some(i) => &rest[i..],
-        None => return false,
+    let first = start + rest.iter().position(|a| !a.contains('='))?;
+    if is_claude(&argv[first]) {
+        return Some(first);
+    }
+    let sep = first + argv[first..].iter().position(|a| a == "--")?;
+    argv.get(sep + 1).filter(|t| is_claude(t)).map(|_| sep + 1)
+}
+
+/// Add the Claude Code theme to a claude launch: `--settings {"theme":..}`
+/// right after the command token, so a trailing `--` seed stays the prompt.
+/// Left alone when the argv is not claude, already names a settings file (a
+/// second flag would let the theme blob win and drop the user's file), or
+/// runs `claude attach`: attach ignores `--settings` ("extra arguments
+/// ignored"), and the attached view takes the theme the background session
+/// was launched with.
+pub(super) fn with_claude_theme(argv: &mut Vec<String>, theme: &str) {
+    let Some(at) = claude_token_index(argv) else {
+        return;
     };
-    if is_claude(&body[0]) {
-        return true;
+    let names_settings = argv
+        .iter()
+        .any(|a| a == "--settings" || a.starts_with("--settings="));
+    if names_settings || argv.get(at + 1).map(String::as_str) == Some("attach") {
+        return;
     }
-    match body.iter().position(|a| a == "--") {
-        Some(i) => body.get(i + 1).is_some_and(|t| is_claude(t)),
-        None => false,
-    }
+    argv.insert(at + 1, "--settings".to_string());
+    argv.insert(at + 2, format!("{{\"theme\":\"{theme}\"}}"));
 }
 
 /// The argv index where the `env(1)` `NAME=VALUE` assignment run begins:
@@ -268,7 +290,7 @@ pub(super) fn set_attach_program(argv: &[&str]) {
     ATTACH_PROGRAM.with(|p| *p.borrow_mut() = Some(argv.iter().map(|s| s.to_string()).collect()));
 }
 
-/// The Follow tier's viewer argv: `fno agents peek <name> --follow`,
+/// The Follow tier's viewer argv: `fno agents session peek <name> --follow`,
 /// tailing the row's transcript in the dedicated pane. Read-only by
 /// construction (peek never writes the observed). Tests override the program
 /// via `set_peek_program` so the spawn path runs without the deployed CLI.
@@ -281,6 +303,7 @@ pub(super) fn peek_argv(name: &str) -> Vec<String> {
     vec![
         "fno".to_string(),
         "agents".to_string(),
+        "session".to_string(),
         "peek".to_string(),
         name.to_string(),
         "--follow".to_string(),

@@ -150,7 +150,7 @@ pub(super) fn build_row_menu_with(
     } else if agent.pane_id.is_some() {
         // Live pane row: already placed, so re-placement is a MOVE of the live
         // pane, never an attach. Same 2x2 grid geometry the paneless branch uses
-        // below, so the two menus read as one system; the verbs differ because
+        // below, so the two menus read as one system; the commands differ because
         // the operations do (move a running pane vs. place a new one).
         add(entry("→", "Focus"), &[MenuAction::Focus]);
         add(entry("◫", "Open in portal..."), &[MenuAction::PortalPicker]);
@@ -178,7 +178,7 @@ pub(super) fn build_row_menu_with(
             PopupRow::Grid(vec![cell("⬒", "Move Up"), cell("⬓", "Move Down")]),
             &[MenuAction::MoveDir(Dir::Up), MenuAction::MoveDir(Dir::Down)],
         );
-        // The viewer verb sits apart from the thread verbs (Stop and
+        // The viewer command sits apart from the thread commands (Stop and
         // Remove end the thread): closing the portal must not
         // touch the row. A bare stand-in seat row (portal set, pane now
         // gone) takes the same arm, so its menu offers Close portal too.
@@ -250,6 +250,15 @@ pub(super) fn build_row_menu_with(
     // Bound in menu scope now, so its hint is the live key.
     add(PopupRow::Rule, &[]);
     add(entry("±", "Diff"), &[MenuAction::Diff]);
+    // A pin is a session fact, so only a row with a session id offers it.
+    if agent.harness_session_id.is_some() {
+        let (glyph, label) = if agent.pinned {
+            (super::sideline::PIN_OUTLINE, "Unpin")
+        } else {
+            (super::sideline::PIN_STAR, "Pin")
+        };
+        add(entry(&glyph.to_string(), label), &[MenuAction::TogglePin]);
+    }
     // The hold lift is common to every row state too: the mark rides the
     // row, not its pane, so a worker wearing [DND] or [HELD] can sit in any
     // of them. The label names the mark the row wears - the user's
@@ -309,7 +318,7 @@ mod tests {
     #[test]
     fn a_non_portal_pane_row_lists_no_close_portal() {
         // AC8-HP inverse. A pane row with portal: None lists no Close portal
-        // entry: the verb is the portal's, not the pane's.
+        // entry: the command is the portal's, not the pane's.
         let menu = build_row_menu(&portal_row(None), test_anchor());
         assert!(
             !menu.popup.rows.iter().any(|r| matches!(
@@ -497,10 +506,10 @@ mod tests {
 /// change, because a tab-bar cell sits in no pane rect and was never
 /// forwarded. Destructive items sit last, after a `Rule`.
 ///
-/// Save/apply layout are deliberately ABSENT: `ControlVerb::LayoutGet` /
+/// Save/apply layout are deliberately ABSENT: `ControlCommand::LayoutGet` /
 /// `LayoutApply` ride one-shot `ClientMsg::Control` connections (`fno mux
 /// pane ...`), which an attached TUI client cannot send, so a menu item for
-/// them would bind to a verb this socket can never carry. That needs a
+/// them would bind to a command this socket can never carry. That needs a
 /// `Command` surface and is filed rather than faked.
 pub(super) fn build_tab_menu(idx: usize, tab: &TabMeta, anchor: Anchor, viewed: bool) -> RowMenu {
     let mut rows: Vec<PopupRow> = Vec::new();
@@ -528,7 +537,7 @@ pub(super) fn build_tab_menu(idx: usize, tab: &TabMeta, anchor: Anchor, viewed: 
         &[],
     );
     add(PopupRow::Rule, &[]);
-    // Every tab verb answers a bare in-menu key from the same
+    // Every tab command answers a bare in-menu key from the same
     // registry its hint reads: n for New tab, the angle brackets for the
     // reorder pair - app vocabulary beside the prefix chords (prefix+c, and
     // prefix+< / prefix+> mean the same moves from outside the menu).
@@ -1081,21 +1090,22 @@ pub(super) async fn execute_row_menu_action(
         MenuAction::RenameAgent => {
             // The CURRENT label, re-resolved at execute above (a rename
             // between menu-open and pick addresses the live row), seeded so
-            // Enter with no edit lands on the verb's same-label no-op.
+            // Enter with no edit lands on the command's same-label no-op.
             view.open_rename_seeded(RenameTarget::Agent(a.name.clone()), a.name.clone());
         }
+        MenuAction::TogglePin => super::agent_sort::pin_agent(view, &a),
         MenuAction::ReleaseHold => {
-            // The by-session release verb (mail_hold.rs `--release`): the
+            // The by-session release command (mail_hold.rs `--release`): the
             // lift answers in microseconds; the held-mail delivery leg runs
             // detached, so the bounded wait below never sits on the
-            // transport. The verb's EXIT is the truth a stale paired binary
+            // transport. The command's EXIT is the truth a stale paired binary
             // cannot paper over: one that predates `--release` exits 2 on
             // the unknown flag, and the notice must say so, not "released".
             let Some(sid) = a.harness_session_id.clone() else {
                 view.set_notice("row carries no session id to release".into());
                 return Ok(());
             };
-            // The verb wait is a subprocess round trip on a loaded machine.
+            // The command wait is a subprocess round trip on a loaded machine.
             // It runs on a task and the notice lands through the
             // reply-notice channel, so the UI loop keeps draining keys while
             // it runs; on timeout the child stays alive detached and the
@@ -1325,6 +1335,10 @@ pub(super) async fn row_menu_execute_selected(
     }
     view.row_menu = None;
     if let Some((action, target)) = picked {
+        // A menu opened from the navigator closes it first, so the overlay or
+        // confirm an action opens owns the keys.
+        view.nav = None;
+        view.nav_esc.clear();
         execute_row_menu_action(view, action, target, sock_w).await?;
     }
     Ok(())
@@ -1512,7 +1526,96 @@ pub(super) async fn row_menu_mouse(
     Ok(())
 }
 
+/// What a navigator row's menu acts on, pinned by identity and re-resolved
+/// when it opens. A plain pane has none: no menu entry applies to a bare shell.
+pub(super) enum NavMenu {
+    Agent(AgentIdent),
+    Tab(TabId),
+    Squad(u64),
+    None,
+}
+
+impl NavRow {
+    pub(super) fn with_menu(mut self, menu: NavMenu) -> Self {
+        self.menu = menu;
+        self
+    }
+}
+
 impl View {
+    /// The agent lifecycle menu for one row, the ONE builder behind the
+    /// sideline (`open_row_menu`) and the navigator (`nav_open_menu`), so the
+    /// two surfaces cannot grow different entry sets.
+    fn agent_menu(&self, a: &AgentRow, anchor: Anchor) -> RowMenu {
+        let mut menu = build_row_menu_with(a, anchor, self.split_opens);
+        // A pane-hosted row relocates its live pane into another
+        // workspace; any other row (paneless, or only SHOWN through a
+        // portal seat) is pinned there by session id. Append the entry
+        // only when another workspace exists, so it never offers a move
+        // to nowhere. Built here (where the layout is) rather than in
+        // build_row_menu so the per-state builder stays layout-free and
+        // its direct tests stay untouched.
+        if !self.move_dst_squads(a.squad).is_empty() {
+            menu.popup.rows.push(PopupRow::Rule);
+            menu.popup.rows.push(PopupRow::Entry {
+                glyph: "↪".into(),
+                label: "Move to workspace".into(),
+                hint: String::new(),
+                enabled: true,
+            });
+            menu.actions.push(MenuAction::MoveToWorkspace);
+        }
+        menu
+    }
+
+    /// Install a built menu: clear peek, show it, reset the esc buffer.
+    fn show_row_menu(&mut self, menu: RowMenu) {
+        self.clear_peek();
+        self.row_menu = Some(menu);
+        self.row_menu_esc.clear();
+    }
+
+    /// A section header's menu (a workspace name row or a `~` band). `false`
+    /// with a notice for a non-workspace header with nothing to clear.
+    fn open_section_menu(
+        &mut self,
+        key: SectionKey,
+        label: String,
+        squad: Option<u64>,
+        anchor: Anchor,
+    ) -> bool {
+        // A section with nothing to clear would leave a one-entry menu
+        // whose only entry is a no-op; say so instead (the row menu's
+        // "no dead item ever renders" rule, applied to the whole menu).
+        // "nothing to clear" covers both an all-live section and a key
+        // `section_dead_rows` refused as ambiguous - it never claims
+        // there are no dead rows when the truth is we won't guess which.
+        let dead = self.section_dead_rows(&key, squad).len();
+        // A workspace section always has a menu (it can be renamed). A
+        // non-workspace header (Elsewhere) with nothing to clear
+        // says so rather than opening a one-entry no-op menu.
+        if dead == 0 && squad.is_none() {
+            self.set_notice(format!("no dead rows in {label}"));
+            return false;
+        }
+        self.show_row_menu(build_section_menu(key, label, squad, dead, anchor));
+        true
+    }
+
+    /// A workspace's section identity and display name, `None` when the
+    /// squad is gone or its key is ambiguous.
+    fn squad_section(&self, squad: u64) -> Option<(SectionKey, String)> {
+        let key = squad_key(&self.layout, squad)?;
+        let label = self
+            .layout
+            .squads
+            .iter()
+            .find(|s| s.id == squad)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        Some((key, label))
+    }
+
     /// Open the row context menu on `display_rows()` index `i`, anchored at
     /// `anchor` (US2): the agent lifecycle menu, or a section header's
     /// clear-dead menu (a squad name row or a `~` band). Returns whether it
@@ -1529,38 +1632,11 @@ impl View {
             // A card's detail and metrics lines are the agent row's own
             // span, so the menu opens from any line of the card.
             Some(DisplayRow::Agent(a) | DisplayRow::CardDetail(a) | DisplayRow::CardMetrics(a)) => {
-                let mut menu = build_row_menu_with(a, anchor, self.split_opens);
-                // A pane-hosted row relocates its live pane into another
-                // workspace; any other row (paneless, or only SHOWN through a
-                // portal seat) is pinned there by session id. Append the entry
-                // only when another workspace exists, so it never offers a move
-                // to nowhere. Built here (where the layout is) rather than in
-                // build_row_menu so the per-state builder stays layout-free and
-                // its direct tests stay untouched.
-                let move_dsts = self.move_dst_squads(a.squad);
-                if !move_dsts.is_empty() {
-                    menu.popup.rows.push(PopupRow::Rule);
-                    menu.popup.rows.push(PopupRow::Entry {
-                        glyph: "↪".into(),
-                        label: "Move to workspace".into(),
-                        hint: String::new(),
-                        enabled: true,
-                    });
-                    menu.actions.push(MenuAction::MoveToWorkspace);
-                }
-                Some(Pick::Menu(Box::new(menu)))
+                Some(Pick::Menu(Box::new(self.agent_menu(a, anchor))))
             }
-            Some(DisplayRow::Sel(row)) if row.tab.is_none() => squad_key(&self.layout, row.squad)
-                .map(|key| {
-                    let label = self
-                        .layout
-                        .squads
-                        .iter()
-                        .find(|s| s.id == row.squad)
-                        .map(|s| s.name.clone())
-                        .unwrap_or_default();
-                    Pick::Section(key, label, Some(row.squad))
-                }),
+            Some(DisplayRow::Sel(row)) if row.tab.is_none() => self
+                .squad_section(row.squad)
+                .map(|(key, label)| Pick::Section(key, label, Some(row.squad))),
             Some(DisplayRow::Header { key, label, .. }) => {
                 Some(Pick::Section(key.clone(), label.clone(), None))
             }
@@ -1568,32 +1644,55 @@ impl View {
         };
         match pick {
             Some(Pick::Menu(m)) => {
-                self.clear_peek();
-                self.row_menu = Some(*m);
-                self.row_menu_esc.clear();
+                self.show_row_menu(*m);
                 true
             }
             Some(Pick::Section(key, label, squad)) => {
-                // A section with nothing to clear would leave a one-entry menu
-                // whose only entry is a no-op; say so instead (the row menu's
-                // "no dead item ever renders" rule, applied to the whole menu).
-                // "nothing to clear" covers both an all-live section and a key
-                // `section_dead_rows` refused as ambiguous - it never claims
-                // there are no dead rows when the truth is we won't guess which.
-                let dead = self.section_dead_rows(&key, squad).len();
-                // A workspace section always has a menu (it can be renamed). A
-                // non-workspace header (Elsewhere) with nothing to clear
-                // says so rather than opening a one-entry no-op menu.
-                if dead == 0 && squad.is_none() {
-                    self.set_notice(format!("no dead rows in {label}"));
-                    return false;
-                }
-                self.clear_peek();
-                self.row_menu = Some(build_section_menu(key, label, squad, dead, anchor));
-                self.row_menu_esc.clear();
-                true
+                self.open_section_menu(key, label, squad, anchor)
             }
             None => false,
         }
+    }
+
+    /// Open the navigator's highlighted row menu through the sideline's own
+    /// builders. A row with no menu or a vanished target says so and opens
+    /// nothing; the navigator stays up.
+    pub(super) fn nav_open_menu(&mut self) -> bool {
+        let Some(row) = self
+            .nav
+            .as_ref()
+            .and_then(|n| self.nav_filtered(n).into_iter().nth(n.cursor))
+        else {
+            return false;
+        };
+        // Beside the highlighted line: the menu never hides its own row.
+        let (origin, dims) = self.overlay_viewport();
+        let anchor = self.nav.as_ref().zip(self.nav_layout(origin, dims)).map_or(
+            Anchor::Center,
+            |(n, l)| Anchor::At {
+                row: (l.origin.0 + l.body_top + (n.cursor + 1).saturating_sub(l.window.0)) as u16,
+                col: (l.origin.1 + l.framed.width) as u16,
+            },
+        );
+        let opened = match row.menu {
+            NavMenu::Agent(id) => match self.layout.agents.iter().find(|a| id.matches(a)) {
+                Some(a) => {
+                    let m = self.agent_menu(a, anchor);
+                    self.show_row_menu(m);
+                    true
+                }
+                None => false,
+            },
+            NavMenu::Tab(tid) => self.open_tab_menu_by_id(tid, anchor),
+            NavMenu::Squad(sq) => match self.squad_section(sq) {
+                Some((key, label)) => self.open_section_menu(key, label, Some(sq), anchor),
+                None => false,
+            },
+            NavMenu::None => false,
+        };
+        if !opened {
+            self.set_notice("no actions on this row".into());
+        }
+        opened
     }
 }

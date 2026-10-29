@@ -1,0 +1,1 @@
+{"op": "tainting_writers", "args": {"cli": "claude"}, "store": {".active-claude.tainted": "not json"}, "now": 1800000000.0, "expect": {"result": null, "error": null, "store": {".active-claude.tainted": "not json"}, "modes": {".active-claude.tainted": false}, "files": {}, "keychain_writes": []}}

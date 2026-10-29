@@ -82,9 +82,41 @@ fn plan_expected_url_count(fields: &Fields) -> Option<i64> {
 /// waves, not PRs, so a multi-wave join-manual plan never reads done while a
 /// wave is unshipped.
 pub(crate) fn unshipped_waves(fields: &Fields, plan_path: &Path) -> bool {
-    let expected = plan_expected_url_count(fields)
-        .unwrap_or_else(|| crate::wave::declared_wave_count(plan_path).unwrap_or(1) as i64);
+    let expected = declared_ships(fields, plan_path);
     expected > 1 && (plan_urls(fields).len() as i64) < expected
+}
+
+/// The ships a plan declares: expected_url_count when well-formed, else the
+/// Execution Strategy's wave count, else one.
+pub(crate) fn declared_ships(fields: &Fields, plan_path: &Path) -> i64 {
+    plan_expected_url_count(fields)
+        .unwrap_or_else(|| crate::wave::declared_wave_count(plan_path).unwrap_or(1) as i64)
+}
+
+/// One `W` line when the plan declares more PRs than the project ceiling:
+/// the larger of its `max_prs` and its declared ship count, against
+/// `decompose::pr_ceiling`. An unreadable plan or ceiling says nothing here;
+/// decompose refuses a bad ceiling where it binds.
+pub(crate) fn pr_ceiling_line(plan: &Path, root: &Path) -> Option<String> {
+    let (_, fields, _) = codec::read_plan_file(plan).ok()?;
+    let ships = declared_ships(&fields, plan);
+    let max_prs = match fields.get("max_prs") {
+        Some(Fv::Scalar(s)) => s.trim().parse::<i64>().unwrap_or(0),
+        _ => 0,
+    };
+    let (count, source) = if max_prs > ships {
+        (max_prs, "max_prs")
+    } else {
+        (ships, "declared ships")
+    };
+    let (ceiling, ceiling_src) = crate::backlog::decompose::pr_ceiling(root).ok()?;
+    (count > ceiling).then(|| {
+        format!(
+            "W\tplan declares {count} PRs ({source}), over the PR ceiling {ceiling} ({ceiling_src}); \
+             bundle the work into at most {ceiling} PRs (set expected_url_count when the waves ship as one PR), \
+             or raise the ceiling with config.blueprint.max_prs_per_epic in the project's .fno/config.toml"
+        )
+    })
 }
 
 /// The latest session id from session_ids (scalar or last list item).
@@ -116,7 +148,7 @@ fn emit_plan_event(events_path: Option<&Path>, event_type: &str, data: Value) {
     }
 }
 
-/// Stamp a plan with shipping metadata (the `stamp` verb's body, lock included).
+/// Stamp a plan with shipping metadata (the `stamp` command's body, lock included).
 pub fn cmd_stamp(
     plan_path: &Path,
     session_id: &str,

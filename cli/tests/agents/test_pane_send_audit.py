@@ -1,6 +1,6 @@
 """One audit row per prompt write (x-91ba): the mail lane declares, the floor writes.
 
-The audit row for a pane write is written by the ``fno mux pane send`` verb
+The audit row for a pane write is written by the ``fno mux pane send`` command
 itself, so every entry point that puts text at a worker's prompt is audited
 the same way. The mail lane's pane arm declares its provenance with
 ``--source mail:<msg-id>`` so the floor's row joins the bus record, and it

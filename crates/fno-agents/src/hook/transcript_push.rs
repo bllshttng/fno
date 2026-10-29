@@ -111,7 +111,10 @@ fn post_lines(home: &crate::paths::AgentsHome, session_id: &str, lines: &[String
     let records: Vec<Value> = lines.iter().map(|line| json!({ "line": line })).collect();
     let req = crate::protocol::Request::new(
         1,
-        "agent.transcript-append",
+        format!(
+            "agent.{}",
+            crate::daemon::transcript_push::TRANSCRIPT_APPEND_COMMAND
+        ),
         json!({ "session_id": session_id, "records": records }),
     );
     matches!(

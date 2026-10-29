@@ -10,7 +10,7 @@
 # The envelope cannot ride the payload. `skills/agent/scripts/normalize.sh:710`
 # classifies by a LEADING slash, and the harness REPL is a second reader we do
 # not control, so anything in front of `/fno:target ` breaks routing and
-# anything behind it may be swallowed into the verb's arguments. So the prompt
+# anything behind it may be swallowed into the command's arguments. So the prompt
 # stays byte-identical and the attribution arrives beside it, here.
 #
 # Startup only. `resume` and `compact` fire SessionStart too, and emitting there
@@ -64,7 +64,7 @@ fi
 FNO_BIN="${FNO_BIN:-fno}"
 command -v "$FNO_BIN" >/dev/null 2>&1 || { echo '{}'; exit 0; }
 
-ENVELOPE="$("$FNO_BIN" mail seed-provenance 2>/dev/null)" || {
+ENVELOPE="$("$FNO_BIN" agents mail seed-provenance 2>/dev/null)" || {
     echo "spawn-seed-provenance: renderer refused; the seed stays unattributed" >&2
     echo '{}'
     exit 0

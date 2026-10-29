@@ -1,0 +1,1 @@
+{"pin":{"FNO_WORKTREE_POLICY":"never"},"receipt":"worktree=never (undeclared repo; declare work.workspaces.<slug>.projects[].worktree)"}

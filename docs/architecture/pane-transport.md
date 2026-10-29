@@ -28,7 +28,7 @@ An earlier ruling said "an envelope typed as keystrokes is still keystrokes" and
 
 The three passthroughs rely on `_already_wrapped`, which tests the FIRST tag of the body. A digest that merely CONTAINS an envelope fails that test. `wrap_fno_mail` then refuses it, because a body must not hold an envelope. So a caller whose payload EMBEDS mail says `raw` rather than trusting the passthrough.
 
-**One renderer.** `cli/src/fno/mail/envelope.py` is the sole `<fno_mail>` renderer. A prior node deleted the Rust mirror as dead code. If the Rust verb cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
+**One renderer.** `cli/src/fno/mail/envelope.py` is the sole `<fno_mail>` renderer. A prior node deleted the Rust mirror as dead code. If the Rust command cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
 
 ## The read-back gate
 
@@ -65,17 +65,17 @@ A thread-substrate row hosts no pane at any point in its life, so a pane send ha
 
 There is a fourth case, and it long had no receipt at all. `--submit` defaults to false. So `fno mux pane send <id> --text '<body>'` TYPES the body into the pane's prompt buffer and does not run it. A second call carrying `--submit` is what runs it. A non-submit send still prints nothing and exits clean. A confirmed submit prints `submitted` on stdout and exits 0, and an unconfirmed one exits 22 naming the failure. Before the `submitted` marker landed, `fno mux pane read` was the only evidence the text arrived, or that it was still sitting there unsubmitted.
 
-Both defaults are correct and neither changes here. A send that submitted by default is the read-back gate's own failure case. A stray submit against a showing prompt selects the highlighted default and discards the payload. What was missing is that the doc said so nowhere, while `skills/using-fno/SKILL.md` lists this verb beside mail as a handoff channel. Measured twice on 2026-08-22. A lead sent a ruling to a busy pane and to an idle one. Both times it got silence and a clean exit, and had delivered nothing. That is the `queued (durable)` shape again, a transport whose surface reads normal while the message sits.
+Both defaults are correct and neither changes here. A send that submitted by default is the read-back gate's own failure case. A stray submit against a showing prompt selects the highlighted default and discards the payload. What was missing is that the doc said so nowhere, while `skills/using-fno/SKILL.md` lists this command beside mail as a handoff channel. Measured twice on 2026-08-22. A lead sent a ruling to a busy pane and to an idle one. Both times it got silence and a clean exit, and had delivered nothing. That is the `queued (durable)` shape again, a transport whose surface reads normal while the message sits.
 
 ## The audit row: who told this worker to do that
 
-On 2026-08-21 answering that question took a twenty-minute forensic sweep. The dispatch had gone through `fno mux pane send`, and the pane verb wrote nothing. The mail lane wrote an `agent_raw_inject` row for unwrapped payloads, but a direct `pane send` never crossed it. The instrument existed and covered one of the two ways to put text at a worker's prompt.
+On 2026-08-21 answering that question took a twenty-minute forensic sweep. The dispatch had gone through `fno mux pane send`, and the pane command wrote nothing. The mail lane wrote an `agent_raw_inject` row for unwrapped payloads, but a direct `pane send` never crossed it. The instrument existed and covered one of the two ways to put text at a worker's prompt.
 
-Every `fno mux pane send` now writes one `agent_raw_inject` row to `~/.fno/agents/events.jsonl`, at the verb itself. Any path that reaches the prompt through the floor is audited, and a third entry point inherits the row instead of repeating the gap. The row names the pane, the resolved recipient, the calling session and pid, the payload digest and byte length, the submit outcome, and a `source`. One row per dispatch: the CR, Tab, and arrow sends that submit the payload are control bytes, not dispatches, and write no row.
+Every `fno mux pane send` now writes one `agent_raw_inject` row to `~/.fno/agents/events.jsonl`, at the command itself. Any path that reaches the prompt through the floor is audited, and a third entry point inherits the row instead of repeating the gap. The row names the pane, the resolved recipient, the calling session and pid, the payload digest and byte length, the submit outcome, and a `source`. One row per dispatch: the CR, Tab, and arrow sends that submit the payload are control bytes, not dispatches, and write no row.
 
 Provenance is DECLARED, never sniffed. `--source <label>` names the caller. The mail lane passes `mail:<msg-id>`, which joins the audit row to the bus record the id was minted for. An absent label reads `unattributed:<pid>`, which is a value an operator can act on and never a blank. The floor never inspects the payload to decide any of this. `--raw` carries both a wrapped mail body and an operator's verbatim keystrokes. No byte inspection can tell them apart.
 
-The outcome vocabulary is the verb's own exit codes: `submitted`, `delivered`, `unconfirmed`, `identity-mismatch`, `dnd`, `unanswered`, `refused`. Exit 22 records `unconfirmed` and never `delivered`: the text landed and no post-submit marker appeared, which is exactly the distinction the row exists to preserve. `confirmed` carries the same fact as a boolean.
+The outcome vocabulary is the command's own exit codes: `submitted`, `delivered`, `unconfirmed`, `identity-mismatch`, `dnd`, `unanswered`, `refused`. Exit 22 records `unconfirmed` and never `delivered`: the text landed and no post-submit marker appeared, which is exactly the distinction the row exists to preserve. `confirmed` carries the same fact as a boolean.
 
 The query the row exists to answer, given a worker's registry name or session id:
 
@@ -89,7 +89,9 @@ The full field contract is `agent_raw_inject` in `cli/src/fno/events/schema.yaml
 
 ## `fno agents mail send --force`, and why it stays opt-in
 
-`--force` keeps every mail semantic and changes only the transport. Before it existed, a live-miss forced the sender to switch verbs. Switching verbs is what lost the envelope, the message id, the reply handle, and the outbox row.
+`--force` keeps every mail semantic and changes only the transport. Before it existed, a live-miss forced the sender to switch commands. Switching commands is what lost the envelope, the message id, the reply handle, and the outbox row.
+
+A thread worker hosts no pane, so `--force` cannot reach it. `fno agents spawn` makes a thread unless the caller asks for `--as pane`. To correct a thread worker that is underway, write the correction on its node with `fno backlog note <node>`. The note has no word cap, and it mails the node's holder a short pointer. The `--force` refusal and the control-lane budget refusal both name this lane.
 
 The bus row records `mail_id` alongside the `pane_id` it was typed into. That one mapping buys three things:
 
@@ -115,7 +117,7 @@ So:
 
 The seed is the one message that defines a worker's entire task. It was also the one message a worker had no way to attribute.
 
-The envelope cannot ride the payload. `skills/agent/scripts/normalize.sh:710` classifies a payload by a LEADING slash (`case "$msg" in /*) payload_mode="passthrough"`), so anything in front of `/fno:target x-aaaa` destroys routing. Behind the verb line is no safer. The harness REPL is a second reader nobody controls. Probe 1 measured what it does with a trailing block. The verb still routes, and the whole trailer lands inside `<command-args>`. For `/fno:target <node>` those arguments are load-bearing, so an envelope swallowed into them is a real failure rather than a cosmetic one.
+The envelope cannot ride the payload. `skills/agent/scripts/normalize.sh:710` classifies a payload by a LEADING slash (`case "$msg" in /*) payload_mode="passthrough"`), so anything in front of `/fno:target x-aaaa` destroys routing. Behind the command line is no safer. The harness REPL is a second reader nobody controls. Probe 1 measured what it does with a trailing block. The command still routes, and the whole trailer lands inside `<command-args>`. For `/fno:target <node>` those arguments are load-bearing, so an envelope swallowed into them is a real failure rather than a cosmetic one.
 
 So the prompt stays byte-identical and the attribution arrives beside it. Every launcher exports bounded `FNO_SEED_PROV_*` fields on the child's environment (`cli/src/fno/mail/seed_provenance.py` owns the contract), and `hooks/spawn-seed-provenance-session-start.sh` renders them through the one renderer into startup context. The worker learns who supplied its seed before it acts. The transcript carries a greppable `</fno_mail>` for that seed, with no envelope at byte zero.
 
@@ -147,6 +149,6 @@ What the column still does not answer is whether a pane is idle or safe to reuse
 
 ## Out of scope
 
-**Making `live-miss` say busy versus absent.** Measured: two sends to one codex worker both returned `live-miss`. `fno mux pane read` showed that same worker `Working`. The receipt conflates a busy peer with an unreachable one, and those demand opposite responses. It changes what the liveness PROBE MEASURES, upstream of every transport, so it belongs in its own node. What lands here against that finding is `--force`. A reader who misreads `live-miss` as dead now reaches for a verb that keeps the envelope, the id, the reply handle, and the outbox row.
+**Making `live-miss` say busy versus absent.** Measured: two sends to one codex worker both returned `live-miss`. `fno mux pane read` showed that same worker `Working`. The receipt conflates a busy peer with an unreachable one, and those demand opposite responses. It changes what the liveness PROBE MEASURES, upstream of every transport, so it belongs in its own node. What lands here against that finding is `--force`. A reader who misreads `live-miss` as dead now reaches for a command that keeps the envelope, the id, the reply handle, and the outbox row.
 
 **A cryptographic trust boundary on the envelope.** The envelope is metadata. A model can ignore it. This is prompt-level enforcement, which is what is being bought.

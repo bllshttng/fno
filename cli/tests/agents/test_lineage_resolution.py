@@ -106,8 +106,8 @@ def test_token_matching_two_live_branch_rows_refuses_and_names_both() -> None:
 
 
 class _CodexSuccessorRow(_Row):
-    """A codex-shaped succession row (harness-specific id mapping reads
-    harness_session_id through HARNESS_SESSION_ID_FIELDS)."""
+    """A codex-shaped succession row (its id reads through the
+    harness_session_id fallback beside claude's short_id exception)."""
 
 
 def test_resume_by_predecessor_full_uuid_keeps_that_exact_id() -> None:
@@ -134,7 +134,7 @@ def test_resume_by_predecessor_full_uuid_keeps_that_exact_id() -> None:
     )
 
 
-def test_claude_exact_predecessor_resume_refuses_and_names_the_spawn_door() -> None:
+def test_claude_exact_predecessor_resume_refuses_and_names_the_row() -> None:
     """This runtime cannot pin a claude resume's model or route, so an exact
     predecessor id refuses with exit 13, launches nothing, and names the
     spawn door instead of reopening the session on the account default."""
@@ -158,7 +158,7 @@ def test_claude_exact_predecessor_resume_refuses_and_names_the_spawn_door() -> N
     )
     assert res.exit_code == 13
     assert res.exec_argv is None, "a refusal launches nothing"
-    assert f"fno agents spawn --resume {A}" in (res.stderr or "")
+    assert "fno agents resume alpha" in (res.stderr or "")
 
 
 # ---------------------------------------------------------------------------

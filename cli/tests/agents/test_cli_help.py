@@ -32,26 +32,16 @@ def _run(runner: CliRunner, *args: str) -> tuple[int, str]:
     return result.exit_code, _strip_ansi(result.stdout)
 
 
-def test_heal_token_accepts_hidden_cross_project_recovery_flag(
-    runner: CliRunner, monkeypatch
-) -> None:
-    monkeypatch.setattr(
-        "fno.agents.registry.resolve_from_harness_store", lambda *args, **kwargs: None
-    )
-    code, _out = _run(runner, "heal-token", "deadbeef", "--cross-project")
-    assert code == 13
-
-
 # The advertised `fno agents` menu. `history` joins as the advertised
 # session-history reader.
-_ADVERTISED_AGENTS_VERBS = {
+_ADVERTISED_AGENTS_COMMANDS = {
     "spawn", "list", "logs", "watch", "attach", "stop", "resume", "status",
     "watchdog", "history", "gate-status", "incident",
 }
 
 
-def test_agents_help_advertises_only_the_menu_verbs(runner: CliRunner) -> None:
-    """AC1-HP: `fno agents --help` lists at most 12 verbs, and exactly the
+def test_agents_help_advertises_only_the_menu_commands(runner: CliRunner) -> None:
+    """AC1-HP: `fno agents --help` lists at most 12 commands, and exactly the
     advertised set."""
     import click
     import typer.main
@@ -63,7 +53,7 @@ def test_agents_help_advertises_only_the_menu_verbs(runner: CliRunner) -> None:
         for name in group.list_commands(ctx)
         if not (cmd := group.get_command(ctx, name)) or not cmd.hidden
     ]
-    assert set(listed) == _ADVERTISED_AGENTS_VERBS, (
-        f"advertised agents verbs drifted: {sorted(listed)}"
+    assert set(listed) == _ADVERTISED_AGENTS_COMMANDS, (
+        f"advertised agents commands drifted: {sorted(listed)}"
     )
     assert len(listed) <= 12

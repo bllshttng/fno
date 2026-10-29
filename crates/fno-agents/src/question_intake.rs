@@ -3,8 +3,8 @@
 //! Transport-only `question-intake` arm: one JSON request on stdin (what the
 //! Python shim resolved: text, flags, identity, live law rows, storage root),
 //! one JSON answer on stdout, and the exit code carries the verdict. It
-//! registers no client verb - the shrink law (d-fe66560a) allows no new
-//! action - and callers reach it through `verb_call`, like the patch door.
+//! registers no client command - the shrink law (d-fe66560a) allows no new
+//! action - and callers reach it through `command_call`, like the patch door.
 //!
 //! Owns: the law refusal (`law_match`), the context parse
 //! (`escalation::parse` with the question-file sections), the node-pointer
@@ -32,6 +32,9 @@ pub const QUESTION_CAP: usize = 2000;
 pub const QUESTION_TEMPLATE: &str = "\
 ---
 recommend: 1
+class: <public-surface, gate-override, irreversible, money-security, outside-reach, taste or law-change>
+deadline: <RFC 3339 time, such as 2026-11-01T09:00:00Z>
+on_silence: <take-recommended or wait>
 ---
 
 <the question, one line>
@@ -56,6 +59,12 @@ Option 1, <the reason in one line>.
 
 ## Not thought through
 <the part you did not check>
+
+## Tried
+<what you did to answer it yourself>
+
+## Evidence
+<what you read or ran, with the command or file>
 
 ## Reversible
 costly
@@ -91,6 +100,10 @@ pub struct IntakeRequest {
     pub asker: Option<String>,
     #[serde(default)]
     pub laws: Vec<crate::law_match::LawRow>,
+    /// The ladder rung the asker placed the row on (`question_ladder::place`);
+    /// absent is the user rung.
+    #[serde(default)]
+    pub rung: Option<Value>,
     pub storage_root: PathBuf,
     /// The machine index, resolved by the Python side (`paths.questions_jsonl()`)
     /// so the caller's sandbox stays the single path authority. Falls back to
@@ -108,6 +121,24 @@ pub struct IntakeRequest {
     /// `fno inbox outstanding`'s render cap, for the does-not-render line.
     #[serde(default)]
     pub render_cap: Option<usize>,
+    /// `append`: the machine-writer door (the lead wake, the branch hook).
+    /// `event` is a caller-built `operator_question` envelope; it is
+    /// validated and written to both sinks, and no ask gate runs. The wake
+    /// and hook lanes ask questions the ask gate would refuse (machine
+    /// markers, option lists with no node pointer), and their rows were
+    /// always raw appends.
+    #[serde(default)]
+    pub op: Option<String>,
+    #[serde(default)]
+    pub event: Option<Value>,
+    /// `--image`: screenshots the page embeds under `## Screens`. Each is
+    /// copied into `screens_dir` before anything is recorded.
+    #[serde(default)]
+    pub images: Vec<PathBuf>,
+    /// Where the copies land: `<questions dir>/screens`, so the vault holds
+    /// them next to the page. Required when `images` is not empty.
+    #[serde(default)]
+    pub screens_dir: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -121,7 +152,7 @@ pub struct IntakeAnswer {
     /// that predates the template arm.
     #[serde(default)]
     pub template: bool,
-    /// `law` | `node_pointer` | `context` | `decide_yourself` | `dedup` | `write` | `index`.
+    /// `law` | `node_pointer` | `context` | `config` | `decide_yourself` | `dedup` | `write` | `index`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,6 +162,9 @@ pub struct IntakeAnswer {
     pub position: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<usize>,
+    /// The rung the recorded row carries; the asker wakes its holder.
+    #[serde(skip)]
+    pub rung: Option<Value>,
 }
 
 impl IntakeAnswer {
@@ -145,6 +179,7 @@ impl IntakeAnswer {
             truncated: false,
             position: None,
             total: None,
+            rung: None,
         }
     }
 }
@@ -284,6 +319,98 @@ fn is_reversible_word(word: &str) -> bool {
     matches!(word, "yes" | "costly" | "no")
 }
 
+/// A question that would clear a visual-approval hold: the gate's own
+/// subject (`visual approval PR <n> at <head>`), or a title that names a PR
+/// and the visual hold, the shape a lead writes by hand.
+fn asks_visual_approval(subject: Option<&str>, title: &str) -> bool {
+    if subject.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("visual approval")) {
+        return true;
+    }
+    let t = title.to_ascii_lowercase();
+    let visual = ["visual hold", "visual approval", "visual-approval"]
+        .iter()
+        .any(|w| t.contains(w));
+    visual && names_a_pr(&t)
+}
+
+/// A word-start `pr`, an optional `#`/space run, then a digit.
+fn names_a_pr(lower: &str) -> bool {
+    lower.match_indices("pr").any(|(i, _)| {
+        let start = i == 0 || !lower.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let rest = lower[i + 2..].trim_start_matches(['#', ' ']);
+        start && rest.starts_with(|c: char| c.is_ascii_digit())
+    })
+}
+
+/// An image the viewer and Obsidian both show: a png, jpg, gif or webp
+/// extension, and a regular file whose first bytes carry that format's
+/// signature. A renamed text file would satisfy the screens refusal and
+/// still show nothing.
+fn is_image_file(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp")
+    ) || !path.is_file()
+    {
+        return false;
+    }
+    let mut head = [0u8; 12];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    let head = &head[..n];
+    head.starts_with(b"\x89PNG\r\n\x1a\n")
+        || head.starts_with(b"\xff\xd8\xff")
+        || head.starts_with(b"GIF8")
+        || (head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP"))
+}
+
+/// A png `fno mux serve --snapshot` stamped: its frame painted an image with
+/// no image protocol, so it shows the half-block path and never the kitty
+/// one. The stamp is a `tEXt` chunk, `fno-snapshot` / `no-image-protocol`.
+fn snapshot_without_image_protocol(path: &Path) -> bool {
+    let Ok(png) = std::fs::read(path) else {
+        return false;
+    };
+    let mut at = 8;
+    while let Some(head) = png.get(at..at + 8) {
+        let len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let Some(data) = png.get(at + 8..at + 8 + len) else {
+            return false;
+        };
+        match &head[4..8] {
+            b"tEXt" if data == b"fno-snapshot\0no-image-protocol" => return true,
+            b"IDAT" | b"IEND" => return false,
+            _ => at += 12 + len,
+        }
+    }
+    false
+}
+
+/// Copy each screenshot to `<dir>/<qid>-<n>-<name>`, so the vault holds it
+/// next to the page and Obsidian's `![[name]]` resolves it by its unique
+/// name. Returns the copies' absolute paths.
+fn copy_screens(images: &[PathBuf], dir: Option<&Path>, qid: &str) -> Result<Vec<String>, String> {
+    let dir = dir.ok_or("no screens directory was resolved")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut out = Vec::new();
+    for (i, src) in images.iter().enumerate() {
+        let name = src
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let dest = dir.join(format!("{qid}-{}-{name}", i + 1));
+        std::fs::copy(src, &dest).map_err(|e| format!("{}: {e}", src.display()))?;
+        let abs = std::fs::canonicalize(&dest).unwrap_or(dest);
+        out.push(abs.to_string_lossy().into_owned());
+    }
+    Ok(out)
+}
+
 fn title_of(text: &str, parsed_title: &str) -> String {
     if !parsed_title.trim().is_empty() {
         return parsed_title.trim().to_string();
@@ -345,7 +472,118 @@ fn targets_operator_retraction(question: &str, laws: &[crate::law_match::LawRow]
     })
 }
 
+/// The machine-writer append door: validate one caller-built
+/// `operator_question` envelope, then the dual write - project journal
+/// fatal, machine index reported. The id must ride the envelope: a writer
+/// that cannot name its row has a bug, and minting here would hide it.
+fn run_append(req: &IntakeRequest) -> IntakeAnswer {
+    let mut answer = IntakeAnswer::exit(0);
+    let Some(event) = req.event.as_ref().filter(|e| e.is_object()) else {
+        answer.lines.push(
+            "outstanding: failed to record question: the append door needs an event envelope"
+                .to_string(),
+        );
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 2;
+        return answer;
+    };
+    let Some(qid) = event
+        .get("data")
+        .and_then(|d| d.get("question_id"))
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+    else {
+        answer.lines.push(
+            "outstanding: failed to record question: question event has no question_id".to_string(),
+        );
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 2;
+        return answer;
+    };
+    let qid = qid.to_string();
+    // Stamp once, before the serialize: the journal line and the index row
+    // must stay identical.
+    let mut event = event.clone();
+    if let Some(data) = event.get_mut("data").and_then(Value::as_object_mut) {
+        crate::identity::stamp_person(data);
+    }
+    let event = &event;
+    let journal_path = req
+        .journal_path
+        .clone()
+        .unwrap_or_else(|| req.storage_root.join(".fno").join("events.jsonl"));
+    let index = req
+        .index_path
+        .clone()
+        .unwrap_or_else(|| questions_path(&AgentsHome::from_env()));
+    if let Err((journaled, e)) = append_question_event(event, &journal_path, &index) {
+        answer.lines.push(e);
+        answer.exit_code = 1;
+        if journaled {
+            answer.qid = Some(qid);
+        } else {
+            answer.refusal = Some("write".to_string());
+        }
+        return answer;
+    }
+    answer.qid = Some(qid);
+    answer
+}
+
+/// Who asked, for the card: the handle and session the row already carries,
+/// plus the registry name and harness and this machine's host name.
+fn origin_of(req: &IntakeRequest, home: &AgentsHome) -> Option<Value> {
+    let session = req.session_id.as_deref().filter(|s| !s.is_empty())?;
+    let rows = crate::state::load_registry(&home.registry_json())
+        .map(|r| r.entries)
+        .unwrap_or_default();
+    let row = crate::lead_state::find_by_session(&rows, session, None);
+    Some(json!({
+        "handle": req.asker,
+        "session_id": session,
+        "name": row.map(|r| r.name.clone()),
+        "harness": row.and_then(|r| r.harness.clone()),
+        "host": crate::claims::hostname(),
+    }))
+}
+
+/// The dual write of one `operator_question` envelope: the project journal
+/// (durable, fatal) then the recall index. `Err` carries whether the journal
+/// half landed, and the line naming the failure.
+pub(crate) fn append_question_event(
+    event: &Value,
+    journal_path: &Path,
+    index: &Path,
+) -> Result<(), (bool, String)> {
+    let line = serde_json::to_string(event).map_err(|e| {
+        (
+            false,
+            format!(
+                "outstanding: failed to record question: could not serialize the envelope: {e}"
+            ),
+        )
+    })?;
+    crate::event_store::append_envelope(journal_path, &line, None).map_err(|e| {
+        (
+            false,
+            format!("outstanding: failed to append question to project journal: {e}"),
+        )
+    })?;
+    crate::provider_cap::append_questions_row(index, event).map_err(|e| {
+        (
+            true,
+            format!(
+                "outstanding: recorded the question in the project journal, but the recall \
+index write failed: {e}. Run `fno inbox outstanding reindex`."
+            ),
+        )
+    })
+}
+
 pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
+    if req.op.as_deref() == Some("append") {
+        return run_append(req);
+    }
     if req.template {
         let mut answer = IntakeAnswer::exit(0);
         answer.lines = vec![QUESTION_TEMPLATE.to_string()];
@@ -369,16 +607,33 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
 
     // The law refusal first: a live law on this subject means the question
     // is never recorded (fail-closed, d-0fa92eb9) - unless the question's
-    // closing action is the retraction of that law. A law-lane row refuses
-    // every non-operator retraction (`retract_decision`), so "act on the
-    // law; do not ask" has no agent-side remedy there and the user is the
-    // only door. The closing action may ride the pin line (`--ask`), so it
+    // closing action is the retraction of a superuser law. A session
+    // retracts a chat_attested law itself, but a superuser law refuses every
+    // session retraction, so "act on the law; do not ask" has no agent-side
+    // remedy there and the user is the only door. The closing action may ride the pin line (`--ask`), so it
     // scans with the question, not after it.
     let closing_text = match req.ask.as_deref() {
         Some(ask) if !ask.trim().is_empty() => format!("{}\n{}", req.question, ask),
         _ => req.question.clone(),
     };
     let retraction_ask = targets_operator_retraction(&closing_text, &req.laws);
+    // A retraction ask names its own target: exactly one cited live
+    // operator-retraction law stamps the machine subject, so the board
+    // answer performs the retraction in the same step. A question citing
+    // several laws names no single target and gets no stamp.
+    let retraction_stamp: Option<String> = if retraction_ask {
+        let cited: Vec<&crate::law_match::LawRow> = req
+            .laws
+            .iter()
+            .filter(|l| {
+                l.retraction_needs_operator()
+                    && cites_retraction(&closing_text, std::slice::from_ref(&l.decision_id))
+            })
+            .collect();
+        (cited.len() == 1).then(|| format!("law-retract:{}", cited[0].decision_id.to_lowercase()))
+    } else {
+        None
+    };
     let law_verdict = crate::law_match::ask_answer(&crate::law_match::AskRequest {
         question: req.question.clone(),
         subject: req.subject.clone(),
@@ -397,8 +652,9 @@ fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}
             if req.subject.is_none() {
                 line += " If the question is about another subject, name it with --subject.";
             }
-            line += " If the question asks to retract this law, name its id in the \
-question and ask again: only the user may record that retraction.";
+            line += " If the question asks to retract this law: a chat-attested law \
+retracts from your session with `fno inbox law retract <id> --reason <why> --quote \"<the user's words>\"`; \
+for a superuser law, name its id in the question and ask again.";
             answer.lines.push(line);
         }
         if let Some(refusal) = law_verdict.nearby_refusal {
@@ -410,6 +666,12 @@ question and ask again: only the user may record that retraction.";
     }
 
     let parsed = crate::escalation::parse(&req.question);
+    for name in &parsed.unknown_sections {
+        answer.lines.push(format!(
+            "outstanding: warning: section '## {name}' is not one the page renders, so the user will not see it. \
+Move its text into a known section, or link a vault page from 'Why these options'."
+        ));
+    }
     // A mistyped class would land as an unroutable hop, so it refuses the
     // way the reversible field does: exit 2, the six values named, nothing
     // written.
@@ -424,7 +686,7 @@ question and ask again: only the user may record that retraction.";
             .find(|l| l.split_once(':').is_some_and(|(k, _)| k.trim() == "class"))
             .unwrap_or("class:");
         answer.lines.push(format!(
-            "outstanding: refused: read '{read_line}'. class must be one of six \
+            "outstanding: refused: read '{read_line}'. class must be one of these \
 words: {}. 'decision' is not a class.",
             crate::decision_trace::DECISION_CLASSES.join(", ")
         ));
@@ -442,7 +704,9 @@ words: {}. 'decision' is not a class.",
     if has_options && node.is_none() {
         answer.lines.push(
             "outstanding: refused: a question with options names its node (--node). \
-One line plus a node pointer (law d-59af3235)."
+The ask line stays one line plus the pointer (law d-59af3235); a question \
+file carries the context sections and is not a violation, so pass the file \
+with --question-file and --node together."
                 .to_string(),
         );
         answer.refusal = Some("node_pointer".to_string());
@@ -531,40 +795,95 @@ choice starts>'.",
             answer.exit_code = 2;
             return answer;
         }
-        // The asker-must-decide refusal (user ruling 2026-09-22): a
-        // reversible question with a recommendation is one the asker or its
-        // lead settles itself; it reaches the user only with a user-only
-        // reason in why_user. A question whose closing action is an
-        // operator-only retraction is not the asker's to settle, whatever
-        // the file says: the same authority rule decides here.
-        if parsed.reversible.trim().eq_ignore_ascii_case("yes") {
-            let user_only = crate::escalation::why_user_is_user_only(&parsed.why_user);
-            if !user_only && !retraction_ask {
-                let decide = match node {
-                    Some(n) => format!("fno backlog decide {n} \"<ruling>\""),
-                    None => "fno backlog decide <node> \"<ruling>\"".to_string(),
-                };
-                answer.lines.push(format!(
-                    "outstanding: refused: reversible with a recommendation is yours \
-to rule. Decide door first: {decide} (--authority agent) - record the \
-ruling, then continue. \
-The user answers only what only a user can: irreversible, spends money or a \
-credential, reaches outside the machine, or a product or taste call - name it \
-with why_user: in the question file."
-                ));
-                answer.refusal = Some("decide_yourself".to_string());
+        // The asker-must-decide refusal (user ruling 2026-09-22): a class
+        // in questions.rules.allow, or a reversible question, is one the
+        // asker or its lead settles itself; it reaches the user only when
+        // why_user names exactly one class in questions.rules.deny. A
+        // question whose closing action is an operator-only retraction is
+        // not the asker's to settle, whatever the file says.
+        let cwd = req.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
+        let rules = match crate::question_ladder::rules_for(&cwd) {
+            Ok(r) => r,
+            Err(e) => {
+                answer.lines.push(format!("outstanding: refused: {e}."));
+                answer.refusal = Some("config".to_string());
                 answer.exit_code = 2;
                 return answer;
             }
+        };
+        let class = parsed.class.trim();
+        let user_only = crate::question_ladder::class_word(&parsed.why_user)
+            .is_some_and(|c| rules.user_only(c));
+        let reversible = parsed.reversible.trim().eq_ignore_ascii_case("yes");
+        if (rules.asker_decides(class) || (reversible && !user_only)) && !retraction_ask {
+            let decide = match node {
+                Some(n) => format!("fno backlog decide {n} \"<ruling>\""),
+                None => "fno backlog decide <node> \"<ruling>\"".to_string(),
+            };
+            answer.lines.push(format!(
+                "outstanding: refused: this question is yours to rule. Decide door \
+first: {decide} (--authority agent) - record the ruling, then continue. \
+The user answers only a class in questions.rules.deny ({}): name exactly one \
+with why_user: <class> in the question file.",
+                rules.deny.join(", ")
+            ));
+            answer.refusal = Some("decide_yourself".to_string());
+            answer.exit_code = 2;
+            return answer;
         }
     }
 
+    // The screens refusal: the user cannot judge paint they cannot see, so
+    // a question that clears a visual-approval hold carries its shots.
+    if let Some(bad) = req.images.iter().find(|p| !is_image_file(p)) {
+        answer.lines.push(format!(
+            "outstanding: refused: --image {} is not a readable png, jpg, gif or webp file.",
+            bad.display()
+        ));
+        answer.refusal = Some("image".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    let visual = asks_visual_approval(
+        req.subject.as_deref(),
+        &title_of(&req.question, &parsed.title),
+    );
+    if visual
+        && !req.images.is_empty()
+        && req
+            .images
+            .iter()
+            .all(|p| snapshot_without_image_protocol(p))
+    {
+        answer.lines.push(
+            "outstanding: refused: every shot is an fno mux snapshot of an image view. The \
+snapshot has no image protocol, so it shows half-blocks and never the kitty image. Add a \
+capture from a real terminal (Ghostty, kitty or WezTerm) with --image."
+                .to_string(),
+        );
+        answer.refusal = Some("screens_protocol".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    if req.images.is_empty() && visual {
+        answer.lines.push(
+            "outstanding: refused: a visual-approval question carries the screens the user \
+judges. Pass each screenshot with --image <path>; the page embeds them under ## Screens."
+                .to_string(),
+        );
+        answer.refusal = Some("screens".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+
     // Dedup: an open question on the same subject and node already waits.
-    let subject = req
-        .subject
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let subject: Option<String> = retraction_stamp.clone().or_else(|| {
+        req.subject
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
     let index = req
         .index_path
         .clone()
@@ -572,7 +891,7 @@ with why_user: in the question file."
     // One read serves the dedup and the supersede after the write: the
     // open rows a re-ask closes are the ones this read saw.
     let open = open_rows(&index);
-    if let (Some(s), Some(n)) = (subject, node) {
+    if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         let dup = open.iter().find(|row| {
             row.subject.as_deref().map(str::trim) == Some(s) && row.node.as_deref() == Some(n)
         });
@@ -671,11 +990,57 @@ already waits ({}). Answer it or clear it; do not ask twice.",
             data.insert(key.into(), json!(v));
         }
     }
+    crate::identity::stamp_person(&mut data);
     if let Some(n) = node {
         data.insert("node".into(), json!(n));
     }
+    // A rung row that lacks the card fields would read not-ready once its
+    // lease ran out and never reach the board, so it skips the ladder.
+    if let Some(rung) = &req.rung {
+        let missing: Vec<&str> = [
+            ("class", &parsed.class),
+            ("deadline", &parsed.deadline),
+            ("on_silence", &parsed.on_silence),
+            ("## Tried", &parsed.tried),
+        ]
+        .into_iter()
+        .filter(|(_, v)| v.trim().is_empty())
+        .map(|(k, _)| k)
+        .collect();
+        if missing.is_empty() {
+            data.insert("rung".into(), rung.clone());
+            answer.rung = Some(rung.clone());
+        } else {
+            answer.lines.push(format!(
+                "outstanding: this question goes to the user's board, not to your lead: \
+                 the ladder needs {}. Add them to the question file to ask your lead first.",
+                missing.join(", ")
+            ));
+        }
+    }
+    if !parsed.class.trim().is_empty() {
+        data.insert("class".into(), json!(parsed.class.trim()));
+    }
+    if let Some(origin) = origin_of(req, home) {
+        data.insert("origin".into(), origin);
+    }
     if !req.blocks.is_empty() {
         data.insert("blocks".into(), json!(req.blocks));
+    }
+    if !req.images.is_empty() {
+        match copy_screens(&req.images, req.screens_dir.as_deref(), &qid) {
+            Ok(copies) => {
+                data.insert("images".into(), json!(copies));
+            }
+            Err(e) => {
+                answer.lines.push(format!(
+                    "outstanding: failed to record question: the screens could not be copied: {e}"
+                ));
+                answer.refusal = Some("write".to_string());
+                answer.exit_code = 1;
+                return answer;
+            }
+        }
     }
     if has_options {
         if file_options {
@@ -698,7 +1063,7 @@ already waits ({}). Answer it or clear it; do not ask twice.",
             data.insert("options".into(), json!(req.options));
         }
     }
-    if let Some(subject) = subject {
+    if let Some(subject) = &subject {
         data.insert("subject".into(), json!(subject));
     }
     let why_user = parsed.why_user.trim();
@@ -717,6 +1082,10 @@ already waits ({}). Answer it or clear it; do not ask twice.",
         ("reversible", &parsed.reversible),
         ("cost_if_wrong", &parsed.cost_if_wrong),
         ("meanwhile", &parsed.meanwhile),
+        ("tried", &parsed.tried),
+        ("evidence", &parsed.evidence),
+        ("deadline", &parsed.deadline),
+        ("on_silence", &parsed.on_silence),
     ] {
         if !value.trim().is_empty() {
             context.insert(key.into(), json!(value.trim()));
@@ -804,12 +1173,17 @@ would mint a second id for the same question."
         "outstanding: recorded {qid}. The user answers it on the question board, \
 and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {qid}"
     ));
+    if let Some(stamp) = &retraction_stamp {
+        answer.lines.push(format!(
+            "outstanding: retraction target {stamp} stamped; the board answer performs the retraction as the operator"
+        ));
+    }
 
     // A re-ask at a new head closes the older head's open question on the
     // same node, whoever asked: the older head can no longer be approved
     // or refused, so one open question per head family stays. Best-effort;
     // a close that fails here waits for the hourly sweep.
-    if let (Some(s), Some(n)) = (subject, node) {
+    if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         if let Some((new_family, new_head)) = crate::question_sweep::head_scoped(s) {
             let olds: Vec<(&str, &str)> = open
                 .iter()
@@ -945,11 +1319,16 @@ mod tests {
             cwd: Some("/repo/fno".to_string()),
             asker: Some("worker-1".to_string()),
             laws: vec![],
+            rung: None,
             storage_root: root.to_path_buf(),
             index_path: None,
             journal_path: None,
             display_name: None,
             render_cap: None,
+            op: None,
+            event: None,
+            images: Vec::new(),
+            screens_dir: None,
         }
     }
 
@@ -1043,12 +1422,86 @@ stops
                 .and_then(Value::as_u64),
             Some(1)
         );
-        // The index row landed too.
+        // The index row landed too, with the same person stamp.
         let index =
             crate::event_store::journal_text(&questions_path(&home), &["operator_question"]);
         assert!(index.contains(&qid));
+        let person = data.get("person").and_then(Value::as_str).unwrap();
+        assert!(
+            index.contains(&format!("\"person\":{}", json!(person))),
+            "{index}"
+        );
         assert_eq!(answer.position, Some(1));
         assert_eq!(answer.total, Some(1));
+    }
+
+    #[test]
+    fn a_visual_approval_ask_needs_screens_and_copies_them_beside_the_page() {
+        let home = tmp_home("screens");
+        let root = tmp_root("screens");
+        let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.subject = Some("visual approval PR 7 at 05ea5bcc".to_string());
+        let refused = run_intake(&r, &home);
+        assert_eq!(
+            refused.refusal.as_deref(),
+            Some("screens"),
+            "{:?}",
+            refused.lines
+        );
+        // A hand-written title naming the PR and the hold reads the same.
+        let mut by_title = req(
+            &QUESTION_FILE.replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Approve PR 4030 at f5068f08 past the visual hold?",
+            ),
+            &root,
+        );
+        by_title.node = Some("x-aaaa".to_string());
+        assert_eq!(
+            run_intake(&by_title, &home).refusal.as_deref(),
+            Some("screens")
+        );
+        r.images = vec![root.join("missing.png")];
+        assert_eq!(run_intake(&r, &home).refusal.as_deref(), Some("image"));
+        assert!(journal_text(&root).is_empty());
+
+        let shot = root.join("bell.png");
+        std::fs::write(&shot, b"png").unwrap();
+        r.images = vec![shot.clone()];
+        assert_eq!(
+            run_intake(&r, &home).refusal.as_deref(),
+            Some("image"),
+            "a renamed text file is no image"
+        );
+        // A snapshot of an image view carries the stamp: alone it cannot show
+        // the kitty image, so the ask is refused.
+        let text = b"fno-snapshot\0no-image-protocol";
+        let mut stamped = b"\x89PNG\r\n\x1a\n".to_vec();
+        stamped.extend_from_slice(&(text.len() as u32).to_be_bytes());
+        stamped.extend_from_slice(b"tEXt");
+        stamped.extend_from_slice(text);
+        stamped.extend_from_slice(&[0; 4]);
+        std::fs::write(&shot, &stamped).unwrap();
+        assert_eq!(
+            run_intake(&r, &home).refusal.as_deref(),
+            Some("screens_protocol")
+        );
+        let png = b"\x89PNG\r\n\x1a\n-pixels";
+        std::fs::write(&shot, png).unwrap();
+        r.screens_dir = Some(root.join("questions/screens"));
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        let qid = answer.qid.unwrap();
+        let copy = root.join(format!("questions/screens/{qid}-1-bell.png"));
+        assert_eq!(std::fs::read(&copy).unwrap(), png);
+        let row: Value = serde_json::from_str(journal_text(&root).lines().last().unwrap()).unwrap();
+        let images = row["data"]["images"].as_array().unwrap();
+        assert_eq!(images.len(), 1);
+        assert!(images[0]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{qid}-1-bell.png")));
     }
 
     #[test]
@@ -1100,6 +1553,78 @@ stops
         let answer2 = run_intake(&r2, &home);
         assert_eq!(answer2.exit_code, 2);
         assert_eq!(answer2.refusal.as_deref(), Some("decide_yourself"));
+        // why_user is exactly one class word: free text refuses and names
+        // the deny classes; a deny class passes.
+        let with_why = |why: &str| {
+            QUESTION_FILE
+                .replace("## Reversible\ncostly", "## Reversible\nyes")
+                .replace(
+                    "## Meanwhile\nstops\n",
+                    &format!("## Meanwhile\nstops\n\n## Why user\n{why}\n"),
+                )
+        };
+        let ask = |why: &str, root: &Path| {
+            let mut r = req(&with_why(why), root);
+            r.node = Some("x-aaaa".to_string());
+            run_intake(&r, &home)
+        };
+        let answer3 = ask("product call", &root);
+        assert_eq!(answer3.refusal.as_deref(), Some("decide_yourself"));
+        assert!(answer3
+            .lines
+            .iter()
+            .any(|l| l.contains("irreversible, money-security")));
+        let taste_root = tmp_root("rule10-taste");
+        let answer4 = ask("taste", &taste_root);
+        assert_eq!(answer4.exit_code, 0, "lines: {:?}", answer4.lines);
+    }
+
+    #[test]
+    fn a_ladder_ask_carries_its_rung_and_stays_off_the_board() {
+        let rung = json!({"level": "lead", "holder_session": "s-lead", "holder_name": "tomas"});
+        // A file without the card fields skips the ladder: the row goes to
+        // the board, and the asker learns which fields the ladder needs.
+        let home = tmp_home("ladder-bare");
+        let root = tmp_root("ladder-bare");
+        let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.rung = Some(rung.clone());
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        assert!(answer.rung.is_none());
+        assert!(answer
+            .lines
+            .iter()
+            .any(|l| l.contains("class, deadline, on_silence, ## Tried")));
+        assert_eq!(
+            crate::outstanding::fold_questions(&journal_text(&root)).len(),
+            1
+        );
+
+        let laddered = QUESTION_FILE
+            .replace(
+                "recommend: 1\n",
+                "recommend: 1\nclass: taste\ndeadline: 2026-11-01T09:00:00Z\non_silence: wait\n",
+            )
+            .replace(
+                "## Reversible",
+                "## Tried\nread the grant table\n\n## Reversible",
+            );
+        let home = tmp_home("ladder-rung");
+        let root = tmp_root("ladder-rung");
+        let mut r = req(&laddered, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.rung = Some(rung);
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        assert!(answer.rung.is_some());
+        let journal = journal_text(&root);
+        assert!(
+            journal.contains("\"holder_session\":\"s-lead\""),
+            "{journal}"
+        );
+        // Fresh, the row sits with the lead: the board fold does not list it.
+        assert!(crate::outstanding::fold_questions(&journal).is_empty());
     }
 
     #[test]
@@ -1164,14 +1689,78 @@ stops
             decision: Some("a placeholder ruling".to_string()),
             ts: Some("2026-08-29T19:20:10Z".to_string()),
             lane: Some("law".to_string()),
+            authority_source: Some("operator".to_string()),
         }
+    }
+
+    #[test]
+    fn a_single_law_retraction_ask_stamps_the_machine_subject() {
+        // Exactly one cited live operator-retraction law stamps
+        // law-retract:<id> on the recorded question, so the board answer
+        // performs the retraction in the same step. Two cited laws name no
+        // single target: no stamp, the caller's subject stands.
+        let home = tmp_home("retract-stamp");
+        let root = tmp_root("retract-stamp");
+        let question = QUESTION_FILE
+            .replace("## Reversible\ncostly", "## Reversible\nyes")
+            .replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Retract d-junk0001: the junk law ruling on junk-law?",
+            );
+        let mut r = req(&question, &root);
+        r.subject = Some("junk-law".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.laws = vec![junk_law()];
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let row = journal_text(&root);
+        assert!(
+            row.contains("\"law-retract:d-junk0001\""),
+            "stamped subject: {row}"
+        );
+        assert!(
+            answer
+                .lines
+                .iter()
+                .any(|l| l.contains("retraction target law-retract:d-junk0001")),
+            "{:?}",
+            answer.lines
+        );
+
+        let mut second = junk_law();
+        second.decision_id = "d-junk0002".to_string();
+        let home = tmp_home("retract-stamp-2");
+        let root = tmp_root("retract-stamp-2");
+        // The text cites both ids: two cited laws name no single target.
+        let two_question = QUESTION_FILE
+            .replace("## Reversible\ncostly", "## Reversible\nyes")
+            .replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Retract d-junk0001 and d-junk0002: the junk laws ruling on junk-law?",
+            );
+        let mut r = req(&two_question, &root);
+        r.subject = Some("junk-law".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.laws = vec![junk_law(), second];
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let row = journal_text(&root);
+        assert!(
+            !row.contains("law-retract"),
+            "no stamp on a two-law ask: {row}"
+        );
+        assert!(
+            row.contains("\"junk-law\""),
+            "the caller's subject stands: {row}"
+        );
     }
 
     #[test]
     fn a_question_to_retract_a_law_is_accepted() {
         // The closing action is a retraction, and the retract gate refuses
-        // every non-operator authority on a law-lane row: the ask is the
-        // only door, so neither the law refusal nor decide_yourself fires.
+        // every session on a superuser law: the ask is the only door, so
+        // neither the law refusal nor decide_yourself fires. A chat_attested
+        // law retracts from the session, so the same ask is refused.
         let home = tmp_home("retract-accept");
         let root = tmp_root("retract-accept");
         let question = QUESTION_FILE
@@ -1187,6 +1776,23 @@ stops
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
         assert!(journal_text(&root).lines().count() == 1);
+
+        let chat_root = tmp_root("retract-chat");
+        let mut chat = req(&question, &chat_root);
+        chat.subject = Some("junk-law".to_string());
+        chat.node = Some("x-aaaa".to_string());
+        chat.laws = vec![crate::law_match::LawRow {
+            authority_source: Some("chat_attested".to_string()),
+            ..junk_law()
+        }];
+        let answer = run_intake(&chat, &home);
+        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
+        assert!(
+            answer.lines.iter().any(|l| l.contains("d-junk0001")),
+            "{:?}",
+            answer.lines
+        );
+        assert_eq!(journal_text(&chat_root).lines().count(), 0);
     }
 
     #[test]
@@ -1222,11 +1828,16 @@ stops
         // node closes nothing.
         let home = tmp_home("supersede");
         let root = tmp_root("supersede");
+        // A visual-approval ask carries its screens.
+        let shot = root.join("paint.png");
+        std::fs::write(&shot, b"\x89PNG\r\n\x1a\n").unwrap();
         let ask = |subject: &str, node: &str| {
             let mut r = req("does the paint look right?", &root);
             r.subject = Some(subject.to_string());
             r.node = Some(node.to_string());
             r.ask = Some("approve the paint at this head".to_string());
+            r.images = vec![shot.clone()];
+            r.screens_dir = Some(root.join("screens"));
             run_intake(&r, &home)
         };
         let first = ask("visual approval PR 7 at 1111111a", "x-aaaa");
@@ -1282,6 +1893,7 @@ stops
             decision: Some("stay strict".to_string()),
             ts: Some("2026-09-01T00:00:00Z".to_string()),
             lane: Some("law".to_string()),
+            authority_source: None,
         }];
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 2);
@@ -1345,6 +1957,108 @@ stops
         assert!(
             open.iter().all(|r| r.id != "q-t1"),
             "a store-only close must unmark the question: {open:?}"
+        );
+    }
+
+    #[test]
+    fn the_append_door_writes_the_envelope_to_both_sinks() {
+        let root = tmp_root("append-ok");
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "daemon",
+            "data": {"question_id": "q-ap1", "question": "wake?", "ask": "answer inherit or clean", "person": "caller"}
+        });
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(journal.clone()),
+            index_path: Some(index.clone()),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-ok"));
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        assert_eq!(answer.qid.as_deref(), Some("q-ap1"));
+        let row = crate::events::committed_journal_text(&journal)
+            .lines()
+            .last()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .unwrap();
+        assert_eq!(
+            row.pointer("/data/question_id").and_then(Value::as_str),
+            Some("q-ap1")
+        );
+        assert_eq!(
+            row.pointer("/source").and_then(Value::as_str),
+            Some("daemon")
+        );
+        // The stamp keeps the caller's person, in both sinks.
+        assert_eq!(row.pointer("/data/person"), Some(&json!("caller")));
+        let indexed = crate::events::committed_journal_text(&index);
+        assert!(indexed.contains("\"q-ap1\""), "{indexed}");
+        assert!(indexed.contains("\"person\":\"caller\""), "{indexed}");
+    }
+
+    #[test]
+    fn the_append_door_refuses_an_envelope_with_no_question_id() {
+        let root = tmp_root("append-noid");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "hook",
+            "data": {"question": "no id here"}
+        });
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(root.join("events.jsonl")),
+            index_path: Some(root.join("questions.jsonl")),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-noid"));
+        assert_eq!(answer.exit_code, 2);
+        assert_eq!(answer.qid, None);
+        assert!(
+            answer.lines[0].contains("no question_id"),
+            "{:?}",
+            answer.lines
+        );
+        assert!(
+            crate::events::committed_journal_text(&root.join("events.jsonl")).is_empty(),
+            "a refused envelope writes nothing"
+        );
+    }
+
+    #[test]
+    fn a_failed_journal_append_is_fatal_and_reported() {
+        let root = tmp_root("append-jfail");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "daemon",
+            "data": {"question_id": "q-ap2", "question": "wake?"}
+        });
+        // A journal parked under a plain FILE cannot take the append: both
+        // the store and the journal need that parent to be a directory.
+        std::fs::write(root.join("no-such-dir"), b"not a directory").unwrap();
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(root.join("no-such-dir").join("events.jsonl")),
+            index_path: Some(root.join("questions.jsonl")),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-jfail"));
+        assert_eq!(answer.exit_code, 1);
+        assert!(
+            answer.lines[0].contains("failed to append question to project journal"),
+            "{:?}",
+            answer.lines
         );
     }
 }

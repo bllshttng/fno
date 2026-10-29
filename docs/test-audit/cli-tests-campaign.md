@@ -129,7 +129,7 @@ Twenty files with tests are unchanged and not listed.
 | `integration/test_target_node_claim.py` | 8 | 4 |
 | `integration/test_test_run_lifecycle.py` | 3 | 2 |
 | `integration/test_undispatched_order.py` | 4 | 1 |
-| `integration/test_verb_projection.py` | 4 | 2 |
+| `integration/test_command_projection.py` | 4 | 2 |
 | `integration/test_verify_child_promise.py` | 10 | deleted |
 | `integration/test_worktree_cargo_build_base.py` | 3 | 2 |
 | `integration/test_worktree_cleanup_merged.py` | 63 | 24 |
@@ -151,9 +151,9 @@ Twenty files with tests are unchanged and not listed.
 | `lint/test_smoke_wheel_env_scrub.py` | 9 | 5 |
 | `lint/test_think_skill_size.py` | 2 | 1 |
 | `lint/test_think_workflow_contract.py` | 2 | 1 |
-| `lint/test_verb_callers.py` | 11 | 5 |
-| `lint/test_verb_ratchet.py` | 14 | 6 |
-| `lint/test_verb_ratchet_source_scan.py` | 6 | 4 |
+| `lint/test_command_callers.py` | 11 | 5 |
+| `lint/test_command_ratchet.py` | 14 | 6 |
+| `lint/test_command_ratchet_source_scan.py` | 6 | 4 |
 | `mcp/test_channel_wire.py` | 17 | 7 |
 | `mcp/test_request_id.py` | 10 | 3 |
 | `mcp/test_sidecar_lifecycle.py` | 15 | 6 |
@@ -217,5 +217,5 @@ Twenty files with tests are unchanged and not listed.
 | `test_state_root_inventory.py` | 3 | 2 |
 | `test_status_fanout.py` | 98 | 45 |
 | `test_truth_status.py` | 23 | 10 |
-| `test_two_spelling_dispatch.py` | 2 | 1 |
+| `test_two_spelling_dispatch.py` | 2 | deleted |
 | `test_v2_paths.py` | 1 | deleted |

@@ -76,7 +76,7 @@ case_run() {
   local rc=0
   (
     cd "$TMP" || exit 9
-    export GITHUB_REPOSITORY="bllshttng/footnote" PR_NUMBER="99"
+    export GITHUB_REPOSITORY="bllshttng/fno" PR_NUMBER="99"
     export STUB_FILES="$fixture" GITHUB_OUTPUT="$out" PATH="$TMP:$PATH"
     if [[ -n "$config" ]]; then
       export PAINT_CONFIG_PATH="$TMP/$name.config.toml"

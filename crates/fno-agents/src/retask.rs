@@ -60,8 +60,8 @@ pub struct RetaskTarget {
     pub permission_mode: Option<String>,
     pub route: Option<String>,
     pub account: Option<String>,
-    /// The node's next lifecycle verb; profiles.<verb> supplies the tier.
-    pub verb: String,
+    /// The node's next lifecycle command; profiles.<command> supplies the tier.
+    pub command: String,
 }
 
 impl RetaskTarget {
@@ -89,7 +89,9 @@ impl RetaskTarget {
             permission_mode: get("permission_mode"),
             route: get("route"),
             account: get("account"),
-            verb: get("verb").unwrap_or_else(|| "target".to_string()),
+            command: get("command")
+                .or_else(|| get("verb"))
+                .unwrap_or_else(|| "target".to_string()),
         })
     }
 }
@@ -200,13 +202,30 @@ pub(crate) fn transition_receipt(value: &Value, predecessor: &str) -> Option<Val
 }
 
 /// The (model, effort) pair one status frame reports, or `None` when the
-/// harness's status pattern does not settle both named groups.
+/// harness's status pattern does not settle both named groups. When the
+/// frame is truncated (a narrow pane cuts the `Model:` line mid-token), the
+/// status-bar pattern reads the same pair off the chrome that survives.
 pub(crate) fn status_tier(strategy: &ModelSwitchStrategy, frame: &str) -> Option<(String, String)> {
     let pattern = regex::Regex::new(&strategy.status_pattern).ok()?;
     let captures = pattern.captures(frame)?;
     let model = captures.name("model")?.as_str().to_string();
     let effort = captures.name("effort")?.as_str().to_string();
     Some((model, effort))
+}
+
+/// `status_tier`, with the status-bar fallback a truncated frame needs.
+pub(crate) fn status_tier_or_bar(
+    strategy: &ModelSwitchStrategy,
+    frame: &str,
+) -> Option<(String, String)> {
+    status_tier(strategy, frame).or_else(|| {
+        let pattern = regex::Regex::new(strategy.status_bar_pattern.as_ref()?).ok()?;
+        let captures = pattern.captures(frame)?;
+        Some((
+            captures.name("model")?.as_str().to_string(),
+            captures.name("effort")?.as_str().to_string(),
+        ))
+    })
 }
 
 /// Menu rows one frame paints: `(row number, has cursor, label)`.
@@ -375,7 +394,7 @@ pub fn detect_retask(
         }
     }
 
-    // The model axis resolves from the new verb's routed lane alone; a row
+    // The model axis resolves from the new command's routed lane alone; a row
     // never carries its old tier across a retask, so an unrouted lane spawns.
     let desired_model = target.model.clone().filter(|m| !m.is_empty());
     if desired_model.is_none() && row.model.is_some() {
@@ -522,9 +541,9 @@ pub fn execute_retask<S: RetaskSeams>(
         ));
     }
 
-    let rename_name = match crate::naming::verb_code_for(Some(&target.verb)) {
-        Ok(verb_code) => {
-            crate::naming::dispatch_agent_name(None, &verb_code, node, None, None, None, None)
+    let rename_name = match crate::naming::command_code_for(Some(&target.command)) {
+        Ok(command_code) => {
+            crate::naming::dispatch_agent_name(None, &command_code, node, None, None, None, None)
         }
         Err(error) => {
             return Ok(override_receipt(
@@ -557,7 +576,7 @@ pub fn execute_retask<S: RetaskSeams>(
         ));
     }
     let settled = settled_read(seams)?;
-    let Some((cleared_model, cleared_effort)) = status_tier(strategy, &settled) else {
+    let Some((cleared_model, cleared_effort)) = status_tier_or_bar(strategy, &settled) else {
         return Ok(override_receipt(
             refusal,
             json!({ "cleared": true, "session_restamped": true, "registry_name": renamed, "reason": "status_unreadable" }),
@@ -646,7 +665,7 @@ pub fn execute_retask<S: RetaskSeams>(
             ));
         }
         let settled = settled_read(seams)?;
-        let verified = status_tier(strategy, &settled);
+        let verified = status_tier_or_bar(strategy, &settled);
         if verified.as_ref() != Some(&(desired_model.clone(), desired_effort.clone())) {
             return Ok(override_receipt(
                 refusal,

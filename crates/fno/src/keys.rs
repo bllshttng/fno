@@ -262,20 +262,9 @@ pub fn resolve_keymap(
     )
 }
 
-/// Resolve a candidate prefix against the live rebinds.
-///
-/// The returned map is safe to pass to [`reinstall`]. A refusal carries the
-/// same operator-readable warning as [`resolve_keymap`] and changes nothing.
-pub fn resolve_prefix_change(spec: &str) -> Result<Keymap, String> {
-    let rebinds = KEYMAP
-        .read()
-        .map_err(|_| "keymap is unavailable; prefix unchanged".to_string())?
-        .as_ref()
-        .map(|map| map.rebinds.clone())
-        .unwrap_or_default();
-    resolve_prefix_change_with_rebinds(spec, &rebinds)
-}
-
+// Test-only since the live-map wrappers went: the pub entry points had no
+// callers, and the refusal rules below are what the tests still pin.
+#[cfg(test)]
 fn resolve_prefix_change_with_rebinds(
     spec: &str,
     live_rebinds: &[(String, u8)],
@@ -295,14 +284,7 @@ fn resolve_prefix_change_with_rebinds(
     Ok(map)
 }
 
-/// Resolve moving one action to `byte` against the live keymap, with the
-/// same rules a config file gets. A refusal carries the resolver's sentence
-/// and changes nothing; the returned map is safe to pass to [`reinstall`].
-pub fn resolve_rebind(action: &str, byte: u8) -> Result<Keymap, String> {
-    let map = keymap();
-    resolve_rebind_with(map.prefix, &map.rebinds, action, byte)
-}
-
+#[cfg(test)]
 fn resolve_rebind_with(
     prefix: u8,
     live: &[(String, u8)],
@@ -458,7 +440,7 @@ pub enum Event {
     /// layer interprets that, not here.
     OpenTeam,
     /// Open or close the Org board view in one press: the sideline's org
-    /// board (tree, table, graph), from any sideline view. From Org it
+    /// board (fleet, machines, leads, seats), from any sideline view. From Org it
     /// closes back to the agents list. The client's view layer interprets
     /// this, like OpenTeam.
     OpenOrgView,
@@ -492,7 +474,7 @@ pub enum Event {
     /// round trip through slim.
     ToggleAgentSort,
     /// Cycle the sideline agents view's group-by axis: workspace -> team ->
-    /// cwd -> status (prefix+G). Persisted like the density.
+    /// cwd -> status -> harness (prefix+W). Persisted like the density.
     CycleAgentGroup,
     /// Show or hide the card's `node · PR` header row (prefix+Y). The header
     /// shows at every width now; this is the operator's off switch.
@@ -519,6 +501,13 @@ pub enum Event {
     /// client enters a local typing mode; the query and n/N/Esc are interpreted
     /// by the client's view layer, not here (like OpenSelector / OpenAnswers).
     SearchOpen,
+    /// Enter keyboard scroll mode on the focused pane (prefix+PgUp, tmux
+    /// copy-mode convention). While the mode holds the keyboard, j/k move one
+    /// line, PgUp/PgDn a page, Ctrl-u/Ctrl-d a half page, g/G jump to the
+    /// top/bottom, q/Esc leaves; the moves ride the SHARED server-side scroll
+    /// offset the wheel drives, so co-viewers track. The mode is interpreted
+    /// by the client's view layer, not here (like SearchOpen).
+    ScrollModeOpen,
     /// Open the session navigator (prefix+f): a global goto picker over
     /// a flat catalog of every squad/tab/agent/card. The client owns the typing
     /// mode (text filter, Tab state pane focus, Ctrl-n/p cursor, Enter goto); the
@@ -541,6 +530,9 @@ pub enum Event {
     /// `sweep threads` row, on the keyboard. The modal still asks before
     /// anything is reaped.
     OpenSweepThreads,
+    /// Lift the machine-wide fleet hold the status row names (prefix+U),
+    /// when the machine armed it.
+    LiftHold,
     /// Share the focused pane and copy the join link (prefix+X); pressed
     /// again while sharing, it copies the link again. The experimental
     /// `pane share` toggle gates it client-side.
@@ -1336,7 +1328,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "org-view",
             OpenOrgView,
             Global,
-            "org view (tree, table, graph)",
+            "org view (fleet, machines, leads, seats)",
         ),
         b(
             b'q',
@@ -1399,7 +1391,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "cycle-agent-group",
             CycleAgentGroup,
             Global,
-            "group agents by workspace, lead, cwd, or status",
+            "group agents by workspace, lead, cwd, status, or harness",
         ),
         b(
             b'Y',
@@ -1422,6 +1414,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             OpenSweepThreads,
             Global,
             "sweep threads (close, reap)",
+        ),
+        b(
+            b'U',
+            "lift-hold",
+            LiftHold,
+            Global,
+            "lift the fleet hold (reserve, overload)",
         ),
         b(
             b'X',
@@ -1458,24 +1457,6 @@ fn default_bindings() -> Vec<KeyBinding> {
 /// deliberately absent here and refused as rebind targets.
 pub fn key_bindings() -> Vec<KeyBinding> {
     bindings_for(&keymap())
-}
-
-/// Every rebindable binding as the settings page lists it: the live table
-/// plus the actions that ship with no chord, which read "unbound" so the
-/// page can give them one.
-pub fn editable_bindings() -> Vec<KeyBinding> {
-    let map = keymap();
-    let mut rows = default_bindings();
-    for kb in &mut rows {
-        if kb.key == 0 {
-            kb.disp = "unbound".into();
-        }
-        if let Some((_, byte)) = map.rebinds.iter().find(|(a, _)| a == kb.action) {
-            kb.key = *byte;
-            kb.disp = key_disp(*byte);
-        }
-    }
-    rows
 }
 
 fn bindings_for(map: &Keymap) -> Vec<KeyBinding> {
@@ -1518,7 +1499,7 @@ fn disp_for(action_id: &str, bindings: &[KeyBinding]) -> Option<String> {
 /// uses. A SEPARATE scope, not a rebind: prefix chords read a byte only after
 /// the prefix, menu keys read it bare inside a popup, so the two layers never
 /// consult each other's tables (ruling d-a5e7569d - `x` stays kill-pane after
-/// a prefix and becomes the destructive verb inside a menu).
+/// a prefix and becomes the destructive command inside a menu).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuKeyBinding {
     pub action: &'static str,
@@ -1526,8 +1507,8 @@ pub struct MenuKeyBinding {
 }
 
 /// The shipped in-menu accelerator table: app vocabulary inside the open menu
-/// (`r` renames, `x` is the destructive verb, `n` and the angle brackets drive
-/// the tab verbs). One byte MAY serve two action ids here (`close-tab` and
+/// (`r` renames, `x` is the destructive command, `n` and the angle brackets drive
+/// the tab commands). One byte MAY serve two action ids here (`close-tab` and
 /// `remove-row` never share a popup), so collision rules live with the caller,
 /// which knows which menu is open. A static slice: lookups run per popup row
 /// at build time and per offered action on every in-menu keypress.
@@ -1570,7 +1551,7 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         action: "move-tab-to",
         key: b'#',
     },
-    // The row-menu verbs, teachable by keyboard now. Letters reuse
+    // The row-menu commands, teachable by keyboard now. Letters reuse
     // the sideline's own vocabulary so the two scopes teach one keyboard:
     // `s` stop (the sideline spends `x` on stop-then-remove and `X` on bulk
     // reap, so the menu's own free mnemonic takes Stop), `p` peek (the
@@ -1607,7 +1588,7 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         key: b'l',
     },
     // `c` closes the portal seat only - the viewer, never the row it
-    // shows; `x` stays the destructive row verb.
+    // shows; `x` stays the destructive row command.
     MenuKeyBinding {
         action: "close-portal",
         key: b'c',
@@ -1626,6 +1607,11 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
     MenuKeyBinding {
         action: "toggle-split-opens",
         key: b't',
+    },
+    // `.` pins, the sideline selector's own pin byte.
+    MenuKeyBinding {
+        action: "pin-row",
+        key: b'.',
     },
 ];
 
@@ -1695,7 +1681,7 @@ pub fn prefix_hint() -> String {
 /// so the keys the selector answers never need discovering by accident. The
 /// words name what the selector's own handlers run (client `selector_keys`).
 pub fn selector_hint() -> &'static str {
-    " selector: arrows/hjkl move \u{b7} enter open \u{b7} space peek \u{b7} x stop/remove \u{b7} P portal \u{b7} esc close "
+    " selector: enter open \u{b7} space reply \u{b7} . or ctrl+t pin \u{b7} shift+up/down move \u{b7} r rename \u{b7} x stop \u{b7} P portal \u{b7} esc close "
 }
 
 /// Display-only pseudo-bindings the modal shows but `chord()` handles as
@@ -1749,6 +1735,11 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
             "move the pane".into(),
             KeySection::GlobalNoPrefix,
         ),
+        (
+            format!("{p} PgUp"),
+            "scroll mode: j/k line, PgUp/PgDn page, g/G ends, q/Esc leaves".into(),
+            KeySection::GlobalNoPrefix,
+        ),
         // The dead-row removal paths. Bare sideline keys, not chords -
         // listed here so the reference names them; Enter on them BELs.
         (
@@ -1767,7 +1758,7 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
             KeySection::SidelineRows,
         ),
         (
-            ".".into(),
+            ". or ctrl+t".into(),
             "pin or unpin the row (inside the row selector)".into(),
             KeySection::SidelineRows,
         ),
@@ -1946,12 +1937,22 @@ fn esc_chord(seq: &[u8]) -> EscScan {
         }
     };
     // Complete plain arrow: ESC [ X
-    if seq.len() == 3 && seq.starts_with(PLAIN) {
+    if seq.len() >= 3 && seq.starts_with(PLAIN) {
         if let Some(dir) = arrow(seq[2]) {
             return EscScan::Complete(Event::Cmd(Command::FocusDir(dir)));
         }
         // Might still be the Ctrl-arrow prefix (ESC [ 1 ...).
         if seq[2] != b'1' {
+            // PageUp (`ESC [ 5 ~`, 4 bytes here - the prefix byte is consumed
+            // by the Prefix state before PrefixEsc starts) enters keyboard
+            // scroll mode; PgDn after the prefix is unbound (the mode's own
+            // folder consumes it inside).
+            if seq.len() == 4 && seq[2] == b'5' && seq[3] == b'~' {
+                return EscScan::Complete(Event::ScrollModeOpen);
+            }
+            if seq.len() < 4 && seq[2] == b'5' {
+                return EscScan::Partial;
+            }
             return EscScan::Invalid;
         }
     }
@@ -2008,6 +2009,7 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
     use Event::*;
     vec![
         ("Ctrl+Opt+Left", OpenSelector),
+        ("PgUp", ScrollModeOpen),
         ("Up", Cmd(C::FocusDir(Dir::Up))),
         ("Down", Cmd(C::FocusDir(Dir::Down))),
         ("Left", Cmd(C::FocusDir(Dir::Left))),
@@ -2792,7 +2794,7 @@ mod tests {
             );
             assert_eq!(menu_byte_for(mb.action), Some(mb.key), "{}", mb.action);
         }
-        // The tab verbs read as this app in both scopes (menu n and angle
+        // The tab commands read as this app in both scopes (menu n and angle
         // brackets beside the prefix chords); Diff stays prefix-only - a
         // row-menu action with no settled menu meaning renders no key.
         assert!(
@@ -2905,7 +2907,10 @@ mod tests {
         // The ladder rungs are PREFIX-GATED (the global chord is the only
         // prefix-free one), so every ladder sequence carries the default
         // prefix byte the Scanner::default binds.
-        let mut sequences: Vec<(Vec<u8>, &str)> = vec![(b"\x1b[1;7D".to_vec(), "Ctrl+Opt+Left")];
+        let mut sequences: Vec<(Vec<u8>, &str)> = vec![
+            (b"\x1b[1;7D".to_vec(), "Ctrl+Opt+Left"),
+            (b"\x02\x1b[5~".to_vec(), "PgUp"),
+        ];
         for (final_byte, _dir) in dir_seq {
             let f = final_byte as char;
             sequences.push((format!("\x02\x1b[{f}").into_bytes(), "arrows"));
@@ -2936,6 +2941,7 @@ mod tests {
             format!("{p} arrows"),
             format!("{p} Ctrl+arrows"),
             format!("{p} Shift+arrows"),
+            format!("{p} PgUp"),
         ] {
             assert!(
                 rows.iter()

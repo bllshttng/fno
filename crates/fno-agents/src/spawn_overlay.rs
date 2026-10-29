@@ -1,5 +1,5 @@
 //! `spawn-overlay`: the spawn-defaults resolver Python delegates to, ported
-//! from Python. Payload kinds, one verb, direct dispatch (no
+//! from Python. Payload kinds, one command, direct dispatch (no
 //! daemon RPC), the route-slot transport shape: one JSON payload in on stdin,
 //! one JSON answer out on stdout.
 //!
@@ -9,16 +9,13 @@
 //!   caller already resolved; picks ONE bundle args vector (lane > profile
 //!   overlay > defaults overlay, never concatenated) and names the boundary
 //!   that would displace it.
-//! - kind `model-vendor`: the advisory/refusing model-vs-lane vendor judgment
-//!   (`_check_model_vendor_mismatch` in Python). The caller supplies the
-//!   already-resolved harness; the answer names the event fields so the Python
-//!   event bus stays the emitter.
 //! - kind `fallback`: the failover-chain validation (`validate_fallback` in
 //!   Python). Returns canonical links or the exact refusal the Python raised.
 //! - kind `print`: the lane's native launch line. The payload names the
 //!   lane's resolved values (and optionally a routing row's own `launch`
 //!   argv); the answer carries the filled tokens [`crate::spawn_compose::
-//!   fill_launch`] produced.
+//!   fill_launch`] produced, so `spawn --print` and the exec path share one
+//!   renderer.
 //! - kind `team-settle`: whether a teamed spawn is granted, transfers, or
 //!   refuses (`team_settle::resolve`), a port of Python's
 //!   `settle_spawn_team` with a new human-succession branch and ladder-aware
@@ -28,6 +25,34 @@
 //! - kind `team-rescope`: the role re-scope's team-name effect
 //!   (`team_rescope::resolve`), the promote-side carry that keeps a lead's
 //!   recorded name across an `org promote` scope move.
+//! - kind `lead`: the lead manifest, wake-ledger and scope ops
+//!   (`lead_ops::overlay_kind`) the PR watcher's lead wake and the role
+//!   commands read.
+//! - kind `roles-discover`: layered business-role discovery
+//!   (`roles::registry::discover_kind`), the records the Python roles
+//!   package reads back. The roles commands ride the same command as argv ops,
+//!   `spawn-overlay roles <op>`.
+//! - kind `roles-resolve`: business-role resolution
+//!   (`roles::resolver::resolve_kind`), the one leg the Python
+//!   `resolve_role` calls.
+//! - kind `business-role`: the business-role lookup model routing reads
+//!   (`roles::routing::business_role_kind`).
+//! - kind `role-resolve`: the org ladder (`territory::resolve_role`), a
+//!   scope's rung and canonical form, the one resolver the board and the
+//!   promote path share.
+//! - kind `role-grant`: the grant decision and the re-scope strand scan
+//!   (`territory::role_grant_kind`), over the one containment rule
+//!   `territory::scope_contains`.
+//!
+//! - kinds `credentials`, `state-root-seal`, `account-overlay`,
+//!   `dispatch-account`, `account-for-env` and `login-present`: the account
+//!   answers a Python spawn seam reads (`accounts::credentials`,
+//!   `accounts::launch`).
+//!
+//! The `fno config accounts` commands ride the same action as argv ops,
+//! `spawn-overlay accounts <command>` (see `accounts::run`).
+//! The `fno config plugins` commands ride it too, as
+//! `spawn-overlay plugins <command>` (see `plugins::cli::run`).
 
 use crate::provider::{known_providers_csv, KNOWN_PROVIDERS};
 use serde_json::{json, Map, Value};
@@ -53,22 +78,6 @@ const HARNESS_DEFAULT_VENDOR: [(&str, &str); 4] = [
     ("agy", "google"),
 ];
 
-/// The harness whose own lane bills `vendor` by default, so a mismatch
-/// remedy names the flag that actually works (-H codex, not -P openai -
-/// openai is not a configured provider here). Vendors no harness serves by
-/// default (zai, deepseek) have no -H answer, so the caller falls back to
-/// the -P spelling.
-fn harness_for_vendor(vendor: &str) -> Option<&'static str> {
-    CHAIN_HARNESSES
-        .iter()
-        .find(|h| {
-            HARNESS_DEFAULT_VENDOR
-                .iter()
-                .any(|(name, v)| *name == **h && *v == vendor)
-        })
-        .copied()
-}
-
 /// A model string's implied vendor, by prefix or tier word. A pure string
 /// opinion and never a routing input: the pairing is legal and --model is
 /// deliberate passthrough.
@@ -86,6 +95,41 @@ const MODEL_WORD_VENDORS: [(&str, &str); 3] = [
 ];
 
 pub fn run_spawn_overlay(args: &[String]) -> i32 {
+    // The roles commands nest here as argv ops (crate::roles::cli), so they
+    // add no fno-agents root command.
+    if args.first().map(String::as_str) == Some("roles") {
+        return crate::roles::cli::run(&args[1..]);
+    }
+    // The `fno doctor observer` commands nest here the same way
+    // (crate::observer::run), so they add no fno-agents root action.
+    if args.first().map(String::as_str) == Some("observer") {
+        return crate::observer::run(&args[1..]);
+    }
+    // The whoami family nests the same way (crate::whoami::run).
+    if args.first().map(String::as_str) == Some("whoami") {
+        return crate::whoami::run(&args[1..]);
+    }
+    // The `fno config accounts` commands nest here as argv ops
+    // (crate::accounts::run), so they add no fno-agents root action.
+    if args.first().map(String::as_str) == Some("accounts") {
+        return crate::accounts::run(&args[1..]);
+    }
+    // The `fno config plugins` commands nest here the same way
+    // (crate::plugins::cli::run).
+    if args.first().map(String::as_str) == Some("plugins") {
+        return crate::plugins::cli::run(&args[1..]);
+    }
+    // The `fno config project` commands nest here the same way
+    // (crate::project::run).
+    if args.first().map(String::as_str) == Some("project") {
+        return crate::project::run(&args[1..]);
+    }
+    // The `fno agents admit autonomy` spawner table nests here the same way
+    // (crate::autonomy_status): the spawn seam's introspection, adding no
+    // fno-agents root action (shrink law d-fe66560a).
+    if args.first().map(String::as_str) == Some("autonomy") {
+        return crate::autonomy_status::run(&args[1..]);
+    }
     let mut payload = String::new();
     let read = if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--payload-file=")) {
         std::fs::read_to_string(path)
@@ -147,7 +191,6 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
             let inputs = crate::spawn_compose::gather(&payload, &cwd);
             Ok(crate::spawn_compose::compose(&inputs).to_value())
         }
-        Some("model-vendor") => resolve_model_vendor(&payload),
         Some("lane-vendor") => {
             let toks: Vec<String> = payload
                 .get("argv_tail")
@@ -171,16 +214,30 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("pane-group") => resolve_pane_group(&payload),
         Some("fallback") => resolve_fallback(&payload),
         Some("codex-route") => resolve_codex_route_kind(&payload),
+        Some("claude-route") => resolve_claude_route_kind(&payload),
+        Some("providers") => resolve_providers_kind(&payload),
         Some("print") => resolve_print(&payload),
         Some("write-settings") => crate::route_settings::write_settings_kind(&payload),
+        Some("launch") => crate::launch_exec::launch_kind(&payload),
+        Some("role-resolve") => crate::territory::resolve_role_kind(&payload),
+        Some("role-grant") => crate::territory::role_grant_kind(&payload),
         Some("role-settle") => crate::team_settle::resolve(&payload),
         Some("role-identity") => crate::team_identity::resolve(&payload),
         Some("role-widen") => crate::team_widen::resolve(&payload),
         Some("team-rivals") => crate::org_rivals::resolve(&payload),
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
+        Some("lead") => crate::lead_ops::overlay_kind(&payload),
+        Some("roles-discover") => crate::roles::registry::discover_kind(&payload),
+        Some("credentials") => crate::accounts::credentials::compose_kind(&payload),
+        Some("state-root-seal") => crate::accounts::credentials::seal_kind(&payload),
+        Some(kind @ ("account-overlay" | "dispatch-account" | "account-for-env" | "login-present")) => {
+            crate::accounts::launch::resolve_kind(kind, &payload)
+        }
+        Some("roles-resolve") => crate::roles::resolver::resolve_kind(&payload),
+        Some("business-role") => crate::roles::routing::business_role_kind(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|print|write-settings|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-grant|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|lead|roles-discover|credentials|state-root-seal|account-overlay|dispatch-account|account-for-env|login-present|roles-resolve|business-role"
         )),
     }
 }
@@ -191,7 +248,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
 /// parent over this one stdout pipe. `unrouted` marks the deliberate no-op
 /// (an anthropic-protocol provider belongs to the claude lane, silent in
 /// Python exactly as before); `refusal` names a misconfiguration the spawn
-/// surfaces as a notice. Key-free, like every answer this verb prints.
+/// surfaces as a notice. Key-free, like every answer this command prints.
 fn resolve_codex_route_kind(payload: &Value) -> Result<Value, String> {
     let provider = payload
         .get("provider")
@@ -228,6 +285,101 @@ fn resolve_codex_route_kind(payload: &Value) -> Result<Value, String> {
     }
 }
 
+/// The claude route builder behind Python's `resolve_route` and
+/// `resolve_explicit_route`: the payload names the (provider, model) the
+/// role lane or the peer lane picked, plus the spawn cwd and the context the
+/// fail-safe notices word themselves by. The answer carries the route env
+/// (with the key under `ANTHROPIC_AUTH_TOKEN`, the same exposure `codex-route`
+/// has) and the notices. A payload missing provider, model or cwd answers a
+/// skip notice, as `resolve_codex_route_kind` does.
+fn resolve_claude_route_kind(payload: &Value) -> Result<Value, String> {
+    let provider = payload
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let model = payload.get("model").and_then(Value::as_str).unwrap_or("");
+    let cwd = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
+    if provider.is_empty() || model.is_empty() || cwd.is_empty() {
+        return Ok(json!({
+            "route": Value::Null,
+            "notices": ["spawn-overlay claude-route: payload needs provider, model and cwd"],
+        }));
+    }
+    let ctx = match payload.get("ctx") {
+        Some(value) => match value.get("kind").and_then(Value::as_str) {
+            Some("peer") => crate::provider_route::RouteCtx::Peer(
+                value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(provider)
+                    .to_string(),
+            ),
+            _ => crate::provider_route::RouteCtx::Role(
+                value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(provider)
+                    .to_string(),
+            ),
+        },
+        None => crate::provider_route::RouteCtx::Role(provider.to_string()),
+    };
+    let env_map = payload_env(&payload);
+    // A payload env REPLACES the process env (Python callers pass the spawn
+    // env under construction as the whole mapping), not chains with it.
+    let env_get: Box<dyn Fn(&str) -> Option<String>> = if payload.get("env").is_some() {
+        Box::new(move |key: &str| env_map.get(key).cloned())
+    } else {
+        Box::new(|key: &str| std::env::var(key).ok())
+    };
+    let block = payload
+        .get("block")
+        .and_then(crate::provider_route::block_from_json);
+    let route = crate::provider_route::claude_route_with(
+        block.as_ref(),
+        Path::new(cwd),
+        provider,
+        model,
+        &ctx,
+        &env_get,
+    );
+    Ok(route.to_json())
+}
+
+/// The merged provider registry behind Python's `effective_providers` and
+/// `key_source`: one answer for the `fno config route ls` render, with the
+/// key column naming its source and never the value.
+fn resolve_providers_kind(payload: &Value) -> Result<Value, String> {
+    let cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let env_map = payload_env(&payload);
+    // Same replace-not-chain rule as the claude-route kind.
+    let env_get: Box<dyn Fn(&str) -> Option<String>> = if payload.get("env").is_some() {
+        Box::new(move |key: &str| env_map.get(key).cloned())
+    } else {
+        Box::new(|key: &str| std::env::var(key).ok())
+    };
+    Ok(crate::provider_route::providers_json(&cwd, &env_get))
+}
+
+/// The env mapping a payload carries, or the process env the kind falls back
+/// to: `claude-route` and `providers` resolve their keys through it.
+fn payload_env(payload: &Value) -> std::collections::BTreeMap<String, String> {
+    payload
+        .get("env")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn block_map<'a>(owner: &'a Value, key: &str) -> Option<&'a Map<String, Value>> {
     owner.get(key).and_then(Value::as_object)
 }
@@ -260,7 +412,7 @@ fn overlay_args(block: &Value) -> Option<Vec<String>> {
 fn effective_field(
     defaults: &Value,
     profile: Option<&Value>,
-    verb: &str,
+    command: &str,
     name: &str,
     harness: Option<&str>,
 ) -> Option<(String, String)> {
@@ -269,7 +421,7 @@ fn effective_field(
             if let Some(block) = table.get(h) {
                 let v = overlay_scalar(block, name);
                 if !v.is_empty() {
-                    return Some((v, format!("agents.profiles.{verb}.harness.{h}")));
+                    return Some((v, format!("agents.profiles.{command}.harness.{h}")));
                 }
             }
         }
@@ -277,7 +429,7 @@ fn effective_field(
     if let Some(p) = profile {
         let v = overlay_scalar(p, name);
         if !v.is_empty() {
-            return Some((v, format!("agents.profiles.{verb}")));
+            return Some((v, format!("agents.profiles.{command}")));
         }
     }
     if let Some(h) = harness {
@@ -388,7 +540,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
 }
 
 fn resolve_overlay(payload: &Value) -> Result<Value, String> {
-    let verb = payload.get("verb").and_then(Value::as_str).unwrap_or("");
+    let command = payload.get("verb").and_then(Value::as_str).unwrap_or("");
     let defaults = payload.get("defaults").cloned().unwrap_or(json!({}));
     let profile = payload.get("profile").filter(|v| v.is_object()).cloned();
     let harness = payload
@@ -419,7 +571,7 @@ fn resolve_overlay(payload: &Value) -> Result<Value, String> {
     let owners: Vec<(String, &Value)> = vec![
         ("agents.defaults".to_string(), &defaults),
         (
-            format!("agents.profiles.{verb}"),
+            format!("agents.profiles.{command}"),
             profile.as_ref().unwrap_or(&Value::Null),
         ),
     ];
@@ -459,7 +611,7 @@ fn resolve_overlay(payload: &Value) -> Result<Value, String> {
     let effective_for = |h: Option<&str>| {
         let mut effective = Map::new();
         for name in ["effort", "substrate", "permission_mode"] {
-            let entry = effective_field(&defaults, profile.as_ref(), verb, name, h);
+            let entry = effective_field(&defaults, profile.as_ref(), command, name, h);
             if let Some((v, rung)) = entry {
                 effective.insert(name.to_string(), json!({"value": v, "rung": rung}));
             }
@@ -490,14 +642,14 @@ fn resolve_overlay(payload: &Value) -> Result<Value, String> {
     if let Some(h) = harness {
         if let (Some(l), Some(idx)) = (lane, lane_index) {
             if let Some(args) = overlay_args(l) {
-                bundle = Some((args, format!("agents.profiles.{verb}.lanes[{idx}].args")));
+                bundle = Some((args, format!("agents.profiles.{command}.lanes[{idx}].args")));
             }
         }
         if bundle.is_none() {
             for (obj, rung) in [
                 (
                     profile.as_ref(),
-                    format!("agents.profiles.{verb}.harness.{h}.args"),
+                    format!("agents.profiles.{command}.harness.{h}.args"),
                 ),
                 (Some(&defaults), format!("agents.defaults.harness.{h}.args")),
             ] {
@@ -643,108 +795,11 @@ fn resolve_lane_vendor(
     resolve_lane_vendor_by_lane(axes, harness, env_harness, argv_head)
 }
 
-fn resolve_model_vendor(payload: &Value) -> Result<Value, String> {
-    let toks: Vec<String> = payload
-        .get("argv_tail")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let harness = payload.get("harness").and_then(Value::as_str);
-    let head = payload.get("argv_head").and_then(Value::as_str);
-    let model_source = payload
-        .get("model_source")
-        .and_then(Value::as_str)
-        .map(String::from);
-    let (axes, _) = crate::cli_args::SpawnAxes::scan(&toks)?;
-    let model = axes.model.clone();
-    let implied = match implied_vendor(model.as_deref()) {
-        Some(v) => v,
-        None => return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null})),
-    };
-    if axes.route.is_some() {
-        // Explicit route: a deliberate lane choice beside a deliberate model.
-        return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null}));
-    }
-    let lane = match resolve_lane_vendor_by_lane(
-        &axes,
-        harness,
-        payload.get("env_harness").and_then(Value::as_str),
-        head,
-    ) {
-        Some(l) => l,
-        None => return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null})),
-    };
-    if lane == implied {
-        return Ok(json!({"verdict": "ok", "message": Value::Null, "event": Value::Null}));
-    }
-    // A spawn whose harness nobody typed is not a deliberate passthrough:
-    // --node dispatch harnesses come from a resolver, and an untyped -H
-    // came from config or a default. A typed -H beside a typed
-    // model is the operator's own pairing, so it only warns. The --account
-    // downgrade and the early --route return stay as they are.
-    let harness_typed = payload
-        .get("harness_typed")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let node_typed = toks
-        .iter()
-        .any(|t| t == "--node" || t.starts_with("--node="));
-    let refusing =
-        (model_source.is_some() || !harness_typed || node_typed) && axes.account.is_none();
-    let model_str = model.clone().unwrap_or_default();
-    let remedy = match harness_for_vendor(&implied) {
-        Some(h) => format!("-H {h}"),
-        None => format!("-P {implied}"),
-    };
-    let event = json!({
-        "model": model,
-        "implied_vendor": implied,
-        "resolved_vendor": lane,
-        "model_source": model_source.clone().unwrap_or_else(|| "explicit".into()),
-        "outcome": if refusing { "refused" } else { "warned" },
-    });
-    if refusing {
-        if let Some(src) = model_source {
-            return Ok(json!({
-                "verdict": "refuse",
-                "event": event,
-                "message": format!(
-                    "fno agents spawn: refusing to spawn. {src} supplies --model {model_str}, \
-            which implies vendor {implied}, but this spawn resolves the {lane} lane. Set a model \
-            for the {lane} lane at {src}, or pass {remedy}."
-                ),
-            }));
-        }
-        return Ok(json!({
-            "verdict": "refuse",
-            "event": event,
-            "message": format!(
-                "fno agents spawn: refusing to spawn. --model {model_str} implies vendor {implied}, \
-        but nothing typed the harness and this spawn resolves the {lane} lane. No routing.models row \
-        declares that model, so nothing names its harness. Pass {remedy}, or declare a routing.models row for the model."
-            ),
-        }));
-    }
-    Ok(json!({
-        "verdict": "warn",
-        "event": event,
-        "message": format!(
-            "fno agents spawn: --model {model_str} implies vendor {implied}, but the resolved \
-    lane is {lane}; the model rides that lane's CLI as-is. Pass {remedy} to run it on the harness that serves {implied}."
-        ),
-    }))
-}
-
 /// One stop in the fallback walk: each link's stable destination id and its
 /// spawn flags. Two links differing only in effort are the SAME destination
 /// for walk memory; `account` participates because it names a different bill
-/// and meter. Flags keep the existing axis spelling, and substrate resolves
-/// from the harness's own spawn claim (claude rides bg, everything else pane)
-/// rather than being handed one its harness rejects.
+/// and meter. Flags carry only the live spawn spellings (harness, route,
+/// account); the lane itself is named the way the spawn command derives it.
 fn resolve_link_meta(payload: &Value) -> Result<Value, String> {
     let links = payload
         .get("links")
@@ -802,29 +857,29 @@ pub(crate) fn mint_link(link: &Value) -> (String, Vec<Value>) {
         flags.push(json!("-H"));
         flags.push(json!(harness));
     }
-    for (flag, key) in [
-        ("-m", "model"),
-        ("--effort", "effort"),
-        ("--permission-mode", "permission_mode"),
-        ("--route", "route"),
-        ("--account", "account"),
-    ] {
+    // The model, effort and permission axes are retired at the spawn door:
+    // the lane template owns them, so a link carries its route instead.
+    for (flag, key) in [("--route", "route"), ("--account", "account")] {
         let v = field(key);
         if !v.is_empty() {
             flags.push(json!(flag));
             flags.push(json!(v));
         }
     }
-    let mut substrate = field("substrate");
-    if substrate.is_empty() {
-        substrate = if harness == "claude" {
-            "bg".into()
-        } else {
-            "pane".into()
-        };
+    // A thread is the spawn default; a pane needs an explicit --as pane, and
+    // headless is the one-shot spelling. claude keeps its thread; every other
+    // harness keeps the pane it took before.
+    let substrate = field("substrate");
+    let substrate = match substrate.as_str() {
+        "" if harness == "claude" => "thread",
+        "" => "pane",
+        other => other,
+    };
+    match substrate {
+        "pane" => flags.extend([json!("--as"), json!("pane"), json!("--bounded-placement")]),
+        "headless" => flags.push(json!("--once")),
+        _ => {}
     }
-    flags.push(json!("--substrate"));
-    flags.push(json!(substrate));
     (id, flags)
 }
 
@@ -1044,115 +1099,6 @@ mod tests {
     }
 
     #[test]
-    fn model_vendor_rows() {
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "glm-5.3", "-H", "claude"],
-            "harness": "claude",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "warn");
-        assert!(out["message"]
-            .as_str()
-            .unwrap()
-            .contains("implies vendor zai"));
-        assert_eq!(out["event"]["outcome"], "warned");
-
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "gpt-5.6", "-H", "claude"],
-            "harness": "claude",
-            "model_source": "agents.profiles.target.model",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        assert_eq!(out["event"]["outcome"], "refused");
-
-        // AC3: a typed -H beside a typed model proceeds with a warning whose
-        // remedy is the harness flag that works, and the model prints as its
-        // string, never Option debug.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "gpt-6-astra", "-H", "claude"],
-            "harness": "claude",
-            "harness_typed": true,
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "warn");
-        let msg = out["message"].as_str().unwrap();
-        assert!(msg.contains("-H codex"));
-        assert!(!msg.contains("-P openai"));
-        assert!(!msg.contains("Some("));
-        assert!(msg.contains("--model gpt-6-astra"));
-
-        // AC5: a typed model with nothing typing the harness refuses before
-        // launch, naming -H codex and the missing row.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "gpt-9-preview"],
-            "harness": "claude",
-            "harness_typed": false,
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        let msg = out["message"].as_str().unwrap();
-        assert!(msg.contains("refusing to spawn"));
-        assert!(msg.contains("-H codex"));
-        assert!(msg.contains("No routing.models row declares that model"));
-
-        // AC8a: --node dispatch whose resolved harness mismatches the typed
-        // model's vendor refuses even though -H was on the argv (the
-        // resolver put it there).
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--node", "x-0000", "--model", "gpt-5.6-sol", "-H", "claude"],
-            "harness": "claude",
-            "harness_typed": true,
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        assert!(out["message"].as_str().unwrap().contains("-H codex"));
-
-        // AC8b: an explicit --account downgrades refusal to warn, as before.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "glm-5.3", "--account", "zai-main", "-H", "claude"],
-            "harness": "claude",
-            "harness_typed": false,
-            "model_source": "agents.profiles.target.model",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "warn");
-
-        // AC10b: an injected anthropic-voiced model on a codex spawn refuses
-        // naming -H claude, never -P anthropic.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["spawn", "--model", "claude-opus-5"],
-            "harness": "codex",
-            "harness_typed": false,
-            "model_source": "agents.profiles.target.model",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-        let msg = out["message"].as_str().unwrap();
-        assert!(msg.contains("-H claude"));
-        assert!(!msg.contains("-P anthropic"));
-
-        // The checker's lane answer must NOT absorb the model inference, or
-        // an injected glm-on-claude model would agree with itself and never
-        // refuse.
-        let out = resolve(json!({
-            "kind": "model-vendor",
-            "argv_tail": ["--model", "glm-5.3-flash[1m]"],
-            "harness": "claude",
-            "model_source": "config.agents.profiles.target",
-        }))
-        .unwrap();
-        assert_eq!(out["verdict"], "refuse");
-    }
-
-    #[test]
     fn vendor_rows() {
         let vendor = |payload: Value| {
             resolve(payload).unwrap()["vendor"]
@@ -1164,53 +1110,13 @@ mod tests {
             Some("zai".into())
         );
         assert_eq!(
-            vendor(json!({"kind": "lane-vendor", "argv_tail": ["-P", "openai"]})),
-            Some("openai".into())
-        );
-        assert_eq!(
             vendor(json!({"kind": "lane-vendor", "argv_tail": [], "harness": "codex"})),
             Some("openai".into())
         );
-        // opencode holds no vendor opinion; the model's own spelling answers.
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["--model", "glm-5.3-flash"],
-                "harness": "opencode",
-            })),
-            Some("zai".into())
-        );
+        // opencode holds no vendor opinion of its own.
         assert_eq!(
             vendor(json!({"kind": "lane-vendor", "argv_tail": [], "harness": "opencode"})),
             None
-        );
-
-        // The measured A/B matrix: a routeless glm spawn answered the claude
-        // harness default (anthropic), minted a row under it, and died on the
-        // default endpoint's first inference. The model spelling is the only
-        // voice that named z.ai, so it outranks the harness default when no
-        // route and no provider named a vendor.
-        let vendor = |payload: Value| {
-            resolve(payload).unwrap()["vendor"]
-                .as_str()
-                .map(String::from)
-        };
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["--model", "glm-5.3-flash[1m]"],
-                "harness": "claude",
-            })),
-            Some("zai".into())
-        );
-        // A pinned vendor still answers ahead of the model spelling.
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["-P", "zai", "--model", "glm-5.3-flash[1m]"],
-                "harness": "claude",
-            })),
-            Some("zai".into())
         );
         assert_eq!(
             vendor(json!({
@@ -1219,15 +1125,6 @@ mod tests {
                 "harness": "claude",
             })),
             Some("zai".into())
-        );
-        // Control: a model the harness default agrees with is unchanged.
-        assert_eq!(
-            vendor(json!({
-                "kind": "lane-vendor",
-                "argv_tail": ["--model", "claude-opus-5"],
-                "harness": "claude",
-            })),
-            Some("anthropic".into())
         );
     }
 

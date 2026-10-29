@@ -1,7 +1,7 @@
 //! The status payload's live seams, ported from the Python legs the composer
 //! retires: rerun recovery, merge authority, the dispatch-hold word, and the
 //! durable-grant execution projection. A seam with no Rust owner yet spawns
-//! the same verb its Python twin spawned, so behavior is identical and each
+//! the same command its Python twin spawned, so behavior is identical and each
 //! is its own future port leg.
 
 use super::GhProbe;
@@ -152,7 +152,13 @@ pub(crate) fn rerun_recovery<P: GhProbe>(
 /// during a critical Actions incident the surface could not name). Read-only
 /// and fail-open: an unreachable page reads null, never a second red.
 pub(crate) fn platform_incident() -> Value {
-    let out = std::process::Command::new("curl")
+    platform_incident_via("curl")
+}
+
+/// The same status-page read with the curl program named, so a caller with a
+/// bin-dir seam (heal) resolves a stub in tests.
+pub(crate) fn platform_incident_via(curl: &str) -> Value {
+    let out = std::process::Command::new(curl)
         .args([
             "-sf",
             "--max-time",
@@ -246,7 +252,7 @@ pub(crate) enum HoldVerdict {
 /// The PR's dispatch-hold word through the same probe the merge path reads.
 /// The binding facts ride the caller's own PR read when it has one, so the
 /// common path runs in process; a read without the fields (a projection
-/// older than the facts keys) falls back to the spawned verb.
+/// older than the facts keys) falls back to the spawned command.
 pub(crate) fn hold_verdict(cwd: &Path, pr: u64, pr_json: Option<&Value>) -> HoldVerdict {
     if let Some(payload) = pr_json {
         if let Ok(facts) = crate::authorized_merge::facts_from_pulls(payload, Some(pr)) {
@@ -257,7 +263,7 @@ pub(crate) fn hold_verdict(cwd: &Path, pr: u64, pr_json: Option<&Value>) -> Hold
             };
         }
     }
-    let mut out = crate::merge_verb::hold_check_flow(pr as i64, cwd);
+    let mut out = crate::merge_command::hold_check_flow(pr as i64, cwd);
     let mut stderr = String::new();
     for (err, line) in std::mem::take(&mut out.lines) {
         if err {
@@ -273,7 +279,7 @@ pub(crate) fn hold_verdict(cwd: &Path, pr: u64, pr_json: Option<&Value>) -> Hold
 
 /// The durable-grant execution state through the ONE resolver, in process:
 /// whether a parked granted worker's PR would be merged by the watcher now.
-/// A projection only - it never widens the merge verb's own gates. A receipt
+/// A projection only - it never widens the merge command's own gates. A receipt
 /// never lies by crashing: every fault reads `unknown`.
 pub(crate) fn merge_execution(cwd: &Path, pr: u64) -> Value {
     let payload = json!({

@@ -173,10 +173,7 @@ fn quiet_scope_workers(workers: &[Value], scope_ids: &BTreeSet<String>) -> Vec<(
         let Some(name) = crate::lead_checkin::s_str(w, "name") else {
             continue;
         };
-        let node = crate::lead_checkin::s_str(w, "node")
-            .map(str::to_string)
-            .or_else(|| node_from_name(name));
-        let Some(node) = node else {
+        let Some(node) = row_scope_node(w) else {
             continue;
         };
         if !scope_ids.contains(&node) {
@@ -187,23 +184,100 @@ fn quiet_scope_workers(workers: &[Value], scope_ids: &BTreeSet<String>) -> Vec<(
     rows
 }
 
+/// The node id a payload worker row answers for: the joined node when the
+/// row carries one, else the id its spawn name embeds.
+fn row_scope_node(w: &Value) -> Option<String> {
+    crate::lead_checkin::s_str(w, "node")
+        .map(str::to_string)
+        .or_else(|| crate::lead_checkin::s_str(w, "name").and_then(node_from_name))
+}
+
 /// The node id a spawned worker's name carries (`t-x-9999-glm`): the first
 /// `x-` run of 4 to 8 hex chars bounded by non-alphanumerics.
-pub(crate) fn node_from_name(name: &str) -> Option<String> {
+pub(crate) fn node_from_name(node_name: &str) -> Option<String> {
     let mut from = 0usize;
-    while let Some(pos) = name[from..].find("x-") {
+    while let Some(pos) = node_name[from..].find("x-") {
         let abs = from + pos + 2;
-        let end = name[abs..]
+        let end = node_name[abs..]
             .find(|c: char| !c.is_ascii_alphanumeric())
             .map(|p| abs + p)
-            .unwrap_or(name.len());
-        let id = &name[abs..end];
+            .unwrap_or(node_name.len());
+        let id = &node_name[abs..end];
         if (4..=8).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Some(format!("x-{id}"));
         }
         from = abs;
     }
     None
+}
+
+/// Idea-status children under the scope's epics, counted. A child holds a
+/// non-empty `contained_in` or `parent` naming a scope node, is not
+/// terminal, and still reads `idea`. The ready selection refuses every
+/// contained child, so an epic-heavy scope reads as clean while it holds
+/// the most unplanned work it has ever had; the check-in counts them as
+/// the unplanned work they are, never dispatch rows - a contained child
+/// rides its epic.
+pub(crate) fn scope_idea_children_count(rows: &[Value], scope_ids: &BTreeSet<String>) -> usize {
+    rows.iter()
+        .filter(|r| {
+            crate::lead_checkin::s_str(r, "status") == Some("idea")
+                && !crate::org_board::is_terminal(r)
+                && row_holder(r).is_some_and(|holder| scope_ids.contains(holder))
+        })
+        .count()
+}
+
+/// The node id the row hangs from: `contained_in` first, then `parent`.
+fn row_holder(r: &Value) -> Option<&str> {
+    crate::lead_checkin::s_str(r, "contained_in")
+        .filter(|s| !s.is_empty())
+        .or_else(|| crate::lead_checkin::s_str(r, "parent").filter(|s| !s.is_empty()))
+}
+
+/// The beat-facing reader: one graph read for the count, scoped by the
+/// same compile every other scope reading shares.
+pub(crate) fn idea_children_reading(
+    graph: &Path,
+    scope_ids: &BTreeSet<String>,
+) -> Result<Value, String> {
+    let rows = crate::graph_store::read_rows_where(
+        graph,
+        &crate::backlog::RowQuery {
+            fields: Some(
+                [
+                    "id",
+                    "status",
+                    "contained_in",
+                    "parent",
+                    "superseded_by",
+                    "completed_at",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            // The count explains the live board's empty queue; an archived
+            // child is off the board, so it stays out of the count too.
+            include_archived: false,
+            with_blockers: false,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
+    .map_err(|e| format!("graph unreadable: {}", e.0))?;
+    let count = scope_idea_children_count(&rows, scope_ids);
+    Ok(json!({ "count": count }))
+}
+
+/// How many payload worker rows run inside the scope: the in-scope live
+/// worker count the idle-scope attention reads. Machine-wide `live_workers`
+/// cannot answer it - the bug this fixes read 4 of 32 workers live while
+/// this scope held zero.
+pub(crate) fn scope_live_worker_count(rows: &[Value], scope_ids: &BTreeSet<String>) -> usize {
+    rows.iter()
+        .filter(|w| row_scope_node(w).is_some_and(|node| scope_ids.contains(&node)))
+        .count()
 }
 
 /// The worker's own last word, read in process from its transcript tail:
@@ -222,7 +296,7 @@ fn peek_last_report(handle: &str) -> Result<String, String> {
 fn peek_texts(handle: &str) -> Result<Vec<String>, String> {
     let n = PEEK_RECORDS.to_string();
     let (code, out, err) =
-        crate::lead_checkin::fno_verb(&["agents", "peek", handle, "--json", "-n", &n])?;
+        crate::lead_checkin::fno_command(&["agents", "peek", handle, "--json", "-n", &n])?;
     if code != 0 {
         let cause = crate::lead_checkin::stderr_cause(&err);
         return Err(if cause == "no stderr" {
@@ -239,10 +313,15 @@ fn peek_texts(handle: &str) -> Result<Vec<String>, String> {
 }
 
 /// The last report in a record tail, newest record winning; inside one
-/// record a RESULT line outranks a help block.
+/// record a RESULT line outranks a help block. Records the harness or
+/// control plane injected drop first: a skill body quotes every protocol
+/// tag, and neither it nor a tool result is ever the worker's report.
 fn last_report(texts: &[String]) -> Option<String> {
     let mut report: Option<String> = None;
     for text in texts {
+        if crate::session_truth::injected_record_text(text) {
+            continue;
+        }
         if let Some(l) = last_result_line(text) {
             report = Some(l);
         } else if let Some(h) = help_line(text) {
@@ -262,13 +341,15 @@ fn last_result_line(text: &str) -> Option<String> {
         .last()
 }
 
-/// One `<help ...>...</help>` block flattened to a line; an unclosed block
-/// runs to the end of the text (the tail may have cut it).
+/// One real `<help ...>...</help>` block flattened to a line; an unclosed
+/// block runs to the end of the text (the tail may have cut it). Detection
+/// is the shared distress parser, so a tag the record merely quotes - in
+/// inline code, a fence, or a bare prose mention - is not a report.
 fn help_line(text: &str) -> Option<String> {
-    let start = text.find("<help")?;
-    let end = text[start..]
+    let (start, tag_end) = crate::distress::help_open_span(text)?;
+    let end = text[tag_end..]
         .find("</help>")
-        .map(|i| start + i + "</help>".len())
+        .map(|i| tag_end + i + "</help>".len())
         .unwrap_or(text.len());
     Some(one_line(&text[start..end], REPORT_CAP_CHARS))
 }
@@ -328,7 +409,7 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
 
 /// The pure fold: open pages whose question_id the stem names and whose
 /// team equals this check-in's canonical scope, oldest first. Rows carry
-/// what the render needs to name the decide verb.
+/// what the render needs to name the decide command.
 pub(crate) fn held_from_pages(pages: &[(String, String)], scope: &str) -> Vec<Value> {
     let canon = crate::territory::canonical_scope(scope);
     let mut rows: Vec<(u64, Value)> = Vec::new();
@@ -416,7 +497,7 @@ pub(crate) fn r_subagents() -> Result<Value, String> {
 /// The payload's worker rows, behind the same positive-predicate guard the
 /// summary runs: a top payload whose census failed carries no rows, and a
 /// reading that answered from it would read as a quiet zero.
-fn payload_workers(payload: &Value) -> Result<&[Value], String> {
+pub(crate) fn payload_workers(payload: &Value) -> Result<&[Value], String> {
     let predicate = payload
         .get("predicate")
         .and_then(|p| p.as_str())
@@ -542,7 +623,7 @@ fn reading_rows(
     }
 }
 
-/// The held render block: the decide and clear verbs one line per question.
+/// The held render block: the decide and clear commands one line per question.
 pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
     let (error, _value, rows) = reading_rows(readings, "held");
     let mut lines = Vec::new();
@@ -551,8 +632,8 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
         return lines;
     }
     // This team's questions: the rows carry node, question id and ask
-    // time; a row with a node names the decide verb, a row with none names
-    // the clear verb.
+    // time; a row with a node names the decide command, a row with none names
+    // the clear command.
     if rows.is_empty() {
         lines.push("held: none".into());
         return lines;
@@ -569,7 +650,8 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
                 "  {n} on question {qid}; answer with: fno backlog decide {n} \"<ruling>\" --question-id {qid}"
             )),
             None => lines.push(format!(
-                "  question {qid}: the user answers it on the question board; if this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority role"
+                "  question {qid}: {} If this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority role",
+                crate::question_clear::chat_answer_line(&qid)
             )),
         }
     }
@@ -758,6 +840,26 @@ mod tests {
         assert_eq!(last_report(&texts(&["thinking"])), None);
     }
 
+    /// A tag the record merely quotes never reads as the worker's help: a
+    /// re-arm note in inline code, the recovery nudge's own bare `<help>`,
+    /// and a skill injection quoting the protocol whole. The worker's own
+    /// RESULT after an injected record still reads.
+    #[test]
+    fn a_quoted_nudged_or_injected_help_never_reads_as_the_report() {
+        let rearm = "Re-arming; `<help class=\"held\">` only if this wedges";
+        assert_eq!(last_report(&texts(&[rearm])), None);
+        let nudge = "control: quiet 15 min on x-9, what blocks you? continue or emit <help>. [quiet-recovery:sid:work:nudge]";
+        assert_eq!(last_report(&texts(&[nudge])), None);
+        let skill = "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\nOn red CI emit <help class=\"stuck\" reason=\"ci\"> and stop.";
+        assert_eq!(last_report(&texts(&[skill])), None);
+        let tail = texts(&[skill, "RESULT: SUCCESS shipped"]);
+        assert_eq!(
+            last_report(&tail).as_deref(),
+            Some("RESULT: SUCCESS shipped"),
+            "the injected record drops; the worker's own RESULT reads"
+        );
+    }
+
     #[test]
     fn quiet_reading_names_the_failure_instead_of_blanking() {
         let ids = ids(&["x-1111"]);
@@ -814,7 +916,7 @@ mod tests {
             rows[1].get("question_id").and_then(|v| v.as_str()),
             Some("q-new")
         );
-        // The node-less row reads as null so the render names the clear verb.
+        // The node-less row reads as null so the render names the clear command.
         assert_eq!(rows[0].get("node"), Some(&Value::Null));
     }
 
@@ -834,5 +936,50 @@ mod tests {
             "---\nquestion_id: {id}\nkind: question\nstatus: {status}\ntitle: t-{id}\nasked_at: {asked_at}\n{node_line}team: {team}\n---\n\n# t-{id}\n"
         );
         (stem, text)
+    }
+
+    /// The counted child: idea status, a holder inside the scope, not
+    /// terminal. Every other shape the board produces is the uncounted
+    /// contrast; one test walks the filter's four legs.
+    #[test]
+    fn an_idea_child_counts_only_through_a_live_scope_holder() {
+        let scope = ids(&["e-1"]);
+        let rows = vec![
+            // In scope through contained_in: the counted shape.
+            json!({"id": "x-a", "status": "idea", "contained_in": "e-1"}),
+            // Same child through the parent fallback.
+            json!({"id": "x-b", "status": "idea", "parent": "e-1"}),
+            // Not idea: riding its epic means nothing for the ready
+            // selection when the row already left idea.
+            json!({"id": "x-c", "status": "ready", "contained_in": "e-1"}),
+            // Terminal despite idea: superseded, done, or completed rows
+            // are not unplanned work.
+            json!({"id": "x-d", "status": "idea", "contained_in": "e-1", "superseded_by": "x-2"}),
+            json!({"id": "x-e", "status": "idea", "contained_in": "e-1", "completed_at": "2026-10-24T00:00:00Z"}),
+            // Idea but the holder is a foreign epic.
+            json!({"id": "x-f", "status": "idea", "contained_in": "e-9"}),
+            // Idea with no holder: it does not ride any epic, so the
+            // selection surface never refused it - not this bug.
+            json!({"id": "x-g", "status": "idea"}),
+        ];
+        assert_eq!(scope_idea_children_count(&rows, &scope), 2, "{rows:?}");
+    }
+
+    /// The live count is a scope read, not a machine read: an in-scope
+    /// worker row counts, a foreign node does not, and a row that names no
+    /// node joins through the id its spawn name embeds. A lead row (no node
+    /// anywhere) counts nothing.
+    #[test]
+    fn a_live_worker_counts_when_its_node_joins_the_scope() {
+        let scope = ids(&["x-1111", "x-2222"]);
+        let rows = vec![
+            json!({"name": "t-x-1111-a", "node": "x-1111", "status": "live"}),
+            json!({"name": "t-x-9999-a", "node": "x-9999", "status": "live"}),
+            // No node field: the spawn name carries it.
+            json!({"name": "t-x-2222-glm", "status": "live"}),
+            // No node anywhere: a lead row, never a scope worker.
+            json!({"name": "lead-main", "status": "live"}),
+        ];
+        assert_eq!(scope_live_worker_count(&rows, &scope), 2, "{rows:?}");
     }
 }

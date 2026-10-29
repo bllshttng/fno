@@ -143,7 +143,7 @@ pub fn enforce(pre: &[Value], post: &[Value], cap: Option<usize>) -> Result<(), 
              new epic to its own team: fno agents org promote <its handle> --scope <each epic \
              it \
              holds> --scope '<new-epic-id>'. That works for an epic the lead's own session \
-             created. Any other epic needs an attended shell or a team that contains both."
+             created. Any other epic needs a team that contains both: ask that lead."
         ));
     }
     Ok(())
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn a_sixteenth_open_child_is_refused_and_names_the_cap() {
         // AC1-HP, first half: the message names the epic, both counts, the
-        // config key and the new-epic verb.
+        // config key and the new-epic command.
         let pre = full_epic_rows();
         let mut post = pre.clone();
         post.push(child("c-16", "e-1"));

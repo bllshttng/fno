@@ -54,15 +54,12 @@
 //! plan to stamp and no node to graduate, so there is nothing left for a
 //! close to do.
 
-use crate::loop_dispatch::retry_etxtbsy;
 use crate::loop_runtime::{CloseOutcome, Evidence, LoopError, Queue, Unit};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -211,7 +208,7 @@ impl LeadQueue {
         }
         // the walk identity is minted through the canonical bridge; a
         // failed mint refuses the walk before anything dispatches.
-        let walk_key = mint_walk_key(&fno_bin, repo_root, &scope)?;
+        let walk_key = mint_walk_key(&scope)?;
         Ok(Self {
             walk_key,
             fno_id: manifest.fno_id,
@@ -235,7 +232,7 @@ impl LeadQueue {
     }
 
     /// The walk refuses to respawn another lead past the manifest ceiling.
-    /// `run_loop_verb_inner` is the ceiling authority: it terminates the walk
+    /// `run_loop_command_inner` is the ceiling authority: it terminates the walk
     /// on Budget before dispatching. The queue re-checks so a ceiling crossed
     /// by a concurrent walk between preflight and dequeue also stops here
     /// rather than spawning past it. What the ceiling bounds is
@@ -441,51 +438,30 @@ fn mint_walk_discriminator() -> String {
     format!("w{:012x}{:08x}", nanos % (1u128 << 48), suffix)
 }
 
-/// `kl-th-<scope>-<walk-discriminator>`, minted through the canonical
-/// `fno agents name` bridge: the kl source names the lead loop as the
-/// spawner, th the think-class walk verb, and the scope the team it belongs
+/// `kl-th-<scope>-<walk-discriminator>`, minted in process by the canonical
+/// name bridge: the kl source names the lead loop as the
+/// spawner, th the think-class walk command, and the scope the team it belongs
 /// to so a journal read by a human says which lead spawned the unit. A failed
 /// mint REFUSES the walk (Err) rather than falling back to an uncoded key.
-pub(crate) fn mint_walk_key(fno_bin: &str, cwd: &Path, scope: &str) -> Result<String, LoopError> {
+pub(crate) fn mint_walk_key(scope: &str) -> Result<String, LoopError> {
     let discriminator = mint_walk_discriminator();
-    // `agents name` is a Python-only verb: an ambient FNO_AGENTS_RUNTIME=rust
-    // routes the whole group to this binary, which has no name port.
-    let out = retry_etxtbsy(|| {
-        std::process::Command::new(fno_bin)
-            .args([
-                "agents",
-                "name",
-                "--source",
-                "kl",
-                "--verb",
-                "th",
-                scope,
-                "--discriminator",
-                &discriminator,
-            ])
-            .current_dir(cwd)
-            .env("FNO_AGENTS_RUNTIME", "python")
-            .output()
+    let model = crate::naming::name_model_from_env();
+    crate::naming::bridge_name(
+        None,
+        scope,
+        None,
+        None,
+        Some(&discriminator),
+        Some("kl"),
+        Some("th"),
+        model.as_deref(),
+    )
+    .map_err(|error| {
+        LoopError::Queue(format!(
+            "walk-name mint refused: {}",
+            error.to_string().chars().take(200).collect::<String>()
+        ))
     })
-    .map_err(|error| LoopError::Queue(format!("walk-name mint failed to spawn fno: {error}")))?;
-    if !out.status.success() {
-        return Err(LoopError::Queue(format!(
-            "walk-name mint refused ({}): {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-                .trim()
-                .chars()
-                .take(200)
-                .collect::<String>()
-        )));
-    }
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if name.is_empty() {
-        return Err(LoopError::Queue(
-            "walk-name mint produced no name".to_string(),
-        ));
-    }
-    Ok(name)
 }
 
 /// The env var carrying [`LeadQueue::walk_key`] into the dispatched session.
@@ -501,7 +477,10 @@ pub(crate) const WALK_SESSION_KEY_ENV: &str = "FNO_LEAD_WALK_SESSION_KEY";
 /// same {alias: canonical} project map the Python guard canonicalizes with -
 /// a row stored as `alpha` and a walk for the short name `a` are one
 /// territory, not two.
-fn canonical_members(scope: &str, projects: &HashMap<String, String>) -> HashSet<String> {
+pub(crate) fn canonical_members(
+    scope: &str,
+    projects: &HashMap<String, String>,
+) -> HashSet<String> {
     scope
         .split(',')
         .map(str::trim)
@@ -522,7 +501,7 @@ pub(crate) fn territory_members(scope: &str, projects: &HashMap<String, String>)
 /// derives it: 2+ projects is a portfolio (0), one project is 1, and epics
 /// are 2. `None` marks a mixed scope no legal writer produces; the caller
 /// treats it as fail-closed.
-fn derived_scope_level(scope: &str, projects: &HashMap<String, String>) -> Option<u32> {
+pub(crate) fn derived_scope_level(scope: &str, projects: &HashMap<String, String>) -> Option<u32> {
     let members: Vec<String> = scope
         .split(',')
         .map(str::trim)
@@ -619,6 +598,34 @@ pub(crate) fn team_answers_to(
         && asked.is_subset(&canonical_members(held, projects))
 }
 
+/// Strict containment for the take-over floor in `team_settle`: `target`'s
+/// members are a strict subset of `mine`'s, or `mine`'s derived rung sits
+/// above `target`'s (a portfolio over projects, a project over an epic set).
+/// Reads no graph - the Python guard's strict containment already refused
+/// the graph-precise misses before team-settle ran, so this floor checks
+/// scope shape only and cannot refine that answer.
+pub(crate) fn scope_strictly_contains(
+    mine: &str,
+    target: &str,
+    projects: &HashMap<String, String>,
+) -> bool {
+    let sup = canonical_members(mine, projects);
+    let sub = canonical_members(target, projects);
+    if sup.is_empty() || sub.is_empty() {
+        return false;
+    }
+    if sub != sup && sub.is_subset(&sup) {
+        return true;
+    }
+    match (
+        derived_scope_level(mine, projects),
+        derived_scope_level(target, projects),
+    ) {
+        (Some(a), Some(b)) => a < b,
+        _ => false,
+    }
+}
+
 /// `team_rivals` for sibling modules (`lead`'s multiple-holders warning).
 pub(crate) fn team_rivals_pub(
     held: &str,
@@ -699,30 +706,33 @@ pub(crate) fn escalate_stalled(
     reason: &str,
     scope: &str,
 ) -> String {
-    // Like every shellout here: retry_etxtbsy, because a binary rewritten
-    // under us (a test stub on a parallel runner, or an fno upgrade racing a
-    // spawn) briefly refuses exec with ETXTBSY.
-    let output = retry_etxtbsy(|| {
-        Command::new(fno_bin)
-            .args([
-                "agents",
-                "org",
-                "escalate",
-                "--stalled",
-                &ids.join(","),
-                "--reason",
-                reason,
-            ])
-            .args(if scope.is_empty() {
-                Vec::<&str>::new()
-            } else {
-                vec![scope]
-            })
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .output()
-    });
-    match output {
+    // The bounded transport, not a bare Command: a wedged escalation child
+    // must die at its bound like every other fire read. The margin-funded
+    // floor (the merged-read formula) keeps the child runnable on a hot
+    // fire; the transport's own spawn path owns the ETXTBSY retry the old
+    // `retry_etxtbsy` wrapper provided. The terminal contract is unchanged:
+    // a failed escalation is named and moves on, never blocks.
+    let bound = crate::loopcheck::stopgate_pr_meta_timeout();
+    let stalled = ids.join(",");
+    let mut args: Vec<&str> = vec![
+        "agents",
+        "org",
+        "escalate",
+        "--stalled",
+        &stalled,
+        "--reason",
+        reason,
+    ];
+    if !scope.is_empty() {
+        args.push(scope);
+    }
+    match crate::loopcheck::bounded_read(
+        std::ffi::OsStr::new(fno_bin),
+        &args,
+        cwd,
+        "lead escalation",
+        bound,
+    ) {
         Ok(out) if out.status.success() => {
             let target = String::from_utf8_lossy(&out.stdout).trim().to_string();
             match target.strip_prefix("lead:") {
@@ -734,14 +744,15 @@ pub(crate) fn escalate_stalled(
             }
         }
         Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stderr = String::from_utf8_lossy(&out.stderr_tail);
             let detail = stderr.trim().chars().take(300).collect::<String>();
             eprintln!("lead: escalation failed: {detail}");
             format!("escalation FAILED: {detail}")
         }
-        Err(e) => {
-            eprintln!("lead: cannot run {fno_bin} agents lead escalate: {e}");
-            format!("escalation FAILED: cannot run {fno_bin} agents lead escalate: {e}")
+        Err(error) => {
+            let detail = error.render();
+            eprintln!("lead: escalation failed: {detail}");
+            format!("escalation FAILED: {fno_bin} agents org escalate: {detail}")
         }
     }
 }
@@ -756,22 +767,11 @@ fn frontmatter_field(line: &str, key: &str) -> Option<u64> {
 
 /// +1 the manifest's `respawn_count`, returning the new count.
 ///
-/// Takes the same `<scope>.md.lock` file the Python arming path flocks, so a
+/// Takes the same `<scope>.md.lock` file the arming path flocks, so a
 /// concurrent re-team (which rewrites the whole manifest) and a bump cannot
 /// interleave. All other lines pass through untouched.
 pub(crate) fn bump_respawn_count(path: &Path) -> Result<u64, String> {
-    let lock_path = path.with_extension("md.lock");
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-    }
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
-    let result = (|| {
+    crate::lead_state::with_manifest_lock(path, || {
         let content =
             fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let count = content
@@ -820,9 +820,7 @@ pub(crate) fn bump_respawn_count(path: &Path) -> Result<u64, String> {
         }
         fs::rename(&tmp, path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
         Ok(count)
-    })();
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
-    result
+    })
 }
 
 impl LeadQueue {
@@ -908,13 +906,30 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_mint_refuses_the_walk() {
-        // A stub that exits 1 stands in for a stale fno / naming refusal: the
-        // walk refuses (Err) instead of dispatching under an uncoded key.
+    fn a_wedged_escalation_is_killed_at_its_bound() {
+        // The escalation child must die at its bound like every other fire
+        // read: a wedged `fno agents org escalate` used to hold the terminal
+        // open with no ceiling at all. The injected bound is an instruction
+        // the margin-funded floor never overrides.
         let dir = tempfile::tempdir().unwrap();
-        let p = crate::write_exec_stub(dir.path(), "fno", "#!/bin/sh\nexit 1\n");
-        let out = mint_walk_key(p.to_str().unwrap(), dir.path(), "epic-x");
-        assert!(out.is_err(), "a failed mint must refuse the walk");
+        let fno = crate::write_exec_stub(
+            dir.path(),
+            "fno",
+            "#!/bin/sh\nif [ \"$3\" = escalate ]; then sleep 30; fi\n",
+        );
+        crate::loopcheck::stopgate_stamp_fire(
+            250,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+            0,
+        );
+        let out = escalate_stalled(
+            fno.to_str().unwrap(),
+            dir.path(),
+            &["undispatched:x-aaaa".to_string()],
+            "NoProgress",
+            "x-bbbb",
+        );
+        assert!(out.contains("escalation FAILED"), "{out}");
     }
 
     #[test]
@@ -922,9 +937,8 @@ mod tests {
         // The original defect, pinned at the seam it lived at: the unit key is
         // not the manifest fno_id, so a termination written under fno_id by
         // either lead arm matches no walk unit's session_key.
-        let dir = tempfile::tempdir().unwrap();
-        let fno = write_fno_stub(dir.path(), "kl-th-epic-x-w00ff");
-        let key = mint_walk_key(fno.to_str().unwrap(), dir.path(), "epic-x").expect("stub mint");
+        let key = mint_walk_key("epic-x").expect("bridge mint");
+        assert!(key.starts_with("kl-th-epic-x-"), "{key}");
         assert_ne!(key, "k-1");
         assert!(!key.contains('\n'));
     }
@@ -1066,8 +1080,8 @@ mod tests {
         fs::create_dir_all(&leads).unwrap();
         fs::write(leads.join("k.md"), "---\nfno_id: k-1\nscope: epic-x\n---\n").unwrap();
         let registry = write_registry(&dir, "busy", Some("epic-x"));
-        // the mint runs `fno agents name` at construction; the stub
-        // answers it so the guard assertions stay the test's subject.
+        // the stub answers the queue's own fno calls; the walk-key mint
+        // runs in process.
         let fno_bin = write_fno_stub(&dir, "kl-th-epic-x-w00ff")
             .to_string_lossy()
             .into_owned();

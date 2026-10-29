@@ -1,7 +1,7 @@
-//! The `refresh` verb: re-render the watcher's plist onto the current binary
+//! The `refresh` command: re-render the watcher's plist onto the current binary
 //! and bounce the LaunchAgent. Ported from `cli/src/fno/pr_watch/_install.py`
 //! (`refresh_watcher`, `bounce`, `_record_bounce`, `_tick_in_flight`); the
-//! plist renderer rides along because refresh is the first verb that rewrites
+//! plist renderer rides along because refresh is the first command that rewrites
 //! the file. The Python `bounce` survives beside this port only for callers a
 //! later wave moves (`groom.py`, the `heal` leaf) and dies with the package
 //! in wave 6; from here on this module is the native leg.
@@ -509,7 +509,7 @@ pub(crate) fn bounce(
 /// the daemon picks up the freshly-installed binary path, a fresh captured
 /// PATH, and a new mtime (so doctor's `healthy-pending` grace applies until
 /// the next tick instead of a transient false `dead` - unless the recent ends
-/// are a broken streak, which reads `wedged`). Called by the refresh verb at
+/// are a broken streak, which reads `wedged`). Called by the refresh command at
 /// the tail of an update so an update leaves an enabled watcher running the
 /// new binary and un-wedges a job a mid-tick reinstall may have broken.
 pub(crate) fn refresh_watcher(

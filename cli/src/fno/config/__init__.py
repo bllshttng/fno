@@ -41,9 +41,9 @@ from fno.config.split_block import SplitBlock as SplitBlock
 from fno.config import _watchdog
 from fno.config._active_backlog import ActiveBacklogConfig as ActiveBacklogConfig
 from fno.config._auto_heal import AutoHealBlock
-from fno.config._dispatch_verbs import DEFAULT_DISPATCH_VERBS as _DEFAULT_DISPATCH_VERBS
-from fno.config._dispatch_verbs import DispatchVerbDescriptor as DispatchVerbDescriptor
-from fno.config._dispatch_verbs import resolvable_verbs as resolvable_verbs
+from fno.config._dispatch_commands import DispatchBlock as DispatchBlock
+from fno.config._dispatch_commands import DispatchCommandDescriptor as DispatchCommandDescriptor
+from fno.config._dispatch_commands import resolvable_commands as resolvable_commands
 from fno.config._lead import LEAD_CHECKIN_TEXT as LEAD_CHECKIN_TEXT
 from fno.config._lead import LeadBlock
 from fno.config._evals import EvalsBlock
@@ -60,7 +60,6 @@ from fno.config._attention import AttentionBlock
 from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
-from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
 from fno.config_io import _deep_merge as _deep_merge
 from fno.config_io import _global_settings_path as _global_settings_path
 from fno.config_io import _load_raw as _load_raw
@@ -123,7 +122,6 @@ class PathsBlock(BaseModel):
     cargo_targets_base: Optional[str] = None
     memory_dir: Optional[str] = None
     hook_logs_dir: Optional[str] = None
-    inbox_dir: Optional[str] = None
     inbox_path: Optional[str] = None
     handoffs_dir: Optional[str] = None
     retro_pending_dir: Optional[str] = None
@@ -143,7 +141,6 @@ class PathsBlock(BaseModel):
         "cargo_targets_base",
         "memory_dir",
         "hook_logs_dir",
-        "inbox_dir",
         "inbox_path",
         "handoffs_dir",
         "retro_pending_dir",
@@ -724,12 +721,12 @@ class ReviewerDescriptor:
     # means "is self-cert") and leaves check-reviewer-descriptor-parity.sh
     # reading a two-valued axis.
     asserts: Literal["review-evidence", "self-cert", "invocation"]
-    # Per-harness verb overrides. A reviewer whose verb differs by harness
-    # (the self-review verb: `/code-review` on claude, `/review` on codex)
+    # Per-harness command overrides. A reviewer whose command differs by harness
+    # (the self-review command: `/code-review` on claude, `/review` on codex)
     # carries them here; `invocation` stays the unknown-harness default. None
     # means the scalar invocation is the only rendering. Mirrored into the Rust
     # REVIEWER_INVOCATIONS per-harness column by the parity script, so the two
-    # tables cannot disagree about which verb a harness serves.
+    # tables cannot disagree about which command a harness serves.
     invocations: Optional[Mapping[str, str]] = None
 
 
@@ -758,7 +755,7 @@ _RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
     # review lane and its emit step records the classified attestation.
     # `requires="none"` is load-bearing ("operator" made `blocks_autonomy` true
     # and refused every unattended run at init). No per-harness map: the lane is
-    # the invocation on every harness. The native verbs (/code-review on claude,
+    # the invocation on every harness. The native commands (/code-review on claude,
     # /review on codex) stay the operator's explicit choice; the machinery never
     # recommends them (docs/architecture/review-lanes.md).
     "code-review": ReviewerDescriptor(
@@ -1189,8 +1186,8 @@ class ApprovalsBlock(BaseModel):
 
 
 #: The optional-reviewer logins an UNSET `review.optional_apps` resolves to.
-#: One default, read by both sides that measure optional lanes - Python
-#: (`fno.pr._reviews.optional_reviewer_names`) and the Rust gate
+#: One default, read by both sides that measure optional lanes - the Rust
+#: status reader (`pr_status/reviews.rs`) and the loop gate
 #: (`resolved_optional_bots`) - so `fno do pr status` and the loop gate cannot
 #: measure different lanes on one PR, which is what a remedy printed by one and
 #: refused by the other looked like. Parity is pinned against the shared golden
@@ -1304,6 +1301,10 @@ class ReviewBlock(BaseModel):
     # the env var holding that identity's PAT.
     peer_identity: Optional[str] = None
     peer_token_env: Optional[str] = None
+    # The bot-review poster: the login the publish-review door posts as and the
+    # env var holding its PAT (publish_review.rs); empty means no bot posting.
+    bot_identity: Optional[str] = None
+    bot_token_env: Optional[str] = None
     # Reviewer logins honored-if-present but NOT required: the gate
     # never waits for them, but a blocking finding from one still holds it.
     # None resolves to DEFAULT_OPTIONAL_APPS via resolved_optional_apps;
@@ -1369,8 +1370,8 @@ class ReviewBlock(BaseModel):
     # review is unbounded, so this is a wedge bound rather than an estimate:
     # long enough that a real review never expires under itself, short enough
     # that a crashed reviewer does not hold the lane for a working day. Clamped
-    # into the claim TTL bounds at use (`_review_hold.resolve_ttl_ms`), never at
-    # parse: a misconfigured TTL must not make the merge guard unreadable.
+    # into the claim TTL bounds at use (`review_hold.rs resolve_ttl_ms`), never
+    # at parse: a misconfigured TTL must not make the merge guard unreadable.
     hold_ttl_minutes: int = 90
     # How long a merge-gating opt-out claim remains valid. The claim layer caps
     # the same value at 24 hours, so a writer cannot create an unbounded lease.
@@ -1900,6 +1901,7 @@ class InboxBlock(BaseModel):
 
     unclaimed_ttl: int = 1800
     landed_abandon_ttl: int = 21600
+    tool_boundary_ordinary: bool = False  # read in Rust by mail_control_drain.rs
 
     @field_validator("unclaimed_ttl", "landed_abandon_ttl")
     @classmethod
@@ -1994,6 +1996,7 @@ from fno.config.routing_blocks import RoutingBlock as RoutingBlock  # noqa: E402
 # over the file budget and shrink-only); re-exported for every reader.
 from fno.config.spawn_blocks import (  # noqa: E402
     HarnessOverlayBlock as HarnessOverlayBlock,
+    NamingBlock as NamingBlock,
     SpawnDefaultsBlock as SpawnDefaultsBlock,
     SpawnProfileBlock as SpawnProfileBlock,
 )
@@ -2045,99 +2048,6 @@ class SidelineBlock(BaseModel):
         if isinstance(v, str) and v.strip().lower() == "list":
             return "list"
         return "card"
-
-
-class DispatchBlock(BaseModel):
-    """Autonomous-dispatch profile (nested under 'config.dispatch').
-
-    Per-environment overlay of the in-tree harness-capability map
-    (`fno.agents.harness_map`): the shared `resolve_node_spawn` resolver reads
-    these as the config rung between an explicit flag and the built-in default.
-    All three are empty ("") = unset, so a fresh install resolves exactly as the
-    built-ins (harness=claude, per-harness substrate, `/target --no-merge {id}`).
-
-    No value validation here (config stays a leaf module): the resolver
-    validates the harness against the map and the substrate against the harness's
-    capabilities at resolve time, fail-loud.
-
-    `command` is a template with a single `{id}` placeholder. A node's
-    `dispatch_verb`/`dispatch_brief` (US3) layer on top: the resolver validates
-    the verb against `allowed_verbs` and carries the brief via env only, so a
-    graph field crossing into a worker prompt is a guarded trust boundary.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    # DEPRECATED: the harness axis lives in the stage table
-    # (`agents.profiles.<verb>.provider`); this key reads as the fallback rung
-    # beneath it for one release. The fold runs at resolution time
-    # (fno.agents.harness_map); the operator-facing surface is `fno config doctor`.
-    harness: str = ""
-    substrate: str = ""
-    command: str = ""
-    # Registered verbs from outside fno (unioned with allowed_verbs at resolve;
-    # a shipped or allowlisted spelling cannot be redefined here).
-    verb_registry: dict[str, DispatchVerbDescriptor] = Field(default_factory=dict)
-    # US3 verb allowlist: a node dispatch_verb must match or the resolver refuses.
-    allowed_verbs: list[str] = Field(default_factory=lambda: list(_DEFAULT_DISPATCH_VERBS))
-    # DEPRECATED (/): reads as `auto_merge.grant` for one release;
-    # every dispatch path reads the grant key now, no consumer reads this field.
-    # An explicit --allow-merge/--no-merge flag always wins.
-    auto_merge: bool = False
-    # defer (default, byte-identical to today) or fail over to the next
-    # healthy provider in the active combo; an unknown value degrades to "defer".
-    on_exhaustion: str = "defer"
-    # Proactive LOW cutover, opt-in, default 0 = off. Deliberately inverted from
-    # defer_horizon_minutes: a distant reset means leave now, not wait.
-    cutover_low_after_minutes: int = 0
-    # The blueprint floor for a plan-less node (lean dispatch): "high" (the
-    # default) routes a plan-less node to /blueprint only when its difficulty
-    # is high, its size is L, or an open premise question blocks it (the
-    # `premise-question` tag). Every other plan-less node goes straight to
-    # /target, which states its own scope. "medium" restores the pre-lean
-    # table (blueprint for medium and up). "low" blueprints every plan-less
-    # node; "never" targets everything. Read by the lifecycle verb table
-    # (fno-agents effective_verb) through the dispatch doors, and by the
-    # lead check-in's blueprint reading.
-    blueprint_floor: str = "high"
-
-    @field_validator("auto_merge", mode="before")
-    @classmethod
-    def _coerce_auto_merge(cls, v: object) -> object:
-        """Only a real TOML boolean grants merge; anything else degrades to
-        no-merge. Locked Decision 6 + Errors invariant: a config error can never
-        grant merge rights, so a lax-coercible string like "yes" (which a plain
-        bool would read as True) resolves False. Mirrors the _coerce_* idiom on
-        AgentsBlock: never raise, always degrade toward safety."""
-        return v if isinstance(v, bool) else False
-
-    @field_validator("on_exhaustion", mode="before")
-    @classmethod
-    def _coerce_on_exhaustion(cls, v: object) -> object:
-        """Only the two literals are honored; anything else degrades to "defer".
-        Same degrade-toward-safety stance as _coerce_auto_merge: a typo can never
-        enable failover."""
-        return v if v in ("defer", "failover") else "defer"
-
-    @field_validator("cutover_low_after_minutes", mode="before")
-    @classmethod
-    def _coerce_cutover_low(cls, v: object) -> object:
-        """Only a nonnegative TOML integer arms proactive LOW cutover; a bool,
-        a string, or a negative degrades to 0 (off). Same stance as the two
-        above: a config typo can never arm automatic rerouting."""
-        return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
-
-    @field_validator("blueprint_floor", mode="before")
-    @classmethod
-    def _coerce_blueprint_floor(cls, v: object) -> object:
-        """Only the four literals are honored; anything else degrades to "high",
-        the lean default. Case and surrounding space are normalized like the
-        Rust reader lowercases them, so both surfaces answer one value. Same
-        stance as the validators above: a typo can never widen blueprint
-        ceremony past the lean-dispatch ruling."""
-        if isinstance(v, str) and v.strip().lower() in ("high", "medium", "low", "never"):
-            return v.strip().lower()
-        return "high"
 
 
 def _positive_int(v: object) -> bool:
@@ -2264,10 +2174,10 @@ class AgentsBlock(SweepKeys):
 
     a2a: A2aBlock = Field(default_factory=A2aBlock)
     defaults: SpawnDefaultsBlock = Field(default_factory=SpawnDefaultsBlock)
-    # Per-verb overlays of defaults, one precedence rung above them.
+    # Per-command overlays of defaults, one precedence rung above them.
     profiles: dict[str, SpawnProfileBlock] = Field(default_factory=dict)
     # Ordered per-size fallback chains, consulted only after provider and account refusal.
-    # Values stay raw so the consuming verb can name malformed links without making every
+    # Values stay raw so the consuming command can name malformed links without making every
     # settings load fail.
     fallback: dict[str, Any] = Field(default_factory=dict)
     # Silence only reports; it never stops, spawns, or unclaims.
@@ -2287,6 +2197,7 @@ class AgentsBlock(SweepKeys):
     claude: AgentBeatBlock = Field(default_factory=AgentBeatBlock)
     codex: CodexAgentBlock = Field(default_factory=CodexAgentBlock)
     gemini: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
+    naming: NamingBlock = Field(default_factory=NamingBlock)
     # Spawn-gate scalars degrade to safe defaults: max_live caps the roster
     # union as the BACKSTOP behind the RAM floor (min_free_gb) and the CPU
     # axis (LD1); provider_limits caps lanes and fan-out; admission
@@ -2330,7 +2241,7 @@ class AgentsBlock(SweepKeys):
         pre-existing no-failover behavior stands. Everything else passes
         through untouched, INCLUDING a malformed link, because the failover
         path has to be able to see the mistake and name it. The strict check
-        lives in the ``fallback-chain`` verb (crates/fno-agents).
+        lives in the ``fallback-chain`` command (crates/fno-agents).
         """
         return v if isinstance(v, dict) else {}
 
@@ -2651,7 +2562,7 @@ class KeepGoingBlock(BaseModel):
     ``config.think_spawn.daily_cap`` (the same per-install per-day counter
     ``fno do think dispatch`` bumps) so think + target dispatches share ONE budget -
     a single ceiling on total autonomous fan-out per day. The classify + dispatch
-    logic lives in :mod:`fno.retro.keep_going`.
+    logic lives in the native retro keep-going engine (crates/fno-agents/src/retro/keep_going.rs).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -2685,7 +2596,7 @@ class ThinkSpawnBlock(BaseModel):
     node (a birth trigger never auto-spawns -), handing it the *resolved*
     origin transcript pointer (not a paraphrase) so a later pickup starts from
     ground truth. A real spawn still happens for the explicit conversational
-    verb, an armed lifecycle trigger (``on_work_start``), or a
+    command, an armed lifecycle trigger (``on_work_start``), or a
     consented decompose fan-out.
 
     Default ``False`` (Locked Decision 2): shipping this changes nothing until
@@ -2694,7 +2605,7 @@ class ThinkSpawnBlock(BaseModel):
     rather than failing the whole settings load - false-enabled (a background
     ``/think`` dispatched against the operator's intent) is the dangerous
     direction. The enable + presence + spawn logic lives in
-    :mod:`fno.provenance.spawn_think`.
+    ``crates/fno-agents/src/think_dispatch.rs`` and ``backlog/birth.rs``.
 
     ``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):
     a bulk run exceeding it skips the remainder and logs the truncation.
@@ -2913,7 +2824,7 @@ class AutoMergeBlock(BaseModel):
     # same affirmative set this coercer does. It was stricter while it read
     # only for the native arm. `fno do pr merge` now resolves its standing
     # switch through that reader too, and a split would have refused
-    # `enabled = "true"` at the very verb that honored it a release ago. Any
+    # `enabled = "true"` at the very command that honored it a release ago. Any
     # change to either spelling set must move both readers and the
     # git-protection hook, or the gates split on exactly that spelling.
     enabled: bool = False
@@ -3248,8 +3159,8 @@ class ResourceMeterBlock(BaseModel):
 class CollisionThresholdsBlock(BaseModel):
     """Collision severity scoring thresholds (config.collision.severity_thresholds).
 
-    Defaults lifted verbatim from the former
-    ``collision.py:DEFAULT_THRESHOLDS`` (US2 converges that private loader here).
+    Defaults lifted verbatim from the collision module's original private
+    loader; the native thresholds reader holds the same contract.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -3264,8 +3175,9 @@ class CollisionThresholdsBlock(BaseModel):
     def _sanitize(cls, v: object) -> object:
         """Drop any non-numeric or negative value so the field default applies.
 
-        Matches the old collision._load_thresholds per-key fallback: a bad
-        threshold warns and falls back to default rather than breaking load.
+        A bad threshold warns and falls back to default rather than breaking
+        load; the native twin holds the same contract (cutover.rs
+        collision_thresholds).
         """
         if not isinstance(v, dict):
             return v
@@ -3727,6 +3639,14 @@ class MuxBlock(BaseModel):
     open_with: Literal["inmux", "obsidian", "system"] = "inmux"
     # The in-mux file viewer's shape: docked panel or centered modal.
     viewer: Literal["panel", "modal"] = "panel"
+    # Lines one wheel notch scrolls a pane whose app does NOT own the mouse;
+    # the Rust reader clamps 1..=50. A notch here is one cell of trackpad
+    # travel, so the default stays 1.
+    wheel_lines: int = Field(default=1, ge=1, le=50)
+    # Wheel ticks forwarded per 100ms window to a pane whose app DOES own the
+    # mouse; the Rust reader clamps 1..=100. The app scrolls its own step per
+    # forwarded tick, so this caps how fast a trackpad flick moves it.
+    wheel_passthrough_rate: int = Field(default=3, ge=1, le=100)
 
     @field_validator("shell_integration", mode="before")
     @classmethod
@@ -4362,11 +4282,6 @@ WORKTREE_LOCAL_KEYS: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# Loader
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # One-shot yaml -> flat-toml migration (Locked Decision #4: the load-time
 # safety net for the hard cut). This module is the ONLY place PyYAML survives
 # at load time - a legacy settings.yaml is converted to a flat config.toml
@@ -4471,46 +4386,6 @@ def _migrate_yaml_to_toml(
     return toml_path
 
 
-def run_config_migration(
-    locations: Optional[list[Path]] = None,
-) -> list[tuple[Path, str]]:
-    """Convert every legacy settings.yaml (+ its settings.local.yaml) in the
-    candidate chain to a flat config.toml, returning ``(toml_path, action)`` per
-    file for the CLI to report. ``action`` is ``migrated`` | ``already-migrated``
-    | ``absent``. The explicit ``fno config setup migrate-config`` verb over the same
-    one-shot conversion the loader runs, so a deployed install converts on demand
-    (comments are NOT carried across the round-trip). Idempotent + atomic.
-    """
-    out: list[tuple[Path, str]] = []
-    seen: set[str] = set()
-    for yaml_path in locations if locations is not None else _settings_yaml_locations():
-        if yaml_path.name != "settings.yaml":
-            continue
-        real = (
-            Path(os.path.realpath(yaml_path)) if yaml_path.is_symlink() else yaml_path
-        )
-        for src, toml_name in (
-            (yaml_path, "config.toml"),
-            (real.with_name("settings.local.yaml"), "config.local.toml"),
-        ):
-            toml_path = real.with_name(toml_name)
-            if str(toml_path) in seen:
-                continue
-            seen.add(str(toml_path))
-            # settings.local.yaml is a real per-worktree file; skip a symlinked one.
-            if toml_name == "config.local.toml" and (
-                not src.is_file() or src.is_symlink()
-            ):
-                continue
-            if toml_path.exists():
-                out.append((toml_path, "already-migrated"))
-            elif _migrate_yaml_to_toml(src, toml_name) is not None:
-                out.append((toml_path, "migrated"))
-            else:
-                out.append((toml_path, "absent"))
-    return out
-
-
 def _ensure_migrated(locations: list[Path]) -> None:
     """Convert every legacy settings.yaml (+ its settings.local.yaml) in
     ``locations`` to a flat config.toml, once. The load-time hard-cut safety net:
@@ -4588,7 +4463,7 @@ def _settings_yaml_locations(root: Optional[Path] = None) -> list[Path]:
     if canonical_candidate not in candidates and not suppress_canonical:
         candidates.append(canonical_candidate)
     candidates.append(_global_settings_path())
-    return _apply_search_ceiling(candidates)
+    return candidates
 
 
 def _candidate_paths(root: Optional[Path] = None) -> list[Path]:

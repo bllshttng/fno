@@ -7,7 +7,7 @@
 //!
 //! Wave 3 lands the daemon skeleton, IPC transport, worker spawn/ask routing,
 //! and the correctness-critical recovery procedure. The drive WebSocket surface
-//! is Wave 4; the full lifecycle-verb polish is Wave 5; Python integration is
+//! is Wave 4; the full lifecycle-command polish is Wave 5; Python integration is
 //! Wave 6. The handlers here are deliberately the minimum that makes the daemon
 //! a working supervisor end-to-end.
 
@@ -35,6 +35,8 @@ mod terminal_stop_sweep;
 pub(super) use terminal_stop_sweep::terminal_stop_sweep;
 mod fleet_arms;
 mod lifecycle;
+mod removal_audit;
+use self::removal_audit::RemovalAuditContext;
 mod rm_codex_rollback;
 mod rm_refusal_detail;
 mod rm_teardown;
@@ -645,11 +647,11 @@ pub(crate) fn cascade_codex_index(
 /// MISSING from disk - content HEAD still holds, so removal loses nothing.
 ///
 /// Permission needs BOTH a clean exit and the literal `reapable=yes` marker. A
-/// stale `fno` predating the verb exits non-zero with no receipt, which is
+/// stale `fno` predating the command exits non-zero with no receipt, which is
 /// indistinguishable from any other non-answer, so every unknown degrades to
 /// `None` and the row is kept. That is exactly the prior behaviour.
 pub(crate) fn worktree_clean_probe(cwd: &str) -> Option<bool> {
-    // In-process since the gate port: same answers the shelled verb
+    // In-process since the gate port: same answers the shelled command
     // gave, without a subprocess per row. A probe that cannot answer
     // (probe-failed) reads None -> the caller keeps the row, fail closed.
     let v = crate::worktree_reapable::reapable(cwd);
@@ -747,55 +749,6 @@ pub(crate) fn rm_take_worktree(entry: &state::RegistryEntry) -> Option<PruneOutc
                 }
             })
     })
-}
-
-#[derive(Debug, Clone)]
-struct RemovalAuditContext {
-    actor: String,
-    reason: String,
-    request_id: String,
-    worktree_touched: Option<bool>,
-    reclaimed_bytes: Option<u64>,
-}
-
-impl RemovalAuditContext {
-    fn from_request(req: &Request, entry: &state::RegistryEntry) -> Self {
-        let string_param = |key: &str| {
-            req.params
-                .get(key)
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_owned)
-        };
-        let actor = string_param("audit_actor").unwrap_or_else(|| {
-            [
-                "FNO_HARNESS_SESSION_ID",
-                "CLAUDE_CODE_SESSION_ID",
-                "CODEX_THREAD_ID",
-            ]
-            .iter()
-            .find_map(|key| std::env::var(key).ok())
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| format!("session:{value}"))
-            .unwrap_or_else(|| "operator".into())
-        });
-        let reason = string_param("audit_reason").unwrap_or_else(|| "operator-requested".into());
-        let request_id = string_param("audit_request_id")
-            .unwrap_or_else(|| format!("agent-rm:{}:{}", entry.name, entry.created_at));
-        Self {
-            actor,
-            reason,
-            request_id,
-            worktree_touched: req
-                .params
-                .get("audit_worktree_touched")
-                .and_then(Value::as_bool),
-            reclaimed_bytes: req
-                .params
-                .get("audit_reclaimed_bytes")
-                .and_then(Value::as_u64),
-        }
-    }
 }
 
 use crate::liveness_sweep;
@@ -970,12 +923,12 @@ pub(crate) fn live_liveness_prober(
     truth: std::collections::HashMap<String, String>,
     sockets: std::collections::HashMap<String, String>,
     codex_index: Option<Vec<(String, u64)>>,
-) -> impl Fn(&state::RegistryEntry) -> crate::client_verbs::RowLiveness {
+) -> impl Fn(&state::RegistryEntry) -> crate::client_commands::RowLiveness {
     move |e: &state::RegistryEntry| {
         if let Some(dead) = fold_positive_death(e) {
             return dead;
         }
-        crate::client_verbs::row_liveness_with_indexed(
+        crate::client_commands::row_liveness_with_indexed(
             e,
             &sockets,
             codex_index.as_deref(),
@@ -1168,7 +1121,7 @@ pub async fn bind_supervisor_socket(
     // BOUNDED, and that bound is load-bearing. A blocking connect here is this
     // whole defect in miniature: an old-build listener whose backlog is full
     // leaves connect() hanging, and we hold the exclusive lock while it hangs,
-    // so every client verb reports a busy incumbent forever. A listener that
+    // so every client command reports a busy incumbent forever. A listener that
     // cannot answer in 250ms is serving nobody, so a timeout falls through to
     // the unlink. Deferring to it instead would leave the machine with no
     // reachable daemon at all, which is strictly worse than displacing a
@@ -1721,7 +1674,7 @@ mod report;
 pub(crate) mod sandbox_host;
 mod status;
 mod thread_row_status;
-mod transcript_push;
+pub(crate) mod transcript_push;
 use codex_thread_lane::spawn_codex_thread_lane;
 use codex_thread_resume::{ensure_codex_thread_handle, schedule_codex_thread_recovery};
 pub(crate) use report::{find_uuid_backfill_row, UuidBackfill};
@@ -1852,7 +1805,7 @@ async fn load_registry_offloaded(path: PathBuf) -> Result<state::Registry, state
 /// or write itself; every other variant stays the catch-all internal fault.
 /// The one classification choke point both `registry_read_failed` and every
 /// `update_registry_offloaded` call site route through, so a shutdown-time
-/// cancellation gets `ShuttingDown` regardless of which verb hit it.
+/// cancellation gets `ShuttingDown` regardless of which command hit it.
 fn state_error_code(e: &state::StateError) -> ErrorCode {
     match e {
         state::StateError::Cancelled(_) => ErrorCode::ShuttingDown,
@@ -1911,7 +1864,7 @@ async fn dispatch(ctx: &Arc<Ctx>, req: &Request) -> Response {
 async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
     // Async handlers (spawn/ask/stop) interleave worker-socket I/O and stay on
     // the async runtime; pure-sync handlers go to the blocking pool.
-    match Namespace::verb(&req.method) {
+    match Namespace::command(&req.method) {
         Some("spawn") => handle_spawn(ctx, req).await,
         Some("ask") => handle_ask(ctx, req).await,
         Some("review-start") => handle_review_start(ctx, req).await,
@@ -1919,7 +1872,7 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         Some("stop") => handle_stop(ctx, req).await,
         Some("rm") => handle_rm(ctx, req).await,
         Some("list") => run_blocking(ctx, req, handle_list).await,
-        // The subscription verb: version-gated full document,
+        // The subscription command: version-gated full document,
         // so a subscriber pays a stat per idle tick and a read per write.
         Some("watch") => run_blocking(ctx, req, handle_watch).await,
         // status reads the in-memory drive table for the active-drives count, so
@@ -1938,30 +1891,26 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         // {working|blocked|done} on the matching claude row. Pure flock + CPU.
         Some("report") => run_blocking(ctx, req, handle_report).await,
         // The sandboxed-session transcript lane: a turn hook pushes raw
-        // transcript lines; the store is judged and idempotent. Lived in
-        // transcript_push; both dispatch lines are paid by the handle_status
-        // move.
-        Some("transcript-append") => {
+        // transcript lines; the store is judged and idempotent.
+        Some(transcript_push::TRANSCRIPT_APPEND_COMMAND) => {
             run_blocking(ctx, req, transcript_push::handle_transcript_append).await
         }
-        // SessionStart report: one thin per-harness hook posts the raw
-        // payload; the registry holds id/transcript/source additively.
-        Some("session-report") => {
+        // SessionStart report: a per-harness hook posts the raw payload.
+        Some(crate::session_report::SESSION_REPORT_COMMAND) => {
             run_blocking(ctx, req, |ctx: &Ctx, req: &Request| {
                 crate::session_report::handle_session_report(&ctx.home, &ctx.emitter, req)
             })
             .await
         }
-        // Live mail the Python send routes here: a footnote thread's host.
+        // Live mail the Python send routes here: a footnote or muse thread's host.
         Some("deliver") => {
-            let deliver =
-                |c: &Ctx, r: &Request| crate::footnote_harness::thread::deliver_rpc(&c.home, r);
+            let deliver = |c: &Ctx, r: &Request| crate::thread_host::deliver_rpc(&c.home, r);
             run_blocking(ctx, req, deliver).await
         }
         _ => Response::err(
             req.id,
             ErrorCode::UnknownMethod,
-            format!("unknown agent verb in `{}`", req.method),
+            format!("unknown agent command in `{}`", req.method),
         ),
     }
 }
@@ -2107,7 +2056,7 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     Response::err(
         req.id,
         ErrorCode::InvalidParams,
-        format!("daemon PTY hosting was retired at G4, and harness '{provider}' has no `--substrate {substrate}` arm: spawn a mux-hosted agent pane with `fno agents spawn --substrate pane`. The daemon serves only claude stream-json adoption (host_mode=interactive, mode=stream_json)."),
+        format!("daemon PTY hosting was retired at G4, and harness '{provider}' has no {substrate} lane arm: spawn a mux-hosted agent pane by naming a placement (`fno agents spawn --split right`). The daemon serves only claude stream-json adoption (host_mode=interactive, mode=stream_json)."),
     )
 }
 
@@ -2148,7 +2097,7 @@ async fn route_thread_spawn(
                 &format!(
                     "thread spawn refused: harness {provider} hosts its own detached thread \
                      client, so the daemon has no thread to hold for it. Spawn it through the \
-                     client-side detached lane (`fno agents spawn --substrate thread`)."
+                     client-side detached lane (a bare `fno agents spawn`)."
                 ),
             ),
             Err(error) => thread_spawn_refusal(
@@ -2383,7 +2332,7 @@ async fn spawn_claude_stream_lane(
     provenance: Option<&crate::spawn_contract::SpawnProvenance>,
 ) -> Response {
     // 1. Adoption requires a resume target. A fresh `host --provider claude`
-    //    (no --from) has nothing to resume; point the user at the adopt verb.
+    //    (no --from) has nothing to resume; point the user at the adopt command.
     let uuid = match resume_id {
         Some(u) if !u.trim().is_empty() => u,
         _ => {
@@ -2838,7 +2787,7 @@ async fn handle_review_start(ctx: &Ctx, req: &Request) -> Response {
                 ErrorCode::InvalidStatus,
                 format!(
                     "agent {} is a pane worker; review reaches no pane. Review a hosted \
-                     thread (`--substrate thread`), or kill the pane: \
+                     thread (`fno agents spawn` seats one by default), or kill the pane: \
                      `fno mux pane kill {}:{}`.",
                     entry.name, mux.session, mux.pane_id
                 ),
@@ -3080,7 +3029,7 @@ async fn handle_ask(ctx: &Ctx, req: &Request) -> Response {
     };
 
     // Send the message to the PTY stdin. The provider envelope wrapping for the
-    // non-Claude PTY paths is applied by the verb's full wiring (Wave 5/6); the
+    // non-Claude PTY paths is applied by the command's full wiring (Wave 5/6); the
     // Wave 3 daemon forwards the raw line so the transport is exercised.
     let mut payload = message.clone();
     if !payload.ends_with('\n') {
@@ -3830,7 +3779,7 @@ async fn read_worker_snapshot(sock: &std::path::Path) -> Option<String> {
 /// minutes. Mirrors `session_truth.STALE_ATTENTION_S` and the mux client's
 /// constant - the three cannot share code (the crates do not link), so the
 /// shared fixture in schemas/ is what pins them together.
-const STALE_ATTENTION_S: f64 = 600.0;
+pub(crate) const STALE_ATTENTION_S: f64 = 600.0;
 
 const LIST_PROJECTION_OMISSIONS: [&str; 0] = [];
 
@@ -4098,7 +4047,7 @@ where
                     // Python writes opencode ids to the canonical harness_session_id
                     // and drops `session_id` on write (it is Rust-set only), so
                     // falling through would report null for every opencode row. Same
-                    // resolution as `to_agent_entry` and `client_verbs::session_id_field`.
+                    // resolution as `to_agent_entry` and `client_commands::resume_session_id`.
                     "opencode" => e
                         .harness_session_id
                         .clone()
@@ -4243,7 +4192,7 @@ where
                     // The model this worker is ACTUALLY answering as, from the same
                     // family-1 probe that produced `status` above -- so the daemon
                     // never grows a second transcript reader that could disagree
-                    // with the truth verb about the same session.
+                    // with the truth command about the same session.
                     "observed_model": observed_model,
                     // The stored request with its basis, beside the observation.
                     // A null substitution marker is match-or-unknown, never clean.
@@ -4385,13 +4334,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         Some(n) => n.to_string(),
         None => return Response::err(req.id, ErrorCode::InvalidParams, "missing `name`"),
     };
-    // stop shares rm's cross-project grant: its store heal resolves through
-    // the same confinement refusal that names --cross-project.
-    let cross_project = req
-        .params
-        .get("cross_project")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let registry = match load_registry_offloaded(ctx.home.registry_json()).await {
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
@@ -4400,7 +4342,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         &registry,
         &requested_name,
         &ctx.home.registry_json(),
-        cross_project,
         true,
     )
     .await
@@ -4481,7 +4422,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             if let Some(entry) = registry.find_mut(&stop_name) {
                 entry.status = AgentStatus::Exited;
                 entry.exited_at = Some(now_rfc3339_like());
-                crate::state::record_stop(entry, "stop-verb", Some("codex-thread".into()));
+                crate::state::record_stop(entry, "stop-command", Some("codex-thread".into()));
                 // best-effort: a failed stamp costs a later wake its name,
                 // never the stop.
                 crate::wake_name::stamp_from_row(&wake_home, entry);
@@ -4545,7 +4486,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     if let Err(e) = update_registry_offloaded(ctx.home.registry_json(), move |r| {
         if let Some(e) = r.find_mut(&stop_name) {
             e.status = AgentStatus::Exited;
-            crate::state::record_stop(e, "stop-verb", None);
+            crate::state::record_stop(e, "stop-command", None);
             // best-effort: a failed stamp costs a later wake its name,
             // never the stop.
             crate::wake_name::stamp_from_row(&wake_home, e);
@@ -4567,7 +4508,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     Response::ok(req.id, json!({"stopped": true, "short_id": entry.short_id}))
 }
 
-/// One release per confirmed stop/rm verb (change 5). Resolves the
+/// One release per confirmed stop/rm command (change 5). Resolves the
 /// stopped row's identity, scans the global claims dir and the row's own
 /// space claims dir, releases the provably-dead claims the stopped holder
 /// keeps, emits ONE audit event, and rides the receipt on the response under
@@ -4576,7 +4517,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
 async fn attach_stopped_claims_release(
     ctx: &Ctx,
     req: &Request,
-    verb: &str,
+    command: &str,
     response: &mut Response,
 ) {
     let confirmed = match response.result() {
@@ -4601,7 +4542,7 @@ async fn attach_stopped_claims_release(
     // passes the resolved identity instead of re-reading the registry. The
     // requested token may be a session id rather than the row name (a
     // stop-by-id, or a cross-project heal that just minted the row), so
-    // resolve through the same finder the lifecycle verbs resolve with; an
+    // resolve through the same finder the lifecycle commands resolve with; an
     // exact-name miss here dropped the healed row's claims on the floor.
     let identity = load_registry_offloaded(ctx.home.registry_json())
         .await
@@ -4617,7 +4558,7 @@ async fn attach_stopped_claims_release(
         });
     let (resolved_name, session_id, cwd) = identity.unwrap_or((None, None, None));
     let name: &str = resolved_name.as_deref().unwrap_or(name);
-    release_stopped_claims_into(&ctx.emitter, name, session_id, cwd, verb, response);
+    release_stopped_claims_into(&ctx.emitter, name, session_id, cwd, command, response);
 }
 
 /// The synchronous core of the release: resolve dirs, run
@@ -4629,7 +4570,7 @@ fn release_stopped_claims_into(
     name: &str,
     session_id: Option<String>,
     cwd: Option<String>,
-    verb: &str,
+    command: &str,
     response: &mut Response,
 ) {
     let Some(result) = response.result_mut().and_then(|r| r.as_object_mut()) else {
@@ -4660,7 +4601,7 @@ fn release_stopped_claims_into(
         Err(error) => {
             let _ = emitter.emit(
                 "agent_stop_claims_released",
-                &json!({"name": name, "verb": verb, "error": error}),
+                &json!({"name": name, "verb": command, "error": error}),
             );
             return;
         }
@@ -4670,7 +4611,7 @@ fn release_stopped_claims_into(
         &json!({
             "name": name,
             "session_id": session_id.clone(),
-            "verb": verb,
+            "verb": command,
             "released": receipt.released,
             "kept": receipt.kept,
         }),
@@ -4775,11 +4716,11 @@ pub(crate) async fn stop_worker_confirmed_for_home(
     if let Some(sock) = keeper_thread_sock(entry) {
         return stop_keeper_confirmed(&sock).await;
     }
-    // A footnote row has no worker socket: its pid (a headless child, or a
-    // thread host that cancels the turn on SIGINT) leads its own group, and a
-    // thread host's fnh child leads another.
-    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
-        return crate::footnote_harness::thread::stop_row(pid, entry).await;
+    // A footnote or muse row has no worker socket: its pid (a headless child,
+    // or a thread host that cancels the turn on SIGINT) leads its own group,
+    // and a thread host's harness child leads another.
+    if let Some(stopped) = crate::thread_host::stop_row(entry).await {
+        return stopped;
     }
     let sock = home.worker_sock(&entry.short_id);
     // 1. Graceful: ask the worker to tear down its PTY child + exit. Both the
@@ -5006,7 +4947,7 @@ async fn handle_rm(ctx: &Ctx, req: &Request) -> Response {
         req,
         &crate::claude_roster::read_all_agents_union,
         &run_claude_rm,
-        &rm_teardown::claude_stop_confirmed,
+        &rm_teardown::confirmed_claude_stop,
         &run_mux_pane_kill,
         &run_mux_pane_probe,
     )
@@ -5060,7 +5001,7 @@ async fn handle_rm_with(
     req: &Request,
     read_claude_agents: &(dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot + Sync),
     claude_rm: &(dyn Fn(&str) -> Result<(), String> + Sync),
-    claude_stop: &(dyn Fn(&str) -> bool + Sync),
+    claude_stop: &(dyn Fn(&str, Option<&str>) -> rm_teardown::StopLeg + Sync),
     mux_pane_kill: &(dyn Fn(&str, u64) -> Result<bool, String> + Sync),
     mux_pane_probe: &(dyn Fn(&str, u64) -> PaneProbe + Sync),
 ) -> Response {
@@ -5073,39 +5014,29 @@ async fn handle_rm_with(
         .get("force")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    // rm is the one lifecycle verb whose caller can name a session whose cwd
-    // resolves outside this project (the store heal's refusal prescribes
-    // --cross-project for exactly that case); forward the grant to resolution.
-    let cross_project = req
-        .params
-        .get("cross_project")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let registry = match load_registry_offloaded(ctx.home.registry_json()).await {
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
     };
-    let entry = match entry_for_lifecycle(
-        &registry,
-        &requested_name,
-        &ctx.home.registry_json(),
-        cross_project,
-        false,
-    )
-    .await
-    {
-        Ok(Some(entry)) => entry,
-        Ok(None) => {
-            return Response::err(
-                req.id,
-                ErrorCode::AgentNotFound,
-                format!("agent {requested_name} not found"),
-            )
-        }
-        Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
-    };
+    let mut entry =
+        match entry_for_lifecycle(&registry, &requested_name, &ctx.home.registry_json(), false)
+            .await
+        {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                return Response::err(
+                    req.id,
+                    ErrorCode::AgentNotFound,
+                    format!("agent {requested_name} not found"),
+                )
+            }
+            Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
+        };
     let name = entry.name.clone();
     let audit = RemovalAuditContext::from_request(req, &entry);
+    if let Some(held) = audit.pin_hold(&ctx.home, &entry) {
+        return Response::err(req.id, ErrorCode::InvalidStatus, held);
+    }
     // Computed once (self-review finding): every other reference in this
     // handler reuses this allocation instead of re-deriving the same short id.
     let harness_row_id = claude_row_id(&entry);
@@ -5132,28 +5063,28 @@ async fn handle_rm_with(
         || claude_row_provably_absent(claude_agents.as_ref(), harness_row_id.as_deref())
         || off_executor(|| pane_provably_absent(entry.mux.as_ref(), mux_pane_probe));
     // Law d-81c6da7e: remove needs no prior stop. rm owns the one exception's
-    // stop - the claude background thread - itself: run the bounded `claude
-    // stop`, then re-read the roster and recompute the death verdict. Every
+    // stop - the claude background thread - itself: ask, and end the proven
+    // process set when the ask does not (the glm escalation). Every
     // other live row is ended by the arms below; no caller composes a stop
-    // leg in front of this verb anymore.
-    if entry.status == AgentStatus::Live
-        && !force
-        && !provably_gone
-        && crate::gc_native::stop_precedes_removal(&entry)
+    // leg in front of this command anymore.
+    match rm_teardown::run_stop_leg(
+        ctx,
+        req,
+        &mut entry,
+        force,
+        provably_gone,
+        claude_stop,
+        read_claude_agents,
+        harness_row_id.as_deref(),
+    )
+    .await
     {
-        let short = entry.transport_short().map(str::to_string).or_else(|| {
-            entry
-                .harness_session_id
-                .clone()
-                .filter(|session_id| !session_id.trim().is_empty())
-        });
-        if let Some(short) = short {
-            let _ = off_executor(|| claude_stop(&short));
-            let snapshot = off_executor(read_claude_agents);
-            provably_gone = row_death_reason(&entry, &snapshot).is_some()
-                || claude_row_provably_absent(Some(&snapshot), harness_row_id.as_deref());
-            claude_agents = Some(snapshot);
+        Ok(Some(result)) => {
+            provably_gone = result.provably_gone;
+            claude_agents = Some(result.snapshot);
         }
+        Ok(None) => {}
+        Err(response) => return response,
     }
     // Only a claude background thread can still be refused here: every other
     // live row falls through to the arms that end its process.
@@ -6227,7 +6158,7 @@ pub(crate) fn run_reconcile_sweep(
     let witness = crate::liveness_sweep::BgRoster::load();
     let roster_readable = witness.readable();
     crate::native_bg_mint::mint_missing_native_bg(home, witness.listing(), emitter);
-    let codex_index = crate::client_verbs::codex_rollout_index(None);
+    let codex_index = crate::client_commands::codex_rollout_index(None);
     let rollout_exists = |e: &RegistryEntry| -> bool {
         crate::codex_store::codex_rollout_exists(
             codex_index.as_deref(),
@@ -6261,7 +6192,7 @@ pub(crate) fn run_reconcile_sweep(
     // walk alone exceeded the whole 5s window, so every later row deferred).
     let prober = live_liveness_prober(
         truth,
-        crate::client_verbs::sessions_socket_index(&crate::claude_ask::ClaudeHome::from_env()),
+        crate::client_commands::sessions_socket_index(&crate::claude_ask::ClaudeHome::from_env()),
         codex_index.clone(),
     );
     // The sweep budget starts HERE, after the truth batch and roster load:
@@ -6426,7 +6357,7 @@ pub(crate) fn run_reconcile_sweep(
 /// call (`since` absent) serves the FULL document - connect, payload. Later
 /// calls serve the full document again only when the registry's version
 /// moved - which is exactly what any write (the sweep, `agent.report`,
-/// spawn, rm, a Python-side CLI verb) does to the file - and a bare version
+/// spawn, rm, a Python-side CLI command) does to the file - and a bare version
 /// echo when it did not, so a polling reader costs one stat per tick instead
 /// of one file read. The caller keeps its read off the file entirely: the
 /// daemon is the reader now, the served rows are the served facts.
@@ -6566,14 +6497,14 @@ fn handle_reconcile(ctx: &Ctx, req: &Request) -> Response {
 
 async fn dispatch_channel(ctx: &Arc<Ctx>, req: &Request) -> Response {
     // All channel handlers are pure flock + CPU; run on the blocking pool.
-    match Namespace::verb(&req.method) {
+    match Namespace::command(&req.method) {
         Some("register_channel") => run_blocking(ctx, req, handle_register_channel).await,
         Some("unregister_channel") => run_blocking(ctx, req, handle_unregister_channel).await,
         Some("push_to_channel") => run_blocking(ctx, req, handle_push_to_channel).await,
         _ => Response::err(
             req.id,
             ErrorCode::UnknownMethod,
-            format!("unknown channel verb in `{}`", req.method),
+            format!("unknown channel command in `{}`", req.method),
         ),
     }
 }
@@ -6695,56 +6626,32 @@ fn handle_push_to_channel(ctx: &Ctx, req: &Request) -> Response {
             return Response::ok(req.id, json!({"routed": true}));
         }
     };
-    // Deliver via the Python sidecar (`fno agents mcp send`), inheriting its lazy-start
-    // + socket discovery instead of reimplementing it in Rust. `delivered: true`
-    // only when the sidecar accepted the envelope; on failure `reason` is
-    // MANDATORY so a caller can tell route-exists from delivered.
-    match deliver_envelope(&channel_id, &envelope) {
+    // Deliver via the sidecar client in-process (the ported mcp family):
+    // the client inherits lazy-start + socket discovery, and `delivered:
+    // true` only when the sidecar accepted the envelope; on failure
+    // `reason` is MANDATORY so a caller can tell route-exists from
+    // delivered.
+    match crate::mcp::client::send_to_channel(
+        &channel_id,
+        &envelope,
+        None,
+        crate::mcp::client::DEFAULT_TIMEOUT,
+    ) {
         Ok(()) => Response::ok(req.id, json!({"routed": true, "delivered": true})),
-        Err(reason) => Response::ok(
+        Err(e) => Response::ok(
             req.id,
-            json!({"routed": true, "delivered": false, "reason": reason}),
+            json!({"routed": true, "delivered": false, "reason": reason_of(&e)}),
         ),
     }
 }
 
-/// Shell `fno agents mcp send --session <id>` with `envelope` on stdin (never argv - it
-/// can be large). Returns `Err(reason)` on any failure (spawn or non-zero exit),
-/// with the stderr tail as the reason.
-fn deliver_envelope(channel_id: &str, envelope: &Value) -> Result<(), String> {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = crate::loop_dispatch::fno_cmd("fno")
-        .args(["agents", "mcp", "send", "--session-id", channel_id])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn `fno agents mcp send` failed: {e}"))?;
-    // Write + close stdin (drop => EOF) so the child's `stdin.read()` completes.
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "child stdin unavailable".to_string())?;
-        let bytes = serde_json::to_vec(envelope).map_err(|e| format!("serialize envelope: {e}"))?;
-        stdin
-            .write_all(&bytes)
-            .map_err(|e| format!("write envelope to `fno agents mcp send`: {e}"))?;
+/// The machine-stable reason for a delivery failure, matching the shape the
+/// shelled `fno agents mcp send` used to surface (its stderr tail).
+fn reason_of(e: &crate::mcp::client::ClientError) -> String {
+    match e {
+        crate::mcp::client::ClientError::Sidecar { reason } => reason.clone(),
+        crate::mcp::client::ClientError::Unreachable { reason } => reason.clone(),
     }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("wait for `fno agents mcp send`: {e}"))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let tail = stderr.trim().rsplit('\n').next().unwrap_or("").trim();
-    Err(if tail.is_empty() {
-        format!("`fno agents mcp send` exited {}", out.status)
-    } else {
-        tail.to_string()
-    })
 }
 
 // ---------------------------------------------------------------------------

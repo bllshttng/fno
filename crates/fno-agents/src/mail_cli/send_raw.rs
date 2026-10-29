@@ -1,7 +1,7 @@
 //! The `mail send --raw` leaf: prompt-line injection.
 //!
 //! Port of the Python `_raw_send` leg plus its codex review-target helpers.
-//! The front classifies and execs this verb; the leaf resolves the recipient
+//! The front classifies and execs this command; the leaf resolves the recipient
 //! in the shared registry, gates delivery policy in-process, and drives the
 //! `mail-inject` / `review-start` child lanes.
 
@@ -11,13 +11,13 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::OnceLock;
 
-const REVIEW_VERBS: [&str; 4] = ["code-review", "review", "review-changes", "sigma-review"];
+const REVIEW_COMMANDS: [&str; 4] = ["code-review", "review", "review-changes", "sigma-review"];
 const REVIEW_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Python `repr(str)` for refusal text: single quotes, backslash and quote
 /// escaped. The refusal strings interpolate `{name!r}`, and Rust's `{:?}`
 /// renders double quotes, so every interpolation goes through this.
-fn py_repr(value: &str) -> String {
+pub(crate) fn py_repr(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for ch in value.chars() {
@@ -218,7 +218,7 @@ fn raw_send(
     } else {
         name.to_string()
     };
-    let rows = match crate::client_verbs::load_registry_entries(&registry) {
+    let rows = match crate::client_commands::load_registry_entries(&registry) {
         Ok(rows) => rows,
         Err(_) => {
             return unmeasurable(
@@ -230,7 +230,7 @@ fn raw_send(
             )
         }
     };
-    let found = match crate::client_verbs::find_agent_entry(&rows, &lookup_name) {
+    let found = match crate::client_commands::find_agent_entry(&rows, &lookup_name) {
         Ok(found) => found,
         Err(_) => {
             return refused(
@@ -261,7 +261,7 @@ fn raw_send(
         return refused(
             check,
             false,
-            "you addressed this session. For a plain self-note the envelope is fine:\n    fno agents mail send <own-id> \"text\"\nTo fire a verb at your own prompt line (no envelope, so the slash parses):\n    fno agents mail send '<payload>' --to-self --raw",
+            "you addressed this session. For a plain self-note the envelope is fine:\n    fno agents mail send <own-id> \"text\"\nTo fire a command at your own prompt line (no envelope, so the slash parses):\n    fno agents mail send '<payload>' --to-self --raw",
         );
     }
 
@@ -291,9 +291,7 @@ fn raw_send(
     }
 
     let transport_sender = crate::identity::ambient_agent_handle();
-    let sender = transport_sender
-        .clone()
-        .unwrap_or_else(|| "fno".to_string());
+    let sender = crate::system_sender::stamp_or_unknown(None, || transport_sender.clone());
     let raw_recipient = crate::identity::canonical_handle(&session_id);
     let authored_words = crate::backlog::style_check::word_count(stripped);
     let mut failure_reasons: Vec<String> = Vec::new();
@@ -328,9 +326,9 @@ fn raw_send(
                 // failed reload this keeps the stale row instead - the heal
                 // just said the pane is gone, and the send refuses downstream
                 // either way.
-                if let Ok(fresh_rows) = crate::client_verbs::load_registry_entries(&registry) {
+                if let Ok(fresh_rows) = crate::client_commands::load_registry_entries(&registry) {
                     if let Ok(fresh) =
-                        crate::client_verbs::find_agent_entry(&fresh_rows, &lookup_name)
+                        crate::client_commands::find_agent_entry(&fresh_rows, &lookup_name)
                     {
                         entry = fresh.clone();
                     }
@@ -349,9 +347,9 @@ fn raw_send(
     let (lane, is_keystroke) = keystroke_lane(&entry);
     if !is_keystroke {
         if lane == "codex-daemon" {
-            let review_verbs = packaged_review_verbs();
-            let verb = stripped.split_whitespace().next().unwrap_or("");
-            let is_review = review_verbs.iter().any(|candidate| candidate == verb);
+            let review_verbs = packaged_review_commands();
+            let command = stripped.split_whitespace().next().unwrap_or("");
+            let is_review = review_verbs.iter().any(|candidate| candidate == command);
             if check && !is_review {
                 println!("injectable: codex-daemon turn/start");
                 return 0;
@@ -414,7 +412,7 @@ fn raw_send(
                         0
                     }
                     None => {
-                        println!("not-injectable: no resolvable review target (bare verb with no origin default branch, or unparsable arguments); retry with '/review --base <branch>' or '/review --uncommitted'");
+                        println!("not-injectable: no resolvable review target (bare command with no origin default branch, or unparsable arguments); retry with '/review --base <branch>' or '/review --uncommitted'");
                         1
                     }
                 };
@@ -424,7 +422,7 @@ fn raw_send(
                     check,
                     false,
                     &format!(
-                        "{} {verb} has no resolvable review target - a bare verb with no origin default branch, or arguments after the verb do not parse; retry with '/review --base <branch>' or explicitly request '/review --uncommitted'",
+                        "{} {command} has no resolvable review target - a bare command with no origin default branch, or arguments after the command do not parse; retry with '/review --base <branch>' or explicitly request '/review --uncommitted'",
                         py_repr(name)
                     ),
                 );
@@ -622,7 +620,7 @@ fn keystroke_lane(entry: &Value) -> (String, bool) {
     ("control.sock".to_string(), true)
 }
 
-fn packaged_review_verbs() -> Vec<String> {
+fn packaged_review_commands() -> Vec<String> {
     // The Python leg checked for an absent sibling binary here; this leaf IS
     // the binary, so the absent arm is dead by construction.
     match crate::harness_capabilities::HarnessContract::packaged() {
@@ -765,7 +763,7 @@ fn emit_review_sent(
     let mut fields = serde_json::Map::new();
     fields.insert("invocation_id".to_string(), json!(invocation_id));
     fields.insert("stage".to_string(), json!("sent"));
-    fields.insert("verb".to_string(), json!(review.verb));
+    fields.insert("verb".to_string(), json!(review.command));
     fields.insert("args_raw".to_string(), json!(review.args_raw));
     fields.insert("level".to_string(), json!(review.level));
     fields.insert("level_source".to_string(), json!(review.level_source));
@@ -921,7 +919,7 @@ fn emit_style_refusal(violations: &[crate::backlog::style_check::Violation]) {
 }
 
 struct ReviewInvocation {
-    verb: String,
+    command: String,
     args_raw: String,
     level: String,
     level_source: String,
@@ -941,7 +939,7 @@ fn parse_review_invocation(raw: &str) -> Option<ReviewInvocation> {
         .rsplit(':')
         .next()
         .unwrap_or("");
-    if !REVIEW_VERBS.contains(&name) {
+    if !REVIEW_COMMANDS.contains(&name) {
         return None;
     }
     // Python shlex with a whitespace fallback on ValueError.
@@ -965,7 +963,7 @@ fn parse_review_invocation(raw: &str) -> Option<ReviewInvocation> {
         }
     }
     Some(ReviewInvocation {
-        verb: format!("/{name}"),
+        command: format!("/{name}"),
         args_raw,
         level,
         level_source,
@@ -974,7 +972,10 @@ fn parse_review_invocation(raw: &str) -> Option<ReviewInvocation> {
 }
 
 fn canonical_flag(token: &str) -> Option<String> {
-    const KNOWN_REVIEW_FLAGS: [&str; 3] = ["comment", "fix", "verify-fixes"];
+    // Keep in step with the owner table in review_invocation_core.rs: this
+    // local copy prices review invocations on the mail surface and must not
+    // read a narrower vocabulary than the parser that minted them.
+    const KNOWN_REVIEW_FLAGS: [&str; 4] = ["comment", "fix", "verify-fixes", "fresh"];
     let mut name = token;
     if let Some(stripped) = name.strip_prefix("--") {
         name = stripped;
@@ -1068,7 +1069,7 @@ fn explicit_review_pr_number(payload: &str) -> Option<i64> {
 
 fn resolve_codex_review_target(payload: &str, default_base: Option<&str>) -> Option<String> {
     let mut parts = payload.splitn(2, char::is_whitespace);
-    let _verb = parts.next().unwrap_or("");
+    let _command = parts.next().unwrap_or("");
     let Some(remainder_raw) = parts.next() else {
         return default_base.map(|base| format!("baseBranch:{base}"));
     };
@@ -1100,7 +1101,7 @@ fn resolve_codex_review_target(payload: &str, default_base: Option<&str>) -> Opt
     None
 }
 
-fn agents_binary() -> String {
+pub(crate) fn agents_binary() -> String {
     if let Ok(value) = std::env::var("FNO_AGENTS_BIN") {
         if !value.is_empty() {
             return value;
@@ -1111,18 +1112,18 @@ fn agents_binary() -> String {
         .unwrap_or_else(|_| "fno-agents".to_string())
 }
 
-struct Captured {
-    status: Option<i32>,
-    stdout: String,
-    timed_out: bool,
-    spawn_failed: bool,
+pub(crate) struct Captured {
+    pub(crate) status: Option<i32>,
+    pub(crate) stdout: String,
+    pub(crate) timed_out: bool,
+    pub(crate) spawn_failed: bool,
 }
 
 /// Bounded spawn: stdin always piped (fed and closed by a writer thread),
 /// stdout captured by a reader thread, stderr either inherited (the real-send
 /// lanes freeze the child's teaching text) or drained by a thread so a chatty
 /// child cannot deadlock on a full pipe. Kills at the deadline.
-fn run_captured(
+pub(crate) fn run_captured(
     argv: &[String],
     stdin_text: &str,
     inherit_stderr: bool,
@@ -1556,7 +1557,7 @@ fn codex_review_subject_nonempty(cwd: &str, base_ref: &str) -> (bool, String) {
 mod tests {
     use super::*;
 
-    /// Payloads go through the full verb+args shape the leaf receives: verb,
+    /// Payloads go through the full command+args shape the leaf receives: command,
     /// one whitespace, then args. `main` as the default base keeps the
     /// explicit-target arm distinguishable from the fallback.
     fn target(payload: &str) -> Option<String> {
@@ -1567,7 +1568,7 @@ mod tests {
     fn explicit_pr_receipt_resolves_to_its_base_branch() {
         let payload = "/fno:review high HEAD 1ed3352 of PR 42 against origin/next";
         assert_eq!(target(payload).as_deref(), Some("baseBranch:origin/next"));
-        // explicit_review_pr_number receives args_raw, the verb-stripped
+        // explicit_review_pr_number receives args_raw, the command-stripped
         // remainder parse_review_invocation stores, never the full payload.
         let args_raw = "high HEAD 1ed3352 of PR 42 against origin/next";
         assert_eq!(explicit_review_pr_number(args_raw), Some(42));
@@ -1579,7 +1580,7 @@ mod tests {
         assert_eq!(target(payload), None);
         // No `pr` capture survives a malformed receipt. Feeding args_raw
         // makes the refusal come from the malformed head hash itself, not
-        // from the verb breaking the anchored match.
+        // from the command breaking the anchored match.
         let args_raw = "HEAD 0xzz of PR 42 against origin/main";
         assert_eq!(explicit_review_pr_number(args_raw), None);
     }

@@ -42,9 +42,6 @@ pub const LOG_TYPES: &[&str] = &[
     "child_session",
 ];
 
-/// A writer appends a `heartbeat` this often for as long as it lives. A
-/// reader counts the session alive while the newest is under the stale bound.
-pub const HEARTBEAT_EVERY_SECS: u64 = 30;
 pub const HEARTBEAT_STALE_SECS: u64 = 90;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -139,7 +136,8 @@ pub struct EndpointSpec {
 pub struct LaunchSpec {
     pub v: u64,
     /// `create` mints nothing: the supervisor minted `fno_id`. `resume`
-    /// reopens the session in `session_dir`.
+    /// reopens the session in `session_dir`. `fork` copies `fork_from`
+    /// through `fork_seq` into a new session, then resumes it.
     pub mode: String,
     pub fno_id: String,
     pub session_dir: PathBuf,
@@ -156,6 +154,9 @@ pub struct LaunchSpec {
     /// `--permission-mode`, one of the capability row's `permission_modes`.
     /// `None` runs the binary's default mode.
     pub permission_mode: Option<String>,
+    /// The source session's id. Its sidecar dir sits beside `session_dir`.
+    pub fork_from: Option<String>,
+    pub fork_seq: Option<u64>,
     pub price_cache: PathBuf,
     /// The model's context window in tokens; compaction fires at 80%.
     pub context_window: u64,

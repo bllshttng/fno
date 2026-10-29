@@ -110,6 +110,81 @@ fn recipient_key(to: &str, registry: &[Value]) -> String {
     resolve_key(to, registry)
 }
 
+/// Aliases the mail store itself proves, for addresses no registry row
+/// holds: a name sent with a `from_session` joins that session (the latest
+/// row wins), and a short id that is a unique prefix of exactly one observed
+/// full id joins that id. An ended session's tail-8 handle, its full UUID and
+/// its role name then fold to one participant.
+fn store_aliases(texts: &[String], registry: &[Value]) -> BTreeMap<String, String> {
+    let mut named: BTreeMap<String, (String, String)> = BTreeMap::new();
+    let mut full: std::collections::BTreeSet<String> = Default::default();
+    let mut short: std::collections::BTreeSet<String> = Default::default();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let field = |f: &str| v.get(f).and_then(Value::as_str).unwrap_or("").to_string();
+        let (from, from_session, to, ts) = (
+            field("from"),
+            field("from_session"),
+            field("to"),
+            field("ts"),
+        );
+        for id in [&from_session, &from, &to] {
+            if id.is_empty() || registry_lookup(registry, id).is_some() {
+                continue;
+            }
+            if id.len() >= 32 && id.contains('-') {
+                full.insert(id.clone());
+            } else {
+                short.insert(id.clone());
+            }
+        }
+        // The operator voice and system arms are shared names, never one
+        // session's alias.
+        let shared_name = from == "user" || crate::system_sender::is_system_sender(&from);
+        if !from_session.is_empty() && !from.is_empty() && from != from_session && !shared_name {
+            match named.get(&from) {
+                Some((seen, _)) if seen.as_str() > ts.as_str() => {}
+                _ => {
+                    named.insert(from.clone(), (ts, from_session.clone()));
+                }
+            }
+        }
+    }
+    let mut aliases: BTreeMap<String, String> = named
+        .into_iter()
+        .filter(|(name, _)| registry_lookup(registry, name).is_none())
+        .map(|(name, (_, session))| (name, session))
+        .collect();
+    for id in short.iter().filter(|id| id.len() >= 6) {
+        let hits: Vec<&String> = full.iter().filter(|f| f.starts_with(id.as_str())).collect();
+        if let [hit] = hits[..] {
+            aliases.entry(id.clone()).or_insert_with(|| hit.clone());
+        }
+    }
+    // A name's session may itself be a short handle: follow one more hop.
+    let snapshot = aliases.clone();
+    for target in aliases.values_mut() {
+        if let Some(next) = snapshot.get(target.as_str()) {
+            *target = next.clone();
+        }
+    }
+    aliases
+}
+
+/// A resolved key, folded through the store's own aliases when no registry
+/// row claimed it.
+fn fold(key: String, aliases: &BTreeMap<String, String>, registry: &[Value]) -> String {
+    match aliases.get(&key) {
+        Some(target) if registry_lookup(registry, &key).is_none() => resolve_key(target, registry),
+        _ => key,
+    }
+}
+
 /// The broadcast scope an announce row answers to (the chats store's rule).
 fn scope_of(line: &Value) -> String {
     line.get("meta")
@@ -171,14 +246,13 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             })
         }
     };
-    for entry in rd.flatten() {
-        if entry.file_name().into_string().is_err() {
-            continue;
-        }
-        let file = entry.path().join("messages.jsonl");
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
+    let texts: Vec<String> = rd
+        .flatten()
+        .filter(|entry| entry.file_name().into_string().is_ok())
+        .filter_map(|entry| std::fs::read_to_string(entry.path().join("messages.jsonl")).ok())
+        .collect();
+    let aliases = store_aliases(&texts, registry);
+    for text in &texts {
         let mut rows: Vec<Value> = Vec::new();
         for line in text.lines() {
             let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -194,8 +268,12 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             if is_hold_sender(from) {
                 continue; // R8: the digest never appears
             }
-            let from_key = participant_key(from_session, from, registry);
-            let to_key = recipient_key(to, registry);
+            let from_key = fold(
+                participant_key(from_session, from, registry),
+                &aliases,
+                registry,
+            );
+            let to_key = fold(recipient_key(to, registry), &aliases, registry);
             // The join reads the RESOLVED key, so a prefix-resolved short id
             // takes its row's display name, not the raw id (item 3).
             let reg_from = registry_lookup(registry, &from_key);
@@ -374,6 +452,19 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             .and_then(Value::as_str)
             .cmp(&b.get("last_ts").and_then(Value::as_str))
     });
+    // The You section rides the same projection: one row per registry-named
+    // claude session whose transcript carries typed turns.
+    // Fail-open: without a resolvable home the section reads as absent.
+    let you = crate::paths::AgentsHome::from_env_opt()
+        .map(|home| {
+            crate::you_threads::project_you(&crate::you_threads::YouInputs {
+                registry,
+                projects_dir: crate::claude_drive::claude_projects_dir(),
+                home_root: home.root().to_path_buf(),
+                cache_path: home.root().join("intel").join("you-threads.json"),
+            })
+        })
+        .unwrap_or_default();
     json!({
         "participants": participants.values().cloned().collect::<Vec<_>>(),
         "threads": threads,
@@ -381,6 +472,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         "channels": channels.into_iter().map(|(scope, rows)| json!({"scope": scope, "rows": rows})).collect::<Vec<_>>(),
         "announcements": announcements,
         "unreadable": unreadable,
+        "you": you,
     })
 }
 
@@ -472,7 +564,7 @@ fn best_scope(votes: &BTreeMap<String, (usize, String)>) -> Option<String> {
         .map(|(scope, _)| scope.clone())
 }
 
-/// The hidden `fno-agents mail-threads` verb: `--format json` (the only
+/// The hidden `fno-agents mail-threads` command: `--format json` (the only
 /// form) prints the projection; `details --session <id>` prints that
 /// session's token counters and ledger cost. Hidden from help, like
 /// `team-fold` (ruling d-aef0ed7b).
@@ -674,8 +766,20 @@ fn run_details(args: &[String]) -> i32 {
         .and_then(Value::as_str)
         .unwrap_or(session.as_str());
     let harness = row.get("harness").and_then(Value::as_str).unwrap_or("");
-    let tokens = transcript_tokens(sid, harness);
-    let cost = ledger_cost(sid);
+    let activity = transcript_activity(sid, harness);
+    let tokens = activity.as_ref().map(|(t, _)| {
+        json!({
+            "input": t.input,
+            "output": t.output,
+            "cache_read": t.cache_read,
+            "cache_write": t.cache_write,
+        })
+    });
+    let cost = details_cost(
+        ledger_cost(sid),
+        activity.as_ref().map(|(t, m)| (*t, m.as_deref())),
+        &crate::model_price::state_dir(),
+    );
     println!(
         "{}",
         json!({
@@ -687,10 +791,29 @@ fn run_details(args: &[String]) -> i32 {
     0
 }
 
-/// Token counters over the session's transcript: claude projects, codex
-/// walks its sessions tree; any other harness has no reader here, so its
-/// tokens read null rather than a wrong zero (AC3-EDGE).
-fn transcript_tokens(sid: &str, harness: &str) -> Option<Value> {
+/// The session's dollar cost: the ledger sum when node_costs rows exist,
+/// else the transcript tokens priced at the transcript model's catalog
+/// rates. No rows and no known rate read null, never a fabricated zero.
+fn details_cost(
+    ledger: Option<f64>,
+    activity: Option<(crate::session_activity::Tokens, Option<&str>)>,
+    state: &Path,
+) -> Option<f64> {
+    if ledger.is_some() {
+        return ledger;
+    }
+    let (tokens, model) = activity?;
+    let rates = crate::model_price::price_book(state)?.rates(model?, None)?;
+    crate::model_price::cost(tokens, &rates)
+}
+
+/// Token counters and majority model over the session's transcript: claude
+/// projects, codex walks its sessions tree; any other harness has no reader
+/// here, so it reads null rather than a wrong zero (AC3-EDGE).
+fn transcript_activity(
+    sid: &str,
+    harness: &str,
+) -> Option<(crate::session_activity::Tokens, Option<String>)> {
     if sid.is_empty() {
         return None;
     }
@@ -708,23 +831,17 @@ fn transcript_tokens(sid: &str, harness: &str) -> Option<Value> {
     } else {
         crate::session_activity::claude_activity(&raw)
     };
-    let t = act.tokens;
-    Some(json!({
-        "input": t.input,
-        "output": t.output,
-        "cache_read": t.cache_read,
-        "cache_write": t.cache_write,
-    }))
+    Some((act.tokens, act.model))
 }
 
-/// The session's cost from the graph's node_costs rows. Any read failure
-/// reads as null, never an error exit: this modal informs, it never blocks.
+/// The session's cost from the graph's node_costs rows; null when the
+/// session has no rows (SUM over none is NULL) or any read fails.
 fn ledger_cost(sid: &str) -> Option<f64> {
     let db = crate::state_layout::place(&crate::backlog::settings::state_dir()?, "graph.db");
     let conn = crate::store_conn::open_read(&db).ok()?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
     conn.query_row(
-        "SELECT COALESCE(SUM(cost_usd), 0.0) FROM node_costs WHERE session_id = ?1",
+        "SELECT SUM(cost_usd) FROM node_costs WHERE session_id = ?1",
         [sid],
         |r| r.get::<_, Option<f64>>(0),
     )
@@ -1242,6 +1359,75 @@ mod tests {
             std::env::remove_var("FNO_BUS_DIR");
         }
         let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn store_aliases_fold_one_unregistered_agent_into_one_participant() {
+        // No registry rows: sutton mails twain by name, twain replies by its
+        // session id, and an older row addresses twain's tail-8 handle.
+        let twain = "02ee4d20-60ad-46fb-b3cd-3d84362fce89";
+        let sutton = "9a1b2c3d-1111-2222-3333-444455556666";
+        let root = temp_root("aliases");
+        let chats = root.join("chats");
+        let mut ask = msg("fmail-a1", "2026-10-20T10:00:00Z", "sutton", "twain", "ask");
+        ask["from_session"] = json!(sutton);
+        let mut reply = msg("fmail-a2", "2026-10-20T10:05:00Z", "twain", sutton, "reply");
+        reply["from_session"] = json!(twain);
+        write_chat(&chats, "chat-1111111111111111", &[ask]);
+        write_chat(&chats, "chat-2222222222222222", &[reply]);
+        write_chat(
+            &chats,
+            "chat-3333333333333333",
+            &[msg(
+                "fmail-a3",
+                "2026-10-20T09:00:00Z",
+                sutton,
+                "02ee4d20",
+                "old",
+            )],
+        );
+        let now = crate::state::rfc3339_like_to_secs("2026-10-20T12:00:00Z").unwrap();
+        let out = project_at(&chats, &[], now);
+        let keys: Vec<&str> = out["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["key"].as_str())
+            .collect();
+        assert_eq!(keys, vec![twain, sutton], "one participant per agent");
+        let threads = out["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 1, "both sides read one pair thread");
+        assert_eq!(threads[0]["rows"].as_array().unwrap().len(), 3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn details_cost_prices_transcript_tokens_and_never_fabricates_zero() {
+        let state = temp_root("details-cost");
+        std::fs::create_dir_all(state.join("cache")).unwrap();
+        std::fs::write(
+            state.join("cache/models-dev.json"),
+            r#"{"anthropic": {"models": {"claude-opus-5-5": {"cost": {
+                "input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0}}}}}"#,
+        )
+        .unwrap();
+        let tokens = crate::session_activity::Tokens {
+            input: 0,
+            output: 1_000_000,
+            cache_read: 1_000_000,
+            cache_write: 0,
+        };
+        let priced = details_cost(None, Some((tokens, Some("claude-opus-5-5"))), &state);
+        assert!((priced.unwrap() - 20.2).abs() < 1e-9);
+        assert_eq!(
+            details_cost(None, Some((tokens, Some("mystery-1"))), &state),
+            None
+        );
+        assert_eq!(
+            details_cost(Some(3.5), Some((tokens, Some("claude-opus-5-5"))), &state),
+            Some(3.5)
+        );
         let _ = std::fs::remove_dir_all(&state);
     }
 }

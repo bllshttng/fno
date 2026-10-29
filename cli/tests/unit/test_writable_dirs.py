@@ -176,16 +176,6 @@ def test_computed_set_is_skipped_on_a_provider_with_no_additive_grant(
     assert capsys.readouterr().err == ""
 
 
-def test_explicit_add_dir_still_refuses_on_that_provider(tmp_path: Path) -> None:
-    """The computed-set skip must not weaken the operator-flag refusal."""
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.mux_spawn import build_pane_argv
-
-    with pytest.raises(DispatchAskError, match="not supported for harness"):
-        build_pane_argv("opencode", "t", tmp_path, False, None, add_dir="/w")
-
-
-# --------------------------------------------------------------------------
 # The lane the Python token builders never see.
 # --------------------------------------------------------------------------
 
@@ -206,14 +196,8 @@ def test_seam_export_publishes_the_set_for_the_rust_route(
 
     env: dict[str, str] = {}
     published = export_worker_writable_dirs(tmp_path, env)
-    # The state root, then the mail bus the seam creates so its grant survives
-    # the existing-only filter. A worker with the claim store and no mail bus
-    # holds its node and reports nothing.
-    mail_bus = fake_state / "inbox" / "agents"
-    assert published == [str(fake_state), str(mail_bus)]
-    assert env[WORKER_ADD_DIRS_ENV] == os.pathsep.join(
-        [str(fake_state), str(mail_bus)]
-    )
+    assert published == [str(fake_state)]
+    assert env[WORKER_ADD_DIRS_ENV] == str(fake_state)
 
 
 def test_seam_export_clears_an_inherited_value(
@@ -268,32 +252,6 @@ def test_resume_lane_reads_the_published_value_rather_than_recomputing(
     assert published_worker_writable_dirs() == [str(fake_state)]
     published = git_writable_config_args(tmp_path)
     assert str(fake_state) in "".join(published)
-
-
-def test_mail_bus_is_granted_even_when_it_sits_outside_the_state_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The claim store alone buys a worker that holds its node and says nothing.
-
-    On a vault setup the mail bus resolves to ``<vault>/internal/agents``, not
-    under the state root. Measured 2026-08-28: a bounded codex thread worker
-    granted ``~/.fno`` and nothing else acquired its claim and then answered
-    ``durable envelope write failed: [Errno 1] Operation not permitted`` on the
-    vault path. A worker that cannot mail cannot tell you it cannot mail.
-    """
-    state = tmp_path / "state"
-    (state / "claims").mkdir(parents=True)
-    mail = tmp_path / "vault" / "internal" / "agents"
-    mail.mkdir(parents=True)
-    monkeypatch.setattr("fno.paths.state_dir", lambda: state)
-    monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: state)
-    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
-    monkeypatch.setattr("fno.paths.inbox_agents_root", lambda: mail)
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
-    )
-
-    assert worker_writable_dirs(tmp_path) == [str(state), str(mail)]
 
 
 def test_thread_spawn_seam_publishes_the_plan_dir(

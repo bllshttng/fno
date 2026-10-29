@@ -37,7 +37,6 @@ import os
 import random
 import re
 import sys
-import tempfile
 import time
 import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
@@ -58,6 +57,7 @@ from fno.harness_identity import (
 )
 from fno.state_fence import refuse_source_ahead_write, running_from_source
 from fno.time_budget import validate_timeout_budget
+from fno.harness_names import known_providers
 
 # registry.status is a projection of state.status (LD10), so it can be ANY
 # AgentStatus variant. The daemon writes "live" on spawn and "exited" on child
@@ -68,7 +68,7 @@ from fno.time_budget import validate_timeout_budget
 # AgentStatus vocabulary (mirrors crates/fno-agents/src/lib.rs AgentStatus and
 # the status-v1 schema); it accepts every valid projected status while still
 # rejecting garbage. Must stay in lockstep with the Rust strict reader
-# (crates/fno-agents/src/client_verbs.rs::KNOWN_STATUSES).
+# (crates/fno-agents/src/client_commands.rs::KNOWN_STATUSES).
 AgentStatus = Literal[
     "spawning",
     "ready",
@@ -117,33 +117,16 @@ TERMINAL_STATUSES = frozenset({"exited", "orphaned", "failed", "permanent_dead"}
 # stays load_registry-readable from Python instead of bricking the registry.
 KNOWN_HOST_MODES = frozenset({"exec", "interactive", "attached"})
 
-# Single source of truth for "which stored field is a harness's resume
-# target". Consumed by both AgentEntry.session_id (real entries) and
-# resume_cli._session_id_for (duck-typed against test fakes), so the
-# harness -> field mapping lives in exactly one place and cannot drift
-# between the two. Keyed on the row's harness: identity is one axis.
-# At v10 the legacy per-provider id fields are gone, so codex/gemini
-# resume off the canonical harness_session_id; claude still attaches by the
-# 8-hex jobId in short_id (a distinct transport key, not removed).
-# pi joined at. Two consumers reach this map WITHOUT the
-# harness_session_id fallback that AgentEntry.session_id and
-# _session_id_for apply: `register_session` below raises on an unmapped
-# harness, and `discover._discover_from_registry` skips the row. So a
-# harness the capability contract already supports has to be here, not
-# merely rescued by the fallback. Admitting pi puts it exactly where
-# gemini/agy/opencode already sit -- no transcript store of its own, so its
-# rows resolve with truth_state unknown and the shared classify_reachability
-# decides, rather than a new per-harness liveness opinion.
+# The one session-id field EXCEPTION. claude attaches by the 8-hex jobId in
+# `short_id`, a distinct transport key; every other harness stores and resumes
+# by the canonical `harness_session_id`, which AgentEntry.session_id,
+# resume_cli._session_id_for and the events push all fall back to -- so the
+# map carries no per-name arm for them and a new harness edits nothing here.
+# The known-harness GATE that used to live in this map's membership now reads
+# the Rust roster (`fno.harness_names.known_providers()`), so register_session
+# and discovery admit a new harness without a Python edit.
 HARNESS_SESSION_ID_FIELDS = {
     "claude": "short_id",
-    "codex": "harness_session_id",
-    "gemini": "harness_session_id",
-    "agy": "harness_session_id",
-    "opencode": "harness_session_id",
-    "pi": "harness_session_id",
-    "cursor-agent": "harness_session_id",
-    "grok": "harness_session_id",
-    "zcode": "harness_session_id",
 }
 
 # The registry's legacy per-harness session-id keys. Distinct from the
@@ -420,7 +403,7 @@ class AgentEntry:
     # None/absent means "an operator asked for this directly." Format is
     # "<dispatcher>:<reason>", e.g. "think_spawn:work-start" or
     # "think_spawn:conversational" - the only producer today is
-    # fno.provenance.spawn_think._spawn_think_worker. Before the only
+    # the Rust think dispatch (think_dispatch.rs). Before the only
     # evidence for "did a birth trigger spawn this?" was a timestamp gap
     # between a node's created_at and a worker's registry row.
     spawn_trigger: Optional[str] = None
@@ -528,7 +511,7 @@ class AgentEntry:
     # fno's own stop (v32): ``{"by", "at", "reason"?}``; Rust stamps, Python custodies (X3).
     stop: Optional[dict] = None
     # Mux hosting ref (4a-G2): ``{"session": <mux session>, "pane_id": <u64>}``
-    # for an agent whose PTY is a mux pane (``fno agents spawn --substrate
+    # for an agent whose PTY is a mux pane (``fno agents spawn``,
     # pane``); ``None`` for daemon-worker, bg-thread, and headless rows. The
     # Python spawn back half writes it; the mux server's sideline reader and
     # ``fno agents mail`` live-inject dispatch on it (a row carries exactly ONE live
@@ -708,11 +691,12 @@ class AgentEntry:
         Falling back to ``harness_session_id`` keeps such a row resumable
         instead of reporting "no session id" for a row that has one.
 
-        The harness -> field mapping comes from the module-level
-        :data:`HARNESS_SESSION_ID_FIELDS`, which ``resume_cli._session_id_for``
-        also reads, so the two cannot drift. Keyed on ``harness`` (the
-        sole identity axis). As a ``@property`` this is excluded from ``asdict``
-        serialization and never becomes an on-disk storage field.
+        The one field exception comes from the module-level
+        :data:`HARNESS_SESSION_ID_FIELDS` (claude), which
+        ``resume_cli._session_id_for`` also reads, so the two cannot drift;
+        every other harness resolves ``harness_session_id`` below. Keyed on
+        ``harness`` (the sole identity axis). As a ``@property`` this is excluded
+        from ``asdict`` serialization and never becomes an on-disk storage field.
         """
         field_name = HARNESS_SESSION_ID_FIELDS.get(self.harness)
         # `short_id` is a str defaulting to "" (never None); normalize the
@@ -773,9 +757,9 @@ def mint_agent_entry(
 
 # ---------------------------------------------------------------------------
 # Shared identifier resolver: every session-connecting `fno agents`
-# verb accepts the registry name, full harness session id, explicit transport
+# command accepts the registry name, full harness session id, explicit transport
 # short id, canonical handle, or legacy prefix. This function is the single
-# lookup choke point so no verb re-implements a name-only `.find`.
+# lookup choke point so no command re-implements a name-only `.find`.
 # ---------------------------------------------------------------------------
 
 # Exactly eight lowercase hex characters, used only when deciding whether a
@@ -789,7 +773,7 @@ class AgentResolutionError(RuntimeError):
 
     ``exit_code`` defaults to 2 (the lifecycle name-not-found convention) for a
     caller that maps the error straight through (``raise typer.Exit(exc.exit_code)``,
-    e.g. ``watch``). Verbs with their own convention still override it — resume
+    e.g. ``watch``). Commands with their own convention still override it — resume
     reports 13, trace/stop/rm map through their existing not-found path — so this
     default is the fallback, not a universal choke point.
 
@@ -819,9 +803,9 @@ class AgentResolutionError(RuntimeError):
 class ResolvedAgent:
     """The entry a token resolved to, plus which rule matched.
 
-    ``worker_short_id`` is the transport handle a session-connecting verb
+    ``worker_short_id`` is the transport handle a session-connecting command
     shells out with (``claude attach/logs <short>`` etc.); ``None`` when the
-    row recorded no short (a pre-heal claude row) so the verb can raise its own
+    row recorded no short (a pre-heal claude row) so the command can raise its own
     explicit "no short id on file" error instead of shelling an empty arg.
 
     ``matched_session_id`` is the exact id on the winning row the token named,
@@ -912,7 +896,7 @@ def resolve_agent_in(entries: list, token: str) -> ResolvedAgent:
     preserves case.
 
     ``getattr``-based, so both real ``AgentEntry`` rows and duck-typed rows (a
-    verb that injects its own registry loader) resolve identically. Raises
+    command that injects its own registry loader) resolve identically. Raises
     :class:`AgentResolutionError` (exit 2) on empty/unknown/ambiguous."""
     token = (token or "").strip()
     if not token:
@@ -944,14 +928,12 @@ def resolve_agent(
     token: str,
     *,
     path: Optional[Path] = None,
-    scope_cwd: Optional[str] = None,
-    cross_project: bool = False,
 ) -> ResolvedAgent:
     """Resolve ``token`` to one registry entry, loading the registry first.
 
     Wraps :func:`resolve_agent_in`; a malformed/unreadable registry becomes a
     typed unavailable :class:`AgentResolutionError`, never a traceback leaking
-    to the verb. See ``resolve_agent_in`` for the matching rules.
+    to the command. See ``resolve_agent_in`` for the matching rules.
 
     A full session id and an ordinary name resolve from the registry directly.
     Every session-shaped short token is checked against the harness stores too:
@@ -966,13 +948,7 @@ def resolve_agent(
             f"registry unreadable ({exc}); cannot resolve {token!r}",
             unavailable=True,
         ) from exc
-    return resolve_agent_across_sources(
-        entries,
-        token,
-        path=path,
-        scope_cwd=scope_cwd,
-        cross_project=cross_project,
-    )
+    return resolve_agent_across_sources(entries, token, path=path)
 
 
 def resolve_agent_across_sources(
@@ -980,14 +956,12 @@ def resolve_agent_across_sources(
     token: str,
     *,
     path: Optional[Path] = None,
-    scope_cwd: Optional[str] = None,
-    cross_project: bool = False,
 ) -> ResolvedAgent:
     """Resolve one token against a registry snapshot and every harness store.
 
-    ``scope_cwd`` and ``cross_project`` are selection inputs only. They flow to
-    the single store-healing owner so every caller keeps the same confinement
-    and complete-namespace rules.
+    Resolution is machine-wide: a store hit adopts from any project (the
+    retired ``--cross-project`` flag had authorized exactly that), so the
+    single store-healing owner takes no selection inputs.
     """
     try:
         return resolve_registered_agent_across_sources(entries, token)
@@ -1000,8 +974,6 @@ def resolve_agent_across_sources(
         entry = resolve_from_harness_store(
             token,
             registry_path=path,
-            scope_cwd=scope_cwd,
-            cross_project=cross_project,
         )
         if entry is None:
             raise
@@ -1012,7 +984,7 @@ def resolve_registered_agent_across_sources(entries: list, token: str) -> Resolv
     """Resolve a registry row while checking store-only collision candidates.
 
     A registry miss stays a miss and never adopts a store-only session. Registry-
-    gated read and delivery verbs use this to share the all-source ambiguity rule
+    gated read and delivery commands use this to share the all-source ambiguity rule
     without changing their established miss contract.
     """
     resolved = resolve_agent_in(entries, token)
@@ -1098,7 +1070,6 @@ def _ensure_unique_across_stores(
 
 def resolve_from_harness_store(
     token: str, *, registry_path: Optional[Path] = None,
-    scope_cwd: Optional[str] = None, cross_project: bool = False,
 ) -> Optional[AgentEntry]:
     """The registry-miss healer, isolated so every resolution surface
     reaches it identically -- including ``resume``, which loads its own entries
@@ -1108,15 +1079,12 @@ def resolve_from_harness_store(
     unchanged error. Propagates :class:`AgentResolutionError` on an ambiguous
     token: refusing to guess is the designed outcome, not a miss.
 
-    ``scope_cwd``/``cross_project`` carry the project-confinement contract
-    through to :func:`heal_from_harness_store`; the default (process cwd, no
-    override) confines adoption to the caller's project. ``resume`` bypasses this
-    healer entirely, so it is uncovered by design."""
+    Healing is machine-wide: adoption resolves from any project. ``resume``
+    bypasses this healer entirely, so it is uncovered by design."""
     from fno.agents.store_fallback import heal_from_harness_store
 
     return heal_from_harness_store(
         token, registry_path=registry_path,
-        scope_cwd=scope_cwd, cross_project=cross_project,
     )
 
 
@@ -1334,36 +1302,6 @@ def _validate_resolvable_handle(entry: AgentEntry) -> None:
     )
 
 
-class RegistryWriteRefused(RuntimeError):
-    """The shared-registry write guard, Python's mirror of ``registry_guard::check``."""
-
-
-def _refuse_probe_or_row_loss_write(target: Path, raw: Optional[dict], entries: list) -> None:
-    # Protect the shared runtime registry under the ambient home, even when
-    # config redirects writes. The Rust interop uses plain python3, and the
-    # declared-home branch matches the first resolution its fixtures seed.
-    sh = (paths.agents_home_dir() / "registry.json").resolve()
-    if sh != target.resolve() or sh.is_relative_to(Path(tempfile.gettempdir()).resolve()):
-        return  # another target is the caller's own store; a sandboxed HOME has no real registry
-    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("FNO_TEST_HERMETIC") == "1":
-        raise RegistryWriteRefused(
-            f"refusing {target}: a test or probe process never writes the shared registry; "
-            "pin its own home (FNO_AGENTS_HOME) instead."
-        )
-    if os.environ.get("FNO_REGISTRY_ALLOW_ROW_LOSS") == "1":
-        return
-    live = _OWNERSHIP_LIVE_STATUSES
-    before = sum(
-        r.get("status") in live for r in (raw or {}).get("agents", []) if isinstance(r, dict)
-    )
-    after = sum(e.status in live for e in entries)
-    if before >= 2 and after * 2 < before:
-        raise RegistryWriteRefused(
-            f"refusing {target}: this write drops live registry rows from {before} to {after}; "
-            "set FNO_REGISTRY_ALLOW_ROW_LOSS=1 when the drop is deliberate."
-        )
-
-
 def write_registry(
     entries: list[AgentEntry], path: Optional[Path] = None, *, revision: Optional[int] = None
 ) -> None:
@@ -1388,7 +1326,6 @@ def write_registry(
         raise RegistryRevisionConflict(f"revision_conflict: {target} moved past {revision}")
     revision = current
     _refuse_source_ahead_schema_bump(raw, target)
-    _refuse_probe_or_row_loss_write(target, raw, entries)
     existing = _existing_row_names(raw)
     for e in entries:
         _validate_single_live_ref(e)
@@ -1409,154 +1346,8 @@ def write_registry(
 #: Constructor keys of ``AgentEntry``, derived rather than listed so a new
 #: field never has to be remembered here. Used on the read-forward path, to
 #: drop keys a newer writer added after this fno was built, and by the repair
-#: verb, to decide which keys a rollback would be discarding.
+#: command, to decide which keys a rollback would be discarding.
 _INIT_FIELD_NAMES = frozenset(f.name for f in fields(AgentEntry) if f.init)
-
-
-class RegistryRepairRefused(RuntimeError):
-    """The repair verb refused rather than guessing. Never a partial write."""
-
-
-@dataclass(frozen=True)
-class RegistryRepairPlan:
-    """What a repair would drop, whether or not it was applied."""
-
-    path: Path
-    on_disk: int
-    to_version: int
-    #: row name -> the newer-schema keys this repair discards, all of them empty
-    dropped: dict[str, list[str]]
-    backup: Optional[Path] = None
-
-
-def _plan_registry_schema_repair(
-    raw: object, target: Path, to_version: int
-) -> tuple[dict, RegistryRepairPlan]:
-    """Decide the repair, or refuse. Pure: reads nothing, writes nothing."""
-    if not isinstance(raw, dict):
-        raise RegistryRepairRefused(
-            f"refusing to repair {target}: it is absent, empty, or not a JSON "
-            "object. A torn file is damage, not a version to roll back, and "
-            "this verb never guesses at what the rows were."
-        )
-    on_disk = raw.get("schema_version")
-    if not isinstance(on_disk, int):
-        raise RegistryRepairRefused(
-            f"refusing to repair {target}: schema_version is "
-            f"{on_disk!r}, not an integer."
-        )
-    if on_disk <= to_version:
-        raise RegistryRepairRefused(
-            f"refusing to repair {target}: on-disk schema_version={on_disk} is "
-            f"not above the requested --to {to_version}. This verb only rolls "
-            "a version DOWN; raising one is the deployed writer's job."
-        )
-    agents = raw.get("agents")
-    if not isinstance(agents, list):
-        raise RegistryRepairRefused(
-            f"refusing to repair {target}: 'agents' is {type(agents).__name__}, "
-            "not a list."
-        )
-    dropped: dict[str, list[str]] = {}
-    carrying: list[str] = []
-    for index, row in enumerate(agents):
-        if not isinstance(row, dict):
-            raise RegistryRepairRefused(
-                f"refusing to repair {target}: row {index} is not an object."
-            )
-        raw_name = row.get("name")
-        name = raw_name if isinstance(raw_name, str) else f"<row {index}>"
-        # A poisoned file can carry duplicate names, and the report is keyed by
-        # name: without this, the second row's keys would overwrite the first's
-        # and the preview would name one row where two are dropping data. The
-        # write below still visits every row, so only the report was at risk.
-        if name in dropped:
-            name = f"{name} (row {index})"
-        unknown = [k for k in row if k not in _INIT_FIELD_NAMES]
-        if not unknown:
-            continue
-        # None and an empty string, list, or object read as "the newer schema
-        # added this field and nothing ever wrote it". Everything else is data,
-        # 0 and False included: those are values a newer schema meant to store.
-        empty = [k for k in unknown if row[k] is None or row[k] in ("", [], {})]
-        real = [k for k in unknown if k not in empty]
-        if real:
-            carrying.append(f"{name}: {', '.join(sorted(real))}")
-        if empty:
-            dropped[name] = sorted(empty)
-    if carrying:
-        raise RegistryRepairRefused(
-            f"refusing to repair {target}: rolling schema_version={on_disk} back "
-            f"to {to_version} would DISCARD data these rows carry - "
-            + "; ".join(carrying)
-            + ". The 2026-08-28 rollback was lossless only because every row "
-            "happened to carry the newer fields empty; this is the assertion "
-            "that ends that luck. Deploy the newer schema instead."
-        )
-    plan = RegistryRepairPlan(
-        path=target, on_disk=on_disk, to_version=to_version, dropped=dropped
-    )
-    return raw, plan
-
-
-def repair_registry_schema(
-    to_version: int,
-    *,
-    path: Optional[Path] = None,
-    apply: bool = False,
-    lock_timeout: Optional[float] = None,
-) -> RegistryRepairPlan:
-    """Roll a poisoned registry's ``schema_version`` back down, under the lock.
-
-    The script the operator ran by hand on 2026-08-28, and whose
-    ``.bak.poison-repair`` sibling shows someone ran on 2026-08-09. Twice by
-    hand is a verb. Five steps, in this order, refusing rather than guessing at
-    any of them:
-
-    1. hold the registry-wide lock, so a live file is never repaired unlocked;
-    2. read the raw JSON, and refuse anything not strictly above ``to_version``;
-    3. assert no row carries a key this fno does not know with a real value;
-    4. write a timestamped backup beside the file;
-    5. drop the empty unknown keys, set the integer, replace atomically.
-
-    Step 3 is the point of the verb. Prevention (the write guard) drives this
-    verb's expected frequency toward zero, but prevention is not retroactive: a
-    worktree that already raised the shared file leaves a state only a hand edit
-    clears.
-
-    Dry run by default; ``apply=True`` performs it.
-    """
-    target = _registry_path(path)
-    with _hold_registry_lock(target, timeout=lock_timeout):
-        from fno.registry_door import (
-            RegistryDoorError,
-            commit_registry_document,
-            read_registry_document,
-        )
-
-        try:
-            raw, revision = read_registry_document(target)
-        except RegistryDoorError as exc:
-            raise RegistryRepairRefused(
-                f"refusing to repair {target}: could not read it ({exc})."
-            ) from exc
-        raw, plan = _plan_registry_schema_repair(raw, target, to_version)
-        if not apply:
-            return plan
-        _refuse_probe_or_row_loss_write(target, raw, raw["agents"])
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup = target.with_name(f"{target.name}.bak.schema-repair-{stamp}")
-        backup.write_text(_json_dumps(raw, indent=2, sort_keys=False), encoding="utf-8")
-        raw["schema_version"] = to_version
-        raw["agents"] = [
-            {k: v for k, v in row.items() if k in _INIT_FIELD_NAMES}
-            for row in raw["agents"]
-        ]
-        try:
-            commit_registry_document(target, {**raw, "replace": True}, revision)
-        except RegistryDoorError as exc:
-            raise RegistryRepairRefused(f"refusing to repair {target}: {exc}") from exc
-        return replace(plan, backup=backup)
 
 
 def _is_identity_token(value: object) -> bool:
@@ -1568,7 +1359,7 @@ def _is_identity_token(value: object) -> bool:
     alien harness (it degrades to durable routing, posture), and
     dispatch capability is gated separately at the spawn/ask seam. This still
     rejects genuine corruption -- empty, non-string, or whitespace-bearing
-    identity. Mirrors Rust ``client_verbs::is_identity_token``.
+    identity. Mirrors Rust ``client_commands::is_identity_token``.
     """
     return (
         isinstance(value, str)
@@ -1708,11 +1499,19 @@ def spawn_row_session_ids(harness: str, registry_path: Optional[Path] = None) ->
 
 
 class LoadedRegistry(list[AgentEntry]):
-    """Registry rows, whether a forward read kept every raw row, and the read revision."""
+    """Registry rows, whether a forward read kept every raw row, and the read revision.
 
-    def __init__(self, rows=(), *, complete: bool = True, revision=None) -> None:
+    ``complete`` is false on any forward read: a row may lack a newer field.
+    ``rows_complete`` is false only when a row was skipped, so a reader that
+    counts rows by fields this fno knows (pid, status) can trust a forward read.
+    """
+
+    def __init__(
+        self, rows=(), *, complete: bool = True, rows_complete: bool | None = None, revision=None
+    ) -> None:
         super().__init__(rows)
         self.complete = complete
+        self.rows_complete = complete if rows_complete is None else rows_complete
         self.revision = revision
 
 
@@ -1973,7 +1772,12 @@ def load_registry(path: Optional[Path] = None) -> list[AgentEntry]:
             "are invisible to this process until it is upgraded.",
             file=sys.stderr,
         )
-    return LoadedRegistry(entries, complete=not read_forward and not skipped_rows, revision=rev)
+    return LoadedRegistry(
+        entries,
+        complete=not read_forward and not skipped_rows,
+        rows_complete=not skipped_rows,
+        revision=rev,
+    )
 
 
 def register_existing_session(
@@ -2018,12 +1822,12 @@ def register_existing_session(
     """
     # ``provider`` was the old spelling for the harness. Keep that call shape
     # working, but when both axes are supplied treat it as the model vendor.
-    if harness is None and provider in HARNESS_SESSION_ID_FIELDS:
+    if harness is None and provider in known_providers():
         harness, provider = provider, None
-    if harness not in HARNESS_SESSION_ID_FIELDS:
+    if harness not in known_providers():
         raise ValueError(
             f"unknown harness for registration: {harness or provider!r}; "
-            f"known: {sorted(HARNESS_SESSION_ID_FIELDS)}"
+            f"known: {sorted(known_providers())}"
         )
     if not session_id:
         raise ValueError("session_id must be non-empty")
@@ -2040,7 +1844,7 @@ def register_existing_session(
             "session-start restamp keeps the existing row pointed at this session"
         )
 
-    session_field = HARNESS_SESSION_ID_FIELDS[harness]
+    session_field = "short_id" if harness == "claude" else "harness_session_id"
 
     # A hand-started session has NO live messaging transport (no daemon PTY,
     # no bg jobId/socket): a peer cannot inject into it. Registering it "live"
@@ -2060,9 +1864,11 @@ def register_existing_session(
     _REGISTERED_STATUS: AgentStatus = status or "idle"
 
     # A restore can strip a row's stamp; a manifest naming this session re-stamps it when bare.
-    from fno.lead.state import manifest_role_for_session
+    from fno.agents.role import lead_manifest_call
 
-    manifest_role = manifest_role_for_session(session_id, owner_cwd=cwd)
+    manifest_role = lead_manifest_call(
+        "for-session", session_id=session_id, owner_cwd=str(cwd or "")
+    ).get("fields")
 
     def _apply_manifest_role(entry: AgentEntry) -> None:
         if manifest_role and not entry.role_scope:
@@ -2371,7 +2177,7 @@ def _arm_role_after_identification(entry: AgentEntry, session_id: str) -> None:
     if entry.role_level is None or not entry.role_scope:
         return
     try:
-        from fno.lead.state import arm_lead_manifest
+        from fno.agents.role import arm_lead_manifest
 
         arm_lead_manifest(entry.role_scope, session_id, row=entry)
     except (OSError, ValueError) as exc:
@@ -2621,9 +2427,9 @@ SESSION_OBSERVATION_OUTCOMES = (
 
 def _flush_pending_session_row(entry: AgentEntry, session_id: str) -> None:
     from fno.paths import agents_registry_path, graph_json
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
     try:
-        verb_call("pending-session-row", {"action": "open", "name": entry.name,
+        command_call("pending-session-row", {"action": "open", "name": entry.name,
                  "session_id": session_id, "graph": str(graph_json()),
                  "registry": str(agents_registry_path())})
     except (Exception, SystemExit) as exc:  # noqa: BLE001 - never fail the stamp

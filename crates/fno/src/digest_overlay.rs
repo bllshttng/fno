@@ -838,6 +838,34 @@ pub fn threshold_secs(cwd: &Path) -> u64 {
         // saturating: an absurd configured minutes value must not overflow.
         .saturating_mul(60)
 }
+/// `config.mux.wheel_lines` (default 1, clamped 1..=50): lines one wheel
+/// notch scrolls a mux-interpreted pane. ONE by default because the host
+/// terminal already accumulated the trackpad into whole notches - a notch
+/// here IS one cell of finger travel. A wheel-mouse operator wanting the
+/// classic 3-notch step sets the key; SGR cannot tell a detent from a
+/// trackpad cell so the code does not guess.
+pub fn wheel_lines(cwd: &Path) -> i32 {
+    wheel_lines_from(mux_str(cwd, "wheel_lines"))
+}
+
+fn wheel_lines_from(v: Option<String>) -> i32 {
+    v.and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(1)
+        .clamp(1, 50)
+}
+
+/// `config.mux.wheel_passthrough_rate` (default 3, clamped 1..=100): wheel
+/// ticks forwarded per 100ms window to a mouse-owning pane's PTY. A
+/// deliberate notch stream (a few ticks/s) never gates; only the trackpad
+/// flood the budget clips. The v118 default dropped from the fixed 12: on a
+/// Claude Code / Codex pane the app multiplies each forwarded tick, so a
+/// flick read "too big, too fast".
+pub fn wheel_passthrough_rate(cwd: &Path) -> u32 {
+    mux_str(cwd, "wheel_passthrough_rate")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(3)
+        .clamp(1, 100)
+}
 
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
@@ -1031,7 +1059,8 @@ pub(crate) fn mux_restore_policy(cwd: &Path) -> MuxRestorePolicy {
 /// project tier would silently split those external callers off a project's
 /// sessions. Explicit isolation (`FNO_CONFIG`, inherited by every subprocess
 /// an isolated environment spawns) is the supported isolation for the mux.
-#[allow(dead_code)]
+// The only callers sit behind cfg(not(test)), so the test leg sees no call.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn config_explicit_top_str(key: &str) -> Option<String> {
     if let Some(explicit) = non_empty_env_os("FNO_CONFIG") {
         return read_top_file(&PathBuf::from(explicit), key);
@@ -1077,7 +1106,8 @@ pub(crate) fn global_config_toml() -> Option<PathBuf> {
 /// a lower-priority candidate (its `_prefer_toml` keeps both files). Exposed
 /// for the state-root resolver's divergence warning: a state_dir that lives
 /// only in this file is invisible to every TOML-only reader here.
-#[allow(dead_code)]
+// Its caller is cfg(not(test)) too, so the test leg sees no call.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn global_settings_yaml_sibling() -> Option<PathBuf> {
     non_empty_env("FNO_GLOBAL_SETTINGS_PATH")
         .map(PathBuf::from)
@@ -1135,7 +1165,6 @@ pub(crate) fn read_nested_file(
     )
 }
 
-#[allow(dead_code)]
 fn read_top_file(path: &Path, key: &str) -> Option<String> {
     read_top_value(&std::fs::read_to_string(path).ok()?, key)
 }

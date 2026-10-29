@@ -12,7 +12,7 @@ import pytest
 
 
 def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
-    """AC1-HP: KNOWN_HARNESSES is the COMPLETE supported roster - the ten
+    """AC1-HP: KNOWN_HARNESSES is the COMPLETE supported roster - the eleven
     capability-backed names plus hermes and openclaw, which host real sessions
     per docs/SETUP-*.md. The roster lives in Rust (provider.rs
     KNOWN_HARNESSES) and the import proxies it through the fno-agents
@@ -39,10 +39,11 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
         "openclaw",
         "zcode",
         "footnote",
+        "muse",
     }
     from fno.agents.harness_map import known_harnesses
 
-    # The capability-backed roster stays at ten; the wider names ride the
+    # The capability-backed roster stays at eleven; the wider names ride the
     # roster only, which is the asymmetry this change exists to declare.
     assert set(known_harnesses()) == {
         "claude",
@@ -55,6 +56,7 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
         "grok",
         "zcode",
         "footnote",
+        "muse",
     }
 
     # The door mechanics, folded under the test-delta declaration cap: the
@@ -62,15 +64,15 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
     # read refuses closed naming the remedy.
     import fno.harness_names as hn
 
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
     assert hn.known_harnesses() is hn.KNOWN_HARNESSES
 
     calls = []
 
-    def fake_read(verb, args=(), *, timeout=60, binary=None):
-        calls.append(verb)
-        return (None, {"known": ("alpha", "beta"), "providers": ("alpha",)})
+    def fake_read(command, args=(), *, timeout=60, binary=None):
+        calls.append(command)
+        return (None, {"known": ("alpha", "beta"), "providers": ("alpha",), "spawn": ("alpha",)})
 
     monkeypatch.setattr(hn, "_ROSTER", None, raising=False)
     monkeypatch.setattr(hn, "call_binary_json", fake_read)
@@ -89,7 +91,7 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
             sys.executable,
             "-c",
             "import fno.harness_names as hn; "
-            "hn.call_binary_json = lambda *a, **k: (None, {'known': ['alpha']}); "
+            "hn.call_binary_json = lambda *a, **k: (None, {'known': ['alpha'], 'providers': ['alpha'], 'spawn': ['alpha']}); "
             "from fno.agents.harnesses import READABLE_PROVIDERS; "
             "print(READABLE_PROVIDERS)",
         ],
@@ -104,7 +106,7 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
         hn, "call_binary_json", lambda *a, **k: ("fno-agents binary not found", None)
     )
     monkeypatch.setattr(hn, "_ROSTER", None, raising=False)
-    with pytest.raises(VerbUnavailable, match="fno doctor update"):
+    with pytest.raises(CommandUnavailable, match="fno doctor update"):
         hn.known_harnesses()
 
 
@@ -122,7 +124,7 @@ def test_thread_refusal_renders_from_the_roster_without_the_runtime():
     from fno.harness_names import unknown_thread_harness_message
 
     rostered = unknown_thread_harness_message("hermes")
-    assert "hermes has no measured thread lane yet; use --substrate pane." in rostered
+    assert "hermes has no measured thread lane yet; use --as pane." in rostered
     typo = unknown_thread_harness_message("claud")
     assert "use --substrate pane" not in typo
     assert "accepted here: " in typo

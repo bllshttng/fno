@@ -2,7 +2,7 @@
 //!
 //! Every door that re-enters a Claude session (`fno agents attach`, the dead
 //! and live resume arms, the mux attach/ResumeAgent gestures, the recovery
-//! verb) must restore the SAME launch context the worker was spawned with or
+//! command) must restore the SAME launch context the worker was spawned with or
 //! refuse before launching anything. Before this module each door rebuilt its
 //! own provider argv, and the account binding dispatch applies at spawn was
 //! applied on none of them - a worker launched under one account was
@@ -19,10 +19,9 @@
 //! - Secrets never cross this boundary. The plan carries PATHS and ids; the
 //!   route-settings file is opened only to prove it still records a route,
 //!   and no value read from it is ever emitted.
-//! - Account truth lives in the Python account store, so account resolution
-//!   shells `fno config accounts show <id> --print-binding` (the same
-//!   shells-don't-reimplement rule the loop's account picker follows). The
-//!   ambient `CLAUDE_CONFIG_DIR` is never consulted.
+//! - Account resolution reads the `accounts show --print-binding`
+//!   projection in process (`accounts::show::binding`), the one account
+//!   reader. The ambient `CLAUDE_CONFIG_DIR` is never consulted.
 //! - A proven default row (`launch_account: "default"`, no route file) keeps
 //!   the historical bare behavior: no account prefix, no settings flag. A
 //!   ROUTED or non-Anthropic row with an UNKNOWN account refuses, because
@@ -151,36 +150,11 @@ impl ReentryPlan {
 /// carries the refusal receipt (unknown account, unresolvable record).
 pub type AccountBinding = dyn Fn(&str) -> Result<Option<String>, String>;
 
-/// The production account resolver: shells the one implementation of account
-/// truth (the Python store) and parses its secret-free `--print-binding`
-/// projection. Same rule as the loop's picker: never reimplement the store.
-pub fn shell_account_binding(account_id: &str) -> Result<Option<String>, String> {
-    let out = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["config", "accounts", "show", account_id, "--print-binding"])
-        .output()
-        .map_err(|e| format!("could not run `fno config accounts show`: {e}"))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let reason = stderr
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .next_back()
-            .unwrap_or("no reason given");
-        return Err(reason.to_string());
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    for line in stdout.lines().map(str::trim) {
-        if let Some(dir) = line.strip_prefix("CLAUDE_CONFIG_DIR=") {
-            if !dir.is_empty() {
-                return Ok(Some(dir.to_string()));
-            }
-        }
-    }
-    // Exit 0 with no config-dir line: the account exists and rides the
-    // default namespace (an api-key lane). The id resolving is the fact; the
-    // namespace is the default slot.
-    Ok(None)
+/// The production account resolver: the `accounts show --print-binding`
+/// projection, answered in process.
+pub fn account_binding(account_id: &str) -> Result<Option<String>, String> {
+    let cwd = crate::accounts::show::pwd();
+    crate::accounts::show::binding(account_id, &cwd, &crate::accounts::env::Sources::system())
 }
 
 /// Prove the recorded route-settings file still records a route. Reads it,
@@ -656,9 +630,19 @@ fn resolve_reentry_inner(
                 None => true,
                 Some(route) => {
                     saved_job_settings(&claude_home.jobs_dir_for(&short_id).join("state.json"))
-                        .is_some_and(|saved| &saved == route)
+                        .is_some_and(|saved| same_route_file(&saved, route))
                 }
             };
+            // `claude --bg --resume` on a session a live process still holds
+            // starts a COPY under a new session id, and the copy then shows
+            // as a second worker. Refuse rather than fork.
+            if !(listed && job_keeps_route) && claude_home.session_held(&session_id) {
+                return Err(format!(
+                    "row {name:?}: a live process still holds session {session_id}, and \
+                     `claude --bg --resume` would start a copy of it under a new session id; \
+                     attach it with `claude attach {short_id}` or stop it first"
+                ));
+            }
             if listed && job_keeps_route {
                 mechanism = "respawn".to_string();
                 argv.push("claude".into());
@@ -670,6 +654,10 @@ fn resolve_reentry_inner(
                 argv.push("--bg".into());
                 argv.push("--resume".into());
                 argv.push(session_id.clone());
+                // A resume takes the title the transcript carries, which a
+                // retasked row has outgrown: the row's name is the truth.
+                argv.push("--name".into());
+                argv.push(entry.name.clone());
             }
         }
     }
@@ -685,6 +673,13 @@ fn resolve_reentry_inner(
         if let Some(path) = plan_route.as_deref() {
             argv.push("--settings".into());
             argv.push(path.to_string());
+        } else if mechanism == "bg-resume" {
+            // An unrouted revive starts a fresh process, and the attached
+            // view wears the theme that launch carries.
+            if let Some(theme) = crate::route_settings::claude_theme_env() {
+                argv.push("--settings".into());
+                argv.push(format!("{{\"theme\":\"{theme}\"}}"));
+            }
         }
     }
 
@@ -782,6 +777,27 @@ fn saved_job_settings(state: &Path) -> Option<String> {
     None
 }
 
+/// Whether a job's saved `--settings` file applies the plan's route. Claude
+/// reads only the file's bytes, so two paths with the same bytes are the same
+/// route: a lane alias (`lane-zai-flash.json`) and the hashed file it was
+/// written from both qualify. Comparing path strings sent such a revive to
+/// `claude --bg --resume`, which copies a session that is still held.
+fn same_route_file(saved: &str, route: &str) -> bool {
+    if saved == route {
+        return true;
+    }
+    match (std::fs::read(saved), std::fs::read(route)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The revive pane's script. A relaunch can take seconds, so the pane says
+/// what it waits on. A failed relaunch keeps its error on screen until Enter:
+/// a pane that just exits reads as a blank, dead tap. While it is held the
+/// seat counts as a live viewer, so a re-tap retries only after Enter.
+const REVIVE_SCRIPT: &str = r#"printf 'reviving %s...\n' "$0"; "$@" && exec claude attach "$0"; printf 'revive of %s failed (exit %s). Press Enter to close, then tap the row to retry.\n' "$0" "$?"; read -r _"#;
+
 /// One argv that runs the relaunch, then becomes `claude attach <short>`:
 /// the revive's pane shows the session it just brought back. The ids ride as
 /// positional arguments, never spliced into the script text.
@@ -789,7 +805,7 @@ fn relaunch_then_attach(relaunch: Vec<String>, short_id: &str) -> Vec<String> {
     let mut argv = vec![
         "sh".to_string(),
         "-c".to_string(),
-        r#""$@" && exec claude attach "$0""#.to_string(),
+        REVIVE_SCRIPT.to_string(),
         short_id.to_string(),
     ];
     argv.extend(relaunch);
@@ -837,7 +853,7 @@ pub fn resolve_reentry(
         name,
         transition,
         select_session,
-        &shell_account_binding,
+        &account_binding,
         &crate::claude_ask::ClaudeHome::from_env(),
         cwd_override,
     )?;
@@ -1176,6 +1192,7 @@ mod tests {
             "aaaaaaaa",
             &["--settings", &dir.to_string_lossy()],
         );
+        let mut aliased = e.clone();
         let plan = resolve_reentry_with(
             &reg(vec![e]),
             "glm",
@@ -1214,6 +1231,45 @@ mod tests {
             plan.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
             Some("/acct/makers/cfg")
         );
+
+        // The saved launch names a different file with the same bytes (a lane
+        // alias beside its hashed source): still the row's route, so respawn
+        // keeps the id. A path-string compare sent this to `--bg --resume`.
+        let alias = std::env::temp_dir().join("reentry-test-route-a-alias.json");
+        std::fs::copy(&dir, &alias).unwrap();
+        aliased.route_settings_path = Some(alias.to_string_lossy().to_string());
+        let plan = resolve_reentry_with(
+            &reg(vec![aliased.clone()]),
+            "glm",
+            ReentryTransition::Resume,
+            None,
+            &binding_ok,
+            &home,
+            None,
+        )
+        .unwrap();
+        assert_eq!(plan.mechanism, "respawn");
+
+        // A real route change on a session a live process still holds would
+        // fork it under a new id, so the resume refuses instead.
+        let mut changed = std::fs::read(&dir).unwrap();
+        changed.push(b'\n');
+        std::fs::write(&alias, changed).unwrap();
+        let live_home = home
+            .clone()
+            .with_live_sessions(vec!["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into()]);
+        let err = resolve_reentry_with(
+            &reg(vec![aliased]),
+            "glm",
+            ReentryTransition::Resume,
+            None,
+            &binding_ok,
+            &live_home,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("would start a copy"), "{err}");
+        std::fs::remove_file(&alias).ok();
 
         // The ATTACH arm is a fresh interactive launch: there the recorded
         // route DOES ride the argv as --settings.
@@ -1655,7 +1711,7 @@ mod tests {
                 vec![
                     "sh",
                     "-c",
-                    r#""$@" && exec claude attach "$0""#,
+                    REVIVE_SCRIPT,
                     "9a1b2c3d",
                     "claude",
                     "respawn",
@@ -1672,7 +1728,7 @@ mod tests {
             &[
                 "sh",
                 "-c",
-                r#""$@" && exec claude attach "$0""#,
+                REVIVE_SCRIPT,
                 "9a1b2c3d",
                 "claude",
                 "--bg",
@@ -1721,6 +1777,8 @@ mod tests {
                 "--bg".to_string(),
                 "--resume".to_string(),
                 "9a1b2c3d-eeee-ffff-0000-111122223333".to_string(),
+                "--name".to_string(),
+                "paned".to_string(),
             ]
         );
 
@@ -1937,12 +1995,8 @@ mod tests {
         .unwrap_err();
         std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
         std::fs::remove_dir_all(&routes).ok();
-        assert!(
-            err.contains(
-                "fno agents spawn --resume 77770008-2222-3333-4444-555555555555 -P zai -m 'glm-5.3-flash[1m]'"
-            ),
-            "{err}"
-        );
+        assert!(err.contains("this resume restores no route"), "{err}");
+        assert!(err.contains("fno agents spawn --account <id>"), "{err}");
     }
 
     #[test]

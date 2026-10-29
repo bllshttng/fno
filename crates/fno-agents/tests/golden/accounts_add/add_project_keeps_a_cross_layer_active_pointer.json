@@ -1,0 +1,58 @@
+{
+  "global": "# operator note: keep this comment\n[review]\nmax_rounds = 2\n\n[accounts]\nactive = \"work\"\nauto_switch = true\n\n[[accounts.records]]\nid = \"work\"\nname = \"work\"\nharness = \"claude\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\npriority = 10\ntags = [\"main\"]\n\n[accounts.quota]\ndefer_dispatch = true\n",
+  "project": "[accounts]\nactive = \"work\"\n",
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "managed",
+    "-s",
+    "project"
+  ],
+  "expect": {
+    "exit": 0,
+    "stdout": "Account 'alpha' added (scope=project).\n",
+    "stderr": "",
+    "global": {
+      "review": {
+        "max_rounds": 2
+      },
+      "accounts": {
+        "active": "work",
+        "auto_switch": true,
+        "records": [
+          {
+            "id": "work",
+            "name": "work",
+            "harness": "claude",
+            "auth": "oauth_dir",
+            "credentials_source": "<TMP>/creds",
+            "priority": 10,
+            "tags": [
+              "main"
+            ]
+          }
+        ],
+        "quota": {
+          "defer_dispatch": true
+        }
+      }
+    },
+    "project": {
+      "accounts": {
+        "active": "work",
+        "records": [
+          {
+            "id": "alpha",
+            "name": "alpha",
+            "harness": "claude",
+            "auth": "managed",
+            "priority": 100,
+            "account_id": "alpha"
+          }
+        ]
+      }
+    }
+  }
+}

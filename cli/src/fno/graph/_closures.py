@@ -9,9 +9,9 @@ from __future__ import annotations
 
 def _strandable_epic_ids(entries: list[dict]) -> set[str]:
     """Open epics (parents) that pass ``children_all_closed`` - closeable now.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
-    from fno.graph._reconcile import _reopen_outranks_child_closes, children_all_closed
+    from fno.graph._reconcile import _reopen_holds_epic, children_all_closed
 
     children_by_parent: dict[str, list[dict]] = {}
     for e in entries:
@@ -27,7 +27,7 @@ def _strandable_epic_ids(entries: list[dict]) -> set[str]:
             parent is not None
             and not parent.get("completed_at")
             and children_all_closed(parent, kids)
-            and not _reopen_outranks_child_closes(parent, kids)
+            and not _reopen_holds_epic(parent, kids)
             and not (
                 parent.get("plan_path")
                 and not (parent.get("pr_number") or parent.get("additional_prs"))
@@ -39,7 +39,7 @@ def _strandable_epic_ids(entries: list[dict]) -> set[str]:
 
 def _sweep_close_done_epics(entries: list[dict]) -> list[str]:
     """Close every open epic whose children are all done (self-heal/migration).
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     # Local: graph/cli.py imports this module, so a module-level import back
     # into it would be a cycle.
@@ -123,7 +123,7 @@ def _cascade_close_contained(
     With ``merged_at`` the child reopen keys on the merge, not the owner's
     completed_at (the mutator stamps that with reconcile's wall clock moments
     before calling). Full contract:
-    docs/architecture/backlog-graph-verb-contracts.md
+    docs/architecture/backlog-graph-command-contracts.md
     """
     # Local: graph/cli.py imports this module, so a module-level import back
     # into it would be a cycle.
@@ -170,7 +170,7 @@ def _cascade_close_contained(
 def _strandable_contained_ids(entries: list[dict]) -> set[str]:
     """Open nodes whose delivery unit is ALREADY done - closeable right now.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.graph._reconcile import _reopen_outranks_child_closes
 

@@ -43,7 +43,7 @@ mod row_menu;
 mod sweep_scope;
 mod wire_version;
 mod workspace_folder;
-use wire_version::{server_has_splitdir, split_skew_notice};
+use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
 use sweep_scope::{build_sweep_modal, parse_sweep_receipt, sweep_apply_args, SweepCounts};
 
@@ -86,11 +86,11 @@ use crate::vt::ShellActivity;
 use crate::wordmark;
 use overlay_paint::{
     draw_lines_overlay, draw_overlay_layout, draw_popup_overlay, layout_lines_overlay,
-    OverlayAnchor, OverlayLayout,
+    overlay_text_cols, OverlayAnchor, OverlayLayout,
 };
 use theme_ground::LaunchTheme;
 // Re-exported for the test module's glob; the layout fns are the only callers.
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(crate) use overlay_paint::family_b_origin;
 
 mod row_stamp;
@@ -106,7 +106,7 @@ pub(crate) use name_fit::pad_to;
 /// How long to wait for a just-spawned server to accept.
 const SPAWN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One connect attempt on the attach path. Longer than the scriptable verbs'
+/// One connect attempt on the attach path. Longer than the scriptable commands'
 /// probe. A script refuses when it expires; a human attach says it is still
 /// waiting and tries again.
 const ATTACH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -158,13 +158,6 @@ const STATUS_ROWS: u16 = 1;
 /// Below this many terminal rows the bottom chrome (status row + which-key
 /// hint) auto-hides and the content area recovers the line (AC4-ERR).
 const MIN_ROWS_FOR_STATUS: u16 = TAB_BAR_ROWS + STATUS_ROWS + 5;
-/// The sideline footer's `+ new` and `menu` labels (US4). The menu
-/// button rides the existing new-workspace footer row's right edge when the
-/// panel is wide enough (see [`View::footer_menu_range`]). ASCII only: the
-/// former `☰` is an ambiguous-width glyph some terminals render wide, which
-/// displaced that row's whole line (the screenshot review's stray fragments).
-const FOOTER_NEW_LABEL: &str = "+ new workspace";
-const FOOTER_MENU: &str = "menu";
 /// How long a pending prefix chord waits before the hint bar paints.
 /// Zero: the bar paints at once; `prefix+?` shows the full table.
 const HINT_DELAY: Duration = Duration::ZERO;
@@ -798,8 +791,6 @@ pub(crate) struct View {
     /// The manual reorder sequence (agent names in display order) behind the
     /// Manual sort column, persisted.
     manual_order: Vec<String>,
-    /// Pinned agent names in pin order; they lead every sort.
-    pinned_agents: Vec<String>,
     /// Manual status-row toggle (prefix+s). Client-local and deliberately
     /// unpersisted: a reattach resets to on (AC4-FR).
     status_on: bool,
@@ -1005,6 +996,11 @@ pub(crate) struct View {
     /// input line / counter. Client-local: opening never sends a message and
     /// never reserves a row (no Resize -> no reflow -> no dropped highlight).
     search: Option<SearchView>,
+    /// (v118) Keyboard scroll mode (prefix+PgUp): stdin diverts to
+    /// `scroll_mode_keys`; the moves ride the shared server-side offset.
+    scroll_mode: bool,
+    /// Pending escape bytes in scroll mode, the `search_esc` contract.
+    scroll_esc: Vec<u8>,
     /// Pending escape bytes in search mode, carried ACROSS reads so a split
     /// arrow sequence can never half-close the search or leak its tail into the
     /// pane (same split-arrow safety as [`View::sel_esc`]).
@@ -1054,13 +1050,6 @@ pub(crate) struct View {
     share_tx: Option<share_flow::ShareTx>,
     /// Which settings tab is in front (general toggles / theme picker).
     settings_tab: SettingsTab,
-    /// Whether the which-key modal was opened FROM the settings modal (tab or
-    /// click on its keybindings section). Esc and the other pure-dismiss paths
-    /// return to the settings modal instead of dropping to the board; a run of
-    /// an actual chord closes for real. The keybindings section is a launcher
-    /// with no rows of its own, so `settings_tab` stays on the section the
-    /// user came from.
-    keys_modal_return: bool,
     /// `config.split.opens`: where the row menu's Split Direction toggle
     /// starts. Latched once at startup; the in-menu toggle flips and persists.
     split_opens: SplitOpens,
@@ -1130,6 +1119,8 @@ pub(crate) struct View {
     /// The esc-close spans the last compose painted: the one list a tap
     /// checks, whichever overlay drew them.
     close_chips: std::cell::RefCell<Vec<chrome::CloseSpan>>,
+    /// Card line 1's node span per agent name, as the last paint drew it.
+    card_node_spans: std::cell::RefCell<HashMap<String, Option<std::ops::Range<usize>>>>,
     /// The pending new-workspace name buffer, `Some` while the `+`
     /// create overlay is open. Keys divert to `overlay_keys::create_keys`: printable append,
     /// Backspace pops, Enter sends [`Command::NewSquad`] (empty keeps it open),
@@ -1231,6 +1222,8 @@ pub(crate) struct View {
     /// Split-CSI carry for the reply input (its own buffer, like `rename_esc`),
     /// so an arrow key mid-type never leaks a param byte into the buffer.
     peek_input_esc: Vec<u8>,
+    /// The peek paints docked under the sideline list (space's reply dock).
+    peek_docked: bool,
     /// The session-local active claude account: every mux-initiated
     /// worker spawn (prefix+g `DispatchNext`, a targeted `DispatchNode`)
     /// appends `--account <id>` while `Some`. Client-local ephemera like
@@ -1254,7 +1247,7 @@ pub(crate) struct View {
     /// Generation token, bumped per open/refresh so a read landing after
     /// the modal closed or refreshed again is discarded.
     conn_gen: u64,
-    /// A mutation/login verb wanted by a keypress; the run loop spawns
+    /// A mutation/login command wanted by a keypress; the run loop spawns
     /// it at loop top (the sender lives there, out of the stdin handler) and
     /// clears this. `(argv, child-env, is_login)`: `is_login` runs `fno mux pane
     /// run` (opens the login pane, keeps the pending notice), else a single-flight
@@ -1274,13 +1267,13 @@ pub(crate) struct View {
     /// An update-readiness probe is in flight; bounds concurrent
     /// probes to one, mirroring `conn_inflight`.
     update_probe_inflight: bool,
-    /// A pending sweep verb (counts probe or scoped apply) for the run
+    /// A pending sweep command (counts probe or scoped apply) for the run
     /// loop to spawn off the UI thread, mirroring `conn_action`.
     sweep_action: Option<SweepAction>,
     /// A queued release upgrade and its one-in-flight bound, mirroring the
     /// sweep pair. (The restart is not queued: its tap unwinds the run loop.)
-    update_verb_want: Option<release_check::Channel>,
-    update_verb_inflight: bool,
+    update_command_want: Option<release_check::Channel>,
+    update_command_inflight: bool,
     /// The update modal's restart tap detached the client; the detach exit reads this.
     restart_pending: bool,
     /// The open new-agent popup, or the RETAINED draft after Esc
@@ -1299,7 +1292,7 @@ pub(crate) struct View {
     /// A catalog probe is wanted/in flight (the update-probe discipline).
     catalog_want: bool,
     catalog_inflight: bool,
-    /// A sweep verb is in flight; one at a time, so a second tap queues
+    /// A sweep command is in flight; one at a time, so a second tap queues
     /// nothing and is told so.
     sweep_inflight: bool,
 }
@@ -1320,7 +1313,7 @@ enum SweepScope {
     Squads,
 }
 
-/// A sweep verb the run loop should spawn: a counts probe for the choice
+/// A sweep command the run loop should spawn: a counts probe for the choice
 /// modal, or an apply of one scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SweepAction {
@@ -1328,7 +1321,7 @@ enum SweepAction {
     Apply(SweepScope),
 }
 
-/// What a finished sweep verb reports back to the UI loop.
+/// What a finished sweep command reports back to the UI loop.
 #[derive(Debug, Clone)]
 enum SweepMsg {
     Counts(SweepCounts),
@@ -1431,7 +1424,7 @@ struct SearchView {
 /// under an open navigator is reflected at once.
 pub(crate) struct NavView {
     /// Incremental text filter (substring, case-insensitive) over row match
-    /// keys: label + pane id + node id + slug + workspace.
+    /// keys: the label plus the row's identity tokens ([`NavRow::match_key`]).
     query: String,
     /// The active state chip; `None` = all states. `Tab` cycles it.
     state_filter: Option<PaneState>,
@@ -1464,7 +1457,7 @@ pub(crate) struct PeekView {
     last_fetch: Instant,
     /// An auto-refresh request is in flight (armed, body not yet
     /// landed). Guards against stacking a new refresh every Layout push while a
-    /// slow `fno agents peek` is still running - without it a >3s peek read on a
+    /// slow `fno agents session peek` is still running - without it a >3s peek read on a
     /// busy row would supersede each response before it arrives and never settle.
     /// Cleared when any body lands (`apply_peek_body`).
     refresh_pending: bool,
@@ -1658,6 +1651,8 @@ enum MenuAction {
     PortalAt(Option<Dir>),
     /// Release the row's mail hold; built only on a row wearing a hold mark.
     ReleaseHold,
+    /// Pin or unpin the row's session: the keep mark no reaper passes.
+    TogglePin,
     /// Flip the Split Direction group's pane|portal toggle in-menu. Never
     /// reaches [`execute_row_menu_action`]: the execute path closes the menu,
     /// and the toggle's whole point is flipping BEFORE the arrow is pressed,
@@ -1669,7 +1664,7 @@ impl MenuAction {
     /// The stable id this action's in-menu accelerator is registered
     /// under in `keys::menu_bindings`, when it has one. The drawn hint and the
     /// dispatched byte both resolve through this id, so the key the menu
-    /// advertises and the key it answers cannot drift. The tab verbs and the
+    /// advertises and the key it answers cannot drift. The tab commands and the
     /// settled rename/close/remove pair carry one; everything else is
     /// Enter/click only and renders no key.
     fn accelerator_id(&self) -> Option<&'static str> {
@@ -1685,7 +1680,7 @@ impl MenuAction {
             }),
             MenuAction::TabMoveTo => Some("move-tab-to"),
             MenuAction::Remove => Some("remove-row"),
-            // The row-menu verbs join the keyboard: every entry that
+            // The row-menu commands join the keyboard: every entry that
             // can carry a key now shows one, and the drawn glyph and the
             // dispatched byte both resolve through the same menu-scope id.
             MenuAction::Stop => Some("stop-row"),
@@ -1698,6 +1693,7 @@ impl MenuAction {
             MenuAction::ClosePortal => Some("close-portal"),
             MenuAction::PortalPicker => Some("open-in-portal"),
             MenuAction::ReleaseHold => Some("release-hold"),
+            MenuAction::TogglePin => Some("pin-row"),
             MenuAction::ToggleSplitOpens => Some("toggle-split-opens"),
             _ => None,
         }
@@ -1787,6 +1783,10 @@ pub(crate) enum AuxAction {
     /// The whole-machine resource meter: flip the status-row meter, persist
     /// `resource_meter.enabled`, start or stop the sampler.
     ToggleResourceMeter,
+    /// Flip `agents.reserve_auto` (the daemon's OBS / editor reserve).
+    ToggleReserveAuto,
+    /// Clear the machine-wide fleet hold the status row names (prefix+U).
+    LiftHold,
     ToggleConfirmLifecycle,
     /// Apply the named mux theme now: swap the in-memory theme, then
     /// persist via `fno config set mux.theme`. The picker lists the shipped
@@ -1820,18 +1820,20 @@ mod experimental;
 mod lane_entry;
 mod node_detail;
 mod share_flow;
-pub(crate) use node_detail::wrap_line;
+pub(crate) use node_detail::{wrap_line, wrap_line_joined};
 mod editor;
 mod keys_settings;
 mod messages_detail;
 mod messages_reply;
 mod overlay_lines;
-pub(crate) use overlay_lines::{humanize_age, nav_overlay_lines, peek_overlay_lines};
+#[cfg(test)]
+pub(crate) use overlay_lines::nav_overlay_lines;
+pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
-mod org_detail;
-mod org_graph;
-mod org_table;
+mod org_pages;
+pub(crate) mod org_seats;
+mod org_tabs;
 mod overlay_paint;
 mod release_check;
 mod settings_modal;
@@ -1853,6 +1855,7 @@ pub(crate) mod input_field;
 mod input_folds;
 mod mail_input;
 mod overlay_keys;
+mod reply_dock;
 mod terminal_cursor;
 // The overlay key state machines live in the module; the re-import keeps
 // every existing bare-name caller (the tests' `use super::*` chain) resolving.
@@ -1860,6 +1863,8 @@ mod terminal_cursor;
 use overlay_keys::{answer_keys, move_to_keys, nav_goto, nav_keys, recruit_keys, rename_keys};
 
 mod bottom_row;
+
+mod scroll_mode;
 
 use input_folds::{
     fold_modal_keys, fold_nav_input, fold_search_input, fold_selector_keys,
@@ -1884,12 +1889,12 @@ fn begin_sweep_apply(view: &mut View, scope: SweepScope) {
     }
 }
 
-/// Run one `mux workspace prune` verb off the UI thread: a `--dry-run --json`
+/// Run one `mux workspace prune` command off the UI thread: a `--dry-run --json`
 /// probe for the choice modal's counts, or a scoped apply whose JSON receipt
 /// becomes the notice. Bounded so a wedged server cannot hold the UI loop's
 /// sweep slot forever; the counts parse fails loud rather than opening a
 /// modal with fabricated zeros.
-async fn run_sweep_verb(action: SweepAction) -> SweepMsg {
+async fn run_sweep_command(action: SweepAction) -> SweepMsg {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     let mut args = vec![
         "mux".to_string(),
@@ -1956,7 +1961,6 @@ impl View {
         let agent_group = view_store::load_agent_group();
         let show_card_head = view_store::load_card_head();
         let manual_order = view_store::load_manual_order();
-        let pinned_agents = view_store::load_pinned();
         // The stored intent, resolved once. Deliberately NOT clamped to
         // the current terminal here: `panel_w` clamps transiently on every paint,
         // and pre-clamping the stored value would let a small startup terminal
@@ -1978,7 +1982,6 @@ impl View {
             agent_group,
             show_card_head,
             manual_order,
-            pinned_agents,
             status_on: true,
             resource_meter_on: false,
             confirm_lifecycle: view_store::load_confirm_lifecycle(),
@@ -2044,7 +2047,7 @@ impl View {
             yard_gen: 0,
             org: crate::org_overlay::Panel::default(),
             digest: None,
-            notice: None,
+            notice: view_store::take_legacy_pins().map(agent_sort::legacy_pin_notice),
             reply_notice_tx: None,
             details_tx: None,
             next_reply_request_id: 1,
@@ -2054,6 +2057,8 @@ impl View {
             row_slot: None,
             search: None,
             search_esc: Vec::new(),
+            scroll_mode: false,
+            scroll_esc: Vec::new(),
             hover_focus: true,
             card_graph: crate::client::card_line::CardGraph::Activity,
             theme: Theme::default_theme(),
@@ -2078,7 +2083,6 @@ impl View {
             share: None,
             share_tx: None,
             settings_tab: SettingsTab::General,
-            keys_modal_return: false,
             split_opens: SplitOpens::Pane,
             lane: LaneColorsUi::default(),
             theme_import: theme_import_ui::ThemeImportUi::Idle,
@@ -2098,6 +2102,7 @@ impl View {
             confirm: None,
             modal_release_swallow: false,
             close_chips: Default::default(),
+            card_node_spans: Default::default(),
             create: None,
             folder_pick: Default::default(),
             create_esc: Vec::new(),
@@ -2119,6 +2124,7 @@ impl View {
             peek_seq: 0,
             peek_input: None,
             peek_input_esc: Vec::new(),
+            peek_docked: false,
             active_account: None,
             connections: None,
             conn_esc: Vec::new(),
@@ -2130,8 +2136,8 @@ impl View {
             update_probe_want: false,
             update_probe_inflight: false,
             sweep_action: None,
-            update_verb_want: None,
-            update_verb_inflight: false,
+            update_command_want: None,
+            update_command_inflight: false,
             restart_pending: false,
             sweep_inflight: false,
             launcher: None,
@@ -3116,11 +3122,11 @@ impl View {
     /// relative; the content origin is `(TAB_BAR_ROWS, left_chrome_w)`.
     fn hit_test(&self, row: u16, col: u16) -> Option<(u64, u16, u16)> {
         let left_w = self.left_chrome_w();
-        if row < TAB_BAR_ROWS || col < left_w {
+        let (cr, cc) = (row.checked_sub(TAB_BAR_ROWS)?, col.checked_sub(left_w)?);
+        // A pane cropped by a smaller window answers only inside it.
+        if !self.in_visible(cr, cc) {
             return None;
         }
-        let cr = row - TAB_BAR_ROWS;
-        let cc = col - left_w;
         for (pid, rect) in &self.layout.panes {
             // A framed pane answers for its CONTENT: the border ring is the
             // frame's own surface (it focuses, it never forwards), and the
@@ -3497,7 +3503,7 @@ impl View {
             return None;
         }
         let (cr, cc) = (row - TAB_BAR_ROWS, col - left_w);
-        let (a_rows, a_cols) = self.layout.area;
+        let (a_rows, a_cols) = self.visible_area();
         if a_rows == 0 || a_cols == 0 || cr >= a_rows || cc >= a_cols {
             return None;
         }
@@ -3908,49 +3914,6 @@ impl View {
         })
     }
 
-    /// The footer's two labels with their live key hints, and the menu
-    /// button's column range - one fn so the paint and the hit-test cannot
-    /// diverge. The hinted forms (`+ new workspace (N)`, `menu (M)`) resolve
-    /// through the live chord table (`key_for`), so a rebind relabels the
-    /// row; when the row cannot fit the hints, the bare forms keep the
-    /// button's seat (the density-button rule: the hint drops, the affordance
-    /// stays). A `None` range means no button at all: the panel is too
-    /// narrow, or a recruit-mark tally is competing for the row.
-    fn footer_labels(&self, panel_w: usize) -> (String, String, Option<std::ops::Range<usize>>) {
-        // last column is the divider
-        let tw = panel_w.saturating_sub(1);
-        let hint = |action: &str, bare: &str| match crate::keys::key_for(action) {
-            Some(k) => format!("{bare} ({k})"),
-            None => bare.to_string(),
-        };
-        let new_hinted = hint("new-workspace", FOOTER_NEW_LABEL);
-        let menu_hinted = hint("sideline-menu", FOOTER_MENU);
-        for (new_label, menu) in [
-            (&new_hinted, &menu_hinted),
-            (&FOOTER_NEW_LABEL.to_string(), &FOOTER_MENU.to_string()),
-        ] {
-            // Display columns, not char count: the menu trigram (U+2630) is
-            // two display columns, so a char-count range under-reserves by
-            // one and the button crosses the divider into the pane.
-            let mw = menu.chars().map(glyph_cols).sum::<usize>();
-            if self.marks.is_empty() && tw >= new_label.len() + 2 + mw {
-                return (new_label.clone(), menu.clone(), Some((tw - mw)..tw));
-            }
-        }
-        let bare_new = if self.marks.is_empty() {
-            FOOTER_NEW_LABEL.to_string()
-        } else {
-            format!("{FOOTER_NEW_LABEL}   {} marked \u{b7}R", self.marks.len())
-        };
-        (bare_new, FOOTER_MENU.to_string(), None)
-    }
-
-    /// The column range of the footer's `menu` button, shared by the
-    /// renderer and the hit-test so a click lands where it draws.
-    fn footer_menu_range(&self, panel_w: usize) -> Option<std::ops::Range<usize>> {
-        self.footer_labels(panel_w).2
-    }
-
     /// The column range of the density button on the sideline's top
     /// row, shared by the renderer and the hit-test so a click lands where it
     /// draws. `None` when the panel is too narrow to reserve the button without
@@ -4029,26 +3992,32 @@ impl View {
         for s in &self.layout.squads {
             // Always SelectSquad (unlike the sideline's active-squad
             // CycleSection): the navigator is a jump, never a view-state cycle.
-            out.push(NavRow::new(
-                s.name.clone(),
-                PaneState::Idle,
-                None,
-                None,
-                ChromeHit::Cmds(vec![Command::SelectSquad(s.id)]),
-                &[],
-            ));
+            out.push(
+                NavRow::new(
+                    s.name.clone(),
+                    PaneState::Idle,
+                    None,
+                    None,
+                    ChromeHit::Cmds(vec![Command::SelectSquad(s.id)]),
+                    &[],
+                )
+                .with_menu(row_menu::NavMenu::Squad(s.id)),
+            );
             for (t, tab) in s.tabs.iter().enumerate() {
                 let tab_text = tab_label_text(&tab.name, t, tab.named);
-                out.push(NavRow::new(
-                    format!("{} › {}", s.name, tab_text),
-                    PaneState::Idle,
-                    // SelectTab resolves the squad server-side, so one command
-                    // switches squad+tab (row_action's tab arm, gemini review).
-                    None,
-                    None,
-                    ChromeHit::Cmds(vec![Command::SelectTab(tab.id)]),
-                    std::slice::from_ref(&s.name),
-                ));
+                out.push(
+                    NavRow::new(
+                        format!("{} › {}", s.name, tab_text),
+                        PaneState::Idle,
+                        // SelectTab resolves the squad server-side, so one command
+                        // switches squad+tab (row_action's tab arm, gemini review).
+                        None,
+                        None,
+                        ChromeHit::Cmds(vec![Command::SelectTab(tab.id)]),
+                        std::slice::from_ref(&s.name),
+                    )
+                    .with_menu(row_menu::NavMenu::Tab(tab.id)),
+                );
                 // Plain panes of the tab (v22): a pane already shown as an agent
                 // row is skipped (the agent row is the richer view of the same
                 // pane); the rest become goto-able so a bare shell pane in any
@@ -4078,42 +4047,37 @@ impl View {
                     Some(TabContext::Ordinal(n)) => format!("{} › {} ·{n}", s.name, a.name),
                     None => format!("{} › {}", s.name, a.name),
                 };
-                out.push(NavRow::new(
-                    label,
-                    nav_agent_state(a),
-                    // Switch to the agent's squad first when it is not active, so
-                    // the following FocusPane lands there (the server resolves the
-                    // pane's tab on focus; the ordinal is display-only).
-                    cross(s.id),
-                    None,
-                    agent_hit(a, self.layout.active_squad),
-                    &[
-                        a.pane_id.map(|p| p.to_string()).unwrap_or_default(),
-                        s.name.clone(),
-                        // The portal index joins the match key so an
-                        // EXISTING portal is reachable by number through the
-                        // navigator; the `portal:` prefix keeps it from
-                        // colliding with pane ids and node hex.
-                        a.portal.map(|p| format!("portal:{p}")).unwrap_or_default(),
-                    ],
-                ));
+                out.push(
+                    NavRow::new(
+                        label,
+                        nav_agent_state(a),
+                        // Switch to the agent's squad first when it is not active, so
+                        // the following FocusPane lands there (the server resolves the
+                        // pane's tab on focus; the ordinal is display-only).
+                        cross(s.id),
+                        None,
+                        agent_hit(a, self.layout.active_squad),
+                        &nav_agent_tokens(a, Some(&s.name)),
+                    )
+                    .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
+                );
             }
         }
         // Orphan agents (no live squad), mirroring display_rows' orphan section.
         for a in self.layout.agents.iter().filter(
             |a| !matches!(a.squad, Some(id) if self.layout.squads.iter().any(|s| s.id == id)),
         ) {
-            out.push(NavRow::new(
-                a.name.clone(),
-                nav_agent_state(a),
-                None,
-                None,
-                agent_hit(a, self.layout.active_squad),
-                &[
-                    a.pane_id.map(|p| p.to_string()).unwrap_or_default(),
-                    a.portal.map(|p| format!("portal:{p}")).unwrap_or_default(),
-                ],
-            ));
+            out.push(
+                NavRow::new(
+                    a.name.clone(),
+                    nav_agent_state(a),
+                    None,
+                    None,
+                    agent_hit(a, self.layout.active_squad),
+                    &nav_agent_tokens(a, None),
+                )
+                .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
+            );
         }
         out
     }
@@ -4933,6 +4897,8 @@ impl View {
             // key-table poster (opaque, sectioned, scrollable).
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if let Some(m) = &self.row_menu {
+            // A menu opened from the navigator paints over it, not instead.
+            self.draw_nav(&mut cells, rows, cols, overlay_origin, overlay_dims);
             // US2: the anchored row context menu, drawn at the pointer.
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if let Some(m) = &self.aux {
@@ -5069,7 +5035,7 @@ impl View {
                 overlay_origin,
                 overlay_dims,
                 &chrome,
-                &conn.render(),
+                &conn.render_with(&self.layout.agents, overlay_text_cols(overlay_dims.1)),
                 &self.theme,
                 None,
             );
@@ -5090,45 +5056,15 @@ impl View {
             let lines = peek_overlay_lines(agent, peek, reply, now_secs);
             let title = agent.map(|a| a.name.as_str()).unwrap_or("peek");
             let chrome = chrome::Chrome::new(title, Anchor::Center).footer("esc close");
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                &lines,
-                &self.theme,
-                None,
-            );
+            let layout = self.peek_layout(&chrome, &lines);
+            draw_overlay_layout(&mut cells, rows, cols, &layout, &self.theme);
         } else if self.backlog_board.is_some() {
             // The board's whole surface - docked column, drill-down,
             // pickers, centered or full-screen overlay - paints from its
             // own module (the file-budget gate keeps client.rs shrinking).
             self.draw_board(&mut cells, rows, cols);
-        } else if let Some(nav) = &self.nav {
-            // navigator: the filtered flat catalog + query/chip line. Rows
-            // recompute per frame from the live layout (no cache), so a push
-            // repopulates it.
-            let filtered = self.nav_filtered(nav);
-            let lines = nav_overlay_lines(&filtered, nav);
-            let chrome = chrome::Chrome::new("navigator", Anchor::Center)
-                .footer("type to filter · esc close");
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                &lines,
-                &self.theme,
-                // The navigator is the uncapped selector this whole change
-                // points operators at, so its cursor must stay on screen too:
-                // a session with more rows than the viewport would otherwise
-                // drive the selection below the fold. +1 for the query line.
-                Some(nav.cursor + 1),
-            );
+        } else if self.nav.is_some() {
+            self.draw_nav(&mut cells, rows, cols, overlay_origin, overlay_dims);
         } else if self.org_board.is_some() && self.board_full {
             org_board::paint(self, &mut cells, rows, cols, cols, rows);
         } else if self.messages_board.is_some() {
@@ -5152,6 +5088,7 @@ impl View {
             // per-pane indicator is drawn INTO the cells above from each pane
             // frame's own scroll_offset.
             scroll_offset: 0,
+            history_lines: 0,
         }
     }
 
@@ -5303,7 +5240,7 @@ impl View {
             origin,
             dims,
             &chrome,
-            &conn.render(),
+            &conn.render_with(&self.layout.agents, overlay_text_cols(dims.1)),
             None,
             OverlayAnchor::Center,
         )
@@ -5314,7 +5251,6 @@ impl View {
     /// tick between draw and click can move a width by a character; the hit
     /// spans are wide enough that this never unclicks the footer.
     fn peek_overlay_layout(&self, _rows: usize, peek: &PeekView) -> OverlayLayout {
-        let (origin, dims) = self.overlay_viewport();
         let drows = self.display_rows();
         let agent = drows.get(peek.cursor).and_then(|r| match r {
             DisplayRow::Agent(a) => Some(*a),
@@ -5328,7 +5264,7 @@ impl View {
         let lines = peek_overlay_lines(agent, peek, reply, now_secs);
         let title = agent.map(|a| a.name.as_str()).unwrap_or("peek");
         let chrome = chrome::Chrome::new(title, Anchor::Center).footer("esc close");
-        layout_lines_overlay(origin, dims, &chrome, &lines, None, OverlayAnchor::Center)
+        self.peek_layout(&chrome, &lines)
     }
 
     fn draw_confirm_line(
@@ -5354,13 +5290,13 @@ impl View {
     /// refuses a stale id regardless.
     fn move_pick_lines(&self, picker: &MovePick) -> Vec<String> {
         const W: usize = 40;
-        let verb = match &picker.src {
+        let command = match &picker.src {
             MoveSrc::Tab(_) => "move tab to:",
             MoveSrc::Pane(_) => "move pane to:",
             MoveSrc::Row { .. } => "move session to:",
             MoveSrc::Folder { .. } => "add folder:",
         };
-        let mut lines = vec![pad_to(&format!(" {verb}"), W)];
+        let mut lines = vec![pad_to(&format!(" {command}"), W)];
         for (i, &sid) in picker.squads.iter().enumerate() {
             let folder = workspace_folder::folder_label(&picker.src, sid);
             let name = folder.as_deref().unwrap_or_else(|| {
@@ -5385,31 +5321,6 @@ impl View {
         lines.push(pad_to(" hjkl/arrows move · enter move here", W));
         lines.push(pad_to(" 1-9 move to first nine · esc/q cancel", W));
         lines
-    }
-
-    /// Paint the in-scrollback search line over the bottom row (v12).
-    /// Blank first so the divider-fill pass cannot bleed through (gotcha).
-    /// Typing shows `/query_`; browsing shows `[i/n] /query` or `/query - no
-    /// matches` (total 0).
-    fn draw_search_line(&self, cells: &mut [Cell], rows: usize, cols: usize, sv: &SearchView) {
-        let r = rows - 1;
-        for c in 0..cols {
-            cells[r * cols + c] = Cell::default();
-        }
-        let text = match sv.result {
-            Some((0, _)) => format!(" /{} - no matches", sv.query),
-            Some((total, current)) => format!(" [{current}/{total}] /{}", sv.query),
-            // Typing, or submitted but awaiting the first reply: show the input.
-            None => format!(" /{}_", sv.query),
-        };
-        for (i, ch) in text.chars().take(cols).enumerate() {
-            cells[r * cols + i] = Cell {
-                c: ch,
-                fg: Color::Default,
-                bg: Color::Default,
-                flags: cell_flags::BOLD,
-            };
-        }
     }
 
     /// The tab-bar spans in paint order: the active squad's name (inert), its
@@ -5456,7 +5367,7 @@ impl View {
             let (glyph_prefix, fg, glyph_flags) =
                 match tab_rollup_state(&self.layout.agents, s.id, t.id) {
                     Some(st) => {
-                        let style = lattice_style(st, self.theme.needs_you);
+                        let style = lattice_style(st, self.theme.needs_you, self.theme.ok);
                         (format!("{} ", style.glyph), style.fg, style.flags)
                     }
                     None => (String::new(), Color::Default, 0),
@@ -5765,7 +5676,6 @@ impl View {
         let now = crate::digest_overlay::now_secs();
         let order = &AgentOrder {
             manual: &self.manual_order,
-            pinned: &self.pinned_agents,
         };
         let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
         let mut group = Vec::new();
@@ -6389,6 +6299,8 @@ enum ChromeHit {
     Notice(String),
     /// Open the new-workspace name-input overlay; the `+` footer.
     OpenCreate,
+    /// The footer's `+ session` button: what prefix+i does.
+    ToggleComposer,
     /// Flip the active squad row's caret locally; no socket write.
     /// Advance one sideline section through the view cycle.
     CycleSection(SectionKey),
@@ -6440,9 +6352,8 @@ fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
             // The default gesture names portal 0, which is exactly
             // where the single thread pane always landed. `P` opens the next
             // free portal beside it; nothing about this path changed.
-            let id = a.attach_id.clone().unwrap_or_else(|| a.name.clone());
             ChromeHit::Cmds(vec![Command::AttachAgent {
-                id,
+                id: a.reach_key(),
                 placement: PanePlacement {
                     portal: Some(0),
                     ..PanePlacement::default()
@@ -6791,10 +6702,11 @@ pub(crate) struct NavRow {
     /// Rendering only - the text filter matches [`NavRow::match_key`].
     label: String,
     /// The searchable identity, composed at build time and NEVER
-    /// displayed: `label` plus the mux pane id, the bound node id, the
-    /// title-slug and the workspace name, lowercased and space-joined. The
-    /// text filter matches HERE, so a row is findable by what it IS (pane
-    /// `307`, node ``, a slug) not just by its label text. A row whose
+    /// displayed: `label` plus the row's identity tokens (a pane's id and
+    /// workspace; an agent's [`nav_agent_tokens`]), lowercased and
+    /// space-joined. The text filter matches HERE, so a row is findable by
+    /// what it IS (pane `307`, PR `3706`, model `opus`) not just by its
+    /// label text. A row whose
     /// hit is invisible in the label shows the matched token
     /// ([`nav_overlay_lines`]) - a hit with no visible reason reads as a bug.
     match_key: String,
@@ -6814,6 +6726,8 @@ pub(crate) struct NavRow {
     /// FocusPane/AttachAgent for an agent, the dispatch confirm / focus for a
     /// card, or a [`ChromeHit::Notice`] that keeps the navigator open.
     hit: ChromeHit,
+    /// What the row menu (Ctrl-o) acts on; set by [`NavRow::with_menu`].
+    menu: row_menu::NavMenu,
 }
 
 impl NavRow {
@@ -6839,6 +6753,7 @@ impl NavRow {
             goto_squad,
             goto_tab,
             hit,
+            menu: row_menu::NavMenu::None,
         }
     }
 }
@@ -7087,11 +7002,11 @@ pub(crate) use crate::lattice::{
 };
 
 /// The lane fg for one agent row, shared by both sideline arms:
-/// the fixed cascade over the row's axes, with the lattice accent standing
-/// on Blocked (attention is never re-colored) and the lattice fg as the
-/// fallback when nothing declares the lane.
+/// the fixed cascade over the row's axes, with the lattice color standing
+/// on Blocked and DoneUnseen (attention and done are never re-colored) and
+/// the lattice fg as the fallback when nothing declares the lane.
 fn agent_lane_fg(a: &AgentRow, st: LatticeState, fallback: Color) -> Color {
-    if st == LatticeState::Blocked {
+    if matches!(st, LatticeState::Blocked | LatticeState::DoneUnseen) {
         return fallback;
     }
     sideline_color::resolve_lane_color(
@@ -7134,21 +7049,6 @@ fn nav_glyph(s: PaneState) -> char {
 /// is ignored. Working rows push at the 1s registry cadence, so an active
 /// transcript still follows within ~3s; a silent row stops refetching entirely.
 const PEEK_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
-
-/// Humanize an age in seconds to `Ns`/`Nm`/`Nh`/`Nd` for the peek
-/// header's `changed Ns ago` line (Discretion 3). A future stamp (clock skew)
-/// is clamped by the caller to 0 before this, so `0s` is the floor.
-pub(crate) fn humanize_ago(secs: u64) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Attach + main loop
@@ -7337,7 +7237,7 @@ async fn attach_and_run(
         tokio::sync::mpsc::unbounded_channel::<theme_import_ui::ImportMsg>();
     let (board_tx, mut board_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, backlog_board::BoardMsg)>();
-    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_detail::OrgMsg)>();
+    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_board::OrgMsg)>();
     let (share_tx, mut share_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, share_flow::ShareMsg)>();
     view.share_tx = Some(share_tx);
@@ -7388,7 +7288,7 @@ async fn attach_and_run(
     let (conn_tx, mut conn_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, crate::connections_view::ReadOutcome)>();
 
-    // a Connections single-flight mutation verb reports its result here,
+    // a Connections single-flight mutation command reports its result here,
     // gen-tagged like the read, so a result for a closed/superseded modal is
     // dropped and a live one surfaces the notice + triggers the read-after-write.
     let (conn_act_tx, mut conn_act_rx) = tokio::sync::mpsc::unbounded_channel::<(
@@ -7397,7 +7297,7 @@ async fn attach_and_run(
         bool, // is_login: keep the pending notice on success, no acting flip
     )>();
 
-    // The sweep verbs (counts probe, scoped apply) run off the UI loop and
+    // The sweep commands (counts probe, scoped apply) run off the UI loop and
     // report back here. The in-flight flag bounds them to one at a time;
     // the message carries what the tap asked for.
     let (sweep_tx, mut sweep_rx) = tokio::sync::mpsc::unbounded_channel::<SweepMsg>();
@@ -7413,7 +7313,7 @@ async fn attach_and_run(
     let (catalog_tx, mut catalog_rx) =
         tokio::sync::mpsc::unbounded_channel::<agent_launcher::CatalogOutcome>();
 
-    // The queued update verb (restart or release upgrade) runs off the UI loop
+    // The queued update command (restart or release upgrade) runs off the UI loop
     // and reports its verdict here. The View's inflight flag bounds it to one
     // at a time; the notice is the receipt.
     let (restart_tx, mut restart_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -7485,7 +7385,7 @@ async fn attach_and_run(
         org_board::maybe_kick(&mut view, &org_tx);
         messages_view::maybe_kick(&mut view, &messages_tx);
         bell::maybe_kick(&mut view, &bell_tx);
-        // a queued board write verb runs off the UI loop too.
+        // a queued board write command runs off the UI loop too.
         if let Some(action) = view
             .backlog_board
             .as_mut()
@@ -7496,10 +7396,10 @@ async fn attach_and_run(
             tokio::spawn(async move {
                 let notice = match action {
                     backlog_board::WriteAction::Args(args, stdin) => {
-                        crate::backlog_write::run_verb(&args, stdin).await.1
+                        crate::backlog_write::run_command(&args, stdin).await.1
                     }
                 };
-                let _ = tx.send((gen, backlog_board::BoardMsg::VerbDone { notice }));
+                let _ = tx.send((gen, backlog_board::BoardMsg::CommandDone { notice }));
             });
         }
         // task 2.2: kick a queued MINE mutation off the UI loop.
@@ -7515,7 +7415,7 @@ async fn attach_and_run(
         }
         // task 2.3: kick a queued answer; refresh the projection and index.
         questions::maybe_kick(&mut view, &questions_tx, &questions_index_tx);
-        questions::kick_action(&mut view, &question_act_tx);
+        questions::kick_action(&mut view, &question_act_tx, &link_tx);
         if view.yard_want && !view.yard_inflight {
             view.yard_want = false;
             view.yard_inflight = true;
@@ -7531,6 +7431,9 @@ async fn attach_and_run(
         }
         // kick a wanted Connections read off the UI loop, at most one in
         // flight, tagged with the current gen so a stale result is dropped.
+        if view.connections.as_mut().is_some_and(|cv| cv.usage_due()) {
+            view.rearm_connections_read();
+        }
         if view.conn_want && !view.conn_inflight {
             view.conn_want = false;
             view.conn_inflight = true;
@@ -7547,11 +7450,11 @@ async fn attach_and_run(
             let tx = conn_act_tx.clone();
             let gen = view.conn_gen;
             tokio::spawn(async move {
-                let result = crate::connections_view::run_verb_env(argv, env).await;
+                let result = crate::connections_view::run_command_env(argv, env).await;
                 let _ = tx.send((gen, result, is_login));
             });
         }
-        // Kick any wanted update probe/verb off the UI loop (one in flight
+        // Kick any wanted update probe/command off the UI loop (one in flight
         // each); the update surface owns the discipline.
         update_menu::pump_wants(&mut view, &update_tx, &restart_tx);
         // Kick a wanted harness-catalog probe, same one-in-flight
@@ -7567,13 +7470,13 @@ async fn attach_and_run(
         }
         // Kick the harness-flags capture when the rows in hand are stale.
         harness_flags::kick(&mut view, flags_tx.clone());
-        // Kick a wanted sweep verb off the UI loop, at most one in flight.
+        // Kick a wanted sweep command off the UI loop, at most one in flight.
         if let Some(action) = view.sweep_action.take() {
             if !view.sweep_inflight {
                 view.sweep_inflight = true;
                 let tx = sweep_tx.clone();
                 tokio::spawn(async move {
-                    let msg = run_sweep_verb(action).await;
+                    let msg = run_sweep_command(action).await;
                     let _ = tx.send(msg);
                 });
             }
@@ -7762,7 +7665,7 @@ async fn attach_and_run(
                     }
                 }
                 Ok(ServerMsg::Info { .. }) => {} // pre-Attach-only answer; stray here
-                // v4 control-verb replies belong to one-shot `fno mux pane`
+                // v4 control-command replies belong to one-shot `fno mux pane`
                 // connections, never an attached client's stream: ignore.
                 Ok(ServerMsg::PaneList { .. }
                     | ServerMsg::PaneText { .. }
@@ -8083,7 +7986,7 @@ async fn attach_and_run(
                 }
             }
             Some((gen, msg)) = org_rx.recv() => {
-                org_detail::apply(&mut view, gen, msg);
+                org_board::apply(&mut view, gen, msg);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }
@@ -8163,7 +8066,7 @@ async fn attach_and_run(
                 }
             }
             Some((gen, result, is_login)) = conn_act_rx.recv() => {
-                // a mutation/login verb finished. Clear the single-flight
+                // a mutation/login command finished. Clear the single-flight
                 // guard UNCONDITIONALLY (the subprocess has exited, whatever the
                 // modal's read-gen), so a manual R during the mutation can never
                 // wedge `acting` on nor let a second write overlap this one. The
@@ -8563,7 +8466,7 @@ async fn attach_and_run(
             if let Some(n) = NOTICE.with(|n| n.borrow_mut().take()) {
                 eprintln!("fno: {n}");
             }
-            // The update modal's restart unwinds here: run the verb in the foreground, exec the fresh client.
+            // The update modal's restart unwinds here: run the command in the foreground, exec the fresh client.
             if let Some(err) = update_menu::maybe_reattach(code, &mut view).await {
                 return Err(err);
             }
@@ -8591,14 +8494,14 @@ fn consume_modal_close_gesture(view: &mut View, kind: MouseKind) -> bool {
 /// Family-B name and confirmation overlays own every pointer event while open.
 /// The pre-pass's esc-chip tap cancels them; outside clicks are swallowed so
 /// they cannot dismiss the modal or reach a pane underneath it. The
-/// Connections modal joins them. Peek does NOT: it is deliberately
-/// click-through (a right-press under it still opens the row's menu).
+/// Connections modal joins them. The centered peek is click-through; the dock owns its box.
 fn modal_mouse(view: &mut View, rep: crate::mouse::MouseReport) -> bool {
     let peek_open = view.peek.is_some();
     if !peek_open && consume_modal_close_gesture(view, rep.kind) {
         return true;
     }
-    view.active_overlay_layout().is_some() && !peek_open
+    view.active_overlay_layout()
+        .is_some_and(|l| !peek_open || view.dock_holds(&l, rep))
 }
 
 /// Route one stdin chunk: the selector consumes keys while open (AC6-FR
@@ -8918,13 +8821,7 @@ async fn dispatch_event(
             // Pure local state, like the sort cycle: no geometry, no wire.
             view.agent_group = view.agent_group.next();
             view_store::save_agent_group(view.agent_group);
-            let word = match view.agent_group {
-                AgentGroup::Workspace => "workspace",
-                AgentGroup::Team => "lead",
-                AgentGroup::Cwd => "cwd",
-                AgentGroup::Status => "status",
-            };
-            view.set_notice(format!("grouping by {word}"));
+            view.set_notice(format!("grouping by {}", view.agent_group.word()));
         }
         Event::ToggleCardHead => {
             // Pure local state: the head row is one display row, and the
@@ -8976,6 +8873,7 @@ async fn dispatch_event(
         Event::OpenSweepThreads => {
             execute_aux_action(view, AuxAction::OpenSweep, sock_w).await?;
         }
+        Event::LiftHold => hold::lift(view).await,
         Event::OpenSidelineMenu => {
             // The footer `menu` button's popup, on the keyboard.
             view.open_sideline_menu(Anchor::Center);
@@ -9039,6 +8937,19 @@ async fn dispatch_event(
                 result: None,
             });
             view.search_esc.clear();
+            return Ok(DispatchFlow::Break);
+        }
+        Event::ScrollModeOpen => {
+            // Enter keyboard scroll mode on the focused pane. Keystrokes
+            // divert to scroll_mode_keys on the next read; the moves ride the
+            // shared server-side scroll offset the wheel drives. A server that
+            // predates the v118 commands gets a bell, never a dead mode.
+            if !server_has_pane_scroll(view.server_proto) {
+                let _ = raw_out(b"\x07");
+                return Ok(DispatchFlow::Continue);
+            }
+            view.scroll_mode = true;
+            view.scroll_esc.clear();
             return Ok(DispatchFlow::Break);
         }
         Event::OpenNav => {
@@ -9188,6 +9099,7 @@ async fn apply_hit(
                 .await
                 .map_err(|e| format!("resize send failed: {e}"))?;
         }
+        ChromeHit::ToggleComposer => sideline::toggle_composer(view, sock_w).await?,
         // US4: open the sideline MENU popup anchored at the clicked cell.
         ChromeHit::OpenSidelineMenu { row, col } => {
             view.open_sideline_menu(Anchor::At { row, col })
@@ -9335,7 +9247,7 @@ async fn execute_aux_action(
         AuxAction::SweepBoth => begin_sweep_apply(view, SweepScope::Both),
         AuxAction::UpgradeRelease(c) => {
             if update_menu::update_tap(view) {
-                view.update_verb_want = Some(c);
+                view.update_command_want = Some(c);
             }
         }
         AuxAction::RestartAgents => {
@@ -9362,6 +9274,7 @@ async fn execute_aux_action(
             view.aux = None;
             return Ok(DispatchFlow::Detach);
         }
+        AuxAction::LiftHold => hold::lift(view).await,
         AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),
         AuxAction::Share(act) => share_flow::act(view, act).await,
         AuxAction::OpenBacklogView => {
@@ -9372,6 +9285,7 @@ async fn execute_aux_action(
         | AuxAction::ToggleStatus
         | AuxAction::ToggleConfirmLifecycle
         | AuxAction::ToggleResourceMeter
+        | AuxAction::ToggleReserveAuto
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
         | AuxAction::ThemeImportOpen
@@ -9492,6 +9406,10 @@ async fn aux_keys(
                     theme_import_ui::reset(view);
                     view.aux = None;
                 }
+            }
+            // Space flips a settings checkbox in place, as Enter does.
+            ModalKey::Byte(b' ') if settings_modal::space_toggle(view).is_some() => {
+                aux_execute_selected(view, sock_w).await?;
             }
             // Any other (unbound) key dismisses, per the shared popup contract.
             ModalKey::Byte(_) => {
@@ -9717,7 +9635,7 @@ async fn selector_keys(
     let keys = fold_selector_keys(&mut esc, &cleaned2);
     view.sel_esc = esc;
     for _ in 0..rights {
-        // Same cursor as every other selector verb: pointer-follow works
+        // Same cursor as every other selector command: pointer-follow works
         // through the hover-ARMED selector, and an explicit prefix+w
         // selector keeps keyboard control even with the pointer parked on an
         // inert sideline cell.
@@ -9743,7 +9661,7 @@ async fn selector_keys(
     }
     for delta in shifts.drain(..) {
         // The agent reorder acts on the same per-key cursor the other
-        // selector verbs read, so a close mid-chunk swallows the rest.
+        // selector commands read, so a close mid-chunk swallows the rest.
         let Some(cur) = view.selector else {
             break;
         };
@@ -9816,15 +9734,13 @@ async fn selector_keys(
             }
             b'r' => view.rename_at_cursor(cur),
             b' ' => {
-                // Open the read-only peek overlay: an agent row shows
-                // its status sentence + recent transcript from disk; a
-                // workspace row shows its tabs and members rendered
-                // locally from the layout, no wire round trip. Any other row
-                // notices why (US3). The selector stays open
-                // underneath; Esc drops back into it at the peeked row.
+                // An agent row opens the reply dock: the peek under the
+                // list, reply input focused. A workspace row shows its tabs
+                // and members rendered locally, no wire round trip. Any
+                // other row notices why. The selector stays open underneath.
                 match view.display_rows().get(cur) {
                     Some(DisplayRow::Agent(a)) => {
-                        fetch_peek(view, cur, a.name.clone(), sock_w).await?
+                        reply_dock::open(view, cur, a.name.clone(), sock_w).await?
                     }
                     Some(DisplayRow::Sel(r)) if r.tab.is_none() => {
                         view.open_squad_peek(cur, r.squad);
@@ -9959,7 +9875,7 @@ async fn selector_keys(
                     .map_err(|e| format!("dismiss send failed: {e}"))?;
                     continue;
                 }
-                // A WATCH-ONLY (paneless) agent row gets the lifecycle verb
+                // A WATCH-ONLY (paneless) agent row gets the lifecycle command
                 // a live row (`!exited`) stops, an exited row removes.
                 // The registry poll's state flip IS the stage separator - stop,
                 // wait ≤1s for the row to flip exited, then `x` again removes (no
@@ -9971,7 +9887,7 @@ async fn selector_keys(
                 // `pane_id.is_none()` is load-bearing (codex review): a PANE-hosted
                 // Agent row is either a real agent's pane or a bare shell pane that
                 // agent_rows() surfaces as a first-class Agent row labelled from its
-                // cmd/cwd - NOT a registry entry. Arming the verb there would shell
+                // cmd/cwd - NOT a registry entry. Arming the command there would shell
                 // `fno-agents` on a label that could collide with an unrelated
                 // agent's name and stop the wrong one. Pane-hosted rows are managed
                 // via their tab (CloseTab); only the paneless rows - the bg/headless
@@ -9979,7 +9895,7 @@ async fn selector_keys(
                 //
                 // An EXTERNAL row (claude-daemon roster or a persisted external
                 // tombstone) routes by stable `attach_id` to the
-                // External verbs instead of `fno-agents` by name: a live row
+                // External commands instead of `fno-agents` by name: a live row
                 // (`!exited`) stops (`claude stop <id>`), a stopped tombstone
                 // (`exited`) removes (`claude rm <id>`). The server re-validates
                 // the exact id + gates rm on a persisted `stopped` state; a
@@ -10141,28 +10057,9 @@ async fn selector_keys(
                     None => view.set_notice("no other workspace to move this tab to".into()),
                 }
             }
-            b'.' => {
-                // Pin/unpin the agent row under the cursor. Pinned rows lead
-                // every sort (the operator's 2026-10-07 ask), persisted like
-                // the sort itself; a non-agent row notices why.
-                match view.display_rows().get(cur) {
-                    Some(DisplayRow::Agent(a)) => {
-                        let name = a.name.clone();
-                        let pinned =
-                            if let Some(pos) = view.pinned_agents.iter().position(|n| *n == name) {
-                                view.pinned_agents.remove(pos);
-                                false
-                            } else {
-                                view.pinned_agents.push(name.clone());
-                                true
-                            };
-                        view_store::save_pinned(&view.pinned_agents);
-                        let word = if pinned { "pinned" } else { "unpinned" };
-                        view.set_notice(format!("{word} {name}"));
-                    }
-                    _ => view.set_notice("pin works on an agent row".into()),
-                }
-            }
+            // Pinned rows lead every sort (the operator's 2026-10-07 ask);
+            // ctrl+t is Claude's agents-view chord for the same pin.
+            b'.' | 0x14 => agent_sort::toggle_pin(view, cur),
             0x1b | b'q' => view.selector = None,
             _ => {}
         }
@@ -10386,6 +10283,7 @@ mod glyph_legend;
 
 mod card_line;
 pub(crate) use card_line::CardGraph;
+mod sideline_footer;
 
 #[path = "client/confirm_anchor.rs"]
 mod confirm_anchor;
@@ -10399,6 +10297,7 @@ mod agent_sort;
 
 #[path = "client/agent_group.rs"]
 mod agent_group;
+mod hold;
 
 #[path = "client/header_band.rs"]
 mod header_band;

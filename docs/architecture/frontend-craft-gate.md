@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Frontend-craft gate
 
 Stops frontend work from silently skipping the frontend-craft (`/impeccable`)
@@ -25,11 +25,11 @@ is left alone. The derivation is a safe no-op when `REPO_ROOT` is not a git
 repo. This restores the browser gate for UI changesets and feeds the
 frontend-craft gate its "frontend touched" signal.
 
-The single source of truth for the globs is the in-package module
-`fno.executor._surface` (ported from the retired `infer-task-executor.sh`):
-`is_frontend_surface_path()` / `any_frontend_surface()` plus a
-CLI (`python3 -m fno.executor._surface`, with a `--has-ui` mode).
-`infer-has-ui.sh` delegates to that module so routing and `has_ui` share one
+The single source of truth for the globs is the native executor-route door
+`crates/fno-agents/src/executor_route.rs` (the worker-family port deleted
+the Python leg): `is_frontend_surface_path()` / `any_frontend_surface()`
+plus the `fno-agents executor-route surface [--has-ui]` stdin door.
+`infer-has-ui.sh` delegates to that door so routing and `has_ui` share one
 copy of the patterns.
 
 ## Bug 2: executor resolution on the inline path

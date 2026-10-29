@@ -1,0 +1,1 @@
+{"args": ["alt", "-H", "codex", "--config-dir", "{TMP}/alt"], "mkdirs": ["alt"], "now": 1800000000.0, "expect": {"code": 1, "stdout": "", "stderr": "error: --config-dir accounts are claude-only\n", "global": null, "project": null, "store": {}}}

@@ -87,6 +87,8 @@ pub struct RegistryAgent {
     /// overlay, never by `derive_rows` (the registry doc carries no such
     /// fact); absent on every hand-built row.
     pub held_conversation: bool,
+    /// The user pinned this session; only the render-path overlay stamps it.
+    pub pinned: bool,
     /// In-TTL inside-leg badge; `None` = liveness-only. Never a scraped guess.
     pub badge: Option<AgentBadge>,
     pub reason: Option<String>,
@@ -224,7 +226,7 @@ pub enum Liveness {
     Unmeasured,
 }
 
-/// The harnesses whose transcripts `fno agents peek` can tail: the
+/// The harnesses whose transcripts `fno agents session peek` can tail: the
 /// reader arms registered in `recent_records` (cli/src/fno/agents/peek.py).
 /// A static mirror of a Python seam; `thread_reach_mirrors_the_peek_reader_seam`
 /// pins it against that file so the two cannot drift (Rust checked against
@@ -409,7 +411,7 @@ pub fn attach_form(harness: &str) -> Option<AttachForm> {
 /// The interactive-resume form `harness` declares, or `None` when it declares
 /// none. Same reader, same sources and precedence as [`attach_form`], keyed
 /// by the resume lane: the bundled `interactive_resume` row, overridable by
-/// the shallower `[harness.<name>.resume]`. The workspace-restore verb
+/// the shallower `[harness.<name>.resume]`. The workspace-restore command
 /// resumes every member through the form this returns, so "none" is the
 /// honest dead row - refused by name, never a spawn that fails.
 pub fn resume_form(harness: &str) -> Option<AttachForm> {
@@ -445,7 +447,7 @@ fn declared_form(lane: FormLane, harness: &str) -> Option<AttachForm> {
 /// file, a missing `harness` table and a rejected block each skip rather
 /// than clearing what was already there, so a typo in one harness's block
 /// cannot un-attach a working harness.
-fn resolved_rows() -> &'static std::collections::BTreeMap<String, toml::Value> {
+pub(crate) fn resolved_rows() -> &'static std::collections::BTreeMap<String, toml::Value> {
     static ROWS: std::sync::OnceLock<std::collections::BTreeMap<String, toml::Value>> =
         std::sync::OnceLock::new();
     ROWS.get_or_init(|| {
@@ -809,6 +811,35 @@ impl RegistryAgent {
     /// differ on every healthy row, and a sender may name either.
     pub fn answers_to(&self, id: &str) -> bool {
         self.session_id.as_deref() == Some(id) || self.harness_session_id.as_deref() == Some(id)
+    }
+
+    /// Whether a STORED key names this row: any id the row carries, or a
+    /// session its resume lineage retired. The name only for a row with no
+    /// id at all ([`Self::stored_key`]): a name, and an unnamed thread's
+    /// title most of all, is not stable across a restart.
+    pub fn keyed_by(&self, key: &str) -> bool {
+        match self.own_id() {
+            Some(_) => {
+                self.answers_to(key)
+                    || self.claude_session_uuid.as_deref() == Some(key)
+                    || self.attach_id.as_deref() == Some(key)
+                    || self.predecessor_session_ids.iter().any(|p| p == key)
+            }
+            None => self.name == key,
+        }
+    }
+
+    /// The key a saved reference to this row stores: the durable fno id,
+    /// else a harness session id, else the attach id. The name only for a
+    /// row that carries no id at all.
+    pub fn stored_key(&self) -> String {
+        self.own_id().unwrap_or(&self.name).to_string()
+    }
+
+    fn own_id(&self) -> Option<&str> {
+        self.effective_identity()
+            .or(self.claude_session_uuid.as_deref())
+            .or(self.attach_id.as_deref())
     }
 
     /// The row's harness session id, falling back to the stable slot for a
@@ -1201,7 +1232,7 @@ pub fn registry_text() -> std::io::Result<String> {
 /// Hinnant days-from-civil; the mux reads the FILE contract, not the crate).
 /// Any other shape is `None`, so a malformed stamp ages the badge out (fails
 /// closed) rather than pinning a stale `working`.
-fn rfc3339_like_to_secs(s: &str) -> Option<u64> {
+pub(crate) fn rfc3339_like_to_secs(s: &str) -> Option<u64> {
     let b = s.as_bytes();
     if b.len() != 20
         || b[4] != b'-'
@@ -1242,7 +1273,7 @@ fn rfc3339_like_to_secs(s: &str) -> Option<u64> {
 /// True while an inside-leg report is authoritative at `now_secs` (contract
 /// v2 / AC-X2-2): no `ttl_ms` never self-ages; a TTL'd report expires once
 /// `received_at + ttl_ms` passes; an unparseable `received_at` is expired.
-fn report_is_live(received_at: &str, ttl_ms: Option<u64>, now_secs: u64) -> bool {
+pub(crate) fn report_is_live(received_at: &str, ttl_ms: Option<u64>, now_secs: u64) -> bool {
     let Some(ttl_ms) = ttl_ms else { return true };
     match rfc3339_like_to_secs(received_at) {
         Some(recv) => now_secs.saturating_sub(recv).saturating_mul(1000) <= ttl_ms,
@@ -1347,7 +1378,7 @@ fn is_well_formed_node_id(candidate: &str) -> bool {
 ///
 /// Three live spellings, measured against a registry dump on 2026-08-20:
 /// `t-xaaaa-tally-claude-sonnet` -> `x-aaaa` (hyphen dropped),
-/// `lead-cliverbs-x-bbbb-g2` -> `x-bbbb` (hyphenated), and
+/// `lead-clicommands-x-bbbb-g2` -> `x-bbbb` (hyphenated), and
 /// `t-eeee-finish` -> `fd2a` (bare hex, prefix-less).
 pub(crate) fn node_id_candidates(name: &str) -> Vec<String> {
     let tokens: Vec<&str> = name.split('-').collect();
@@ -1696,7 +1727,7 @@ pub fn overlay_truth_badges(rows: &mut [RegistryAgent], truth: &TruthBadges) {
 /// The attach id a claude row carries: an 8-hex jobId. A legacy row whose
 /// `short_id` holds the FULL uuid (the register path wrote it that way)
 /// still attaches: the jobId is the uuid's own leading segment, so derive
-/// it rather than hand the attach a uuid the verb refuses. Any other shape
+/// it rather than hand the attach a uuid the command refuses. Any other shape
 /// passes through untouched - the 8-hex gesture gate stays the judge.
 fn attach_job_id(raw: &str) -> String {
     if raw.len() > 8 {
@@ -1738,29 +1769,42 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(rfc3339_like_to_secs);
         let served_word = row.get("liveness").and_then(|v| v.as_str());
         let pid = row.get("pid").and_then(|v| v.as_u64());
-        let ladder = derive_liveness(
-            status,
-            pid,
-            row.get("short_id").and_then(|v| v.as_str()).unwrap_or(""),
-        );
-        let liveness = crate::served_liveness::served_liveness(served_word, measured_at, now_secs)
-            .unwrap_or_else(|| {
-                // A stale served "dead" on a TERMINAL, pid-less row still
-                // corroborates the terminal status: the daemon stamped it from an
-                // observed exit, and with no pid recorded there is no reused-pid
-                // contradiction to wait for - the stamp is the only evidence
-                // either side has, and age must not erase it. Any other stale
-                // reading keeps the ladder's verdict.
-                if exited
-                    && pid.is_none()
-                    && served_word == Some("dead")
-                    && ladder == Liveness::Unmeasured
-                {
-                    Liveness::Dead
-                } else {
-                    ladder
-                }
-            });
+        // A cloud row carries no local liveness surface: no pid, no roster
+        // row, no transcript. Nothing local can confirm or falsify the
+        // status word, so the honest render is the unmeasured `?` - never
+        // the alive a spawn-time status claims.
+        let is_cloud_row = row.get("substrate").and_then(|v| v.as_str()) == Some("cloud");
+        let ladder = if is_cloud_row {
+            Liveness::Unmeasured
+        } else {
+            derive_liveness(
+                status,
+                pid,
+                row.get("short_id").and_then(|v| v.as_str()).unwrap_or(""),
+            )
+        };
+        let liveness = if is_cloud_row {
+            Liveness::Unmeasured
+        } else {
+            crate::served_liveness::served_liveness(served_word, measured_at, now_secs)
+                .unwrap_or_else(|| {
+                    // A stale served "dead" on a TERMINAL, pid-less row still
+                    // corroborates the terminal status: the daemon stamped it from an
+                    // observed exit, and with no pid recorded there is no reused-pid
+                    // contradiction to wait for - the stamp is the only evidence
+                    // either side has, and age must not erase it. Any other stale
+                    // reading keeps the ladder's verdict.
+                    if exited
+                        && pid.is_none()
+                        && served_word == Some("dead")
+                        && ladder == Liveness::Unmeasured
+                    {
+                        Liveness::Dead
+                    } else {
+                        ladder
+                    }
+                })
+        };
         let harness_title = row
             .get("harness_title")
             .and_then(|v| v.as_str())
@@ -1803,7 +1847,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         // into a (session, pane_id) pair. `mux` above is the parsed form,
         // and a half-written `{"session": "s"}` parses to None there; a
         // row is not promoted to a drivable thread by a malformed field.
-        // The CLI verb's `is_codex_thread_row` reads the raw key the same
+        // The CLI command's `is_codex_thread_row` reads the raw key the same
         // way, so both doors answer alike.
         let is_thread_shape = row
             .get("host_mode")
@@ -1832,7 +1876,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         // above for the reason its comment gives: a PRESENT key means
         // pane-hosted whether or not it parses into a (session, pane_id) pair,
         // and a half-written field must not make the viewport drive a row the
-        // CLI verb treats as pane-hosted.
+        // CLI command treats as pane-hosted.
         let is_pi_thread = harness_name == Some("pi")
             && row
                 .get("host_mode")
@@ -1967,80 +2011,15 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        // The hook rung (inside_leg) owns the row wherever a leg exists;
+        // the leg-less row falls to the screen-manifest rung. Both mappings
+        // and the one merge (a no-blocked-producer harness's fresh screen
+        // `blocked` outranks the leg) live in blocked_rung.
         let (badge, reason, answerable) = match inside_leg {
-            Some(leg) if !leg.is_null() => {
-                let live = report_is_live(
-                    leg.get("received_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    leg.get("ttl_ms").and_then(|v| v.as_u64()),
-                    now_secs,
-                );
-                if live {
-                    let badge = match leg.get("state").and_then(|v| v.as_str()) {
-                        Some("working") => Some(AgentBadge::Working),
-                        Some("blocked") => Some(AgentBadge::Blocked),
-                        Some("done") => Some(AgentBadge::Done),
-                        _ => None,
-                    };
-                    let reason = leg
-                        .get("reason")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
-                    // Hook-badged blocks carry no answer payload in v1 (the
-                    // grammar is a scrape-rung concern); focus-only.
-                    (badge, reason, None)
-                } else {
-                    (None, None, None) // TTL lapsed -> liveness-only (AC2-ERR)
-                }
+            Some(leg) if !leg.is_null() => crate::blocked_rung::merged_badge(leg, row, now_secs),
+            _ => {
+                crate::blocked_rung::screen_rung_badge(row, now_secs).unwrap_or((None, None, None))
             }
-            // Screen-manifest rung (v7): consulted ONLY when no inside_leg
-            // report exists at all - a hook-capable row (even TTL-lapsed)
-            // never falls through to a scrape verdict (per-capability
-            // arbitration; the writer clears screen_state on the flip, this
-            // is the reader-side defense in depth).
-            _ => match row.get("screen_state") {
-                Some(ss) if !ss.is_null() => {
-                    let live = report_is_live(
-                        ss.get("at").and_then(|v| v.as_str()).unwrap_or(""),
-                        ss.get("ttl_ms").and_then(|v| v.as_u64()),
-                        now_secs,
-                    );
-                    if live {
-                        // Manifest vocabulary is working|idle|blocked. `idle`
-                        // maps to no badge (a plain live row): AgentBadge has
-                        // no Idle variant and adding one is a proto bump,
-                        // serialized behind the v7 wire work. Anything
-                        // malformed fails badge-closed.
-                        let badge = match ss.get("state").and_then(|v| v.as_str()) {
-                            Some("working") => Some(AgentBadge::Working),
-                            Some("blocked") => Some(AgentBadge::Blocked),
-                            _ => None,
-                        };
-                        // The matched rule doubles as the human hint, the way
-                        // an inside-leg reason does.
-                        let reason = badge
-                            .is_some()
-                            .then(|| ss.get("rule").and_then(|v| v.as_str()).map(str::to_string))
-                            .flatten();
-                        // Answer payload only for a live `blocked` scrape verdict
-                        // that carried one; a malformed payload degrades to
-                        // focus-only (extraction is additive - never blanks the
-                        // badge). from_value tolerates the missing/extra field.
-                        let answerable = if badge == Some(AgentBadge::Blocked) {
-                            ss.get("answerable").filter(|v| !v.is_null()).and_then(|v| {
-                                serde_json::from_value::<AnswerablePrompt>(v.clone()).ok()
-                            })
-                        } else {
-                            None
-                        };
-                        (badge, reason, answerable)
-                    } else {
-                        (None, None, None) // TTL lapsed -> liveness-only
-                    }
-                }
-                _ => (None, None, None),
-            },
         };
         // The row's durable identity, provider-agnostic (both are
         // read unscoped: `where` resolves against either spelling).
@@ -2126,6 +2105,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             exited,
             dnd,
             held_conversation: false,
+            pinned: false,
             badge,
             reason,
             mux,
@@ -2440,6 +2420,7 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             exited: false,
             dnd: false,
             held_conversation: false,
+            pinned: false,
             badge: None,
             reason: None,
             mux: None,
@@ -2470,6 +2451,27 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
         });
     }
     drop(reg_ids); // release the borrow of `out` before extending it
+
+    // A claude row that lost its cached short id (a mux restart drops it)
+    // still names its job: the jobId is the session uuid's leading 8 hex, the
+    // re-entry planner's own derivation, so a tap reaches Drive instead of a
+    // transcript tail. Only after the join: a roster worker answering the row
+    // by name holds the real job id, and a derived one would shadow it.
+    let roster_names: HashSet<&str> = roster.iter().map(|w| w.name.as_str()).collect();
+    for r in &mut out {
+        if r.attach_id.is_some()
+            || r.harness.as_deref() != Some("claude")
+            || roster_names.contains(r.name.as_str())
+        {
+            continue;
+        }
+        r.attach_id = r
+            .harness_session_id
+            .as_deref()
+            .or(r.claude_session_uuid.as_deref())
+            .map(attach_job_id)
+            .filter(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
 
     // A PARKED fork id renders as a lineage child of its
     // primary while the roster still lists it live. The second uuid a fork
@@ -2514,6 +2516,7 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             exited: false,
             dnd: false,
             held_conversation: false,
+            pinned: false,
             badge: None,
             reason: None,
             mux: None,
@@ -2708,6 +2711,11 @@ pub(crate) use hold_marks::overlay_hold_marks;
 #[cfg(test)]
 pub(crate) use hold_marks::overlay_hold_marks_at;
 
+mod keep_marks;
+pub(crate) use keep_marks::overlay_keep_marks;
+#[cfg(test)]
+pub(crate) use keep_marks::overlay_keep_marks_at;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2719,6 +2727,7 @@ mod tests {
     mod roster_join_tests;
     mod spawned_by_name_tests;
     mod thread_row_status_tests;
+    mod uuid_attach_tests;
     fn reg(rows: &str) -> String {
         format!(r#"{{"schema_version": 6, "agents": [{rows}]}}"#)
     }
@@ -2775,9 +2784,27 @@ mod tests {
     }
 
     #[test]
+    fn cloud_rows_render_unmeasured_and_local_rows_keep_the_ladder() {
+        // No local surface can measure a cloud row (no pid, no roster row,
+        // no transcript), so the honest render is `?`, never the alive its
+        // spawn-time status word claims. The override keys on the substrate
+        // stamp, not pid-absence: a pid-less local row still reads its ladder.
+        let raw = reg(
+            r#"{"name":"cloudy","cwd":"/w","status":"live","harness":"claude",
+                "substrate":"cloud","short_id":"session_abc123"},
+               {"name":"local","cwd":"/w","status":"live","harness":"claude"}"#,
+        );
+        let rows = derive_rows(&raw, NOW).unwrap();
+        let cloudy = rows.iter().find(|r| r.name == "cloudy").unwrap();
+        assert_eq!(cloudy.liveness, Liveness::Unmeasured);
+        let local = rows.iter().find(|r| r.name == "local").unwrap();
+        assert_eq!(local.liveness, Liveness::Alive);
+    }
+
+    #[test]
     fn derive_rows_reads_the_owner_edge_over_the_birth_edge() {
         // Succession re-homes the org. The FILE keeps the birth
-        // edge (the stepped_down lead) as history; the sideline joins the
+        // edge (the lead that stepped down) as history; the sideline joins the
         // CURRENT owner, so the lead label names the successor.
         let raw = reg(r#"{"name":"kestrel-successor","cwd":"/w","status":"live",
                  "harness_session_id":"01a0ee3f-successor"},
@@ -2951,50 +2978,6 @@ mod tests {
         assert_eq!(
             attach_job_id("too-long-hexstring-abcdef12"),
             "too-long-hexstring-abcdef12"
-        );
-    }
-
-    #[test]
-    fn agent_rows_screen_state_rung_badges_only_hookless_rows() {
-        // The screen-manifest rung (v7): a hook-less row with a fresh scrape
-        // verdict badges (blocked/working); `idle` renders as a plain live
-        // row (no AgentBadge::Idle until the next proto bump); a lapsed or
-        // malformed verdict ages to liveness-only; and ANY inside_leg report
-        // - even TTL-lapsed - keeps a leftover verdict from badging (the hook
-        // is unconditionally senior).
-        let raw = reg(&format!(
-            r#"{{"name":"scraped-blocked","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"blocked","rule":"permission_prompt",
-                                  "seq":2,"at":"{recent}","ttl_ms":120000}}}},
-               {{"name":"scraped-idle","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"idle","rule":"idle_prompt",
-                                  "seq":1,"at":"{recent}","ttl_ms":120000}}}},
-               {{"name":"scraped-lapsed","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"working","rule":"busy","seq":1,
-                                  "at":"2020-01-01T00:00:00Z","ttl_ms":120000}}}},
-               {{"name":"scraped-corrupt","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"working","rule":"busy","seq":1,
-                                  "at":"garbage","ttl_ms":120000}}}},
-               {{"name":"hook-wins","cwd":"/w","status":"live",
-                 "inside_leg":{{"state":"working","seq":9,
-                                "received_at":"2020-01-01T00:00:00Z","ttl_ms":60000}},
-                 "screen_state":{{"state":"blocked","rule":"leftover","seq":1,
-                                  "at":"{recent}","ttl_ms":120000}}}}"#,
-            recent = "2027-01-15T07:59:30Z",
-        ));
-        let now = rfc3339_like_to_secs("2027-01-15T08:00:00Z").unwrap();
-        let rows = derive_rows(&raw, now).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        let blocked = get("scraped-blocked");
-        assert_eq!(blocked.badge, Some(AgentBadge::Blocked));
-        assert_eq!(blocked.reason.as_deref(), Some("permission_prompt"));
-        assert_eq!(get("scraped-idle").badge, None, "idle = plain live row");
-        assert_eq!(get("scraped-lapsed").badge, None, "TTL lapse ages out");
-        assert_eq!(get("scraped-corrupt").badge, None, "corrupt stamp closed");
-        assert_eq!(
-            get("hook-wins").badge,
-            None,
-            "a hook-capable row (even lapsed) never badges from a scrape verdict"
         );
     }
 
@@ -4254,6 +4237,7 @@ config_dir = "~/.claude-alt"
             exited,
             dnd: false,
             held_conversation: false,
+            pinned: false,
             badge,
             reason: None,
             mux: None,
@@ -4292,7 +4276,7 @@ config_dir = "~/.claude-alt"
         ]);
         for (name, expected) in [
             ("t-xaaaa-tally-claude-sonnet", "x-aaaa"),
-            ("lead-cliverbs-x-bbbb-g2", "x-bbbb"),
+            ("lead-clicommands-x-bbbb-g2", "x-bbbb"),
             ("build-xcccc", "x-cccc"),
             ("target-x-dddd-fleet-status", "x-dddd"),
             ("target-ab-1a2b3c4d-slug", "ab-1a2b3c4d"),
@@ -4316,7 +4300,7 @@ config_dir = "~/.claude-alt"
     const LIVE_NAMES: &[(&str, Option<&str>)] = &[
         ("t-xaaaa-tally-claude-sonnet", Some("x-aaaa")),
         ("bp-xffff-toml", Some("x-ffff")),
-        ("lead-cliverbs-x-bbbb-g2", Some("x-bbbb")),
+        ("lead-clicommands-x-bbbb-g2", Some("x-bbbb")),
         ("bp-sccache-x0000", Some("x-0000")),
         ("build-xcccc", Some("x-cccc")),
         ("bp-slotleak-x1111", Some("x-1111")),
@@ -4713,7 +4697,7 @@ config_dir = "~/.claude-alt"
 
     /// The Follow set mirrors the reader arms in peek.py's `recent_records`.
     /// Rust checked against Rust proves nothing: parse the Python seam the
-    /// verb actually dispatches on, so adding a reader arm there without
+    /// command actually dispatches on, so adding a reader arm there without
     /// moving the tier here fails this test.
     #[test]
     fn thread_reach_mirrors_the_peek_reader_seam() {

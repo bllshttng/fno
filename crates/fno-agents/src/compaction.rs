@@ -156,38 +156,6 @@ fn first_boundary_after(transcript: &Path, after_epoch: i64) -> Result<Option<St
     Ok(None)
 }
 
-/// The timestamp of the newest `type:"assistant"` entry. User, system and
-/// summary lines keep transcript mtime warm without meaning the worker spoke
-/// (trap 4: one session read 0.4h fresh by mtime while its newest assistant
-/// entry was 10.5h old), so liveness reads THIS, never mtime.
-pub fn newest_assistant_ts(transcript: &Path) -> Result<Option<String>, String> {
-    let raw =
-        std::fs::read_to_string(transcript).map_err(|e| format!("transcript unreadable: {e}"))?;
-    let mut newest: Option<(i64, String)> = None;
-    for line in raw.lines() {
-        // Cheap prefilter before the JSON parse: only assistant entries can win.
-        if !line.contains("\"type\":\"assistant\"") {
-            continue;
-        }
-        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if row.get("type").and_then(|v| v.as_str()) != Some("assistant") {
-            continue;
-        }
-        let Some(ts) = row.get("timestamp").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(epoch) = rfc3339_to_epoch(ts) else {
-            continue;
-        };
-        if newest.as_ref().is_none_or(|(e, _)| epoch > *e) {
-            newest = Some((epoch, ts.to_string()));
-        }
-    }
-    Ok(newest.map(|(_, ts)| ts))
-}
-
 /// The full reader. `transcript` is the claude JSONL path when known; a
 /// `None` transcript with a live stamp still answers from the stamp alone.
 pub fn compaction_state(
@@ -313,7 +281,7 @@ pub fn count_boundaries_since(transcript: &Path, since_epoch: Option<i64>) -> Re
 }
 
 // ---------------------------------------------------------------------------
-// CLI verb: `fno-agents compaction mark --session <id>` (the PreCompact hook
+// CLI command: `fno-agents compaction mark --session <id>` (the PreCompact hook
 // leg) and `status` (read-side debug surface; the daemon and provider_cap call
 // the library in process).
 // ---------------------------------------------------------------------------
@@ -325,9 +293,14 @@ pub fn run_compaction(args: &[String]) -> i32 {
         Some((action, rest)) if action == "status" => compaction_status(&home, rest),
         Some((action, rest)) if action == "operator-turns" => crate::operator_turns::run(rest),
         Some((action, rest)) if action == "ack" => crate::operator_turns::run_ack(rest),
+        Some((action, rest)) if action == "inbox-peers" => crate::inbox_peers::run(rest),
+        Some((action, rest)) if action == "outstanding" => {
+            crate::outstanding::run_outstanding(rest)
+        }
+        Some((action, rest)) if action == "approvals" => crate::approvals::run(rest),
         _ => {
             eprintln!(
-                "usage: compaction mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns --session <id> --transcript <path> --capture-dir <dir> | ack --session <id> --turn <id> --outcome <o> [--why <w>] --capture-dir <dir>"
+                "usage: compaction outstanding [--json|-J] | outstanding mine|ask|clear|reindex ... | mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json] | approvals ls|show|decide ..."
             );
             2
         }

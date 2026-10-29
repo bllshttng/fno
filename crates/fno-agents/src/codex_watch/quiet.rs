@@ -11,6 +11,48 @@ use std::path::Path;
 const SENDER: &str = "fno/quiet-recovery";
 const TAIL_BYTES: u64 = 256 * 1024;
 
+/// A parked session stays shielded for one quiet interval past its watch's
+/// ring: the moment its alarm last went off. The ring is the bound itself,
+/// or an earlier wake row's stamp when the watch woke ahead of its bound.
+/// The worker then needs that interval to wake, act and re-arm (or proceed)
+/// before its silence reads as stuck. The shield still requires the watch
+/// to be the session's current one, so a superseded watch releases the seat
+/// at once; the wake row is not superseding evidence, so it never lifts the
+/// shield, and a re-arm supersedes the row inside `settle_watches`. Without
+/// the linger, every watch bound evaluated the ladder against a pre-watch
+/// activity stamp, flagged the healthy parked worker stuck, and each failed
+/// resume salvaged a recovery branch.
+const WATCH_LINGER_MS: i64 = 900 * 1000;
+
+fn watch_shielded(
+    watch: &crate::watch_expiry::Watch,
+    evidence: &[crate::watch_expiry::Evidence],
+    now_ms: i64,
+) -> bool {
+    let ring = wake_ring(watch, evidence)
+        .unwrap_or(watch.expires_at_ms)
+        .min(watch.expires_at_ms);
+    now_ms < ring + WATCH_LINGER_MS && crate::watch_expiry::is_current_watch(watch, evidence)
+}
+
+/// The newest wake row stamped for this watch, when one exists. The same
+/// identity `woken_already` matches: session plus `watch_event_id`.
+fn wake_ring(
+    watch: &crate::watch_expiry::Watch,
+    evidence: &[crate::watch_expiry::Evidence],
+) -> Option<i64> {
+    evidence
+        .iter()
+        .filter(|row| {
+            row.session_id.as_deref() == Some(watch.session_id.as_str())
+                && row.kind == crate::watch_expiry::WAKE_EVENT
+                && row.data.get("watch_event_id").and_then(Value::as_str)
+                    == Some(watch.event_id.as_str())
+        })
+        .map(|row| row.ts_ms)
+        .max()
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Episode {
     activity: i64,
@@ -29,17 +71,27 @@ struct Tail {
     started_at: Option<i64>,
     failed: bool,
     read: bool,
+    touched: i64,
 }
 
 fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
     let mut file = std::fs::File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
+    let meta = file.metadata().ok()?;
+    let size = meta.len();
+    let touched = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
     file.seek(SeekFrom::Start(size.saturating_sub(TAIL_BYTES)))
         .ok()?;
     let mut bytes = Vec::new();
     file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes);
-    let mut out = Tail::default();
+    let mut out = Tail {
+        touched,
+        ..Default::default()
+    };
     for line in text.lines().skip(usize::from(size > TAIL_BYTES)) {
         let Ok(row) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -74,7 +126,8 @@ fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
             }
         }
     }
-    (out.activity > 0 || out.started_at.is_some() || out.read || out.failed).then_some(out)
+    (out.activity > 0 || out.started_at.is_some() || out.read || out.failed || out.touched > 0)
+        .then_some(out)
 }
 
 #[derive(Debug, PartialEq)]
@@ -83,6 +136,39 @@ enum Action {
     Nudge(u8),
     Recover,
     Help,
+    /// The node closed under an idle worker: stop it so the seat frees.
+    Stop(&'static str),
+}
+
+/// The reason a node is closed to its worker, or `None` while work remains.
+/// Deferred stays a silent skip: a parked node may come back to the same seat.
+fn closed(row: &Value) -> Option<&'static str> {
+    let field = |k: &str| row.get(k).and_then(Value::as_str);
+    match field("status") {
+        Some("done") => Some("done"),
+        Some("superseded") => Some("superseded"),
+        _ if field("superseded_by").is_some_and(|s| !s.is_empty()) => Some("superseded"),
+        _ if field("merge_status") == Some("merged") => Some("merged"),
+        _ => None,
+    }
+}
+
+/// On a closed node every move past `Wait` would resume or nudge a worker
+/// into work that is already over, so it becomes a stop. A worker still
+/// writing its transcript reads `Wait` and is left to finish.
+fn on_closed(decision: Action, closed: Option<&'static str>) -> Action {
+    match (closed, decision) {
+        (_, Action::Wait) => Action::Wait,
+        (Some(why), _) => Action::Stop(why),
+        (None, decision) => decision,
+    }
+}
+
+/// The skip a deliberately-stopped row records when its node also delivered:
+/// the revival rule's "record a skip reason instead". `None` proceeds into
+/// the ladder - an open node's revival stands.
+fn stopped_skip_reason(closed: Option<&'static str>) -> Option<String> {
+    closed.map(|why| format!("worker stopped on purpose; node {why}; never revived"))
 }
 
 fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) -> Action {
@@ -98,7 +184,11 @@ fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) 
     if episode.escalated {
         return Action::Wait;
     }
-    if dead {
+    // A pid probe can read a working worker as gone (a launcher pid, a tool
+    // call in flight). A live own claim or a transcript written inside the
+    // first nudge window outranks it: no resume, no salvage, no help.
+    let fresh = now.saturating_sub(tail.activity.max(tail.touched)) < 900;
+    if dead && !live && !fresh {
         return if episode.recovered {
             Action::Help
         } else {
@@ -109,6 +199,8 @@ fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) 
         if tail.read {
             episode.read_stage = *stage;
             episode.pending = None;
+        } else if fresh {
+            return Action::Wait;
         } else {
             return if episode.recovered {
                 Action::Help
@@ -356,6 +448,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                     "id",
                     "status",
                     "merge_status",
+                    "superseded_by",
                     "sessions",
                     "parent",
                     "project",
@@ -372,14 +465,13 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
     let claude_home = crate::claude_ask::ClaudeHome::from_env();
     let watches = crate::watch_expiry::read_evidence(home, now * 1000)?;
-    // Every `agent_stopped` emit carries only the row's `name`, never a
-    // `session_id` (daemon.rs, claude_stop.rs, keeper_stop.rs all stamp
-    // `{"name": ...}`), so this keys on name - keying on `session_id` here
-    // leaves the set permanently empty.
+    // The evidence reader stamps each `agent_stopped` row with the session
+    // that held the stopped name at the time, so a respawn under the same
+    // name keeps its own recovery.
     let stopped: std::collections::HashSet<_> = watches
         .iter()
         .filter(|e| e.kind == "agent_stopped")
-        .filter_map(|e| e.data.get("name").and_then(Value::as_str))
+        .filter_map(|e| e.session_id.as_deref())
         .collect();
     let mut stores = crate::gc_inventory::HarnessStoreIndex::default();
     let mut loaded = None;
@@ -408,17 +500,13 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             else {
                 return Ok(());
             };
-            if matches!(
-                row.get("status").and_then(Value::as_str),
-                Some("done" | "superseded" | "deferred")
-            ) || row.get("merge_status").and_then(Value::as_str) == Some("merged")
-            {
+            if row.get("status").and_then(Value::as_str) == Some("deferred") {
                 return Ok(());
             }
+            let closed = closed(row);
             if settle_watches.iter().any(|w| {
                 (w.watch.session_id == sid || w.codex_thread_id.as_deref() == Some(sid))
-                    && now * 1000 < w.watch.expires_at_ms
-                    && crate::watch_expiry::is_current_watch(&w.watch, &watches)
+                    && watch_shielded(&w.watch, &watches, now * 1000)
             }) {
                 return Ok(());
             }
@@ -437,8 +525,18 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 return Ok(());
             }
             // A row a lead stopped on purpose is the lead's, not quiet
-            // recovery's: send no nudge, no resume and no help for it.
-            if stopped.contains(entry.name.as_str()) {
+            // recovery's: send no nudge, no resume and no help for it. When
+            // its work also delivered, the revival rule records the skip it
+            // mandates; an open node stays the silent grace skip.
+            if stopped.contains(sid) {
+                if let Some(reason) = stopped_skip_reason(closed) {
+                    emitter
+                        .emit(
+                            "quiet_worker_skip",
+                            &json!({"session_id": sid, "node": node, "reason": reason}),
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
                 return Ok(());
             }
             let state_path = dir.join(format!("{sid}.json"));
@@ -494,12 +592,15 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 .as_ref()
                 .filter(|_| tail.read)
                 .map(|(marker, _, stage)| (marker.clone(), *stage));
-            let decision = action(
-                &mut episode,
-                &tail,
-                now,
-                own && claim_state == crate::claims::ClaimState::Live,
-                dead,
+            let decision = on_closed(
+                action(
+                    &mut episode,
+                    &tail,
+                    now,
+                    own && claim_state == crate::claims::ClaimState::Live,
+                    dead,
+                ),
+                closed,
             );
             if decision != Action::Wait {
                 acted += 1;
@@ -585,6 +686,19 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                         episode.pending = Some((marker, now, 3));
                     }
                 }
+                Action::Stop(why) => {
+                    let (code, out, error) = command(&["fno", "agents", "stop", sid], &entry.cwd);
+                    episode.escalated = true;
+                    let receipt =
+                        crate::attention_arm::last_line(if code == 0 { &out } else { &error });
+                    emitter
+                        .emit(
+                            "quiet_worker_recovery",
+                            &json!({"session_id": sid, "node": node,
+                        "reason": format!("node {why}: stopped the idle worker instead of resuming it (exit {code}: {receipt})")}),
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
                 Action::Help => {
                     handoff = Some(episode.recovery_reason.clone().unwrap_or_else(|| {
                         "worker stayed quiet after read-confirmed nudges".to_string()
@@ -647,7 +761,41 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             break;
         }
     }
+    prune_salvage_refs(&registry, &dir, now)?;
     Ok(())
+}
+
+/// Salvage refs are checked against git at most once an hour: every check
+/// reads each stray path, too much to pay on every daemon tick.
+const SALVAGE_PRUNE_INTERVAL_SECS: i64 = 3600;
+
+fn prune_salvage_refs(
+    registry: &crate::state::Registry,
+    dir: &Path,
+    now: i64,
+) -> Result<(), String> {
+    let stamp = dir.join("salvage-prune.epoch");
+    let last = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|text| text.trim().parse::<i64>().ok());
+    if matches!(last, Some(t) if now - t < SALVAGE_PRUNE_INTERVAL_SECS) {
+        return Ok(());
+    }
+    let repos: std::collections::BTreeSet<&str> =
+        registry.entries.iter().map(|e| e.cwd.as_str()).collect();
+    for repo in repos {
+        let pruned = match super::salvage_prune::prune(Path::new(repo), "origin/main", now) {
+            Ok(pruned) => pruned,
+            Err(error) => {
+                eprintln!("salvage prune skipped {repo}: {error}");
+                continue;
+            }
+        };
+        for p in pruned {
+            eprintln!("salvage ref pruned {}: {}", p.refname, p.sha);
+        }
+    }
+    std::fs::write(&stamp, now.to_string()).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -666,6 +814,13 @@ mod tests {
         };
         assert_eq!(action(&mut e, &t, 1000, true, false), Action::Nudge(1));
         e.pending = Some(("marker".into(), 1000, 1));
+        t.touched = 950;
+        assert_eq!(
+            action(&mut e, &t, 1001, true, false),
+            Action::Wait,
+            "an unread nudge never recovers a worker still writing its transcript"
+        );
+        t.touched = 0;
         assert_eq!(action(&mut e, &t, 1001, true, false), Action::Recover);
         assert_eq!(action(&mut e, &t, 1600, true, false), Action::Recover);
         t.read = true;
@@ -679,7 +834,24 @@ mod tests {
         t.activity = 2800;
         assert_eq!(action(&mut e, &t, 2801, true, false), Action::Wait);
         assert_eq!(e.read_stage, 0);
-        assert_eq!(action(&mut e, &t, 2801, false, true), Action::Recover);
+        assert_eq!(
+            action(&mut e, &t, 2801, false, true),
+            Action::Wait,
+            "fresh transcript work outranks a gone pid"
+        );
+        assert_eq!(
+            action(&mut e, &t, 4000, true, true),
+            Action::Nudge(1),
+            "a live own claim outranks a gone pid: the quiet ladder runs, not recovery"
+        );
+        assert_eq!(action(&mut e, &t, 4000, false, true), Action::Recover);
+        t.touched = 3900;
+        e.recovered = false;
+        assert_eq!(
+            action(&mut e, &t, 4000, false, true),
+            Action::Wait,
+            "a transcript file write mid tool call is progress"
+        );
         assert_eq!(action(&mut e, &t, 5000, false, false), Action::Wait);
 
         let dir = tempfile::tempdir().unwrap();
@@ -708,6 +880,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tail(&path, None).unwrap().activity, 1767226500);
+    }
+
+    #[test]
+    fn closed_node_stops_an_idle_worker_instead_of_resuming_it() {
+        let superseded = json!({"id": "x-1", "status": "in_progress", "superseded_by": "x-2"});
+        assert_eq!(closed(&superseded), Some("superseded"));
+        assert_eq!(
+            on_closed(Action::Recover, closed(&superseded)),
+            Action::Stop("superseded")
+        );
+        assert_eq!(
+            on_closed(Action::Nudge(1), closed(&json!({"status": "done"}))),
+            Action::Stop("done")
+        );
+        assert_eq!(
+            on_closed(Action::Wait, Some("merged")),
+            Action::Wait,
+            "a worker still writing on a merged node finishes its ritual"
+        );
+        let open = json!({"status": "in_progress", "superseded_by": null});
+        assert_eq!(on_closed(Action::Recover, closed(&open)), Action::Recover);
+    }
+
+    #[test]
+    fn a_stopped_row_records_its_skip_only_on_a_delivered_node() {
+        for why in ["done", "superseded", "merged"] {
+            let reason = stopped_skip_reason(Some(why)).expect("delivered nodes record a skip");
+            assert!(
+                reason.contains(why) && reason.contains("never revived"),
+                "{reason}"
+            );
+        }
+        assert!(
+            stopped_skip_reason(None).is_none(),
+            "an open node's stopped worker keeps the silent grace skip"
+        );
     }
 
     #[test]
@@ -803,5 +1011,156 @@ mod tests {
             err.contains("salvage skipped") && err.contains("the main worktree"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn watch_shield_covers_the_bound_and_one_quiet_interval_past_it() {
+        let watch = crate::watch_expiry::Watch {
+            event_id: "e1".into(),
+            seq: 1,
+            session_id: "sess-a".into(),
+            pr: Some(258),
+            node: "x-1".into(),
+            blocker: "ci".into(),
+            task_id: None,
+            reason: None,
+            expires_at_ms: 1_000_000,
+            ts_ms: 100_000,
+        };
+        assert!(watch_shielded(&watch, &[], watch.expires_at_ms - 1));
+        assert!(watch_shielded(&watch, &[], watch.expires_at_ms));
+        assert!(watch_shielded(
+            &watch,
+            &[],
+            watch.expires_at_ms + WATCH_LINGER_MS - 1
+        ));
+        assert!(!watch_shielded(
+            &watch,
+            &[],
+            watch.expires_at_ms + WATCH_LINGER_MS
+        ));
+    }
+
+    #[test]
+    fn the_expiry_wake_does_not_unshield_a_parked_session() {
+        // The incident: a session parks on ci, the bound fires, the daemon
+        // emits its wake row (which ends is_current_watch), and the worker's
+        // next transcript write is still minutes out. The shield must hold
+        // through the wake and one quiet interval past the bound.
+        let evidence = vec![
+            crate::watch_expiry::Evidence {
+                event_id: "e1".into(),
+                seq: 1,
+                ts_ms: 100_000,
+                kind: crate::watch_expiry::WATCH_IDLE.into(),
+                session_id: Some("sess-a".into()),
+                data: serde_json::json!({
+                    "harness": "claude",
+                    "expires_at_ms": 1_000_000,
+                    "blocker": "ci",
+                    "node": "x-1",
+                }),
+            },
+            crate::watch_expiry::Evidence {
+                event_id: "e2".into(),
+                seq: 2,
+                ts_ms: 1_000_050,
+                kind: crate::watch_expiry::WAKE_EVENT.into(),
+                session_id: Some("sess-a".into()),
+                data: serde_json::json!({"watch_event_id": "e1"}),
+            },
+        ];
+        let watch = &crate::codex_watch::settle_watches(&evidence)[0].watch;
+        assert!(
+            crate::watch_expiry::is_current_watch(watch, &evidence),
+            "the wake row is not superseding evidence, so the watch stays current"
+        );
+        assert!(watch_shielded(watch, &evidence, 1_000_050));
+        assert!(watch_shielded(
+            watch,
+            &evidence,
+            watch.expires_at_ms + WATCH_LINGER_MS - 1
+        ));
+        assert!(!watch_shielded(
+            watch,
+            &evidence,
+            watch.expires_at_ms + WATCH_LINGER_MS
+        ));
+    }
+
+    #[test]
+    fn a_superseded_watch_never_shields_the_seat() {
+        // A watch a later idle row superseded (the worker re-armed or moved
+        // on) releases the seat at once, however far its own bound still
+        // sits in the future.
+        let evidence = vec![crate::watch_expiry::Evidence {
+            event_id: "e2".into(),
+            seq: 2,
+            ts_ms: 200_000,
+            kind: crate::watch_expiry::WATCH_IDLE.into(),
+            session_id: Some("sess-a".into()),
+            data: serde_json::json!({
+                "harness": "claude",
+                "expires_at_ms": 1_100_000,
+                "blocker": "ci",
+                "node": "x-1",
+            }),
+        }];
+        let superseded = crate::watch_expiry::Watch {
+            event_id: "e1".into(),
+            seq: 1,
+            session_id: "sess-a".into(),
+            pr: Some(258),
+            node: "x-1".into(),
+            blocker: "ci".into(),
+            task_id: None,
+            reason: None,
+            expires_at_ms: 1_000_000,
+            ts_ms: 100_000,
+        };
+        assert!(!crate::watch_expiry::is_current_watch(
+            &superseded,
+            &evidence
+        ));
+        assert!(!watch_shielded(&superseded, &evidence, 150_000));
+    }
+
+    #[test]
+    fn an_early_wake_lights_the_shield_from_the_wake_not_the_bound() {
+        // A ci watch settled ahead of its bound: the worker got its answer
+        // early, so the linger runs from the wake's own stamp, not from the
+        // bound it never reached. A worker that stalls after answering is
+        // read on the same cadence as any other quiet worker.
+        let evidence = vec![
+            crate::watch_expiry::Evidence {
+                event_id: "e1".into(),
+                seq: 1,
+                ts_ms: 100_000,
+                kind: crate::watch_expiry::WATCH_IDLE.into(),
+                session_id: Some("sess-a".into()),
+                data: serde_json::json!({
+                    "harness": "claude",
+                    "expires_at_ms": 1_000_000,
+                    "blocker": "ci",
+                    "node": "x-1",
+                }),
+            },
+            crate::watch_expiry::Evidence {
+                event_id: "e2".into(),
+                seq: 2,
+                ts_ms: 500_000,
+                kind: crate::watch_expiry::WAKE_EVENT.into(),
+                session_id: Some("sess-a".into()),
+                data: serde_json::json!({"watch_event_id": "e1"}),
+            },
+        ];
+        let watch = &crate::codex_watch::settle_watches(&evidence)[0].watch;
+        assert!(watch_shielded(watch, &evidence, 500_000));
+        assert!(watch_shielded(
+            watch,
+            &evidence,
+            500_000 + WATCH_LINGER_MS - 1
+        ));
+        assert!(!watch_shielded(watch, &evidence, 500_000 + WATCH_LINGER_MS));
     }
 }

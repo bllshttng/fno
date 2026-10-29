@@ -4,7 +4,7 @@
 //! Every body guard is a pure function of the body text, the title and the
 //! branch name, yet CI is where a bad body was first discovered: a red job
 //! costs a full workflow round, a body edit and a pushed commit, and reads
-//! indistinguishably from a code failure. This verb runs the same scripts CI
+//! indistinguishably from a code failure. This command runs the same scripts CI
 //! runs -- it holds no second copy of any rule -- so first detection moves to
 //! authoring time. The CI guards stay as the backstop.
 //!
@@ -27,8 +27,7 @@ const GUARD_TIMEOUT: Duration = Duration::from_secs(60);
 /// `PR_BASE_SHA` (merge-base of the resolved base ref and HEAD). A script missing
 /// from this repo is a `skip`, not a failure, so a repo carrying none of
 /// these guards passes vacuously.
-const GUARDS: [&str; 3] = [
-    "scripts/ci/check-no-session-urls.sh",
+const GUARDS: [&str; 2] = [
     "scripts/ci/check-pr-node-closure.sh",
     "scripts/ci/check-oos-tracked.sh",
 ];
@@ -197,7 +196,7 @@ pub fn run(argv: &[String]) -> i32 {
     };
 
     // The guard child inherits this process's environment, so the shared env
-    // contract is stamped once before the loop. The verb is single-threaded:
+    // contract is stamped once before the loop. The command is single-threaded:
     // no reader can see a torn write.
     std::env::set_var("PR_BODY", &body);
     std::env::set_var("PR_TITLE", &a.title);
@@ -264,7 +263,7 @@ pub fn run(argv: &[String]) -> i32 {
 
     println!("pr-body-check: {ran} ran, {failed} failed");
     if failed > 0 {
-        eprintln!("the PR body is not a commit: fix the body file, rerun this verb, then create or edit the PR");
+        eprintln!("the PR body is not a commit: fix the body file, rerun this command, then create or edit the PR");
         return 1;
     }
     0

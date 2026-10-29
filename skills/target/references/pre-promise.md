@@ -27,10 +27,12 @@ Skip the entire step silently when:
 Mechanic:
 
 ```python
-from fno.inbox.settings import read_peer_surfaces, read_surface_patterns
+import json, subprocess
 
-peers = read_peer_surfaces()
-patterns = read_surface_patterns()
+maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
+                                 capture_output=True, text=True, check=True).stdout)
+peers = maps["peers"]
+patterns = maps["surface_patterns"]
 if not peers:
     raise SystemExit(0)  # opt-in by design
 
@@ -117,7 +119,7 @@ if [[ -n "${NODE_ID:-}" && "$NODE_ID" != "null" && -n "${PR_NUMBER:-}" ]]; then
 fi
 ```
 
-The loop-check verb (`fno-agents loop-check`) will verify the world independently: PR exists for HEAD + CI green + reviewed. A premature promise does not close the loop - it blocks with the failing read named, and the session continues until the world catches up or the backstop fires.
+The loop-check command (`fno-agents loop-check`) will verify the world independently: PR exists for HEAD + CI green + reviewed. A premature promise does not close the loop - it blocks with the failing read named, and the session continues until the world catches up or the backstop fires.
 
 **Required-bot quota early warning (advisory).** When a review gate would wait on a `config.review` required bot, a cached-quota check surfaces a coming wedge now instead of letting the gate hang silently for hours. Run it just before the promise; it is read-only, fail-open, and never gates:
 
@@ -125,7 +127,7 @@ The loop-check verb (`fno-agents loop-check`) will verify the world independentl
 fno config accounts required-bot-check
 ```
 
-When every required bot's provider has headroom or none are configured, print nothing. Emit one `quota_required_bot_exhausted` decision event per exhausted bot. If there is a warning, surface its facts in attended mode. The user can swap accounts or wait for reset instead of discovering the block later.
+When every required bot's provider has headroom or none are configured, it prints nothing. The command itself emits one `quota_required_bot_exhausted` decision event per exhausted bot, so do not emit it again. If there is a warning, surface its facts in attended mode. The user can swap accounts or wait for reset instead of discovering the block later.
 
 ```
 <help reason="required-bot-quota-exhausted" evidence="<the required-bot-check output>">a required review bot's provider is out of quota; the review gate will wedge until its reset. Consider swapping the account or waiting.</help>
@@ -137,7 +139,7 @@ This never blocks `<promise>` - it is an early warning, not a gate.
 
 Before emitting the promise, scan this session for novel learnings worth persisting. The goal is to populate `~/.claude/projects/.../memory/` with signal that would otherwise rot in the transcript and cause future-you to repeat a mistake or miss context.
 
-The memory pass is informational. Run it before the promise output. When you have nothing worth writing, declare an explicit empty pass so the session record is complete. The loop-check verb does not gate on memory pass; it is a best-effort practice for session learning capture.
+The memory pass is informational. Run it before the promise output. When you have nothing worth writing, declare an explicit empty pass so the session record is complete. The loop-check command does not gate on memory pass; it is a best-effort practice for session learning capture.
 
 Either way, **always run the pass.** When you have nothing worth writing, declare an explicit empty pass so the session record is complete:
 
@@ -148,7 +150,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory/write-memory-entry.sh" \
   --empty-pass --session-id "$SESSION_ID"
 ```
 
-The empty-pass flag writes the artifact with `entries_written: 0 approved: true` so the session record is complete. The pass is advisory: it never gates `<promise>` (the loop-check verb does not read it), but running it - even as an explicit empty pass - keeps the session learning trail honest.
+The empty-pass flag writes the artifact with `entries_written: 0 approved: true` so the session record is complete. The pass is advisory: it never gates `<promise>` (the loop-check command does not read it), but running it - even as an explicit empty pass - keeps the session learning trail honest.
 
 ### What qualifies
 
@@ -276,7 +278,7 @@ When zero candidates pass the bar, write nothing. Silence is fine. An empty memo
 
 ## Deferrals Capture (advisory)
 
-Sibling to the memory pass, but for the *substrate* rather than your memory. Scan this session for small follow-ups that surfaced and were deferred ("replace this lambda with a def", "add a `Literal[]` here", "audit the failure-path emits") - items too small for an idea node but worth not losing. These land in the backlog capture tier (`fno backlog capture`), a markdown holding-pen below idea nodes. See `docs/triage.md` in the footnote repo for the full triage + promotion flow.
+Sibling to the memory pass, but for the *substrate* rather than your memory. Scan this session for small follow-ups that surfaced and were deferred ("replace this lambda with a def", "add a `Literal[]` here", "audit the failure-path emits") - items too small for an idea node but worth not losing. These land in the backlog capture tier (`fno backlog capture`), a markdown holding-pen below idea nodes. See `docs/backlog-triage.md` in the footnote repo for the full triage + promotion flow.
 
 **The pass is advisory** (`deferrals_captured`): run-and-log, never a gate. It writes a `.fno/artifacts/deferrals-${session_id}.md` artifact and emits an `inbox_add`/`inbox_empty_pass` event for the session as an observable record, but its absence never blocks `<promise>` and never re-opens the loop (completion authority is the three external reads plus budget). Skipped entirely when `no_deferrals_capture: true` (S size).
 
@@ -348,7 +350,7 @@ Output the completion promise when the pipeline is done. Choose the variant that
 When `cross_project: true` in target-state.md:
 - ALL projects must have a PR created and reviewed
 - ALL projects must have a `pr_url` visible in the cross-project pipeline summary
-- The loop-check verb reads the world independently; the promise succeeds only when all reads pass
+- The loop-check command reads the world independently; the promise succeeds only when all reads pass
 
 Promise tag format for cross-project:
 ```

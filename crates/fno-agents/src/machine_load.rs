@@ -214,11 +214,16 @@ pub fn outside_question(groups: &[StoredGroup]) -> IntakeRequest {
         cwd: None,
         asker: Some("machine_watch".to_string()),
         laws: Vec::new(),
+        rung: None,
         storage_root: PathBuf::from("."),
         index_path: None,
         journal_path: None,
         display_name: None,
         render_cap: None,
+        op: None,
+        event: None,
+        images: Vec::new(),
+        screens_dir: None,
     }
 }
 
@@ -544,11 +549,16 @@ pub fn file_budget_question(
         cwd: None,
         asker: Some("machine_watch".to_string()),
         laws: Vec::new(),
+        rung: None,
         storage_root: PathBuf::from("."),
         index_path: Some(crate::provider_cap::questions_path(home)),
         journal_path: Some(crate::paths::space_dir(cwd).join("events.jsonl")),
         display_name: None,
         render_cap: None,
+        op: None,
+        event: None,
+        images: Vec::new(),
+        screens_dir: None,
     };
     let answer = crate::question_intake::run_intake(&req, home);
     // A dedup names the still-open question: adopt its id so the answer

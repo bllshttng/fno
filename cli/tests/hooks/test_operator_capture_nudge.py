@@ -100,7 +100,7 @@ def test_speaks_with_literal_count_at_depth_three(tmp_path):
     assert "oldest operator ask" in result.stdout
 
 
-def test_silent_when_deployed_fno_lacks_the_verb(tmp_path):
+def test_silent_when_deployed_fno_lacks_the_command(tmp_path):
     """AC: exit 2 (Typer no-such-command) -> silent, exit 0, no perpetual nag."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

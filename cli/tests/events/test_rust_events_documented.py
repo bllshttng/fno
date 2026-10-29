@@ -43,10 +43,17 @@ REQUIRED_SOURCES = [
 RUST_CLIENT_EVENT_SOURCES = {
     "version_skew": "rust",
     # The native triage engine emits the apply telemetry from the backlog
-    # client verb, the same producer source its Python twin declares.
+    # client command, the same producer source its Python twin declares.
     "triage_applied": "backlog",
-    # The native archive sweep emits from the backlog archive verb.
+    # The native archive sweep emits from the backlog archive command.
     "graph_archive_swept": "backlog",
+    # A standalone research round records its DoneAdvisory terminal under the
+    # hook source, as its Python twin did.
+    "termination": "hook",
+    # The native observer (fno doctor observer) emits its findings and run
+    # close under the observer source its Python twin declared.
+    "skill_eval_finding": "observer",
+    "skill_eval_run_complete": "observer",
 }
 
 

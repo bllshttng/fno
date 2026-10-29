@@ -99,16 +99,18 @@ fn list(
 ) -> Outcome {
     let mut state = "open".to_string();
     let mut repo: Option<String> = None;
+    let mut since: Option<String> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match (arg.as_str(), it.next()) {
             ("--state", Some(v)) => state = v.clone(),
             ("--repo", Some(v)) => repo = Some(v.clone()),
+            ("--since", Some(v)) => since = Some(v.clone()),
             _ => {
                 return fail(
                     2,
                     format!(
-                    "usage: pr-heal list [--state open|closed|all] [--repo owner/repo]; got {arg}"
+                    "usage: pr-heal list [--state open|closed|all] [--repo owner/repo] [--since YYYY-MM-DD]; got {arg}"
                 ),
                 )
             }
@@ -116,6 +118,11 @@ fn list(
     }
     if !matches!(state.as_str(), "open" | "closed" | "all") {
         return fail(2, "--state must be open, closed, or all".to_string());
+    }
+    if let Some(day) = &since {
+        if chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").is_err() {
+            return fail(2, format!("--since must be YYYY-MM-DD; got {day}"));
+        }
     }
     let (slug, source) = match repo {
         Some(r) => (r, "--repo".to_string()),
@@ -132,11 +139,14 @@ fn list(
     };
     let mut rows: Vec<Value> = Vec::new();
     let mut full_pages = 0;
+    // Newest first, so a `--since` read stops at the first older page
+    // instead of walking every page of the repo's history.
+    let mut past_since = false;
     for page in 1..=MAX_PAGES {
         let cmd: Vec<String> = [
             "gh".to_string(),
             "api".to_string(),
-            format!("repos/{slug}/pulls?state={state}&per_page={PAGE_SIZE}&page={page}"),
+            format!("repos/{slug}/pulls?state={state}&sort=created&direction=desc&per_page={PAGE_SIZE}&page={page}"),
         ]
         .to_vec();
         let raw = match gh(&cmd, cwd) {
@@ -160,6 +170,18 @@ fn list(
         };
         for item in items {
             match summary(item) {
+                // ISO-8601 UTC stamps order as strings, and a bare day
+                // sorts before every stamp on that day. A row with no stamp
+                // stays listed rather than ending the read.
+                Some(row)
+                    if since.as_deref().is_some_and(|day| {
+                        row["createdAt"]
+                            .as_str()
+                            .is_some_and(|created| created < day)
+                    }) =>
+                {
+                    past_since = true;
+                }
                 Some(row) => rows.push(row),
                 None => {
                     return fail(
@@ -169,7 +191,7 @@ fn list(
                 }
             }
         }
-        if items.len() < PAGE_SIZE {
+        if items.len() < PAGE_SIZE || past_since {
             break;
         }
         full_pages += 1;
@@ -195,7 +217,8 @@ fn list(
     }
 }
 
-/// The listing row: `number, state, title, headRefName, url`, plus `body`
+/// The listing row: `number, state, title, headRefName, url`, the three
+/// `createdAt`/`closedAt`/`mergedAt` stamps (null when unset), plus `body`
 /// for the binding reader (removed before print). None on a malformed row.
 fn summary(item: &Value) -> Option<Value> {
     let number = item.get("number")?.as_i64()?;
@@ -228,6 +251,13 @@ fn summary(item: &Value) -> Option<Value> {
         }),
     );
     row.insert("url".into(), json!(url));
+    for (key, field) in [
+        ("createdAt", "created_at"),
+        ("closedAt", "closed_at"),
+        ("mergedAt", "merged_at"),
+    ] {
+        row.insert(key.into(), item.get(field).cloned().unwrap_or(Value::Null));
+    }
     row.insert(
         "body".into(),
         json!(item.get("body").and_then(Value::as_str).unwrap_or("")),
@@ -439,10 +469,14 @@ mod tests {
                 "headRefName",
                 "isCrossRepository",
                 "url",
+                "createdAt",
+                "closedAt",
+                "mergedAt",
                 "node_id",
                 "node_binding"
             ]
         );
+        assert!(bound["createdAt"].is_null());
         assert_eq!(bound["node_id"], "x-aaaa");
         assert_eq!(bound["node_binding"], "bound");
         assert_eq!(row(8)["node_binding"], "missing");
@@ -458,6 +492,56 @@ mod tests {
             out.stderr,
             vec!["pr list: o/r (--repo), 4 rows".to_string()]
         );
+    }
+
+    #[test]
+    fn since_keeps_rows_created_that_day_and_stops_paging_at_older_ones() {
+        let pages = std::cell::Cell::new(0);
+        let gh = |cmd: &[String], _: &Path| {
+            pages.set(pages.get() + 1);
+            assert!(cmd[2].contains("sort=created&direction=desc"), "{}", cmd[2]);
+            let pr = |number: i64, created: &str, merged: Value| {
+                json!({
+                    "number": number, "state": "closed", "merged_at": merged,
+                    "created_at": created, "closed_at": created, "title": "t",
+                    "head": {"ref": "chore/t", "repo": {"full_name": "o/r"}},
+                    "base": {"repo": {"full_name": "o/r"}},
+                    "html_url": format!("https://github.com/o/r/pull/{number}"),
+                })
+            };
+            // A full page, so only the older row can stop the paging.
+            let mut page: Vec<Value> = (0..PAGE_SIZE as i64)
+                .map(|n| pr(900 - n, "2026-10-24T09:00:00Z", Value::Null))
+                .collect();
+            page[0] = pr(901, "2026-10-24T00:00:00Z", json!("2026-10-24T01:00:00Z"));
+            page[PAGE_SIZE - 1] = pr(1, "2026-10-23T23:59:59Z", Value::Null);
+            Ok(Value::Array(page).to_string().into_bytes())
+        };
+        let out = list(
+            &args(&["--repo", "o/r", "--state", "all", "--since", "2026-10-24"]),
+            Path::new("/"),
+            None,
+            &gh,
+            &no_graph,
+        );
+        assert_eq!(out.code, 0, "{}", out.stdout);
+        assert_eq!(pages.get(), 1);
+        let rows: Value = serde_json::from_str(&out.stdout).unwrap();
+        let rows = rows.as_array().unwrap();
+        assert_eq!(rows.len(), PAGE_SIZE - 1);
+        assert_eq!(rows[0]["state"], "MERGED");
+        assert_eq!(rows[0]["mergedAt"], "2026-10-24T01:00:00Z");
+        assert!(rows.iter().all(|r| r["number"] != 1));
+
+        let bad = list(
+            &args(&["--repo", "o/r", "--since", "yesterday"]),
+            Path::new("/"),
+            None,
+            &gh,
+            &no_graph,
+        );
+        assert_eq!(bad.code, 2);
+        assert!(bad.stdout.contains("--since must be YYYY-MM-DD"));
     }
 
     #[test]

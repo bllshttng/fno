@@ -1,0 +1,6 @@
+owner function=marketing layer=built-in source=built-in/équipe.json status=valid
+analyst function=marketing layer=company source=company/sub/nested.json status=valid
+<unavailable> function=<unavailable> layer=project source=project/bad.json status=invalid
+broken function=support layer=project source=project/broken.json status=invalid
+<unavailable> function=<unavailable> layer=plan source=<FIXTURE>/extra/missing.json status=unreadable
+<unavailable> function=<unavailable> layer=plan source=plan status=invalid

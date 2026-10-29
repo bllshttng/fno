@@ -1,0 +1,1 @@
+{"records": [], "now": 1800000000.0, "expect": {"text": {"stdout": "No accounts configured. Run `fno config accounts add` to add one.\n", "exit": 0}, "json": {"stdout": "[]\n", "exit": 0}}}

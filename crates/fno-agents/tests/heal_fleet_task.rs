@@ -1,6 +1,6 @@
-//! The heal -> fleet-task seam, driven through the public verb: a rebase
+//! The heal -> fleet-task seam, driven through the public command: a fold
 //! conflict files one deduped fleet task beside the events journal, a clean
-//! rebase closes it with reason `rebased`, and two roots with the same
+//! fold closes it with reason `rebased`, and two roots with the same
 //! conflict file two tasks distinguished by cwd (one heal process serves
 //! several repos and PR numbers repeat across them, so identity is
 //! lane + key + cwd).
@@ -121,10 +121,10 @@ fn store_text(dir: &Path) -> String {
     fno_agents::event_store::journal_text(&dir.join("questions.jsonl"), &[])
 }
 
-const CONFLICT_PUSH_STDERR: &str = "pr-push: the branch is not safely rebasable onto origin/main (status needs_resolver; files: crates/fno-agents/src/a.rs, crates/fno/src/b.rs). Resolve the conflicts, then run `fno do pr rebase --continue`.";
+const CONFLICT_PUSH_STDERR: &str = "pr-push: the branch is not safely mergeable onto origin/main (status merge_conflict; files: crates/fno-agents/src/a.rs, crates/fno/src/b.rs). Resolve, then `git merge --continue`, and re-run the push.";
 
 #[test]
-fn a_rebase_conflict_files_one_fleet_task_and_a_clean_rebase_closes_it() {
+fn a_fold_conflict_files_one_fleet_task_and_a_clean_fold_closes_it() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
     stub_gh_rebase(d, "false");
@@ -140,19 +140,23 @@ fn a_rebase_conflict_files_one_fleet_task_and_a_clean_rebase_closes_it() {
         "one open task: {store}"
     );
     assert!(
-        store.contains("rebase conflict")
+        store.contains("fold conflict")
             && store.contains("crates/fno-agents/src/a.rs")
             && store.contains("crates/fno/src/b.rs"),
         "{store}"
     );
-    assert!(store.contains(r#""run":"fno do pr rebase 1""#), "{store}");
+    assert!(
+        store.contains(r#""run":"fno do pr push --pr 1""#),
+        "{store}"
+    );
+    assert!(!store.contains("fno do pr rebase"), "{store}");
     assert!(
         !log_of(d, "fno.log").contains("outstanding ask"),
         "no question was filed"
     );
     // The skip receipt itself stays asserted in-file: the events journal is
     // store-committed, and the committed read is crate-private.
-    // The next run rebases PR 1 cleanly, and the task closes.
+    // The next run folds PR 1 cleanly, and the task closes.
     stub_fno_push(
         d,
         "pr-push: origin/main behind-before=9 behind-after=0 preflight=full ci=settled sha=abc pushed=1",
@@ -163,7 +167,7 @@ fn a_rebase_conflict_files_one_fleet_task_and_a_clean_rebase_closes_it() {
     let store = store_text(d);
     assert!(
         store.contains(r#""type":"fleet_task_closed""#) && store.contains(r#""reason":"rebased""#),
-        "the clean rebase closed the task: {store}"
+        "the clean fold closed the task: {store}"
     );
 }
 
@@ -194,8 +198,8 @@ fn two_roots_with_the_same_conflict_file_two_tasks_distinguished_by_cwd() {
         .collect();
     assert_eq!(tasks.len(), 2, "one task per root: {store}");
     assert!(
-        tasks[0].contains(r#""key":"PR 1 rebase conflict""#)
-            && tasks[1].contains(r#""key":"PR 1 rebase conflict""#)
+        tasks[0].contains(r#""key":"PR 1 fold conflict""#)
+            && tasks[1].contains(r#""key":"PR 1 fold conflict""#)
             && tasks
                 .iter()
                 .any(|t| t.contains(&format!(r#""cwd":"{}""#, d.display())))
@@ -204,39 +208,4 @@ fn two_roots_with_the_same_conflict_file_two_tasks_distinguished_by_cwd() {
                 .any(|t| t.contains(&format!(r#""cwd":"{}""#, root1.display()))),
         "same key, different cwd: {store}"
     );
-}
-
-/// The merge leg's conflict stderr (a branch holding merge commits): the
-/// verb merged instead of rebasing and aborted, so the door is merge-then-push.
-const MERGE_LEG_PUSH_STDERR: &str = "pr-push: the branch is not safely rebasable onto origin/main (status merge_conflict; files: crates/fno-agents/src/a.rs). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.";
-
-#[test]
-fn a_merge_commit_branch_conflict_tells_the_owner_to_merge_not_rebase() {
-    // A rebase flattens a branch that holds merge commits, so the merge
-    // leg's question quotes the verb's merge door and its run is a push.
-    let tmp = tempfile::tempdir().unwrap();
-    let d = tmp.path();
-    stub_gh_rebase(d, "false");
-    stub_git_drive(d);
-    stub_cargo(d);
-    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
-    stub_fno_push(d, "", 3, MERGE_LEG_PUSH_STDERR);
-    fno_agents::heal::run_heal(&args_for(d, &["--all", "--apply"]));
-    let store = store_text(d);
-    assert_eq!(
-        store.matches(r#""type":"fleet_task""#).count(),
-        1,
-        "one open task: {store}"
-    );
-    assert!(
-        store.contains("Merge origin/main by hand")
-            && store.contains("instead of rebasing")
-            && store.contains("crates/fno-agents/src/a.rs"),
-        "{store}"
-    );
-    assert!(
-        store.contains(r#""run":"fno do pr push --pr 1""#),
-        "{store}"
-    );
-    assert!(!store.contains("fno do pr rebase"), "{store}");
 }

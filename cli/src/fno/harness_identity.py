@@ -155,10 +155,9 @@ SELF_SET_HARNESS_MARKERS: tuple[tuple[str, str], ...] = (
 # resolve_harness_identity() consults, in precedence order, while this defines
 # what has to be absent for a test or a preflight leg to behave like a fresh
 # checkout. Several modules read a session marker directly rather than through
-# the resolver - carveout/core.py and done/cli.py read
-# CLAUDECODE_SESSION_ID, adapters/hermes.py additionally treats
-# HERMES_SESSION_ID as proof of an in-session run - so scrubbing only the
-# resolver's tuples leaves those paths resolving the live session.
+# the resolver - carveout/core.py and done/cli.py read CLAUDECODE_SESSION_ID -
+# so scrubbing only the resolver's tuples leaves those paths resolving the live
+# session.
 #
 # Adding a name here changes ONLY what gets scrubbed, never what resolves, which
 # is why the direct-read markers belong here and not in the tuples: promoting one
@@ -225,11 +224,11 @@ def env_marks_unattended(env: "Mapping[str, str]") -> bool:
     ``TARGET_UNATTENDED`` for the manifest writer, `init-target-state.sh` ORs
     that with ``config.unattended.enabled``, and the native capability door
     (`fno-agents review-level capability`) re-derives it in-process, and
-    ``provenance/spawn_think`` asks the same question about the session filing
+    the Rust think dispatch asks the same question about the session filing
     an idea. They agreed before only by repeating one expression in four
     places.
 
-    Dependency-free on purpose: spawn_think's presence classifier is a locked
+    Dependency-free on purpose: the think presence classifier is a locked
     decision to stay off config and off tty probes, so this reads env and
     nothing else.
 
@@ -317,11 +316,10 @@ def ambient_identity_env_unset_args() -> list[str]:
 #   fno     - TARGET_SESSION_ID is this run's own claim linkage. The resolver
 #             never consults it, so stripping it cannot cure an ambiguity, and
 #             dropping it would mis-key the retried command's claims.
-#   hermes  - HERMES_SESSION_ID is a fail-closed guard, not a session identity:
-#             HermesCliAdapter reads it as "we are inside a CLI agent session,
-#             shell spawn is FORBIDDEN" (adapters/hermes.py). It is never a
-#             keep_family, so without this entry every remedy line offered to
-#             delete it, which turns that refusal into a real spawn.
+#   hermes  - HERMES_SESSION_ID marks a hermes CLI session, not a session
+#             identity, so it is never promoted to a resolver marker. It is
+#             never a keep_family either, so without this entry every remedy
+#             line would offer to delete it.
 _NEVER_STRIPPED_FAMILIES: frozenset[str] = frozenset({"fno", "hermes"})
 
 
@@ -738,9 +736,9 @@ def resolve_harness_identity(
     from two harness families mean one is foreign and inherited - a claude
     child carrying its codex parent's ``CODEX_THREAD_ID`` - and the answer is
     ``(None, None)`` so no caller can launder the foreign marker into this
-    session's identity. This is the same disposition
-    :func:`fno.dispatch_flags.infer_invoking_harness` gives the same
-    environment; the two must not diverge.
+    session's identity. route-slot's resolve mode folds the same
+    markers through the Rust twin of this resolution; the two must not
+    diverge.
 
     Byte-identical to :func:`resolve_owned_identity`'s ``single`` disposition
     whenever exactly one family is present (the dominant case).
@@ -818,7 +816,7 @@ def resolve_owned_identity(
     ``collide(harness, session_id) -> owner | None`` reports when a live
     registry row already owns an id (two live sessions cannot share one);
     default ``None`` skips the check. Both default off so this module stays
-    dependency-free; the consuming verb injects the real prover and collider.
+    dependency-free; the consuming command injects the real prover and collider.
 
     Resolution order: proof beats collision - a proven marker wins without
     consulting the collider, in both branches; collision then rejects ids a
@@ -1184,7 +1182,7 @@ def resolve_attester_identity(
             # such a directory, because the emitter then sees a family ancestor
             # that is really pytest.
             exe_name = os.path.basename(argv[0] if argv else proc.name()).lower()
-        except psutil.Error:
+        except (psutil.Error, PermissionError):
             exe_name = ""
         carrier_is_family.append(family_token in exe_name)
         if carrier_is_family[-1]:
@@ -1196,7 +1194,7 @@ def resolve_attester_identity(
             break
         try:
             proc = proc.parent()
-        except psutil.Error:
+        except (psutil.Error, PermissionError):
             break
         depth += 1
     witness = _attester_witness(marker_name, session_id, chain, carrier_is_family)

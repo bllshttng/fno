@@ -35,9 +35,9 @@ fn main() {
     sync_module_copy("effect_map");
     sync_module_copy("footnote_transcript");
     sync_merge_posture();
+    sync_ambient_vocab();
     sync_page_reload();
-    sync_spawn_phase();
-    sync_model_tiers();
+    sync_model_reach();
     sync_registry_schema();
     sync_events_limits();
     sync_events_schema();
@@ -360,6 +360,26 @@ fn sync_merge_posture() {
     write_if_different(&cli_copy, &bytes);
 }
 
+/// PRODUCE the downstream copy of the ambient vocabulary.
+///
+/// The crate owns `src/ambient_vocab.toml` (`test_env.rs` `include_str!`s
+/// it), and the Python package reads a byte copy as package data so the
+/// Python `classify` service and the Rust neutralise cannot drift. The
+/// cli-ci generated-copies step is the tripwire for a hand edit to the copy.
+fn sync_ambient_vocab() {
+    println!("cargo:rerun-if-changed=src/ambient_vocab.toml");
+    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ambient_vocab.toml");
+    let Ok(bytes) = std::fs::read(&canonical) else {
+        return;
+    };
+    let Some(root) = repo_root() else { return };
+    let cli_copy = root.join("cli/src/fno/ambient_vocab.toml");
+    if !cli_copy.is_file() {
+        return;
+    }
+    write_if_different(&cli_copy, &bytes);
+}
+
 /// PRODUCE the downstream copy of the operator-page reload script.
 ///
 /// The crate owns `src/page_reload.js` (`lead_ledger.rs` `include_str!`s it),
@@ -380,49 +400,25 @@ fn sync_page_reload() {
     write_if_different(&cli_copy, &bytes);
 }
 
-/// PRODUCE the downstream copy of the spawn verb-to-phase table.
+/// PRODUCE the downstream copy of the vendor reach + built-in provider preset.
 ///
-/// Same shape as [`sync_merge_posture`]: the canonical TOML lives in this
-/// crate, and the Python package reads a byte copy as package data so
-/// `infer_phase` and any future Rust reader cannot drift.
-fn sync_spawn_phase() {
-    println!("cargo:rerun-if-changed=src/spawn_phase.toml");
-    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/spawn_phase.toml");
+/// The canonical TOML lives in this crate (`provider_route.rs`
+/// `include_str!`s it, and `crates/fno/src/model_catalog.rs` reads the byte
+/// copy), so the built-in zai preset is written once and the composer's
+/// prediction of what the spawn door resolves cannot drift from the door's
+/// answer. No-op when the sibling crate is absent: the crates.io tarball.
+fn sync_model_reach() {
+    println!("cargo:rerun-if-changed=src/model_reach.toml");
+    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/model_reach.toml");
     let Ok(bytes) = std::fs::read(&canonical) else {
         return;
     };
     let Some(root) = repo_root() else { return };
-    let cli_copy = root.join("cli/src/fno/agents/spawn_phase.toml");
-    if !cli_copy.is_file() {
+    let fno_copy = root.join("crates/fno/src/model_reach.toml");
+    if !fno_copy.is_file() {
         return;
     }
-    write_if_different(&cli_copy, &bytes);
-}
-
-/// PRODUCE the downstream copy of the inline slot-lane vocabulary.
-///
-/// Same shape as [`sync_spawn_phase`]: the canonical TOML lives in this
-/// crate (`route_slot.rs` `include_str!`s it), and the Python package reads
-/// a byte copy as package data so the lanes JSON projection cannot drift
-/// from the Rust fold's field vocabulary.
-/// PRODUCE the downstream copy of the reachability + static tier tables.
-///
-/// The canonical TOML lives in this crate
-/// (`route_gather.rs` `include_str!`s it), and `benchmarks.py` reads the byte
-/// copy as package data, so the Python tier read cannot drift from the Rust
-/// inventory fold's built-in rows.
-fn sync_model_tiers() {
-    println!("cargo:rerun-if-changed=src/model_tiers.toml");
-    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/model_tiers.toml");
-    let Ok(bytes) = std::fs::read(&canonical) else {
-        return;
-    };
-    let Some(root) = repo_root() else { return };
-    let cli_copy = root.join("cli/src/fno/agents/model_tiers.toml");
-    if !cli_copy.is_file() {
-        return;
-    }
-    write_if_different(&cli_copy, &bytes);
+    write_if_different(&fno_copy, &bytes);
 }
 
 /// Render the registry schema version and writer floor from their single owner,
@@ -663,15 +659,6 @@ fn sync_check_supersession() {
         check_supersession_codegen::render_rust(&contract),
     )
     .expect("generated Rust supersession source must be writable");
-
-    let Some(root) = repo_root() else { return };
-    let cli = root.join("cli");
-    if cli.is_dir() {
-        write_if_different(
-            &cli.join("src/fno/pr/_check_supersession_generated.py"),
-            check_supersession_codegen::render_python(&contract).as_bytes(),
-        );
-    }
 }
 
 /// PRODUCE the fno crate's provider-key copy from this crate's implementation.

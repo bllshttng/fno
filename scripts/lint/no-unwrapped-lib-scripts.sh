@@ -2,8 +2,8 @@
 # scripts/lint/no-unwrapped-lib-scripts.sh
 #
 # Lists every script in scripts/lib/*.sh and scripts/lib/*.py.
-# For each script not in the allowlist, greps cli/src/fno/**/*.py
-# for the script's basename. Missing = hard fail (exit 1).
+# For each script not in the allowlist, greps cli/src/fno/**/*.py and
+# crates/*/src/**/*.rs for the script's basename. Missing = hard fail (exit 1).
 #
 # Exit codes:
 #   0  all scripts/lib/ entries have wrappers (or are in the allowlist)
@@ -55,7 +55,9 @@ for script_path in "$LIB_DIR"/*.sh "$LIB_DIR"/*.py; do
 
     checked=$((checked + 1))
 
-    if ! grep -rq "$basename_script" "$CLI_SRC" --include='*.py' 2>/dev/null; then
+    # A wrapper is a Python command or, once its family ported, a native one.
+    if ! grep -rq "$basename_script" "$CLI_SRC" --include='*.py' 2>/dev/null \
+        && ! grep -rq "$basename_script" "$REPO_ROOT"/crates/*/src --include='*.rs' 2>/dev/null; then
         missing=$((missing + 1))
         missing_names+=("$basename_script")
     fi

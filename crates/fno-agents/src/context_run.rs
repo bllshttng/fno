@@ -90,11 +90,17 @@ pub fn run_context_run(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("--probe") {
         return run_context_probe(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("--audit") {
+        return crate::context_audit::run_context_audit(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("--effective-window") {
         return run_effective_window(&args[1..]);
     }
     if args.first().map(String::as_str) == Some("--model-price") {
         return run_model_price(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("--session-cost") {
+        return crate::session_cost::run_session_cost(&args[1..]);
     }
     let mut group_name: Option<&str> = None;
     let mut plugin_root: Option<&str> = None;
@@ -254,6 +260,7 @@ fn run_context_probe(args: &[String]) -> i32 {
         .or_else(|_| std::env::var("FNO_HARNESS_SESSION_ID"))
         .unwrap_or_default();
     let mut json_output = false;
+    let mut summary = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         if crate::json_output::is_flag(arg) {
@@ -262,6 +269,7 @@ fn run_context_probe(args: &[String]) -> i32 {
         }
         match arg.as_str() {
             "--transcript" => transcript = rest.next().map(String::as_str),
+            "--summary" => summary = true,
             "--session" => {
                 session = rest
                     .next()
@@ -275,12 +283,27 @@ fn run_context_probe(args: &[String]) -> i32 {
             }
         }
     }
-    let Some(transcript) = transcript else {
-        eprintln!("context-run --probe: --transcript is required");
-        return 2;
+    let transcript = match transcript {
+        Some(t) => t.to_string(),
+        None => {
+            // The deleted leg self-resolved the caller's transcript when the
+            // flag was omitted (self_stamp's resolve_own_transcript): the
+            // bare `fno context` form answers from the live session.
+            let harness =
+                crate::spawn_context::resolve_session_harness_ambient().unwrap_or_default();
+            match session_transcript(&session, harness) {
+                Some(path) => path.to_string_lossy().into_owned(),
+                None => {
+                    eprintln!(
+                        "context-run --probe: --transcript is required (no own transcript resolved)"
+                    );
+                    return 2;
+                }
+            }
+        }
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let payload = match transcript_reading(Path::new(transcript), &session, &cwd) {
+    let payload = match transcript_reading(Path::new(transcript.as_str()), &session, &cwd) {
         Ok(payload) => payload,
         Err(error) => {
             if error.starts_with("effective context window unreadable:") {
@@ -297,6 +320,33 @@ fn run_context_probe(args: &[String]) -> i32 {
         Some("harness") => " [harness window]".to_string(),
         _ => " [unmeasured default]".to_string(),
     };
+    if summary {
+        // The retired `fno context` / `fno whoami context` shapes: exactly
+        // the four keys, no provenance suffix, comma-grouped numbers.
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string(&json!({
+                    "used_tokens": payload["used_tokens"],
+                    "window_tokens": payload["window_tokens"],
+                    "used_pct": payload["used_pct"],
+                    "model": payload["model"],
+                }))
+                .unwrap_or_else(|_| "{}".to_string())
+            );
+        } else {
+            let used = payload["used_tokens"].as_u64().unwrap_or(0);
+            let window = payload["window_tokens"].as_u64().unwrap_or(0);
+            println!(
+                "{}% used ({} of {} tokens), model {}",
+                payload["used_pct"],
+                crate::whoami::with_commas(used),
+                crate::whoami::with_commas(window),
+                payload["model"]
+            );
+        }
+        return 0;
+    }
     if json_output {
         println!("{payload}");
     } else {
@@ -859,31 +909,26 @@ fn build_hook_output(event: &str, contexts: &[String], messages: &[String]) -> S
     Value::Object(out).to_string()
 }
 
-/// Native rows come from the existing `fno doctor --context-audit` verb so
-/// Rust and the Python audit keep one owner for host-source measurement.
+/// Native rows come from the audit op: one owner for host-source
+/// measurement, called in-process (the spawn of `fno doctor
+/// --context-audit` is gone; its wheel arm is deleted too).
 fn fetch_native_manifest(
     input: &CoreInput,
     harness: &str,
     entry_state: &str,
 ) -> Result<(Vec<Value>, Vec<String>), String> {
-    let host = input.host_dir.display().to_string();
-    let plugin = input.plugin_root.display().to_string();
-    let cmd: Vec<String> = match &input.native_cmd {
-        Some(cmd) => cmd.clone(),
-        None => vec![
-            "fno".to_string(),
-            "doctor".to_string(),
-            "--context-audit".to_string(),
-            "--source".to_string(),
-            plugin,
-            "--context-host".to_string(),
-            host.clone(),
-            "--context-harness".to_string(),
-            harness.to_string(),
-            "--context-entry".to_string(),
-            entry_state.to_string(),
-            "--json".to_string(),
-        ],
+    let Some(cmd) = &input.native_cmd else {
+        // In-process: the audit runs in this process; the shared cell
+        // extractor pulls the rows the runner reads.
+        let report = crate::context_audit::build_context_report(
+            &input.host_dir,
+            &input.plugin_root,
+            &[harness],
+            &[entry_state],
+            crate::context_audit::DEFAULT_PACKET_BUDGET_BYTES,
+            1,
+        )?;
+        return extract_cell_rows(&report, harness, entry_state);
     };
     let child = spawn_bounded(
         OsStr::new(&cmd[0]),
@@ -914,6 +959,17 @@ fn fetch_native_manifest(
     }
     let data: Value =
         serde_json::from_slice(&outcome.stdout).map_err(|e| format!("unparseable json: {e}"))?;
+    extract_cell_rows(&data, harness, entry_state)
+}
+
+/// The cell + row filter `fetch_native_manifest` shares with the in-process
+/// read: pick this run's (harness, entry_state) cell, keep only observed
+/// harness-native directive rows, surface the rest as errors.
+fn extract_cell_rows(
+    data: &Value,
+    harness: &str,
+    entry_state: &str,
+) -> Result<(Vec<Value>, Vec<String>), String> {
     let cells = data
         .get("cells")
         .and_then(Value::as_array)

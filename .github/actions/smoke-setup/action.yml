@@ -63,7 +63,7 @@ runs:
       # tests/hooks/test_format_on_edit.sh drives hooks/format-on-edit.sh,
       # which shells to `rustfmt +1.94.1` (rust-ci.yml's RUSTFMT_TOOLCHAIN,
       # kept in lockstep). Without this toolchain the test SKIPs (exit 77),
-      # and smoke counts a SKIP as a FAILURE (see test_cmd.py's discovery
+      # and smoke counts a SKIP as a FAILURE (see the smoke discovery's
       # notes) - so the toolchain must actually be present, not merely
       # tolerated. Component-only + minimal profile, same as rust-ci.yml.
       shell: bash
@@ -81,8 +81,8 @@ runs:
         restore-keys: |
           ${{ runner.os }}-cargo-journey-
 
-    - name: Build the fno-agents front (verb-surface ratchet)
-      # `fno doctor lint verb-ratchet` still cross-checks the fno-agents client
+    - name: Build the fno-agents front (command-surface ratchet)
+      # `fno doctor lint command-ratchet` still cross-checks the fno-agents client
       # against its source and fails closed when it is unreachable, so the smoke
       # job supplies it by explicit path (FNO_AGENTS_FRONT) rather than adding
       # it to PATH, where it could shadow another step's entry point.

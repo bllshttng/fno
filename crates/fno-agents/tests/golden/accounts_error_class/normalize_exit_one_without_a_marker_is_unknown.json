@@ -1,0 +1,1 @@
+{"op": "normalize", "status": null, "body": "something else", "exit_code": 1, "expect": {"error_class": "unknown", "raw_status": null, "raw_exit_code": 1, "body_excerpt": "something else", "triggers_swap": false, "model": null, "resets_at": null, "reset_stamp_unparsed": null, "reset_is_derived": false}}

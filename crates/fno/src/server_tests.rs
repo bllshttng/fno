@@ -5,6 +5,10 @@ use crate::proto::{AgentRow, TemplateName};
 use crate::pty::ChildGuard;
 use crate::restore_gate::{set_restore_registry_rows, RestoreRegistryRowsGuard};
 use crate::server::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
+use crate::server::pane_scroll::{wheel_gate, WHEEL_GATE_BUDGET, WHEEL_GATE_WINDOW};
+
+#[path = "server_tests/pane_scroll_tests.rs"]
+mod pane_scroll_tests;
 
 #[path = "server/server_thread_viewer_tests.rs"]
 mod thread_viewer_tests;
@@ -373,7 +377,7 @@ fn pane_label_rows() {
 }
 
 #[test]
-fn unknown_control_verb_gets_typed_wire_refusal() {
+fn unknown_control_command_gets_typed_wire_refusal() {
     let request = serde_json::json!({
         "Control": {
             "proto": crate::proto::PROTO_VERSION + 1,
@@ -391,7 +395,7 @@ fn unknown_control_verb_gets_typed_wire_refusal() {
                 "{msg}"
             );
         }
-        other => panic!("expected typed unknown-verb refusal, got {other:?}"),
+        other => panic!("expected typed unknown-command refusal, got {other:?}"),
     }
 }
 
@@ -524,7 +528,7 @@ fn tab_close_rows() {
     assert_eq!(result.1, vec![pane]);
     assert_eq!(result.2, RemoveOutcome::SessionEmpty);
     assert!(!core.panes.contains_key(&pane));
-    assert!(!core.tab_areas.contains_key(&5));
+    assert!(!core.sizing.areas.contains_key(&5));
 }
 
 #[test]
@@ -1112,7 +1116,7 @@ fn rename_tab_rows() {
     assert_eq!(stored, format!("[31m{}", "a".repeat(MAX_TAB_NAME - 4)));
 }
 
-// -- x-96e8 squad management verbs ----------------------------------
+// -- x-96e8 squad management commands ----------------------------------
 
 pub(super) fn leaf_tab(id: TabId, pane: u64) -> Tab {
     Tab {
@@ -1183,7 +1187,7 @@ fn place_rows() {
     core.session
         .add_squad(1, vec!["/a".into()], None, leaf_tab(5, 1));
     // 8 cols cannot hold two MIN_COLS(8)-wide halves -> horizontal refusal.
-    core.tab_areas.insert(5, (40, 8));
+    core.sizing.areas.insert(5, (40, 8));
     let before = core.session.squad(1).unwrap().tabs[0].root.clone();
 
     let (_sid, tid, fell_back) = core
@@ -1272,8 +1276,8 @@ fn two_tab_core() -> Core {
         root: Node::Leaf(3),
         focus: 3,
     });
-    core.tab_areas.insert(10, (24, 80));
-    core.tab_areas.insert(20, (24, 80));
+    core.sizing.areas.insert(10, (24, 80));
+    core.sizing.areas.insert(20, (24, 80));
     core.next_pane_id = 100;
     core
 }
@@ -1297,7 +1301,7 @@ fn template_core() -> (Core, u64) {
     let p = core.spawn_pane(24, 80, "/a").unwrap();
     core.session
         .add_squad(1, vec!["/a".into()], Some("sq".into()), leaf_tab(5, p));
-    core.tab_areas.insert(5, (24, 80));
+    core.sizing.areas.insert(5, (24, 80));
     (core, p)
 }
 
@@ -1390,7 +1394,7 @@ fn template_rows() {
     core.agents = vec![bound_agent("S1", p1)];
     // A second, empty target tab to apply into.
     let tid = core.create_tab_in(1, Some("grid".into())).unwrap();
-    core.tab_areas.insert(tid, (24, 80));
+    core.sizing.areas.insert(tid, (24, 80));
 
     let spec = LayoutSpec {
         template: TemplateName::MainLeft,
@@ -1514,7 +1518,7 @@ fn template_refusal_rows() {
     // AC6: a tab too small to tile grid-2x2 -> TEMPLATE_UNFITTABLE, tab
     // unchanged (the pre-mutation atomic refuse).
     let (mut core, _p) = template_core();
-    core.tab_areas.insert(5, (3, 8)); // far too small for four tiles
+    core.sizing.areas.insert(5, (3, 8)); // far too small for four tiles
     let before = core
         .session
         .squad(1)
@@ -1586,7 +1590,7 @@ fn template_refusal_rows() {
 #[test]
 fn template_lifecycle_rows() {
     // x-cde1 AC1-HP: Command::RenameTab (the interactive overlay path, not
-    // the ControlVerb::TabRename wire API) must re-persist a template tab's
+    // the ControlCommand::TabRename wire API) must re-persist a template tab's
     // spec so restore finds it under the NEW name. persist_squad alone
     // preserves tab_specs byte-for-byte, keeping the stale old key.
     let _s = StoreScratch::new("cde1-rename");
@@ -2467,7 +2471,7 @@ fn graft_rows() {
     // A second tab holding the anchor; squad tabs are now [5, anchor_tid],
     // so the Fno pane's tab 5 is EARLIER than the anchor's.
     let anchor_tid = core.create_tab_in(1, Some("anchor-tab".into())).unwrap();
-    core.tab_areas.insert(anchor_tid, (24, 80));
+    core.sizing.areas.insert(anchor_tid, (24, 80));
     let anchor_pane = core
         .session
         .squad(1)
@@ -2588,7 +2592,7 @@ fn reanchor_rows() {
     assert_eq!(tree::leaves(&a.root), vec![2], "sibling 2 stays in tab 10");
 
     // AC1-HP (the "and": the script path does NOT move focus). The CoreMsg
-    // path a scripted ControlVerb::PaneBreak takes is pane_break itself; it
+    // path a scripted ControlCommand::PaneBreak takes is pane_break itself; it
     // never touches a view. A viewer of the (surviving) source tab stays put.
     let mut core = two_tab_core();
     let (c, _rx) = live_client(7, 10); // viewing tab 10 [1,2]
@@ -2785,7 +2789,7 @@ fn move_join_rows() {
     core.command(7, Command::BreakPane { pane: 1 });
     let brk = core.client_view(7).unwrap().1; // the new tab holding [1]
                                               // Now cram the anchor tab so a join back would breach min-size.
-    core.tab_areas.insert(20, (40, 8));
+    core.sizing.areas.insert(20, (40, 8));
     let before_brk = core
         .session
         .squad(1)
@@ -4613,7 +4617,7 @@ fn mail_rows() {
 #[test]
 fn external_rows() {
     // US4: an external roster row belongs to the claude daemon, not the fno
-    // registry, so BOTH verbs refuse with a notice rather than fire a doomed
+    // registry, so BOTH commands refuse with a notice rather than fire a doomed
     // `fno-agents` call. The external arm is checked before the live/exited
     // arms, so a dead external row still refuses on provenance.
     let ext_live = RegistryAgent {
@@ -4682,7 +4686,7 @@ fn external_rows() {
 
     // codex P2: a non-8-hex attach id from the client is rejected before it
     // is persisted or reaches a `claude` argv (a dash-prefixed id could be
-    // read as a CLI option). Both verbs guard; the refusal precedes any
+    // read as a CLI option). Both commands guard; the refusal precedes any
     // resolve/CAS, so a #[test] with no tokio runtime never panics.
     for cmd in [
         Command::StopExternal {
@@ -4806,7 +4810,7 @@ fn agent_rows_dedup_external_tombstone_against_live_row() {
 fn lifecycle_name_collision_refused_fail_closed() {
     // codex review: `name` is not a unique catalog key (dedup is by
     // attach_id). When an external roster row shares a name with a registry
-    // row, the verb must refuse on provenance and NEVER act on the registry
+    // row, the command must refuse on provenance and NEVER act on the registry
     // agent the external shadows; two same-named registry rows are ambiguous.
     // Both are fail-closed refusals, so no unrelated agent is ever stopped.
     let shared = |external, exited, attach: &str| RegistryAgent {
@@ -7811,7 +7815,7 @@ fn break_of_a_member_pane_refreshes_the_stored_tab_name() {
         }],
     );
     core.attached.insert("c19cd2c3".into(), 100);
-    core.tab_areas.insert(7, (24, 80));
+    core.sizing.areas.insert(7, (24, 80));
     core.persist_squad(7);
 
     core.pane_break(100, Some("solo".into()))
@@ -7875,8 +7879,8 @@ fn join_of_a_member_tab_refreshes_the_stored_tab_name() {
         }],
     );
     core.attached.insert("c19cd2c3".into(), 100);
-    core.tab_areas.insert(7, (24, 80));
-    core.tab_areas.insert(20, (24, 80));
+    core.sizing.areas.insert(7, (24, 80));
+    core.sizing.areas.insert(20, (24, 80));
     core.persist_squad(7);
 
     core.tab_join(&TabSel::Id(7), 200, Dir::Right)
@@ -7957,151 +7961,6 @@ fn rerun_guard_is_scoped_to_the_current_session() {
 
 // -- x-9454 wheel-passthrough rate gate --------------------------------
 
-// AC1-HP / AC2-HP: a 30-tick same-direction flood inside one window
-// forwards at most WHEEL_GATE_BUDGET; ticks spaced past the window all pass.
-#[test]
-fn wheel_gate_bounds_flood_and_passes_notch_rate() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    let allowed = (0..30)
-        .filter(|_| wheel_gate(&mut g, 7, MouseKind::WheelDown, t0))
-        .count();
-    assert_eq!(
-        allowed, WHEEL_GATE_BUDGET as usize,
-        "a same-window flood forwards exactly the budget, drops the rest"
-    );
-
-    // Notch rate: one tick per window, none dropped.
-    let mut g2 = HashMap::new();
-    let passed = (0..30)
-        .filter(|i| {
-            wheel_gate(
-                &mut g2,
-                7,
-                MouseKind::WheelDown,
-                t0 + WHEEL_GATE_WINDOW * (*i as u32),
-            )
-        })
-        .count();
-    assert_eq!(passed, 30, "notch-rate input is forwarded 1:1");
-}
-
-// AC1-EDGE: exactly budget ticks pass, the (budget+1)th in the window drops.
-#[test]
-fn wheel_gate_exact_budget_boundary() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    for i in 0..WHEEL_GATE_BUDGET {
-        assert!(
-            wheel_gate(&mut g, 1, MouseKind::WheelUp, t0),
-            "tick {i} within budget forwards"
-        );
-    }
-    assert!(
-        !wheel_gate(&mut g, 1, MouseKind::WheelUp, t0),
-        "the tick past budget drops"
-    );
-}
-
-// AC1-UI: a reversal mid-flood forwards immediately and resets the budget.
-#[test]
-fn wheel_gate_reversal_passes_immediately() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    // Exhaust the down budget so drops are occurring.
-    for _ in 0..WHEEL_GATE_BUDGET {
-        wheel_gate(&mut g, 1, MouseKind::WheelDown, t0);
-    }
-    assert!(
-        !wheel_gate(&mut g, 1, MouseKind::WheelDown, t0),
-        "same-direction is dropping"
-    );
-    assert!(
-        wheel_gate(&mut g, 1, MouseKind::WheelUp, t0),
-        "the opposite tick forwards immediately (reversal is fresh intent)"
-    );
-    // Reversal reset the window: a fresh up budget is available.
-    for _ in 1..WHEEL_GATE_BUDGET {
-        assert!(wheel_gate(&mut g, 1, MouseKind::WheelUp, t0));
-    }
-    assert!(
-        !wheel_gate(&mut g, 1, MouseKind::WheelUp, t0),
-        "the reset up budget then exhausts"
-    );
-}
-
-// AC1-FR: a tick at or after exactly window_start + window re-admits
-// (no permanent mute), testing the boundary instant itself.
-#[test]
-fn wheel_gate_readmits_at_window_boundary() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    for _ in 0..WHEEL_GATE_BUDGET {
-        wheel_gate(&mut g, 1, MouseKind::WheelDown, t0);
-    }
-    assert!(
-        !wheel_gate(&mut g, 1, MouseKind::WheelDown, t0),
-        "budget exhausted inside the window"
-    );
-    assert!(
-        wheel_gate(&mut g, 1, MouseKind::WheelDown, t0 + WHEEL_GATE_WINDOW),
-        "the exact boundary instant counts as a fresh window and forwards"
-    );
-}
-
-// AC2-ERR: a now behind window_start (virtualized clock) saturates instead
-// of panicking, and treats the tick as inside the window.
-#[test]
-fn wheel_gate_clock_skew_saturates() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now() + WHEEL_GATE_WINDOW * 10;
-    assert!(wheel_gate(&mut g, 1, MouseKind::WheelDown, t0));
-    // A now BEFORE the stored window_start: saturating_duration_since is 0,
-    // so the tick is inside the window and consumes budget (never panics).
-    let earlier = t0 - WHEEL_GATE_WINDOW * 5;
-    for _ in 1..WHEEL_GATE_BUDGET {
-        assert!(wheel_gate(&mut g, 1, MouseKind::WheelDown, earlier));
-    }
-    assert!(
-        !wheel_gate(&mut g, 1, MouseKind::WheelDown, earlier),
-        "skewed-early ticks stay inside the window and hit the budget"
-    );
-}
-
-// Per-pane independence: one pane's flood never spends another's budget.
-#[test]
-fn wheel_gate_per_pane() {
-    let mut g = HashMap::new();
-    let t0 = Instant::now();
-    for _ in 0..WHEEL_GATE_BUDGET {
-        wheel_gate(&mut g, 1, MouseKind::WheelDown, t0);
-    }
-    assert!(!wheel_gate(&mut g, 1, MouseKind::WheelDown, t0));
-    assert!(
-        wheel_gate(&mut g, 2, MouseKind::WheelDown, t0),
-        "a different pane draws from its own budget"
-    );
-}
-
-// AC2-EDGE: reaping a pane drops its gate entry (touch_last_emit pattern).
-#[test]
-fn reap_pane_clears_wheel_gate() {
-    let mut core = empty_core();
-    core.wheel_gate.insert(
-        42,
-        WheelGateState {
-            window_start: Instant::now(),
-            count: 3,
-            dir: MouseKind::WheelDown,
-        },
-    );
-    core.reap_pane(42);
-    assert!(
-        !core.wheel_gate.contains_key(&42),
-        "the closed pane's gate entry is removed"
-    );
-}
-
 #[test]
 fn node_id_shape_check() {
     assert!(node_id_shaped("x-aff6"));
@@ -8131,7 +7990,7 @@ pub(super) fn empty_core() -> Core {
         clients: Vec::new(),
         next_pane_id: 1,
         next_squad_id: 1,
-        tab_areas: HashMap::new(),
+        sizing: TabSizing::with_policy(window_size::WindowSize::Smallest),
         session_name: "test".into(),
         shells: Vec::new(),
         out_tx,
@@ -8158,6 +8017,8 @@ pub(super) fn empty_core() -> Core {
         claims: HashMap::new(),
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
+        wheel_lines: 1,
+        wheel_passthrough_rate: 3,
         fno_token_claims: HashMap::new(),
         link_click_claims: HashMap::new(),
         touch_emit_failures: Arc::new(AtomicU64::new(0)),
@@ -8273,7 +8134,7 @@ fn pane_placement_resolves_named_and_stale_targets_before_spawn() {
 #[test]
 fn pane_placement_splits_on_requested_side_and_focuses_new_pane() {
     let mut core = placement_core();
-    core.tab_areas.insert(11, (24, 80));
+    core.sizing.areas.insert(11, (24, 80));
     let landed = core
         .place_spawned_pane(Some(7), "/repo/child", 2, Some(Dir::Left))
         .unwrap();
@@ -8288,7 +8149,7 @@ fn pane_placement_split_refusal_falls_back_to_new_tab() {
     // AC3-FR (x-9f75): a split refused at min-size no longer reaps and dead-ends - the pane lands as a
     // NEW TAB in the same squad, the original tab is untouched, and the caller is told to notice.
     let mut core = placement_core();
-    core.tab_areas.insert(11, (24, 16));
+    core.sizing.areas.insert(11, (24, 16));
     core.claim_eligible.insert(2);
     let before = core.session.squad(7).unwrap().tabs[0].clone();
     let (sid, tid, fell_back) = core
@@ -8431,7 +8292,7 @@ fn observer_attach_sole_viewer_keeps_last_or_default() {
         (vt::DEFAULT_ROWS, vt::DEFAULT_COLS),
         "sole observer -> VT defaults, never its own dims"
     );
-    core.tab_areas.insert(5, (40, 120));
+    core.sizing.areas.insert(5, (40, 120));
     assert_eq!(
         core.tab_area(5),
         (40, 120),
@@ -8481,6 +8342,7 @@ fn bye_flushes_the_final_dirty_frame_first() {
                 cursor_col: 0,
                 cursor_visible: true,
                 scroll_offset: 0,
+                history_lines: 0,
             };
             dirty.lock().unwrap().insert(7, frame.clone());
             let stats: PaneStats = Arc::default();
@@ -8768,7 +8630,7 @@ fn add_second_squad(core: &mut Core) -> (u64, TabId) {
 
 #[test]
 fn pane_focus_moves_the_viewer_across_squads_and_reports_where() {
-    // AC1-HP: the verb is a goto, not a nudge. A client viewing squad 1 ends
+    // AC1-HP: the command is a goto, not a nudge. A client viewing squad 1 ends
     // up on squad 2's tab with the named pane focused, and the receipt names
     // the RESOLVED location rather than echoing the request.
     let (mut core, client_id, _p1, _p2, _rx) = seen_test_core();
@@ -8845,7 +8707,7 @@ fn pane_focus_refuses_when_only_passive_observers_are_attached() {
     // AC1-ERR: no non-passive client is a REFUSAL with its OWN code, never a
     // silent pass and never DEAD_PANE. A passive observer is read-only at the
     // server with no viewport to move, so it must not satisfy the check -
-    // otherwise the verb reports success for a pane nobody can see.
+    // otherwise the command reports success for a pane nobody can see.
     let (mut core, client_id, p1, _p2, _rx) = seen_test_core();
     core.clients.retain(|c| c.id != client_id);
     let (tx, _rx2) = mpsc::channel::<ServerMsg>(32);
@@ -9149,7 +9011,7 @@ mod server_tests_keeper;
 #[test]
 fn keeper_list_reports_zero_as_zero_and_exits_zero() {
     // The empty read is a valid answer, never a failure: the done-probe
-    // greps this verb's --json on machines that may hold no keepers.
+    // greps this command's --json on machines that may hold no keepers.
     let rc = crate::mux_cli::pane_keeper_list(true, Some(std::time::Duration::from_secs(0)));
     assert_eq!(
         rc,

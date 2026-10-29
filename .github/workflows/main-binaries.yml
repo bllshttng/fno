@@ -25,13 +25,22 @@ on:
       - .github/workflows/release-binaries.yml
   workflow_dispatch:
 
+# A build in flight always finishes. GitHub keeps one pending run per group
+# and replaces it with the newest head, so a burst queues one build, not
+# many. Cancelling in flight starved the bin cache: merges landed faster
+# than a build finished, nothing published, and fno doctor update stayed
+# on an old rev for hours.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
   resolve:
     name: resolve the build key
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       crates_rev: ${{ steps.rev.outputs.crates_rev }}
@@ -76,7 +85,7 @@ jobs:
   publish:
     name: publish to bin-cache
     needs: [resolve, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -115,9 +124,18 @@ jobs:
               --notes "Rolling cache of main-branch binaries for fno update, keyed by crates/ rev. Not a release." || true
           fi
           gh release upload bin-cache -R "$REPO" --clobber fno-bin-*
-          # Keep the newest 15 revs: 4 tarballs, 4 digests and 1 pack marker each.
+          # The latest manifest goes up after the tarballs, so a rev it names
+          # is always downloadable. `fno update` reads it through the download
+          # URL, which the per-IP REST limit does not meter.
+          for f in fno-bin-"${REV}"-*.tar.gz; do
+            platform="${f#fno-bin-${REV}-}"
+            printf '%s %s\n' "$REV" "${platform%.tar.gz}"
+          done > fno-bin-latest.txt
+          gh release upload bin-cache -R "$REPO" --clobber fno-bin-latest.txt
+          # Keep the newest 15 revs (4 tarballs, 4 digests and 1 pack marker
+          # each) plus the latest manifest.
           release_id="$(gh api "repos/$REPO/releases/tags/bin-cache" --jq .id)"
           gh api --paginate "repos/$REPO/releases/$release_id/assets?per_page=100" \
-            --jq '.[] | "\(.created_at) \(.id)"' | sort -r | tail -n +136 | while read -r _ id; do
+            --jq '.[] | "\(.created_at) \(.id)"' | sort -r | tail -n +137 | while read -r _ id; do
             gh api -X DELETE "repos/$REPO/releases/assets/$id" || true
           done

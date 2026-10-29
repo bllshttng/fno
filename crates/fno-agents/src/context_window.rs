@@ -72,15 +72,6 @@ pub enum CompactionBand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextReading {
-    pub usage: ContextUsage,
-    pub used_tokens: u64,
-    pub window_tokens: u64,
-    pub used_pct: u64,
-    pub band: CompactionBand,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextWindowError {
     Missing(&'static str),
     Invalid(&'static str),
@@ -148,8 +139,9 @@ pub struct WindowReading {
 }
 
 /// Match key: a trailing `[...]` bracket suffix is a request marker, not a
-/// different model, and ids differ in case across harnesses.
-fn normalize_model(model: &str) -> String {
+/// different model, and ids differ in case across harnesses. Shared with the
+/// by-lane scorecard, which keys its model axis on the same fold.
+pub(crate) fn normalize_model(model: &str) -> String {
     let base = match model.find('[') {
         Some(open) if model.ends_with(']') => &model[..open],
         _ => model,

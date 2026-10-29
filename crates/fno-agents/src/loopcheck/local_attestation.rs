@@ -68,9 +68,43 @@ pub(super) fn in_scope_chain(events_text: &str, head_branch: &str, head_sha: &st
     chain
 }
 
+/// The invocation ids whose `review_invocation` row carried `--verify-fixes`.
+/// The started row is the one writer of flags on the invocation trace; a row
+/// without flags, an unjoined id, or an unparseable line contributes nothing,
+/// and the disposition gate then keeps its head-move requirement (fail
+/// closed). Pure: scans the events text, no IO.
+pub(crate) fn verify_invocation_ids(events_text: &str) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    for line in events_text.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if val.get("type").and_then(|v| v.as_str()) != Some("review_invocation") {
+            continue;
+        }
+        let Some(id) = val
+            .pointer("/data/invocation_id")
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.is_empty() && *id != "UNJOINED")
+        else {
+            continue;
+        };
+        let carries = val
+            .pointer("/data/flags")
+            .and_then(|v| v.as_array())
+            .map(|flags| flags.iter().any(|f| f.as_str() == Some("--verify-fixes")))
+            .unwrap_or(false);
+        if carries {
+            ids.insert(id.to_string());
+        }
+    }
+    ids
+}
+
 /// The non-terminal blocking findings in the PR's attestation chain.
 ///
-/// Terminal means: fixed (and a LATER round reviewed the fix delta),
+/// Terminal means: fixed (and a LATER round reviewed the fix delta, or the
+/// disposing round carried --verify-fixes),
 /// non-blocking by the gate's own re-derivation, or declined WITH a recorded
 /// reason. Origin never gates: whoever attested the disposition, the
 /// terminality is the same. Pure: scans the events text, no IO. An empty
@@ -81,7 +115,8 @@ pub fn disposition_blockers(
     head_sha: &str,
 ) -> Vec<DispositionBlocker> {
     let chain = in_scope_chain(events_text, head_branch, head_sha);
-    disposition_blockers_on_chain(&chain)
+    let verify = verify_invocation_ids(events_text);
+    disposition_blockers_on_chain(&chain, &verify)
 }
 
 /// The PR's review-round total, on two evidence axes. The operator's ruling
@@ -125,9 +160,8 @@ pub fn disposition_blockers(
 /// followed by a max() would have under-counted (law d-608344c1: a round is
 /// keyed by head). Scoped exactly like
 /// the tiling and disposition scans: branch match, with the legacy
-/// exact-head admission. Pure: scans its inputs, no IO. The Python
-/// gate-side mirror is `rounds_since_last_pass` in `_coverage_gate.py`; the
-/// two are held equal by the shared corpus.
+/// exact-head admission. Pure: scans its inputs, no IO. The shared
+/// coverage_gate corpus pins the counting.
 pub fn rounds_since_last_pass(
     events_text: &str,
     head_branch: &str,
@@ -304,7 +338,7 @@ pub(super) fn local_refused_verdicts(events_text: &str, head_sha: &str) -> Vec<R
             continue;
         }
         let mut name = val
-            .pointer("/data/verb")
+            .pointer("/data/command")
             .and_then(|v| v.as_str())
             .unwrap_or("review")
             .trim_start_matches('/')
@@ -398,7 +432,7 @@ pub(super) fn local_latest_attestations(
         // recording it as Stale would pool every PR's legacy passes into
         // every coverage read (the cross-PR leak this node deletes). The
         // refusal's action for that cohort is the generic one: re-run the
-        // review verb at HEAD, which emits a branch-scoped event.
+        // review command at HEAD, which emits a branch-scoped event.
         let line_branch = val
             .pointer("/data/branch")
             .and_then(|v| v.as_str())
@@ -435,7 +469,7 @@ pub(super) fn local_latest_attestations(
         // which keeps its name key (the config.review.reviewers gate).
         // A retraction names ONE pass, by head. When the pair's entry already
         // describes a different (newer) head, the named pass is superseded and
-        // the retraction must not touch it: the verb emits the retraction after
+        // the retraction must not touch it: the command emits the retraction after
         // any newer pass, so an unconditional insert would revoke a live pass
         // nobody asked to revoke. Same-head (and first-entry) inserts keep
         // today's semantics.

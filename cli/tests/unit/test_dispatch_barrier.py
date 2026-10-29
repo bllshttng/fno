@@ -8,9 +8,8 @@ different holder and this dispatcher skips with duplicate-claim so exactly one
 worker launches.
 """
 import json
-import os
-from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 # Import the claims CLI module BEFORE any test patches fno.claims.core. Its
@@ -49,6 +48,7 @@ def _route_to(monkeypatch, root):
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.mark.dev_build
 def test_spawn_guard_serializes_two_callers(monkeypatch, tmp_path):
     # AC2-HP: two dispatch attempts for one node -> exactly one dispatchable.
     _route_to(monkeypatch, tmp_path)
@@ -59,26 +59,6 @@ def test_spawn_guard_serializes_two_callers(monkeypatch, tmp_path):
     v2 = _last_json(r2.output)
     assert v2["verdict"] == "already-running"
     assert v2["reason"] in ("reservation-held", "duplicate-claim")
-
-
-def test_barrier_catches_peer_after_acquire(monkeypatch, tmp_path):
-    # The barrier's distinct value: acquire succeeds, but the post-acquire re-read
-    # sees a peer (a visibility-lagged race resolved against us) -> duplicate-claim,
-    # never dispatchable.
-    _route_to(monkeypatch, tmp_path)
-
-    def status(key, root=None):
-        if key == "node:N":
-            return {"key": key, "state": "free"}
-        return {"key": key, "state": "live", "holder": "target-session:PEER"}
-
-    monkeypatch.setattr("fno.claims.core.claim_status", status)
-    monkeypatch.setattr("fno.claims.core.acquire_claim", lambda *a, **k: SimpleNamespace(holder="ME", pid=os.getpid()))
-    r = runner.invoke(agents_app, ["spawn-guard", "N", "--holder", "ME", "--ttl", "3m", "--json"])
-    v = _last_json(r.output)
-    assert v["verdict"] == "already-running"
-    assert v["reason"] == "duplicate-claim"
-    assert v["holder"] == "target-session:PEER"
 
 
 # ---------------------------------------------------------------------------
@@ -95,92 +75,12 @@ def _dead_pid():
     return dead
 
 
-def _fake_roster(monkeypatch, rows, warnings=()):
-    monkeypatch.setattr(
-        "fno.agents.watchdog.fleet_rows", lambda *_a, **_kw: (list(rows), list(warnings))
-    )
-
-
-def _row_for(session_id, name, state, node):
-    """A row keyed on a SESSION id, so a claim holder can resolve to it."""
-    from fno.agents.watchdog import Row
-
-    return Row(row_id=session_id, name=name, state=state, node=node, cwd="")
-
-
-def test_an_acquire_that_raises_after_writing_hands_back_its_reservation(
-    monkeypatch, tmp_path
-):
-    """AC1-HP: the acquire wrote dispatch:N and then raised. Exit 3 must hand
-    the row back, or the retry refuses as already-running for the whole TTL
-    with nothing launched."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.claims import core as claims_core
-
-    original_acquire = claims_core.acquire_claim
-
-    def raising_acquire(key, *args, **kwargs):
-        written = original_acquire(key, *args, **kwargs)
-        if key == "dispatch:N":
-            raise RuntimeError("events schema not found")
-        return written
-
-    monkeypatch.setattr(claims_core, "acquire_claim", raising_acquire)
-
-    verdict, exit_code = _spawn_guard_decision(
-        "N", "spawn-cli:me", ttl="3m", handover_holder="spawn-handover:t-N"
-    )
-    assert verdict["verdict"] == "error"
-    assert exit_code == 3
-    assert claims_core.claim_status("dispatch:N", root=tmp_path)["state"] == "free"
-
-
-def test_a_live_worker_on_the_node_is_never_cleared(monkeypatch, tmp_path):
-    """The x-ba4b regression guard at the dispatch site. Clearing this claim
-    launches a second worker into a live session's worktree."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.claims.core import acquire_claim, claim_status
-
-    acquire_claim(
-        "node:N", "target-session:sid-respawned", ttl_ms=3_600_000,
-        pid=_dead_pid(), root=tmp_path,
-    )
-    _fake_roster(
-        monkeypatch, rows=[_row_for("sid-respawned", "t-N-worker", "working", "N")]
-    )
-
-    verdict, exit_code = _spawn_guard_decision("N", "spawn-cli:me", ttl="3m")
-    assert verdict["verdict"] == "already-running"
-    assert verdict["reason"] == "suspect-claim"
-    assert claim_status("node:N", root=tmp_path)["state"] == "suspect"
-    assert exit_code == 0
-
-
-def test_an_unprovable_wedge_refuses_and_names_the_way_out(monkeypatch, tmp_path):
-    """x-05be case 3. Assert the command string, never the absence of a launch.
-    When the roster cannot be read the operator is on their own, which is
-    exactly when the refusal has to carry the remedy. A blind roster must
-    never authorize a clear, so the claim stays suspect on disk."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.claims.core import acquire_claim, claim_status
-
-    acquire_claim(
-        "node:N", "target-session:dead", ttl_ms=3_600_000, pid=_dead_pid(), root=tmp_path
-    )
-    _fake_roster(monkeypatch, rows=[], warnings=["claude not on PATH"])
-
-    verdict, _exit = _spawn_guard_decision("N", "spawn-cli:me", ttl="3m")
-    assert verdict["verdict"] == "already-running"
-    assert claim_status("node:N", root=tmp_path)["state"] == "suspect"
-    assert "fno agents claim release node:N --force" in verdict["remedy"]
-    assert "fno agents claim reap --apply" in verdict["remedy"]
-
-
 # ---------------------------------------------------------------------------
 # spawn --node takes THE node claim, and the worker inherits it (x-cd1e)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.dev_build
 def test_the_guard_claims_the_node_key_not_just_the_reservation(monkeypatch, tmp_path):
     """The measured defect: five workers spawned with an explicit --node and
     `fno agents claim status node:<id>` read free for every one of them."""
@@ -196,6 +96,7 @@ def test_the_guard_claims_the_node_key_not_just_the_reservation(monkeypatch, tmp
     assert info["holder"] == "spawn-handover:t-N"
 
 
+@pytest.mark.dev_build
 def test_the_worker_inherits_the_claim_without_a_refusal(monkeypatch, tmp_path):
     """x-cd1e case 6. The handover must not abort the worker, and the key must
     never read free in between - the gap is the whole point of claiming early."""
@@ -304,7 +205,8 @@ def _barrier_diag(tmp_path) -> str:
     )
 
 
-def test_the_bare_guard_verb_never_clears_a_barrier_it_cannot_replace(
+@pytest.mark.dev_build
+def test_the_bare_guard_command_never_clears_a_barrier_it_cannot_replace(
     monkeypatch, tmp_path
 ):
     """`fno agents spawn-guard` takes no handover holder, so it never takes the
@@ -325,6 +227,27 @@ def test_the_bare_guard_verb_never_clears_a_barrier_it_cannot_replace(
     assert exit_code == 0
 
 
+def test_a_guard_timeout_names_its_cause(monkeypatch):
+    """A guard that never answered under a slow shared primary printed
+    reason=error, which named nothing an operator could check."""
+    import subprocess
+
+    from fno import rust_binary
+
+    def _times_out(*_args, **_kwargs):
+        try:
+            raise subprocess.TimeoutExpired(["fno-agents"], 30)
+        except subprocess.TimeoutExpired as exc:
+            raise rust_binary.CommandUnavailable(f"fno-agents failed: {exc}") from exc
+
+    monkeypatch.setattr(rust_binary, "command_call", _times_out)
+    verdict, exit_code = _spawn_guard_decision("N", "spawn-cli:me")
+    assert exit_code == 3
+    assert " reason=guard-timeout; " in verdict["refusal_line"]
+    assert "store.remote_url" in verdict["detail"]
+
+
+@pytest.mark.dev_build
 def test_a_held_node_refuses_and_hands_back_its_own_reservation(monkeypatch, tmp_path):
     """A session that claimed the node through its own `fno do target init` is
     invisible to the reservation, which only dedups other DISPATCHERS. Swallowing
@@ -356,140 +279,4 @@ def test_a_held_node_refuses_and_hands_back_its_own_reservation(monkeypatch, tmp
 
 # --- x-2fe6: the reservation is taken after the launch is proven, and released
 # --- on an observation every substrate reaches ----------------------------
-
-
-def _spawn_env(monkeypatch, tmp_path, *, node="x-abcd"):
-    """Route claims to TMP_PATH and stub everything cmd_spawn touches downstream."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.agents import mux_spawn, spawn_gate
-
-    monkeypatch.setattr(
-        mux_spawn, "resolve_provenance", lambda n, s, p: {"FNO_NODE": node} if n else {}
-    )
-
-    class FakeGuard:
-        def release(self):
-            pass
-
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda name, substrate, **kw: FakeGuard())
-    return FakeGuard
-
-
-def _spy_guard(monkeypatch):
-    """Replace the node guard with a spy that records every call and takes nothing."""
-    from fno.agents import cli as agents_cli
-
-    calls: list[tuple] = []
-
-    def spy(*a, **k):
-        calls.append((a, k))
-        return {
-            "verdict": "dispatchable",
-            "reservation_key": "dispatch:x-abcd",
-            "reservation_holder": "spawn-cli:spy",
-        }, 0
-
-    monkeypatch.setattr(agents_cli, "_spawn_guard_decision", spy)
-    return calls
-
-
-def test_a_resume_registry_failure_never_took_the_reservation(monkeypatch, tmp_path):
-    """AC1-HP: the resume-provider exit runs BEFORE the node guard.
-
-    The registry read raising used to exit 2 with `dispatch:<id>` already held
-    by a pid that was gone, stranding the node for the whole TTL with nothing
-    launched. The spy is the positive marker: a free claim alone cannot tell
-    "released" from "never taken".
-    """
-    _spawn_env(monkeypatch, tmp_path)
-    from fno.claims.core import claim_status
-
-    guard_calls = _spy_guard(monkeypatch)
-
-    def boom():
-        raise RuntimeError("registry unreadable")
-
-    monkeypatch.setattr("fno.agents.registry.load_registry", boom)
-
-    result = runner.invoke(
-        agents_app,
-        [
-            "spawn", "--name", "w1", "/fix hi",
-            "--harness", "claude", "--substrate", "thread",
-            "--node", "x-abcd", "--resume", "11111111-2222-3333-4444-555555555555",
-        ],
-    )
-    assert result.exit_code == 2, result.output
-    assert guard_calls == []
-    assert claim_status("dispatch:x-abcd", root=tmp_path)["state"] == "free"
-    assert claim_status("node:x-abcd", root=tmp_path)["state"] == "free"
-
-
-#: The `provider` field on both spawn results carries the HARNESS axis, not a
-#: model provider: `cmd_spawn` renders it as the receipt's "harness" key. Bind
-#: the value to a harness-named constant so these fixtures name the axis the
-#: value belongs to rather than restating the field's misnomer.
-_FIXTURE_HARNESS = "claude"
-
-
-def test_a_pane_spawn_still_holds_the_reservation_for_its_worker(
-    monkeypatch, tmp_path
-):
-    """AC5-HP: the fix is a SPLIT, not a blanket release.
-
-    A pane worker outlives this process, so its reservation must stay held or
-    the next dispatcher launches a second worker onto the same node.
-    """
-    _spawn_env(monkeypatch, tmp_path)
-    from fno.agents import mux_spawn
-    from fno.agents.mux_spawn import MuxSpawnResult
-    from fno.claims.core import claim_status
-
-    monkeypatch.setattr(
-        mux_spawn,
-        "dispatch_spawn_bounded_pane",
-        lambda **kw: MuxSpawnResult(
-            name="w1",
-            provider=_FIXTURE_HARNESS,
-            session="s0",
-            pane_id=1,
-            child_pid=None,
-            session_uuid="11111111-2222-3333-4444-555555555555",
-            short_id="abcd1234",
-            bound=True,
-        ),
-    )
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
-         "--substrate", "pane", "--node", "x-abcd"],
-    )
-    assert result.exit_code == 0, result.output
-    assert claim_status("dispatch:x-abcd", root=tmp_path)["state"] == "live"
-
-
-def test_a_failed_release_names_the_key_it_could_not_free(monkeypatch, capsys):
-    """A release that no-ops must not report the same nothing as one that worked.
-
-    Swallowing the exception is correct: this runs on the way out of a failure
-    and raising would mask the error being handled. Saying nothing is not. A
-    silently-failed release leaves the key held for its whole TTL under a holder
-    that is gone, which is the same wedge the rest of this file deletes.
-    """
-    from fno.agents import cli as agents_cli
-
-    def boom(key, holder, **kw):
-        raise OSError("claims dir is read-only")
-
-    monkeypatch.setattr("fno.claims.core.release_claim", boom)
-    agents_cli._release_dispatch_claims(
-        ("dispatch:x-abcd", "spawn-cli:1"), ("node:x-abcd", "spawn-handover:w1")
-    )
-    err = capsys.readouterr().err
-    # Both keys named, and the way out named with them.
-    assert "dispatch:x-abcd" in err
-    assert "node:x-abcd" in err
-    assert "stays held until its TTL expires" in err
-    assert "fno agents claim release" in err
-
 

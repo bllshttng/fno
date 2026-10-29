@@ -54,7 +54,6 @@ fn dispatch(dep: &Value, root: &Path, manifest: &Path, events: Option<&Path>) ->
         .and_then(|args| {
             super::advance_dispatch::launch_resolved(
                 id,
-                dep,
                 args,
                 Some((&key, &holder)),
                 "reconcile_dispatch",
@@ -199,7 +198,7 @@ pub fn fire_pending(id: &str, root: &Path) -> Option<Value> {
     }
     let rows =
         crate::graph_store::read_rows_strict(&super::settings::graph_path()).unwrap_or_default();
-    let fallback = json!({"id":id,"cwd":root,"dispatch_verb":"/target"});
+    let fallback = json!({"id":id,"cwd":root,"dispatch_command":"/target"});
     let dep = rows.iter().find(|r| r["id"] == id).unwrap_or(&fallback);
     let events = advance::advance_events_path(Some(root));
     let manifest = root.join(".fno").join(format!("stub-manifest-{id}.json"));

@@ -14,6 +14,8 @@ set -u
 # Survive a caller env with no usable PATH (see worktree-write-protect.sh).
 PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
+# Producers are hooks: their fno calls never join the session.
+export FNO_HOOK_CONTEXT=1
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HOOK_DIR/.." && pwd)"
 source "$HOOK_DIR/lib/agents-bin.sh"
@@ -35,7 +37,7 @@ run_sync() {
     rc=$?
     if [ "$rc" -ne 0 ]; then
         # The runner exits 0 on its own error paths; a nonzero here is an old
-        # binary that does not know the verb. Name the remedy, keep the hook clean.
+        # binary that does not know the command. Name the remedy, keep the hook clean.
         echo "fno: context-run exited $rc (stale fno-agents binary?); run fno doctor --fix" >&2
     fi
 }

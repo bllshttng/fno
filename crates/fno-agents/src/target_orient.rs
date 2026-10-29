@@ -352,7 +352,24 @@ fn worktree_line(project_root: &Path, node_id: Option<&str>) -> String {
         return project_root.to_string_lossy().to_string();
     }
     let hint = node_id.unwrap_or("<node>");
-    format!("on canonical main -- create with: fno do target start {hint}")
+    // A checkout that is not a linked worktree is canonical whether or not
+    // it sits on main; name the branch it is actually on so the line never
+    // says main when the branch is not.
+    let branch = git_out(project_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| "HEAD".to_string());
+    if branch == "main" {
+        format!("on canonical main -- create with: fno do target start {hint}")
+    } else if branch == "HEAD" {
+        // --abbrev-ref answers HEAD on a detached checkout; git_out's None
+        // (git absent or not a repo) lands here too. "unknown branch" stays
+        // honest about both, and the line names the command that resolves it,
+        // the way the python twin's error path did.
+        format!(
+            "on canonical (unknown branch; resolve: git rev-parse --abbrev-ref HEAD) -- create with: fno do target start {hint}"
+        )
+    } else {
+        format!("on canonical {branch} -- create with: fno do target start {hint}")
+    }
 }
 
 fn tests_line(project_root: &Path) -> String {
@@ -378,7 +395,7 @@ fn tests_line(project_root: &Path) -> String {
 
 /// Backticked token that looks like a repo path: a slash and a dotted
 /// extension, no whitespace. The slash requirement excludes dotted config
-/// keys and bare verbs, the common prose false positives.
+/// keys and bare commands, the common prose false positives.
 fn path_token_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"`([^`\s]+/[^`\s]+\.[A-Za-z0-9_]+)`").unwrap())
@@ -507,13 +524,21 @@ fn has_any_marker(text: &str) -> bool {
 
 /// True if a landed-marker heading naming the blocker (id OR PR number) is
 /// already in the doc. Both keys match on a TOKEN boundary.
+///
+/// The Rust regex crate has no look-around, so the boundaries are spelled as
+/// explicit alternations. The `pr` pattern used to build `#{pr}(?!\d)` and
+/// `unwrap()` it, which PANICKED init on any node whose landed-marker check
+/// named a merged PR (a look-around is a compile error, and unwrap turned it
+/// into a crash mid-`fno do target start`).
 fn marker_present(text: &str, blocker_id: &str, pr_number: Option<i64>) -> bool {
     let id_re = Regex::new(&format!(
-        r"(?i)(?<![\w-]){}(?![\w-])",
+        r"(?i)(?:^|[^0-9A-Za-z_-]){}(?:[^0-9A-Za-z_-]|$)",
         regex::escape(blocker_id)
     ))
     .ok();
-    let pr_re = pr_number.map(|pr| Regex::new(&format!(r"#{pr}(?!\d)")).unwrap());
+    let pr_re = pr_number
+        .map(|pr| Regex::new(&format!(r"#{pr}(?:[^\d]|$)")).ok())
+        .flatten();
     for line in text.lines() {
         let s = line.trim();
         if !is_marker_heading(s) {
@@ -1008,7 +1033,7 @@ fn local_review_gates(settings: &Settings) -> Vec<String> {
     gates
 }
 
-/// The inline self-review verb and refusal remedy. The lane is
+/// The inline self-review command and refusal remedy. The lane is
 /// `/fno:review` on a slash surface and `$fno:review` on codex; an unknown
 /// harness gets the claude spelling (advisory text, never a gate). `None`
 /// from the diff sizing leaves the `<level>` placeholder in place.
@@ -1072,7 +1097,7 @@ fn done_when_line(manifest_raw: &Option<BTreeMap<String, String>>, project_root:
         ));
     }
     // Self-review floor: when the obligation is on and no local lane is
-    // configured, name this harness's verb so a session serves itself.
+    // configured, name this harness's command so a session serves itself.
     if local.is_empty() && settings.self_review_required.unwrap_or(true) {
         let clause = self_review_clause(project_root);
         if !clause.is_empty() {
@@ -1088,17 +1113,24 @@ fn done_when_line(manifest_raw: &Option<BTreeMap<String, String>>, project_root:
 // ── assembly + render ─────────────────────────────────────────────────────────
 
 /// Resolve all eight orientation lines. Read-only; never raises.
-pub fn report(project_root: &Path) -> String {
+/// The report lines, shared by the render and the `target-status` transport
+/// door. The overrides carry the python `load_orientation` contract: an
+/// explicit node or plan wins over the manifest's own.
+fn orient_lines(
+    project_root: &Path,
+    node_override: Option<String>,
+    plan_override: Option<String>,
+) -> Vec<(&'static str, String)> {
     let manifest_raw = read_manifest(project_root);
-    let node_id = {
+    let node_id = node_override.or_else(|| {
         let nid = manifest_str(&manifest_raw, "graph_node_id");
         (!nid.is_empty() && nid != "null").then_some(nid)
-    };
-    let plan_path = {
+    });
+    let plan_path = plan_override.or_else(|| {
         let pp = manifest_str(&manifest_raw, "plan_path");
         let pp = pp.trim_matches(['"', '\'']).to_string();
         (!pp.is_empty() && pp != "null").then_some(pp)
-    };
+    });
     // boundary-reconcile reads the SAME binding the plan line does; a graph
     // read error degrades to the constant the Python twin renders.
     let (bound_plan, plan_text) = match bound_plan_path(plan_path.as_deref(), node_id.as_deref()) {
@@ -1112,7 +1144,7 @@ pub fn report(project_root: &Path) -> String {
             "unknown (plan unreadable: graph unreadable)".to_string(),
         ),
     };
-    let lines: Vec<(&str, String)> = vec![
+    vec![
         ("node", node_line(node_id.as_deref(), &manifest_raw)),
         ("attended", attended_line(&manifest_raw)),
         ("worktree", worktree_line(project_root, node_id.as_deref())),
@@ -1124,11 +1156,202 @@ pub fn report(project_root: &Path) -> String {
         ),
         ("manifest-live", manifest_live_line(&manifest_raw)),
         ("done-when", done_when_line(&manifest_raw, project_root)),
-    ];
+    ]
+}
+
+pub fn report(project_root: &Path) -> String {
+    let lines = orient_lines(project_root, None, None);
     let width = lines.iter().map(|(l, _)| l.len()).max().unwrap_or(0) + 2;
     lines
         .iter()
         .map(|(label, value)| format!("{:<width$} {}", format!("{label}:"), value))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The `target-status` door, two modes. The transport shape reads one
+/// `command_call` payload on stdin (`{"root": path, "node": id?,
+/// "plan_path": path?}`) and prints `{"lines": [...]}` for the caller to
+/// render. The argv shape is the deleted Python command's own surface: the
+/// front door execs `target-status [node] [--plan-path P] [--json]` and the
+/// door resolves the root itself and renders text or JSON exactly as the
+/// Python caller did (the padded `label: value` lines, or one indented JSON
+/// object). A bare shell call with a TTY stdin takes the argv mode; a piped
+/// stdin with no args keeps the transport contract. Exit 3 names a bad
+/// request on stderr; exit 2 a usage error.
+pub fn run_status(args: &[String]) -> i32 {
+    if !args.is_empty() || std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return run_status_argv(args);
+    }
+    let mut input = String::new();
+    use std::io::Read as _;
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        eprintln!("target-status: stdin read failed");
+        return 3;
+    }
+    let req: serde_json::Value = match serde_json::from_str(&input) {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("target-status: bad payload: {error}");
+            return 3;
+        }
+    };
+    let Some(root) = req.get("root").and_then(|v| v.as_str()).map(PathBuf::from) else {
+        eprintln!("target-status: payload has no root");
+        return 3;
+    };
+    let node = req
+        .get("node")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let plan = req
+        .get("plan_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let lines: Vec<(String, String)> = orient_lines(&root, node, plan)
+        .into_iter()
+        .map(|(label, value)| (label.to_string(), value))
+        .collect();
+    println!("{}", serde_json::json!({ "lines": lines }));
+    0
+}
+
+/// The deleted Python command's render, byte-shape for byte-shape: `--json`
+/// prints one pretty JSON object of the lines (a duplicate label collapses
+/// to its last value, the Python dict build), and text pads `label:` to the
+/// longest label plus one column, then the value.
+fn run_status_argv(args: &[String]) -> i32 {
+    let mut positional: Vec<String> = Vec::new();
+    let mut plan = None;
+    let mut json = false;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--plan-path" => plan = it.next().cloned(),
+            "--json" | "-J" => json = true,
+            other if other.starts_with('-') => {
+                eprintln!("target-status: unknown flag {other}");
+                return 2;
+            }
+            other => positional.push(other.to_string()),
+        }
+    }
+    let node = positional.first().cloned();
+    let root = crate::target_gates::resolve_repo_root();
+    let lines: Vec<(String, String)> = orient_lines(&root, node, plan)
+        .into_iter()
+        .map(|(label, value)| (label.to_string(), value))
+        .collect();
+    if json {
+        let mut object = serde_json::Map::new();
+        for (label, value) in &lines {
+            object.insert(label.clone(), serde_json::Value::String(value.clone()));
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(object))
+                .unwrap_or_else(|_| "{}".to_string())
+        );
+    } else {
+        let width = lines
+            .iter()
+            .map(|(l, _)| l.chars().count())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        for (label, value) in &lines {
+            println!("{:<width$} {value}", format!("{label}:"), width = width + 1);
+        }
+    }
+    0
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::marker_present;
+
+    #[test]
+    fn pr_number_marker_matches_without_lookaround() {
+        // The heading the boundary-reconcile step writes when Step 0 ran:
+        // the regex crate has no look-around, so the token boundary must be
+        // an alternation. `#34890` must NOT match `#3489`, and the heading
+        // may name the PR at end-of-line or before a separator. Blocker ids
+        // are the allowlisted synthetic pool (x-aaaa), not real nodes.
+        let text = "### x-aaaa landed via #3489 - boundary reconcile\n";
+        assert!(marker_present(text, "x-aaaa", Some(3489)));
+        // The keys are id OR pr (the python twin's contract): the id alone
+        // marks the blocker present, even when the query names another pr.
+        assert!(marker_present(text, "x-aaaa", Some(34890)));
+        // The pr token boundary, decided by the pr leg alone: #3489 does
+        // not satisfy a #34890 query when no id matches.
+        assert!(!marker_present(
+            "### x-bbbb landed via #3489 - boundary reconcile\n",
+            "x-aaaa",
+            Some(34890)
+        ));
+        assert!(marker_present("### #3489 landed\n", "x-none", Some(3489)));
+        // The heading must read as a landed marker: one without the word
+        // never matches, however it names the PR.
+        assert!(!marker_present("### #3489\n", "x-none", Some(3489)));
+    }
+
+    #[test]
+    fn id_marker_matches_on_token_boundaries() {
+        // `x-aaaa1` must not match for blocker x-aaaa; a leading dash is
+        // part of a longer token and excludes the match, as before. The
+        // longer forms are synthetic (built from the allowlisted pool
+        // token), never real node ids.
+        assert!(marker_present(
+            "### x-aaaa landed - boundary reconcile\n",
+            "x-aaaa",
+            None
+        ));
+        assert!(!marker_present("### x-aaaa1 landed\n", "x-aaaa", None));
+        assert!(!marker_present(
+            "### prefix-x-aaaa landed\n",
+            "x-aaaa",
+            None
+        ));
+    }
+}
+
+#[cfg(test)]
+mod worktree_line_tests {
+    use super::worktree_line;
+
+    #[test]
+    fn names_the_real_branch_on_a_non_main_canonical_checkout() {
+        // Gap 13: any checkout that is not a linked worktree read as
+        // "canonical main". A plain repo is canonical too, so the line must
+        // keep the byte-exact main form there, and name the branch it
+        // actually sits on everywhere else.
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(dir.path().join("f.txt"), "x").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+        let main_line = worktree_line(dir.path(), Some("x-9"));
+        assert!(
+            main_line.contains("on canonical main -- create with: fno do target start x-9"),
+            "{main_line}"
+        );
+        run(&["checkout", "-q", "-b", "feature/x"]);
+        let branch_line = worktree_line(dir.path(), Some("x-9"));
+        assert!(
+            branch_line.starts_with("on canonical feature/x -- create with:"),
+            "{branch_line}"
+        );
+        assert!(!branch_line.contains("canonical main"), "{branch_line}");
+    }
 }

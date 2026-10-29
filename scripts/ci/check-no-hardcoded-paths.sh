@@ -20,11 +20,6 @@
 #   - fno/adapters/providers/dispatch.py - has try/except fallback for providers
 #   - fno/adapters/providers/staging.py  - has try/except fallback for providers
 #   - graph/_constants.py             - uses _state_dir() helper with try/except
-#   - cost/_register.py, cost/_session_cost.py - the moved standalone metric
-#       scripts (: former scripts/metrics/register-task.py +
-#       session-cost.py). They keep their home-anchored ledger literal
-#       (~/.fno/ledger.json), which is exactly what paths.ledger_json() defaults
-#       to; the move-not-rewrite preserved them verbatim (no logic change).
 #   - doctor.py - the orphan-file report deliberately checks the DEFAULT
 #       (unconfigured) ~/.fno, not a configured override: it is an advisory
 #       hygiene check for stray files at the standard location, and routing
@@ -91,7 +86,6 @@ add_violation() {
 #   adapters/providers/loader.py (bootstrap: settings loader self-reference)
 #   agents/dispatch_target.py (bootstrap: settings loader self-reference)
 #   agents/registry.py (guard identifies the shared HOME registry despite config overrides)
-#   cost/_register.py, cost/_session_cost.py (moved standalone metric scripts)
 #   graph/_constants.py (uses _state_dir() helper), test_*.py
 # ---------------------------------------------------------------------------
 
@@ -113,8 +107,6 @@ PY_HITS=$(
     | grep -v 'adapters/providers/loader\.py' \
     | grep -v 'agents/dispatch_target\.py' \
     | grep -v 'agents/registry\.py' \
-    | grep -v 'cost/_register\.py' \
-    | grep -v 'cost/_session_cost\.py' \
     | grep -v 'doctor\.py' \
     || true
 )
@@ -169,8 +161,8 @@ add_violation "skills/ bare \$HOME/.fno violations:" "$SKILLS_SH_HITS"
 # ---------------------------------------------------------------------------
 # handoffs/ path joins: the canon handoff doc location is configured via
 # paths.handoffs_dir() and surfaced by `fno config paths handoff`. A skill or hook
-# that composes a `handoffs/` path by hand re-hardcodes the convention the verb
-# exists to retire. The verb (`fno config paths handoff`) and the
+# that composes a `handoffs/` path by hand re-hardcodes the convention the command
+# exists to retire. The command (`fno config paths handoff`) and the
 # worktree-local succession brief (`.fno/artifacts/handoff/`, singular) do not
 # match this plural-slash form, so there are no legitimate hits to exclude.
 # ---------------------------------------------------------------------------

@@ -242,7 +242,7 @@ def git_writable_config_args(cwd: Path) -> list[str]:
 
     roots = [
         root
-        for root in (_git_common_dir(cwd), _resolve_plan_dir(cwd))
+        for root in (*_git_write_roots(cwd), _resolve_plan_dir(cwd))
         if root
     ]
     for extra in published_worker_writable_dirs():
@@ -261,6 +261,22 @@ def _git_common_dir(cwd: Path) -> str:
     return str(common) if common else ""
 
 
+def _git_write_roots(cwd: Path) -> list[str]:
+    """The common dir, then a linked worktree's own gitdir: codex keeps that
+    gitdir read-only inside the common dir. Mirror of provider.rs::git_write_roots."""
+    import subprocess
+
+    common, own = _git_common_dir(cwd), ""
+    try:
+        out = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--absolute-git-dir"],
+                             capture_output=True, text=True, timeout=10)
+        own = out.stdout.strip() if out.returncode == 0 and common else ""
+    except (OSError, subprocess.SubprocessError):
+        pass
+    linked = own and "\n" not in own and Path(own).resolve() != Path(common).resolve()
+    return [common, own] if linked else [common] if common else []
+
+
 def _resolve_plan_dir(cwd: Path) -> str:
     """Absolute configured plan directory for ``cwd``; ``""`` on failure."""
     try:
@@ -272,7 +288,7 @@ def _resolve_plan_dir(cwd: Path) -> str:
 
 
 def git_writable_args(cwd: Path) -> list[str]:
-    """Return ``--add-dir <git-common-dir>`` so a bounded worker can commit.
+    """Return ``--add-dir`` git grants so a bounded worker can commit.
 
     codex's ``workspace-write`` policy marks ``<project_root>/.git`` read-only,
     so a sandboxed worker cannot take ``index.lock`` and every commit fails
@@ -281,17 +297,14 @@ def git_writable_args(cwd: Path) -> list[str]:
     ``<repo>/.git/worktrees/<name>/``, outside the workspace entirely, and the
     resulting "wrong path" error has been misread as data loss.
 
-    The git COMMON dir covers both shapes in one token: it is ``<repo>/.git``
-    either way, and it contains the per-worktree gitdir alongside the shared
-    ``objects/`` and ``refs/`` a commit also writes. ``--add-dir`` is repeatable
+    The grant is :func:`_git_write_roots`. ``--add-dir`` is repeatable
     and additive, so this composes with a caller's own ``--add-dir`` instead of
     clobbering it the way ``-c sandbox_workspace_write.writable_roots`` would.
 
     Returns ``[]`` outside a repo, or on any git failure - a grant we cannot
     resolve must never break the spawn.
     """
-    common = _git_common_dir(cwd)
-    return ["--add-dir", common] if common else []
+    return [tok for root in _git_write_roots(cwd) for tok in ("--add-dir", root)]
 
 
 def plan_writable_args(cwd: Path) -> list[str]:
@@ -829,9 +842,10 @@ def create(
         *codex_hook_trust_args(),
     ]
     if passthrough:
-        from fno.agents.mux_spawn import pane_passthrough_tokens
+        from fno.agents.mux_spawn import refuse_passthrough_collision
 
-        argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
+        refuse_passthrough_collision(passthrough, argv)
+        argv = [*argv, *passthrough]
     argv += [
         # Behind `--` (codex's own clap tip): a leading-flag seed must be the
         # prompt positional, not a codex flag.

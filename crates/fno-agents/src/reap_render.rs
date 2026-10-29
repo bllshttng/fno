@@ -95,7 +95,7 @@ pub(crate) fn human_duration(secs: i64) -> String {
 /// Render a sweep outcome. Pure, so the one property that matters here is
 /// testable without a registry: every bucket appears at every pass, zero
 /// counts included. A row the pass judged lands in exactly one bucket, and a
-/// bucket nothing prints is not a count - the verb would report zero
+/// bucket nothing prints is not a count - the command would report zero
 /// retirements while rows were being removed.
 pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String {
     // The hold clock: the age suffix on a hold line. Reads the
@@ -235,7 +235,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
                 "kept_planning_unclosed": planning_unclosed,
                 "kept_active": active,
                 "kept_attended": pair(&summary.kept_attended),
-                "kept_user_typed": pair(&summary.kept_user_typed),
+                "kept_other": pair(&summary.kept_other),
                 "kept_marked": pair(&summary.kept_marked),
                 "kept_probe_unread": probe_unread,
                 "kept_live_claim": live_claim,
@@ -270,13 +270,13 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
             })
         );
     }
-    let verb = if dry_run { "would retire" } else { "retired" };
+    let command = if dry_run { "would retire" } else { "retired" };
     // A rehearsal never calls prune_tree, so `pruned` here is a PROJECTION
-    // off TreeAction::Prune alone, never a confirmed removal - the verb
+    // off TreeAction::Prune alone, never a confirmed removal - the command
     // must say so, the same way `retired` already does.
-    let prune_verb = if dry_run { "would prune" } else { "pruned" };
+    let prune_command = if dry_run { "would prune" } else { "pruned" };
     let mut out = format!(
-        "{verb} {} row(s); {prune_verb} {} worktree(s)\n",
+        "{command} {} row(s); {prune_command} {} worktree(s)\n",
         summary.retired.len(),
         summary.pruned.len(),
     );
@@ -291,19 +291,21 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
         ));
     }
     for (id, basis) in &summary.retired {
-        out.push_str(&format!("  {verb} {id} ({basis})\n"));
+        out.push_str(&format!("  {command} {id} ({basis})\n"));
     }
     for (id, path) in &summary.pruned {
-        out.push_str(&format!("  {prune_verb} {id} (clean and merged: {path})\n"));
+        out.push_str(&format!(
+            "  {prune_command} {id} (clean and merged: {path})\n"
+        ));
     }
     for (id, reason) in &summary.prune_failed {
         out.push_str(&format!("  prune failed {id} ({reason})\n"));
     }
-    let settle_verb = if dry_run { "would settle" } else { "settled" };
+    let settle_command = if dry_run { "would settle" } else { "settled" };
     for (node, harness, session_id) in &summary.settled_do_rows {
         let _ = harness; // named in the JSON; the text line carries node + session
         out.push_str(&format!(
-            "  {settle_verb} {session_id} (stale open do row filled on done+merged node: {node})\n"
+            "  {settle_command} {session_id} (stale open do row filled on done node: {node})\n"
         ));
     }
     for (node, reason) in &summary.settle_refused {
@@ -361,7 +363,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
             .map(|h| h.detail.as_str())
             .unwrap_or("");
         out.push_str(&format!(
-            "  kept {id} (open do row on done node: {node}: {detail}){}\n",
+            "  kept {id} (open do row: {node}: {detail}){}\n",
             hold_line(summary, id)
         ));
     }
@@ -391,8 +393,8 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
     for (id, detail) in &summary.kept_attended {
         out.push_str(&format!("  kept {id} (attended: {detail})\n"));
     }
-    for (id, detail) in &summary.kept_user_typed {
-        out.push_str(&format!("  kept {id} (user typed: {detail})\n"));
+    for (id, reason) in &summary.kept_other {
+        out.push_str(&format!("  kept {id} ({reason})\n"));
     }
     for (id, detail) in &summary.kept_marked {
         out.push_str(&format!("  kept {id} ({detail})\n"));
@@ -487,10 +489,10 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
     // The dead-team sweep's lines: one per vacated or would-vacate team,
     // one per kept team, and the unread naming when the sweep refused.
     if let Some(teams) = &summary.teams {
-        let vacate_verb = if dry_run { "would vacate" } else { "vacated" };
+        let vacate_command = if dry_run { "would vacate" } else { "vacated" };
         for v in &teams.vacated {
             out.push_str(&format!(
-                "  {vacate_verb} team {} (holder {} dead: {}; inherits: {})\n",
+                "  {vacate_command} team {} (holder {} dead: {}; inherits: {})\n",
                 v.scope,
                 v.holder_session.as_deref().unwrap_or("unknown"),
                 v.evidence,
@@ -503,10 +505,10 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
         if let Some(unread) = &teams.unread {
             out.push_str(&format!("  teams unreadable ({unread})\n"));
         }
-        let revert_verb = if dry_run { "would revert" } else { "reverted" };
+        let revert_command = if dry_run { "would revert" } else { "reverted" };
         for r in &teams.successions_reverted {
             out.push_str(&format!(
-                "  {revert_verb} succession on {} (successor {} {}: predecessor session restored)\n",
+                "  {revert_command} succession on {} (successor {} {}: predecessor session restored)\n",
                 r.scope, r.successor_name, r.evidence
             ));
         }
@@ -526,7 +528,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
 /// complete the enumeration is. `None` renders exactly like
 /// [`render_reap`].
 ///
-/// `mux` is the second surface this verb sweeps: the mux tab
+/// `mux` is the second surface this command sweeps: the mux tab
 /// sideline through `fno mux workspace prune --tabs-only
 /// --include-used-shells`. It renders in one of three distinguishable states
 /// - ran, unread, skipped - in both the JSON object and the human receipt.
@@ -579,7 +581,7 @@ pub struct PruneReceipt {
     pub notice: Option<String>,
 }
 
-/// Parse the prune verb's JSON receipt, fail-closed: `None` over a zeroed
+/// Parse the prune command's JSON receipt, fail-closed: `None` over a zeroed
 /// report. An unparsable stdout must never read as a clean zero - the same
 /// rule `parse_stale_sweep` (daemon.rs) already states (AC3-EDGE).
 pub fn parse_prune_receipt(stdout: &str) -> Option<PruneReceipt> {
@@ -710,13 +712,13 @@ fn inventory_text_lines(inv: &crate::gc_inventory::Inventory) -> String {
 pub fn mux_sweep_text_line(mux: &MuxSweep, dry_run: bool) -> String {
     match mux {
         MuxSweep::Ran { receipt } => {
-            let verb = if dry_run { "would close" } else { "closed" };
+            let command = if dry_run { "would close" } else { "closed" };
             let count = if dry_run {
                 receipt.would_close
             } else {
                 receipt.closed
             };
-            let mut line = format!("mux sweep (ran): {verb} {count} tab(s)");
+            let mut line = format!("mux sweep (ran): {command} {count} tab(s)");
             if !receipt.close_named.is_empty() {
                 line.push_str(": ");
                 line.push_str(&receipt.close_named.join("; "));
@@ -1034,7 +1036,7 @@ mod tests {
         assert!(out.contains("(dry-run: no changes made)"));
 
         // A rehearsal never confirms a removal - the `pruned` line must
-        // carry the same "would" verb the `retired` line already does.
+        // carry the same "would" command the `retired` line already does.
         let s = GcSummary {
             pruned: vec![("a1".into(), "/tmp/wt".into())],
             ..Default::default()

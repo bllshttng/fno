@@ -173,8 +173,9 @@ async function fromFno($: EngineInterface): Promise<Soul | null> {
   if (!home) return null
   const dir = `${home}/.claude/plugins/store`
   try {
-    // The marketplace install (fno@footnote) wins over a local dev copy such as fno@inline.
-    const entries = (await $.fs.list(dir)).sort((a, b) => Number(b.name.startsWith('fno_footnote-')) - Number(a.name.startsWith('fno_footnote-')))
+    // The marketplace install (fno@fno, or fno@footnote before the rename) wins over a local dev copy such as fno@inline.
+    const market = (name: string) => Number(name.startsWith('fno_fno-') || name.startsWith('fno_footnote-'))
+    const entries = (await $.fs.list(dir)).sort((a, b) => market(b.name) - market(a.name))
     for (const entry of entries) {
       if (!entry.name.startsWith('fno_') || !entry.name.endsWith('.json')) continue
       const old = JSON.parse(await $.fs.read(`${dir}/${entry.name}`))
@@ -616,9 +617,9 @@ async function runJson($: EngineInterface, argv: string[], cwd?: string): Promis
   }
 }
 
-// The same counts the fleet's own verbs print: live workers from the spawn gate,
+// The same counts the fleet's own commands print: live workers from the spawn gate,
 // questions waiting on the user from the outstanding inbox, and the user's open PRs.
-// Each verb takes several seconds, so one read every FLEET_MS serves every session.
+// Each command takes several seconds, so one read every FLEET_MS serves every session.
 export function fleetLine(gate: any, outstanding: any, prs: any): string {
   const parts: string[] = []
   if (typeof gate?.live_workers === 'number') parts.push(`${gate.live_workers} workers`)
@@ -790,7 +791,7 @@ export function register(on: On) {
     const now = await $.clock.now()
     const arg = e.args.trim().toLowerCase()
     if (!buddy) await load($, now)
-    if (deferred) return { text: 'Your fno plugin still runs its own buddy. Update fno (/plugin update fno@footnote), then start a new session.' }
+    if (deferred) return { text: 'Your fno plugin still runs its own buddy. Update fno (/plugin update fno@fno, or fno@footnote on an older install), then start a new session.' }
     if (!stateDir) stateDir = await findStateDir($, await readSettings($))
     if (arg === 'statusline') return { text: await statuslineOn($) }
     if (arg === 'bye') {

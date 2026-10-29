@@ -3,7 +3,7 @@
 use super::*;
 
 /// The commit-status context the merge ruleset requires. One const for
-/// both emitter call sites and the standalone verb arm; the Python publisher
+/// both emitter call sites and the standalone command arm; the Python publisher
 /// and refresher workflow pin the same name from their own surfaces, and a
 /// context string that splits in two is a green marker on nothing.
 pub(super) const COVERAGE_STATUS_CONTEXT: &str = "fno/review-coverage";
@@ -12,7 +12,7 @@ pub(super) const COVERAGE_UNAVAILABLE_STATUS_CONTEXT: &str = "fno/review-coverag
 
 pub(super) fn coverage_unavailable_description(head: &str) -> String {
     format!(
-        "coverage read unavailable at {}; retry the review verb",
+        "coverage read unavailable at {}; retry the review command",
         short_sha(head)
     )
 }
@@ -30,8 +30,8 @@ pub(super) fn coverage_instrument_status(
     }
 }
 
-/// Whether `name` is the local reviewer Python's gate demands a pass from,
-/// with the same leading-slash tolerance `_coverage_has_local_pass` applies.
+/// Whether `name` is the local code-review reviewer the gate demands a
+/// pass from, leading-slash tolerant.
 pub(super) fn is_code_review_reviewer(name: &str) -> bool {
     normalize_reviewer(name) == "code-review"
 }
@@ -54,12 +54,12 @@ pub(super) fn bounded_success_text(result: Result<BoundedOutput, GhReadError>) -
 /// the event row, and a failed POST leaves the status absent, which the
 /// ruleset reads as not-passing (fail-closed).
 ///
-/// The success conjunction MIRRORS `coverage_verdict` in
-/// cli/src/fno/pr/_coverage_gate.py: covered count > 0, the row pinned to the PR head
-/// (not merely the local HEAD), and - when `code-review` is a configured
-/// reviewer - a head-pinned local pass from it. The two must agree, because
-/// this status is exactly what lets a merge through where `fno do pr merge`
-/// already looked; the post-merge audit on main is what catches a drift.
+/// The success conjunction is the verdict's own: covered count > 0, the row
+/// pinned to the PR head (not merely the local HEAD), and - when
+/// `code-review` is a configured reviewer - a head-pinned local pass from
+/// it. The status must agree with the gate, because this status is exactly
+/// what lets a merge through where `fno do pr merge` already looked; the
+/// post-merge audit on main is what catches a drift.
 ///
 /// Skipped entirely when no review lane is configured: a stock install has no
 /// ruleset requiring the context, and a permanent failure status there would
@@ -67,7 +67,7 @@ pub(super) fn bounded_success_text(result: Result<BoundedOutput, GhReadError>) -
 /// Whether the PR carries the `coverage-override` label. The label is durable
 /// shared state: EVERY writer of the coverage status re-reads it before
 /// posting, so a green stamped by the gate workflow's labeled arm survives a
-/// later stop-hook or verb fire instead of being clobbered red. `None` means
+/// later stop-hook or command fire instead of being clobbered red. `None` means
 /// all three reads failed; the caller then checks the current marker
 /// description before deciding whether an override green needs protection.
 pub(super) fn pr_has_override_label(gh_bin: &str, cwd: &Path, pr_number: i64) -> Option<bool> {
@@ -124,13 +124,11 @@ pub(super) fn current_coverage_description(gh_bin: &str, cwd: &Path, head: &str)
 /// The standing operator-law subject for review coverage. One live law
 /// verdict here waives the coverage conjunct fleet-wide; the per-head exit
 /// beside it is the attended `fno do pr coverage-waive` command's scoped
-/// subject. Mirrors `STANDING_WAIVER_SUBJECT` in
-/// cli/src/fno/pr/_coverage_gate.py; the two spellings are held equal by the
-/// coverage-path tests, not by trust.
+/// subject. The coverage-path tests pin this spelling, not trust.
 pub(super) const STANDING_WAIVER_SUBJECT: &str = "review-coverage-waiver";
 
-/// The one decision value that counts as an affirmative waiver. Mirrors
-/// `WAIVER_DECISION` in cli/src/fno/pr/_coverage_gate.py: a single law row at
+/// The one decision value that counts as an affirmative waiver: a single
+/// law row at
 /// a waiver subject counts ONLY when its decision equals this string - row
 /// existence carries no polarity, so a note or a denial recorded at the
 /// subject reads as no waiver. An exact match against a constant, never free
@@ -152,7 +150,7 @@ pub(super) fn scoped_waiver_subject(repo_slug: &str, pr_number: i64, head: &str)
 /// `Unknown`: a nonzero exit (the reader refuses a damaged index), a dead
 /// probe, a conflict among operator rows, or malformed output all answer
 /// UNKNOWN authority, which no consumer may read as either permission or
-/// absence. Mirrors `law_authority` on the Python side, seam for seam.
+/// absence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LawStatus {
     Single,
@@ -229,8 +227,7 @@ pub(crate) fn operator_law_rows(stdout: &[u8]) -> Option<Vec<Value>> {
 /// push - then the standing ruling, which never clears an unresolved
 /// CONFIRMED correctness or security finding. `authority_unknown` is true
 /// when either probe could not answer; a caller naming it must never report
-/// "no waiver" on that evidence. Mirrors `operator_waiver_verdict` in
-/// cli/src/fno/pr/_coverage_gate.py.
+/// "no waiver" on that evidence.
 pub fn operator_waiver(
     fno_bin: &str,
     cwd: &Path,
@@ -301,7 +298,7 @@ pub(super) fn post_coverage_status(
     match result {
         Ok(out) if out.status.success() => {}
         Ok(out) => {
-            let error = GhReadError::failed("coverage_status_post", stderr_tail(&out.stderr_tail));
+            let error = GhReadError::failed("coverage_status_post", failed_read_tail(&out));
             log_bounded_read_error("review-coverage publisher", &error);
         }
         Err(error) => log_bounded_read_error("review-coverage publisher", &error),
@@ -311,18 +308,18 @@ pub(super) fn post_coverage_status(
 #[allow(clippy::too_many_arguments)]
 /// The `failure` status description for an uncovered head.
 ///
-/// NEVER names a harness-specific verb, and the rule is the whole reason this
+/// NEVER names a harness-specific command, and the rule is the whole reason this
 /// is a named function rather than an inline format. This description is ONE
 /// string on a shared GitHub commit status: written once by whichever harness
 /// happened to publish it, then read by every harness, every CI runner, and
-/// every human on the PR page. Embedding the publisher's own verb hands a
+/// every human on the PR page. Embedding the publisher's own command hands a
 /// claude `/code-review ...` to a codex worker, which has no such command -
 /// measured, not theoretical. The harness-neutral command named here resolves
-/// the right verb LOCALLY, on whatever harness runs it, which is the only
+/// the right command LOCALLY, on whatever harness runs it, which is the only
 /// place that resolution is correct.
 ///
 /// The worker's own held reason (`coverage_receipt_line`) still names the
-/// sized verb, and rightly: that text is read in the session that produced
+/// sized command, and rightly: that text is read in the session that produced
 /// it, on that session's harness. Shared artifact, neutral; local text,
 /// sized. That is the line.
 ///
@@ -392,7 +389,7 @@ pub(super) fn publish_coverage_status(
         );
         return;
     }
-    // The override first, mirroring the Python publisher: the label outranks
+    // The override first: the label outranks
     // the verdict, and its green must not be clobbered by this writer. The
     // actor is named by the workflow's labeled arm, which sees the event.
     // A label read that remains unavailable after retrying consults the
@@ -408,9 +405,9 @@ pub(super) fn publish_coverage_status(
                 "success",
                 "coverage-override label applied on the PR",
             );
-            // The diagnostic mirrors the Python override arm, not the
+            // The diagnostic mirrors the override arm, not the
             // possibly-Unknown computed read: a waived review must not wear
-            // "retry the review verb" beside its override success, and the
+            // "retry the review command" beside its override success, and the
             // two writers of one context must post the same state.
             post_coverage_status(
                 gh_bin,
@@ -493,7 +490,7 @@ pub(super) fn publish_coverage_status(
             &description,
         );
         // The diagnostic mirrors the waiver, not the computed read: a waived
-        // review must not wear "retry the review verb" beside its waiver
+        // review must not wear "retry the review command" beside its waiver
         // success, same as the override arm above.
         post_coverage_status(
             gh_bin,

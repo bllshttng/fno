@@ -1,13 +1,13 @@
 <!-- style-exception: canonical org prose predates the style rules; bundled into skills/lead verbatim -->
 # CLI commands: what the role reaches for
 
-Curated for the role: the verbs an adjudicator actually uses, each with the one gotcha that makes it non-obvious.
+Curated for the role: the commands an adjudicator actually uses, each with the one gotcha that makes it non-obvious.
 
-`fno help --all` is the source of truth for every verb this page does not list, and `fno help <group> --all` enumerates a subtree.
+`fno <group> --help` is the source of truth for every command this page does not list, and `fno-py help <group> --all` adds the hidden Python leaves.
 
-A verb with no gotcha earns no line here, because the help surface already covers it.
+A command with no gotcha earns no line here, because the help surface already covers it.
 
-This page exists because a verb can ship and stay invisible. One lead filed work to build a pane-grouping capability that had already shipped. The placement flags were simply not findable from the skill.
+This page exists because a command can ship and stay invisible. One lead filed work to build a pane-grouping capability that had already shipped. The placement flags were simply not findable from the skill.
 
 ## How to trust a line
 
@@ -17,9 +17,9 @@ A stale line is worse than no page. Before you act on a load-bearing claim, re-v
 
 | You need | The truth lives in |
 |---|---|
-| The full verb surface | `fno help --all` (hidden verbs included) |
-| Flags on one verb | `fno <verb> --help` |
-| Behavior of a verb | The source: `cli/src/fno/`, `crates/` |
+| The full command surface | `fno help --all` (hidden commands included) |
+| Flags on one command | `fno <command> --help` |
+| Behavior of a command | The source: `cli/src/fno/`, `crates/` |
 | A registry fact | The live lockfile or transcript, never a receipt snapshot |
 
 Receipts and manifest snapshots have each lied about a live session. Three reads stay truthful:
@@ -32,23 +32,23 @@ Receipts and manifest snapshots have each lied about a live session. Three reads
 
 The fetch is the point: a stale local `origin/main` ref answers zero for a branch that is dozens of commits behind.
 
-## The role's own verbs
+## The role's own commands
 
-Verbs that exist only for a titled session. One lead ran a whole territory without knowing three of these shipped.
+Commands that exist only for a titled session. One lead ran a whole territory without knowing three of these shipped.
 
-| You are trying to | Verb | The gotcha |
+| You are trying to | Command | The gotcha |
 |---|---|---|
 | Run one check-in beat | `fno agents org checkin` | Runs the whole check-in body and emits the `lead_checkin` journal row itself. The row carries the numbers it just printed. A failed reader gets its own `READER FAILED` line and the beat continues. `--change "<sentence>"` records your finding on the same row. `--no-emit` prints and diffs without appending. |
 | Join nodes to PRs, sessions and workers | `fno agents org -n` | Returns the node, PR, session and worker join in one call. Replaces a hand-built join over `fno do pr list`, `fno agents internal registry-json` and a raw graph read. Implies JSON output. |
 | Count what is left to deliver | `fno agents org chart drain <scope>` | Answers delivery, not assignment: undelivered as one number. An unreadable graph exits non-zero on purpose, so the count can never read as drained. |
-| Leave an answer for the next lead | `fno agents org faq add` | The only role verb aimed at a successor. Refuses without `--exit`, the change that retires the entry. |
+| Leave an answer for the next lead | `fno agents org faq add` | The only role command aimed at a successor. Refuses without `--exit`, the change that retires the entry. |
 | Read the lead back | `fno agents org history` | This role's recorded check-ins, newest first, verbatim. Legacy alias rows count as rejected evidence and are never silently accepted. It never generates a summary. |
 
 ## Observation and pointing
 
-| You are trying to | Verb | The gotcha |
+| You are trying to | Command | The gotcha |
 |---|---|---|
-| Move the user's view to a pane | `fno mux pane focus <n>` | The only pane verb that acts on the USER's view. Every other pane verb acts FOR an agent. This is the one that answers "show me that". |
+| Move the user's view to a pane | `fno mux pane focus <n>` | The only pane command that acts on the USER's view. Every other pane command acts FOR an agent. This is the one that answers "show me that". |
 | Find where a handle lives | `fno mux where <handle>` | Pane-only. Any thread agent answers `hosts no live pane` (exit 17). That is a true answer, not an error. |
 | Read a worker that has no pane | `fno agents session peek <handle> --follow` | Tails the transcript. This is the read that works after `where` says there is no pane. |
 | Read a worker's output log | `fno agents session logs <name> --tail <n>` | Registry-scoped output log, distinct from `peek` (a transcript tail through the mux ref). |
@@ -58,17 +58,17 @@ Verbs that exist only for a titled session. One lead ran a whole territory witho
 
 ## Spawning
 
-Harness-native commands first, overrides only on explicit request. The `fno agents` verbs and the config defaults already resolve names and lanes. When the request itself names the lane, reach for the axis flag.
+Harness-native commands first, overrides only on explicit request. The `fno agents` commands and the config defaults already resolve names and lanes. When the request itself names the lane, reach for the axis flag.
 
-Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (provider, model, effort, substrate, permission_mode, route, account), `agents.profiles.<verb>` overlays it per verb, and an explicit flag always wins. A lane set once in config needs no flags at spawn time. That is the line that saves the most re-derivation.
+Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (provider, model, effort, substrate, permission_mode, route, account), `agents.profiles.<command>` overlays it per command, and an explicit flag always wins. A lane set once in config needs no flags at spawn time. That is the line that saves the most re-derivation.
 
 | You are trying to | The trap |
 |---|---|
 | Name the vendor | `--model` alone never does. It is exact passthrough to the provider's own CLI. `-P/--provider` is the vendor axis, and `--provider zai --model glm-5.3` is the same route as `--route zai/glm-5.3`. `--route` fails closed on an unknown vendor or a missing key, and is claude-only. |
 | Name the CLI binary | That is `-H/--harness`. `-P` is not it, and `-H` no longer means headless. |
-| Fire a one-shot | `-p` off spawn is a refusal, not a synonym. `--substrate headless` or `--once` is the one-shot. |
+| Fire a one-shot | `-p` off spawn is a refusal, not a synonym. `--as headless` or `--once` is the one-shot. |
 | Escape an inherited tier remap | `ANTHROPIC_DEFAULT_SONNET_MODEL` and its siblings remap a tier for the whole inherited environment, so a `sonnet` spawn can land on another vendor's model. `env -u` escapes. Pinned by `cli/tests/unit/test_inherited_tier_remap.py` and `cli/tests/unit/test_model_routing.py`. |
-| Spawn through a crippled daemon | `--substrate thread` needs no mux pane, so it survives an EMFILE-crippled daemon; The retired `bg` spelling refuses with a redirect to `thread`. The supported provider lanes are defined in `docs/architecture/thread-lanes.md`. |
+| Spawn through a crippled daemon | `--as thread` needs no mux pane, so it survives an EMFILE-crippled daemon; The retired `bg` spelling refuses with a redirect to `thread`. The supported provider lanes are defined in `docs/architecture/thread-lanes.md`. |
 
 The prompt prefix is per harness: claude `/fno:target`, codex `$fno:target`, opencode prose only, with no slash surface. On codex the `$fno:` token does not reliably expand. An audit of one night's spawns (`scripts/diagnostics/codex-skill-load-audit.py`, 2026-08-18) found the harness `<skill>` injection in 4 of 15 wrapped prompts. The worker's own first-action read of the deployed SKILL.md carried most of the rest. Three of 15 never loaded it. Spawn the skill invocation as the prompt, never prose wrapping it.
 
@@ -76,7 +76,7 @@ The spawn receipt is one line of compact JSON carrying `name`, `short_id`, `harn
 
 ## Fleet lifecycle
 
-There is no kill verb on either surface: not `fno agents kill`, not `fno-agents kill`. The reap sequence depends on the substrate.
+There is no kill command on either surface: not `fno agents kill`, not `fno-agents kill`. The reap sequence depends on the substrate.
 
 A thread worker, the default where the harness seats one, is reaped with `fno agents session stop <name>` followed by `fno agents session rm <name>`.
 
@@ -84,25 +84,25 @@ Killing the pane does not touch the registry row. A row that lingers after the p
 
 A thread or daemon worker is reaped stop first, then rm.
 
-| Step | Verb | The gotcha |
+| Step | Command | The gotcha |
 |---|---|---|
 | 1 | `fno agents session stop <name>` | Reaches a session on claude rows only. Codex and gemini answer `stop is a no-op between asks`, registry unchanged. |
 | 2 | `fno agents session rm <name>` | Tears down the harness session record FIRST, registry row after. That record is the resume handle. On teardown failure the registry row is KEPT for retry. `--force` drops it anyway and names the orphan left in the harness store. |
-| 2r | `fno agents registry adopt <full-harness-session-id> --cross-project` | Identity-only recovery from a surviving harness store. Use the full session ID. The flag authorizes machine-wide store selection after uniqueness checks. |
+| 2r | `fno agents registry adopt <full-harness-session-id>` | Identity-only recovery from a surviving harness store. Use the full session ID; store selection is machine-wide. |
 
-`rm` alone never stops a running session. Removing a row and stopping a session are separate verbs by design.
+`rm` alone never stops a running session. Removing a row and stopping a session are separate commands by design.
 
 <!-- retired-ok: names the command in order to forbid it. -->
-Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>` instead.
+Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>` instead.
 
 Measured on a live registry: `fno agents session rm` lands the registry removal, then hangs on harness teardown. A timeout is not a failed removal. Re-read the registry before you believe the receipt.
 
-<!-- retired-ok: states why driving these directly fails, as the reason to reach for the fno verbs instead. -->
-Driven directly, the claude-native verbs key on the SHORT ID: `claude rm <short_id>`, `claude stop <short_id>`. A name does not match there, so a direct reap by name silently no-ops and leaves the row the user sees.
+<!-- retired-ok: states why driving these directly fails, as the reason to reach for the fno commands instead. -->
+Driven directly, the claude-native commands key on the SHORT ID: `claude rm <short_id>`, `claude stop <short_id>`. A name does not match there, so a direct reap by name silently no-ops and leaves the row the user sees.
 
-The `fno agents` verbs resolve the name to the short id for you. Reach for those.
+The `fno agents` commands resolve the name to the short id for you. Reach for those.
 
-`fno agents session rm` talks to the Rust daemon, and a wedged daemon takes the verb down with it. The old in-process escape (`python -c "... rm_agent ..."`) is gone: rm has no Python implementation. The remedy is the daemon restart verb, `fno agents session restart`: it SIGTERMs the stale daemon and lazy-starts a fresh one, and PTY workers survive the restart. Re-run the rm on the fresh daemon.
+`fno agents session rm` talks to the Rust daemon, and a wedged daemon takes the command down with it. The old in-process escape (`python -c "... rm_agent ..."`) is gone: rm has no Python implementation. The remedy is the daemon restart command, `fno agents session restart`: it SIGTERMs the stale daemon and lazy-starts a fresh one, and PTY workers survive the restart. Re-run the rm on the fresh daemon.
 
 `fno agents session list` reads every transcript to derive per-row state. On a fleet of dozens it has taken over 120 seconds. Budget for that before you block a lead on the read.
 
@@ -118,9 +118,9 @@ It is a dry run by default. `--apply` executes the wake lane only, the one actio
 
 ## Delivery to a parked or live session
 
-`fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>`.
+`fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>`.
 
-A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands. A session that carries `FNO_AGENTS_RUNTIME=python` reaches the older Python leg, which refuses a Done row. Run the verb with `env -u FNO_AGENTS_RUNTIME` until spawned sessions stop inheriting that pin.
+A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands. A session that carries `FNO_AGENTS_RUNTIME=python` reaches the older Python leg, which refuses a Done row. Run the command with `env -u FNO_AGENTS_RUNTIME` until spawned sessions stop inheriting that pin.
 
 On the one path that forwards it, the warning `timed out after 3.0s, falling back to registry-only view` is noise. The roster probe times out, the command falls back to the registry view, and the message still lands.
 
@@ -166,7 +166,7 @@ Draft to a file and run `fno doctor lint style --stdin < file` before sending. T
 
 | Read | The gotcha |
 |---|---|
-| `fno do pr status <n>` | `ready` means green AND `optional_reviews_unresolved == 0`. Advisory, never the exit code. Costs GraphQL quota through its `reviewThreads` read. |
+| `fno do pr status <n>` | `ready` means green AND no counted unresolved optional finding (an unreadable count warns and holds nothing). Advisory, never the exit code. Costs GraphQL quota through its `reviewThreads` read. |
 | `fno do pr merge <n>` | Gates on the `review_coverage` event read from local `events.jsonl`. Never reads threads. |
 | `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`, `/commits/<sha>/status`, and `actions/runs?head_sha=<sha>` | CI state over REST: check runs plus legacy commit statuses, which `check-runs` alone cannot see, plus the Actions runs listing: a run that failed before minting a job (a workflow file GitHub cannot parse) owns no check run and reads red by its workflow path. Free of the GraphQL budget. |
 | `fno-agents review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |

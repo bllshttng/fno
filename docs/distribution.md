@@ -38,7 +38,7 @@ staged binaries and:
 
 - ships each as a wheel **script** (`*.data/scripts/<binary>`), which pip installs into
   the environment's `bin/` (`Scripts/` on Windows) — i.e. on PATH, so daemon-backed
-  verbs work with no second install (US6); and
+  commands work with no second install (US6); and
 - tags the wheel `py3-none-<platform>` rather than `cp3XX-cp3XX-<platform>`, because a
   standalone executable is interpreter-agnostic. One wheel serves every Python 3.x on
   the platform, so there is no per-version build explosion and no sdist fallback on
@@ -52,7 +52,7 @@ license-less wheel hard-fails rather than ship silently (US5). The events schema
 (`fno/events/schema.yaml`) ships as ordinary package data — it lives inside the
 `src/fno` package, so it needs no force-include. The CI runs a clean-machine smoke
 (`cli/tests/smoke/clean_machine_smoke.sh`) against the freshly built wheel — all three
-binaries on PATH, the internalized verbs run, the clone-only verbs degrade — failing the
+binaries on PATH, the internalized commands run, the clone-only commands degrade — failing the
 release on any miss.
 
 When no binary is staged (local dev, `pip install -e`, sdist) the hook no-ops the binary
@@ -64,17 +64,17 @@ a Rust toolchain to build.** On Linux the CI sets
 
 ## Rust runtime for `fno agents` (default)
 
-The Rust daemon is the **default** runtime for the daemon-native verbs and four of the five
-shared verbs (which closed the flag +
-stdout parity gap for `list`/`stop`/`rm`/`reconcile`). By default `fno agents <verb>` execs
-the installed `fno-agents` binary for every verb the Rust client implements at parity, and
-uses the mature Python dispatch for `ask` and the Python-only verbs. `FNO_AGENTS_RUNTIME`
+The Rust daemon is the **default** runtime for the daemon-native commands and four of the five
+shared commands (which closed the flag +
+stdout parity gap for `list`/`stop`/`rm`/`reconcile`). By default `fno agents <command>` execs
+the installed `fno-agents` binary for every command the Rust client implements at parity, and
+uses the mature Python dispatch for `ask` and the Python-only commands. `FNO_AGENTS_RUNTIME`
 selects the runtime explicitly:
 
 | `FNO_AGENTS_RUNTIME` | Behavior |
 |---|---|
-| unset / anything else | **`auto`** (default): exec the installed binary for the daemon-native + the four cut-over shared verbs; Python for `ask` and the Python-only verbs |
-| `rust` | force the binary for every verb, `ask` included (missing binary → exit 127) |
+| unset / anything else | **`auto`** (default): exec the installed binary for the daemon-native + the four cut-over shared commands; Python for `ask` and the Python-only commands |
+| `rust` | force the binary for every command, `ask` included (missing binary → exit 127) |
 | `python` | force the Python dispatch; never touch the binary |
 
 ```bash
@@ -82,14 +82,14 @@ fno agents spawn --name worker-A --harness codex             # Rust by default w
 fno agents session list --json                                 # Rust: render_json shape; table on a TTY
 fno agents session stop worker-A                               # Rust: prints "stopped: worker-A (<short_id>)"
 fno agents mail ask worker-A "hello" --harness codex        # Python (ask stays on Python — see below)
-FNO_AGENTS_RUNTIME=rust fno agents mail ask worker-A "..."  # force the binary for every verb, ask included
+FNO_AGENTS_RUNTIME=rust fno agents mail ask worker-A "..."  # force the binary for every command, ask included
 ```
 
-Why the default routes most verbs, and is install-aware:
+Why the default routes most commands, and is install-aware:
 
-- **Daemon-native + four shared verbs auto-route; `ask` stays on Python.** The Rust client
+- **Daemon-native + four shared commands auto-route; `ask` stays on Python.** The Rust client
   implements `spawn`, `ask`, `list`, `status`, `stop`, `rm`, `reconcile`, `drive`, and the
-  `*-channel` verbs. Four shared verbs reached flag + stdout parity:
+  `*-channel` commands. Four shared commands reached flag + stdout parity:
   `stop` prints `stopped: <name> (<short_id>)`, `rm` prints `removed: <name>`, and
   `list`/`reconcile` emit the `render_json` shape under `--json`/non-TTY (a functional
   table on a TTY) and accept `--cwd/--harness/--status`. **`ask` is NOT auto-routed**: the
@@ -100,7 +100,7 @@ Why the default routes most verbs, and is install-aware:
   create-on-first-contact `handle_ask` groundwork (auto-spawn via
   `ProviderWithPty::create_argv`, readiness-poll reply) is in place for
   `FNO_AGENTS_RUNTIME=rust` force-mode and a future reply-extraction follow-up, but `auto`
-  keeps `ask` on Python. Only `ask` and the Python-only verbs (`logs`, `ping`,
+  keeps `ask` on Python. Only `ask` and the Python-only commands (`logs`, `ping`,
   `drive-authority`, `attach`, `resume`, `trace`) stay on Python. (One decided behavior,
   not a gap: `list` reports the daemon's PTY-worker status and deliberately does not
   replicate Python's per-row `claude agents --json` `live_status` augmentation. Under the
@@ -117,8 +117,8 @@ Why the default routes most verbs, and is install-aware:
   exits 127 with an actionable message when no binary is found.
 
 `fno agents --help` always stays on the Python group help so the wrapper stays
-discoverable; because the shared verbs stay on Python, `fno agents <verb> --help` renders
-the Python help for them. (Per-verb help for the daemon-native verbs is pending Rust-client
+discoverable; because the shared commands stay on Python, `fno agents <command> --help` renders
+the Python help for them. (Per-command help for the daemon-native commands is pending Rust-client
 support.)
 
 ## Release channels (the runbook)
@@ -136,6 +136,18 @@ Three channels ship through `release.yml`. The nightly is automatic, and each gr
 1. The candidate opens itself. The nightly publish dispatches `channel=rc` at the same green commit. That run builds and parks on the `release` approval. To open one by hand, run `gh workflow run release.yml -f channel=rc` for the newest green main commit. Add `-f sha=<commit>` for a specific one.
 2. Judge it before you click: main green, no open p0, a day of your own use of the nightly. One click, and the approved job uploads `0.4.0rcN` to PyPI and creates the `v0.4.0rcN` tag and pre-release. Candidates on the same base bump `rcN` (`0.4.0rc1`, `0.4.0rc2`, ...). After a stable promotion, the next candidate opens on the next unreleased patch. Main's version can still read the released one. crates.io is stable-only. A plain `pip install` skips rc versions. `FNO_VERSION=0.4.0rcN sh fno.sh` pins one.
 3. When a candidate sits unclicked for more than a day, the workflow opens one reminder issue naming the waiting run. It closes itself once a candidate ships. A waiting candidate never stacks: the next candidate parks and the stale pending run is cancelled. The click always holds the newest commit.
+
+### The release record
+
+The lead records which sha the candidate holds, which PRs it includes, and which PRs joined later. The record lives at `<agents home>/releases/<release>.json`. A pin appends, so a moved pin stays visible:
+
+```bash
+fno-agents authorized-merge '{"op": "release-pin", "release": "v0.4.1rc1", "base_tag": "v0.4.0", "sha": "<40 hex>", "repo": "<owner/repo>", "by": "lead", "reason": "first candidate"}'
+fno-agents authorized-merge '{"op": "release-join", "release": "v0.4.1rc1", "pr": 4051, "by": "lead"}'
+fno-agents authorized-merge '{"op": "release-show", "release": "v0.4.1rc1"}'
+```
+
+The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` in the cwd (or the payload's `repo_dir`). A join refuses a PR the pin already includes. A pin also moves the sha of a live merge freeze on the same repo. It never adds a PR to the freeze. Dispatch the rc run with the record's current sha: `gh workflow run release.yml -f channel=rc -f sha=<sha>`. Draft the notes from the record: `scripts/release/draft-release-notes.py <release> --record <agents home>/releases/<release>.json`. Joiners print under "Joined after pin". A candidate the nightly opens with no lead writes no record, and its notes fall back to the tag range.
 
 ### Stable (one click)
 

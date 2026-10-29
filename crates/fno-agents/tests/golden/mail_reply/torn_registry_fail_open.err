@@ -1,0 +1,7 @@
+note: reachability stores unreadable (registry); replying to 'HEX8' as recorded on the answered message.
+mail: liveness of HEX8 could not be established; queued durably as recovery only - the recipient must drain its inbox to read this, and may never do so
+  live delivery NOT confirmed - do not wait for a reply, recover:
+    fno agents peek HEX8     # did it land? a busy peer may have queued it
+    fno agents resume HEX8   # wakes it (claude) or resumes it (other harnesses), then re-send
+    fno agents attach HEX8   # drive it yourself (claude)
+    fno agents mail withdraw <id>      # none of the above? retract it

@@ -24,11 +24,6 @@ use crate::spawn_gate::status_is_liveish;
 use crate::state::{load_registry, RegistryEntry};
 use crate::AgentStatus;
 
-/// How long a reactive provider-health entry may drive the quota lock
-/// (mirrors runtime_state.PROVIDER_HEALTH_TTL_SECONDS and the bound
-/// fallback_chain already applies to its own health reads).
-const PROVIDER_HEALTH_TTL_SECONDS: f64 = 60.0 * 60.0;
-
 // ponytail: fixed 5-hour hold matches the vendor window in the measured 429;
 // upgrade is parsing the window length from the excerpt.
 const UNKNOWN_RESET_HOLD_S: i64 = 5 * 3600;
@@ -203,7 +198,7 @@ fn built_in_subagents(provider: &str) -> Option<i64> {
 }
 
 // ---------------------------------------------------------------------------
-// Pane liveness: one seam crossing, through the pane owner's own verb
+// Pane liveness: one seam crossing, through the pane owner's own command
 // ---------------------------------------------------------------------------
 
 /// Exact pane liveness for a registry row's mux ref: `Ok(true/false)` decided,
@@ -845,12 +840,70 @@ pub(crate) struct ShareReading {
     pub held: Option<usize>,
     pub held_rows: Option<Vec<String>>,
     pub unattributed_rows: Option<Vec<String>>,
+    /// Every counted row in the fleet, attributed or not.
+    pub fleet: Option<usize>,
+    /// The seats the other teamed leads still lack to reach their share.
+    pub owed: Option<usize>,
+}
+
+impl ShareReading {
+    /// A lead at its share can borrow a free seat only when one is left over
+    /// after every seat the other leads still lack to reach their share, so
+    /// the borrow never takes a floor. A lead under its share always passes.
+    /// With no teamed lead there is no lead seat to lend, and the share of 1
+    /// holds. `None` when unread.
+    pub(crate) fn refuses(&self, cap: usize) -> Option<bool> {
+        let (share, held, fleet, owed) = (self.share?, self.held?, self.fleet?, self.owed?);
+        if held < share {
+            return Some(false);
+        }
+        if self.leads? == 0 {
+            return Some(true);
+        }
+        Some(cap.saturating_sub(fleet) <= owed)
+    }
+
+    pub(crate) fn free(&self, cap: usize) -> Option<usize> {
+        self.fleet.map(|fleet| cap.saturating_sub(fleet))
+    }
 }
 
 pub(crate) fn share_reading(
     registry_path: &Path,
     cap: usize,
     caller: Option<&str>,
+    terminal_runs: Option<&Path>,
+) -> ShareReading {
+    let home = crate::paths::AgentsHome::at(registry_path.parent().unwrap_or(Path::new(".")));
+    share_reading_with(registry_path, cap, caller, terminal_runs, &mut || {
+        crate::gc_sweep::read_graph_entries(&home)
+    })
+}
+
+/// The graph records every node this session names as merged. The reaper's
+/// own verdict decides it, so the gate and the reaper never disagree about
+/// which rows are finished.
+fn named_work_merged(e: &RegistryEntry, sid: &str, graph: &crate::gc_sweep::GraphRead) -> bool {
+    let verdict = crate::gc_sweep::provenance_verdict(e, sid, graph, None, None);
+    if verdict.hold.is_some() {
+        return false;
+    }
+    match &verdict.work {
+        crate::graph_store::WorkState::AllDone { .. } => {
+            !verdict.merge_note.is_empty()
+                && verdict.merge_note.iter().all(|n| n.ends_with(":merged"))
+        }
+        crate::graph_store::WorkState::Open { .. } => verdict.merged_but_open.is_some(),
+        crate::graph_store::WorkState::NoProvenance => false,
+    }
+}
+
+fn share_reading_with(
+    registry_path: &Path,
+    cap: usize,
+    caller: Option<&str>,
+    terminal_runs: Option<&Path>,
+    load_graph: &mut dyn FnMut() -> Option<crate::gc_sweep::GraphRead>,
 ) -> ShareReading {
     let registry = match load_registry(registry_path) {
         Ok(registry) => registry,
@@ -861,12 +914,19 @@ pub(crate) fn share_reading(
                 held: None,
                 held_rows: None,
                 unattributed_rows: None,
+                fleet: None,
+                owed: None,
             }
         }
     };
     let mut teamed: HashSet<String> = HashSet::new();
     let mut held_rows: Vec<String> = Vec::new();
     let mut unattributed: Vec<String> = Vec::new();
+    let mut by_spawner: std::collections::HashMap<String, usize> = Default::default();
+    let mut fleet = 0usize;
+    let terminal = terminal_runs.map(crate::terminal_run::read_keys);
+    // Read only when a row's turn ended: the graph read is the costly part.
+    let mut graph: Option<Option<crate::gc_sweep::GraphRead>> = None;
     for e in &registry.entries {
         // A team counts until it is cleared or its row is permanently dead.
         // A reboot leaves every teamed row reading exited while the team
@@ -883,9 +943,38 @@ pub(crate) fn share_reading(
         if !status_is_liveish(&e.status) || e.role_level.is_some() {
             continue;
         }
+        // A finished row still takes a fleet seat; it only stops charging
+        // its lead.
+        fleet += 1;
+        // A row whose run reported a releasing terminal reason is a parked
+        // finished worker, not active work: it stops charging its lead's
+        // share while it stays alive for late review mail. No session id or
+        // an unreadable dir keeps today's counting.
+        if let Some(set) = &terminal {
+            if e.harness_session_id
+                .as_deref()
+                .is_some_and(|sid| set.contains(sid))
+            {
+                continue;
+            }
+        }
+        // A worker whose turn ended (its hook reported `done`) on merged work
+        // is finished, not a held seat. The graph is read only when such a
+        // row exists; an unread graph charges the row.
+        let turn_ended = e
+            .inside_leg
+            .as_ref()
+            .is_some_and(|r| r.state == crate::state::InsideLegState::Done);
+        if let (true, Some(sid)) = (turn_ended, e.harness_session_id.as_deref()) {
+            if let Some(read) = graph.get_or_insert_with(&mut *load_graph) {
+                if named_work_merged(e, sid, read) {
+                    continue;
+                }
+            }
+        }
         match e.spawned_by_session.as_deref() {
             Some(spawner) if Some(spawner) == caller => held_rows.push(e.name.clone()),
-            Some(_) => {}
+            Some(spawner) => *by_spawner.entry(spawner.to_string()).or_default() += 1,
             None => unattributed.push(e.name.clone()),
         }
     }
@@ -900,12 +989,19 @@ pub(crate) fn share_reading(
     } else {
         (cap / divisor).max(1)
     };
+    let owed = teamed
+        .iter()
+        .filter(|lead| Some(lead.as_str()) != caller)
+        .map(|lead| share.saturating_sub(by_spawner.get(lead).copied().unwrap_or(0)))
+        .sum();
     ShareReading {
         leads: Some(leads),
         share: Some(share),
         held: Some(held_rows.len()),
         held_rows: Some(held_rows),
         unattributed_rows: Some(unattributed),
+        fleet: Some(fleet),
+        owed: Some(owed),
     }
 }
 
@@ -992,7 +1088,7 @@ pub(crate) fn check_registry_schema(
     let latch_path = data_dir.join("version-skew.last");
     let latch_key = format!("{writer_rev}:{min_writer}:{understood}");
     if !matches!(std::fs::read_to_string(&latch_path), Ok(stored) if stored == latch_key) {
-        let emitted = crate::events::EventEmitter::new(data_dir.join("events.jsonl"), "rust")
+        let emitted = crate::events::EventEmitter::new(data_dir.join("events.jsonl"), "rust") // events-discipline:allow: the raw write in the window is the version-skew latch
             .emit(
                 "version_skew",
                 &serde_json::json!({
@@ -1068,7 +1164,7 @@ pub(crate) fn check_account_quota_lock(
 /// The auth wall beside the quota lock: a spawn naming an account whose
 /// config dir cannot log in is refused before launch, so the node is not
 /// counted as dispatched while nobody works on it. Claude-only: codex and
-/// opencode status verbs read local state and cannot see a server-side
+/// opencode status commands read local state and cannot see a server-side
 /// expiry, so a probe built on them could only ever say yes. The rules and
 /// their order live in [`check_account_login_with`]; this wrapper binds the
 /// production reader and probe so tests can inject both.
@@ -1080,7 +1176,7 @@ pub(crate) fn check_account_login(
     check_account_login_with(
         route_provider,
         account,
-        crate::reentry::shell_account_binding,
+        crate::reentry::account_binding,
         crate::claude_login::probe_config_dir,
         crate::claude_login::record_verdict_ambient,
         warnings,
@@ -1252,16 +1348,13 @@ fn runtime_state_payload(config_cwd: &Path) -> Value {
 }
 
 /// The account's binding rate-limit deadline, when its health entry is fresh
-/// (the shared record-level TTL) and the lock is in the future. Reuses the
-/// fallback-chain's health parse instead of a second one.
+/// (the shared record-level TTL) and the lock is in the future.
 pub(crate) fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
-    let health = crate::fallback_chain::parse_provider_health(raw).remove(account)?;
-    let rlu = health.get("rate_limited_until").and_then(Value::as_f64)?;
-    match health.get("last_error_at").and_then(Value::as_f64) {
-        Some(at) if at < now - PROVIDER_HEALTH_TTL_SECONDS => return None,
-        _ => {}
-    }
-    (rlu > now).then_some(rlu)
+    let health = crate::accounts::state::parse_health(raw);
+    crate::accounts::state::drop_stale(health, now)
+        .remove(account)?
+        .rate_limited_until
+        .filter(|rlu| *rlu > now)
 }
 
 /// Epoch seconds as a UTC ISO-8601 string for the refusal prose; the receipt
@@ -1272,33 +1365,37 @@ fn chrono_like_iso(epoch_s: f64) -> String {
         .unwrap_or_else(|| "unknown (no reset was readable)".to_string())
 }
 
-/// The lead-share axis: one lead holding more than its share of the
-/// effective cap refuses its own spawn, naming the rows it can stop. Lives
-/// beside `share_reading`, the count it refuses on.
+/// The lead-share axis: a lead at its share of the effective cap refuses
+/// its own spawn, naming the rows it can stop, unless it can borrow a seat
+/// the other leads leave idle (`ShareReading::refuses`). Lives beside
+/// `share_reading`, the count it refuses on.
 pub(crate) fn check_lead_share(
     registry_path: &Path,
     learned: &crate::capacity::Effective,
     caller_session: Option<&str>,
+    terminal_runs: Option<&Path>,
     _axes_read: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), crate::spawn_gate::Refusal> {
     let cap = learned.cap;
     let Some(caller) = caller_session.filter(|c| !c.is_empty()) else {
         return Ok(());
     };
-    let reading = share_reading(registry_path, cap, Some(caller));
+    let reading = share_reading(registry_path, cap, Some(caller), terminal_runs);
     let (Some(leads), Some(share), Some(held)) = (reading.leads, reading.share, reading.held)
     else {
         // An unreadable registry leaves every count unknown; nothing to
         // enforce and no zero to fail open on.
         return Ok(());
     };
-    if held < share {
+    if reading.refuses(cap) != Some(true) {
         return Ok(());
     }
+    let free = reading.free(cap).unwrap_or(0);
+    let owed = reading.owed.unwrap_or(0);
     let mut msg = format!(
         "spawn-gate: lead {} holds {held} of {} across {leads} leads (share {share}); \
-         refusing to spawn -- waiting cannot help while your own workers hold the share \
-         (--force to bypass)",
+         {free} seat(s) free and {owed} owed to other leads, so none to borrow; \
+         refusing to spawn (--force to bypass)",
         &caller[..caller.len().min(8)],
         learned.clause()
     );
@@ -1326,6 +1423,8 @@ pub(crate) fn check_lead_share(
             .ev("share", serde_json::json!(share))
             .ev("max_live", serde_json::json!(cap))
             .ev("leads", serde_json::json!(leads))
+            .ev("free", serde_json::json!(free))
+            .ev("owed", serde_json::json!(owed))
             .ev(
                 "held_rows",
                 serde_json::json!(reading.held_rows.clone().unwrap_or_default()),
@@ -1368,6 +1467,210 @@ mod tests {
         format!(
             r#"{{"name":"{name}","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"{sid}"}}"#
         )
+    }
+
+    /// A live spawned worker row carrying its harness session id and spawner.
+    fn spawned_row(name: &str, sid: &str, spawner: &str) -> String {
+        format!(
+            r#"{{"name":"{name}","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"{sid}","spawned_by_session":"{spawner}"}}"#
+        )
+    }
+
+    /// A live caller-spawned row with a terminal-run receipt stops counting
+    /// toward lead_share, and counts again once the receipt clears.
+    #[test]
+    fn a_terminal_receipt_row_stops_counting_toward_lead_share() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-share-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        let sid = "c79bce5b-1682-4a8c-97f4-d6254cf18112";
+        write_registry(&reg, &[spawned_row("t-w-done", sid, "lead-1")]);
+
+        let home = crate::paths::AgentsHome::at(&dir);
+        let runs = home.terminal_runs_dir();
+
+        // No receipt: the row counts (today's refusal fires unchanged).
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(reading.held, Some(1), "no receipt: the row counts");
+
+        // DonePRGreen receipt dropped: the same row stops counting.
+        crate::terminal_run::write_receipt(&home, sid, "DonePRGreen").unwrap();
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(reading.held, Some(0), "receipt: the finished row skips");
+        assert!(
+            reading
+                .held_rows
+                .unwrap_or_default()
+                .iter()
+                .all(|n| n != "t-w-done"),
+            "the skipped row is not named as held"
+        );
+
+        // Receipt cleared (the loop went live again): the row counts again.
+        crate::terminal_run::remove_receipt(&home, sid);
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(
+            reading.held,
+            Some(1),
+            "cleared receipt: the row counts again"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The skip keys on the row, not the caller; a missing dir reads as no
+    /// receipts (count everything).
+    #[test]
+    fn the_receipt_skip_is_keyed_on_the_row_not_the_caller() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-share2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        let sid = "c79bce5b-1682-4a8c-97f4-d6254cf18112";
+        write_registry(
+            &reg,
+            &[
+                spawned_row("t-w-lead2", sid, "lead-2"),
+                spawned_row("t-w-lead1", "aaaaaaaa-bb-cc-dd-eeeeeeeeeeee", "lead-1"),
+            ],
+        );
+        let home = crate::paths::AgentsHome::at(&dir);
+        let runs = home.terminal_runs_dir();
+        crate::terminal_run::write_receipt(&home, sid, "DonePRGreen").unwrap();
+
+        // lead-2's own finished row skips; lead-1's live row still counts.
+        let reading = share_reading(&reg, 3, Some("lead-2"), Some(&runs));
+        assert_eq!(reading.held, Some(0), "lead-2's finished row skips");
+        let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
+        assert_eq!(reading.held, Some(1), "lead-1's working row still counts");
+
+        // A nonexistent dir reads as no receipts: lead-2's row counts.
+        let reading = share_reading(&reg, 3, Some("lead-2"), Some(&dir.join("nope")));
+        assert_eq!(reading.held, Some(1), "missing dir: count everything");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A lead at its share borrows only a seat left over after every floor:
+    /// with max_live 16 and leads A=5, B=1, C=1, A borrows the spare sixth
+    /// seat. B then starts work and admits, and A's seventh is refused
+    /// because the free seats are owed to B and C. At max_live 15 nothing is
+    /// spare, so A is refused at its share.
+    #[test]
+    fn an_idle_leads_seats_lend_until_a_lead_under_its_share_asks() {
+        let dir = std::env::temp_dir().join(format!("fno-lanes-lend-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The first read migrates registry.json into a store directory, so
+        // each state gets its own registry path.
+        let fresh = |state: &str| {
+            let sub = dir.join(state);
+            std::fs::create_dir_all(&sub).unwrap();
+            sub.join("registry.json")
+        };
+        let lead = |sid: &str| {
+            format!(
+                r#"{{"name":"lead-{sid}","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"{sid}"}}"#
+            )
+        };
+        let rows = |a: usize, b: usize, c: usize| {
+            let mut rows = vec![lead("a"), lead("b"), lead("c")];
+            for (spawner, n) in [("a", a), ("b", b), ("c", c)] {
+                for i in 0..n {
+                    rows.push(spawned_row(
+                        &format!("w-{spawner}{i}"),
+                        &format!("{spawner}-{i}"),
+                        spawner,
+                    ));
+                }
+            }
+            rows
+        };
+
+        let reg = fresh("5-1-1");
+        write_registry(&reg, &rows(5, 1, 1));
+        let a = share_reading(&reg, 16, Some("a"), None);
+        assert_eq!(
+            (a.share, a.held, a.fleet, a.owed),
+            (Some(5), Some(5), Some(7), Some(8))
+        );
+        assert_eq!(a.refuses(16), Some(false), "A borrows the spare seat");
+        let a = share_reading(&reg, 15, Some("a"), None);
+        assert_eq!(a.refuses(15), Some(true), "no spare seat at 15");
+
+        let reg = fresh("6-1-1");
+        write_registry(&reg, &rows(6, 1, 1));
+        let b = share_reading(&reg, 16, Some("b"), None);
+        assert_eq!(b.refuses(16), Some(false), "B under its share admits");
+
+        let reg = fresh("6-2-1");
+        write_registry(&reg, &rows(6, 2, 1));
+        let a = share_reading(&reg, 16, Some("a"), None);
+        assert_eq!(
+            a.refuses(16),
+            Some(true),
+            "the free seats are owed to B and C"
+        );
+
+        // No teamed lead: nothing to lend, so the share of 1 still refuses.
+        let reg = fresh("solo");
+        write_registry(&reg, &[spawned_row("w-solo", "s-0", "solo")]);
+        let solo = share_reading(&reg, 15, Some("solo"), None);
+        assert_eq!(solo.refuses(15), Some(true), "no team, no borrow");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A worker whose hook reported `done` on a node recorded merged stops
+    /// charging its lead and still takes a fleet seat. The same row with no
+    /// recorded merge keeps counting.
+    #[test]
+    fn a_turn_ended_on_merged_work_stops_charging_the_lead() {
+        let dir = std::env::temp_dir().join(format!("fno-lanes-merged-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        let done = r#"{"name":"w-done","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","harness_session_id":"d-1","spawned_by_session":"a","inside_leg":{"state":"done","seq":1,"received_at":"2026-10-24T16:00:00Z"}}"#;
+        write_registry(&reg, &[done.to_string(), spawned_row("w-live", "l-1", "a")]);
+        let graph = |merge: Option<&str>| {
+            let index = std::collections::HashMap::from([(
+                "d-1".to_string(),
+                vec![("N1".to_string(), "done".to_string())],
+            )]);
+            crate::gc_sweep::GraphRead {
+                work_index: index.clone(),
+                index,
+                open_do: Default::default(),
+                phases: Default::default(),
+                closed_planning: Default::default(),
+                plan_written: Default::default(),
+                statuses: [("N1".to_string(), "done".to_string())].into(),
+                pr_state: [("N1".to_string(), (merge.map(str::to_string), 0, 0))].into(),
+                pr_number: Default::default(),
+                plan_paths: Default::default(),
+                delivery_merged_refs: Default::default(),
+                do_nodes: Default::default(),
+                pr_reads: Default::default(),
+            }
+        };
+
+        let read = share_reading_with(&reg, 15, Some("a"), None, &mut || {
+            Some(graph(Some("merged")))
+        });
+        assert_eq!(
+            read.held_rows,
+            Some(vec!["w-live".to_string()]),
+            "merged and idle skips"
+        );
+        assert_eq!(read.fleet, Some(2), "the finished row still takes a seat");
+
+        let read = share_reading_with(&reg, 15, Some("a"), None, &mut || Some(graph(None)));
+        assert_eq!(read.held, Some(2), "no recorded merge: the row counts");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// AC1-HP's counting rule: live rows of the provider count, dead pids and
@@ -1425,6 +1728,7 @@ mod tests {
         let now = crate::claims::now_ms();
         let launch = |name: &str, provider: Option<&str>| crate::launch_record::Launch {
             harness: "claude".into(),
+            resume: None,
             name: Some(name.into()),
             node: None,
             slot: None,

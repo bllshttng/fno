@@ -6,17 +6,23 @@
 //! alive/dead. This module restores a screen-read fallback: for each
 //! registry row that is mux-hosted AND hook-less, the daemon reads the pane's
 //! rendered screen through the mux script API (`fno mux pane ls/read --json`,
-//! the same one-shot control verbs scripts use - no mux proto change, no
+//! the same one-shot control commands scripts use - no mux proto change, no
 //! fno-agents<->fno crate dependency in either direction), evaluates the
 //! provider's detection manifest ([`crate::manifest`]) against it, and stores
 //! the verdict as [`state::ScreenStateReport`] on the row.
 //!
 //! Arbitration is per-capability, not per-moment (no two competing sources of
 //! truth): a row that carries ANY `inside_leg` report - live or
-//! TTL-lapsed - is never scraped; its TTL lapse degrades to liveness-only
-//! exactly as before. The inside-leg store path clears `screen_state` on the
-//! capability flip, and the sweep's write closure re-checks under the
-//! registry lock, so a scrape verdict can never shadow a hook.
+//! TTL-lapsed - is never scraped, UNLESS its harness wiring names no blocked
+//! producer (`blocked = "none"`): the hook lane of such a harness reports
+//! working/done but structurally cannot report blocked (no PermissionRequest
+//! payload was ever captured for codex), so the screen owns that rung for
+//! its rows and the sweep keeps scraping them. A harness that DOES wire a
+//! blocked event keeps the old whole-row rule; its TTL lapse degrades to
+//! liveness-only exactly as before. The inside-leg store path clears
+//! `screen_state` on the capability flip, and the sweep's write closure
+//! re-checks under the registry lock, so a scrape verdict can never shadow a
+//! hook that can state the blocked rung.
 //!
 //! Registry writes are change-gated: a verdict is written when the detected
 //! state differs from the stored one, or when the stored stamp is due a
@@ -67,11 +73,18 @@ pub fn scrape_targets(reg: &Registry) -> Vec<ScrapeTarget> {
             // ANY inside-leg report (live or lapsed) marks the row
             // hook-capable: the hook owns the signal, TTL lapse degrades to
             // liveness-only, never to a scrape (no authority flapping).
-            // Non-live statuses are excluded too: Orphaned (failed
-            // reachability probe) and Failed (panicked task) already say the
-            // backend is not live, so scraping their last screen would badge
-            // a dead pane (codex P2).
-            e.inside_leg.is_none()
+            // ONE carve-out: a harness whose wiring names no blocked
+            // producer (`blocked = "none"`) can never state blocked through
+            // the hook, so its rows stay scrapable and the screen owns that
+            // rung (the codex pane at a permission prompt must read
+            // blocked). Non-live statuses are excluded too: Orphaned
+            // (failed reachability probe) and Failed (panicked task)
+            // already say the backend is not live, so scraping their last
+            // screen would badge a dead pane (codex P2).
+            (e.inside_leg.is_none()
+                || crate::harness_capabilities::session_state_names_no_blocked_producer(
+                    e.harness_name(),
+                ))
                 && !matches!(
                     e.status,
                     AgentStatus::Exited
@@ -263,7 +276,7 @@ fn fno_py_in_tools_dir(base: &std::path::Path) -> Option<std::path::PathBuf> {
     is_executable_file(&script).then_some(script)
 }
 
-/// Exec the Python CLI (`fno_py`) with the verb words leading, stdio
+/// Exec the Python CLI (`fno_py`) with the command words leading, stdio
 /// inherited, exit code returned. Unix execs in place; elsewhere it spawns
 /// and waits. `label` names the caller in the refusal lines. Lifted from
 /// the backlog forward so the mail relay's verbatim forwards share one
@@ -396,7 +409,9 @@ enum WriteDisposition {
 /// Decide the locked-write disposition for one row. Pure so the arbitration
 /// re-checks (hook flip, mux-ref match) are unit-testable without a daemon.
 fn write_disposition(e: &state::RegistryEntry, expect_ref: &(String, u64)) -> WriteDisposition {
-    if e.inside_leg.is_some() {
+    if e.inside_leg.is_some()
+        && !crate::harness_capabilities::session_state_names_no_blocked_producer(e.harness_name())
+    {
         return WriteDisposition::HookFlip;
     }
     let cur_ref = e.mux.as_ref().map(|m| (m.session.clone(), m.pane_id));
@@ -559,9 +574,22 @@ pub fn scrape_sweep(home: &AgentsHome, emitter: &EventEmitter, notify_on_blocked
     }
 }
 
-/// The hidden `fno-agents detect` debug verb (precedent: the hidden `claim`
-/// verb - matched with `matches!` in bin/client.rs, out of CLIENT_VERB_USAGE
-/// and the routable-verb parity guard). `detect explain <agent>` prints which
+/// The authority `detect explain` names for a row, folded through the shared
+/// [`crate::wait::effective_state`] lattice the daemon waits on, so this
+/// diagnostic cannot report hook or liveness where a fresh screen blocked
+/// verdict outranks the leg for a no-blocked-producer harness. Under an
+/// inside-leg report, `"screen"` is always that merge.
+pub(crate) fn explain_rung(e: &state::RegistryEntry, now_secs: u64) -> &'static str {
+    if matches!(e.status, AgentStatus::Exited | AgentStatus::PermanentDead) {
+        return "pane-exit";
+    }
+    let (_, authority) = crate::wait::effective_state(e, now_secs);
+    authority
+}
+
+/// The hidden `fno-agents detect` debug command (precedent: the hidden `claim`
+/// command - matched with `matches!` in bin/client.rs, out of CLIENT_COMMAND_USAGE
+/// and the routable-command parity guard). `detect explain <agent>` prints which
 /// authority currently badges the agent and, for screen-manifest, the matched
 /// rule + stored verdict + age. Read-only over the registry; no live
 /// re-evaluation in v1.
@@ -593,15 +621,34 @@ pub fn run_detect(args: &[String]) -> i32 {
         }
     };
     println!("agent: {} (provider {})", entry.name, entry.harness_name());
-    // Mirrors the reader lattice: pane-exit > hook (capability) >
-    // screen-manifest > liveness.
+    // Authority names fold through the shared effective_state lattice
+    // (explain_rung): pane-exit tops the ladder, and the inside-leg branch
+    // defers its decision so a fresh screen blocked verdict for a
+    // no-blocked-producer harness reports as "screen".
     if matches!(
         entry.status,
         AgentStatus::Exited | AgentStatus::PermanentDead
     ) {
         println!("authority: pane-exit (status {:?})", entry.status);
     } else if let Some(leg) = &entry.inside_leg {
-        if leg.is_live_at(now_secs) {
+        if explain_rung(entry, now_secs) == "screen" {
+            let Some(ss) = &entry.screen_state else {
+                // Unreachable: effective_state answers "screen" under a leg
+                // only for a fresh blocked verdict, which requires the row.
+                return 1;
+            };
+            println!(
+                "authority: screen (rule {:?} -> {}, seq {}, age {}, ttl {:?}ms; \
+                 outranks the {:?} inside-leg report for a harness whose \
+                 wiring names no blocked producer)",
+                ss.rule,
+                ss.state,
+                ss.seq,
+                age(&ss.at),
+                ss.ttl_ms,
+                leg.state
+            );
+        } else if leg.is_live_at(now_secs) {
             println!(
                 "authority: hook (inside-leg report: state {:?}, seq {}, age {})",
                 leg.state,
@@ -609,11 +656,19 @@ pub fn run_detect(args: &[String]) -> i32 {
                 age(&leg.received_at)
             );
         } else {
+            let no_producer = crate::harness_capabilities::session_state_names_no_blocked_producer(
+                entry.harness_name(),
+            );
             println!(
-                "authority: liveness (hook report lapsed: seq {}, age {}; \
-                 row is hook-capable so the screen-manifest rung stays off)",
+                "authority: liveness (hook report lapsed: seq {}, age {}; {})",
                 leg.seq,
-                age(&leg.received_at)
+                age(&leg.received_at),
+                if no_producer {
+                    "the screen rung owns blocked for this harness, but no \
+                     fresh blocked verdict stands here"
+                } else {
+                    "row is hook-capable so the screen-manifest rung stays off"
+                }
             );
         }
     } else if let Some(ss) = &entry.screen_state {
@@ -777,14 +832,45 @@ mod tests {
         assert_eq!(targets[0].pane_id, 7);
     }
 
+    // A no-blocked-producer harness (wiring `blocked = "none"`, codex) with a
+    // live inside_leg report IS a scrape target: the hook lane cannot state
+    // blocked, so the screen owns that rung. The claude-still-excluded case
+    // is the test above (`hooked`, wiring `blocked = "Notification"`).
+    #[test]
+    fn scrape_targets_scrapes_no_blocked_producer_rows_despite_hook_report() {
+        let mut reg = Registry::default();
+        let mut codex_row = entry("codex-at-prompt", "codex");
+        codex_row.mux = Some(state::MuxRef {
+            session: "main".into(),
+            pane_id: 11,
+        });
+        codex_row.inside_leg = Some(state::InsideLegReport {
+            state: state::InsideLegState::Working,
+            seq: 1,
+            reason: None,
+            received_at: NOW_STAMP.into(),
+            ttl_ms: Some(120_000),
+            posture: None,
+        });
+        reg.entries.push(codex_row);
+
+        let targets = scrape_targets(&reg);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "codex-at-prompt");
+        assert_eq!(targets[0].provider, "codex");
+        assert_eq!(targets[0].pane_id, 11);
+    }
+
     #[test]
     fn write_disposition_rechecks_hook_flip_and_mux_ref() {
         // The locked-write re-checks against the row's CURRENT state, not the
-        // snapshot the sweep read.
+        // snapshot the sweep read. The harness is claude on purpose: its
+        // wiring wires a blocked event, so an inside_leg report means the
+        // hook owns the row whole (a scrape verdict can never shadow it).
         let scraped = ("main".to_string(), 7u64);
 
         // Row still on the scraped pane -> Apply.
-        let mut row = entry("r", "codex");
+        let mut row = entry("r", "claude");
         row.mux = Some(state::MuxRef {
             session: "main".into(),
             pane_id: 7,
@@ -824,6 +910,51 @@ mod tests {
             write_disposition(&unhosted, &scraped),
             WriteDisposition::Skip
         );
+    }
+
+    // A no-blocked-producer row with an inside_leg report is ADMITTED by the
+    // locked-write guard (Apply, not HookFlip): the guard exists so a scrape
+    // verdict can never shadow a hook that can state blocked, and this
+    // harness's hook cannot. The mux-ref check above it is untouched.
+    #[test]
+    fn scrape_write_disposition_applies_for_no_blocked_producer_rows() {
+        let scraped = ("main".to_string(), 12u64);
+        let mut row = entry("codex-at-prompt", "codex");
+        row.mux = Some(state::MuxRef {
+            session: "main".into(),
+            pane_id: 12,
+        });
+        row.inside_leg = Some(state::InsideLegReport {
+            state: state::InsideLegState::Working,
+            seq: 1,
+            reason: None,
+            received_at: NOW_STAMP.into(),
+            ttl_ms: Some(120_000),
+            posture: None,
+        });
+        assert_eq!(write_disposition(&row, &scraped), WriteDisposition::Apply);
+    }
+
+    // -- detect explain ---------------------------------------------------
+
+    // The explain lattice folds the inside-leg branch through the shared
+    // effective_state merge: a legged codex row (wiring names no blocked
+    // producer) with a fresh screen blocked verdict explains as "screen",
+    // and keeps the leg's "hook" word when no merge fires.
+    #[test]
+    fn detect_explain_folds_the_leg_branch_through_the_shared_merge() {
+        let mut codex_row = entry("codex-at-prompt", "codex");
+        codex_row.inside_leg = Some(state::InsideLegReport {
+            state: state::InsideLegState::Working,
+            seq: 1,
+            reason: None,
+            received_at: NOW_STAMP.into(),
+            ttl_ms: Some(120_000),
+            posture: None,
+        });
+        assert_eq!(explain_rung(&codex_row, now_secs()), "hook");
+        codex_row.screen_state = Some(rep("blocked", NOW_STAMP, 2));
+        assert_eq!(explain_rung(&codex_row, now_secs()), "screen");
     }
 
     // -- decide: write-on-change ------------------------------------------

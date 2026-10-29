@@ -70,7 +70,7 @@ struct Census {
     live_registry_names: HashSet<String>,
 }
 
-fn status_word(entry: &RegistryEntry) -> String {
+pub(crate) fn status_word(entry: &RegistryEntry) -> String {
     serde_json::to_value(entry.status)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
@@ -229,6 +229,39 @@ fn census(
     out
 }
 
+/// The recorded pids of the census's live workers, for the orphan sweep's
+/// exclusion set: a `claude --bg` worker is detached to PPID 1 with a worktree
+/// cwd, so without this exclusion the first `--reap` takes down the fleet.
+/// The same union `payload` renders - the Python census union it replaced -
+/// so the sweep and the display view cannot disagree about who is supposed to
+/// exist. The sweep itself decides whether an empty or failed read is a
+/// broken instrument; this helper only reports the pids it can name.
+pub(crate) fn census_worker_pids() -> HashSet<u32> {
+    let home = crate::paths::AgentsHome::from_env();
+    let roster: Vec<crate::claude_roster::RosterWorker> =
+        match crate::claude_roster::ClaudeRoster::load(&crate::claude_roster::default_roster_path())
+        {
+            Ok(r) => r.workers.into_values().collect(),
+            Err(_) => Vec::new(),
+        };
+    let rows = match crate::state::load_registry(&home.registry_json()) {
+        Ok(r) => r.entries,
+        Err(_) => Vec::new(),
+    };
+    let claims_root = crate::claims_root::global_claims_root();
+    let claim_live = |name: &str| {
+        matches!(
+            crate::claims::status(&format!("worker:{name}"), claims_root.as_deref()).0,
+            crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
+        )
+    };
+    census(&roster, &rows, &pid_state, &claim_live, chrono::Utc::now())
+        .workers
+        .iter()
+        .filter_map(|w| w.pid)
+        .collect()
+}
+
 fn role_label(entry: &RegistryEntry) -> Option<String> {
     entry
         .role_level
@@ -237,6 +270,81 @@ fn role_label(entry: &RegistryEntry) -> Option<String> {
 
 fn opt_str(value: Option<&str>) -> Value {
     value.map_or(Value::Null, |s| json!(s))
+}
+
+/// The longest `last_message` a row carries, in characters.
+const LAST_MESSAGE_CHARS: usize = 240;
+
+/// The project a directory belongs to: its own `[project] id`, else its git
+/// remote slug, else its basename. The home config is not consulted: it
+/// names the caller's project, not the seat's. Cached for the process,
+/// because the remote read shells out to git and the daemon reads every
+/// worker on every beat.
+fn project_of(dir: &str) -> String {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(dir) {
+        return hit.clone();
+    }
+    let name = crate::finalize::resolve_project_name(None, None, Path::new(dir));
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(dir.to_string(), name.clone());
+    name
+}
+
+/// The seat facts a fleet page shows beside the status: the full session
+/// id, the model and where it was read, the start, the newest turn and its
+/// stamp, the directory and its project, and the context reading. A fact
+/// no source answers is null.
+fn seat_facts(
+    w: &Worker,
+    entry: Option<&RegistryEntry>,
+    probe: Option<&crate::truth_probe::TruthProbe>,
+) -> Map<String, Value> {
+    let registry_model = entry
+        .and_then(|e| e.model.as_deref())
+        .filter(|m| !m.is_empty());
+    let observed_model = probe
+        .map(|p| &p.observed_model)
+        .filter(|om| om.get("kind").and_then(Value::as_str) == Some("observed"))
+        .and_then(|om| om.get("model").and_then(Value::as_str))
+        .filter(|m| !m.is_empty());
+    // The live worker's observed model wins: the registry row carries the
+    // dispatch default the spawn stamped, and a worker serving a different
+    // model must read as the model it serves. The registry value
+    // is the fallback for a seat no probe reached.
+    let (model, model_basis) = match (observed_model, registry_model) {
+        (Some(m), _) => (Some(m), Some("observed")),
+        (None, Some(m)) => (Some(m), Some("registry")),
+        (None, None) => (None, None),
+    };
+    let cwd = entry.map(|e| e.cwd.as_str()).filter(|d| !d.is_empty());
+    let root = entry
+        .map(|e| e.project_root.as_str())
+        .filter(|d| !d.is_empty());
+    let project = root.or(cwd).map(project_of);
+    let last_message = probe
+        .and_then(|p| p.last_message.as_deref())
+        .map(|m| m.chars().take(LAST_MESSAGE_CHARS).collect::<String>());
+    let facts = json!({
+        "session_id": w.session_id.as_deref().or(entry.and_then(|e| e.harness_session_id.as_deref())),
+        "model": model,
+        "model_basis": model_basis,
+        "started_at": entry.map(|e| e.created_at.as_str()).filter(|s| !s.is_empty()),
+        "last_message": last_message,
+        "last_message_at": probe.and_then(|p| p.last_event_at.as_deref()),
+        "cwd": cwd,
+        "project_root": root,
+        "project": project,
+        "context_pct": entry.and_then(|e| e.context_used_pct),
+    });
+    match facts {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
 }
 
 /// The worker rows: the census joined to truth, the session-to-node map,
@@ -277,7 +385,8 @@ fn worker_rows(
                 .as_deref()
                 .and_then(|s| sessions.get(&s.trim().to_ascii_lowercase()));
             let pid = w.session_pid.or(w.pid);
-            json!({
+            let seat = seat_facts(w, entry, probe);
+            let mut row = json!({
                 "source": w.source,
                 "name": w.name,
                 "handle": handle,
@@ -303,7 +412,11 @@ fn worker_rows(
                 "pr": joined.and_then(|j| j.get("pr")).cloned().unwrap_or(Value::Null),
                 "pr_basis": joined.and_then(|j| j.get("pr_basis")).cloned().unwrap_or(Value::Null),
                 "role": entry.and_then(role_label),
-            })
+            });
+            if let Value::Object(map) = &mut row {
+                map.extend(seat);
+            }
+            row
         })
         .collect();
     out.sort_by(|a, b| {
@@ -311,6 +424,62 @@ fn worker_rows(
         rss(b).cmp(&rss(a))
     });
     out
+}
+
+/// Each worker's `denied` and `last_turn` from its own transcript tail, one
+/// thread per worker. A row with no session id reads unmeasured, never a
+/// missing key.
+fn attach_receipts(workers: &mut [Value], read: &(dyn Fn(&str, &str) -> Value + Sync)) {
+    let readings: Vec<Value> = std::thread::scope(|scope| {
+        let handles: Vec<_> = workers
+            .iter()
+            .map(|r| {
+                let sid = r["session_id"].as_str().map(str::to_string);
+                let harness = r["harness"].as_str().unwrap_or("").to_string();
+                scope.spawn(move || match sid {
+                    Some(sid) => read(&harness, &sid),
+                    None => json!({"basis": "unmeasured: no session id on the row"}),
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| json!({"basis": "unmeasured: the receipt read panicked"}))
+            })
+            .collect()
+    });
+    for (row, reading) in workers.iter_mut().zip(readings) {
+        let (denied, last_turn) = crate::session_receipt::top_fields(&reading);
+        row["denied"] = denied;
+        row["last_turn"] = last_turn;
+    }
+}
+
+/// The DENIED cell: trailing classifier plus user refusals, `-` unmeasured.
+fn denied_cell(d: &Value) -> String {
+    let t = &d["trailing"];
+    match (t["permission_denied"].as_u64(), t["user_rejected"].as_u64()) {
+        (Some(a), Some(b)) => (a + b).to_string(),
+        _ => "-".into(),
+    }
+}
+
+/// The LAST TURN cell: `<age> <who woke it> <calls>c`, `-` unmeasured.
+fn last_turn_cell(t: &Value) -> String {
+    let Some(prov) = t["provenance"].as_str() else {
+        return "-".into();
+    };
+    let age = t["age_s"]
+        .as_i64()
+        .map(crate::claims::fmt_age_s)
+        .unwrap_or_else(|| "?".into());
+    let mut cell = format!("{age} {}", crate::session_receipt::wake_word(prov));
+    if let Some(calls) = t["tool_calls"].as_u64() {
+        cell.push_str(&format!(" {calls}c"));
+    }
+    cell
 }
 
 fn truth_handle(w: &Worker, entry: Option<&RegistryEntry>) -> String {
@@ -323,7 +492,7 @@ fn truth_handle(w: &Worker, entry: Option<&RegistryEntry>) -> String {
 /// Per-provider lane occupancy from the gate's own lane reading, never a
 /// second registry walk. An unreadable lane renders unreadable, never 0.
 fn lane_rows(cwd: &Path, registry: &Path, warnings: &mut Vec<String>) -> Vec<Value> {
-    let lanes = match crate::spawn_gate_verb::lanes_answer(cwd, registry, None, warnings) {
+    let lanes = match crate::spawn_gate_command::lanes_answer(cwd, registry, None, warnings) {
         Ok(lanes) => lanes,
         Err(fault) => {
             return vec![json!({
@@ -657,7 +826,8 @@ pub fn payload(include_subagents: bool, include_pane_stats: bool) -> Value {
         .collect();
     let (table, _) = crate::census::process_table_ps();
     let rss = crate::session_cost::tree_rss(&table, &roots);
-    let workers = worker_rows(&c, &rows, &truth, outcome, &sessions, &rss);
+    let mut workers = worker_rows(&c, &rows, &truth, outcome, &sessions, &rss);
+    attach_receipts(&mut workers, &crate::session_receipt::receipt);
 
     let slot_claims = crate::spawn_gate::live_worker_slot_claims(&mut warnings)
         .into_iter()
@@ -768,7 +938,7 @@ pub fn render(p: &Value) -> String {
         out.push(String::new());
     }
     out.push(format!(
-        "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} STATUS",
+        "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} {:>6} {:<16} STATUS",
         "SOURCE",
         "NAME",
         "HARNESS",
@@ -778,7 +948,9 @@ pub fn render(p: &Value) -> String {
         "RSS_MB",
         "NODE",
         "PROGRESS",
-        "REACH"
+        "REACH",
+        "DENIED",
+        "LAST TURN"
     ));
     let workers = list("workers");
     if workers.is_empty() {
@@ -800,7 +972,7 @@ pub fn render(p: &Value) -> String {
             activity.push_str(&format!(" ({basis})"));
         }
         out.push(format!(
-            "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} {activity}",
+            "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} {:>6} {:<16} {activity}",
             cell(&r["source"]),
             name,
             cell(&r["harness"]),
@@ -811,6 +983,8 @@ pub fn render(p: &Value) -> String {
             cell(&r["node"]),
             cell(&r["progress"]),
             cell(&r["reach"]),
+            denied_cell(&r["denied"]),
+            last_turn_cell(&r["last_turn"]),
         ));
     }
     if let Some(n) = p["slot_claims"].as_u64().filter(|n| *n > 0) {
@@ -818,7 +992,10 @@ pub fn render(p: &Value) -> String {
     }
     out.push(format!(
         "census: {PREDICATE}. PID/RSS are the process at scan time; REACH reads the \
-         transcript (fno agents truth for the full evidence); NODE reads the graph"
+         transcript (fno agents truth for the full evidence); NODE reads the graph; \
+         DENIED (classifier plus user refusals over the last 50 tool results) and LAST TURN \
+         (age, who woke it, tool calls) read the worker's transcript tail \
+         (fno-agents intel --receipt --session <id>)"
     ));
     if let Some(rows) = p["subagents"].as_array() {
         out.push(String::new());
@@ -913,8 +1090,12 @@ fn render_pane_stats(section: &Value) -> Vec<String> {
     out
 }
 
-/// `fno-agents top [--json|-J] [--subagents] [--pane-stats]`.
+/// `fno-agents top [--json|-J] [--subagents] [--pane-stats]`; `--machines`
+/// answers the fleet map instead.
 pub fn run(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--machines") {
+        return crate::fleet_beacon::run(args);
+    }
     let mut as_json = false;
     let (mut subagents, mut pane_stats) = (false, false);
     for arg in args {
@@ -924,7 +1105,7 @@ pub fn run(args: &[String]) -> i32 {
             "--pane-stats" => pane_stats = true,
             "-h" | "--help" => {
                 println!(
-                    "fno agents top [--json] [--subagents] [--pane-stats]\n\n\
+                    "fno agents top [--json] [--subagents] [--pane-stats]\n       fno agents top --machines --help  (every machine on the shared primary)\n\n\
                      Every live worker process (fno registry and the claude roster) with pid, \
                      tree RSS (MB), served status and node. --subagents adds claude sidechains; \
                      --pane-stats adds per-pane mux counter deltas."

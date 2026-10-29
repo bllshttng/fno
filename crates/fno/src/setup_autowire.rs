@@ -1,16 +1,13 @@
 //! `fno config setup auto-wire`: wire the fno plugin into every agent CLI on
 //! PATH, no questions asked. `fno.sh` runs it right after a verified install,
 //! so the CLI and the plugin arrive together and the first agent session
-//! starts whole. The wizard (`fno config setup wizard`) stays for anyone who
-//! wants to choose.
+//! starts whole. The wizard (`fno do wizard`) stays for anyone who wants to
+//! choose.
 //!
-//! Per-harness semantics mirror cli/src/fno/setup/integration.py, which stays
-//! the wizard's engine. opencode, pi and agy install through the same
-//! fno-agents doors the Python adapters call. Codex stays on the Python
-//! converge engine (ship-phase ruling): the front door reaches it through the
-//! wheel's fno-py, adding no Python of its own. Every outcome prints; nothing
+//! codex, opencode, pi and agy install through fno-agents doors; codex
+//! converges onto the release channel. Every outcome prints; nothing
 //! is silent. Best-effort by design: a harness that fails to wire never fails
-//! the CLI install that already succeeded, so the verb always exits 0.
+//! the CLI install that already succeeded, so the command always exits 0.
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -21,20 +18,19 @@ use serde_json::Value;
 
 use crate::process_admission::{std_command, std_spawn};
 
-/// The marketplace / repo the integrations install from. Mirrors
-/// _MARKETPLACE / _REPO_URL in cli/src/fno/setup/integration.py.
-/// `#stable` pins the add to the `stable` branch (781 files, ~4s); the bare
-/// repo clones `main` (7,949 files, 80s+) and can exceed Claude Desktop's
-/// 120s "Add marketplace" timeout.
-const MARKETPLACE: &str = "bllshttng/footnote#stable";
-const REPO_URL: &str = "https://github.com/bllshttng/footnote";
+/// The marketplace / repo the integrations install from. `#stable` pins the
+/// add to the `stable` branch (781 files, ~4s); the bare repo clones `main`
+/// (7,949 files, 80s+) and can exceed Claude Desktop's 120s "Add marketplace"
+/// timeout.
+const MARKETPLACE: &str = "bllshttng/fno#stable";
+const REPO_URL: &str = "https://github.com/bllshttng/fno";
 /// The skills-dir fallback drop's directory name under ~/.claude/skills.
 /// A named constant rather than a literal: the seam-crossings ratchet reads
 /// a bare join("fno") as a porcelain resolver site, and this joins a
 /// directory, not the binary.
 pub(crate) const SKILLS_DROP: &str = "fno";
 
-/// The one argv this verb claims, lexically, before clap: exactly
+/// The one argv this command claims, lexically, before clap: exactly
 /// `fno config setup auto-wire`, no flags. Everything else forwards to the
 /// Python `config setup` namespace untouched.
 pub fn classify(args: &[OsString]) -> Option<()> {
@@ -167,7 +163,9 @@ pub fn claude_wire(home: &Path, run: Run) -> Outcome {
     // lacks the `plugin` subcommand entirely; route to skills-dir.
     if run(&["claude", "plugin", "--help"]).is_ok()
         && run(&["claude", "plugin", "marketplace", "add", MARKETPLACE]).is_ok()
-        && run(&["claude", "plugin", "install", "fno@footnote"]).is_ok()
+        // fno@footnote: a stable branch cut before the marketplace rename.
+        && (run(&["claude", "plugin", "install", "fno@fno"]).is_ok()
+            || run(&["claude", "plugin", "install", "fno@footnote"]).is_ok())
     {
         return Outcome::Installed(String::new());
     }
@@ -206,30 +204,10 @@ fn gemini_wire(run: Run) -> Outcome {
 
 // --- codex ------------------------------------------------------------------
 
-/// The codex adapter, verbatim semantics of integration.py's pair
-/// (inspect_freshness -> fresh means already-installed, else converge on the
-/// release channel), executed by the wheel's own engine. Lives here because
-/// the codex arm stays on the Python converge engine by ruling, and because
-/// this file may add no Python to cli/src/fno.
-const CODEX_WIRE_PY: &str = r#"import json
-from fno.setup.codex_plugin import CodexPluginError, converge, inspect_freshness
-out = {"status": "failed", "note": ""}
-try:
-    if inspect_freshness().get("status") == "fresh":
-        out["status"] = "already-installed"
-    else:
-        r = converge(channel="release")
-        out["status"] = "already-installed" if r.action == "no-op" else "installed"
-        out["note"] = f"{r.plugin_id} {r.version}; start a new Codex session"
-except CodexPluginError as e:
-    out["status"] = "failed"
-    out["note"] = f"{e.stage}: {e.detail}"
-print(json.dumps(out))"#;
-
-/// Map the codex snippet's JSON receipt to an outcome. Pure.
+/// Map the codex arm's `--json` receipt to an outcome. Pure.
 pub fn parse_codex_receipt(out: &str) -> Outcome {
     let Ok(v) = serde_json::from_str::<Value>(out.trim()) else {
-        return Outcome::Failed("unreadable receipt from the fno-py engine".into());
+        return Outcome::Failed("unreadable receipt from the codex arm".into());
     };
     let note = v
         .get("note")
@@ -243,19 +221,25 @@ pub fn parse_codex_receipt(out: &str) -> Outcome {
     }
 }
 
-fn codex_wire() -> Outcome {
-    match py_eval(CODEX_WIRE_PY) {
-        Some(out) => parse_codex_receipt(&out),
-        None => Outcome::Failed(
-            "the fno-py engine is missing or failed; run `fno doctor update`".into(),
-        ),
+/// A fresh install and any dev-channel install stay; anything else converges
+/// onto release, through a candidate proven in a throwaway CODEX_HOME.
+fn codex_wire(agents: &Path, run: Run) -> Outcome {
+    match run(&[
+        agents_str(agents),
+        "plugin-install",
+        "--json",
+        "--release",
+        "codex",
+    ]) {
+        Ok(out) => parse_codex_receipt(&out),
+        Err(e) => Outcome::Failed(e),
     }
 }
 
 // --- opencode ---------------------------------------------------------------
 
 /// The opencode receipt's `status` decides: installed/partial count as
-/// installed (mirrors _opencode_install in integration.py). Pure.
+/// installed. Pure.
 pub fn parse_opencode_receipt(out: &str) -> Outcome {
     let Ok(v) = serde_json::from_str::<Value>(out.trim()) else {
         return Outcome::Failed("unreadable install receipt".into());
@@ -511,7 +495,10 @@ pub fn run() -> i32 {
             "claude" if home_missing => no_home(),
             "claude" => claude_wire(&home, &real_run),
             "gemini" => gemini_wire(&real_run),
-            "codex" => codex_wire(),
+            "codex" if !agents_ok => {
+                Outcome::Failed("the fno-agents binary is missing; run `fno doctor update`".into())
+            }
+            "codex" => codex_wire(&agents, &real_run),
             "opencode" => {
                 if agents_ok {
                     opencode_wire(&agents, &real_run)

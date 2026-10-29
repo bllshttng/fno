@@ -38,6 +38,15 @@ pub(super) const KITTY_DELETE: &[u8] = b"\x1b_Ga=d,d=A,q=2\x1b\\";
 
 static PICKER: OnceLock<Picker> = OnceLock::new();
 
+/// Set once any compose in this process painted an image. The snapshot
+/// stamps its png with it.
+static PAINTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True once this process painted an image.
+pub(super) fn painted() -> bool {
+    PAINTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Terminal cells: top-left corner and size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Rect {
@@ -192,6 +201,7 @@ fn serialize(buf: &Buffer, rect: Rect) -> Vec<u8> {
 /// Paint a rendered image into the frame at `rect`: half-blocks as cells, an
 /// escape protocol as [`HOLE`] cells plus the staged placement.
 pub(super) fn paint(r: &Rendered, rect: Rect, cells: &mut [Cell], cols: usize) {
+    PAINTED.store(true, std::sync::atomic::Ordering::Relaxed);
     match r {
         Rendered::Cells(buf) => crate::ratatui_blit::blit_area(
             buf,

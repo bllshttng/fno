@@ -62,28 +62,28 @@ def _proc(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess
 
 
 def _runner(*, wait_rc: int = WAIT_ALIVE, tail: str = "", read_rc: int = 0, raises=None):
-    """A fake `fno mux` answering every verb the binding loop calls.
+    """A fake `fno mux` answering every command the binding loop calls.
 
     The `ls` arm is EXPLICIT and lists our pane on purpose. An earlier version
     fell through to `_proc(0)` with empty stdout, so `json.loads("")` raised and
     the absence probe returned None - which made the ambiguity tests pass for a
     reason the real CLI never produces (it answers exit 0 with `[]`). A fake that
     supplies the answer the code is waiting for is how this PR shipped a broken
-    death detector twice; the fake must model the real verb, not a convenient one.
+    death detector twice; the fake must model the real command, not a convenient one.
     """
     calls: list[list[str]] = []
 
     def run(argv, **_kw):
         calls.append(argv)
-        # argv is [fno, "mux", "pane", <verb>, ...]
-        verb = argv[3] if len(argv) > 3 else ""
-        if verb == "wait":
+        # argv is [fno, "mux", "pane", <command>, ...]
+        command = argv[3] if len(argv) > 3 else ""
+        if command == "wait":
             return _proc(wait_rc)
-        if verb == "read":
+        if command == "read":
             if raises is not None:
                 raise raises
             return _proc(read_rc, tail)
-        if verb == "ls":
+        if command == "ls":
             return _proc(0, json.dumps([{"pane_id": MUX["pane_id"]}, {"pane_id": 99}]))
         return _proc(0)
 
@@ -133,19 +133,19 @@ def test_confirmed_dead_pane_is_the_died_outcome() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _codex_probe(monkeypatch, *, candidate, alive: bool = True, baseline=frozenset()):
+def _codex_probe(monkeypatch, *, candidate):
     from fno.agents.codex_pane import _make_codex_bind_probe
 
     monkeypatch.setattr(codex_pane, "_CODEX_DAEMON_PROBE_INTERVAL_S", 0.0)
     monkeypatch.setattr(mux_spawn, "_backfill_codex_session_id", lambda *a, **k: None)
     monkeypatch.setattr(codex_pane, "_codex_daemon_candidate", lambda *a, **k: candidate)
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: alive)
+    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: True)
     return _make_codex_bind_probe(
         cwd=Path("/w/proj"),
         spawn_started_ms=0,
         child_pid=4242,
         codex_sessions_dir=None,
-        daemon_baseline_ids=set(baseline),
+        daemon_baseline_ids=set(),
         mux=MUX,
         runner=_runner(),
     )
@@ -175,11 +175,11 @@ def test_an_empty_later_read_does_not_erase_earlier_evidence() -> None:
     waits = iter([WAIT_ALIVE, WAIT_DEAD])
 
     def run(argv, **_kw):
-        # argv is [fno, "mux", "pane", <verb>, ...]
-        verb = argv[3] if len(argv) > 3 else ""
-        if verb == "wait":
+        # argv is [fno, "mux", "pane", <command>, ...]
+        command = argv[3] if len(argv) > 3 else ""
+        if command == "wait":
             return _proc(next(waits))
-        if verb == "read":
+        if command == "read":
             return _proc(0, next(reads))
         return _proc(0)
 
@@ -271,12 +271,12 @@ def test_shared_readiness_submits_a_preloaded_seed() -> None:
 
     def run(argv, **_kw):
         calls.append(argv)
-        verb = argv[3]
-        if verb == "wait":
+        command = argv[3]
+        if command == "wait":
             return _proc(WAIT_ALIVE)
-        if verb == "read":
+        if command == "read":
             return _proc(0, "seed text")
-        if verb == "send":
+        if command == "send":
             return _proc(0)
         raise AssertionError(argv)
 
@@ -300,12 +300,12 @@ def test_an_unconfirmed_submit_names_the_missing_ready_marker() -> None:
     pre-session submit therefore failed with no named cause."""
 
     def run(argv, **_kw):
-        verb = argv[3]
-        if verb == "wait":
+        command = argv[3]
+        if command == "wait":
             return _proc(WAIT_ALIVE)
-        if verb == "read":
+        if command == "read":
             return _proc(0, "idle composer")
-        if verb == "send":
+        if command == "send":
             return _proc(22, stderr="fno mux pane: text delivered, submission unconfirmed")
         raise AssertionError(argv)
 
@@ -326,10 +326,10 @@ def test_a_blank_frame_is_unattempted_not_unconfirmed() -> None:
     child that simply has not painted yet."""
 
     def run(argv, **_kw):
-        verb = argv[3]
-        if verb == "wait":
+        command = argv[3]
+        if command == "wait":
             return _proc(WAIT_ALIVE)
-        if verb == "read":
+        if command == "read":
             return _proc(0, "   \n")
         raise AssertionError(f"a blank frame must not reach a send: {argv}")
 
@@ -341,7 +341,7 @@ def test_a_blank_frame_is_unattempted_not_unconfirmed() -> None:
 
 # --- an argv seed's delivery is not observable from a pane frame -------------
 # Measured 2026-08-22: three spawns minutes apart. Pane 93 reported
-# `seed: unattempted` while the pane already showed the verb and the agent was
+# `seed: unattempted` while the pane already showed the command and the agent was
 # running it, and pane 96 reported the same word for a pane that genuinely got
 # nothing. One word, two opposite realities, and the false reading correlates
 # with machine load because frame paint is slower when the box is busy.
@@ -361,10 +361,10 @@ def test_an_argv_seed_is_submitted_even_when_the_frame_is_blank() -> None:
     """
 
     def run(argv, **_kw):
-        verb = argv[3]
-        if verb == "wait":
+        command = argv[3]
+        if command == "wait":
             return _proc(WAIT_ALIVE)
-        if verb == "read":
+        if command == "read":
             return _proc(0, "   \n")
         raise AssertionError(f"an argv seed must not reach a send: {argv}")
 
@@ -388,10 +388,10 @@ def test_an_argv_seed_on_a_FAILED_read_reports_delivery_and_doubt_apart() -> Non
     """
 
     def run(argv, **_kw):
-        verb = argv[3]
-        if verb == "wait":
+        command = argv[3]
+        if command == "wait":
             return _proc(WAIT_ALIVE)
-        if verb == "read":
+        if command == "read":
             return _proc(1, "")
         raise AssertionError(f"a failed read must not reach a send: {argv}")
 
@@ -429,15 +429,15 @@ def _seed_scenarios() -> list[tuple[str, str, Any]]:
             reads = iter([(read_rc, read_out), second_read or (read_rc, read_out)])
 
             def run(argv, **_kw):
-                verb = argv[3]
-                if verb == "wait":
+                command = argv[3]
+                if command == "wait":
                     return _proc(WAIT_ALIVE)
-                if verb == "read":
+                if command == "read":
                     nxt = next(reads)
                     if nxt == "raise":
                         raise DispatchAskError("mux read failed", exit_code=1)
                     return _proc(nxt[0], nxt[1])
-                if verb == "send":
+                if command == "send":
                     if send == "raise":
                         raise DispatchAskError("mux send failed", exit_code=1)
                     return _proc(0 if send is None else send)
@@ -561,7 +561,7 @@ def test_the_argv_marker_is_correct_for_every_pane_harness() -> None:
 
     Two message shapes, because they exercise different paths. A plain message
     reaches every pane-hostable harness including gemini, whose `normalize_command`
-    refuses a slash verb. A slash verb exercises the normalize-then-enrich
+    refuses a slash command. A slash command exercises the normalize-then-enrich
     rewrite the real call site performs before building, which is where
     opencode's fusion actually bites.
 
@@ -671,15 +671,15 @@ def _ls_runner(*, wait_rc: int, panes: list, ls_rc: int = 0, ls_out=None):
     """A mux whose `pane wait` answers `wait_rc` and whose `pane ls` lists `panes`."""
 
     def run(argv, **_kw):
-        verb = argv[3] if len(argv) > 3 else ""
-        if verb == "wait":
+        command = argv[3] if len(argv) > 3 else ""
+        if command == "wait":
             return _proc(wait_rc)
-        if verb == "ls":
+        if command == "ls":
             body = ls_out if ls_out is not None else json.dumps(
                 [{"pane_id": p} for p in panes]
             )
             return _proc(ls_rc, body)
-        if verb == "read":
+        if command == "read":
             return _proc(0, "")
         return _proc(0)
 
@@ -734,18 +734,11 @@ def test_production_codex_binding_never_keys_on_rollout_mtime(monkeypatch) -> No
     """The July misattribution came from selecting a codex session by newest
     rollout mtime, which happily adopted an unrelated `codex exec` probe.
 
-    That code is gone: with a child pid, the id is read from a rollout held open
-    by the pane's OWN process tree. This pin makes the cwd+time store query
-    explode if the production path ever falls back to it again.
+    That code is gone, and so is the cwd+time store query: the id is read from
+    a rollout held open by the pane's OWN process tree. A miss on that tree
+    answers None, never a guess.
     """
 
-    def forbidden(*_a, **_kw):
-        raise AssertionError(
-            "production codex binding fell back to mtime/cwd store discovery; "
-            "it must correlate through the pane's own pid tree"
-        )
-
-    monkeypatch.setattr("fno.agents.discover.codex_session_ids_started_in", forbidden)
     monkeypatch.setattr(mux_spawn, "_codex_session_id_for_pid", lambda *_a, **_kw: None)
 
     assert (

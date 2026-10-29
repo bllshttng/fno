@@ -1,7 +1,7 @@
 //! The merge-evidence gate shared by `done` and `reopen`: does a stored PR
 //! ref carry GitHub-confirmed merge evidence? Ported from graph/_reconcile.py
 //! (`MergeEvidence`, `resolve_merge_evidence`, the REST state read) so the
-//! native lifecycle verbs answer with the same outcomes, exit codes and
+//! native lifecycle commands answer with the same outcomes, exit codes and
 //! operator remedies as the Python close they replace. The first MERGED ref
 //! closes; an OPEN ref means awaiting merge and outranks an outage, because
 //! a live PR is a definite answer where an unreachable ref is not. CI state
@@ -23,7 +23,7 @@ pub(crate) enum Outcome {
     Refused,
 }
 
-/// The close decision for a node's PR refs, shared by every done verb.
+/// The close decision for a node's PR refs, shared by every done command.
 pub(crate) struct MergeEvidence {
     pub outcome: Outcome,
     pub pr_url: Option<String>,
@@ -211,6 +211,11 @@ pub(crate) fn node_pr_refs(node: &Value) -> Vec<(i64, Option<String>)> {
         .into_iter()
         .flatten()
     {
+        // A reopen-demoted row is record-keeping, not a promised ship: the
+        // history mark keeps it out of the evidence set.
+        if extra.get("history").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
         let Some(num) = extra.get("number").and_then(Value::as_i64) else {
             continue;
         };

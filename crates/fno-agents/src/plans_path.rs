@@ -1,7 +1,7 @@
 //! The plans-path chain, ported from Python `fno.paths`
 //! (`plans_content_dir` -> `plans_dir` -> `plan_doc_filename`): where plan
 //! docs live for one project, and the filename a new doc takes. One owner:
-//! the `fno do plan path` verb forwards here through the pydoor, and
+//! the `fno do plan path` command forwards here through the pydoor, and
 //! `plans_dirs.rs` resolves every registered project in-process instead of
 //! paying one Python CLI startup per project.
 //!
@@ -27,7 +27,7 @@ const DEFAULT_PLANS_FILENAME: &str = "%Y%m%d-{slug}-{node}.md";
 
 /// The plans dir for `anchor` (the project root): chain tiers 1-2, then the
 /// config tier. `None` when the chain errors; the probe treats that the way
-/// it treated a failed verb: fewer accepted dirs, never a wrong one.
+/// it treated a failed command: fewer accepted dirs, never a wrong one.
 pub(crate) fn plans_content_dir(anchor: &Path) -> Option<PathBuf> {
     for name in ["settings.local.json", "settings.json"] {
         let path = anchor.join(".claude").join(name);
@@ -306,7 +306,7 @@ fn collapse_dashes(s: &str) -> String {
     out
 }
 
-/// Python `_resolve`: expand `$VAR`, then `{vault}`/`{project}` templates
+/// Expand `$VAR`, then `{vault}`/`{project}` templates
 /// (unknown template errors), unescape `{{`/`}}`, expand `~`, anchor a
 /// relative remainder at the project root, resolve loose.
 pub(crate) fn resolve_template(raw: &str, project_root: Option<&Path>) -> Result<PathBuf, String> {
@@ -354,6 +354,12 @@ pub(crate) fn vault_root(anchor: &Path) -> Result<String, String> {
 /// The stable project-folder name: `project.id` -> git-remote slug ->
 /// checkout basename, rejecting anything that could escape its subtree.
 pub(crate) fn project_name(project_root: Option<&Path>) -> Result<String, String> {
+    project_folder(project_root, true)
+}
+
+/// [`project_name`], warning on an unset `project.id` only when `warn` (Python
+/// warns for vault placements alone).
+pub(crate) fn project_folder(project_root: Option<&Path>, warn: bool) -> Result<String, String> {
     let root = project_root.unwrap_or(Path::new("."));
     let pid = config_lookup(root, &["project", "id"])
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -367,7 +373,7 @@ pub(crate) fn project_name(project_root: Option<&Path>) -> Result<String, String
     if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
         return Err(format!("unsafe project name for internal/ path: {name:?}"));
     }
-    if pid.is_none() {
+    if warn && pid.is_none() {
         static WARNED: std::sync::Once = std::sync::Once::new();
         WARNED.call_once(|| {
             eprintln!(
@@ -591,11 +597,11 @@ pub fn run_plan_dir(args: &[String]) -> i32 {
 
 /// `fno-agents state plan-path [--slug S] [--node N] [--name-only]
 /// [--now EPOCH] [cwd]`: the save path (or bare filename) for a new plan
-/// doc. The `fno do plan path` verb forwards here.
+/// doc. The `fno do plan path` command forwards here.
 pub fn run_plan_path(args: &[String]) -> i32 {
     // An empty --slug is a real input the chain renders (an id-less,
     // slug-less date file); only a MISSING --slug is a usage error, which is
-    // what the deleted Python verb's typer requirement did too.
+    // what the deleted Python command's typer requirement did too.
     let mut slug: Option<String> = None;
     let mut node = String::new();
     let mut name_only = false;

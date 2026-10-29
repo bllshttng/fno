@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use crate::claude_ask::emit_event;
 use crate::paths::AgentsHome;
-use crate::provider::render_verb_seed;
+use crate::provider::render_command_seed;
 use crate::state::{find_keyed_mut, load_registry, update_registry};
 use crate::AgentStatus;
 
@@ -838,7 +838,7 @@ pub fn codex_create(
     add_dir: Option<&str>,
     harness_args: &[String],
 ) -> Result<CodexResult, CodexAskError> {
-    let effective_prompt = render_verb_seed(prompt, "codex");
+    let effective_prompt = render_command_seed(prompt, "codex");
     let full_prompt = inject_from_name(&effective_prompt, from_name);
     // the create/exec path is the autonomous headless lane. codex
     // exec is treated as possibly-blocking, so default to no-prompt
@@ -902,7 +902,7 @@ pub fn codex_resume(
     agent_self: Option<&str>,
     route: Option<&crate::codex_route::CodexRoute>,
 ) -> Result<CodexResult, CodexAskError> {
-    let effective_prompt = render_verb_seed(prompt, "codex");
+    let effective_prompt = render_command_seed(prompt, "codex");
     let full_prompt = inject_from_name(&effective_prompt, from_name);
     // a resumed autonomous worker is the same headless risk class.
     let eff = crate::agents_config::effective_yolo(
@@ -1767,10 +1767,9 @@ pub fn maybe_run_codex_ask(
     }
 
     let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
+    let from_name_stamped =
+        crate::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+    let from_name = from_name_stamped.as_str();
     // cv-16eb2200: resolve_ask_cwd warns at the canonicalize-fallback point.
     let cwd = crate::subprocess_ask::resolve_ask_cwd(params.get("cwd").and_then(|v| v.as_str()));
     let timeout = params

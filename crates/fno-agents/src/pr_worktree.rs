@@ -93,7 +93,14 @@ fn resolve_pr_with_timeout(
 }
 
 pub fn resolve_pr_with(cwd: &Path, pr: &str, gh_bin: &str) -> Result<PathBuf, String> {
-    resolve_pr_with_timeout(cwd, pr, gh_bin, Duration::from_secs(30))
+    resolve_pr_with_timeout(cwd, pr, gh_bin, merge_gh_read_bound(cwd))
+}
+
+/// The one merge-path gh read bound: `bounds.merge_gh_read_secs` from the
+/// config root the read runs in, so a stalled shim is tuned in one place
+/// instead of hardcoded 30s at every site.
+fn merge_gh_read_bound(cwd: &Path) -> Duration {
+    Duration::from_secs(crate::agents_config::merge_gh_read_secs(cwd))
 }
 
 pub fn run() -> i32 {
@@ -129,7 +136,7 @@ pub fn run() -> i32 {
         .and_then(Value::as_u64)
         .filter(|seconds| *seconds > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(30));
+        .unwrap_or_else(|| merge_gh_read_bound(&cwd));
     let result = match pr {
         Some(pr) => resolve_pr_with_timeout(&cwd, &pr, "gh", timeout),
         None => payload
@@ -198,9 +205,9 @@ mod tests {
         assert_eq!(resolve(&canonical, "feature/pr-42").unwrap(), feature);
         assert_eq!(resolve(&nested, "feature/pr-42").unwrap(), feature);
         assert!(resolve(&canonical, "main").unwrap() == PathBuf::from(&canonical));
-        // The Python caller matches this phrase to read the verb's exit 3 as
-        // "no local worktree" (fno.pr._review_hold resolve_pr_worktree); a
-        // reword here silently restores the traceback blocker there.
+        // The Python command_call seam (pr/cli.py _select_pr_worktree) reads the
+        // command's exit 3 as "no local worktree"; a reword here silently
+        // restores the traceback blocker there.
         let err = resolve(&canonical, "feature/missing").unwrap_err();
         assert!(
             err.contains("no local worktree"),

@@ -29,7 +29,11 @@ Each brand mux theme has a Claude Code theme with the same name. The plugin ship
 | `footnote-superscript` | `custom:fno:footnote-superscript` | Dark ground, light text | White band, near-black text |
 | `footnote-paper` | `custom:fno:footnote-paper` | Light ground, dark text | `#373737` band, near-white text |
 
-A Claude Code pane that the mux starts picks the matching theme for you. It passes the theme with `--settings` for that session only, and it never edits your `settings.json`. A pane that already names a settings file keeps that file. A mux theme with no brand match (`terminal`, `catppuccin`, and so on) leaves Claude Code on its own theme.
+A Claude Code pane that the mux starts picks the matching theme for you. It passes the theme with `--settings` for that session only, and it never edits your `settings.json`. Resumed and restored panes get it too. A pane that already names a settings file keeps that file. A mux theme with no brand match (`terminal`, `catppuccin`, and so on) leaves Claude Code on its own theme.
+
+A thread (`claude --bg`) takes its theme from the launch, not from the pane that attaches to it, because `claude attach` ignores `--settings`. The mux sets `FNO_CLAUDE_THEME` in each worker pane. A `fno agents spawn` run from that pane writes the theme into the thread's settings file.
+
+Backticked text in a reply already differs from body text under both themes. Claude Code 2.1.296 paints an inline code span with the base preset's `permission` color and ignores a custom theme's override of that token. Superscript (dark base) shows `#b1b9f9`, and Paper (light base) shows `#5769f7`. The `permission` token has no effect from a theme file, so the themes do not set it.
 
 Claude Code 2.1.296 lets a theme set the band background, but not the band text. The text keeps the base theme color, so the band reads dark on dark (Paper) or white on white (Superscript). The mux fixes this. It repaints the text of cells whose background is exactly a shipped band color, and it leaves code blocks, diffs, and every other cell alone. The repaint reaches every pane, not only Claude Code panes. Another program that paints one of those exact backgrounds keeps readable text, but loses its own text colors on those cells. The browser viewer (`fno mux serve --web`) applies the same repaint. The `terminal` theme skips it in the terminal client. Outside the mux, neither band has readable text, so use these two themes inside the mux.
 

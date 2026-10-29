@@ -1,15 +1,26 @@
 //! `evals-arm`: the eval bank's scheduled writer, native.
 //!
-//! Two modes behind one verb. **Tick mode** (default) is the pr-watch tick's
+//! Two modes behind one command. **Tick mode** (default) is the pr-watch tick's
 //! evals leg: when the newest regression-tier run is older than
-//! `evals.schedule_days` and the spawn gate admits, it launches **run mode**
-//! detached (new session, stdio on /dev/null) and holds the
-//! `evals:scheduled-run` claim across ticks, so the 480s tick budget never
-//! bounds a 50-minute task-timeout sum. **Run mode** (`--run`) is the child:
+//! `evals.schedule_days` it launches **run mode** detached (new session,
+//! stdio on /dev/null) and holds the `evals:scheduled-run` claim across
+//! ticks, so the 480s tick budget never bounds a 50-minute task-timeout
+//! sum. The bank holds one reserved slot: a fleet at `max_live` never
+//! blocks the launch (only a fleet incident or low ram does), so a busy
+//! machine cannot starve the bank the way a `fleet_full` skip every tick
+//! did. **Run mode** (`--run`) is the child:
 //! it runs `fno doctor evals run --tier regression -y` as its own process
 //! group, attributes the appended history rows by timestamp, journals
 //! `evals_scheduled_run` (or `evals_stale` for plumbing failures), and always
 //! releases the claim.
+//!
+//! An escalation-grade bank (never ran, or older than twice the stale
+//! window) that a tick still cannot run is never a silent ok: the tick
+//! journals `evals_stale` and files one `fleet_task` row - a machine chore
+//! whose text names the bank's age and whose run line is
+//! `fno doctor evals run --tier regression -y`. The row dedups on lane +
+//! key + cwd and closes on evidence: a bank that records rows, or one that
+//! next reads fresh.
 //!
 //! Behavior spec is the deleted Python phase (`git show
 //! 2cf4d6297^:cli/src/fno/pr_watch/_evals_phase.py`): graded fails are data,
@@ -37,7 +48,7 @@ use crate::spawn_gate;
 
 const CLAIM_KEY: &str = "evals:scheduled-run";
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--run --started <rfc3339>] [--run-timeout-s S] [--claims-root DIR]";
+const USAGE: &str = "usage: fno-agents evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--questions-store <jsonl>] [--repo DIR] [--run --started <rfc3339>] [--run-timeout-s S] [--claims-root DIR]";
 
 /// One JSON receipt line on stdout; the tick phase parses acted/skip_reason/detail.
 fn receipt(acted: u8, skip_reason: Option<&str>, detail: &str) -> i32 {
@@ -57,10 +68,12 @@ struct Opts {
     schedule_days: i64,
     stale_days: i64,
     summary_json: Option<String>,
+    questions_store: Option<PathBuf>,
     run: bool,
     started: Option<String>,
     run_timeout_s: u64,
     claims_root: Option<PathBuf>,
+    repo: Option<PathBuf>,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts, String> {
@@ -71,10 +84,12 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
         schedule_days: -1,
         stale_days: -1,
         summary_json: None,
+        questions_store: None,
         run: false,
         started: None,
         run_timeout_s: 3600,
         claims_root: None,
+        repo: None,
     };
     let mut i = 0usize;
     while i < args.len() {
@@ -111,6 +126,9 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| "evals-arm: --stale-days needs an integer".to_string())?;
             }
             "--summary-json" => o.summary_json = Some(value("--summary-json")?),
+            "--questions-store" => {
+                o.questions_store = Some(PathBuf::from(value("--questions-store")?))
+            }
             "--run" => o.run = true,
             "--started" => o.started = Some(value("--started")?),
             "--run-timeout-s" => {
@@ -119,6 +137,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| "evals-arm: --run-timeout-s needs an integer".to_string())?;
             }
             "--claims-root" => o.claims_root = Some(PathBuf::from(value("--claims-root")?)),
+            "--repo" => o.repo = Some(PathBuf::from(value("--repo")?)),
             _ => return Err(format!("evals-arm: unknown flag {name}")),
         }
     }
@@ -136,8 +155,35 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
     Ok(o)
 }
 
-/// The spawn-gate readings the due check gates on. Production reads the live
-/// counters; tests inject them (`GateReading` in, no fs or `vm_stat` touched).
+/// The checkout whose `evals/bank` the scheduled run grades. `fno doctor
+/// evals run` resolves the bank from its cwd, and the launchd tick runs from
+/// `$HOME`, so the child must be handed a repo: `--repo` when the caller
+/// names one, else the plugin root, else the cwd or an ancestor, else the
+/// first registered project that carries a bank. None means no bank
+/// anywhere, and the tick skips instead of launching a run that can only
+/// fail. The plugin root counts only as a git checkout: every task cuts a
+/// disposable worktree from the root, so a staged copy grades all false.
+fn bank_repo(o: &Opts) -> Option<PathBuf> {
+    let has_bank = |root: &PathBuf| root.join("evals").join("bank").is_dir();
+    if let Some(repo) = &o.repo {
+        return Some(repo.clone()).filter(has_bank);
+    }
+    let plugin = crate::provider::plugin_root().filter(|root| root.join(".git").exists());
+    let cwd = std::env::current_dir().ok();
+    plugin
+        .into_iter()
+        .chain(
+            cwd.iter()
+                .flat_map(|c| c.ancestors().map(Path::to_path_buf)),
+        )
+        .chain(crate::backlog::settings::project_roots())
+        .find(has_bank)
+}
+
+/// The spawn-gate readings the launch check reads: a durable stop and low
+/// ram gate it, while the slot counters only annotate (the bank's reserved
+/// slot launches at full fleet). Production reads the live counters; tests
+/// inject them (`GateReading` in, no fs or `vm_stat` touched).
 struct GateReading {
     slots: usize,
     max_live: u32,
@@ -183,10 +229,81 @@ fn last_stale_ts(events: &Path) -> Option<DateTime<Utc>> {
         .map(|newest| newest.with_timezone(&Utc))
 }
 
-/// Journal `evals_stale`, then notify at most once per schedule window, the
-/// deleted phase's contract: the dedup ts is read BEFORE emitting (this very
-/// row must not swallow the mail), the notice rides a successful emit, and a
-/// notify failure never breaks the caller.
+/// The bank's attention row lives on the fleet-task channel: a machine
+/// chore whose row names the command that clears it, deduped by lane + key
+/// + cwd, so a journaling tick every 480s still files exactly one row.
+/// It closes on evidence only - the bank recorded rows (run mode) or reads
+/// fresh (tick mode) - never on intent.
+const TASK_LANE: &str = "evals";
+const TASK_KEY: &str = "regression-bank";
+const TASK_RUN: &str = "fno doctor evals run --tier regression -y";
+
+/// The store the row files into: the explicit `--questions-store` when the
+/// caller names one, else the agents home's inbox index, or None when this
+/// process declares no agents home (a test process with no root files
+/// nowhere rather than inventing one out of ambient $HOME).
+fn bank_task_store(o: &Opts) -> Option<PathBuf> {
+    o.questions_store.clone().or_else(|| {
+        AgentsHome::from_env_opt().map(|home| crate::provider_cap::questions_path(&home))
+    })
+}
+
+fn file_bank_task(o: &Opts, age_days: Option<f64>, reason: &str, detail: &str) {
+    // The attention row tracks an escalation-grade bank only: run-mode
+    // plumbing failures on a fresh bank are journal data, not a chore, and
+    // an unreadable age asserts nothing. The summary, forwarded to run mode
+    // with its argv, supplies the age when the caller has none.
+    let summary = parse_summary(o.summary_json.as_deref());
+    let age = age_days.or(summary.age_days);
+    let escalates = summary.never_ran || age.map_or(false, |a| a > 2.0 * o.stale_days as f64);
+    if !escalates {
+        return;
+    }
+    let Some(store) = bank_task_store(o) else {
+        return;
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let age_txt = age
+        .map(|a| format!("{a:.0}d"))
+        .unwrap_or_else(|| "unmeasured".into());
+    if let Err(e) = crate::fleet_task::file_once(
+        &store,
+        TASK_LANE,
+        TASK_KEY,
+        &cwd.to_string_lossy(),
+        &format!(
+            "evals regression bank: last run {age_txt}, window {}d: {reason}: {}",
+            o.schedule_days,
+            truncate(detail, 120)
+        ),
+        Some(TASK_RUN),
+        None,
+    ) {
+        eprintln!("evals-arm: fleet task refused: {e}");
+    }
+}
+
+fn close_bank_task(o: &Opts, reason: &str) {
+    let Some(store) = bank_task_store(o) else {
+        return;
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let _ = crate::fleet_task::close(
+        &store,
+        TASK_LANE,
+        TASK_KEY,
+        &cwd.to_string_lossy(),
+        reason,
+        "evals-arm",
+    );
+}
+
+/// Journal `evals_stale`, file the bank's attention row, then notify at
+/// most once per schedule window, the deleted phase's contract: the dedup
+/// ts is read BEFORE emitting (this very row must not swallow the mail),
+/// the notice rides a successful emit, and a notify failure never breaks
+/// the caller. The attention row files on every call: it dedups itself,
+/// and it must not inherit the notice's once-per-window bound.
 fn journal_stale(o: &Opts, age_days: Option<f64>, never_ran: bool, reason: &str, detail: &str) {
     let last = last_stale_ts(&o.events);
     let emitted = EventEmitter::new(&o.events, "daemon")
@@ -201,6 +318,7 @@ fn journal_stale(o: &Opts, age_days: Option<f64>, never_ran: bool, reason: &str,
             }),
         )
         .is_ok();
+    file_bank_task(o, age_days, reason, detail);
     if let Some(last) = last {
         if (Utc::now() - last).num_seconds() < o.schedule_days * 86_400 {
             return;
@@ -272,7 +390,7 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
 
 /// The child argv, shared by the production spawner and the tests that
 /// assert on it.
-fn run_argv(o: &Opts, started_rfc3339: &str) -> Vec<String> {
+fn run_argv(o: &Opts, repo: &Path, started_rfc3339: &str) -> Vec<String> {
     let mut argv = vec![
         self_exe(),
         "evals-arm".into(),
@@ -291,10 +409,16 @@ fn run_argv(o: &Opts, started_rfc3339: &str) -> Vec<String> {
         o.run_timeout_s.to_string(),
         "--started".into(),
         started_rfc3339.to_string(),
+        "--repo".into(),
+        repo.to_string_lossy().into_owned(),
     ];
     if let Some(sj) = &o.summary_json {
         argv.push("--summary-json".into());
         argv.push(sj.clone());
+    }
+    if let Some(store) = &o.questions_store {
+        argv.push("--questions-store".into());
+        argv.push(store.to_string_lossy().into_owned());
     }
     if let Some(root) = &o.claims_root {
         argv.push("--claims-root".into());
@@ -357,6 +481,7 @@ fn run_tick_mode(
         );
     }
     if !summary.never_ran && age_days.map_or(false, |a| a <= o.schedule_days as f64) {
+        close_bank_task(o, "bank-fresh");
         return receipt(
             0,
             Some("fresh"),
@@ -369,14 +494,23 @@ fn run_tick_mode(
     }
     let escalates = summary.never_ran || age_days.map_or(false, |a| a > 2.0 * o.stale_days as f64);
 
-    // 3. The gate, read-only: a durable stop outranks the capacity counters
-    // a spawn would be refused on, so the incident is the first case.
+    let Some(repo) = bank_repo(o) else {
+        let detail = "no evals/bank in the cwd or any registered project";
+        if escalates {
+            journal_stale(o, age_days, summary.never_ran, "no_bank", detail);
+        }
+        return receipt(0, Some("no_bank"), detail);
+    };
+
+    // 3. The gate, read-only: a durable stop outranks everything, and low
+    // ram still gates. The slot counters do not - the bank's reserved slot
+    // launches at a full fleet, and the cross-tick claim keeps it to one
+    // run, so `fleet_full` can never starve the bank again.
     let g = gate();
     let hold = pause();
+    let at_capacity = g.slots >= g.max_live as usize;
     let gate_refusal = if hold.is_paused() {
         Some((hold.skip_reason(), hold.detail()))
-    } else if g.slots >= g.max_live as usize {
-        Some(("fleet_full", "spawn gate refused: fleet_full".to_string()))
     } else {
         g.ram_gb.and_then(|ram| {
             (ram < g.min_free_gb).then(|| {
@@ -399,7 +533,7 @@ fn run_tick_mode(
 
     // 4. Detached launch, then the cross-tick claim on the child's pid.
     let started = Utc::now().to_rfc3339();
-    let argv = run_argv(o, &started);
+    let argv = run_argv(o, &repo, &started);
     match spawner(&argv) {
         Err(e) => {
             if escalates {
@@ -446,7 +580,16 @@ fn run_tick_mode(
                 );
             }
             let claim_note = if held { "" } else { " (claim held elsewhere)" };
-            receipt(1, None, &format!("launched pid {pid}{claim_note}"))
+            let reserve_note = if at_capacity {
+                " on the evals reservation (fleet full)"
+            } else {
+                ""
+            };
+            receipt(
+                1,
+                None,
+                &format!("launched pid {pid}{claim_note}{reserve_note}"),
+            )
         }
     }
 }
@@ -543,6 +686,9 @@ fn run_run_mode(o: &Opts) -> i32 {
     let deadline = t0 + Duration::from_secs(o.run_timeout_s);
 
     let mut cmd = Command::new(&o.fno_bin);
+    if let Some(repo) = bank_repo(o) {
+        cmd.current_dir(repo);
+    }
     cmd.args(["doctor", "evals", "run", "--tier", "regression", "-y"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -630,6 +776,7 @@ fn run_run_mode(o: &Opts) -> i32 {
     );
     match outcome {
         Ok((task_count, passes)) => {
+            close_bank_task(o, "bank-ran");
             let summary = parse_summary(o.summary_json.as_deref());
             let _ = EventEmitter::new(&o.events, "daemon").emit(
                 "evals_scheduled_run",

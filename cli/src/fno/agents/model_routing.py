@@ -47,7 +47,7 @@ Two non-negotiable invariants:
 - **Fail safe, not fail closed** (US4): if no key is configured for the role's
   provider, the role falls back to the primary Anthropic model with a one-line
   notice and the spawn still succeeds. The legacy :func:`resolve_route` path
-  never raises; an opted-in business lookup fails closed on typed resolution
+  never raises; the business-role lookup fails closed on typed resolution
   errors so they cannot be mistaken for legacy fallback.
 - **Hard quality guard**: ``implement`` / ``review-verdict`` are in
   ``PROTECTED_ROLES`` and short-circuit to ``None`` *before* any config is read.
@@ -67,65 +67,21 @@ from typing import (
     Sequence,
 )
 
-from fno.env_file import read_var_from_env_file
 from fno.config._tiers import TIER_ALIASES
 
 if TYPE_CHECKING:
     from fno.config import ModelRoutingBlock, SettingsModel
-    from fno.roles import (
-        ManifestRoutingResolution,
-        ResolvedRole,
-        RoleResolution,
-        RoleResolutionBlocked,
-    )
-
-BusinessRoleLookup = Callable[[str], "RoleResolution | ManifestRoutingResolution"]
 
 # Built-in default endpoint for the z.ai provider: the Anthropic-compatible
-# endpoint a claude worker needs (NOT the OpenAI /api/coding/paas/v4 path).
-DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
+# endpoint a claude worker needs. The preset itself (base_url, key env, key
+# file, haiku tier) is written once in crates/fno-agents/src/model_reach.toml
+# and served by the route owner in crates/fno-agents/src/provider_route.rs;
+# the spawn-overlay `providers` kind answers it.
 
 # Default secondary model for routed roles. glm-4.5-air is too weak for
 # reasoning-bearing work; a current flagship GLM does real work. Pin a cheaper
 # model per role via the roles map.
 DEFAULT_SECONDARY_MODEL = "glm-5.3"
-
-# Cheaper model for the background (haiku) tier of the built-in zai provider.
-# Claude Code runs background tasks on haiku; routing the haiku tier to this
-# cheaper GLM keeps judgment-light background traffic cheap while opus/sonnet
-# stay on the role model. glm-4.7 is
-# the vendor's recommended background model; glm-4.5-air left the coding-plan
-# supported set and now fails with a model-not-found error.
-DEFAULT_ZAI_HAIKU_MODEL = "glm-4.7"
-
-# Auto-compact threshold injected on [1m]-routed workers. It is the
-# compaction THRESHOLD, not a window selector: the [1m] variant already selects
-# the 1M context, Claude Code caps the threshold at the model window, and a
-# threshold of 1000000 (the old value) is identical to setting nothing, i.e. no
-# compaction before the ceiling. The lead compact nudge fires at ~40%
-# (target.handoff.lead_used_pct_trigger) so the agent prepares and compacts
-# while it still has decision runway; this 80%
-# threshold is the BACKSTOP that catches a worker that ignored it, could not
-# act, or was mid-loop. 800k leaves ~200k runway for the compaction request
-# itself (a bare /compact at the limit fails "Context limit reached").
-ONE_M_AUTO_COMPACT_WINDOW = "800000"
-
-# Where a key lands when the operator keeps secrets out of the shell env; the
-# built-in fallback keeps env-file keys working for the zero-config zai lane
-# (config-defined providers already opt in per-record via api_key_file).
-DEFAULT_API_KEY_FILE = "~/.fno/.env"
-
-# Built-in providers so a bare key (e.g. ZAI_API_KEY) routes with zero config.
-# A config.model_routing.providers entry of the same name overrides per-field.
-_DEFAULT_PROVIDERS: dict[str, dict[str, Optional[str]]] = {
-    "zai": {
-        "protocol": "anthropic",
-        "base_url": DEFAULT_ZAI_BASE_URL,
-        "api_key_env": "ZAI_API_KEY",
-        "api_key_file": DEFAULT_API_KEY_FILE,
-        "haiku_model": DEFAULT_ZAI_HAIKU_MODEL,
-    },
-}
 
 # Roles routed to a secondary provider by default (provider 'zai', the default
 # model). The config roles map overrides per role. ``post-merge`` is the
@@ -153,11 +109,12 @@ class RouteCompositionError(ValueError):
 class BusinessRoleResolutionBlockedError(RouteCompositionError):
     """A business role exists but its typed resolution failed closed."""
 
-    def __init__(self, result: "RoleResolutionBlocked") -> None:
+    def __init__(self, result: dict) -> None:
         self.result = result
-        detail = f": {result.detail}" if result.detail else ""
+        detail = f": {result['detail']}" if result.get("detail") else ""
+        role_id = (result.get("role") or {}).get("id")
         super().__init__(
-            f"business role {result.role.id!r} is blocked ({result.reason.value}){detail}; "
+            f"business role {role_id!r} is blocked ({result['reason']}){detail}; "
             "no worker launched"
         )
 
@@ -220,7 +177,6 @@ def resolve_spawn_route(
     *,
     intent: Optional[str] = None,
     notice: Optional[Callable[[str], None]] = None,
-    business_lookup: Optional[BusinessRoleLookup] = None,
     resolved_provider: Optional[Callable[[str], None]] = None,
 ) -> Optional[dict[str, str]]:
     """Resolve one spawn route; a pre-resolved route must be a complete unit.
@@ -270,7 +226,6 @@ def resolve_spawn_route(
         route = resolve_route(
             role,
             notice=notice,
-            business_lookup=business_lookup,
             resolved_provider=provider_names.append,
         )
         if route and provider_names:
@@ -344,29 +299,6 @@ MODEL_ENV_KEYS = (
 )
 
 
-def tier_models_for(provider: Mapping[str, object]) -> dict[str, str]:
-    """The provider's effective per-tier model map (alias -> model id).
-
-    ``haiku_model`` folds in as the haiku entry and an explicit
-    ``tier_models`` entry wins over it, so ``tier_models.haiku`` and
-    ``haiku_model`` set together resolve deterministically, not by dict
-    order. Empty for a provider that declares nothing: every tier then
-    rides the spawn model.
-    """
-    tiers: dict[str, str] = {}
-    haiku_model = provider.get("haiku_model")
-    if haiku_model:
-        tiers["haiku"] = str(haiku_model)
-    declared = provider.get("tier_models")
-    if isinstance(declared, Mapping):
-        for alias, tier_model in declared.items():
-            key = str(alias).strip().lower()
-            value = str(tier_model or "").strip()
-            if key in TIER_ALIASES and value:
-                tiers[key] = value
-    return tiers
-
-
 class TierRemapConflict(RouteCompositionError):
     """A claude spawn names a tier alias the ambient environment redefines.
 
@@ -408,20 +340,17 @@ def tier_remap_conflict(
 
 
 def remap_conflict_message(alias: str, remapped: str) -> str:
-    """The one refusal text, shared by the CLI seam and the in-process APIs."""
+    """The one refusal text, shared by the in-process spawn APIs."""
     var = f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"
     return (
-        f"--model {alias} is ambiguous here. This session exports "
+        f"model {alias!r} is ambiguous here. This session exports "
         f"{var}={remapped}, so {alias!r} resolves to that vendor's model id, "
         "while the worker's endpoint and credential are resolved separately "
         'and would not match it. The spawn would report "live" and then fail '
         "on its first turn. No worker launched.\n"
         "Name the route instead, so endpoint, auth, and model are chosen as "
-        "one unit:\n"
-        f"  --account <id> --model {alias}      # Anthropic's {alias} "
-        "(ids from `fno config accounts list`)\n"
-        f"  -P <vendor> --model {remapped}   # stay on the routed vendor "
-        "(vendors from `fno config route ls`)\n"
+        "one unit: --route <vendor>/<model>, or --account <id> for the "
+        "account's own default.\n"
         f"Or unset {var} for this command."
     )
 
@@ -588,7 +517,7 @@ def unrouted_model_clear_notice(cleared: Sequence[str]) -> str:
         "fno: cleared "
         + ", ".join(cleared)
         + " from this child's env: a model the launching shell exported never "
-        "reaches a child. The child's model comes from its --model flag, else "
+        "reaches a child. The child's model comes from its route, else "
         "its account's own default."
     )
 
@@ -658,8 +587,8 @@ def overlay_restores_model_env(*overlays: Optional[Mapping[str, str]]) -> bool:
 
     A caller composing account_env/route_env right after the incoherent
     scrub must not assume ANY overlay re-supplies a dropped model var: the
-    config-dir and managed-active account lanes (``resolve_account_overlay``
-    in ``account_env.py``) return an overlay of just ``CLAUDE_CONFIG_DIR`` -
+    config-dir and managed-active account lanes (``accounts::env::overlay``
+    in the Rust crate) return an overlay of just ``CLAUDE_CONFIG_DIR`` -
     no model var - so the dropped var stays dropped and the child genuinely
     falls back to its account's own default. Only a route, or an
     ``own-dir``/api-key account overlay that carries its own model pins,
@@ -750,9 +679,9 @@ def env_scrub_warning(
     return (
         f"fno agents spawn: {ENV_SCRUB_VAR} is set; it strips "
         "ANTHROPIC_AUTH_TOKEN but leaves ANTHROPIC_BASE_URL and the tier model "
-        "vars (a half-composition), and silently forces --permission-mode to "
-        "default over the one pinned here, so this worker may stall on "
-        f"approvals. Set {ENV_SCRUB_VAR}=0 to keep the pinned mode."
+        "vars (a half-composition), and silently forces the pinned permission "
+        "mode to default, so this worker may stall on approvals. Set "
+        f"{ENV_SCRUB_VAR}=0 to keep the pinned mode."
     )
 
 
@@ -819,56 +748,12 @@ def _parse_target(raw: str) -> Optional[tuple[str, str]]:
     return provider.lower(), model
 
 
-def _resolve_key(provider: Mapping[str, Optional[str]], env: Mapping[str, str]) -> Optional[str]:
-    """Resolve a provider's API key. Precedence: process env (named by
-    ``api_key_env``) wins over the optional ``api_key_file``. Never raises."""
-    key_name = provider.get("api_key_env") or ""
-    if key_name:
-        from_env = env.get(key_name)
-        if from_env:
-            return from_env
-    key_file = provider.get("api_key_file")
-    if key_file and key_name:
-        return read_var_from_env_file(key_file, key_name)
-    return None
-
-
-def key_source(
-    provider: Mapping[str, Optional[str]], env: Optional[Mapping[str, str]] = None
-) -> tuple[Optional[str], list[str]]:
-    """Report WHERE a provider's key resolved, never the key value itself.
-
-    Returns ``(satisfying, checked)``: ``satisfying`` is the env-var name or the
-    file path that yielded a key (``None`` when missing); ``checked`` lists every
-    source consulted, in precedence order, for a legible ``MISSING (checked ...)``
-    message. Same env-beats-file precedence as :func:`_resolve_key`; used by
-    ``fno config route ls`` so the key column names its source without leaking secrets.
-    """
-    if env is None:
-        import os
-
-        env = os.environ
-    checked: list[str] = []
-    key_name = provider.get("api_key_env") or ""
-    if key_name:
-        checked.append(key_name)
-        if env.get(key_name):
-            return key_name, checked
-    key_file = provider.get("api_key_file")
-    if key_file and key_name:
-        checked.append(str(key_file))
-        if read_var_from_env_file(str(key_file), key_name):
-            return str(key_file), checked
-    return None, checked
-
-
 def resolve_route(
     role: Optional[str],
     *,
     settings: "Optional[SettingsModel]" = None,
     env: Optional[Mapping[str, str]] = None,
     notice: Optional[Callable[[str], object]] = None,
-    business_lookup: Optional[BusinessRoleLookup] = None,
     resolved_provider: Optional[Callable[[str], None]] = None,
 ) -> Optional[dict[str, str]]:
     """Resolve per-spawn env overrides for ``role``.
@@ -878,7 +763,7 @@ def resolve_route(
 
     ``None`` is returned for: no role, a production/unrouted role, a disabled
     block, an unconfigured / non-Anthropic provider, or a missing key
-    (fail-safe). The legacy path never raises. An opted-in business lookup
+    (fail-safe). The legacy path never raises. The business-role lookup
     raises a typed error when an existing business role is blocked or lacks a
     complete composable routing projection.
 
@@ -893,7 +778,7 @@ def resolve_route(
     if not name:
         return None
 
-    business_role = _resolve_business_role(requested_role, business_lookup)
+    business_role = _resolve_business_role(requested_role)
 
     # A protected role never routes, even if config or a business manifest
     # asks it to. Discovery still runs first so a malformed manifest cannot
@@ -921,146 +806,90 @@ def resolve_route(
     if target is None:
         return None  # not a routed role -> primary model
     pname, model = target
-    route = _route_for_target(pname, model, block, env, notice, ctx=f"role {name!r}")
+    route = _claude_route_call(
+        pname,
+        model,
+        env,
+        notice,
+        ctx_kind="role",
+        ctx_name=name,
+        block=_block_payload(block) if settings is not None else None,
+    )
     if route is not None and resolved_provider is not None:
         resolved_provider(pname)
     return route
 
 
-ANTHROPIC_API_HOST = "api.anthropic.com"
+def _block_payload(block: "ModelRoutingBlock") -> dict[str, object]:
+    """The route builder's slice of a caller-pinned routing block: the
+    provider overlay table and extra_env, the only fields the Rust owner
+    reads. Each record dumps ONLY explicitly-set fields and no nulls, so a
+    partial override keeps the built-in preset's other fields exactly as the
+    deleted Python merge did (exclude_unset) and the JSON block converts to
+    TOML cleanly (no nulls)."""
+    providers: dict[str, object] = {}
+    for name, record in (getattr(block, "providers", None) or {}).items():
+        fields = (
+            record.model_dump(exclude_unset=True)
+            if hasattr(record, "model_dump")
+            else dict(record)
+        )
+        providers[str(name)] = {str(k): v for k, v in fields.items() if v is not None}
+    extra = getattr(block, "extra_env", None) or {}
+    return {
+        "providers": providers,
+        "extra_env": {str(k): str(v) for k, v in extra.items()},
+    }
 
 
-def _base_url_host(base_url: str) -> str:
-    """The lowercased host of ``base_url``, or "" when there is none.
-
-    A bare authority like ``api.anthropic.com/v1`` carries no scheme, and
-    urlsplit reads the whole thing as a path, so give it one first.
-    """
-    from urllib.parse import urlsplit
-
-    base = base_url.strip()
-    if not base:
-        return ""
-    if "//" not in base:
-        base = "//" + base
-    return (urlsplit(base).hostname or "").lower()
-
-
-def _route_for_target(
+def _claude_route_call(
     pname: str,
     model: str,
-    block: "ModelRoutingBlock",
     env: Mapping[str, str],
     notice: Optional[Callable[[str], object]],
     *,
-    ctx: str,
+    ctx_kind: str,
+    ctx_name: str,
+    block: Optional[dict] = None,
 ) -> Optional[dict[str, str]]:
-    """Build the routed ``ANTHROPIC_*`` env for an explicit ``(provider, model)``.
+    """The route builder's transport: one spawn-overlay round trip to the one
+    Rust owner (`provider_route.rs`). The role-to-target lookup above this
+    call stays here; the preset, the merge, the env build and the notices
+    answer from the binary. Returns None (fail-safe, never raises) when the
+    binary is missing or skips the route; its notices ride ``notice``. A
+    caller-pinned ``block`` (the settings a repository settings file owns)
+    rides the payload so the one owner merges it instead of the config
+    stack."""
+    import os
 
-    Shared by ``resolve_route`` (role -> target) and ``resolve_explicit_route``
-    (peer lane names the target directly). Returns None (fail-safe, never raises)
-    when the provider is unknown/non-anthropic/keyless. ``ctx`` names the caller
-    ("role 'consolidate'" / "peer 'zai'") for the fail-safe notices."""
-    # A role that can't route falls back to the primary Anthropic model; a PEER
-    # that can't route is SKIPPED entirely (there is no author-model fallback for
-    # a peer - that would be the same model as the author). Word the fail-safe
-    # notice for the actual outcome so the operator is not told a skipped GLM peer
-    # "fell back to the primary model" when nothing ran.
-    fallback = "skipping the peer" if ctx.startswith("peer") else "using the primary model"
-    fallback_key = (
-        "skipping the peer"
-        if ctx.startswith("peer")
-        else "falling back to the primary Anthropic model"
-    )
-    provider = _resolve_provider(pname, block)
-    if provider is None:
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
+    payload: dict = {
+        "kind": "claude-route",
+        "provider": pname,
+        "model": model,
+        "cwd": os.getcwd(),
+        "ctx": {"kind": ctx_kind, "name": ctx_name},
+    }
+    if env is not os.environ:
+        payload["env"] = dict(env)
+    if block is not None:
+        payload["block"] = block
+    try:
+        answer = spawn_overlay_call(payload)
+    except SpawnOverlayUnavailable as exc:
+        fallback = "skipping the peer" if ctx_kind == "peer" else "using the primary model"
         _emit(
             notice,
-            f"model-routing: provider {pname!r} for {ctx} is not configured; {fallback}",
+            f"model-routing: route builder unavailable ({exc}); {fallback}",
         )
         return None
-
-    protocol = (provider.get("protocol") or "anthropic").lower()
-    if protocol != "anthropic":
-        _emit(
-            notice,
-            f"model-routing: provider {pname!r} uses the {protocol!r} protocol, "
-            f"which a claude worker cannot use; {fallback}",
-        )
+    for note in answer.get("notices") or []:
+        _emit(notice, str(note))
+    route = answer.get("route")
+    if not route:
         return None
-
-    base_url = provider.get("base_url") or ""
-    if not base_url:
-        _emit(
-            notice,
-            f"model-routing: provider {pname!r} has no base_url; {fallback}",
-        )
-        return None
-
-    key = _resolve_key(provider, env)
-    if not key:
-        _emit(
-            notice,
-            f"model-routing: no API key for provider {pname!r} ({ctx}); {fallback_key}",
-        )
-        return None
-
-    # A bare tier alias is resolved by Claude Code against the endpoint it is
-    # pointed at, and a third-party endpoint has no "sonnet": the spawn would
-    # print a live receipt and die on its first turn. is_anthropic_model draws
-    # the same alias line for the AMBIENT-env conflict; here the endpoint is
-    # known, so the check is local. Refuse, never coerce: picking a model on
-    # the operator's behalf is how a spawn ends up billing somewhere nobody
-    # chose.
-    if (
-        model.strip().lower() in TIER_ALIASES
-        and _base_url_host(base_url) not in ("", ANTHROPIC_API_HOST)
-    ):
-        _emit(
-            notice,
-            f"model-routing: refusing model {model!r} for provider {pname!r}: a bare "
-            "tier alias resolves against the endpoint the worker is pointed at, and "
-            f"{base_url} is not Anthropic's; name a model id this provider serves",
-        )
-        return None
-
-    route = {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": key}
-    # The blanket fill is load-bearing: an undeclared tier must be PRESENT and
-    # set to the spawn model, never absent, or Claude Code resolves that tier
-    # against its own default and a routed worker asks a third-party endpoint
-    # for an Anthropic model.
-    for k in MODEL_ENV_KEYS:
-        route[k] = model
-    # Item 1: layer the provider's per-tier map over the blanket fill,
-    # generalized from the haiku_model special case (zai -> glm-4.7). Still the
-    # SAME secondary provider (base_url + token), so the whole worker stays off
-    # Anthropic; only the named tiers move. A provider with no tier map and no
-    # haiku_model composes exactly as before (never an empty/invalid id).
-    for alias, tier_model in tier_models_for(provider).items():
-        route[f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"] = tier_model
-    # Item 2: a [1m]-routed worker gets an auto-compact backstop. The [1m]
-    # variant selects the 1M context; this threshold (capped at the model
-    # window, and precedence over /autocompact/--autocompact/setting) is the
-    # backstop above the lead nudge. Injected before extra_env so an explicit
-    # extra_env value still wins.
-    if model.endswith("[1m]"):
-        route["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = ONE_M_AUTO_COMPACT_WINDOW
-    # extra_env (timeouts, flags, per-tier model overrides) merged last so an
-    # operator can differentiate tiers or tune the routed worker.
-    for k, v in (getattr(block, "extra_env", None) or {}).items():
-        route[str(k)] = str(v)
-    # Checked after extra_env so a hand pin that already differentiates the
-    # tiers silences it. Four identical /model rows read as "the config did
-    # not take"; this names the one lever that fixes it.
-    tier_values = {route[k] for k in MODEL_ENV_KEYS}
-    if len(tier_values) == 1:
-        _emit(
-            notice,
-            f"model-routing: every tier resolves to {next(iter(tier_values))}; /model "
-            "will offer no alternative; declare "
-            f"model_routing.providers.{pname}.tier_models to differentiate",
-        )
-    return route
+    return {str(k): str(v) for k, v in route.items()}
 
 
 def resolve_explicit_route(
@@ -1091,8 +920,15 @@ def resolve_explicit_route(
         import os
 
         env = os.environ
-    block = _routing_block(settings)
-    return _route_for_target(pname, model.strip(), block, env, notice, ctx=f"peer {pname!r}")
+    return _claude_route_call(
+        pname,
+        model.strip(),
+        env,
+        notice,
+        ctx_kind="peer",
+        ctx_name=pname,
+        block=_block_payload(_routing_block(settings)) if settings is not None else None,
+    )
 
 
 def materialize_model_scrub_settings(dropped: Sequence[str]) -> str:
@@ -1196,35 +1032,6 @@ class RouteRestoreError(RuntimeError):
     """A recorded route could not be read back, so a relaunch must refuse."""
 
 
-def declared_lane(
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-    *,
-    name: Optional[str] = None,
-) -> Optional[dict]:
-    """The one declared lane row, matched by name or by the resolved
-    (provider, model), as a plain dict. The match rule lives in the
-    route-slot verb beside the inventory fold; an unmatched or unreadable
-    lane reads None and the spawn still launches."""
-    from fno.route_slot_client import route_slot_call
-
-    ask: dict = {"mode": "lane"}
-    if name is not None:
-        ask["match"] = "name"
-        ask["name"] = name
-    else:
-        if not provider or not (model or "").strip():
-            return None
-        ask["match"] = "axes"
-        ask["provider"] = provider
-        ask["model"] = model
-    try:
-        answer = route_slot_call(ask)
-    except Exception:  # noqa: BLE001 - a lane read never breaks a spawn
-        return None
-    return dict(answer) if answer.get("found") else None
-
-
 def route_settings_path_for(
     route_env: Optional[Mapping[str, str]],
     account_env: Optional[Mapping[str, str]] = None,
@@ -1303,7 +1110,7 @@ def read_route_settings(path: str) -> dict[str, str]:
 
 
 def _match_provider(
-    route: Mapping[str, str], providers: dict[str, dict[str, Optional[str]]]
+    route: Mapping[str, str], providers: dict[str, dict[str, object]]
 ) -> Optional[str]:
     """The provider name for a route within an ALREADY-BUILT providers map.
 
@@ -1319,21 +1126,6 @@ def _match_provider(
         if base and str(record.get("base_url") or "").rstrip("/") == base:
             return name
     return None
-
-
-def provider_name_for_route(
-    route: Mapping[str, str],
-    *,
-    settings: "Optional[SettingsModel]" = None,
-) -> Optional[str]:
-    """The provider a recorded route belongs to, by stamp else base_url.
-
-    One match implementation shared by the resume re-resolution and the
-    ``config route settings ls`` rendering, so the two can never disagree
-    about which provider a file belongs to. None when neither the
-    ``FNO_ROUTE_PROVIDER`` stamp nor the base_url matches today's registry.
-    """
-    return _match_provider(route, effective_providers(_routing_block(settings)))
 
 
 def refresh_provider_default_tiers(
@@ -1379,8 +1171,10 @@ def refresh_provider_default_tiers(
             "replaying recorded tiers verbatim"
         )
     record = providers[pname]
+    tiers = record.get("tier_models")
+    tiers = tiers if isinstance(tiers, dict) else {}
     moved: list[str] = []
-    for alias, todays in tier_models_for(record).items():
+    for alias, todays in tiers.items():
         key = f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"
         recorded = refreshed.get(key)
         if not todays or not recorded or str(todays) == recorded:
@@ -1422,7 +1216,6 @@ def resolve_codex_route(
     *,
     settings: "Optional[SettingsModel]" = None,
     notice: Optional[Callable[[str], object]] = None,
-    business_lookup: Optional[BusinessRoleLookup] = None,
 ) -> Optional[CodexRoute]:
     """Resolve codex-lane routing for ``role`` against an OpenAI-protocol
     provider, or ``None`` (use codex's default config, change nothing).
@@ -1432,13 +1225,13 @@ def resolve_codex_route(
     provider (that belongs to the claude lane, silently), a missing
     base_url/key, or a value that can't be safely embedded in TOML all return
     ``None`` (with a one-line notice where a misconfiguration is worth
-    surfacing). The legacy path never raises; an opted-in business lookup fails
+    surfacing). The legacy path never raises; the business-role lookup fails
     closed with the same typed errors as the Claude lane.
 
     The provider half (record read, protocol check, key, TOML tokens) is owned
-    by Rust (`codex_route.rs`) through the spawn-overlay verb: ONE builder
+    by Rust (`codex_route.rs`) through the spawn-overlay command: ONE builder
     serves spawn and every relaunch door, so the two cannot disagree. The key
-    resolves in the verb's process env, so tests pin it with ``monkeypatch
+    resolves in the command's process env, so tests pin it with ``monkeypatch
     .setenv`` and a temp ``FNO_CONFIG``. The answer's ``refusal`` surfaces as a
     notice; ``unrouted`` (the claude-lane case) stays silent, exactly as
     before.
@@ -1448,7 +1241,7 @@ def resolve_codex_route(
     if not name:
         return None
 
-    business_role = _resolve_business_role(requested_role, business_lookup)
+    business_role = _resolve_business_role(requested_role)
     if name in PROTECTED_ROLES:
         _emit(
             notice,
@@ -1529,101 +1322,35 @@ def _role_target(role: str, block: "ModelRoutingBlock") -> Optional[tuple[str, s
     return _parse_target(str(raw))
 
 
-def _resolve_business_role(
-    role: str,
-    business_lookup: Optional[BusinessRoleLookup],
-) -> "Optional[ResolvedRole | ManifestRoutingResolution]":
-    """Validate the production business-role tri-state before routing policy."""
-    if business_lookup is None:
-        business_lookup = _default_business_lookup
+def _resolve_business_role(role: str) -> Optional[dict]:
+    """The business-role tri-state, answered by fno-agents (spawn-overlay kind
+    business-role): None when no business role has the name, the routing
+    answer, or the typed refusal, raised before any routing policy."""
+    from fno import rust_binary
 
-    from fno.roles import (
-        ManifestRoutingResolution,
-        ResolvedRole,
-        RoleResolutionBlocked,
-        RoleResolutionReason,
-    )
-
-    result = business_lookup(role)
-    if isinstance(result, RoleResolutionBlocked):
-        if result.reason is RoleResolutionReason.NOT_FOUND:
-            return None
-        raise BusinessRoleResolutionBlockedError(result)
-    if not isinstance(result, (ResolvedRole, ManifestRoutingResolution)):
-        raise BusinessRoleRoutingProjectionError(
-            f"business lookup for role {role!r} returned no typed resolution; no worker launched"
-        )
-    return result
-
-
-def _default_business_lookup(
-    role: str,
-) -> "ManifestRoutingResolution | RoleResolutionBlocked":
-    """Discover conventional manifests only when a role root actually exists."""
-    from pathlib import Path
-    import stat
-
-    from fno.company.contracts import RoleRef
-    from fno.roles import (
-        RoleResolutionBlocked,
-        RoleResolutionReason,
-        default_role_root,
-        discover_role_definitions,
-        resolve_manifest_routing,
-    )
-
-    configured_root = os.environ.get("FNO_ROLES_ROOT")
-    root = Path(configured_root).expanduser() if configured_root else default_role_root()
-    try:
-        root_status = root.stat()
-    except FileNotFoundError:
-        if configured_root:
-            return RoleResolutionBlocked(
-                role=RoleRef(id=role, function_id="unavailable"),
-                reason=RoleResolutionReason.INVALID_MANIFEST,
-                source_id=str(root),
-                reference=role,
-                detail="configured role root does not exist",
-            )
-        return RoleResolutionBlocked(
-            role=RoleRef(id=role, function_id="unavailable"),
-            reason=RoleResolutionReason.NOT_FOUND,
-            reference=role,
-        )
-    except OSError as exc:
-        return RoleResolutionBlocked(
-            role=RoleRef(id=role, function_id="unavailable"),
-            reason=RoleResolutionReason.INVALID_MANIFEST,
-            source_id=str(root),
-            reference=role,
-            detail=f"{type(exc).__name__}: {exc}",
-        )
-    if not stat.S_ISDIR(root_status.st_mode):
-        return RoleResolutionBlocked(
-            role=RoleRef(id=role, function_id="unavailable"),
-            reason=RoleResolutionReason.INVALID_MANIFEST,
-            source_id=str(root),
-            reference=role,
-            detail="role root exists but is not a directory",
-        )
-    return resolve_manifest_routing(role, discover_role_definitions(root=root))
+    answer = rust_binary.command_call("spawn-overlay", {"kind": "business-role", "role": role})
+    if "reason" not in answer:
+        return answer
+    if answer["reason"] == "not_found":
+        return None
+    raise BusinessRoleResolutionBlockedError(answer)
 
 
 def _business_role_target(
     role: str,
     block: "ModelRoutingBlock",
-    business_role: "Optional[ResolvedRole | ManifestRoutingResolution]",
+    business_role: Optional[dict],
 ) -> Optional[tuple[str, str]]:
     """Project only provider/model material into the legacy routing target."""
     legacy_target = _role_target(role, block)
     if business_role is None:
         return legacy_target
 
-    projection = business_role.routing_projection
+    projection = business_role.get("routing_projection")
     if projection is None:
         return None
-    provider = projection.provider if projection is not None else None
-    model = projection.model if projection is not None else None
+    provider = projection.get("provider")
+    model = projection.get("model")
     if legacy_target is not None:
         provider = provider or legacy_target[0]
         model = model or legacy_target[1]
@@ -1642,189 +1369,31 @@ def _business_role_target(
     return provider, model
 
 
-def _provider_to_dict(provider: object) -> dict[str, Optional[str]]:
-    """Normalize a config ModelProvider (or a plain dict, for tests) to a dict
-    of ONLY the explicitly-set fields, so a partial override of a built-in
-    provider (e.g. ``zai: {api_key_file: ...}``) keeps the built-in's other
-    fields (base_url, api_key_env) instead of clobbering them with empty
-    pydantic defaults."""
-    if hasattr(provider, "model_dump"):
-        return dict(provider.model_dump(exclude_unset=True))
-    if isinstance(provider, dict):
-        return dict(provider)
-    return {}
-
-
-def _resolve_provider(pname: str, block: "ModelRoutingBlock") -> Optional[dict[str, Optional[str]]]:
-    """Merge built-in providers with config.providers (config wins per field)
-    and return the named provider's record, or None if unknown."""
-    providers: dict[str, dict[str, Optional[str]]] = {
-        name: dict(rec) for name, rec in _DEFAULT_PROVIDERS.items()
-    }
-    for name, rec in (getattr(block, "providers", None) or {}).items():
-        merged = dict(providers.get(name, {}))
-        merged.update(_provider_to_dict(rec))
-        providers[name] = merged
-    return providers.get(pname)
-
-
 def effective_providers(
-    block: "ModelRoutingBlock",
-) -> dict[str, dict[str, Optional[str]]]:
-    """Public: the merged built-in + config providers map (config wins per field).
-
-    Used by ``fno config route ls`` (render) and ``fno config route set`` (reject a target
-    naming a provider absent from this map) so provider knowledge lives in one
-    place."""
-    providers: dict[str, dict[str, Optional[str]]] = {
-        name: dict(rec) for name, rec in _DEFAULT_PROVIDERS.items()
-    }
-    for name, rec in (getattr(block, "providers", None) or {}).items():
-        merged = dict(providers.get(name, {}))
-        merged.update(_provider_to_dict(rec))
-        providers[name] = merged
-    return providers
-
-
-# Static provenance: which auto-dispatch surface passes each role. Everything
-# not named here is "manual only" (a role reachable only by an explicit --role).
-AUTO_ASSIGNED_BY: dict[str, str] = {
-    "post-merge": "pr_watch post-merge dispatch",
-    "codex-verify": "codex verify lane",
-    "build": "/target bg + fno backlog advance",
-}
-
-# Why each protected name is guarded, rendered in the `assigned_by` column so a
-# reader of `fno config route ls` learns what the guard does NOT cover without opening
-# source. Both names have drifted from the dispatch surface: `build` carries the
-# delivery payload `implement` names, and nothing declares `review-verdict` at
-# all (the reviewer's model is the reviewing session's own). See
-# docs/architecture/role-based-model-routing.md.
-PROTECTED_ROLE_NOTE: dict[str, str] = {
-    "implement": "protected name; delivery routes via 'build'",
-    "review-verdict": "protected name; no dispatch surface declares it",
-}
-
-# The same facts at sentence length, for `fno config route set`'s refusal. Kept beside
-# the column text so the two registers cannot drift apart.
-PROTECTED_ROLE_HINT: dict[str, str] = {
-    "implement": (
-        "delivery spawns route via the 'build' lane "
-        "(fno config route set build <provider/model>)"
-    ),
-    "review-verdict": (
-        "nothing declares this role; a verdict runs on the model of the session "
-        "that reviews, so keep the reviewer off the routed authoring worker"
-    ),
-}
-
-
-def build_route_table(
-    *,
-    settings: "Optional[SettingsModel]" = None,
+    block: "ModelRoutingBlock | None" = None,
     env: Optional[Mapping[str, str]] = None,
-) -> list[dict[str, str]]:
-    """The effective routing table, one row per role, for ``fno config route ls``.
+) -> dict[str, dict[str, object]]:
+    """The merged built-in + config providers map, answered by the one Rust
+    owner through the spawn-overlay ``providers`` kind (the ``block``
+    argument is retained for call compatibility; the binary reads the same
+    config files). Records carry ``tier_models`` and a ``key`` source pair
+    instead of the raw scalar fields. A non-``os.environ`` ``env`` rides the
+    payload so the key column answers from it. Returns {} when the binary is
+    unavailable, so a dev checkout renders no providers rather than
+    refusing."""
+    import os
 
-    Merges built-in roles/providers with config overrides. Each row is the
-    canonical 5-field shape: ``role | provider_model | protocol | key | assigned_by``
-    (AC1-UI). Protected roles render as explicit never-routed rows; a known lane
-    with no config line (``build``) renders as unconfigured. Degrades a missing
-    key to ``MISSING (checked ...)`` rather than raising, so an unreadable/absent
-    ``.env`` never errors the whole table (AC-degraded). Never raises.
-    """
-    if env is None:
-        import os
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
-        env = os.environ
-    block = _routing_block(settings)
-    eff = _effective_roles(block)
-    config_roles = {str(k).strip().lower() for k in (getattr(block, "roles", None) or {})}
+    payload: dict = {"kind": "providers", "cwd": os.getcwd()}
+    if env is not None and env is not os.environ:
+        payload["env"] = dict(env)
+    try:
+        answer = spawn_overlay_call(payload)
+    except SpawnOverlayUnavailable:
+        return {}
+    out: dict[str, dict[str, object]] = {}
+    for name, record in (answer.get("providers") or {}).items():
+        out[str(name)] = record
+    return out
 
-    names: list[str] = []
-    for r in (
-        *DEFAULT_ROUTED_ROLES,
-        *KNOWN_LANE_ROLES,
-        *sorted(config_roles),
-        *sorted(PROTECTED_ROLES),
-    ):
-        if r not in names:
-            names.append(r)
-
-    def _provenance(role: str, source: str) -> str:
-        return f"{AUTO_ASSIGNED_BY.get(role, 'manual only')} ({source})"
-
-    rows: list[dict[str, str]] = []
-    for role in names:
-        if role in PROTECTED_ROLES:
-            rows.append(
-                {
-                    "role": role,
-                    "provider_model": "never routed (hard guard)",
-                    "protocol": "-",
-                    "key": "-",
-                    "assigned_by": PROTECTED_ROLE_NOTE.get(
-                        role, "protected (hard guard)"
-                    ),
-                }
-            )
-            continue
-        source = (
-            "config"
-            if role in config_roles
-            else ("built-in" if role in DEFAULT_ROUTED_ROLES else "known lane")
-        )
-        raw = eff.get(role)
-        if not raw:
-            rows.append(
-                {
-                    "role": role,
-                    "provider_model": "unconfigured",
-                    "protocol": "-",
-                    "key": "-",
-                    "assigned_by": _provenance(role, "unconfigured"),
-                }
-            )
-            continue
-        parsed = _parse_target(str(raw))
-        if parsed is None:
-            rows.append(
-                {
-                    "role": role,
-                    "provider_model": f"{raw} (malformed)",
-                    "protocol": "-",
-                    "key": "-",
-                    "assigned_by": _provenance(role, source),
-                }
-            )
-            continue
-        pname, model = parsed
-        provider = _resolve_provider(pname, block)
-        if provider is None:
-            rows.append(
-                {
-                    "role": role,
-                    "provider_model": f"{pname}/{model}",
-                    "protocol": "unknown provider",
-                    "key": "-",
-                    "assigned_by": _provenance(role, source),
-                }
-            )
-            continue
-        protocol = (provider.get("protocol") or "anthropic").lower()
-        satisfying, checked = key_source(provider, env)
-        key_status = (
-            f"found via {satisfying}"
-            if satisfying
-            else f"MISSING (checked {', '.join(checked) or 'nothing'})"
-        )
-        rows.append(
-            {
-                "role": role,
-                "provider_model": f"{pname}/{model}",
-                "protocol": protocol,
-                "key": key_status,
-                "assigned_by": _provenance(role, source),
-            }
-        )
-    return rows

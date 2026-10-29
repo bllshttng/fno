@@ -1,6 +1,6 @@
 //! One shared read of the machine decision store: graph.db decisions plus
 //! the legacy `decisions.jsonl` rows the db lacks (the same merge the
-//! Python owner `_read_index` applies). The Python verb (`list_decisions`)
+//! Python owner `_read_index` applies). The Python command (`list_decisions`)
 //! stays the format owner; this module mirrors its flatten and lifecycle
 //! derivation for the Rust readers that cannot shell out under fleet load -
 //! `prove_it_verdicts` measured ~25s per Python call, and the session-start
@@ -270,7 +270,7 @@ pub fn read_store_live(graph: &Path, jsonl: &Path) -> Result<Index, String> {
 }
 
 /// `read_store_live` over the machine's default paths, resolved the way
-/// every other client-side verb resolves them.
+/// every other client-side command resolves them.
 pub fn default_store_live() -> Result<Index, String> {
     read_store_live(
         &crate::graph_get::default_graph_path(),
@@ -308,6 +308,32 @@ pub fn is_law(row: &Value) -> bool {
         return false;
     }
     row.get("ts").and_then(Value::as_str).unwrap_or("") >= LAW_LANE_CUTOVER
+}
+
+/// A law row that carries the user's own ruling: an operator row, or a
+/// chat_attested row that stores the user's words (a `quote`, or a
+/// rationale that starts `user in chat:`). Any session can mint a bare
+/// chat_attested row, so the words are the evidence that the user spoke.
+pub fn is_user_ruling(row: &Value) -> bool {
+    if !is_law(row) {
+        return false;
+    }
+    match row.get("authority_source").and_then(Value::as_str) {
+        Some("operator") => true,
+        Some("chat_attested") => {
+            let quoted = row
+                .get("quote")
+                .and_then(Value::as_str)
+                .is_some_and(|q| !q.trim().is_empty());
+            let chat_rationale = row
+                .get("rationale")
+                .and_then(Value::as_str)
+                .and_then(|r| r.trim().strip_prefix("user in chat:"))
+                .is_some_and(|words| !words.trim().is_empty());
+            quoted || chat_rationale
+        }
+        _ => false,
+    }
 }
 
 /// The laws of an index, newest first.

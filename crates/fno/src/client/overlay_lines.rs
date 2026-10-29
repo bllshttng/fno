@@ -61,6 +61,41 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
     lines
 }
 
+/// An agent nav row's identity tokens: the mux pane id, the squad (a
+/// squad-hosted row), the portal as `portal:<n>` (kept apart from pane ids
+/// and node hex), the bound node, the PR as `#N` (a substring hit for `N`
+/// too), the harness, the full model id and the card's short model name.
+/// The short name earns its own token because `opus-4.8` is no substring of
+/// `claude-opus-4-8`.
+pub(crate) fn nav_agent_tokens(a: &AgentRow, squad: Option<&str>) -> Vec<String> {
+    let mut t = vec![
+        a.pane_id.map(|p| p.to_string()).unwrap_or_default(),
+        squad.unwrap_or_default().to_string(),
+        a.portal.map(|p| format!("portal:{p}")).unwrap_or_default(),
+        a.node.clone().unwrap_or_default(),
+        a.pr.map(|n| format!("#{n}")).unwrap_or_default(),
+        a.harness.clone().unwrap_or_default(),
+        a.model.clone().unwrap_or_default(),
+    ];
+    t.extend(super::card_line::model_label(a).filter(|m| Some(m) != a.model.as_ref()));
+    t
+}
+
+/// Humanize an age in seconds to `Ns`/`Nm`/`Nh`/`Nd` for the peek
+/// header's `changed Ns ago` line (Discretion 3). A future stamp (clock skew)
+/// is clamped by the caller to 0 before this, so `0s` is the floor.
+pub(crate) fn humanize_ago(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
 /// The table's last-activity cell: the same buckets as [`humanize_ago`],
 /// right-justified to a fixed width of 4 so the column never reflows when a
 /// value rolls from `59m` to `1h`. An absent reading renders EMPTY, like the
@@ -199,4 +234,42 @@ pub(crate) fn peek_overlay_lines(
         )),
     }
     lines
+}
+
+impl View {
+    /// The navigator's framed block, from the live layout. One layout feeds
+    /// the painter and the row menu's anchor, so the two cannot disagree.
+    pub(super) fn nav_layout(
+        &self,
+        overlay_origin: (usize, usize),
+        overlay_dims: (usize, usize),
+    ) -> Option<OverlayLayout> {
+        let nav = self.nav.as_ref()?;
+        let lines = nav_overlay_lines(&self.nav_filtered(nav), nav);
+        let chrome = chrome::Chrome::new("navigator", Anchor::Center)
+            .footer("type to filter · ctrl-o actions · esc close");
+        Some(layout_lines_overlay(
+            overlay_origin,
+            overlay_dims,
+            &chrome,
+            &lines,
+            // +1 for the query line.
+            Some(nav.cursor + 1),
+            OverlayAnchor::Center,
+        ))
+    }
+
+    /// Paint the navigator, if open.
+    pub(super) fn draw_nav(
+        &self,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+        overlay_origin: (usize, usize),
+        overlay_dims: (usize, usize),
+    ) {
+        if let Some(layout) = self.nav_layout(overlay_origin, overlay_dims) {
+            draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
+        }
+    }
 }

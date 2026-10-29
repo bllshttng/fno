@@ -1,0 +1,26 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "store": {
+   "remote_url": "https://x.invalid/?a=b"
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "store.remote_url",
+   "new_value": "https://x.invalid/?a=b",
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

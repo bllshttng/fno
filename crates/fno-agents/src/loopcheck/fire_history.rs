@@ -212,7 +212,7 @@ pub(super) struct LoopEventEnvelope<'a> {
     pub(super) data: serde_json::Value,
 }
 
-// pub(crate): the `finalize` verb (step 6, ) reuses this so its
+// pub(crate): the `finalize` command (step 6, ) reuses this so its
 // `session_finalized` events carry the identical RFC3339 timestamp shape.
 pub(crate) fn now_rfc3339_utc() -> String {
     // Millisecond precision prevents distinct same-second events from sharing

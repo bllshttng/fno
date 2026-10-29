@@ -339,11 +339,15 @@ fn hit_rows() {
     assert!(
         actions.iter().any(
             |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
-            if line == "fno agents adopt s-ghost --cross-project")
+            if line == "fno agents adopt s-ghost")
         ),
         "the ghost session's link takes the adopt door: {actions:?}"
     );
-    assert_eq!(actions.len(), 3, "node, session-id and pane are actions");
+    let acting = actions
+        .iter()
+        .filter(|a| !matches!(a, feed_detail::FeedAction::Field))
+        .count();
+    assert_eq!(acting, 3, "node, session-id and pane are actions");
 
     let item = feed_item(Some("x-nope"), None);
     let (_, actions, _) = feed_detail::build(&[], 0, &item);
@@ -477,12 +481,10 @@ fn click_rows() {
     let m = v.feed_detail.as_ref().unwrap();
     assert!(m.actions.iter().any(
         |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
-            if line == "fno agents adopt s-3 --cross-project")
+            if line == "fno agents adopt s-3")
     ));
     assert!(
-        m.values
-            .iter()
-            .any(|v| v == "fno agents adopt s-3 --cross-project"),
+        m.values.iter().any(|v| v == "fno agents adopt s-3"),
         "y copies the adopt command: {:?}",
         m.values
     );

@@ -102,7 +102,7 @@ struct Fold {
     merges: Vec<Value>,
     spawns: Vec<Value>,
     team_moves: Vec<Value>,
-    verbs: BTreeMap<String, u64>,
+    commands: BTreeMap<String, u64>,
     checkins: Vec<Value>,
     subagents: Value,
     first_ts: Option<String>,
@@ -182,11 +182,11 @@ fn add(map: &mut BTreeMap<String, u64>, key: &str) {
     *map.entry(key.to_string()).or_default() += 1;
 }
 
-fn fno_verb(target: &str) -> Option<(String, Option<String>)> {
-    static VERB: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let regex = VERB.get_or_init(|| {
+fn fno_command(target: &str) -> Option<(String, Option<String>)> {
+    static COMMAND: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let regex = COMMAND.get_or_init(|| {
         regex::Regex::new(r"\bfno(?:-agents|-py)? ([a-z-]+)(?: ([a-z-]+))?")
-            .expect("fno verb matcher is valid")
+            .expect("fno command matcher is valid")
     });
     let captures = regex.captures(target)?;
     Some((
@@ -243,7 +243,7 @@ fn fold_transcript(
         merges: Vec::new(),
         spawns: Vec::new(),
         team_moves: Vec::new(),
-        verbs: BTreeMap::new(),
+        commands: BTreeMap::new(),
         checkins: Vec::new(),
         subagents: json!({"files": 0, "tool_calls": 0}),
         first_ts: None,
@@ -351,11 +351,11 @@ fn fold_transcript(
                 codex_tool_name.unwrap_or_else(|| entry.tool.as_deref().unwrap_or("")),
             );
             if entry.tool.as_deref() == Some("Bash") {
-                if let Some((verb, subverb)) = fno_verb(&entry.target) {
-                    let key = subverb
-                        .map(|s| format!("{verb} {s}"))
-                        .unwrap_or(verb.clone());
-                    add(&mut fold.verbs, &key);
+                if let Some((command, subcommand)) = fno_command(&entry.target) {
+                    let key = subcommand
+                        .map(|s| format!("{command} {s}"))
+                        .unwrap_or(command.clone());
+                    add(&mut fold.commands, &key);
                     if entry.target.contains("fno do pr merge") {
                         fold.merges.push(json!({"ts": ts, "command": entry.target}));
                     }
@@ -641,6 +641,18 @@ fn fold_json(fold: &Fold) -> Value {
         .iter()
         .map(|turn| json!({"ts": turn.ts, "class": turn.class, "text": turn.text}))
         .collect::<Vec<_>>();
+    let mut asks = BTreeMap::<String, Vec<&str>>::new();
+    for turn in &fold.typed_turns {
+        let key = normalized_lead(turn.text.trim()).to_lowercase();
+        if !key.trim().is_empty() {
+            asks.entry(key).or_default().push(&turn.ts);
+        }
+    }
+    let repeated_asks = asks
+        .into_iter()
+        .filter(|(_, ts)| ts.len() > 2)
+        .map(|(lead, ts)| json!({"lead": lead, "count": ts.len(), "ts": ts}))
+        .collect::<Vec<_>>();
     let windows = fold.windows.iter().map(Window::json).collect::<Vec<_>>();
     let all_start = fold
         .windows
@@ -691,6 +703,7 @@ fn fold_json(fold: &Fold) -> Value {
         },
         "typed_turns": typed,
         "repeated_refusals": repeated,
+        "repeated_asks": repeated_asks,
         "hygiene": hygiene,
         "subagents": fold.subagents,
         "lead_checkin": {
@@ -705,7 +718,7 @@ fn fold_json(fold: &Fold) -> Value {
         "merges": fold.merges,
         "spawns": fold.spawns,
         "team_moves": fold.team_moves,
-        "verbs": fold.verbs,
+        "verbs": fold.commands,
     })
 }
 
@@ -1006,11 +1019,94 @@ fn write_fold_failed_index(
         .and_then(|name| name.to_str())
         .unwrap_or("eval");
     let path = dir.with_file_name(format!("{base}.md"));
+    let status = if transient_failure(reason) {
+        RETRY_STATUS
+    } else {
+        "fold-failed"
+    };
     let body = format!(
-        "---\nsession: {session}\nhandle: {}\ntranscript: {}\nstatus: fold-failed\n---\n\n# Lead eval\n\nThe mechanical fold failed: {}\n",
+        "---\nsession: {session}\nhandle: {}\ntranscript: {}\nstatus: {status}\n---\n\n# Lead eval\n\nThe mechanical fold failed: {}\n",
         &session[..session.len().min(8)], transcript.display(), reason.replace('\n', " ")
     );
     write_if_missing(&path, &body)
+}
+
+const RETRY_STATUS: &str = "fold-retry";
+
+/// EAGAIN (35 on macOS, 11 on Linux): the process table or a socket was
+/// briefly full. The transcript is fine, so the arm folds it again next tick.
+fn transient_failure(reason: &str) -> bool {
+    reason.contains("os error 35")
+        || reason.contains("os error 11)")
+        || reason.contains("Resource temporarily unavailable")
+}
+
+fn index_status(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let front = raw.strip_prefix("---\n")?.split("\n---").next()?;
+    front
+        .lines()
+        .find_map(|line| line.strip_prefix("status: "))
+        .map(|status| status.trim().to_string())
+}
+
+/// The previous lead over the same scope tag: the sibling eval whose fold
+/// ended last before this fold began.
+fn prior_fold(dir: &Path, value: &Value) -> Option<(String, Value)> {
+    let base = dir.file_name()?.to_str()?;
+    let prefix = &base[..=base.rfind('-')?];
+    let start = value["windows"][0]["start"].as_str()?;
+    let mut best: Option<(String, String, Value)> = None;
+    for entry in std::fs::read_dir(dir.parent()?).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == base || !name.starts_with(prefix) || !entry.path().is_dir() {
+            continue;
+        }
+        let Some(prior) = std::fs::read_to_string(entry.path().join("data/fold.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        else {
+            continue;
+        };
+        let Some(end) = prior["windows"]
+            .as_array()
+            .and_then(|w| w.last())
+            .and_then(|w| w["end"].as_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if end.as_str() < start && best.as_ref().is_none_or(|(_, e, _)| end > *e) {
+            best = Some((name, end, prior));
+        }
+    }
+    best.map(|(name, _, prior)| (name, prior))
+}
+
+fn lead_measures(value: &Value) -> [(&'static str, u64); 6] {
+    let len = |key: &str| value[key].as_array().map_or(0, Vec::len) as u64;
+    let num = |ptr: &str| value.pointer(ptr).and_then(Value::as_u64).unwrap_or(0);
+    [
+        ("Tool calls", num("/totals/tool_calls")),
+        ("Errors", num("/totals/errors")),
+        ("Typed user turns", num("/totals/typed")),
+        ("Repeated refusals", len("repeated_refusals")),
+        ("Asks repeated more than twice", len("repeated_asks")),
+        ("Merges", len("merges")),
+    ]
+}
+
+fn against_prior(dir: &Path, value: &Value) -> String {
+    let Some((name, prior)) = prior_fold(dir, value) else {
+        return "\n## Against the last lead\n\nNo earlier eval over this scope.\n".into();
+    };
+    let mut out = format!(
+        "\n## Against the last lead\n\nLast lead: [{name}](../{name}.md).\n\n| Measure | Last lead | This lead |\n|---|---:|---:|\n"
+    );
+    for ((label, then), (_, now)) in lead_measures(&prior).iter().zip(lead_measures(value)) {
+        out.push_str(&format!("| {label} | {then} | {now} |\n"));
+    }
+    out
 }
 
 fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
@@ -1104,7 +1200,7 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
     for (title, data) in [
         ("Error buckets", &value["totals"]["buckets"]),
         ("Tools", &value["totals"]["tools"]),
-        ("Top fno verbs", &value["verbs"]),
+        ("Top fno commands", &value["verbs"]),
         ("Wake economy by class", &value["totals"]["wakes_by_class"]),
         ("Merges", &value["merges"]),
         ("Spawns and subagents", &value["spawns"]),
@@ -1113,6 +1209,7 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
     ] {
         metrics.push_str(&format!("\n## {title}\n\n```json\n{data}\n```\n"));
     }
+    metrics.push_str(&against_prior(dir, value));
     metrics.push_str(&format!("\n## Fold\n\n```json\n{}\n```\n", value));
     write_if_missing(&dir.join("part1-metrics.md"), &metrics)?;
     let mut timeline = format!("# Part 2: timeline\n\n{source}\n");
@@ -1163,6 +1260,13 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
             )?;
         }
     }
+    // A failed fold's index gives way to the real one.
+    if matches!(
+        index_status(&index).as_deref(),
+        Some(RETRY_STATUS | "fold-failed")
+    ) {
+        let _ = std::fs::remove_file(&index);
+    }
     write_if_missing(&index, &index_md)?;
     Ok(())
 }
@@ -1199,6 +1303,60 @@ fn timeline_events(value: &Value) -> Vec<Value> {
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
     in_flight: Arc<AtomicBool>,
+    checkins: Arc<Mutex<Option<CheckinCache>>>,
+}
+
+/// The check-in rows the last tick read, and the journals' committed seqs
+/// they were read at. A tick whose journals all hold the same seqs and no
+/// uningested bytes reuses the rows: no import, no write transaction.
+struct CheckinCache {
+    seqs: Vec<(PathBuf, i64)>,
+    rows: Vec<Value>,
+}
+
+/// Each journal's committed seq, or `None` when any journal has bytes the
+/// store has not ingested (or cannot be read): the cache cannot vouch for it.
+fn checkin_seqs(journals: &[PathBuf]) -> Option<Vec<(PathBuf, i64)>> {
+    journals
+        .iter()
+        .map(|journal| {
+            let live = crate::event_store::live_journal(journal);
+            let store = crate::event_store::store_path(&live);
+            // A store with no raw journal beside it has no bytes to ingest.
+            if live.exists() && crate::event_store::stray_has_uningested_bytes(&live, &store) {
+                return None;
+            }
+            Some((live.clone(), crate::event_store::max_seq(&live).ok()?))
+        })
+        .collect()
+}
+
+/// The check-in rows across every journal, read again only when a journal
+/// moved since the cached read.
+fn checkin_rows(
+    journals: &[PathBuf],
+    cache: &Mutex<Option<CheckinCache>>,
+) -> Result<Vec<Value>, String> {
+    let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
+    let seqs = checkin_seqs(journals);
+    if let (Some(seqs), Some(hit)) = (&seqs, cache.as_ref()) {
+        if *seqs == hit.seqs {
+            return Ok(hit.rows.clone());
+        }
+    }
+    let report = crate::lead_history::scan_scopes(journals, None)?;
+    let rows = report
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Read the seqs after the import, so the next tick compares against
+    // what this read actually saw.
+    *cache = checkin_seqs(journals).map(|seqs| CheckinCache {
+        seqs,
+        rows: rows.clone(),
+    });
+    Ok(rows)
 }
 
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
@@ -1216,9 +1374,10 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         *last = Some(Instant::now());
     }
     let gate = Arc::clone(&arm.in_flight);
+    let cache = Arc::clone(&arm.checkins);
     tokio::task::spawn_blocking(move || {
         let _sweep = crate::daemon::SweepGate(gate);
-        let outcome = run_arm(&home);
+        let outcome = run_arm(&home, &cache);
         let journal = crate::loop_runtime::Journal::new_raw(
             home.events_jsonl(),
             crate::daemon::global_events_path(&home),
@@ -1255,14 +1414,13 @@ pub(crate) fn checkin_journals(home: &AgentsHome) -> Vec<PathBuf> {
     journals
 }
 
-fn run_arm(home: &AgentsHome) -> (u64, Option<String>, String) {
+fn run_arm(
+    home: &AgentsHome,
+    cache: &Mutex<Option<CheckinCache>>,
+) -> (u64, Option<String>, String) {
     let now = chrono::Utc::now();
-    let rows = match crate::lead_history::scan_scopes(&checkin_journals(home), None) {
-        Ok(report) => report
-            .get("events")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+    let rows = match checkin_rows(&checkin_journals(home), cache) {
+        Ok(rows) => rows,
         Err(error) => return (0, Some("checkin_read_failed".into()), error),
     };
     let checkins = rows
@@ -1420,6 +1578,15 @@ fn session_has_eval(session: &str) -> Result<bool, String> {
         let entry = entry.map_err(|error| format!("eval directory entry unreadable: {error}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name.contains(sid8) {
+            // A retry index and the dir it sits beside both name the
+            // handle; neither is a written eval.
+            let index = match name.strip_suffix(".md") {
+                Some(_) => entry.path(),
+                None => entry.path().with_file_name(format!("{name}.md")),
+            };
+            if index_status(&index).as_deref() == Some(RETRY_STATUS) {
+                continue;
+            }
             return Ok(true);
         }
     }
@@ -1653,6 +1820,36 @@ mod tests {
         }
     }
 
+    /// AC7: an unmoved journal serves the cached rows with no rescan; a new
+    /// check-in row is read on the next tick.
+    #[test]
+    fn checkin_rows_rescan_only_when_a_journal_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let row = |change: &str| {
+            json!({"ts": chrono::Utc::now().to_rfc3339(), "type": crate::lead_history::LEAD_CHECKIN,
+                   "source": "loop", "data": {"scope": "team", "change": change}})
+        };
+        let append = |value: Value| {
+            let mut fh = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&journal)
+                .unwrap();
+            writeln!(fh, "{value}").unwrap();
+        };
+        append(row("one"));
+        let journals = vec![journal.clone()];
+        let cache = Mutex::new(None);
+        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 1);
+        let seqs = cache.lock().unwrap().as_ref().map(|c| c.seqs.clone());
+        assert!(seqs.is_some(), "a settled read is cached");
+        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 1);
+        append(row("two"));
+        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 2);
+        assert_ne!(cache.lock().unwrap().as_ref().map(|c| c.seqs.clone()), seqs);
+    }
+
     #[test]
     fn seeded_ended_lead_writes_part1_through_the_full_read() {
         let _lock = crate::claims::test_env_lock()
@@ -1759,6 +1956,42 @@ mod tests {
         assert!(
             session_has_eval(session).unwrap(),
             "the written eval must satisfy the dedup read"
+        );
+    }
+
+    #[test]
+    fn an_eagain_fold_stays_retryable_and_the_eval_reads_the_last_lead() {
+        let leads = tempfile::tempdir().unwrap();
+        let dir = leads.path().join("lead-fno-246866bd");
+        let reason = "Resource temporarily unavailable (os error 35)";
+        write_fold_failed_index("246866bd-x", Path::new("/t.jsonl"), &dir, reason).unwrap();
+        let index = leads.path().join("lead-fno-246866bd.md");
+        assert_eq!(index_status(&index).as_deref(), Some(RETRY_STATUS));
+        let other = leads.path().join("lead-fno-11111111");
+        write_fold_failed_index("11111111-x", Path::new("/t.jsonl"), &other, "bad row").unwrap();
+        assert_eq!(
+            index_status(&leads.path().join("lead-fno-11111111.md")).as_deref(),
+            Some("fold-failed")
+        );
+
+        let prior = leads.path().join("lead-fno-0000aaaa");
+        std::fs::create_dir_all(prior.join("data")).unwrap();
+        let fold = json!({
+            "windows": [{"end": "2026-10-01T00:00:00Z"}],
+            "totals": {"tool_calls": 40, "errors": 4, "typed": 3},
+            "repeated_asks": [{"lead": "status?"}],
+        });
+        std::fs::write(prior.join("data/fold.json"), fold.to_string()).unwrap();
+        let now = json!({
+            "windows": [{"start": "2026-10-02T00:00:00Z"}],
+            "totals": {"tool_calls": 50, "errors": 1, "typed": 2},
+        });
+        let table = against_prior(&dir, &now);
+        assert!(table.contains("lead-fno-0000aaaa"), "{table}");
+        assert!(table.contains("| Tool calls | 40 | 50 |"), "{table}");
+        assert!(
+            table.contains("| Asks repeated more than twice | 1 | 0 |"),
+            "{table}"
         );
     }
 }

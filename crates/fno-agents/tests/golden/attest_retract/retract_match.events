@@ -1,0 +1,2 @@
+{"ts": "2026-10-15T00:00:00+00:00", "type": "review_attestation", "source": "target", "data": {"reviewer": "code-review", "attester_session_id": "s9", "head_sha": "<SHA40>", "verdict": "pass"}}
+{"ts":"<TS>","type":"review_attestation","source":"test","data":{"reviewer":"code-review","head_sha":"<SHA40>","verdict":"fail","session_id":"","retracts_attester":"s9","attester_session_id":"","attester_witness":"env_only","retraction_reason":"forged pass","branch":"main"}}

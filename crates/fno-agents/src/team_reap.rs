@@ -1,7 +1,7 @@
 //! The dead-team sweep: a manifest-only team whose holder session is
 //! proven dead leaves its territory. The org (`org_vacancies`) DETECTS
 //! these teams; this module is the REMEDY, run by the daemon retire arm and
-//! the manual `fno agents reap` verb. A vacate hands territory back, so it
+//! the manual `fno agents reap` command. A vacate hands territory back, so it
 //! refuses over guessing: holder death and territory emptiness are both
 //! re-checked under the manifest flock and the registry lock before anything
 //! is removed.
@@ -402,6 +402,17 @@ fn inheritor_for(
     live: &[crate::territory::Team],
     cwd: &Path,
 ) -> String {
+    presiding_holder(level, scope, live, cwd).unwrap_or_else(|| "operator".to_string())
+}
+
+/// The holder of the live team one rung above `scope`, or None. `lead done`
+/// and `lead escalate` read the same rung rule the sweep's inheritor does.
+pub(crate) fn presiding_holder(
+    level: Option<u32>,
+    scope: &str,
+    live: &[crate::territory::Team],
+    cwd: &Path,
+) -> Option<String> {
     let members = |s: &str| -> Vec<String> {
         s.split(',')
             .map(|m| m.trim().to_string())
@@ -423,26 +434,24 @@ fn inheritor_for(
                 .filter_map(|m| project_of(m))
                 .collect();
             if projects.len() != 1 {
-                return "operator".to_string();
+                return None;
             }
-            let project = crate::territory::canonical_scope(projects.into_iter().next().unwrap());
+            let project = crate::territory::canonical_scope(projects.into_iter().next()?);
             live.iter()
                 .find(|c| c.level == 1 && c.scope == project)
                 .map(|c| c.holder.clone())
-                .unwrap_or_else(|| "operator".to_string())
         }
         Some(1) => live
             .iter()
             .find(|c| c.level == 0 && members(&c.scope).iter().any(|m| m == scope))
-            .map(|c| c.holder.clone())
-            .unwrap_or_else(|| "operator".to_string()),
-        _ => "operator".to_string(),
+            .map(|c| c.holder.clone()),
+        _ => None,
     }
 }
 
 /// Production transcript-age seam: seconds since the session's claude
 /// transcript was last written. `None` is "no transcript", never "fresh".
-/// Public: the `fno-agents` bin client's `reap` verb runs the sweep with it.
+/// Public: the `fno-agents` bin client's `reap` command runs the sweep with it.
 pub fn transcript_age_now(session: &str) -> Option<i64> {
     let path = crate::claude_drive::find_transcript(session)?;
     let modified = fs::metadata(path).ok()?.modified().ok()?;
@@ -452,7 +461,7 @@ pub fn transcript_age_now(session: &str) -> Option<i64> {
         .map(|d| d.as_secs() as i64)
 }
 
-/// The daemon arm and manual verb entry: resolve the spaces root, registry
+/// The daemon arm and manual command entry: resolve the spaces root, registry
 /// and events paths from `home`, the window from `cwd`'s config.
 pub fn production_sweep(home: &crate::paths::AgentsHome, cwd: &Path, apply: bool) -> TeamReap {
     let events = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
@@ -511,6 +520,13 @@ pub fn production_sweep(home: &crate::paths::AgentsHome, cwd: &Path, apply: bool
         eprintln!("team-reap: team names: {e}");
         Vec::new()
     });
+    // Land this machine's name history on the fleet ledger, so a machine
+    // that names nobody for a while still burns its names for its peers.
+    if apply {
+        if let Err(e) = crate::team_names::history_sync(&home.team_names_json()) {
+            eprintln!("team-reap: name ledger: {e}");
+        }
+    }
     out
 }
 

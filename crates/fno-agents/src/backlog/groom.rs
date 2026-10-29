@@ -191,7 +191,7 @@ fn is_due(freshness: &Freshness) -> bool {
 /// The worker seed. Thin on purpose: the skill carries the contract. The
 /// mechanical outcomes ride along because the worker is the only thing that
 /// reaches a human; the receipt goes to a scheduler log nobody reads.
-fn brief(day: &str, mechanical: Option<&[(String, String)]>) -> String {
+fn brief(day: &str, mechanical: Option<&[(String, String)]>, unproven: &[String]) -> String {
     let legs = match mechanical {
         Some(legs) if !legs.is_empty() => {
             let itemized: Vec<String> = legs.iter().map(|(n, o)| format!("{n} {o}")).collect();
@@ -205,12 +205,52 @@ fn brief(day: &str, mechanical: Option<&[(String, String)]>) -> String {
         }
         _ => String::new(),
     };
+    let flags = if unproven.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nSuperseded nodes whose scope may have left the board: the successor shipped \
+             with coverage unproven, or the leftover that held the rest was parked. \
+             List each in the report. Where the old node's done condition still fails, file \
+             the scope left out with `fno backlog idea`:\n- {}",
+            unproven.join("\n- ")
+        )
+    };
     format!(
-        "Daily backlog grooming pass for {day}.{legs}\n\nLoad the `fno:groom` skill and follow \
+        "Daily backlog grooming pass for {day}.{legs}{flags}\n\nLoad the `fno:groom` skill and follow \
          it end to end. Use ONLY the levers it allowlists - never edit graph files directly. \
          Anything the patterns do not support goes to the triage pile as a one-line question. \
          Finish by mailing the one-screen report."
     )
+}
+
+/// Read after the mechanical legs, so reconcile has already stamped every
+/// supersession a merged PR proved. An unreadable store flags nothing: the
+/// brief still dispatches and the worker reads the graph itself.
+fn unproven_supersessions() -> Vec<String> {
+    let rows = crate::graph_store::read_rows(&settings::graph_path()).unwrap_or_default();
+    let text = |row: &Value, key: &str, none: &str| row[key].as_str().unwrap_or(none).to_string();
+    let mut lines: Vec<String> = super::supersession::shipped_successor_unproven(&rows, &rows)
+        .iter()
+        .map(|row| {
+            let why = if row["recorded"] == json!(true) {
+                format!(
+                    "reason: {}; uncovered: {}",
+                    text(row, "reason", "no reason recorded"),
+                    row["uncovered_surfaces"]
+                )
+            } else {
+                "no reason or coverage was ever recorded".to_string()
+            };
+            format!(
+                "{} (successor {} shipped; {why})",
+                text(row, "predecessor", "?"),
+                text(row, "successor", "?")
+            )
+        })
+        .collect();
+    lines.extend(super::supersession::dead_leftovers(&rows));
+    lines
 }
 
 /// The mechanical pass, in dependency order. `relatedness build` runs LAST
@@ -363,10 +403,7 @@ fn spawn_worker(brief: &str, cwd: &str, model: &str, day: &str) -> Result<String
         "spawn",
         "--harness",
         "claude",
-        "--substrate",
-        "headless",
-        "--model",
-        model,
+        "--once",
         "--cwd",
         cwd,
         "--timeout",
@@ -374,6 +411,10 @@ fn spawn_worker(brief: &str, cwd: &str, model: &str, day: &str) -> Result<String
         "--name",
         &name,
         brief,
+        // The model is claude's own flag past the fence: spawn refuses --model.
+        "--",
+        "--model",
+        model,
     ]);
     let out = crate::bounded_cmd::output_with_timeout_result(cmd, SPAWN_TIMEOUT_S)
         .map_err(|e| SpawnError::Launch(e.to_string()))?;
@@ -442,7 +483,8 @@ fn groom_pass(run: &GroomRun<'_>, legs: Legs<'_>, spawn: Spawn<'_>) -> Value {
             .map(|(name, _)| (name.to_string(), "pending".to_string()))
             .collect();
         return json!({"status": "dry-run", "day": day, "key": key, "model": run.model,
-                      "brief": brief(&day, None), "mechanical": legs_object(&pending)});
+                      "brief": brief(&day, None, &unproven_supersessions()),
+                      "mechanical": legs_object(&pending)});
     }
     let holder = format!("groom:{}", std::process::id());
     // Read before acquiring: acquire is idempotent for the SAME holder, so a
@@ -470,7 +512,7 @@ fn groom_pass(run: &GroomRun<'_>, legs: Legs<'_>, spawn: Spawn<'_>) -> Value {
         }
     }
     let mechanical = legs(run.age);
-    let seed = brief(&day, Some(&mechanical));
+    let seed = brief(&day, Some(&mechanical), &unproven_supersessions());
     match spawn(&seed, run.cwd, run.model, &day) {
         Err(SpawnError::Launch(detail)) => {
             // No worker ran and no lever was pulled: hand the day back, and
@@ -695,7 +737,7 @@ fn refresh_agent(agents_dir: &Path) -> Value {
     )
 }
 
-// -- the verb -------------------------------------------------------------------
+// -- the command -------------------------------------------------------------------
 
 #[derive(Default)]
 struct Args {
@@ -849,6 +891,8 @@ mod tests {
             "FNO_CONFIG",
             &dir.path().join("absent.toml").display().to_string(),
         );
+        // The brief reads the store for unproven supersessions.
+        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", &root);
         let spawned = std::cell::Cell::new(0);
         let legs = |_: i64| vec![("archive".to_string(), "ok".to_string())];
         let ok = |_: &str, _: &str, _: &str, _: &str| {

@@ -23,16 +23,34 @@
       "glm-z",
       "/fno:target x-11"
     ],
-    "exit": 2,
-    "journal": null,
-    "stderr": [
-      "fno agents spawn: config.agents.defaults.provider = 'codex' sets the HARNESS axis,",
-      "and a route only the claude harness can carry is already on your command line",
-      "(-P zai --model glm-z).",
-      "Nothing you passed set the harness: -P names the model vendor, a different axis,",
-      "so the profile filled it.",
-      "Pass -H claude to keep your route, or clear agents.defaults.provider."
-    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w13",
+        "verb": "target",
+        "seed": "/fno:target x-11",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [],
     "stdout": null
   },
   "facts": {
@@ -41,7 +59,7 @@
   },
   "node": null,
   "node_row": null,
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

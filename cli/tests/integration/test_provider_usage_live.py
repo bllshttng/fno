@@ -1,4 +1,11 @@
-"""Opt-in live positive-marker gate for every metered provider account."""
+"""Opt-in live positive-marker gate for the native usage command.
+
+The refresh moved to the Rust leg (accounts/usage.rs), so this gate drives
+``fno-agents spawn-overlay accounts usage --refresh --json`` end to end. The
+probe parsers in fno.adapters.providers.usage stay only as the parity oracle;
+their fail-open contract is pinned by the unit tests in
+fno/adapters/providers/test_usage.py.
+"""
 from __future__ import annotations
 
 import os
@@ -33,8 +40,7 @@ def test_live_provider_usage_has_numeric_usage_and_future_resets(
     monkeypatch.setenv("USERPROFILE", str(real_home))
 
     from fno.adapters.providers.loader import load_providers
-    from fno.adapters.providers.runtime_state import refresh_usage_detailed
-    import fno.adapters.providers.usage as usage_mod
+    from fno.rust_binary import call_binary_json
 
     # Avoid the repository's project-local accounts block shadowing the
     # operator's global machine records used by this opt-in test.
@@ -47,41 +53,22 @@ def test_live_provider_usage_has_numeric_usage_and_future_resets(
     now = time.time()
     observations = {}
     for account_id in required:
-        observation = refresh_usage_detailed(
-            account_id,
-            ttl_seconds=0,
-            now=now,
-            repo_root=global_only_root,
+        err, rows = call_binary_json(
+            "spawn-overlay", ("accounts", "usage", "--refresh", "--json")
         )
-        assert observation.known, (
+        assert err is None, err
+        row = rows[account_id]
+        assert row.get("windows"), (
             f"{account_id}: live probe did not produce a positive marker "
-            f"({observation.reason})"
+            f"({row.get('reason')})"
         )
-        assert observation.snapshot is not None
-        assert observation.snapshot.windows
-        observations[account_id] = observation.snapshot.windows
-        for window in observation.snapshot.windows:
-            assert isinstance(window.used_pct, (int, float))
-            assert not isinstance(window.used_pct, bool)
-            assert 0 <= window.used_pct <= 100
-            assert isinstance(window.resets_at, (int, float))
-            assert not isinstance(window.resets_at, bool)
-            assert window.resets_at > now
+        observations[account_id] = row["windows"]
+        for window in row["windows"]:
+            assert isinstance(window["used_pct"], (int, float))
+            assert not isinstance(window["used_pct"], bool)
+            assert 0 <= window["used_pct"] <= 100
+            assert isinstance(window["resets_at"], (int, float))
+            assert not isinstance(window["resets_at"], bool)
+            assert window["resets_at"] > now
 
-    assert any(window.label == "5h" for window in observations["zai"])
-
-    # A failed advisory probe is still an explicit unknown and never a
-    # successful empty result.
-    monkeypatch.setitem(
-        usage_mod._PROBES,
-        "zai",
-        lambda _record, _now: (None, "probe-failed"),
-    )
-    failed = refresh_usage_detailed(
-        "zai",
-        ttl_seconds=0,
-        now=time.time(),
-        repo_root=global_only_root,
-    )
-    assert failed.snapshot is None
-    assert failed.reason == "probe-failed"
+    assert any(window["label"] == "5h" for window in observations["zai"])

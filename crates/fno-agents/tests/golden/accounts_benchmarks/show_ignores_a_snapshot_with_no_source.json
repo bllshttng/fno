@@ -1,0 +1,11 @@
+{
+ "args": [
+  "show"
+ ],
+ "snapshot": "{\"fetched_at\": \"{NOW}\", \"models\": []}",
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "no benchmark snapshot; run `fno config accounts benchmarks refresh`\n"
+ }
+}

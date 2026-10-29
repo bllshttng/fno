@@ -85,7 +85,7 @@ fn proto_fresh_bind_wins() {
 
 #[test]
 fn proto_v28_commands_round_trip_over_the_wire() {
-    // x-7561: the new v28 commands (ReapAgents + the external lifecycle verbs)
+    // x-7561: the new v28 commands (ReapAgents + the external lifecycle commands)
     // serialize and deserialize byte-for-byte through the length-prefixed
     // framing a real client/server pair uses.
     use fno::proto::{read_msg_sync, write_msg_sync, ClientMsg, Command};

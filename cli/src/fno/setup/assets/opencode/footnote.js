@@ -29,7 +29,7 @@
 //
 //   1. resolves the session's target manifest via `fno-agents state path
 //      target-state` (the space-resolved manifest; the legacy in-repo
-//      .fno/target-state.md is the fallback when the verb prints nothing),
+//      .fno/target-state.md is the fallback when the command prints nothing),
 //   2. reads the turn's assistant text,
 //   3. synthesizes a minimal claude-shaped transcript jsonl,
 //   4. shells `fno-agents loop-check` (the SAME completion gate claude uses)
@@ -51,14 +51,18 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from "
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 
+// Every child this plugin runs is hook context: its fno calls never join the
+// session (crates/fno/src/join_marker.rs).
+const HOOK_ENV = () => ({ ...process.env, FNO_HOOK_CONTEXT: "1" })
+
 // The manifest resolver. `state path target-state` is the space-resolved
 // truth (manifests live at ~/.fno/spaces/<space>/worktrees/<name>/); the
-// legacy in-repo path is the fallback when the verb prints nothing or the
-// printed file does not exist. 5s bound: a wedged verb must never hold an
+// legacy in-repo path is the fallback when the command prints nothing or the
+// printed file does not exist. 5s bound: a wedged command must never hold an
 // idle event.
-const MANIFEST_VERB_TIMEOUT_MS = 5000
+const MANIFEST_COMMAND_TIMEOUT_MS = 5000
 
-// The 2.x subprocess bound. The gate verbs are reads, but a wedged read must
+// The 2.x subprocess bound. The gate commands are reads, but a wedged read must
 // never hold the 2.x event subscription forever.
 const SUBPROC_TIMEOUT_MS = 120_000
 
@@ -73,7 +77,7 @@ async function resolveManifest(dir, io) {
     const out = (await Promise.race([
       run,
       new Promise((resolve) => {
-        timer = setTimeout(() => resolve(""), MANIFEST_VERB_TIMEOUT_MS)
+        timer = setTimeout(() => resolve(""), MANIFEST_COMMAND_TIMEOUT_MS)
       }),
     ])) || ""
     clearTimeout(timer)
@@ -87,7 +91,7 @@ async function resolveManifest(dir, io) {
       }
     }
   } catch {
-    // verb unavailable (old fno-agents, no PATH): legacy fallback below
+    // command unavailable (old fno-agents, no PATH): legacy fallback below
   }
   clearTimeout(timer)
   const legacy = join(dir, ".fno", "target-state.md")
@@ -129,6 +133,86 @@ function normalizeV2Rows(rows) {
     }))
 }
 
+// The session.created report: env identity rides --agent-self; a reporter
+// with no env (the shared serve) falls to the session title as a CLAIM-ONLY
+// launch name - it matches a pending launch record or nothing, never a mint
+// flavor. Fire-and-forget: never awaited, never blocks the created handler.
+function reportCreated(io, dir, sid) {
+  const reportArgs = [
+    process.env.FNO_AGENTS_BIN || "fno-agents",
+    "report",
+    "--kind",
+    "session",
+    "--harness",
+    "opencode",
+    "--session-id",
+    sid,
+  ]
+  const send = () =>
+    io.run(reportArgs, dir).catch((e) =>
+      console.error(`[footnote] session report failed: ${e}`),
+    )
+  if (process.env.FNO_AGENT_SELF) {
+    reportArgs.push("--agent-self", process.env.FNO_AGENT_SELF)
+    send()
+    return
+  }
+  Promise.resolve(io.sessionInfo ? io.sessionInfo(sid) : null)
+    .then((info) => {
+      const title = (info && info.title) || ""
+      if (title) reportArgs.push("--launch-name", title)
+    })
+    .then(send)
+    .catch((e) => console.error(`[footnote] session report failed: ${e}`))
+}
+
+// Per-turn session-state push: working, blocked and done reach the daemon row
+// through `fno-agents hook session-state --harness opencode <Event>`, the
+// same entry claude and codex use, so the row reads inside-leg state and a
+// verified model instead of the screen scrape. The payload is claude-shaped;
+// hook/adapter/opencode.rs reads it. Fire-and-forget: a missing binary or a
+// failed run costs the push, never the turn.
+const STATE_PUSH_TIMEOUT_MS = 3000
+
+// The served model per session, as opencode's own `provider/model` spelling.
+// Only chat.message names it, so the later tool and idle fires reuse it.
+const servedModel = new Map()
+
+function modelName(m) {
+  if (typeof m === "string") return m
+  const id = m?.modelID ?? m?.id
+  if (!id) return ""
+  const provider = m?.providerID ?? m?.provider
+  return provider ? `${provider}/${id}` : String(id)
+}
+
+function pushState(runProc, dir, event, sid, extra = {}) {
+  if (!sid || typeof runProc !== "function") return
+  const payload = JSON.stringify({
+    hook_event_name: event,
+    cwd: dir,
+    session_id: sid,
+    ...(servedModel.has(sid) ? { model: servedModel.get(sid) } : {}),
+    ...extra,
+  })
+  const bin = (process.env.FNO_AGENTS_BIN || "fno-agents").replace(/'/g, `'\\''`)
+  Promise.resolve(
+    runProc(`'${bin}' hook session-state --harness opencode ${event}`, payload, STATE_PUSH_TIMEOUT_MS),
+  ).catch(() => {})
+}
+
+function pushPrompt(runProc, dir, sid, model) {
+  const name = modelName(model)
+  if (name) servedModel.set(sid, name)
+  pushState(runProc, dir, "UserPromptSubmit", sid)
+}
+
+// A permission prompt blocks the turn until the operator answers; the reply
+// event (or the next tool call, or idle) clears it.
+function pushPermission(runProc, dir, sid, prompt) {
+  pushState(runProc, dir, "Notification", sid, { message: prompt?.title ?? "permission requested" })
+}
+
 // The one gate body. Both arms adapt their version's I/O into `io` and hand
 // it here; neither holds a second copy of anything below (AC2-SHARED).
 function makeHandler(io, dir) {
@@ -145,23 +229,11 @@ function makeHandler(io, dir) {
     try {
       if (kind === "created") {
         // Report this session's id to the daemon (the registry holds it; mail
-        // and liveness stop guessing). Fire-and-forget, best-effort: never
-        // awaited, so the created handler never blocks on the RPC. A spawned
-        // pane carries FNO_AGENT_SELF: an interactive pane's row cannot hold
-        // the callee-minted id yet, so the name is what lets the daemon match.
+        // and liveness stop guessing). A spawned pane carries FNO_AGENT_SELF:
+        // an interactive pane's row cannot hold the callee-minted id yet, so
+        // the name is what lets the daemon match.
         if (sid) {
-          const reportArgs = [
-            process.env.FNO_AGENTS_BIN || "fno-agents",
-            "report", "--kind", "session",
-            "--harness", "opencode",
-            "--session-id", sid,
-          ]
-          if (process.env.FNO_AGENT_SELF) {
-            reportArgs.push("--agent-self", process.env.FNO_AGENT_SELF)
-          }
-          io.run(reportArgs, dir).catch((e) =>
-            console.error(`[footnote] session report failed: ${e}`),
-          )
+          reportCreated(io, dir, sid)
         }
         // Presence via the resolver: a plain native session pays nothing.
         if (sid && (await resolveManifest(dir, io))) {
@@ -171,7 +243,7 @@ function makeHandler(io, dir) {
             if (role) {
               await io.sendSynthetic(
                 sid,
-                `${role}\nYou hold this role. Before you reach for any CLI verb, Read skills/lead/references/cli-commands.md.`,
+                `${role}\nYou hold this role. Before you reach for any CLI command, Read skills/lead/references/cli-commands.md.`,
               )
             }
           } catch (e) {
@@ -249,7 +321,7 @@ function makeHandler(io, dir) {
           const rulesBin = process.env.FNO_AGENTS_BIN || "fno-agents"
           const proc = Bun.spawn(
             [rulesBin, "hook", "rules", "--event", "stop"],
-            { cwd: dir, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+            { cwd: dir, stdin: "pipe", stdout: "pipe", stderr: "pipe", env: HOOK_ENV() },
           )
           proc.stdin.write(
             JSON.stringify({
@@ -550,7 +622,7 @@ function makeProcRunner(dir, root) {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root ?? "" },
+      env: { ...HOOK_ENV(), CLAUDE_PLUGIN_ROOT: root ?? "" },
     })
     proc.stdin.write(payload)
     proc.stdin.end()
@@ -689,12 +761,14 @@ async function server({ directory, worktree, client, $ }) {
       cwd: dir,
       session_id: sid,
     }
-    for (const script of [
-      "hooks/lead-postcompact-reinject.sh",
-      "hooks/target-postcompact-reinject.sh",
+    // The using-fno carrier answers only for a session that joined fno.
+    for (const [script, env] of [
+      ["hooks/lead-postcompact-reinject.sh", ""],
+      ["hooks/target-postcompact-reinject.sh", ""],
+      ["hooks/session-start-using-fno.sh", "FNO_HOOK_HARNESS=opencode "],
     ]) {
       try {
-        const out = await runProcSh(`bash ${root}/${script}`, JSON.stringify(payload), 10000)
+        const out = await runProcSh(`${env}bash ${root}/${script}`, JSON.stringify(payload), 10000)
         const text = hookContextText(out)
         if (text) {
           const q = contextQueue.get(sid) || []
@@ -714,6 +788,10 @@ async function server({ directory, worktree, client, $ }) {
     readAssistantTexts: async (sid) => {
       const res = await client.session.messages({ path: { id: sid } })
       return Array.isArray(res?.data) ? res.data : []
+    },
+    sessionInfo: async (sid) => {
+      const res = await client.session.get({ path: { id: sid } })
+      return res?.data
     },
     sendPrompt: (sid, text) =>
       client.session.prompt({
@@ -741,11 +819,19 @@ async function server({ directory, worktree, client, $ }) {
         eventLog("session.compacted", event.properties?.sessionID)
         return runPostCompactReinject(event.properties?.sessionID)
       }
+      if (event?.type === "permission.updated" || event?.type === "permission.asked") {
+        return pushPermission(runProcSh, dir, event.properties?.sessionID, event.properties)
+      }
+      if (event?.type === "permission.replied") {
+        return pushState(runProcSh, dir, "PreToolUse", event.properties?.sessionID)
+      }
       if (event?.type !== "session.idle") return
+      pushState(runProcSh, dir, "Stop", event.properties?.sessionID)
       return handle("idle", event.properties?.sessionID)
     },
     "tool.execute.before": async (input, output) => {
       eventLog("tool.execute.before", input?.sessionID)
+      pushState(runProcSh, dir, "PreToolUse", input?.sessionID, { tool_name: toClaudeTool(input.tool) })
       await runPreToolUse(root, dir, runProcSh, {
         tool: input.tool,
         args: output.args,
@@ -761,6 +847,7 @@ async function server({ directory, worktree, client, $ }) {
     },
     "chat.message": async (input) => {
       eventLog("chat.message", input?.sessionID)
+      pushPrompt(runProcSh, dir, input?.sessionID, input?.model)
       const prompt = (input.message?.parts || [])
         .filter((p) => p?.type === "text" && typeof p.text === "string")
         .map((p) => p.text)
@@ -808,7 +895,7 @@ function makeV2Io(ctx) {
     sendSynthetic: (sid, text) => ctx.session.synthetic({ sessionID: sid, text }),
     run: (argv, cwd) =>
       new Promise((resolve, reject) => {
-        execFile(argv[0], argv.slice(1), { cwd, timeout: SUBPROC_TIMEOUT_MS }, (err, stdout) => {
+        execFile(argv[0], argv.slice(1), { cwd, timeout: SUBPROC_TIMEOUT_MS, env: HOOK_ENV() }, (err, stdout) => {
           if (err) reject(err)
           else resolve(String(stdout ?? ""))
         })
@@ -857,12 +944,14 @@ async function setup(ctx) {
   const runIdleOnce = (sid) => {
     if (!sid || idleArmed.has(sid)) return
     idleArmed.add(sid)
+    pushState(runProc, dir, "Stop", sid)
     handle("idle", sid)
   }
   const missing = []
   // A deny throws, which 2.x surfaces as the tool failing (same as 1.x).
   await ctx.tool.hook("execute.before", async (event) => {
     eventLog("tool.execute.before", event.sessionID)
+    pushState(runProc, dir, "PreToolUse", event.sessionID, { tool_name: toClaudeTool(event.tool) })
     await runPreToolUse(root, dir, runProc, {
       tool: event.tool,
       args: event.input,
@@ -888,6 +977,7 @@ async function setup(ctx) {
     const sid = event.sessionID
     eventLog("chat.message", sid)
     idleArmed.delete(sid) // a fresh prompt re-arms this turn's idle gate
+    pushPrompt(runProc, dir, sid, event.model)
     const texts = await runUserPromptSubmit(root, dir, runProc, {
       sessionID: sid,
       prompt: event.prompt?.text ?? "",
@@ -934,6 +1024,10 @@ async function setup(ctx) {
           // after a failed execution fires this without a prompt hook, so the
           // eventual succeeded twin gates instead of being latched out.
           idleArmed.delete(event.data?.sessionID)
+        } else if (event?.type === "permission.asked" || event?.type === "permission.updated") {
+          pushPermission(runProc, dir, event.data?.sessionID, event.data)
+        } else if (event?.type === "permission.replied") {
+          pushState(runProc, dir, "PreToolUse", event.data?.sessionID)
         } else if (event?.type === "session.idle") {
           eventLog("idle via session.idle", event.data?.sessionID)
           runIdleOnce(event.data?.sessionID)

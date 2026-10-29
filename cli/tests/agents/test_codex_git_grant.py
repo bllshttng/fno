@@ -31,11 +31,16 @@ def _linked_worktree(tmp_path: Path) -> tuple[Path, str]:
     return linked, _git(linked, "rev-parse", "--path-format=absolute", "--git-common-dir")
 
 
-def test_python_grant_is_the_common_dir_for_a_linked_worktree(tmp_path: Path) -> None:
+def test_python_grant_is_the_common_dir_and_own_gitdir_for_a_linked_worktree(
+    tmp_path: Path,
+) -> None:
     linked, common = _linked_worktree(tmp_path)
+    own = _git(linked, "rev-parse", "--absolute-git-dir")
     grant = codex.git_writable_args(linked)
 
-    assert grant == ["--add-dir", common]
+    # codex keeps the worktree's own gitdir read-only inside the common dir.
+    assert grant == ["--add-dir", common, "--add-dir", own]
+    assert codex.git_writable_args(tmp_path / "repo") == ["--add-dir", common]
     assert linked.joinpath(".git").is_file()
     assert str(linked / ".git") not in grant
 

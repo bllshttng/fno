@@ -79,8 +79,8 @@ def _make_tick_deps(
             return obs_map[candidate.pr_number]
         return _make_obs(pr_number=candidate.pr_number)
 
-    def fake_fire_skill(verb, pr_number, repo_dir, *, runner=None, model=None, env_seam=None):
-        fired.append({"verb": verb, "pr": pr_number})
+    def fake_fire_skill(command, pr_number, repo_dir, *, runner=None, model=None, env_seam=None):
+        fired.append({"verb": command, "pr": pr_number})
         if fire_ok:
             return DispatchResult(ok=True, rc=0, is_error=False, raw='{"is_error":false}')
         return DispatchResult(ok=False, rc=1, is_error=True, raw='{"is_error":true}')
@@ -327,7 +327,7 @@ class TestControlPlaneArmRows:
     the three pr-watch-hosted arm rows land in the anchored journal, each
     saying why it did nothing."""
 
-    def test_tick_writes_watchdog_lead_wake_and_merge_arm_rows(self, tmp_path, monkeypatch):
+    def test_tick_writes_watchdog_and_merge_arm_rows(self, tmp_path, monkeypatch):
         from types import SimpleNamespace
         from unittest.mock import patch
 
@@ -378,14 +378,12 @@ class TestControlPlaneArmRows:
         by_arm = {r["data"]["arm"]: r["data"] for r in rows}
         assert by_arm["watchdog"]["skip_reason"] == "watchdog_off"
         assert by_arm["watchdog"]["scheduler"] == "launchd:sh.fno.pr-watcher"
-        assert by_arm["lead_wake"]["skip_reason"] == "wake_disabled"
-        assert by_arm["lead_wake"]["interval_s"] == 900
         assert by_arm["pr_watch_merge"]["skip_reason"] == "disabled"
         assert by_arm["pr_watch_merge"]["interval_s"] == 600
         detail = by_arm["pr_watch_merge"]["detail"]
-        # The merge row speaks its own grammar now: the lead_wake verdict,
-        # then the skip. A clean skip still names no phase.
-        assert detail.startswith("merge kw=")
+        # The merge row opens with its verdict head, then the skip. A clean
+        # skip still names no phase.
+        assert detail.startswith("merge ok")
         assert detail.endswith("pr_watch disabled")
         assert "phase" not in detail, (
             f"a clean skip must not name a phase. Got: {detail}"
@@ -406,9 +404,9 @@ def test_tick_end_bits_names_the_phase_only_when_the_tick_broke():
     from fno.pr_watch._install import tick_end_bits
 
     timeout = tick_end_bits(
-        {"outcome": "timeout", "phase": "lead_wake", "duration_s": 480.0}
+        {"outcome": "timeout", "phase": "merge", "duration_s": 480.0}
     )
-    assert "phase: lead_wake" in timeout, f"timeout bits: {timeout}"
+    assert "phase: merge" in timeout, f"timeout bits: {timeout}"
     assert "480.0s" in timeout, f"timeout bits: {timeout}"
 
     degraded = tick_end_bits(

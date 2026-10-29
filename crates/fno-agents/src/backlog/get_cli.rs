@@ -142,11 +142,54 @@ pub fn run(tail: &[String]) -> i32 {
             .to_string();
         return serve_loaded(&graph_path, &id, true, &args.render, &args.id);
     }
+    // Rows the store ARCHIVED live in the SQLite archive (or the legacy
+    // JSON), not in the live store - the archived tier above only sees rows
+    // the store still carries. Resolve there before answering no, serving
+    // from the spelling that matched. The same shared reader the reaper's
+    // graph read uses; a failed archive read answers no rows, never an
+    // error. A serve the archive file cannot carry (a table the overlay
+    // reads that the archive lacks) degrades to the ordinary not-found
+    // line, never a harder error than no archive read at all.
+    let state_dir = super::settings::state_dir();
+    if let Some(state_dir) = state_dir.as_deref() {
+        for name in ["graph-archive.db", "graph-archive.json"] {
+            let rows = crate::graph_store::archive_rows_from(state_dir, name);
+            let Some(hit) = resolve_tiers(&rows, args.id) else {
+                continue;
+            };
+            let id = hit
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let archive_file = crate::graph_store::archive_file_path(state_dir, name);
+            let code = serve_loaded(&archive_file, &id, true, &args.render, &args.id);
+            if code != GRAPH_UNREADABLE_EXIT {
+                return code;
+            }
+        }
+    }
     let served = served_store_path(&graph_path);
-    eprintln!(
+    // The JSON-stdout contract: the default get render IS json, so a miss
+    // prints one {ok:false} document on stdout instead of silence; rc stays 1
+    // for rc readers. The --field render keeps the scalar contract (empty
+    // stdout on a miss): its consumers read "empty or null" as not-set, and a
+    // document there would read as a linked value.
+    let message = format!(
         "No node matching '{}' (id/slug/bare-hex) in {}",
         args.id,
         served.display()
+    );
+    if args.render.field.is_some() {
+        eprintln!("{message}");
+        return 1;
+    }
+    println!(
+        "{}",
+        py_json_compact(&json!({
+            "ok": false,
+            "error": message,
+        }))
     );
     1
 }

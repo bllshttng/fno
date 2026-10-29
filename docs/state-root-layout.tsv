@@ -54,7 +54,6 @@ graph.md	cache/pages/graph.md	page	daemon
 graph.html	cache/pages/graph.html	page	daemon
 term.html	cache/pages/lead.html	page	daemon
 rundown.html	cache/pages/rundown.html	page	daemon
-fleet.html	cache/pages/fleet.html	page	daemon
 # logs/ - append-only logs; launchd fds keep writing the renamed inode.
 pr-watcher.out.log	logs/pr-watcher.out.log	append	daemon
 pr-watcher.err.log	logs/pr-watcher.err.log	append	daemon
@@ -120,36 +119,36 @@ session-names.json.lock	mux/session-names.json.lock	lock	mux
 # (lead ruling, 2026-10-16). `sessions` has no row either: the footnote
 # harness writes it live (footnote_harness/transcript.rs), so it is a
 # folder with a home still to be ruled, never a park entry.
-announce-cursors	announce-cursors	dir	daemon
-attention	attention	dir	daemon
-attest	attest	dir	daemon
+announce-cursors	state/announce-cursors	dir	daemon
+attention	state/attention	dir	daemon
+attest	state/attest	dir	daemon
 backups	backups	dir	daemon
 bin	bin	dir	daemon
 bus	bus	dir	daemon
 cargo-build	cargo-build	dir	daemon
 chats	chats	dir	daemon
-claim-aux	claim-aux	dir	daemon
+claim-aux	state/claim-aux	dir	daemon
 context-cache	cache/context	dir	daemon
 fleet	cache/fleet	dir	daemon
-flight	flight	dir	daemon
+flight	state/flight	dir	daemon
 handoffs	handoffs	dir	daemon
 history	history	dir	daemon
 inbox	inbox	dir	daemon
 latches	latches	dir	daemon
-locks	locks	dir	daemon
+locks	state/locks	dir	daemon
 mail-escalations	mail-escalations	dir	daemon
 mail-hold	mail-hold	dir	daemon
 migrations	migrations	dir	daemon
-notice-route	notice-route	dir	daemon
+notice-route	state/notice-route	dir	daemon
 operator-capture	operator-capture	dir	daemon
 pages	cache/pages	dir	daemon
 plugin-stage	plugin-stage	dir	daemon
 postmortems	postmortems	dir	daemon
-push-stamps	push-stamps	dir	daemon
-reclaim	reclaim	dir	daemon
-retro-pending	retro-pending	dir	daemon
-review-invocations	review-invocations	dir	daemon
-route-settings	route-settings	dir	daemon
+push-stamps	state/push-stamps	dir	daemon
+reclaim	state/reclaim	dir	daemon
+retro-pending	state/retro-pending	dir	daemon
+review-invocations	state/review-invocations	dir	daemon
+route-settings	state/route-settings	dir	daemon
 saved-sessions	saved-sessions	dir	daemon
 validity-decks	validity-decks	dir	daemon
 # Parked residue - renamed into backups/state-root-migration/<stamp>/.
@@ -165,6 +164,8 @@ graph.json.history	-	park	daemon
 .plan-sync-watermark	-	park	daemon
 id-tombstones.json.tmp	-	park	daemon
 convo-signals.jsonl	-	park	daemon
+events.jsonl.lock	-	park	daemon
+events.jsonl.shell-writers.d	-	park	daemon
 groom-*.md	-	park	daemon
 # The 2026-10-01 residue batch: an empty dir ensure-global-dir.sh created
 # until this table landed (hooks, signals), session scratch (tmp, jobs-tmp),

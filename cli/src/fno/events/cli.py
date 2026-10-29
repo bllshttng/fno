@@ -56,9 +56,11 @@ def _event_callback(
         help="Output structured JSON to stdout. Diagnostics go to stderr.",
     ),
 ) -> None:
-    from fno.handoff.output import merge_json_flag
-
-    merge_json_flag(ctx, json_output)
+    # merge_json_flag's 3-line merge, inlined: the handoff module
+    # dies with the family port and this caller survives it.
+    ctx.ensure_object(dict)
+    if json_output:
+        ctx.obj["json"] = True
 
 
 def _detect_source(state_path: Path) -> Optional[str]:
@@ -171,7 +173,7 @@ def _resolve_parent_handle(explicit: Optional[str]) -> Optional[str]:
     if explicit:
         return explicit
     try:
-        from fno.agents.registry import HARNESS_SESSION_ID_FIELDS, load_registry
+        from fno.agents.registry import load_registry
         from fno.harness_identity import (
             canonical_handle,
             resolve_harness_identity,
@@ -183,11 +185,11 @@ def _resolve_parent_handle(explicit: Optional[str]) -> Optional[str]:
         # Match this session's row by STORED IDENTITY, not by name==handle: a
         # spawned row usually carries a caller-provided display name (e.g.
         # tgt-<node>-<harness>-gN), so a handle-equality check would miss it and
-        # the push would silently skip (codex P1). The per-harness session field
-        # may hold the full id or its first-8 (claude stores the short), so both
+        # the push would silently skip (codex P1). The session field may hold
+        # the full id or its first-8 (claude stores the short), so both
         # variants are accepted; a canonically-named row still matches too.
         my_handle = canonical_handle(ident.session_id)
-        session_field = HARNESS_SESSION_ID_FIELDS.get(ident.harness)
+        session_field = "short_id" if ident.harness == "claude" else "harness_session_id"
         sid_variants = {ident.session_id, canonical_handle(ident.session_id)}
         for entry in load_registry():
             same_session = (
@@ -607,9 +609,9 @@ def emit(
     # `config.state_dir` resolves into the repo checkout, while the global
     # journal deliberately falls back to `~/.fno` - which is also the path the
     # Rust writer hardcodes. Writing via state_dir() on exactly those configs
-    # puts the row in a file nobody opens. `fno/pr/_reviews.py` carries the same
-    # warning on the READ side; the two must name one path or the mirror is a
-    # write with no reader by construction.
+    # puts the row in a file nobody opens. The Rust readers (pr_status.rs
+    # coverage and verify_evidence.rs) carry the same warning; the two must
+    # name one path or the mirror is a write with no reader by construction.
     #
     # Best-effort: the durable project append above already succeeded, so a
     # failure here must not fail the emit and lose that record.
@@ -625,10 +627,11 @@ def emit(
         try:
             import os
 
-            from fno.pr._publish_review import publish_review_call
+            from fno.rust_binary import command_call
 
             _data = event.get("data", {})
-            result = publish_review_call(
+            result = command_call(
+                "publish-review",
                 {
                     "pr_number": None,
                     "head_sha": str(_data.get("head_sha") or ""),
@@ -636,7 +639,8 @@ def emit(
                     "reviewer": str(_data.get("reviewer") or ""),
                     "cwd": str(repo_root) if repo_root else os.getcwd(),
                     "dry_run": False,
-                }
+                },
+                timeout=45,
             )
             typer.echo(result.get("receipt", "bot-review: skipped (no receipt)"), err=True)
         except Exception as exc:  # noqa: BLE001 - never fail the emit
@@ -873,7 +877,7 @@ def find(
     from fno.paths import event_journals
 
     session = session_id or session_legacy
-    # KIND-vs---kinds is refused by the native verb itself; relaying keeps
+    # KIND-vs---kinds is refused by the native command itself; relaying keeps
     # the refusal single-sourced. The value parsers stay local: their
     # refusals read better than a spawned-binary error.
     try:

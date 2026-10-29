@@ -1,0 +1,79 @@
+{
+ "label": "five quiet roles skip the truth read one mail role pays it",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [
+    [
+     "epic-3",
+     "mail",
+     "lead-3",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "lead_woken",
+     {
+      "address": "lead-3",
+      "ceiling": 32,
+      "reason": "mail",
+      "scope": "epic-3",
+      "successor": false,
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-29T10:00:00Z"
+   },
+   "successor_flags": [
+    false
+   ],
+   "summary": {
+    "armed": true,
+    "evaluated": 6,
+    "note": "",
+    "refused": [],
+    "roles": 6,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": [
+     {
+      "address": "lead-3",
+      "reason": "mail",
+      "scope": "epic-3",
+      "successor": false
+     }
+    ]
+   },
+   "truth_probes": [
+    "lead-3"
+   ],
+   "unread_calls": [
+    "aaaa0000",
+    "epic-0",
+    "lead-0",
+    "aaaa0001",
+    "epic-1",
+    "lead-1",
+    "aaaa0002",
+    "epic-2",
+    "lead-2",
+    "aaaa0003",
+    "epic-3",
+    "lead-3",
+    "aaaa0004",
+    "epic-4",
+    "lead-4",
+    "aaaa0005",
+    "epic-5",
+    "lead-5"
+   ],
+   "wake_times": [
+    "2026-08-29T12:00:00Z"
+   ]
+  }
+ ]
+}

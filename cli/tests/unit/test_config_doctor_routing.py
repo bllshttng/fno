@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 import typer
 
-from fno.config_cli import _report_band_routing
+from fno.setup.config_doctor import _report_band_routing
 
 requires_rust = pytest.mark.dev_build
 
@@ -27,15 +27,22 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def _pin_inventory(monkeypatch: pytest.MonkeyPatch, *, declared: bool):
-    """Pin `resolve_inventory` to a declared / undeclared answer."""
-    from fno import route_resolve
+    """Stub the route-slot door's inventory answer: a declared run carries one
+    row, an undeclared run none (the built-ins stay out so the count reads 0).
+    Every other ask refuses, so the states fold reads empty slots."""
+    from fno import rust_binary
 
-    inv = route_resolve.resolve_inventory()
-    monkeypatch.setattr(
-        route_resolve,
-        "resolve_inventory",
-        lambda **kw: route_resolve.Inventory(rows=inv.rows, declared=declared),
-    )
+    def fake_call(command, payload, *a, **k):
+        if command == "route-slot" and payload.get("mode") == "inventory":
+            rows = (
+                [{"name": "declared-row", "harness": "claude", "model": "m"}]
+                if declared
+                else []
+            )
+            return {"rows": rows, "verbs": []}
+        raise rust_binary.CommandUnavailable(f"{command} hermetic in tests")
+
+    monkeypatch.setattr(rust_binary, "command_call", fake_call)
 
 
 def _pin_roles(monkeypatch: pytest.MonkeyPatch, roles: dict):
@@ -48,9 +55,9 @@ def _pin_roles(monkeypatch: pytest.MonkeyPatch, roles: dict):
 
 
 @requires_rust
-def test_doctor_names_verbs_with_empty_slots(monkeypatch):
+def test_doctor_names_commands_with_empty_slots(monkeypatch):
     """AC4-EDGE: the line names BOTH halves - the declared inventory count and
-    every dispatched verb whose slot has no lane."""
+    every dispatched command whose slot has no lane."""
     _pin_inventory(monkeypatch, declared=False)
     _pin_roles(monkeypatch, {})
     out = _capture(monkeypatch)
@@ -60,8 +67,8 @@ def test_doctor_names_verbs_with_empty_slots(monkeypatch):
     text = "\n".join(out)
     assert "band routing inactive:" in text
     assert "declares 0 row(s)" in text
-    for verb in ("think", "blueprint", "target", "review", "role"):
-        assert verb in text
+    for command in ("think", "blueprint", "target", "review", "role"):
+        assert command in text
 
 
 def test_roles_set_alongside_an_empty_inventory_says_they_are_a_different_axis(
@@ -101,12 +108,12 @@ def _pin_overlay_settings(
             harness=defaults.get("harness", {}) if defaults else {},
         ),
         profiles={
-            verb: SimpleNamespace(
+            command: SimpleNamespace(
                 permission_mode=cfg.get("permission_mode", ""),
                 effort=cfg.get("effort", ""),
                 harness=cfg.get("harness", {}),
             )
-            for verb, cfg in (profiles or {}).items()
+            for command, cfg in (profiles or {}).items()
         },
     )
     monkeypatch.setattr(
@@ -114,11 +121,11 @@ def _pin_overlay_settings(
     )
 
 
-def test_doctor_names_a_codex_scalar_that_cannot_serve_claude(monkeypatch):
-    """AC3-HP: the live-shaped defect - a codex spelling on the target profile
-    - gets one line naming the verb, the harness, the value, and the overlay
-    path that fixes it."""
-    from fno.config_cli import _report_harness_overlays
+def test_doctor_names_a_profile_scalar_the_spawn_no_longer_reads(monkeypatch):
+    """A permission or effort scalar on the target profile gets one line
+    naming its path and value: the spawn axis is retired, so the lane
+    template owns the launch line and the scalar is inert."""
+    from fno.setup.config_doctor import _report_harness_overlays
 
     _pin_overlay_settings(
         monkeypatch,
@@ -130,5 +137,5 @@ def test_doctor_names_a_codex_scalar_that_cannot_serve_claude(monkeypatch):
 
     text = "\n".join(out)
     assert "agents.profiles.target.permission_mode" in text
-    assert "'yolo'" in text and "claude" in text
-    assert "[agents.profiles.target.harness.claude]" in text
+    assert "'yolo'" in text
+    assert "is inert on spawn" in text

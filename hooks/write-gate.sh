@@ -7,7 +7,7 @@
 # per write-capable tool call). Policy lives in the native entry; this file
 # only resolves a binary and relays.
 #
-# Never exec a candidate blindly: an old build answers "unknown verb: hook", and
+# Never exec a candidate blindly: an old build answers "unknown command: hook", and
 # a nonzero PreToolUse refuses every tool in the session. Run each, deployed
 # binary first; relay only exit 0. If nothing can answer, the posture splits by
 # surface, exactly as the shell guards split: the graph/state surfaces failed

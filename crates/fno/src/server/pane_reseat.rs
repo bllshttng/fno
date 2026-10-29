@@ -174,7 +174,7 @@ impl Core {
         // survives, ready to graft into the template tree.
         if matches!(outcome, Ok(tree::DetachOutcome::TabEmptied)) {
             self.session.remove_tab(sid, ti);
-            self.tab_areas.remove(&tid);
+            self.sizing.areas.remove(&tid);
             self.reanchor_views();
         }
     }
@@ -260,7 +260,7 @@ impl Core {
                 }
             }
         };
-        let key = row.attach_id.clone().unwrap_or_else(|| row.name.clone());
+        let key = row.stored_key();
         // Slot: a caller index is tuned when its portal is live (the TV
         // rule) and reused when its entry is stale; no index takes the next
         // free one (an explicit gesture may create). A full space refuses.

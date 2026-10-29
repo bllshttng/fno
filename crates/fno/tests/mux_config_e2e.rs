@@ -19,9 +19,17 @@ use common::Scratch;
 
 /// A socket file nobody answers: bind, then drop the listener without
 /// unlinking. `ls` probes it as REFUSED and reports the session as `stale`.
+/// A session socket `ls` lists. The pid sidecar names this live test
+/// process, so the reader's dead-session heal cannot prove it a corpse and
+/// leaves the marker in place for the enumeration under test.
 fn plant_socket(path: &Path) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     drop(UnixListener::bind(path).unwrap());
+    std::fs::write(
+        fno::proto::pid_sidecar_path(path),
+        std::process::id().to_string(),
+    )
+    .unwrap();
 }
 
 /// The fake "real fleet" session socket, under the scratch HOME exactly where
@@ -192,7 +200,7 @@ fn squad_store_reads_the_legacy_file_under_a_global_state_dir() {
 fn a_global_yaml_state_dir_warns_only_when_it_diverges() {
     // The yaml hint compares VALUES, not substrings: a yaml naming the
     // default root is agreement (the explicit pre-migration spelling), and
-    // warning there would fire on every verb forever. A yaml naming a
+    // warning there would fire on every command forever. A yaml naming a
     // different root IS the divergence the warning exists for - the
     // positive marker that keeps this test from passing vacuously.
     let agree = Scratch::new("muxymla");

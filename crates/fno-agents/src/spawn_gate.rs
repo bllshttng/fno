@@ -17,7 +17,6 @@
 //! that bricks spawning.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -71,12 +70,17 @@ pub const EXIT_FLEET_STOP_UNAVAILABLE: i32 = 83;
 /// The lane declares nothing about how it stands toward the fno state root
 /// (epic rule R3). NOT "declares no carrier": an unsandboxed lane needs none.
 pub const EXIT_STATE_ROOT_UNGRANTED: i32 = 84;
-/// The spawn-gate transport could not get an answer at all (the gate verb is
+/// The spawn-gate transport could not get an answer at all (the gate command is
 /// missing, failed, or timed out): fail closed, never admit on an unreadable
 /// gate. Byte-parity with the Python table's EXIT_GATE_UNAVAILABLE. 86 went
 /// to the per-territory team cap, which landed first; the gate-unavailable
 /// number moved to the next free slot.
 pub const EXIT_GATE_UNAVAILABLE: i32 = 87;
+/// The node-occupancy refusal: fleet top shows a positively-live worker on
+/// the spawn's node, claimed or not (fn-6206, 2026-10-21). A collision is
+/// not busyness, so no bypass excuses the named-worker refusal; the
+/// roster-down variant names the broken read and yields to `--force`.
+pub const EXIT_NODE_OCCUPIED: i32 = 92;
 
 /// The prefix every PASS-path gate line carries. Only a refusal may start
 /// `spawn-gate: ` - the verdict line and the refusal sentences - so the
@@ -212,7 +216,7 @@ pub(crate) fn verdict_line(r: &Refusal) -> String {
 /// and before any capacity math. Mail stays ungated so the incident can be
 /// announced and explained; `fno agents incident clear` reopens admission.
 fn fleet_incident_gate() -> Result<(), Refusal> {
-    // A caller with no worker identity is the human's own typed verb: their
+    // A caller with no worker identity is the human's own typed command: their
     // call is the recovery path, so the stop holds agent fan-out only.
     if !crate::spawn_gate_admission::gate_agent_origin() {
         return Ok(());
@@ -257,7 +261,7 @@ const CPU_ADMIT_SAMPLES: u32 = 2;
 /// A blind CPU read (an undecidable band or an unreadable probe) gets at most
 /// this many total samples before the gate refuses. A blind read is not
 /// evidence the fleet is over. It never holds for the whole queue budget and
-/// never admits: worst case is 3 probes of FOOTPRINT_PROBE_BUDGET plus 2 pauses.
+/// never admits: worst case is 3 footprint readings plus 2 pauses.
 const CPU_BLIND_SAMPLES: u32 = 3;
 /// spawn-gate mutex TTL: generous vs the seconds-scale check→dispatch window;
 /// PID liveness frees it instantly if the spawner dies.
@@ -665,6 +669,75 @@ pub(crate) fn territory_of_node(
     Some((format!("loose:{project}"), loose, true))
 }
 
+/// The node-occupancy arm: the fleet-top read
+/// ([`crate::backlog::worked::reachable_workers_by_node_excluding`]) applied
+/// at spawn admission. A node's claim lockfile only sees workers that
+/// claimed; fn-6206 (2026-10-21) went through that hole - fork-6206 worked
+/// the node with no claim, `claim status` read free, and a second spawn
+/// double-seated the node and its PR. Like the quota locks, the arm sits
+/// ahead of the force branch and the human exemption: a collision is not
+/// busyness, and the refusal names the live worker either way. The arm runs
+/// for node-bearing spawns only, never a plain one. An unreadable roster
+/// refuses closed - never read "no worker" off a blind instrument - and the
+/// refusal names the broken read and the `--force` bypass, the escape the
+/// 2026-10-20 CPU-instrument outage wanted. A named worker is not bypassable:
+/// waiting cannot seat two workers on one node.
+fn check_node_occupancy(
+    node: &str,
+    caller_session: Option<&str>,
+    force: bool,
+) -> Result<(), Refusal> {
+    match crate::backlog::worked::reachable_workers_by_node_excluding(caller_session) {
+        Ok(map) => match map.get(node) {
+            // The read only inserts non-empty name lists, so a hit is a
+            // live worker.
+            Some(names) => Err(node_occupied_refusal(node, names)),
+            None => Ok(()),
+        },
+        Err(reason) => {
+            if force {
+                eprintln!(
+                    "spawn-gate note: the fleet roster is unreadable ({reason}); \
+                     --force passed the node-occupancy read"
+                );
+                return Ok(());
+            }
+            Err(Refusal::with_receipt(
+                EXIT_NODE_OCCUPIED,
+                serde_json::json!({
+                    "status": "refused",
+                    "reason": "node_occupancy_unknown",
+                    "node": node,
+                    "detail": reason,
+                    "remedy": format!(
+                        "the fleet roster is unreadable, so node occupancy cannot be read ({reason}); repair the roster read, or pass --force to bypass this refusal"
+                    ),
+                }),
+            )
+            .ev("reason", serde_json::json!("node_occupancy_unknown"))
+            .ev("axis", serde_json::json!("occupancy")))
+        }
+    }
+}
+
+fn node_occupied_refusal(node: &str, names: &[String]) -> Refusal {
+    let peek = names.first().map(String::as_str).unwrap_or("");
+    Refusal::with_receipt(
+        EXIT_NODE_OCCUPIED,
+        serde_json::json!({
+            "status": "refused",
+            "reason": "node_occupied",
+            "node": node,
+            "workers": names.join(", "),
+            "remedy": format!(
+                "a live worker holds this node; peek it with `fno agents peek {peek}` and retask or reap it before spawning here"
+            ),
+        }),
+    )
+    .ev("reason", serde_json::json!("node_occupied"))
+    .ev("axis", serde_json::json!("occupancy"))
+}
+
 /// The per-territory team cap. `Err` carries the refusal receipt the
 /// caller prints; `None` territory reads as UNKNOWN and refuses closed - the
 /// cap never counts an unknown as headroom. A spawn that works no node skips
@@ -735,7 +808,7 @@ fn territory_refusal(receipt: &str) -> Refusal {
 }
 
 /// The blueprint thread cap: the machine axis counts live rows whose
-/// names parse to verb `bp`; the territory axis counts the ones working the
+/// names parse to command `bp`; the territory axis counts the ones working the
 /// spawn's territory. Refuses, never queues, beside the machine cap - and
 /// `--force` does not excuse it, the same posture as the territory cap. The
 /// receipt names the live rows so a blocked lead sees what holds the slot.
@@ -889,7 +962,7 @@ fn territory_verdict_receipt(
     }
 }
 
-/// The `--node <id>` argument of a territory door verb, or `None`.
+/// The `--node <id>` argument of a territory door command, or `None`.
 fn parse_node_arg(args: &[String]) -> Option<String> {
     let mut node: Option<String> = None;
     let mut iter = args.iter();
@@ -1059,7 +1132,7 @@ impl Drop for GateGuard {
 
 impl GateGuard {
     /// The still-held keys, taken out before the guard drops, so a
-    /// cross-process transport (the spawn-gate verb) can hand them back to
+    /// cross-process transport (the spawn-gate command) can hand them back to
     /// the caller whose pid owns them. The guard is empty afterwards; it must
     /// NOT be released by the holder of the returned keys.
     pub fn take_keys(&mut self) -> (Option<(String, String)>, Option<(String, String)>) {
@@ -1081,9 +1154,9 @@ pub fn spawn_cap_would_emit(get: impl Fn(&str) -> Option<String>) -> bool {
 
 /// Auto-emit `gate_escape{reason:spawn-cap}` on an operator bypass of THIS gate
 /// (`FNO_SPAWN_GATE=0`) outside a test context (Locked Decision 2). Best-effort:
-/// shells the shared `fno doctor event gate-escape` verb (which owns the dedup key +
+/// shells the shared `fno doctor event gate-escape` command (which owns the dedup key +
 /// canonical-log resolution, one emit path) and ignores every failure so a
-/// spawn is never blocked by telemetry (AC1-FR). The verb, not this shell,
+/// spawn is never blocked by telemetry (AC1-FR). The command, not this shell,
 /// computes the `(reason, session, day)` dedup bucket, so a Rust-emitted and a
 /// Python-emitted spawn-cap in the same session/day still collapse to one.
 fn maybe_emit_spawn_cap_escape() {
@@ -1102,6 +1175,15 @@ fn maybe_emit_spawn_cap_escape() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+}
+
+/// Whether this substrate charges the machine's RAM floor. `cloud` does not:
+/// the create is a short pty call on this machine and the session runs on
+/// Anthropic-managed infrastructure, so there is nothing local to protect
+/// (the cloud-substrate ruling, recorded on the node). Every other substrate
+/// runs on this machine.
+fn charges_local_memory(substrate: &str) -> bool {
+    substrate != "cloud"
 }
 
 /// Refuse a spawn onto a lane whose stance toward the fno state root is
@@ -1210,10 +1292,10 @@ fn state_root_grant_gate_decide(
 }
 
 /// Everything the gate needs to decide one spawn. The Python transport
-/// (`spawn_gate.py run_gate`) sends these as the `spawn-gate` verb's payload;
+/// (`spawn_gate.py run_gate`) sends these as the `spawn-gate` command's payload;
 /// the native arms construct it directly. `holder_pid` is the pid whose death
-/// frees the gate's claims - the PYTHON caller's pid across the verb, so the
-/// native claim verdict judges the real holder, never the verb process.
+/// frees the gate's claims - the PYTHON caller's pid across the command, so the
+/// native claim verdict judges the real holder, never the command process.
 #[derive(Debug, Clone, Default)]
 pub struct GateInput {
     pub name: String,
@@ -1225,7 +1307,7 @@ pub struct GateInput {
     pub caller_session: Option<String>,
     pub succession_scope: Option<String>,
     pub holder_pid: Option<u32>,
-    /// The spawn's seed message. Its first verb names the session phase.
+    /// The spawn's seed message. Its first command names the session phase.
     pub seed: Option<String>,
     /// An explicit `--session-phase` label.
     pub session_phase: Option<String>,
@@ -1257,10 +1339,6 @@ fn review_session_gate(input: &GateInput) -> Option<Refusal> {
     )
 }
 
-/// The held keys of a [`GateGuard`], taken out before the guard drops so a
-/// cross-process transport can hand them back to the caller.
-pub type GateKeys = (Option<(String, String)>, Option<(String, String)>);
-
 /// Run the full gate for a spawn. Returns a guard to keep alive across
 /// dispatch on pass, or `Err(Refusal)` on refusal/timeout. All human-facing
 /// output goes to stderr (LD10: the stdout receipt is byte-reserved for the
@@ -1288,12 +1366,19 @@ pub fn run_gate(
             );
             // Every gate refusal leaves a feed-visible row: a refused
             // launch previously wrote nothing, so the feed showed nothing
-            // for a launch the operator watched refuse.
-            let _ = crate::events::EventEmitter::new(home.events_jsonl(), "spawn-gate").emit(
+            // for a launch the operator watched refuse. The node rides the
+            // row when the payload named one: the stop gate's held-refusal
+            // fold reads the freshest cap refusal FOR A NODE back, and only
+            // a row that names the node can prove the hold. The source is
+            // the schema's one allowed source for this type (`daemon`, the
+            // dispatch door's own refusal rows); "spawn-gate" was refused by
+            // the judge at write time, so the feed showed nothing after all.
+            let _ = crate::events::EventEmitter::new(home.events_jsonl(), "daemon").emit(
                 "agent_spawn_refused",
                 &serde_json::json!({
                     "argv": std::env::args().skip(1).collect::<Vec<String>>(),
                     "exit_code": r.exit_code,
+                    "node": node,
                     "reason": verdict_line(&r),
                 }),
             );
@@ -1390,11 +1475,22 @@ fn decide_gate(
         }
     }
 
-    // A caller with no worker identity is the human's own typed verb: no
+    // The node-occupancy arm, beside the quota walls above: fleet top's
+    // live-worker read against the spawn's own node. The claim lockfile only
+    // sees workers that claimed, so a claimless live worker (fn-6206) read
+    // free and the second spawn double-seated the node. A queued spawn
+    // re-reads this at dequeue, where the schema and the RAM floor do. A
+    // blind roster refuses closed unless --force speaks; a plain spawn (no
+    // node) never reads the roster at all.
+    if let Some(node) = admitted_node.as_deref() {
+        check_node_occupancy(node, input.caller_session.as_deref(), flags.force)?;
+    }
+
+    // A caller with no worker identity is the human's own typed command: no
     // capacity gate below may refuse or hold it. The slot acquire stays
     // best-effort so the spawned worker still joins the roster accounting.
     if !crate::spawn_gate_admission::gate_agent_origin() {
-        if substrate == "headless" {
+        if substrate == "headless" || substrate == "cloud" {
             acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
         }
         return Ok(guard);
@@ -1442,12 +1538,17 @@ fn decide_gate(
             }
         }
         // The memory axis is hard: --force passes the soft limits only.
-        check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+        // Cloud is exempt: the create is a short pty call on this machine and
+        // the session runs remotely, so there is nothing local to protect
+        // (the cloud-substrate ruling, recorded on the node).
+        if charges_local_memory(substrate) {
+            check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+        }
         eprintln!(
             "{}",
             crate::spawn_gate_forced::report_probing(registry_path, config_cwd)
         );
-        if substrate == "headless" {
+        if substrate == "headless" || substrate == "cloud" {
             // fail_closed=false: this arm cannot fault, only warn.
             acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
         }
@@ -1621,7 +1722,10 @@ fn decide_gate(
             }
             if flags.force {
                 // The memory axis is hard: --force passes the soft limits only.
-                check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+                // Cloud is exempt (zero local footprint; the cloud-substrate ruling).
+                if charges_local_memory(substrate) {
+                    check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+                }
                 eprintln!(
                     "{}",
                     crate::spawn_gate_forced::report(
@@ -1632,7 +1736,7 @@ fn decide_gate(
                         forced_provider,
                     )
                 );
-                if substrate == "headless" {
+                if substrate == "headless" || substrate == "cloud" {
                     // A forced spawn of the reserved name redeems too: force
                     // speaks for the machine being busy, never for keeping a
                     // reservation the spawn itself was promised.
@@ -1849,7 +1953,11 @@ fn decide_gate(
                                 .inspect_err(|_| guard.release())?;
                             // Slot free. RAM recheck happens NOW (at dequeue too — a spawn
                             // that queued 5 minutes must not dispatch into a tight machine).
-                            check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+                            // Cloud skips it: zero local footprint (the cloud-substrate ruling).
+                            if charges_local_memory(substrate) {
+                                check_ram_floor(floor_gb, swap_cap)
+                                    .inspect_err(|_| guard.release())?;
+                            }
                             // Stamped only once the floor actually answered, so a
                             // receipt never claims an axis it did not read.
                             axes_read.insert("ram".into(), serde_json::json!("ok"));
@@ -1866,10 +1974,23 @@ fn decide_gate(
                                     registry_path,
                                     &learned,
                                     input.caller_session.as_deref(),
+                                    Some(&crate::paths::AgentsHome::from_env().terminal_runs_dir()),
                                     &axes_read,
                                 )
                                 .inspect_err(|_| guard.release())?;
                                 axes_read.insert("lead_share".into(), serde_json::json!("ok"));
+                            }
+                            // The occupancy read again, where the schema and the
+                            // RAM floor re-read: a spawn that queued past
+                            // QUEUE_POLL must not dispatch onto a node that
+                            // gained a live worker while it waited.
+                            if let Some(node) = admitted_node.as_deref() {
+                                check_node_occupancy(
+                                    node,
+                                    input.caller_session.as_deref(),
+                                    flags.force,
+                                )
+                                .inspect_err(|_| guard.release())?;
                             }
                             // The per-territory team cap: beside the machine cap,
                             // never instead of it. Refuses (never queues) - waiting cannot
@@ -1905,7 +2026,7 @@ fn decide_gate(
                             // takes its own slot claim: earlier would burn the
                             // reservation on an unrelated CPU or RAM refusal.
                             release_redeemed_reservation(name, guard.root.as_deref());
-                            if substrate == "headless" {
+                            if substrate == "headless" || substrate == "cloud" {
                                 if let Err(fault) = acquire_worker_slot(
                                     &mut guard,
                                     name,
@@ -2247,8 +2368,6 @@ pub(crate) struct AdmissionPayload {
     pub(crate) capacity_cores: f64,
     #[serde(default)]
     pub(crate) ceiling: f64,
-    // read only through serde: kept so the admission payload still parses
-    // when the decider sends the gap the old verdict shape carried.
     #[serde(default)]
     #[allow(dead_code)]
     pub(crate) gap: Option<String>,
@@ -2302,25 +2421,12 @@ fn held_progress_line(admission: &AdmissionPayload, waited_secs: u64) -> String 
 
 #[derive(Debug, Default, Deserialize)]
 pub struct FootprintCausePayload {
-    /// Kept only so an older admission-less payload still parses; the verdict
-    /// comes from `admission` now, never from the gap's presence.
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: older-payload parse tolerance
-    attribution_gap: Option<String>,
     /// The Claude Code background daemon's idle pre-warm pool, for the
     /// `fno agents status` machine line.
     #[serde(default)]
     spare_pool_process_count: u64,
     #[serde(default)]
     spare_pool_cpu_cores: f64,
-    /// 1-min load average, for the status line only. It decides nothing
-    /// anywhere (LD1).
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: display context, decides nothing
-    load_1m: Option<f64>,
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: context on the payload, unused by the gate
-    cpu_capacity_cores: f64,
     /// The `_emit_failure` shape: when footprint cannot measure at all it
     /// still answers, carrying this key and exit 4. Its words travel into
     /// the instrument refusal (keeps that contract).
@@ -2340,9 +2446,6 @@ pub struct FootprintCausePayload {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TopConsumer {
     #[serde(default)]
-    #[allow(dead_code)]
-    pub(crate) cpu_percent: f64,
-    #[serde(default)]
     pub(crate) command: String,
 }
 
@@ -2357,7 +2460,7 @@ pub(crate) struct CpuAdmission {
 }
 
 /// The one spelling of the instrument refusal: the condition, the probe's
-/// own words for what it measured, and a verb the reader can run.
+/// own words for what it measured, and a command the reader can run.
 fn instrument_refusal_sentence(why: &str) -> String {
     format!(
         "spawn-gate: the CPU instrument is unreadable ({why}); \
@@ -2431,35 +2534,6 @@ pub(crate) fn check_cpu_axis(prefetched: Option<&str>, probe_err: Option<&str>) 
     }
 }
 
-/// Wall-clock budget for the out-of-process footprint probe: the Python
-/// twin's 5s measurement budget plus an allowance for a ONE-module
-/// interpreter start. The allowance is not sized for a full CLI boot on
-/// purpose: the probe binary (`fno-footprint-cause`) imports only
-/// `fno.doctor_footprint` (measured 0.11s wall at load 117), where the old
-/// `fno` shim route paid a full typer-app import plus provisioning waits and
-/// timed out under exactly the load this gate exists to measure.
-const FOOTPRINT_PROBE_BUDGET: Duration = Duration::from_secs(8);
-
-/// The probe argv: the narrow console script when it resolves, else the
-/// same `--json --cause-only` reading through `fno_py_cmd()` (PATH-robust:
-///). `fno` itself is deliberately NOT a
-/// candidate: it is the Rust shim, and a gate probe must not route through
-/// its provisioning waits. The fno-py leg always yields an argv; a
-/// genuinely missing wheel surfaces as a failed read the refusal names,
-/// rather than a probe silently declared absent.
-fn footprint_probe_argv() -> Option<Vec<String>> {
-    if resolves_on_path("fno-footprint-cause") {
-        return Some(vec!["fno-footprint-cause".to_string()]);
-    }
-    let mut argv = crate::org_board::fno_py_cmd();
-    argv.extend(
-        ["doctor", "footprint", "--json", "--cause-only"]
-            .iter()
-            .map(|s| s.to_string()),
-    );
-    Some(argv)
-}
-
 /// The status footer's reading and the store keeper's path note, from ONE
 /// footprint answer, a live probe or a fresh persisted one: `(machine line,
 /// keeper note)`. Both best-effort
@@ -2490,15 +2564,26 @@ pub fn machine_reading_notes() -> (Option<String>, Option<String>) {
     (footer, keeper)
 }
 
-/// The footprint payload's admission split, `(fleet_cores, machine_cores)`,
-/// as the one fleet-share answer for the machine arm and the spawn CPU
-/// axis alike. `None` when the probe or the parse fails, which classifies
-/// as fleet load.
-pub(crate) fn fleet_split() -> Option<(f64, f64)> {
-    let raw = footprint_cause_raw().ok()?;
-    let payload: FootprintCausePayload = serde_json::from_str(&raw).ok()?;
-    let admission = payload.admission?;
-    Some((admission.fleet_cores, admission.machine_cores))
+/// The decider's admission inside one raw footprint payload, `None` when
+/// the payload does not parse or carries none.
+pub(crate) fn admission_of(raw: &str) -> Option<AdmissionPayload> {
+    serde_json::from_str::<FootprintCausePayload>(raw)
+        .ok()?
+        .admission
+}
+
+/// The footprint admission from a live probe: the one fleet-share answer
+/// the machine arm's split and the capacity loop read in one tick. `None`
+/// when the probe or the parse fails, which classifies as fleet load.
+pub(crate) fn fleet_admission() -> Option<AdmissionPayload> {
+    admission_of(&footprint_cause_raw().ok()?)
+}
+
+/// The fleet's CPU share the spawn gate decides on, as one number: the
+/// upper bound, so an attribution gap reads as load, never as headroom.
+/// `None` on an unreadable instrument (axis `cpu_instrument`).
+pub(crate) fn fleet_share(admission: &AdmissionPayload) -> Option<f64> {
+    (admission.axis == "fleet_cpu_share").then_some(admission.share_high)
 }
 
 pub(crate) fn footprint_cause_raw() -> Result<String, String> {
@@ -2528,70 +2613,15 @@ pub(crate) fn footprint_cause_raw() -> Result<String, String> {
             return Ok(first.to_string());
         }
     }
-    let argv = footprint_probe_argv().ok_or_else(|| {
-        "no footprint probe resolves on PATH (fno-footprint-cause, fno-py)".to_string()
-    })?;
-    let raw = footprint_cause_raw_with(&argv, FOOTPRINT_PROBE_BUDGET)?;
+    // The reading computes in process (the deleted fno-footprint-cause
+    // probe): one engine serves the gate and the doctor footprint command,
+    // so the two answers cannot drift and the crossing is gone.
+    let reading = crate::footprint_cause::cause_reading(false, Duration::from_secs(5))?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let payload = crate::footprint_cause::cause_payload(&reading, true, None, None, &cwd);
+    let raw = crate::footprint_cause::sorted_json(&payload);
     crate::footprint_cache::persist_footprint_cache(&raw);
     Ok(raw)
-}
-
-/// The transport, split from [`footprint_cause_raw`] so tests can pass a
-/// short budget and a script instead of loading a real machine.
-///
-/// `Err` carries WHY the probe has no answer, as text a refusal can print.
-/// A deadline miss is a fact about the probe's clock, never about the
-/// machine: printing a clock miss as if it were a CPU reading is how a
-/// healthy instrument once read as "attribution unavailable" at load 511
-/// while the same instrument, read in process, answered 3.69/12.00 in 1.6s.
-fn footprint_cause_raw_with(argv: &[String], budget: Duration) -> Result<String, String> {
-    let bin = argv[0].clone();
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("footprint probe {bin} could not run: {e}"))?;
-    let deadline = Instant::now() + budget;
-    loop {
-        match child.try_wait() {
-            // The exit code is not the discriminator; the payload is. Footprint
-            // exits non-zero to report its OWN verdict (3 capacity-over, 4
-            // unknown) while still writing a complete reading to stdout, so
-            // gating on `status.success()` threw away the answer in exactly the
-            // states the gate consults it about. Measured 2026-09-04: a 3380-byte
-            // payload naming 21 unmapped bg-socket rows was discarded because the
-            // probe exited 4. A genuinely failed run writes nothing parseable and
-            // still reaches `Unreadable` through the classifier.
-            Ok(Some(_)) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|e| format!("footprint probe {bin} could not run: {e}"))?;
-                return std::str::from_utf8(&output.stdout)
-                    .map(|s| s.to_string())
-                    .map_err(|_| format!("footprint probe {bin} wrote non-UTF-8 output"));
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let budget_s = if budget.as_secs() > 0 {
-                    format!("{}s", budget.as_secs())
-                } else {
-                    format!("{}ms", budget.as_millis())
-                };
-                return Err(format!(
-                    "footprint probe {bin} did not answer inside {budget_s}; \
-                     that is the probe's clock, not a reading of fleet CPU"
-                ));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("footprint probe {bin} could not run: {e}"));
-            }
-        }
-    }
 }
 
 /// Take the headless worker slot claim. The claim carries `model_provider`
@@ -3195,7 +3225,7 @@ MemAvailable:    8000000 kB\n";
         std::fs::write(&path, serde_json::to_string(&record).unwrap()).unwrap();
 
         // The stop holds an agent-origin caller only; the human's own typed
-        // verb is the recovery path and passes.
+        // command is the recovery path and passes.
         std::env::set_var("FNO_AGENT_SELF", "incident-test-worker");
         assert_eq!(
             fleet_incident_gate().err().map(|r| r.exit_code),
@@ -3210,7 +3240,7 @@ MemAvailable:    8000000 kB\n";
         // The machine admission door one boundary later: armed refuses a
         // worker identity with the same exit code and a machine-runaway
         // reason; expired admits; no identity admits under the same armed
-        // brake (the human's own typed verb is never held here).
+        // brake (the human's own typed command is never held here).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("brake.json");
         let now = std::time::SystemTime::now()
@@ -3549,8 +3579,8 @@ Swapouts: 3444531.\n";
         );
     }
 
-    /// workers hold its full share refuses exit 80 even with fleet slots free,
-    /// because waiting cannot help while the caller's own workers hold it.
+    /// workers hold its full share refuses exit 80 even with a fleet slot
+    /// free, when that slot is owed to a lead still under its share.
     #[test]
     fn lead_share_refuses_when_the_caller_holds_its_full_share() {
         let _g = claims::test_env_lock()
@@ -3597,18 +3627,20 @@ Swapouts: 3444531.\n";
                 r#"{{"name":"{name}","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"{session}"}}"#
             )
         };
-        // 2 leads -> share 2; the caller holds its full share with 2 rows, so
-        // 2 slots remain fleet-wide and the lead share still refuses.
+        // 2 leads -> share 2; the caller holds its full share with 2 rows and
+        // an unteamed session's row takes a third seat. The one free slot is
+        // owed to lead-b, so there is none to borrow and the lead share refuses.
         let reg = dir.join("registry.json");
         std::fs::write(
             &reg,
             format!(
-                r#"{{"schema_version":{},"entries":[{},{},{},{}]}}"#,
+                r#"{{"schema_version":{},"entries":[{},{},{},{},{}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
                 teamed("lead-a", "session-aaaaaaaa"),
                 teamed("lead-b", "session-bbbbbbbb"),
                 live("w1", "session-aaaaaaaa"),
                 live("w2", "session-aaaaaaaa"),
+                live("w-other", "session-cccccccc"),
             ),
         )
         .unwrap();
@@ -3853,3 +3885,7 @@ mod spawn_gate_blind_tests;
 #[cfg(test)]
 #[path = "spawn_gate_territory_tests.rs"]
 mod spawn_gate_territory_tests;
+
+#[cfg(test)]
+#[path = "spawn_gate_occupancy_tests.rs"]
+mod spawn_gate_occupancy_tests;

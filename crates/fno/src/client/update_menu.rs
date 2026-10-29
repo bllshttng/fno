@@ -4,7 +4,7 @@
 //! so the over-budget file shrinks; everything here reaches the client's
 //! private items through `super::*`.
 
-use super::release_check::{probe_release, run_upgrade_verb, Channel, ReleaseOutcome};
+use super::release_check::{probe_release, run_upgrade_command, Channel, ReleaseOutcome};
 use super::*;
 
 /// The client's view of `fno doctor update --check`'s payload - only
@@ -46,6 +46,11 @@ pub(crate) struct UpdateReadiness {
     /// payload); only `behind` is read here.
     #[serde(default)]
     pub(crate) source_pin: Option<SourcePinView>,
+    /// The named revisions block: the side-by-side rev line and the
+    /// mixed-build flag, from the same resolver. Tolerated absent (an
+    /// older fno's payload); both rows skip when it is.
+    #[serde(default)]
+    pub(crate) revisions: Option<RevisionsView>,
 }
 
 /// The slice of the source-pin answer the menu needs. Serde ignores
@@ -54,6 +59,17 @@ pub(crate) struct UpdateReadiness {
 pub(crate) struct SourcePinView {
     #[serde(default)]
     pub(crate) behind: Option<u64>,
+}
+
+/// The slice of the readiness payload's `revisions` block the modal
+/// renders: the ready-made side-by-side line and the mixed-build detail.
+/// The resolver formats both; the TUI only prints them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub(crate) struct RevisionsView {
+    #[serde(default)]
+    pub(crate) summary: Option<String>,
+    #[serde(default)]
+    pub(crate) mixed_detail: Option<String>,
 }
 
 /// One release-notes line: the plain-English summary, the PR number for the
@@ -145,7 +161,7 @@ pub(crate) const UPDATE_PROBE_TIMEOUT: Duration = Duration::from_millis(30_000);
 /// or panic (AC6-EDGE).
 ///
 /// `--check` already prints JSON on its own (`update` has no local `--json`
-/// option, and the global `--json` flag only applies before the verb) - do
+/// option, and the global `--json` flag only applies before the command) - do
 /// not add `--json` after `--check` here, it makes the CLI exit 2 and every
 /// probe degrade (P1, codex on PR #881).
 pub(crate) async fn probe_update_readiness() -> UpdateOutcome {
@@ -288,37 +304,47 @@ pub(crate) fn build_sideline_menu(
         }
         _ => {}
     }
+    // A hold the machine armed is liftable from here; the row exists only
+    // while one stands, so the menu never offers a no-op.
+    let prefix_hint = |id: &str| {
+        crate::keys::key_for(id)
+            .map(|k| format!("prefix {k}"))
+            .unwrap_or_default()
+    };
+    if let Some(held) = hold::current().filter(hold::Hold::liftable) {
+        rows.push(PopupRow::Entry {
+            glyph: "⏸".into(),
+            label: format!("lift hold on {}", held.holds.join(",")),
+            hint: prefix_hint("lift-hold"),
+            enabled: true,
+        });
+        actions.push(AuxAction::LiftHold);
+    }
     rows.push(entry("♺", "sweep threads"));
     rows.push(entry("＋", "new agent"));
     // The open row's hint names the prefix chord that opens the board from
     // anywhere the menu is not.
-    let open_hint = crate::keys::key_for("open-backlog-board")
-        .map(|k| format!("prefix {k}"))
-        .unwrap_or_default();
     rows.push(PopupRow::Entry {
         glyph: "▦".into(),
         label: "backlog".into(),
-        hint: open_hint,
+        hint: prefix_hint("open-backlog-board"),
         enabled: true,
     });
-    rows.push(PopupRow::Header("experimental".into()));
-    for flag in experimental::Flag::ALL {
-        rows.push(entry(if flag.on(flags) { "☑" } else { "☐" }, flag.label()));
-    }
     let (share_rows, share_actions) = share_flow::menu_entries(flags.pane_share, flags.share);
     rows.extend(share_rows);
     rows.push(entry("⌨", "keybindings"));
     rows.push(entry("⚙", "settings"));
-    rows.push(entry("⇄", "connections"));
+    rows.push(PopupRow::Entry {
+        glyph: "⇄".into(),
+        label: "connections (accounts, usage)".into(),
+        hint: prefix_hint("connections"),
+        enabled: true,
+    });
     rows.push(entry("⏏", "detach"));
     actions.push(AuxAction::OpenSweep);
     actions.push(AuxAction::OpenAgentLauncher);
-    // Rows and actions pair by index: these answer the backlog row and the
-    // experimental toggles pushed above, in the same order.
+    // Rows and actions pair by index: this answers the backlog row above.
     actions.push(AuxAction::OpenBacklogView);
-    for flag in experimental::Flag::ALL {
-        actions.push(AuxAction::ToggleExperimental(flag));
-    }
     actions.extend(share_actions);
     actions.push(AuxAction::OpenKeybinds);
     actions.push(AuxAction::OpenSettings);
@@ -433,6 +459,17 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
                         short(r.installed_rev.as_deref()),
                         short(r.source_rev.as_deref())
                     ))),
+                }
+            }
+            // The named revisions line and the mixed-build flag, printed
+            // verbatim from the resolver so every surface words them
+            // identically.
+            if let Some(revs) = &r.revisions {
+                if let Some(summary) = &revs.summary {
+                    rows.push(PopupRow::Text(summary.clone()));
+                }
+                if let Some(detail) = &revs.mixed_detail {
+                    rows.push(PopupRow::Header(detail.clone()));
                 }
             }
             // Shaped notes win; the raw changelog stays the fallback for an
@@ -570,17 +607,17 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
 }
 
 impl View {
-    /// The verb's verdict lands as a notice, and a re-probe arms so the next
+    /// The command's verdict lands as a notice, and a re-probe arms so the next
     /// menu shows the post-upgrade state.
     pub(crate) fn land_update_verdict(&mut self, verdict: String) {
-        self.update_verb_inflight = false;
+        self.update_command_inflight = false;
         self.set_notice(verdict);
         self.update_probe_want = true;
     }
 }
 
 /// The event loop's update wants: kick a readiness probe and an upgrade
-/// verb, at most one of each in flight. The select loop never blocks on the
+/// command, at most one of each in flight. The select loop never blocks on the
 /// probe - the menu and overlay render whatever is already in
 /// `view.update_outcome`. Lives here so the over-budget client.rs shrinks
 /// (the update surface owns its own pump).
@@ -598,7 +635,7 @@ pub(crate) fn pump_wants(
             let _ = tx.send(outcome);
         });
     }
-    if let (false, Some(channel)) = (view.update_verb_inflight, view.update_verb_want) {
+    if let (false, Some(channel)) = (view.update_command_inflight, view.update_command_want) {
         kick_upgrade(view, restart_tx.clone(), channel);
     }
 }
@@ -620,7 +657,7 @@ pub(crate) async fn open_pr(view: &mut View, url: String) {
 /// the caller has already restored the terminal, so the receipts print
 /// live and are their own verdict - a captured run cannot carry them (the
 /// mux leg kills this client's server out from under the TUI). Never
-/// --force. Returns the verb's exit code.
+/// --force. Returns the command's exit code.
 pub(crate) async fn run_restart_foreground() -> i32 {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command.args(["agents", "restart", "--mux"]);
@@ -640,10 +677,10 @@ const RESTART_REATTACH_EXIT: i32 = 42;
 
 /// The update-modal taps' shared guard (the modal named every effect, so
 /// the tap is the confirmation): close the modal, and refuse while an
-/// update verb is queued or in flight. True = proceed with the tapped one.
+/// update command is queued or in flight. True = proceed with the tapped one.
 pub(crate) fn update_tap(view: &mut View) -> bool {
     view.aux = None;
-    if view.update_verb_inflight || view.update_verb_want.is_some() {
+    if view.update_command_inflight || view.update_command_want.is_some() {
         view.set_notice("an update action is already running".into());
         false
     } else {
@@ -673,7 +710,7 @@ pub(crate) fn detach_exit(view: &View) -> i32 {
 }
 
 /// run_inner's restart unwind: the sentinel means the TUI is gone (the
-/// terminal guard dropped on the way out), so the verb runs where the
+/// terminal guard dropped on the way out), so the command runs where the
 /// receipts are visible, then this process execs a fresh client for the
 /// same session. exec, not an in-process restart: the detached client's
 /// stdin thread holds a blocking stdin lock a second reader would deadlock
@@ -702,10 +739,10 @@ pub(crate) fn kick_upgrade(
     tx: tokio::sync::mpsc::UnboundedSender<String>,
     channel: Channel,
 ) {
-    view.update_verb_want = None;
-    view.update_verb_inflight = true;
+    view.update_command_want = None;
+    view.update_command_inflight = true;
     tokio::spawn(async move {
-        let verdict = run_upgrade_verb(channel).await;
+        let verdict = run_upgrade_command(channel).await;
         let _ = tx.send(verdict);
     });
 }

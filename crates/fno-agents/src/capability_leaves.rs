@@ -1,4 +1,4 @@
-//! The two read leaves the dispatch-verb retirement left behind (
+//! The two read leaves the dispatch-command retirement left behind (
 //! change 2): `capabilities` reads the packaged harness capability table and
 //! `target-family` classifies a message against the merge-posture family
 //! table. With `--harness`, `target-family` also answers the loop gate: the
@@ -158,23 +158,28 @@ pub fn run_target_family(args: &[String]) -> i32 {
         return 0;
     };
     let family = is_target_family(&message);
-    let refusal = if !family {
-        None
-    } else {
-        match capabilities_json(&harness) {
-            Err(text) => Some(text),
-            Ok(row) => {
-                let participation = row["loop_participation"].as_str().unwrap_or_default();
-                let loop_extension = row["loop_extension"].as_str().unwrap_or_default();
-                let src = extension_src.as_deref().map(Path::new);
-                let probe = || crate::plugin_install::loop_install_probe(&harness, src);
-                loop_gate_refusal(&harness, participation, loop_extension, &message, probe)
-            }
-        }
-    };
+    let refusal = loop_refusal(&harness, &message, extension_src.as_deref().map(Path::new));
     let out = serde_json::json!({ "family": family, "refusal": refusal });
     println!("{out}");
     0
+}
+
+/// The loop gate on this machine: `Some` refuses a looping `message` at
+/// `harness`. Spawn admission calls it with no `extension_src`, so the pi
+/// probe there checks presence, not byte equality.
+pub fn loop_refusal(harness: &str, message: &str, extension_src: Option<&Path>) -> Option<String> {
+    if !is_target_family(message) {
+        return None;
+    }
+    match capabilities_json(harness) {
+        Err(text) => Some(text),
+        Ok(row) => {
+            let participation = row["loop_participation"].as_str().unwrap_or_default();
+            let loop_extension = row["loop_extension"].as_str().unwrap_or_default();
+            let probe = || crate::plugin_install::loop_install_probe(harness, extension_src);
+            loop_gate_refusal(harness, participation, loop_extension, message, probe)
+        }
+    }
 }
 
 /// The loop gate, ported from Python `check_loop_participation`: `Some`

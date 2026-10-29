@@ -1,39 +1,41 @@
-# Removed verbs, and what replaced each one. The loader is fno/tombstones.py,
+# Removed commands, and what replaced each one. The loader is fno/tombstones.py,
 # which states the contract: a removal moves the name here with its
 # replacement, and the refusal then teaches where the capability went.
 #
-# Keyed by the FULL verb path, matched on longest prefix, so one entry covers
+# Keyed by the FULL command path, matched on longest prefix, so one entry covers
 # a whole removed subtree. Values are the replacement text the refusal prints.
 
 
 # (d-cf2d6fe1): the runtime root is RETIRED with the workspace
 # fold, not re-registered - it was a one-release shim whose destination
-# itself moved. The implementation modules (fno.runtime.registry,
-# fno.runtime.worktree) stay; only the CLI surface is gone.
+# itself moved. The implementation modules left with the worktree
+# family's Rust port; the family surface lives in the fno-agents binary
+# behind the front door (`fno worktree <leaf>`, `fno agents workspace ...`).
 "runtime" = "`fno agents workspace` - worktree lifecycle and worker registration (`register-worker` moved there with it)"
 
-# Four top-level groups whose every leaf scored zero in `verb-callers.py
+# Four top-level groups whose every leaf scored zero in `command-callers.py
 # --dead`: no skill, doc, script, hook, or cli/src argv named any of them.
 # Confirmed by a second whole-repo walk sharing no code with that tool.
 # The implementation packages stay where live code imports them
-# (`fno.company.contracts` and `fno.wake.signal` have many importers); what
-# is gone is the invocable surface.
-"company" = "nothing - the company campaign verbs had no caller anywhere. `fno.company.contracts` is still imported by the graph, plan, and delivery code; only the CLI surface was removed"
+# (`fno.company.contracts` still is); what is gone is the invocable
+# surface. The wake signal reader later left with its family's Rust port,
+# so the wake entry below names where its one live read went.
+"company" = "nothing - the company campaign commands had no caller anywhere. `fno.company.contracts` is still imported by the graph, plan, and delivery code; only the CLI surface was removed"
 "log" = "`fno doctor event emit` - the per-worktree progress log had no reader and no caller outside its own test"
 "reality-check" = "nothing - the external-reality probes had no caller. The `gh` probe's job is done by `fno do pr status <n>`"
-"wake" = "nothing - the wake-signal ADMIN verbs had no caller. Wake signals themselves are still written and read by `fno.wake.signal`, which the inbox drain and mail paths use"
+"wake" = "nothing - the wake-signal ADMIN commands had no caller. The read survives as the fno-agents binary's hidden `wake-signals` op (scripts/lib/wake-signals.sh reads kind=question signals through it); nothing writes wake signals anymore, so the write path is gone with the port"
 "backlog inbox" = "`fno backlog capture` - the same command. `inbox` was a second registration of the identical Typer app, so every one of its nine subcommands was a duplicate of a `capture` subcommand"
 
 # --- Leaves with zero callers anywhere a contributor reads, confirmed by a
-# second whole-repo walk sharing no code with `verb-callers.py --dead`. A
+# second whole-repo walk sharing no code with `command-callers.py --dead`. A
 # zero is a candidate, not a ruling: `loops resume-all` also scored zero and
 # STAYS, because it is the only release for the `pause-all` kill switch and
 # deleting it would strand a paused fleet.
 # Removed from BOTH fronts (Python routing table and client.rs dispatch).
 # Half-removing would have left `fno agents push-channel` auto-routing to
 # the binary while leaving the enumerated surface, which is the invisible
-# live verb this whole node exists to make impossible.
-"agents register-channel" = "nothing - the channel CLI wrappers had no caller. The `channel.*` daemon RPCs they fronted are live and untouched; the MCP sidecar (`fno.mcp.sidecar`) speaks them directly, which is the real path"
+# live command this whole node exists to make impossible.
+"agents register-channel" = "nothing - the channel CLI wrappers had no caller. The `channel.*` daemon RPCs they fronted are live and untouched; the native sidecar (fno-agents-worker --mcp-exec sidecar) speaks them directly, which is the real path"
 "agents unregister-channel" = "nothing - see `fno agents register-channel`; the `channel.*` RPC is live"
 "agents push-channel" = "nothing - see `fno agents register-channel`; the `channel.*` RPC is live"
 "backlog backfill-slugs" = "nothing - the one-shot migration that gave every node a slug has run. `fno backlog idea` assigns a slug at creation"
@@ -41,11 +43,11 @@
 "backlog exec-graph" = "nothing - the derived execution graph had no reader outside its own compile step, which still runs"
 "backlog release" = "`fno backlog unclaim` - `release` was an alias for it"
 "backlog schedule" = "nothing - the shadow-first frontier report never left shadow mode and no gate ever read its exit code. `fno backlog next` picks work"
-"backlog tree" = "`fno backlog view` - the board view nothing had switched off"
+"backlog tree" = "`fno backlog list 'in:\"<id>\"' -J` - it walks the whole subtree; add `-s:done` to drop finished nodes. Quote the id: a bare value is a prefix match"
 "backlog validate" = "nothing - the unknown-blocker and cycle checks had no caller, in CI or out. `fno backlog maintain` is the live hygiene pass but does NOT check blocker integrity, and `backlog triage validate` validates a proposal file rather than the graph"
 "backlog batch abandon" = "`fno backlog batch ship` - it is the documented failure path and already requeues members as individual PRs; `abandon` was wired to nothing despite its docstring naming the daemon"
 "backlog batch close" = "`fno backlog batch ship` - the only close path the daemon takes"
-"backlog batch policy" = "nothing - the selection wiring that was to shell this verb never landed. `fno backlog next` decides what runs"
+"backlog batch policy" = "nothing - the selection wiring that was to shell this command never landed. `fno backlog next` decides what runs"
 "backlog triage pile" = "`fno backlog view` - the rendered board carries the deferred nodes. `triage health` does NOT: it reports collisions, stale, failure-prone, and the idea pile, not the deferred pile"
 "claim incarnation-fence" = "`fno agents claim status <key>` - it reports the live holder, which is the only ownership truth the fence was checking"
 "claim lane-count" = "`fno agents claim list` - it shows the live claims this counted"
@@ -58,19 +60,20 @@
 "stub-manifest check-pr" = "`fno do pr stub-manifest reconcile-validate` - the drift gate with callers"
 "stub-manifest validate" = "`fno do pr stub-manifest reconcile-validate` - it validates the manifest as part of the check that runs"
 
-# --- Flag-shaped names: a verb whose name was a mode of another verb. The
+# --- Flag-shaped names: a command whose name was a mode of another command. The
 # capability is unchanged and the collapse is mechanical, so each of these
-# names the exact replacement invocation rather than a nearby verb.
-"claim force-release" = "`fno agents claim release <key> --force -R <why>` - the same administrative drop, including the archive to .expired/. `--force` refuses without `--reason`, as the old verb did"
+# names the exact replacement invocation rather than a nearby command.
+"claim force-release" = "`fno agents claim release <key> --force -R <why>` - the same administrative drop, including the archive to .expired/. `--force` refuses without `--reason`, as the old command did"
 "claim lane-acquire" = "`fno agents claim acquire --lane <id> --max-lanes <n>` - the same lane slot, same exit 1 when the cap is full"
 "claim lane-release" = "`fno agents claim release --lane <id>` - the same lane slot release, still silent success when the lane holds none"
-"target resume-bind" = "`fno do target init` - it acquires the node claim against the live session pid, which is the rebinding this verb did separately"
+"target resume-bind" = "`fno do target init` - it acquires the node claim against the live session pid, which is the rebinding this command did separately"
 
-# --- Top-level deletes from the verb-root audit. Each scored zero or
+# --- Top-level deletes from the command-root audit. Each scored zero or
 # near-zero lifetime calls with the capability already covered elsewhere,
-# so the verb is gone (a TOMBSTONES entry, not a VERB_MOVES forward: the
+# so the command is gone (a TOMBSTONES entry, not a COMMAND_MOVES forward: the
 # capability moved nowhere, it was already where the replacement names).
-"executor" = "`skills/execute/scripts/resolve-executor.sh` - the live resolver on the execute path (TASK_EXEC, PLAN_EXEC, TASK_FILES env vars). The old flags map to the in-package modules that stay: --plan-path -> `python3 -m fno.executor._locked`, --task-files -> `python3 -m fno.executor._surface`"
+"executor" = "`skills/execute/scripts/resolve-executor.sh` - the live resolver on the execute path (TASK_EXEC, PLAN_EXEC, TASK_FILES env vars). The old flags map to the native executor-route door: --plan-path -> `fno-agents executor-route locked`, --task-files -> `fno-agents executor-route surface`"
+"worker" = "the delivery worker phases retired with the worker-family port; their native answers: `fno do pr create` (ship), `fno do pr wait --until review` (external), `fno backlog reconcile` (reconcile), `fno agents spawn` (blueprint dispatch)"
 "posture" = "`fno config set` - it writes the same stance keys (auto_merge.*, active_backlog.enabled) through the same atomic writer"
 "tokens" = "`fno whoami context` and `fno whoami cost` - session context and cost/usage already cover the token-burn diagnosis"
 "upgrade" = "`fno doctor update` - the identical command `upgrade` duplicated; every `fno upgrade` call was a spelling of `fno doctor update`"

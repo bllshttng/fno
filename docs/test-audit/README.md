@@ -18,7 +18,7 @@ At 325d7e4ddb: 19,570 Python declarations in 1,115 files. 11,323 Rust in 772 fil
 One contract, one keeper. The burden sits on the test. A deletion owes no per-test evidence.
 
 - When its ledger row names the one contract a test alone guards, the test stays. It must also name a credible failure that turns it red. A test that cannot name both is deleted.
-- When several tests guard one contract, keep the strongest boundary (the real verb, store or transport). Delete the rest.
+- When several tests guard one contract, keep the strongest boundary (the real command, store or transport). Delete the rest.
 - When the text is a user-facing byte (a refusal string, config key, or path), the grep stays. This rule covers greps of docs, skills, workflows and source files. A behavior test must not cover the same text.
 - When the dual-implementation inventory (docs/architecture/dual-implementation-inventory.md) marks the port complete, delete the test that forces both legs to agree. Principle 9: delete a leg. Never keep a harness forcing two legs to agree.
 - Per-flag, per-key and per-default tests fold into one table test per surface. One row covers each distinct branch, not each value.
@@ -38,7 +38,7 @@ Ten campaigns, K1 to K10, run in key order, one PR each. Two or three can run at
 | K2 | spawn and dispatch | 2,093 | 518 | 2,611 | 152 | 1,306 | [k2-campaign.md](k2-campaign.md) |
 | K3 | session registry, watchdog, discover, recovery, reap, role | 2,534 | 535 | 3,069 | 163 | 1,535 | [k3-campaign.md](k3-campaign.md) |
 | K4 | harness adapters and providers (cli/src/fno/adapters colocated tests, harnesses, claude/codex Rust) | 1,593 | 669 | 2,262 | 122 | 1,131 | [k4-campaign.md](k4-campaign.md) |
-| K5 | graph store, board, backlog verbs, claims, carveouts | 3,547 | 999 | 4,546 | 273 | 2,273 | [k5-campaign.md](k5-campaign.md) |
+| K5 | graph store, board, backlog commands, claims, carveouts | 3,547 | 999 | 4,546 | 273 | 2,273 | [k5-campaign.md](k5-campaign.md) |
 | K6 | pr, review, merge, pr_watch, mail, bus, events, relay, inbox, decide | 3,208 | 1,041 | 4,249 | 236 | 2,125 | [k6-campaign.md](k6-campaign.md) |
 | K7 | plan, retro, scoreboard, provenance, evals, target | 1,773 | 476 | 2,249 | 132 | 1,125 | [k7-campaign.md](k7-campaign.md) |
 | K8 | mux crate (all of crates/fno) | 0 | 3,012 | 3,012 | 204 | 1,506 | [k8-campaign.md](k8-campaign.md) |

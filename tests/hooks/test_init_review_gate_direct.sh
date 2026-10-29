@@ -20,7 +20,7 @@
 #   - AC4-ERR: stub exits 2 (Click's "No such command" on a STALE fno) => same
 #              note-and-proceed, NEVER a refusal
 #   - AC5-ERR: no fno on PATH => `fno absent` note, manifest still written
-#   - AC3-CON: FNO_TARGET_INIT_GATED=1 => the verb is never invoked at all
+#   - AC3-CON: FNO_TARGET_INIT_GATED=1 => the command is never invoked at all
 #
 # Exit codes:
 #   0  all scenarios passed
@@ -64,6 +64,9 @@ make_repo() {
   printf '# isolated\n' > "${_dir}/home/.fno/config.toml"
   # Pre-create so the never-called scenario counts 0 instead of erroring.
   : > "${_dir}/gate-calls.log"
+  # The gate contract rides the state-path stub now: this file carries the
+  # scenario's gate rc, the log receives the call marker.
+  printf '%s' "$_gate_rc" > "${_dir}/gate-rc"
 
   cat > "${_dir}/bin/fno" << STUB
 #!/usr/bin/env bash
@@ -95,6 +98,8 @@ run_init() {
     HOME="${_dir}/home" \
     FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
     FNO_TEST_SPACE="${_dir}/space" \
+    FNO_TEST_GATE_RC_FILE="${_dir}/gate-rc" \
+    FNO_TEST_GATE_CALL_LOG="${_dir}/gate-calls.log" \
     TARGET_START=1 \
     TARGET_INPUT="review gate probe" \
     "$@" \
@@ -144,7 +149,7 @@ grep -q "review capability gate unavailable (rc=1)" "$TMP_BROKEN/err.log" \
 pass "AC4-ERR: note names the return code"
 
 # ── AC4-ERR (stale CLI): rc 2 is Click's UsageError, NOT a refusal ──
-# Found by running this for real: an installed `fno` predating the verb prints
+# Found by running this for real: an installed `fno` predating the command prints
 # "No such command 'check-review-gate'" and exits 2. If 2 meant "refused", every
 # direct bootstrap would hard-refuse the moment the CLI fell behind source -
 # the exact broken-gate-bricks-bootstrap failure the design forbids.
@@ -185,7 +190,7 @@ chmod 755 "${TMP_NOFNO}/agents-bin/fno-agents"
 (cd "$TMP_NOFNO" && env \
   PATH="${TMP_NOFNO}/agents-bin:${_CLEAN_PATH}:/usr/bin:/bin" \
   HOME="${TMP_NOFNO}/home" \
-  FNO_AGENTS_BIN= \
+  FNO_AGENTS_BIN="${TMP_NOFNO}/agents-bin/absent-fno-agents" \
   TARGET_START=1 \
   TARGET_INPUT="review gate probe" \
   bash "$INIT") > "${TMP_NOFNO}/out.log" 2> "${TMP_NOFNO}/err.log"
@@ -206,7 +211,7 @@ pass "AC5-ERR: absent-fno note printed"
 pass "AC5-ERR: manifest written"
 
 # ── AC3-CON: the wrapper already paid; do not probe GitHub twice ──
-log "AC3-CON: FNO_TARGET_INIT_GATED=1 => verb never invoked"
+log "AC3-CON: FNO_TARGET_INIT_GATED=1 => command never invoked"
 make_repo TMP_MARKED 9
 _ALL_TMPS+=("$TMP_MARKED")
 

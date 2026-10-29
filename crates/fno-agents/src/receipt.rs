@@ -23,10 +23,6 @@ pub enum Writer {
     GcSweep,
     /// The roster sweep for harness rows no fno row names.
     RosterReap,
-    /// The merge reaper's tree/row cleanup.
-    #[allow(dead_code)] // vocabulary sibling; the merge reaper emits
-    // events, not receipts, until a door routes its receipts here
-    MergeReaper,
     /// The registry choke point: the surface is whatever argv named.
     RegistryWrite,
 }
@@ -36,10 +32,9 @@ impl Writer {
         match self {
             Writer::GcSweep => "gc-sweep".to_string(),
             Writer::RosterReap => "roster-reap".to_string(),
-            Writer::MergeReaper => "merge-reaper".to_string(),
-            // One verb serves a human shell and a daemon loop, so the
+            // One command serves a human shell and a daemon loop, so the
             // surface is the whole bounded invocation, not the binary.
-            Writer::RegistryWrite => crate::state::invocation_verb(),
+            Writer::RegistryWrite => crate::state::invocation_command(),
         }
     }
     /// RegistryWrite reads argv0: the daemon binary is unattended, any
@@ -94,7 +89,7 @@ pub struct ReapReceipt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ledger: Option<Value>,
     /// The SURFACE that took the row, never the process that ran it:
-    /// `gc-sweep`, `roster-reap`, `merge-reaper`, or the argv verb for a
+    /// `gc-sweep`, `roster-reap`, `merge-reaper`, or the argv command for a
     /// removal that came through the registry choke point. Empty only on
     /// a receipt written before this field was required.
     #[serde(default)]
@@ -352,7 +347,7 @@ pub fn build_reap_receipt(
         // quoting it again would corrupt it. resume_argv stays raw either way.
         resume: if harness == "claude" {
             argv.iter()
-                .map(|t| crate::client_verbs::shlex_quote(t))
+                .map(|t| crate::client_commands::shlex_quote(t))
                 .collect::<Vec<_>>()
                 .join(" ")
         } else {
@@ -408,7 +403,7 @@ fn store_root_for(harness: &str) -> Option<std::path::PathBuf> {
     match harness {
         "claude" => std::env::var_os("HOME")
             .map(|h| std::path::PathBuf::from(h).join(".claude").join("projects")),
-        "codex" => crate::client_verbs::codex_home().map(|h| h.join("sessions")),
+        "codex" => crate::client_commands::codex_home().map(|h| h.join("sessions")),
         _ => None,
     }
 }

@@ -392,12 +392,10 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     a.node = Some("x-4fb5".into());
     a.model = Some("glm-5.3-flash[1m]".into());
     assert_eq!(card_line::slug(&a, &[card("x-4fb5", "status")]), "t-status");
-    assert_eq!(card_line::harness_model(&a), Some("glm-5.3-flash".into()));
     a.name = "t-cards-org-opus".into();
     a.model = Some("claude-opus-5-5".into());
     a.harness = Some("claude".into());
     assert_eq!(card_line::slug(&a, &[]), "t-cards-org");
-    assert_eq!(card_line::harness_model(&a), Some("claude/opus".into()));
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
     assert_eq!(card_line::node_span(&a, 30), Some(24..30));
@@ -510,9 +508,9 @@ fn hover_and_selection_share_the_same_card_cell_snapshot() {
         selected_detail_i,
     );
 
-    assert_eq!(
+    assert_ne!(
         hover_cells, selected_cells,
-        "hover and click use one paint path"
+        "the cursor card inverts apart from hover"
     );
     // The pairing bands all three lines for both gestures, every cell and
     // column boundary included; the metrics line's hover is covered by its
@@ -522,8 +520,10 @@ fn hover_and_selection_share_the_same_card_cell_snapshot() {
         "hover bands every cell of all three lines"
     );
     assert!(
-        selected_cells.iter().all(|cell| cell.bg != Color::Default),
-        "selection bands every cell of all three lines"
+        selected_cells
+            .iter()
+            .all(|cell| cell.flags & cell_flags::INVERSE != 0),
+        "the cursor card inverts every cell of all three lines"
     );
 }
 
@@ -960,9 +960,6 @@ fn list_mode_keeps_identity_and_unknown_measurements_visible() {
     assert_eq!(row_meter::ctx_cell(Some(0)), "    0%");
     assert_eq!(row_meter::ctx_cell(Some(100)), "███ 100%");
     assert_eq!(row_meter::ctx_cell(Some(129)), "███ 129%");
-    assert_eq!(row_meter::ctx_bar(None), format!("{:<13}", "-"));
-    assert_eq!(row_meter::ctx_bar(Some(0)), "         0%  ");
-    assert_eq!(row_meter::ctx_bar(Some(28)), "██▎      28% ");
     assert_eq!(row_meter::up_cell(None, now), "-");
     assert_eq!(row_meter::up_cell(Some(now + 1), now), "0s");
 }
@@ -1220,6 +1217,27 @@ async fn a_long_press_on_each_card_line_opens_the_agents_menu() {
 }
 
 #[tokio::test]
+async fn a_click_on_a_cards_star_toggles_its_pin() {
+    // The star sits on line 2, which arms the press hold, not a row drag:
+    // a short release there must still reach the pin.
+    let mut v = card_view(lead_and_worker());
+    let (_, detail_i) = card_rows_for(&v, "lead-a");
+    let row = (detail_i - v.sideline_offset() + 1) as u16;
+    let col = (0..v.panel_w()).find(|c| v.pin_star_at(row, *c).is_some());
+    let col = col.expect("line 2 carries a star cell");
+    let (mut buf, mut carry) = (Vec::<u8>::new(), Vec::<u8>::new());
+    let click = format!("\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m", c = col + 1, r = row + 1);
+    let mut scanner = Scanner::default();
+    crate::client::handle_stdin(&mut v, &mut scanner, &mut carry, click.as_bytes(), &mut buf)
+        .await
+        .unwrap();
+    assert!(v
+        .notice
+        .as_ref()
+        .is_some_and(|(n, _)| n == "pinning lead-a"));
+}
+
+#[tokio::test]
 async fn a_right_press_on_each_card_line_opens_the_agents_menu() {
     // Same span for right-click, the no-config path for terminals that
     // swallow the hold. The inter-card rule stays inert: no menu opens.
@@ -1327,4 +1345,84 @@ fn card_row_1_carries_the_role_and_the_lead_rollup() {
         !line2.contains("lead-a") && !line2.contains("lead of fno"),
         "row 2 dropped the lead name: {line2:?}"
     );
+}
+
+#[test]
+fn a_card_keeps_a_teamed_slug_whole_beside_node_and_pr() {
+    // The demo specimen: worker `scout` under a lead, with a node and
+    // `#412`, read `scou` at the demo width. At every sideline width the
+    // slug stays whole; the node cuts its front or drops instead.
+    let mut agents = lead_and_worker();
+    agents[1].name = "scout".into();
+    agents[1].node = Some("zz-00aa11bb".into());
+    agents[1].pr = Some(412);
+    let mut v = card_view(agents);
+    v.term = (30, 140);
+    for width in 26..=60u16 {
+        v.sideline_width = width;
+        let (agent_i, _) = card_rows_for(&v, "scout");
+        let frame = v.compose();
+        let row = agent_i - v.sideline_offset() + 1; // the strip row owns row 0
+        let line = row_text(&frame, row, v.sideline_paint_w() - 1);
+        assert!(line.contains("scout "), "width {width}: {line:?}");
+        assert!(line.contains("#412"), "width {width}: {line:?}");
+    }
+}
+
+#[test]
+fn a_narrow_card_keeps_the_slug_whole_and_cuts_only_the_role() {
+    // The name is the card's most important word: a long role is cut from
+    // its end, and a width that fits only the slug shows the slug alone.
+    let mut agents = lead_and_worker();
+    agents[0].role_title = Some("Lead of mux surfaces and fleet steering".into());
+    let mut v = card_view(agents);
+    v.term = (30, 140);
+    v.sideline_width = 40;
+    let text = frame_text(&v.compose());
+    let line = text
+        .lines()
+        .find(|l| l.contains("lead-a \u{b7} Lead of"))
+        .unwrap_or_else(|| panic!("line 1 keeps the slug and the role's start: {text:?}"));
+    assert!(
+        !line.contains("steering"),
+        "the role's end is cut: {line:?}"
+    );
+    assert_eq!(
+        card_line::card_label("lead-a", Some("Lead of mux"), 9),
+        "lead-a"
+    );
+    assert_eq!(
+        card_line::card_label("lead-a", Some("Lead of mux"), 4),
+        "ad-a"
+    );
+}
+
+#[test]
+fn card_model_names_the_family_alone_only_at_its_newest_version() {
+    let newest = card_line::newest_families([
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-5-5",
+    ]);
+    let short = |m: &str| card_line::short_model(m, &newest);
+    assert_eq!(short("claude-opus-5-5[1m]"), "opus");
+    assert_eq!(short("claude-opus-5"), "opus-5");
+    assert_eq!(short("claude-opus-4-8"), "opus-4.8");
+    assert_eq!(short("claude-haiku-4-5-20251001"), "haiku-4.5");
+    assert_eq!(short("glm-5.3-flash[1m]"), "glm-5.3-flash");
+    assert_eq!(short("gpt-5.5"), "gpt-5.5");
+    assert_eq!(
+        card_line::short_model("claude-opus-4-8", &Default::default()),
+        "opus",
+        "with no catalog the family alone"
+    );
+    // Line 2 paints the served model, observed or recorded, shortened.
+    let mut agents = lead_and_worker();
+    agents[1].model = Some("claude-opus-5-5".into());
+    let v = card_view(agents);
+    assert!(v
+        .card_detail_text(&v.layout.agents[1], 0, 60)
+        .starts_with("opus"));
 }

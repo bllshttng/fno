@@ -10,8 +10,13 @@
 //! The decision is pure; every effect (the PR-state read, the mail, the
 //! resume, the operator ask, the state file) rides an injected runner or a
 //! file seam, so tests stage the world. The ladder fires on the daemon's
-//! retire arm only. A manual `reap` verb never nudges; its dry run prints
+//! retire arm only. A manual `reap` command never nudges; its dry run prints
 //! the plan (`would nudge <id> (<action>)`) and takes no effect.
+//!
+//! An owner's per-PR hold (`pr-hold:<slug>#<pr>`, the same subject the
+//! authorized-merge gate itself refuses on) outranks the ladder exactly
+//! like a merge order: the row pauses, and a held PR gets no "drive it to
+//! merge" nudge, because the hold forbids exactly that.
 
 use crate::events::EventEmitter;
 use crate::gc_sweep::OpenPrRow;
@@ -67,8 +72,9 @@ pub enum NudgeAction {
     /// Nothing is due: the transcript is fresh, the last nudge is young, or
     /// the ladder already escalated and is waiting for activity.
     Wait,
-    /// A merge order or fleet loop halt holds the session: no nudge, and the
-    /// pause names itself in the event log at most once per hour.
+    /// A merge order, the owner's pr-hold, or a fleet loop halt holds the
+    /// session: no nudge, and the pause names itself in the event log at
+    /// most once per hour.
     Pause,
     /// The attempt budget is spent: file one operator question and wait for
     /// activity.
@@ -142,8 +148,8 @@ pub fn decide(input: &NudgeInput) -> (NudgeAction, LadderState) {
     if !due(&input) {
         return (NudgeAction::Wait, state);
     }
-    // 3. Pause: a merge order or fleet loop halt holds the row. The pause
-    // names itself at most once per hour.
+    // 3. Pause: a merge order, the owner's pr-hold, or a fleet loop halt
+    // holds the row. The pause names itself at most once per hour.
     if input.merge_order_hold {
         return (NudgeAction::Pause, state);
     }
@@ -178,7 +184,8 @@ pub struct NudgeInput {
     pub transcript_age_s: Option<i64>,
     /// Unix seconds of the transcript's last write, when the age answered.
     pub last_activity_at: Option<i64>,
-    /// A live merge order or loop-scoped fleet halt holds this session.
+    /// A live merge order, the owner's pr-hold, or a loop-scoped fleet halt
+    /// holds this session.
     pub merge_order_hold: bool,
     pub grace_secs: i64,
     pub now: i64,
@@ -196,12 +203,12 @@ pub struct NudgeInput {
 pub type Runner<'a> = &'a mut dyn FnMut(&[String], &str) -> (i32, String, String);
 
 /// The production runner every arm shares, so the dry run and the daemon
-/// cannot disagree about how a verb runs.
+/// cannot disagree about how a command runs.
 fn production_run(argv: &[String], cwd: &str) -> (i32, String, String) {
     let bin = argv[0].clone();
     let rest: Vec<String> = argv[1..].to_vec();
     let refs: Vec<&str> = rest.iter().map(String::as_str).collect();
-    // A global verb (mail, resume, ask) needs no row cwd; the empty
+    // A global command (mail, resume, ask) needs no row cwd; the empty
     // string means "stay here", because chdir("") fails the spawn.
     let dir: std::path::PathBuf = if cwd.is_empty() {
         std::path::PathBuf::from(".")
@@ -248,8 +255,9 @@ fn ladder_run(argv: &[String], cwd: &str) -> (i32, String, String) {
 /// then drop the state files of sessions that no longer carry one.
 pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow], grace_secs: i64) {
     let now = crate::daemon::now_epoch_secs();
+    let graph = crate::gc_sweep::read_graph_rows(home);
     for row in rows {
-        let held = merge_order_hold(home, &row.node);
+        let held = merge_hold_in(home, row, graph.as_deref());
         let state = load_state(home, &row.session_id);
         apply(
             home,
@@ -265,11 +273,35 @@ pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow],
     cleanup_state_files(home, rows);
 }
 
+/// Every hold that forbids the merge this ladder would drive, over graph
+/// rows the caller read once for the whole sweep (`None`: unreadable).
+fn merge_hold_in(home: &AgentsHome, row: &OpenPrRow, graph: Option<&[Value]>) -> bool {
+    merge_order_hold(home, &row.node)
+        || authorized_merge_hold(home, row)
+        || merge_freeze_hold(home, row)
+        || node_dispatch_hold_rows(&row.node, graph)
+}
+
 fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
-    if merge_order_hold(home, &row.node) {
+    let graph = crate::gc_sweep::read_graph_rows(home);
+    merge_hold_in(home, row, graph.as_deref()) || loop_pause_hold(home, row)
+}
+
+/// The node's `dispatch_hold` (plan frontmatter, or the node row when there
+/// is no plan), walked up its ancestors as the merge gate walks it. An
+/// invalid hold also pauses: the gate refuses that merge too. So does an
+/// unreadable graph, which the gate's probe never reads as unheld.
+fn node_dispatch_hold_rows(node: &str, entries: Option<&[Value]>) -> bool {
+    let Some(entries) = entries else {
         return true;
-    }
-    loop_pause_hold(home, row)
+    };
+    let by_id: std::collections::BTreeMap<String, Value> = entries
+        .iter()
+        .filter_map(|e| crate::graph_store::entry_id(e).map(|id| (id.to_string(), e.clone())))
+        .collect();
+    by_id
+        .get(node)
+        .is_some_and(|entry| crate::backlog_ready::hold_verdict_receipt(entry, &by_id).is_some())
 }
 
 fn loop_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
@@ -440,7 +472,7 @@ pub fn apply(
                 let mut landed = crate::mail_inject::mail_send_accepted(code, &stdout);
                 let mut fallback = false;
                 // Exit 0 is only a queue acceptance. When the receipt says
-                // the lane cannot reach the session (the verb prints both
+                // the lane cannot reach the session (the command prints both
                 // `queued (durable)` and `appended (durable)`), remember it;
                 // either way the attempt must still have had a chance to
                 // land, so the same pass falls back to the
@@ -537,7 +569,7 @@ pub fn apply(
 }
 
 /// The last non-empty stderr line, cut to 200 chars: the reason a failed
-/// resume names, read from the verb's own words.
+/// resume names, read from the command's own words.
 fn stderr_reason(stderr: &str) -> String {
     stderr
         .lines()
@@ -594,7 +626,7 @@ fn escalation_text(marker: &str, sid: &str, undelivered: u32) -> String {
     )
 }
 
-/// The PR-status read: exit-blind. The verb writes its JSON payload to
+/// The PR-status read: exit-blind. The command writes its JSON payload to
 /// stdout whatever the exit (exit 1 IS the red verdict), so the reader
 /// keeps the last non-empty stdout line that parses as a JSON object and
 /// reports the exit code only when no line parses.
@@ -708,7 +740,7 @@ fn nudge_text(row: &OpenPrRow, status: &Result<Value, i32>) -> String {
 }
 
 /// The failing checks as one ` | `-joined string. A settled red with no
-/// failure detail points at the verb; any other shape renders empty so the
+/// failure detail points at the command; any other shape renders empty so the
 /// caller skips the suffix.
 fn render_failures(payload: &Value, pr: u64) -> String {
     let Some(items) = payload.get("failures").and_then(Value::as_array) else {
@@ -798,12 +830,10 @@ fn clean_label(label: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The merge-order pause (the only allowed one): a live decision with the
-/// subject `merge-order:<node>:after:<lead>` names this node, and the lead
-/// node is not done yet. A retracted or superseded decision does not count
-/// (`derive_live` retires both).
-fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
-    let subject_prefix = format!("merge-order:{node}:after:");
+/// The live decision store this home's node sits under: the graph
+/// decisions merged with the journal's rows, retired/superseded rows
+/// already dropped. `None` when neither leg is readable.
+fn live_decisions(home: &AgentsHome) -> Option<crate::decision_index::Index> {
     // The state dir is where the decisions journal, its store and the graph
     // live; the read merges the graph decisions with the journal's rows.
     let state_dir = home
@@ -811,10 +841,20 @@ fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
         .parent()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
-    let Ok(index) = crate::decision_index::read_store_live(
-        &state_dir.join("graph.json"),
+    crate::decision_index::read_store_live(
+        &crate::state_layout::graph_anchor(&state_dir),
         &state_dir.join("decisions.jsonl"),
-    ) else {
+    )
+    .ok()
+}
+
+/// The merge-order pause (the only allowed one): a live decision with the
+/// subject `merge-order:<node>:after:<lead>` names this node, and the lead
+/// node is not done yet. A retracted or superseded decision does not count
+/// (`derive_live` retires both).
+fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
+    let subject_prefix = format!("merge-order:{node}:after:");
+    let Some(index) = live_decisions(home) else {
         return false;
     };
     let mut newest: Option<(String, String, String)> = None; // (ts, decision_id, lead)
@@ -847,6 +887,41 @@ fn merge_order_hold(home: &AgentsHome, node: &str) -> bool {
     !crate::gc_sweep::read_graph_entries(home)
         .and_then(|g| g.statuses.get(&lead).cloned())
         .is_some_and(|status| status == "done")
+}
+
+/// The owner's per-PR hold (`pr-hold:<slug>#<pr>`, `HOLD_DECISION`): the
+/// same subject the authorized-merge gate itself refuses on
+/// (`pr_admission::pr_hold`). A worker whose PR carries this hold must get
+/// no nudge to drive it to merge - the hold forbids exactly that. Read in
+/// process from the live decision store rather than through the gate's own
+/// `gh`-fetched probe, so a held row costs the ladder one local `git
+/// remote` read, never a network call. A row with no PR yet has nothing to
+/// hold.
+/// A release freeze holds every off-pin PR of its repo until the user lifts
+/// it, so nudging the owner to merge one only repeats a refusal.
+fn merge_freeze_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
+    let Some(pr) = row.pr else {
+        return false;
+    };
+    let slug = crate::backlog::pr_link::resolve_current_repo_slug(Some(&row.cwd));
+    crate::merge_freeze::holds_pr(home, pr, slug.as_deref())
+}
+
+fn authorized_merge_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
+    let Some(pr) = row.pr else {
+        return false;
+    };
+    let Some(slug) = crate::backlog::pr_link::resolve_current_repo_slug(Some(&row.cwd)) else {
+        return false;
+    };
+    let Some(index) = live_decisions(home) else {
+        return false;
+    };
+    let subject = crate::pr_admission::hold_subject(&slug, pr);
+    index.rows.iter().any(|r| {
+        r.get("subject").and_then(Value::as_str) == Some(subject.as_str())
+            && r.get("decision").and_then(Value::as_str) == Some(crate::pr_admission::HOLD_DECISION)
+    })
 }
 
 /// The session id is the state filename: hex and dashes only, so a stray
@@ -934,8 +1009,11 @@ fn decide_with_read(
     // ponytail: one status read per due row per retire pass (300 s), and an
     // escalated row is due every pass. Read escalated rows once per grace if the
     // gh budget runs hot. A dead-worker row carries no PR: no read, no red
-    // head - the node's open work is the whole reason for the nudge.
-    if !loop_pause_hold && due(&input) && row.pr.is_some() {
+    // head - the node's open work is the whole reason for the nudge. A held
+    // row (merge order, authorized-merge pr-hold, or loop pause) also skips
+    // the read: the decision is Pause either way, and the read is a wasted
+    // `gh`-touching call for a row the ladder already knows not to nudge.
+    if !input.merge_order_hold && due(&input) && row.pr.is_some() {
         let s = read_status(row, runner);
         input.red_head = s.as_ref().ok().and_then(settled_red_head);
         status = Some(s);
@@ -955,10 +1033,11 @@ pub fn plan_with(
     runner: Runner,
 ) -> Vec<(String, String)> {
     let now = crate::daemon::now_epoch_secs();
+    let graph = crate::gc_sweep::read_graph_rows(home);
     rows.iter()
         .map(|row| {
             let state = load_state(home, &row.session_id);
-            let merge_order = merge_order_hold(home, &row.node);
+            let merge_order = merge_hold_in(home, row, graph.as_deref());
             let loop_paused = loop_pause_hold(home, row);
             let action = decide_with_read(
                 row,
@@ -1058,7 +1137,94 @@ mod tests {
         assert!(!status_read, "a held nudge skips the PR-status read");
     }
 
-    /// The status payload the real verb writes to stdout whatever the exit
+    /// AC: a node held by the owner's pr-hold (the same subject the
+    /// authorized-merge gate refuses on) gets no "drive it to merge" nudge,
+    /// even though the row is otherwise due: a worker repeatedly resumed
+    /// under a live hold drove the merge the hold forbade.
+    #[test]
+    fn authorized_merge_hold_pauses_a_due_nudge() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/bllshttng/fno.git",
+        ]);
+
+        let esc_root = std::env::temp_dir().join("fno-pn-pr-hold");
+        let _ = std::fs::remove_dir_all(&esc_root);
+        let home = AgentsHome::at(esc_root.join("agents"));
+        std::fs::create_dir_all(&esc_root).unwrap();
+        std::fs::write(
+            esc_root.join("decisions.jsonl"),
+            "{\"type\":\"operator_decision\",\"ts\":\"2026-10-19T00:00:00Z\",\
+             \"data\":{\"decision_id\":\"d-1\",\
+             \"subject\":\"pr-hold:bllshttng/fno#3577\",\
+             \"decision\":\"do not merge this pull request\",\
+             \"authority_source\":\"operator\"}}\n",
+        )
+        .unwrap();
+
+        let r = OpenPrRow {
+            pr: Some(3577),
+            cwd: repo.path().to_string_lossy().into_owned(),
+            ..row(false)
+        };
+
+        assert!(
+            authorized_merge_hold(&home, &r),
+            "the owner's pr-hold must hold this PR nudge"
+        );
+
+        let mut status_read = false;
+        let planned = plan_with(&home, &[r], 900, &mut |_, _| {
+            status_read = true;
+            (0, "{}".into(), String::new())
+        });
+        assert_eq!(planned[0].1, "paused");
+        assert!(!status_read, "a held nudge skips the PR-status read");
+        let _ = std::fs::remove_dir_all(&esc_root);
+    }
+
+    /// A lead's `hold-set` writes `dispatch_hold`, on the node row when the
+    /// node has no plan. The nudge must read it: a held node got "drive it to
+    /// merge" retries the merge gate would refuse.
+    #[test]
+    fn dispatch_hold_on_the_node_or_an_ancestor_pauses_the_nudge() {
+        let hold = serde_json::json!({
+            "reason": "main cli-ci red", "release_when": "main green",
+            "review_on": "2099-01-01", "set_by": "lead"
+        });
+        let rows = vec![
+            serde_json::json!({"id": "x-held", "dispatch_hold": hold}),
+            serde_json::json!({"id": "x-child", "parent": "x-held"}),
+            serde_json::json!({"id": "x-free"}),
+        ];
+        assert!(node_dispatch_hold_rows("x-held", Some(&rows)));
+        assert!(node_dispatch_hold_rows("x-child", Some(&rows)));
+        assert!(!node_dispatch_hold_rows("x-free", Some(&rows)));
+        assert!(!node_dispatch_hold_rows("x-missing", Some(&rows)));
+        assert!(
+            node_dispatch_hold_rows("x-free", None),
+            "an unreadable graph never reads as unheld"
+        );
+    }
+
+    /// The status payload the real command writes to stdout whatever the exit
     /// (`_status.py` writes the human line to stderr, the JSON to stdout).
     fn status_payload(verdict: &str, settled: bool, head: &str) -> String {
         format!(
@@ -1761,7 +1927,7 @@ mod tests {
         assert_eq!(ev["data"]["fallback"], "resume");
         let _ = std::fs::remove_dir_all(home.root().to_path_buf());
 
-        // The verb has two durable wordings; both mean the lane cannot
+        // The command has two durable wordings; both mean the lane cannot
         // confirm the landing, so both take the sticky rung.
         let mut runner = |argv: &[String], _cwd: &str| -> (i32, String, String) {
             if argv.contains(&"do".to_string()) {

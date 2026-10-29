@@ -31,16 +31,18 @@ has() { if printf '%s' "$2" | grep -qF "$3"; then PASS=$((PASS+1)); else FAIL=$(
 no()  { if printf '%s' "$2" | grep -qF "$3"; then FAIL=$((FAIL+1)); printf 'FAIL: %s (%q UNEXPECTEDLY in %q)\n' "$1" "$3" "$2"; else PASS=$((PASS+1)); fi; }
 
 # --- stub fno: claim/agents probes pass, spawn emits a valid 8-hex receipt.
-# `worktree ensure` (x-73ca) mirrors the real verb's contract (cli/src/fno/
-# worktree_cli/cli.py): path on stdout + exit 0 on success, NOTHING on failure,
+# `worktree ensure` mirrors the real command's contract (the Rust family:
+# crates/fno/src/worktree_door.rs + crates/fno-agents/src/worktree/ensure.rs):
+# path on stdout + exit 0 on success, NOTHING on failure,
 # so spawn.sh reads $wt empty and falls back to repo root. The mechanism itself
-# (origin/main base, branch reuse) is tested in test_worktree_ensure.py; this
+# (origin/main base, branch reuse) is characterized by the worktree parity
+# goldens (crates/fno-agents/tests/worktree_parity.rs); this
 # hermetic stub only needs the happy path + the two fail-safe branches the
 # caller's logic depends on (stray-dir refusal, idempotent reuse). ----------
 STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/fno" <<'STUB'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -61,7 +63,7 @@ case "$1 $2 $3" in
     printf '{"short_id":"%s"}\n' "${STUB_SHORT_ID-deadbeef}"; exit 0 ;;
   "claim release "*)       exit 0 ;;
   "workspace worktree ensure"|"agents workspace worktree")
-    # Drop the matched verb tokens; the canonical spelling is 4 tokens
+    # Drop the matched command tokens; the canonical spelling is 4 tokens
     # (agents workspace worktree ensure), the deprecated root one is 3.
     case "$1" in agents) shift 4 ;; *) shift 3 ;; esac
     # Parse "--repo R --name N [--harness H]"
@@ -71,7 +73,7 @@ case "$1 $2 $3" in
     while [[ $# -gt 0 ]]; do
       # `shift; shift` (not `shift 2`) so a value-less trailing flag can't
       # wedge the loop re-seeing the same flag -- malformed input falls through
-      # to the git-C check below and fail-safes empty, like the real verb.
+      # to the git-C check below and fail-safes empty, like the real command.
       case "$1" in
         --repo) repo="${2:-}"; shift; shift ;;
         --name) wtname="${2:-}"; shift; shift ;;
@@ -86,7 +88,7 @@ case "$1 $2 $3" in
     common="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
     [[ -n "$gdir" && "$gdir" == "$common" ]] || exit 1
     # Simulated policy=never: a repo named "nevrepo" launches in place (repo root
-    # on stdout, exit 0, NO worktree) -- mirrors the real verb's never receipt.
+    # on stdout, exit 0, NO worktree) -- mirrors the real command's never receipt.
     if [[ "$(basename "$top")" == "nevrepo" ]]; then printf '%s\n' "$top"; exit 0; fi
     wt="$HOME/conductor/workspaces/$(basename "$top")/$wtname"
     if [[ -d "$wt" ]]; then
@@ -195,7 +197,7 @@ has  "subdir worktree'd" "$err6" "auto-worktree: $TMP/conductor/workspaces/myrep
 #    /target prefix (the Codex P1 fix). A non-slash message still isolates, and
 #    these workers have no location gate to fail safe on.
 out7="$(HOME="$TMP" PATH="$STUBDIR:$PATH" bash "$SPAWN" --name "spawn-codex-build" \
-  --provider codex --yolo --payload-mode build --node "x-cdx" \
+  --provider codex --payload-mode build --node "x-cdx" \
   --message "Implement backlog node x-cdx following AGENTS.md. Commit and open a pull request for review; do not merge it." \
   --cwd "$REPO" 2>"$TMP/err7")"
 err7="$(cat "$TMP/err7")"
@@ -270,7 +272,7 @@ no   "never no real-worktree note" "$err11" "auto-worktree: $TMP/conductor"
 no   "never no auto-worktree cwd field" "$out11" "cwd="
 
 # 12. an explicit /target passthrough on opencode/codex is per-harness namespaced
-#     (`/fno:target` / `$fno:target`), yet is still a code-writing verb and MUST
+#     (`/fno:target` / `$fno:target`), yet is still a code-writing command and MUST
 #     isolate - a prefix-only /target check would let these no-location-gate
 #     workers edit the main checkout (gemini review, PR #444).
 out12="$(HOME="$TMP" PATH="$STUBDIR:$PATH" bash "$SPAWN" --name "spawn-oc-pass" \
@@ -280,7 +282,7 @@ err12="$(cat "$TMP/err12")"
 has  "opencode /fno:target passthrough worktree'd" "$err12" "auto-worktree: $TMP/conductor/workspaces/myrepo/spawn-oc-pass"
 [[ -d "$TMP/conductor/workspaces/myrepo/spawn-oc-pass" ]] && PASS=$((PASS+1)) || { FAIL=$((FAIL+1)); echo "FAIL: opencode /fno:target passthrough not worktree'd"; }
 out13="$(HOME="$TMP" PATH="$STUBDIR:$PATH" bash "$SPAWN" --name "spawn-cdx-pass" \
-  --provider codex --yolo --payload-mode passthrough \
+  --provider codex --payload-mode passthrough \
   --message '$fno:target ship the thing' --cwd "$REPO" 2>"$TMP/err13")"
 err13="$(cat "$TMP/err13")"
 has  "codex \$fno:target passthrough worktree'd" "$err13" "auto-worktree: $TMP/conductor/workspaces/myrepo/spawn-cdx-pass"
@@ -304,7 +306,7 @@ out23="$(HOME="$TMP" PATH="$STUBDIR:$PATH" bash "$SPAWN" --name "spawn-legacy-fn
   --cwd "$REPO" 2>"$TMP/err23")"
 has "legacy /fno:do worktree'd" "$(cat "$TMP/err23")" "auto-worktree: $TMP/conductor/workspaces/myrepo/spawn-legacy-fno-do"
 out24="$(HOME="$TMP" PATH="$STUBDIR:$PATH" bash "$SPAWN" --name "spawn-legacy-codex-do" \
-  --provider codex --yolo --payload-mode passthrough --message '$fno:do task 1.1' \
+  --provider codex --payload-mode passthrough --message '$fno:do task 1.1' \
   --cwd "$REPO" 2>"$TMP/err24")"
 has "legacy \$fno:do worktree'd" "$(cat "$TMP/err24")" "auto-worktree: $TMP/conductor/workspaces/myrepo/spawn-legacy-codex-do"
 

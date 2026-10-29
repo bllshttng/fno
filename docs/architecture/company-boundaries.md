@@ -2,10 +2,7 @@
 
 ## Enforced layer direction
 
-The sole layer map lives in `scripts/ci/check-company-boundaries.sh`, and this document intentionally does not duplicate it.
-Dependencies may point within a layer or to a lower-numbered layer, never upward.
-The map is module-granular because `fno.company.contracts` is core vocabulary while `fno.company.campaign`, `coordinator`, `topology`, `execution`, `join`, and `cli` compose that vocabulary with roles.
-A package-granular `fno.company` layer would misclassify that deliberate split and report the shipped topology-to-roles import as a core dependency.
+The sole layer map lives in `scripts/ci/check-company-boundaries.sh`, and this document intentionally does not duplicate it. Dependencies can point within a layer or to a lower-numbered layer, never upward. The whole `fno.company` package is core vocabulary. It held a composition layer for its topology and execution modules until the topology port deleted them. The Rust `TOPOLOGIES` list in `crates/fno-agents/src/plugins/verify.rs` now owns the topology words.
 
 The check scans Python imports with a known-present roles-to-contracts edge as its positive control and reports the importing file, line, layers, and statement for every prohibited dependency.
 The current repository does not satisfy the declared map: the check reports two imports from the platform events CLI into the agents runtime, and a platform-to-runtime-to-platform layer cycle those two imports keep alive.
@@ -33,11 +30,11 @@ Seven of the original nine prohibited imports were misplaced leaf utilities, and
 |---|---|---|
 | `fno.graph._constants.RESERVED_PREFIXES` read by `fno.config` | owned by `fno.config` | a three-element frozenset whose only reader was the importing validator |
 | `fno.agents.events.emit` called by `fno backlog undefer` / `unsupersede` | `fno.graph.failure.emit_undefer_boundary` | the log is graph-owned and `fno.graph.failure` already reads it; the agents emitter was serving as a bare append-a-JSON-line helper |
-| `fno.agents.provider_resolve` | `fno.dispatch_flags` | seven callers spanning every layer; the only remaining dependency is the harness-marker table, and see the caveat below |
+| `fno.agents.provider_resolve` | `fno.dispatch_flags` (since retired whole: the fold lives native behind route-slot's dispatch modes) | seven callers spanning every layer; the only remaining dependency was the harness-marker table, and see the caveat below |
 | `fno.agents.drive_authority` | `fno.drive_authority` | a read-only `state.json` reader whose only dependency is `fno.paths` |
 | `fno.agents.rust_runtime.resolve_binary` | `fno.rust_binary` | a stdlib-only filesystem lookup; `rust_runtime` keeps the dispatch half and depends downward on it |
 
-Applying this document's own test to the third row: `fno.dispatch_flags` was the one move that did not remove the dependency, only the direct spelling of it.
+Applying this document's own test to the third row: `fno.dispatch_flags` was the one move that did not remove the dependency, only the direct spelling of it, and the module has since retired whole - the marker fold now rides the native dispatch modes of route-slot, whose identity twin lives beside `fno.harness_identity`.
 It imported `fno.harness_identity`, which built `LEGACY_HANDLE_RE` at import time from `fno.agents.harness_map.known_harnesses()`, so `import fno.dispatch_flags` pulled in `fno.agents`.
 That edge is now closed: the harness-name set lives at L0 (`fno.harness_names`), so `fno.harness_identity` builds the regex from L0 data with no runtime import, and both `fno.harness_identity` and `fno.harness_names` are declared in the boundary map so the now-absent edge is visible rather than hidden in an unmapped blind spot.
 The runtime capability table (`fno.agents.harness_map`) asserts its keys stay in sync with the name list, so adding a harness stays a single coupled change.

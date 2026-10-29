@@ -1,0 +1,4 @@
+{
+  "error": "registry corrupt; cannot list packs: registry at <ROOT>/.pack-registry.json is not valid JSON: <ERROR>",
+  "version": 1
+}

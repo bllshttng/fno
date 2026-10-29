@@ -113,7 +113,7 @@ def _build_resume_argv(
         # `sandbox_flag_resume`, because it is handed a known posture. Nothing
         # calls it from here, and that is the gap, not an oversight to route
         # around: this lane has no posture to hand it. Clearing the approval
-        # modal needs an operator opt-in this verb does not have yet. Hook
+        # modal needs an operator opt-in this command does not have yet. Hook
         # trust is posture-free, so it rides every resume, as a global.
         from fno.agents.mux_spawn import codex_hook_trust_args
         place = ["--cd", cwd] if cwd else []
@@ -162,7 +162,6 @@ def resume_logic(
     print_command: bool = False,
     message: str = "continue",
     cwd_override: Optional[str] = None,
-    cross_project: bool = False,
     registry_loader: Optional[Any] = None,
     path_checker: Optional[Any] = None,
     cwd_checker: Optional[Any] = None,
@@ -181,8 +180,6 @@ def resume_logic(
             transcript dir before delegating here (`resolve_resume_cwd`);
             without this override this fallback would silently re-derive
             the stale pre-EnterWorktree cwd from the registry instead.
-        cross_project: Explicitly authorize store selection outside the caller's
-            project. It never bypasses ambiguity, route, liveness, or cwd checks.
         registry_loader: Optional callable returning the registry list
             (defaults to ``fno.agents.registry.load_registry``).
         path_checker: Optional callable ``(bin) -> bool`` for PATH check
@@ -223,8 +220,6 @@ def resume_logic(
         resolved = resolve_agent_across_sources(
             entries,
             name,
-            scope_cwd=cwd_override or os.getcwd(),
-            cross_project=cross_project,
         )
         entry = resolved.entry
     except AgentResolutionError as exc:
@@ -296,8 +291,7 @@ def resume_logic(
         return ResumeResult(exit_code=13, stderr=(
             f"fno agents resume: {session_id} is a predecessor of claude row "
             f"{entry.name!r}, and this runtime cannot restore its model or route. "
-            f"Seed a new session from it with `fno agents spawn --resume {session_id}`, "
-            "or resume the row by name.\n"))
+            f"Resume the row by name; `fno agents resume {entry.name}`.\n"))
 
     # Check harness support BEFORE session_id so an unknown harness
     # surfaces the right error ("not supported") rather than a
@@ -470,13 +464,11 @@ def cmd_resume(
             "recovering a pruned worktree."
         ),
     ),
-    cross_project: bool = typer.Option(
+    _cross_project: bool = typer.Option(
         False,
         "--cross-project",
-        help=(
-            "Authorize machine-wide store selection for an orphaned session; "
-            "does not bypass ambiguity or cwd validation."
-        ),
+        hidden=True,
+        help="Retired: healing is machine-wide; accepted as a silent no-op.",
     ),
 ) -> None:
     """Resume a registered agent or refuse when Python cannot own its runtime."""
@@ -485,7 +477,6 @@ def cmd_resume(
         print_command=print_command,
         message=message if message is not None else "continue",
         cwd_override=cwd,
-        cross_project=cross_project,
     )
     if result.stderr:
         sys.stderr.write(result.stderr)

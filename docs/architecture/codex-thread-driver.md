@@ -64,7 +64,7 @@ $ codex resume <id> --cd <dir> -s danger-full-access -a never "..." < /dev/null
 Error: stdin is not a terminal
 ```
 
-So a worker that must RECEIVE a turn while nobody is looking cannot use it. The only way into a running TUI is keystrokes at a pane. That path yields `typed (pane <id>)` rather than delivery. It also refuses a review verb outright while a task runs.
+So a worker that must RECEIVE a turn while nobody is looking cannot use it. The only way into a running TUI is keystrokes at a pane. That path yields `typed (pane <id>)` rather than delivery. It also refuses a review command outright while a task runs.
 
 **That unattended case is the only one that needs more than a flag.** `codex exec resume` answers most of it. It needs no PTY and carries settings through `-c`. Its per-turn boot is roughly ten seconds, against a held connection's fraction of one. On turns that run for minutes that is a few percent, not a barrier.
 
@@ -104,7 +104,7 @@ A private `codex app-server` child speaks newline-delimited JSON on stdin and st
 
 **The driver takes the shared daemon, and the reason is not durability.** `crates/fno-agents/src/codex_thread.rs` calls `ensure_codex_daemon()`, connects through `codex_inject::connect_app_server`, and holds no child process. It used to fork a private app-server per worker as a child of `fno-agents-daemon`. On 2026-08-28 that left eight `codex app-server` processes parented to `fno-agents-daemon` beside one shared daemon holding the socket.
 
-A private app-server owns no control socket. `codex agents`, `codex resume`, `codex fork`, `codex queue`, `codex archive` and Remote Control are all scoped to the shared one. `codex agents --help` says so in its own words: "Browse all agent sessions on the shared local app-server daemon." So a private child forfeits every vendor verb at once, including every verb the vendor ships next. The only symptom is that a thing the operator expects to work does not.
+A private app-server owns no control socket. `codex agents`, `codex resume`, `codex fork`, `codex queue`, `codex archive` and Remote Control are all scoped to the shared one. `codex agents --help` says so in its own words: "Browse all agent sessions on the shared local app-server daemon." So a private child forfeits every vendor command at once, including every command the vendor ships next. The only symptom is that a thing the operator expects to work does not.
 
 ### Exec, never proxy
 
@@ -210,7 +210,7 @@ The grant is per THREAD, never per daemon. One shared app-server owns every thre
 
 ## Posture, grant, and the two failure lanes
 
-`workspace-write` grants the worker's checkout but does not grant the repository's `.git` metadata. A plain checkout has `.git` as a directory. A linked worktree has `.git` as a file pointing into the repository's common Git directory. The common directory is the one path that covers the linked-worktree gitdir, shared objects, refs, and index without widening the worker to full access.
+`workspace-write` grants the worker's checkout but does not grant the repository's `.git` metadata. A plain checkout has `.git` as a directory. A linked worktree has `.git` as a file pointing into the repository's common Git directory. The common directory holds the shared objects and refs. It also contains the linked-worktree gitdir. But codex marks the gitdir named by the cwd's `.git` file read-only inside every writable root. So a linked worktree also grants its own gitdir `<repo>/.git/worktrees/<name>` (`provider::git_write_roots`, measured on codex-cli 0.164.0). Neither grant widens the worker to full access.
 
 The registry row records two separate facts. `sandbox_posture` says which sandbox mode the worker launched with. `git_grant` is the resolved absolute Git common-directory path that the policy carried, so a reader can identify the repository covered by the grant. `None` means the grant did not resolve. It is not an empty-string success and it is distinct from a row written before the field existed.
 
@@ -265,7 +265,7 @@ It stays the right shape for a one-shot. It is not a thread lane.
 
 The journey shape `opencode_serve.rs` established, kept here as the standing bar rather than a checklist that was ticked once.
 
-1. Spawn a codex worker with `--substrate thread`. Assert the registry row carries `harness=codex`, a full `harness_session_id`, and `substrate=thread`. When either identity field is missing, refuse by name.
+1. Spawn a codex worker with `--as thread`. Assert the registry row carries `harness=codex`, a full `harness_session_id`, and `substrate=thread`. When either identity field is missing, refuse by name.
 2. Drive one real turn that writes a file in the worker's own worktree, not the canonical checkout. Assert the file lands on the correct branch.
 3. Kill the mux server. Assert the row survives and the thread is still resumable. Against the shared daemon this holds by construction, and so does killing `fno-agents-daemon`.
 4. Resume from a cold process. Assert a second turn quotes a fact introduced in the first. A recalled token is the positive marker. A non-empty reply is not.
@@ -290,6 +290,6 @@ The order is fixed. Acquire the provider-daemon lock. Re-read readiness under it
 
 Then, and only then, run the vendor restart with the resolved `CODEX_HOME`. Verify after. The recorded incarnation must have changed. Initialize must answer. Both version readers must agree the daemon now equals the installed CLI. Every snapshot id must re-read with the same cwd. The config bytes must be unchanged. Every check passing makes the receipt `upgraded`. Any failure makes it `failed` with the missing ids named. Never a success-shaped line on failure. Never a blind retry.
 
-`fno agents session restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the verb, because nothing was mutated. A post-restart verification failure DOES fail the verb.
+`fno agents session restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the command, because nothing was mutated. A post-restart verification failure DOES fail the command.
 
-Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor verbs in `crates/fno-agents/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.
+Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor commands in `crates/fno-agents/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.

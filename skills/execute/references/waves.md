@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Do — Waves Mode (Wave Orchestration)
 
 > **Multi-CLI:** If not on Claude Code, see [cli-tool-mapping.md](cli-tool-mapping.md) for tool equivalents.
@@ -52,7 +52,7 @@ Load [plan-validation.md](plan-validation.md) for the full protocol.
 
 #### Joiner posture (`FNO_WORKER_NAME` starts with `jn-t-`)
 
-A worker spawned by `fno backlog join <node>` (`jn-t-<node>-<k>`; legacy rows still read `j-<node>-<k>`) is a VISITOR in the node holder's worktree, not a target. First: `.fno/join-briefs/<node>.md` carries your joiner brief (the lead and mail hub, and your claim discipline) - when that file exists for the bound node, read it before dispatching. The brief's band table names YOUR band (the lead carries the highest; a band REPEATS when the plan has more lanes than distinct bands, so your band is your ROW's, never inferable from the lane count): set `FNO_WORKER_BAND` from your row before the dispatch round - the spawn-time env export of the same name cannot reach a daemon-forked worker, the brief file can. Never run `target init` and never take the node claim: the target session keeps it, and a joiner that runs `target init` anyway gets the existing "another session holds the node, not this caller" refusal - on that refusal, stop with `<help>` instead of retrying. Read `graph_node_id` from THIS worktree's manifest with `target_state_field` (step 3e), and let `FNO_WORKER_NAME` be the task-claim holder (the joiner 1 contract): the task verbs bind their holder to the roster name, so each joiner is provable as a distinct owner. Everything else in this flow runs unchanged - a joiner's stop hook exits 0 (`visitor allowed`) because its session id matches no manifest in the worktree. This is the joiner half only. The caller half names the join trigger. The one-wave pass, step 4 (`/fno:lead --once`), covers a lead handing out a `join: manual` plan, and `/target` initialization covers `join: auto` firing at `fno do target init`.
+A worker spawned by `fno backlog join <node>` (`jn-t-<node>-<k>`; legacy rows still read `j-<node>-<k>`) is a VISITOR in the node holder's worktree, not a target. First: `.fno/join-briefs/<node>.md` carries your joiner brief (the lead and mail hub, and your claim discipline) - when that file exists for the bound node, read it before dispatching. The brief's band table names YOUR band (the lead carries the highest; a band REPEATS when the plan has more lanes than distinct bands, so your band is your ROW's, never inferable from the lane count): set `FNO_WORKER_BAND` from your row before the dispatch round - the spawn-time env export of the same name cannot reach a daemon-forked worker, the brief file can. Never run `target init` and never take the node claim: the target session keeps it, and a joiner that runs `target init` anyway gets the existing "another session holds the node, not this caller" refusal - on that refusal, stop with `<help>` instead of retrying. Read `graph_node_id` from THIS worktree's manifest with `target_state_field` (step 3e), and let `FNO_WORKER_NAME` be the task-claim holder (the joiner 1 contract): the task commands bind their holder to the roster name, so each joiner is provable as a distinct owner. Everything else in this flow runs unchanged - a joiner's stop hook exits 0 (`visitor allowed`) because its session id matches no manifest in the worktree. This is the joiner half only. The caller half names the join trigger. The one-wave pass, step 4 (`/fno:lead --once`), covers a lead handing out a `join: manual` plan, and `/target` initialization covers `join: auto` firing at `fno do target init`.
 
 ### 0b. Structural Context (AUTO)
 
@@ -89,7 +89,7 @@ The `scope: cross-project` parallel-worktree pipeline has been removed;
 (from its `project:` field / node) against the workspace map and, when a wave
 belongs to a project OTHER than the session's:
 
-- **Foreign node unblocked (ready):** first deterministically isolate the worker into a dedicated worktree, minting the name through the bridge (`WORKER_NAME="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source ex --verb t <foreign-node>)"`, which yields `ex-t-<foreign-node>`): `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`. On success, link shared state into it best-effort: `[[ -f <foreign-root>/scripts/setup/setup-worktree.sh ]] && CANONICAL=<foreign-root> WORKTREE=$wt bash <foreign-root>/scripts/setup/setup-worktree.sh` (the verb is package code and cannot run this repo-root script itself; the caller does). Then `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` (the `${wt:-...}` fallback launches in the foreign main checkout when `ensure` fails for any reason, so the dispatch is never blocked). Mark the wave delegated, print a `spawned $WORKER_NAME --cwd ${wt:-<foreign-root>}` receipt, and continue this session's own waves. A refused mint refuses the spawn (AC1-EDGE): do not hand-assemble a name.
+- **Foreign node unblocked (ready):** first deterministically isolate the worker into a dedicated worktree, minting the name through the bridge (`WORKER_NAME="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source ex --command t <foreign-node>)"`, which yields `ex-t-<foreign-node>`): `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`. On success, link shared state into it best-effort: `[[ -f <foreign-root>/scripts/setup/setup-worktree.sh ]] && CANONICAL=<foreign-root> WORKTREE=$wt bash <foreign-root>/scripts/setup/setup-worktree.sh` (the command is package code and cannot run this repo-root script itself; the caller does). Then `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` (the `${wt:-...}` fallback launches in the foreign main checkout when `ensure` fails for any reason, so the dispatch is never blocked). Mark the wave delegated, print a `spawned $WORKER_NAME --cwd ${wt:-<foreign-root>}` receipt, and continue this session's own waves. A refused mint refuses the spawn (AC1-EDGE): do not hand-assemble a name.
 - **Foreign node still blocked** (e.g. `blocked_by` the current, not-yet-merged node): do NOT spawn (the worker would refuse). Record a `fno backlog carveout add --kind deferred` entry, print a `deferred <node> to <project>; dispatch on <blocker> merge` line, and rely on `fno backlog advance` to dispatch it after merge.
 - **Foreign node blocked but `dep=contract`** (the optimistic stub pass, G3): dispatch it **NOW** instead of deferring. The node carries `dep: contract` + `stub_against: <ref>` + `contract_version: N` (set by `fno backlog decompose`, G2). Isolate the worker the same way first (mint `WORKER_NAME` through the bridge exactly as the ready bullet; `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`, then the same best-effort `setup-worktree.sh` link as the ready bullet), then spawn `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` and print a `stubbed <node> vs contract v<N>` receipt. The spawned first pass MUST: build against the pinned `## Interface Contract`, **stub** the surface that needs the blocker landed, open its PR as **draft** (`gh pr create --draft` - it must not merge with mocks), emit its manifest via `fno do pr stub-manifest write --node <node> --contract-version <N> --contract-ref <ref> --contract-test '<cmd>' --stubs-json '[{stub_id,file,symbol,contract_ref,kind}, ...]'`, then **END**. Reconciliation is a later merge-triggered pass (G4); the first pass never waits for the blocker. **`--contract-test` is REQUIRED**: it is the executable command the G4 reconcile pass runs against the now-landed schema to authorize de-stubbing (the blocker ships this suite as part of its `## Interface Contract`; Locked Decision 5). A manifest without it makes G4 refuse auto-de-stub (fail-closed), so the draft PR strands - never omit it. For a non-typed contract, a thin schema-snapshot or type-check command is the minimum viable gate.
 - **Never** `cd` into the foreign repo and execute locally.
@@ -180,7 +180,7 @@ executed here. Resolve the session project (plan frontmatter `project:`, or the
 target-state node's `project`) and compare it to each `wave.project`:
 
 - **local** (`wave.project` empty or == session project): execute normally.
-- **foreign + unblocked node**: spawn `fno agents spawn --harness claude --cwd
+- **foreign + unblocked node**: spawn `fno agents spawn --cwd
   <root> "target-<node>" "/target <node>"`, mark the wave DELEGATED in STATE.md,
   continue this session's own waves. Never `cd` into the foreign repo.
 - **foreign + blocked node**: do NOT spawn (a worker would refuse on the blocked
@@ -212,18 +212,20 @@ if [[ -n "${NODE_ID:-}" ]]; then
 fi
 # A joined worker filters the pull to its own band. Neither env export
 # (FNO_WORKER_BAND, FNO_WORKER_NAME) reaches a daemon-forked worker, so the
-# fallback resolves the roster name from the registry binding (whoami's
-# worker_name - the same rung resolve_task_holder reads) and looks up the
-# band table the join brief carries. The brief exists only in a joined
-# worktree, which gates the whole path; a lone target matches no row and
-# stays unfiltered.
+# fallback resolves the roster name from the registry binding (`fno agents
+# whoami`'s name field - the registry row resolve_task_holder also reads)
+# and looks up the band table the join brief carries. The brief exists only
+# in a joined worktree, which gates the whole path; a lone target matches no
+# row and stays unfiltered.
 WORKER_BAND="${FNO_WORKER_BAND:-}"
 if [[ -z "$WORKER_BAND" && -n "$NODE_ID" && -f ".fno/join-briefs/${NODE_ID}.md" ]]; then
-    WORKER=$(fno whoami --json 2>/dev/null | python3 -c \
-        "import json,sys; print(json.load(sys.stdin).get('worker_name') or '')" 2>/dev/null)
-    WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
-        'tolower($2) ~ tolower(w) {gsub(/ /, "", $3); print $3; exit}' \
-        ".fno/join-briefs/${NODE_ID}.md" 2>/dev/null)
+    WORKER=$(fno agents whoami 2>/dev/null | python3 -c \
+        "import json,sys; print(json.load(sys.stdin).get('name') or '')" 2>/dev/null || true)
+    if [[ -n "$WORKER" ]]; then
+        WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
+            '{cell = tolower($2); gsub(/ /, "", cell); want = tolower(w); gsub(/ /, "", want); if (cell == want && cell != "") {gsub(/ /, "", $3); print $3; exit}}' \
+            ".fno/join-briefs/${NODE_ID}.md" 2>/dev/null)
+    fi
 fi
 if [[ -n "$WORKER_BAND" ]]; then
     READY_ARGS+=(--band "$WORKER_BAND")
@@ -274,7 +276,7 @@ Use Task tool to spawn fresh executors for each task. The executor loads `fno:te
 #   1. Explicit `executor:` on the task block (highest)
 #   2. Explicit `executor:` on the plan frontmatter
 #   3. Surface inference from the task's file list
-#      (fno.executor._surface)
+#      (fno-agents executor-route surface)
 #   4. 'do' (default)
 TASK_EXECUTOR=$(TASK_EXEC="$task_executor_field" \
                 PLAN_EXEC="$plan_executor_field" \
@@ -402,7 +404,7 @@ if [[ -n "$NODE_ID" ]]; then
 fi
 ```
 
-For a joiner (`FNO_WORKER_NAME` starts with `jn-t-`, step 0 posture) this block is the whole claim path: the manifest read still resolves `graph_node_id` (that field names the node, not the session), and the task verbs bind the claim's holder to the joiner's roster name, so a joined worker's owner is provable without any session identity of the target.
+For a joiner (`FNO_WORKER_NAME` starts with `jn-t-`, step 0 posture) this block is the whole claim path: the manifest read still resolves `graph_node_id` (that field names the node, not the session), and the task commands bind the claim's holder to the joiner's roster name, so a joined worker's owner is provable without any session identity of the target.
 
 Branch on `TASK_CLAIM_RC`. Every nonzero code means you did NOT take the claim, so dispatching anyway is the double-worker bug this step exists to close.
 

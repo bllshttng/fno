@@ -6,7 +6,7 @@
 //! uv cache under a timeout. Everything removed is rebuilt or downloaded again on demand.
 //!
 //! Dry run by default; `--apply` removes and rewrites
-//! `<state-root>/reclaim/last-run.json` with the bytes each lane reclaimed.
+//! `<state-root>/state/reclaim/last-run.json` with the bytes each lane reclaimed.
 //! The daemon's daily sweep gates on that receipt's own mtime, so gate and
 //! effect share one file and a crashed run just retries next tick.
 //!
@@ -107,13 +107,11 @@ fn temp_root() -> PathBuf {
     std::env::temp_dir()
 }
 
-/// `<state-root>/reclaim/last-run.json`: the state root is the agents home's
-/// parent in the default layout. The env override lets tests and custom state
-/// roots point the gate and the receipt at the same place.
+/// `<state-root>/state/reclaim/last-run.json`: the state root is the agents
+/// home's parent in the default layout. The env override lets tests and
+/// custom state roots point the gate and the receipt at the same place.
 fn receipt_path(home: &AgentsHome) -> PathBuf {
-    reclaim_state_root(home)
-        .join("reclaim")
-        .join("last-run.json")
+    crate::state_layout::place(&reclaim_state_root(home), "reclaim").join("last-run.json")
 }
 
 /// The state root the reclaim surfaces read: the agents home's parent in the
@@ -180,6 +178,9 @@ fn plugin_cache_copies() -> Vec<PathBuf> {
     found
 }
 
+/// The marketplace names a codex converge records and quarantines under.
+const CODEX_MARKETPLACES: [&str; 3] = ["fno", "footnote", "footnote-dev"];
+
 fn codex_cache_quarantines() -> (Lane, Option<std::fs::File>) {
     let mut lane = Lane::new("codex_cache_quarantines", Vec::new());
     let Some(home) = crate::codex_store::codex_home() else {
@@ -221,7 +222,8 @@ fn codex_cache_quarantines() -> (Lane, Option<std::fs::File>) {
         return (lane, None);
     };
     let (marketplace, source) = marker;
-    if marketplace != "footnote" && marketplace != "footnote-dev" {
+    // "fno" since the marketplace rename; the older names stay readable.
+    if !CODEX_MARKETPLACES.contains(&marketplace.as_str()) {
         lane.note = "kept: live copy unreadable (plugin-channel.json)".to_string();
         return (lane, None);
     }
@@ -272,9 +274,11 @@ fn codex_cache_quarantines() -> (Lane, Option<std::fs::File>) {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let suffix = name
-            .strip_prefix(".footnote.")
-            .or_else(|| name.strip_prefix(".footnote-dev."));
+        let suffix = CODEX_MARKETPLACES.iter().find_map(|marketplace| {
+            name.strip_prefix('.')?
+                .strip_prefix(marketplace)?
+                .strip_prefix('.')
+        });
         let Some(suffix) = suffix else {
             continue;
         };
@@ -791,17 +795,15 @@ pub fn maybe_run_daily(home: &AgentsHome) {
         // The full run carries the cargo lane, so it also satisfies the
         // hourly gate instead of sweeping the base twice in one tick.
         let _ = std::fs::write(cargo_stamp_path(home), b"");
-        let (_rc, summary) = run_reclaim_lanes(home, true, false, false);
+        let (_rc, summary) = run_reclaim_lanes(home, true, false, false, true);
         emit_sweep_event(home, &summary);
     }
 }
 
-/// `<state-root>/reclaim/cargo-last-run`: the hourly gate's stamp, holding
-/// the last hourly sweep's summary lines.
+/// `<state-root>/state/reclaim/cargo-last-run`: the hourly gate's stamp,
+/// holding the last hourly sweep's summary lines.
 fn cargo_stamp_path(home: &AgentsHome) -> PathBuf {
-    reclaim_state_root(home)
-        .join("reclaim")
-        .join("cargo-last-run")
+    crate::state_layout::place(&reclaim_state_root(home), "reclaim").join("cargo-last-run")
 }
 
 /// The daemon's hourly gate for the cargo build-base lane alone, apply. The
@@ -906,10 +908,12 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
 
     let mut apply = false;
     let mut verbose = false;
+    let mut uv_prune = true;
     for arg in args {
         match arg.as_str() {
             "--apply" => apply = true,
             "-v" | "--verbose" => verbose = true,
+            "--no-uv-prune" => uv_prune = false,
             other => {
                 eprintln!("fno doctor reclaim: unknown argument: {other}");
                 return 2;
@@ -920,7 +924,7 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
     // the cargo-build-dirs lane sweeps that repo too even if unregistered.
     // The summary rides the daemon path only; a hand run's record is the
     // receipt it prints.
-    run_reclaim_lanes(home, apply, verbose, true).0
+    run_reclaim_lanes(home, apply, verbose, true, uv_prune).0
 }
 
 /// The full lane set (every `run_reclaim` lane but the leading subcommands),
@@ -933,6 +937,7 @@ fn run_reclaim_lanes(
     apply: bool,
     verbose: bool,
     include_cwd_root: bool,
+    uv_prune: bool,
 ) -> (i32, ReclaimSummary) {
     let mut lanes = vec![
         Lane::new("plugin_cache_build_copies", plugin_cache_copies()),
@@ -966,6 +971,9 @@ fn run_reclaim_lanes(
     let mut uv = Lane::new("uv_cache_prune", Vec::new());
     match uv_cache_dir() {
         None => uv.note = "uv not found".to_string(),
+        // An install run skips the prune: uv holds its cache lock exclusively
+        // for it, and a first install must not wait out the 120s cap.
+        Some(_) if !uv_prune => uv.note = "skipped (--no-uv-prune)".to_string(),
         Some(dir) => {
             uv.bytes = tree_bytes(&dir);
             uv.paths.push(dir);
@@ -1148,7 +1156,7 @@ pub(crate) mod tests {
         assert_eq!(rc, 0);
         assert!(!old.exists(), "the aged fake HOME is removed");
         assert!(fresh.exists(), "the fresh fake HOME survives");
-        let receipt = std::fs::read_to_string(state.join("reclaim/last-run.json")).unwrap();
+        let receipt = std::fs::read_to_string(state.join("state/reclaim/last-run.json")).unwrap();
         assert!(receipt.contains("leaked_test_homes"));
         assert!(receipt.contains("codex_cache_quarantines"));
         assert!(receipt.contains("total_bytes"));
@@ -1210,7 +1218,7 @@ pub(crate) mod tests {
         std::env::set_var("FNO_RECLAIM_TEMP_ROOT", temp);
         let home = AgentsHome::at(state.join("agents"));
         let rc = run_reclaim(&["--apply".to_string()], &home);
-        let receipt = std::fs::read_to_string(state.join("reclaim/last-run.json"));
+        let receipt = std::fs::read_to_string(state.join("state/reclaim/last-run.json"));
         drop(process_env);
         assert_eq!(rc, 0);
         let receipt = receipt.unwrap();
@@ -1303,14 +1311,15 @@ pub(crate) mod tests {
         let temp = temp_lane_root("codex-safety-temp");
         let state = temp_lane_root("codex-safety-state");
         let codex = codex_home_fixture("codex-safety-home");
-        let live = codex_live_cache(&codex, "footnote");
+        let live = codex_live_cache(&codex, "fno");
         let source = codex_backup(&codex, ".footnote.", "abcdefabcdefabcdefabcdefabcdefab");
-        write_codex_marker(&codex, "footnote", &source.display().to_string());
+        write_codex_marker(&codex, "fno", &source.display().to_string());
         let link = codex
             .join("footnote")
             .join(".footnote.0123456789abcdef0123456789abcdef");
         std::os::unix::fs::symlink(&live, &link).unwrap();
-        let stale = codex_backup(&codex, ".footnote.", "fedcbafedcbafedcbafedcbafedcbafe");
+        let stale = codex_backup(&codex, ".fno.", "fedcbafedcbafedcbafedcbafedcbafe");
+        let legacy = codex_backup(&codex, ".footnote.", "11111111111111111111111111111111");
 
         let _ = run_codex_reclaim(&codex, &state, &temp);
 
@@ -1318,6 +1327,7 @@ pub(crate) mod tests {
         assert!(source.exists());
         assert!(link.exists());
         assert!(!stale.exists());
+        assert!(!legacy.exists());
         let _ = std::fs::remove_dir_all(temp);
         let _ = std::fs::remove_dir_all(state);
         let _ = std::fs::remove_dir_all(codex);

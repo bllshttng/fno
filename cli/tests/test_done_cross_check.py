@@ -153,7 +153,7 @@ def test_wrong_stored_repository_refuses_without_ambient_fallback(tmp_path, monk
 def test_backlog_done_closes_from_routed_rest_merge_evidence(tmp_path, monkeypatch):
     code, out, err, g = _door_done(
         tmp_path,
-        _node("ab-restdone", pr_number=1140, pr_url="https://github.com/bllshttng/footnote/pull/1140"),
+        _node("ab-restdone", pr_number=1140, pr_url="https://github.com/bllshttng/fno/pull/1140"),
         pr_states={1140: "MERGED"}, log=True,
     )
     assert code == 0, out + err
@@ -162,7 +162,7 @@ def test_backlog_done_closes_from_routed_rest_merge_evidence(tmp_path, monkeypat
     gh_log = g.parent / "gh.log"
     assert gh_log.exists(), "the evidence read must consult gh"
     assert any(
-        "repos/bllshttng/footnote/pulls/1140" in line
+        "repos/bllshttng/fno/pulls/1140" in line
         for line in gh_log.read_text().splitlines()
     ), gh_log.read_text()
 
@@ -217,12 +217,15 @@ def test_open_green_pr_awaits_merge_exit5_no_ci_query(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# AC1-HP: a MERGED ref wins over an OPEN ref on a multi-PR node
+# AC1-HP: a split node stays open while any listed ref is unmerged - a
+# merged sibling never closes it past the open one
 # ---------------------------------------------------------------------------
 
 
-def test_merged_ref_wins_over_open_ref(tmp_path, monkeypatch):
-    """A node with one OPEN and one MERGED ref closes on the MERGED evidence."""
+def test_open_ref_holds_even_when_a_sibling_merged(tmp_path, monkeypatch):
+    """A split-recorded node refuses while a listed ref is unmerged, even
+    though another listed ref already merged: the first merge closes
+    nothing."""
     code, out, err, g = _door_done(
         tmp_path,
         {
@@ -238,9 +241,11 @@ def test_merged_ref_wins_over_open_ref(tmp_path, monkeypatch):
         },
         pr_states={10: "OPEN", 11: "MERGED"},
     )
-    assert code == 0, f"expected 0 (merged wins), got {code}. output: {out + err}"
+    assert code == 6, f"expected 6 (split hold), got {code}. output: {out + err}"
+    assert "#10" in (out + err)
     node = _read(g)[0]
-    assert node.get("status") == "done"
+    assert not node.get("completed_at")
+    assert node.get("status") != "done"
 
 
 # ---------------------------------------------------------------------------

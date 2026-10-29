@@ -1,11 +1,11 @@
 //! `fno-agents judge` -- the grading half of the advisory five-question
 //! blueprint judge. Daemon-free, like `graph-get`/`bash-census`: never a
-//! routable `fno agents <verb>` invocation, though listed in
-//! `ALL_CLIENT_ACTIONS` for the binary's own verb-surface probe.
+//! routable `fno agents <command>` invocation, though listed in
+//! `ALL_CLIENT_ACTIONS` for the binary's own command-surface probe.
 //!
 //! Ported off `cli/src/fno/observer/judge.py` per the flag-registry ratchet
 //! (operator ruling 2026-09-12): a new CLI flag is Rust work.
-//! This verb owns the lens prompts, the model spawn, and verdict parsing; it
+//! This command owns the lens prompts, the model spawn, and verdict parsing; it
 //! emits no events and mints no run_id. The Python wrapper
 //! (`cli/src/fno/observer/cli.py::judge_cmd`/`sweep`) still does the
 //! pre-existing plan-parsing gate (`has_section("Five questions")`) and event
@@ -177,7 +177,7 @@ fn load_lenses(dir: Option<&Path>) -> Lenses {
 fn gather_context(dimension: &str, plan_text: &str, cwd: &Path) -> String {
     if dimension == "surface_fit" {
         return match Command::new(crate::scrape::fno_bin())
-            .args(["help", "--all"])
+            .arg("--help")
             .output()
         {
             Ok(o) if o.status.success() => {
@@ -286,7 +286,7 @@ fn verify_evidence(reply: &str, bundle: &str) -> bool {
         .any(|quote| quote.chars().count() >= 12 && squashed.contains(&squash(quote)))
 }
 
-/// One `fno agents spawn --substrate headless` round-trip for a caller-built
+/// One `fno agents spawn --once` (headless) round-trip for a caller-built
 /// argv: the poll/kill enforcement that `--timeout` cannot guarantee on a
 /// hung lane. Matches the retired Python `_default_spawn`: never a bare
 /// `claude -p`.
@@ -294,17 +294,27 @@ pub(crate) fn headless_spawn(
     argv: &[String],
     kill_after_secs: u64,
 ) -> Result<(i32, String, String), String> {
-    let mut child = Command::new(crate::scrape::fno_bin())
+    let child = Command::new(crate::scrape::fno_bin())
         .args(argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|e| e.to_string())?;
-    // Poll-then-kill (the sandbox_probe shape): `--timeout` only rides argv
-    // to the child harness, which a hung lane ignores, so the enforcement
-    // lives here. The reply is small, so the unread pipes cannot deadlock it.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(kill_after_secs);
+    bounded_wait(child, kill_after_secs)
+}
+
+/// The one bounded-wait implementation both the judge's headless spawn and
+/// the skill-diff proposer's one-shots share: poll-then-kill (the
+/// sandbox_probe shape), `--timeout` only rides argv to the child harness,
+/// which a hung lane ignores, so the enforcement lives here. The reply is
+/// small, so the unread pipes cannot deadlock it. A timeout returns code 124
+/// with a named stderr line when the child wrote none.
+pub(crate) fn bounded_wait(
+    mut child: std::process::Child,
+    timeout_secs: u64,
+) -> Result<(i32, String, String), String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => {
@@ -327,7 +337,7 @@ pub(crate) fn headless_spawn(
                     let out = child.wait_with_output().map_err(|e| e.to_string())?;
                     let err = String::from_utf8_lossy(&out.stderr).into_owned();
                     let named = format!(
-                        "reader timed out after {kill_after_secs}s: model lane slow or provider wait"
+                        "timed out after {timeout_secs}s: model lane slow or provider wait"
                     );
                     return Ok((
                         124,
@@ -357,7 +367,9 @@ pub(crate) fn default_spawn(
 /// The reader's argv, split from `default_spawn` so a test can read it. The
 /// flags after the `--` fence arrive as harness_args (not prompt words), so
 /// the reader loads no settings, MCP servers, tools or chrome and answers
-/// inside the bound instead of running out the full session load.
+/// inside the bound instead of running out the full session load. The model
+/// rides the fence too: the spawn's own --model axis is retired, and claude
+/// takes its own spelling.
 fn reader_argv(
     name: &str,
     prompt: &str,
@@ -373,15 +385,14 @@ fn reader_argv(
         prompt,
         "--harness",
         "claude",
-        "--substrate",
-        "headless",
-        "--model",
-        model,
+        "--once",
         "--cwd",
         &cwd.display().to_string(),
         "--timeout",
         &timeout_secs.to_string(),
         "--",
+        "--model",
+        model,
         "--setting-sources",
         "",
         "--strict-mcp-config",
@@ -891,25 +902,39 @@ fn run_calibration(
     lenses: &Lenses,
     spawn: Spawn,
 ) -> i32 {
+    match calibration_result(labels_path, split, cwd, lenses, spawn) {
+        Ok(v) => {
+            println!("{v}");
+            if v.get("controls_wrong").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                1
+            } else {
+                0
+            }
+        }
+        Err(msg) => {
+            println!("{}", json!({"error": msg}));
+            1
+        }
+    }
+}
+
+/// `run_calibration`'s computation, returning the payload the observer's
+/// labels view renders (the observer port shares the judge's
+/// calibration without re-running the spawn loop twice).
+pub(crate) fn calibration_result(
+    labels_path: &Path,
+    split: &str,
+    cwd: &Path,
+    lenses: &Lenses,
+    spawn: Spawn,
+) -> Result<Value, String> {
     let text = match std::fs::read_to_string(labels_path) {
         Ok(t) => t,
-        Err(e) => {
-            println!(
-                "{}",
-                json!({"error": format!("cannot read {}: {e}", labels_path.display())})
-            );
-            return 1;
-        }
+        Err(e) => Err(format!("cannot read {}: {e}", labels_path.display()))?,
     };
     let rows: Vec<Value> = match serde_yaml_ng::from_str(&text) {
         Ok(Value::Array(v)) => v,
-        _ => {
-            println!(
-                "{}",
-                json!({"error": "labels.yaml did not parse to a list"})
-            );
-            return 1;
-        }
+        _ => return Err("labels.yaml did not parse to a list".to_string()),
     };
     let base = labels_path.parent().unwrap_or(Path::new("."));
 
@@ -1016,15 +1041,11 @@ fn run_calibration(
             )
         })
         .collect();
-    println!(
-        "{}",
-        json!({"dimensions": dimensions, "disagreements": disagreements, "controls_wrong": controls_wrong})
-    );
-    if controls_wrong > 0 {
-        1
-    } else {
-        0
-    }
+    Ok(json!({
+        "dimensions": dimensions,
+        "disagreements": disagreements,
+        "controls_wrong": controls_wrong
+    }))
 }
 
 pub fn run_judge(args: &[String]) -> i32 {
@@ -1066,7 +1087,7 @@ pub fn run_judge(args: &[String]) -> i32 {
             "--force" | "-F" => {
                 // Accepted, ignored: the level=report gate is a Python-side
                 // config read (fno.loops.loop_level) and already ran before
-                // this verb was invoked.
+                // this command was invoked.
             }
             other => {
                 eprintln!("fno-agents judge: unknown flag {other}");
@@ -1227,8 +1248,11 @@ mod tests {
     fn reader_argv_carries_the_substrate_bound_and_lean_flags() {
         let argv = reader_argv("bp-persona", "grade this", Path::new("/w"), 240, "sonnet");
         let s: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let sub = s.iter().position(|a| *a == "--substrate").unwrap();
-        assert_eq!(s[sub + 1], "headless");
+        assert!(s.contains(&"--once"), "the reader is a one-shot: {s:?}");
+        assert!(
+            !s.contains(&"--substrate"),
+            "the retired axis never rides: {s:?}"
+        );
         let t = s.iter().position(|a| *a == "--timeout").unwrap();
         assert_eq!(s[t + 1], "240");
         // the prompt rides before the fence, as the message
@@ -1239,6 +1263,8 @@ mod tests {
         assert_eq!(
             &s[fence + 1..],
             &[
+                "--model",
+                "sonnet",
                 "--setting-sources",
                 "",
                 "--strict-mcp-config",

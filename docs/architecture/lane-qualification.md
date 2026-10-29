@@ -34,7 +34,7 @@ Each run appends one history row per task-run to `~/.fno/history/evals-history.j
 
 ## Reading the result
 
-`fno doctor evals report --by-cohort` folds the history by cohort id: per cohort, attempts, graded, accepted, pass rate with a bootstrap interval, lane-status counts, exclusions by reason, median wall time, tokens, and dollars per accepted change (priced via `--prices`, `unmeasured` unless every scored row carries usage and a price line). A `--json` flag prints the same fold. Read the fold side by side across the two cohort ids for the comparison.
+`fno doctor evals report --by-cohort` folds the history by cohort id. One row per cohort lists attempts, graded, accepted, the pass rate with its 95% Wilson interval, and lane-status counts. It also counts exclusions by reason. Median wall time, tokens, and dollars per accepted change close the row. Pricing needs `--prices`, and cost reads `unmeasured` unless every scored row carries usage and a price line. A `--json` flag prints the same fold. Read the fold side by side across the two cohort ids for the comparison.
 
 A `lane_status` of `substituted` on any row means capacity served a different harness than requested. Exclude that row before comparing lanes. It is not a real sample of the lane you meant to qualify.
 
@@ -55,4 +55,13 @@ A live trial runs only with an explicit configured budget and an account that ca
 - It never edits `config.routing.models`, `agents.profiles`, or any production lane order. Applying a qualification result is a separate, reviewed config change.
 - It never claims one model is universally superior. A result is scoped to the fixtures and the cohort it was measured against.
 - It adds no new eval scheduler, benchmark service, or model/effort enum. The lane vocabulary is `config.routing.models`, the same rows `agents.profiles.*.lanes` already reference.
-- The cohort report folds and compares; it does not recommend. The promotion recommendation stays a human read of the fold (the harness-fit study's decision rules live in its preregistration, `evals/harness-fit/README.md`).
+
+## Climb round
+
+A climb round turns one comparison into a verdict the user can accept in one step. The fold reads the declared split and applies the harness-fit preregistration's decision rules (evals/harness-fit/README.md). The verdicts: underpowered (under 20 scored held-out rows per cohort), regression (trial held-out 15 points down), overfit (train up 15 points, held-out flat), propose, hold. If a difference is real, the cells' 95 percent intervals separate. If overfit is judged, both train cells hold 20 or more scored rows.
+
+1. Pick one stage and one candidate lane from `fno config route inventory`. For the blueprint stage the candidates are only the blueprint-floor models: opus, fable, gpt-5.6-sol, gpt-6-astra. A cheaper model never drafts a plan.
+2. Run each task of that stage separately. Command shape: `fno doctor evals run --task <task id> --lane <baseline lane> --cohort <baseline id> --repeat K`. The trial arm repeats the shape with the trial lane and trial cohort id. Cover the stage's train and held-out tasks in both arms. The fold scores every split task present in the cohort.
+3. Fold it: `fno doctor evals report --climb --baseline <baseline id> --trial <trial id> [--stage <command> --trial-lane <trial lane>] --json`.
+4. On `propose`, write the JSON to `evals/climbs/<date>-<stage>.json` and ask the user with the printed accept line. On `overfit` or `regression`, read the reason and stop. On `underpowered` or `hold`, commit nothing: post the fold JSON in the PR conversation and record the cohort ids and the rows' location in the plan.
+5. Choosing the next candidate reads only train transcripts. Held-out rows are never inspected to steer the climb. The held-out set stays a test, not a tuning surface.

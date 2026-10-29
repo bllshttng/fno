@@ -1,12 +1,13 @@
-//! `fno do target init`: the native port of the Python verb, with a real
+//! `fno do target init`: the native port of the Python command, with a real
 //! `--steps` flag. The bash helper stays; this module is the decision layer
-//! the Python verb was: validate the call, run the gates, build the exact
+//! the Python command was: validate the call, run the gates, build the exact
 //! helper environment, run the helper, propagate its exit, and print the
 //! orientation report.
 //!
-//! The parity contract is `tests/golden/target_init/`, frozen from the
-//! Python leg before its deletion and asserted by
-//! `tests/target_init_parity.rs` through the `target-init` door. The
+//! The parity contract was `tests/golden/target_init/`, frozen from the
+//! Python leg and asserted by `tests/target_init_parity.rs` until the
+//! python `status` command repointed to this orienter and both deleted
+//! (the orienter is now the one implementation). The
 //! review-capability, dispatch-hold, and containment preflights are NOT
 //! ported: when a node resolves they stay unset-stamped, so the helper's own
 //! `fno do target check-*` gate calls (the one Python implementation) refuse
@@ -37,7 +38,7 @@ fn refuse(message: impl Into<String>) -> Fail {
     }
 }
 
-/// The parsed verb surface. Every option the Python verb accepted, plus
+/// The parsed command surface. Every option the Python command accepted, plus
 /// `--steps`.
 struct Args {
     input: Option<String>,
@@ -105,11 +106,11 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
             other => {
                 if other.starts_with("--") {
                     return Err(usage_fail(&format!(
-                        "unknown flag {other}; --steps is the one flag the Python verb did not carry"
+                        "unknown flag {other}; --steps is the one flag the Python command did not carry"
                     )));
                 }
                 return Err(usage_fail(&format!(
-                    "unexpected argument {other:?}; the verb takes flags only"
+                    "unexpected argument {other:?}; the command takes flags only"
                 )));
             }
         }
@@ -233,10 +234,12 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
     // layer needs the root for graph reads and the manifest).
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    init_progress("begin: door: graph read");
     // 6. One graph read feeds the resolver and the gates. A named dispatch
     // against an unreadable graph refuses: the hold state cannot be read,
     // and failing to read it must not read as unheld.
     let entries = graph_rows(&cwd);
+    init_progress("done: door: graph read");
     if entries.is_none()
         && (args
             .input
@@ -245,11 +248,12 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
             .unwrap_or(false)
             || args.plan_path.is_some())
     {
-        return Err(refuse(
+        return Err(refuse(&format!(
             "fno do target init: dispatch-hold-invalid: backlog graph is \
              unreadable; refusing to assume unheld. Nothing was claimed. Fix or \
-             restore graph.json and retry.",
-        ));
+             restore {} and retry.",
+            graph_store_label(&cwd)
+        )));
     }
 
     // 7. Dispatch-node resolution (exact ids only). The review-capability,
@@ -265,6 +269,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         entries.as_deref(),
     );
 
+    init_progress("begin: door: binding gates");
     // 8. The binding transport: a DECLARED required binding revalidates
     // natively before the claim. A refused verdict exits 1, a fork exits 3.
     let binding = dispatch_node.as_ref().map(|node| {
@@ -292,6 +297,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         }
     }
 
+    init_progress("done: door: binding gates");
     // 8.5 Blast-radius modulation: a deterministic read of the plan's File
     // Ownership Map floors the size profile at M (high blast) or downgrades
     // an unpinned size to S (low) BEFORE the immutable manifest is written.
@@ -335,9 +341,16 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         }
     }
 
+    init_progress("begin: door: plan pointer");
     // 9. Plan pointer: explicit --plan-path must resolve; a node-bound plan
     // is back-filled when it resolves too.
-    let plan_path = resolve_plan_pointer_stage(args, dispatch_node.as_ref(), &cwd)?;
+    let plan_path = resolve_plan_pointer_stage(
+        args,
+        dispatch_node.as_ref(),
+        &cwd,
+        &crate::plan_carry::fetch_one,
+    )?;
+    init_progress("done: door: plan pointer");
 
     // 10. Scope denominator: a plan-less code node states its own scope.
     let mut deliverables = args.deliverables;
@@ -370,6 +383,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         }
     }
 
+    init_progress("begin: init helper");
     // 12. Build the exact helper environment and run the bash helper. The
     // gate stamp rides on whether a node resolved (see step 7).
     let code = run_helper(
@@ -545,7 +559,7 @@ fn run_helper(
         cmd.env("TARGET_TURN_MODE", "steps");
     }
     // Stamp the launcher's process-bound harness proof for the script and the
-    // owned-identity verb it spawns. The pair is validated natively (a live
+    // owned-identity command it spawns. The pair is validated natively (a live
     // pid plus a known harness name); an inherited pair forwards as-is.
     let status = cmd.status();
     match status {
@@ -751,6 +765,13 @@ fn warn_if_authority_not_granted(cwd: &Path) {
 
 /// The shared graph rows read. One loader, both consumers: this module's
 /// dispatch-node resolution and the orient report's node and boundary lines.
+/// The store a person can open when the backlog graph will not read.
+pub(crate) fn graph_store_label(cwd: &Path) -> String {
+    crate::backlog::database_path(&crate::org_board::scope::graph_json_path(cwd))
+        .display()
+        .to_string()
+}
+
 pub(crate) fn graph_rows(cwd: &Path) -> Option<Vec<serde_json::Value>> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let store = crate::backlog::api::Store::new(&graph_path);
@@ -871,11 +892,14 @@ pub(crate) fn resolve_dispatch_node(
 /// readable plan (fail closed before the write-once manifest exists); a node
 /// input with no --plan-path back-fills the node's bound plan when THAT
 /// resolves, and refuses when a named-but-dangling pointer would otherwise
-/// close the only legal repair route.
+/// close the only legal repair route. Before either a dangling pointer
+/// refuses or a null one seats a planless worker, `fetch` asks the shared
+/// primary for the plan body another host pushed for this node.
 fn resolve_plan_pointer_stage(
     args: &Args,
     node: Option<&serde_json::Value>,
     cwd: &Path,
+    fetch: &dyn Fn(&str, &str) -> Result<Option<String>, String>,
 ) -> Result<Option<String>, Fail> {
     if let Some(explicit) = &args.plan_path {
         if !explicit.is_empty() {
@@ -901,17 +925,37 @@ fn resolve_plan_pointer_stage(
         .unwrap_or("")
         .trim()
         .to_string();
+    let node_id = node_str(Some(node), "id");
+    let carried = || match fetch(&node_id, &bound_plan) {
+        Ok(path) => (path.and_then(|p| resolve_plan_pointer(&p, cwd)), None),
+        Err(why) => (None, Some(why)),
+    };
     if bound_plan.is_empty() {
-        return Ok(None);
+        // A null pointer with a carrier row is a binding another host lost.
+        let (found, _) = carried();
+        if let Some(found) = &found {
+            eprintln!(
+                "fno do target init: fetched the plan another host wrote for {node_id}: {found}"
+            );
+        }
+        return Ok(found);
     }
-    match resolve_plan_pointer(&bound_plan, cwd) {
-        Some(bound) => Ok(Some(bound)),
-        None => Err(refuse(format!(
-            "fno do target init: REFUSING because the node's bound plan_path \
-             does not resolve to a readable plan ({bound_plan}). \
-             Repair the node with: fno backlog update <id> plan_path=<path>"
-        ))),
+    if let Some(bound) = resolve_plan_pointer(&bound_plan, cwd) {
+        return Ok(Some(bound));
     }
+    let (found, why) = carried();
+    if let Some(found) = found {
+        eprintln!("fno do target init: fetched {found} from the shared primary");
+        return Ok(Some(found));
+    }
+    let carrier = why.map_or(String::new(), |why| {
+        format!(" The shared primary has no copy: {why}.")
+    });
+    Err(refuse(format!(
+        "fno do target init: REFUSING because the node's bound plan_path \
+         does not resolve to a readable plan ({bound_plan}).{carrier} \
+         Repair the node with: fno backlog update <id> plan_path=<path>"
+    )))
 }
 
 /// The plan pointer to bind, NORMALIZED, or None when it does not resolve.
@@ -973,7 +1017,7 @@ fn repo_root_of(cwd: &Path) -> Option<PathBuf> {
 /// First-bind the graph node's plan_path at init. Never overwrites a
 /// non-empty stored value (a group child shares one plan); non-fatal on
 /// failure, like the shell hook's lock-stamp posture. Rides the sibling
-/// binary's own update verb with stdio captured, the way the Python verb
+/// binary's own update command with stdio captured, the way the Python command
 /// shelled `fno backlog update`.
 fn bind_node_plan_path(node: &serde_json::Value, plan_path: &str) {
     let node_id = node_str(Some(node), "id");
@@ -1030,5 +1074,65 @@ fn bind_node_plan_path(node: &serde_json::Value, plan_path: &str) {
         Err(exc) => {
             eprintln!("WARNING: could not bind {plan_path} to {node_id}: {exc}");
         }
+    }
+}
+
+#[cfg(test)]
+mod plan_carry_miss_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_or_lost_plan_comes_from_the_carrier_before_any_refusal() {
+        let args = parse_args(&[]).unwrap_or_else(|_| unreachable!());
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("p.md");
+        let plan_s = plan.to_str().unwrap().to_string();
+        let fetch_writes = |_: &str, _: &str| -> Result<Option<String>, String> {
+            std::fs::write(&plan, "---\nstatus: ready\n---\n").unwrap();
+            Ok(Some(plan_s.clone()))
+        };
+        // A dangling pointer: the carrier writes the file and init proceeds.
+        let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
+        let got = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &fetch_writes);
+        assert!(matches!(got, Ok(Some(_))));
+        // A null pointer with a carrier row binds the carrier's path.
+        std::fs::remove_file(&plan).unwrap();
+        let node = serde_json::json!({"id": "x-1", "plan_path": null});
+        let got = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &fetch_writes);
+        assert!(matches!(got, Ok(Some(_))));
+        // No copy anywhere: the refusal says so.
+        std::fs::remove_file(&plan).unwrap();
+        let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
+        let none = |_: &str, _: &str| -> Result<Option<String>, String> {
+            Err("no host pushed a plan for it".to_string())
+        };
+        let Err(fail) = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &none) else {
+            panic!("a plan absent everywhere must refuse");
+        };
+        assert!(
+            fail.message.contains("no host pushed a plan"),
+            "{}",
+            fail.message
+        );
+    }
+}
+
+/// Append one progress marker when a start-bounded run handed down
+/// FNO_INIT_PROGRESS_FILE. Best-effort: a marker failure never changes the
+/// run, and the parent's timeout receipt degrades to "no step recorded".
+fn init_progress(mark: &str) {
+    let Ok(path) = std::env::var("FNO_INIT_PROGRESS_FILE") else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{mark}");
     }
 }

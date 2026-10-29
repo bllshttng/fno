@@ -1,0 +1,12 @@
+{
+  "live_status": null,
+  "name": "lead-heron",
+  "node": null,
+  "provider": "claude",
+  "registered": true,
+  "resolved_via": "session-fallback",
+  "role": "L1 x-245d (by Gavin)",
+  "session": "7c1d4e9b-2a6f-4b8c-9d0e-5f1a2b3c4d5e",
+  "short_id": null,
+  "status": "idle"
+}

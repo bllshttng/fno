@@ -1,7 +1,7 @@
 ---
 name: review
 description: Review recent code changes, check if they are ready to ship, or assess a research brief.
-argument-hint: "[level] [--comment] [--fix] [<pr#>|<branch>|<path>] | prove-it [<target>] | cleanup [<target>] | peer [adversarial] [--attest|--post] [PR#|branch] [codex|gemini] | research [brief.md] | declare   e.g. (bare = the fno lane, level sized from the diff), `high --comment`, `657`, `prove-it`, `cleanup`, `peer 657 codex --attest`, `research out/topic.md`, `declare`"
+argument-hint: "[level] [--comment] [--fix] [--fresh] [<pr#>|<branch>|<path>] | prove-it [<target>] | cleanup [<target>] | peer [adversarial] [--attest|--post] [PR#|branch] [codex|gemini] | research [brief.md] | declare   e.g. (bare = the fno lane, level sized from the diff), `high --comment`, `high --fresh`, `657`, `prove-it`, `cleanup`, `peer 657 codex --attest`, `research out/topic.md`, `declare`"
 metadata:
   requires:
     binaries:
@@ -14,11 +14,11 @@ metadata:
 
 # Review
 
-**One verb on a diff.** `/review` routes to the right reviewer set for the diff in front of you.
+**One command on a diff.** `/review` routes to the right reviewer set for the diff in front of you.
 
 | Mode | What runs | Shared object |
 |------|-----------|---------------|
-| default (bare, or a level token) | the fno review lane: inline angles, dedup, three-state verify, one attestation | the diff |
+| default (bare, or a level token) | the fno review lane: inline angles, dedup, three-state verify, one attestation; `--fresh` runs the same lane once in a fresh context ([fresh.md](references/fresh.md)) | the diff |
 | `prove-it` | runtime evidence at the changed code's real surface, with a validator that refuses an unprobed PASS | the running change |
 | `cleanup` | the apply-or-skip pass: four cleanup angles once, no gate weight, no attestation | the diff |
 | `peer` | a cross-model second opinion, optionally producing a verdict-gated local attestation | the diff |
@@ -68,10 +68,10 @@ esac
 
 ## Step 1: Resolve the mode (ALWAYS announce it)
 
-The grammar is `[level] [--comment] [--fix] [<pr#>|<branch>|<path>]`, with `prove-it`, `cleanup`, `peer`, `research`, and `declare` as leading mode tokens. A flag is a token in any accepted spelling of a known flag name. Accept `--comment`, bare `comment`, or the em-dash `—comment` (what a phone autocorrects the double hyphen into), and the same three spellings for `fix`. The accepted set is the `canonical_flag` vocabulary in `cli/src/fno/review/invocation.py`. That one list feeds both this router and the invocation telemetry. A spelling accepted here is also recorded there, and no fourth spelling is invented. Strip the flags BEFORE reading the first remaining token. The order is load-bearing. Stripping after the target test hands the flag tokens to the target slot. There they resolve to nothing, and the run dies having posted nothing. `--comment` never drops findings without a PR. They hold on the branch and HEAD (the `review_attestation` row), and the create flow's publish-review step posts them once the PR opens. Then read the first remaining token:
+The grammar is `[level] [--comment] [--fix] [--fresh] [<pr#>|<branch>|<path>]`, with `prove-it`, `cleanup`, `peer`, `research`, and `declare` as leading mode tokens. A flag is a token in any accepted spelling of a known flag name. Accept `--comment`, bare `comment`, or the em-dash `—comment` (what a phone autocorrects the double hyphen into). The same three spellings hold for `fix` and for `fresh`. The accepted set is the `KNOWN_REVIEW_FLAGS` table in `crates/fno/src/review_invocation_core.rs`, the one owner of the review-invocation vocabulary (the vendored twin `crates/fno-agents/src/review_invocation_owner.rs` pins byte equality). That one table feeds both this router and the invocation telemetry. A spelling accepted here is also recorded there, and no fourth spelling is invented. Strip the flags BEFORE reading the first remaining token. The order is load-bearing. Stripping after the target test hands the flag tokens to the target slot. There they resolve to nothing, and the run dies having posted nothing. `--comment` never drops findings without a PR. They hold on the branch and HEAD (the `review_attestation` row), and the create flow's publish-review step posts them once the PR opens. `--fresh` is a default-lane modifier only. A `--fresh` token that survives the strip while the resolved mode is `prove-it`, `cleanup`, `peer`, `research`, or `declare` refuses loudly. Print `refused: --fresh modifies only the default review lane` and stop with a non-zero result. Then read the first remaining token:
 
-- **no argument** -> mode is the default lane at a level sized from the diff. Print exactly: `running fno review lane (default, level from diff)` and continue to Step 2.
-- **a level token** (`low` `medium` `high` `xhigh` `max`) -> mode is the default lane at that explicit level. Print `running fno review lane (level <token>)`. Any remaining tokens are the target. Continue to Step 2.
+- **no argument** -> mode is the default lane at a level sized from the diff. Print exactly: `running fno review lane (default, level from diff)` and continue to Step 2. With `--fresh`, print `running fno review lane (default, level from diff, fresh)` instead and continue to Step 2f.
+- **a level token** (`low` `medium` `high` `xhigh` `max`) -> mode is the default lane at that explicit level. Print `running fno review lane (level <token>)` (`running fno review lane (level <token>, fresh)` with `--fresh`). Any remaining tokens are the target. Continue to Step 2, or Step 2f with `--fresh`.
 - **`ultra`** -> REFUSE. Print exactly `refused: ultra is billed separately and no fno surface issues it; use max` and stop with a non-zero result. Run nothing, emit nothing.
 - **`sigma`** -> REFUSE, naming the replacement. Print exactly `refused: sigma is retired; the default review lane replaced it - run /fno:review [level] [<target>] (or /fno:review peer for a cross-model read)` and stop with a non-zero result. Run nothing, dispatch nothing.
 - **`prove-it`** -> mode is `prove-it`, runtime evidence. Print `running prove-it (runtime evidence)`. The remaining tokens, if any, are the target. Continue to Step 2p.
@@ -139,7 +139,11 @@ fi
 
 ### 2b. Run the lane
 
-Load [single-lane.md](references/single-lane.md) and execute it in full, in this context, with the resolved level, flags, and target. The lane runs inline as ordinary tool calls: mechanical checks, finder angles, dedup, three-state verify, cite-or-drop, carry-forward, then the classified emit. It dispatches ZERO review subagents and fires no native review verb; the panel that used to run here is retired, and the six specialist hunter agents remain individually invocable by their own names.
+Load [single-lane.md](references/single-lane.md) and execute it in full, in this context, with the resolved level, flags, and target. The lane runs inline as ordinary tool calls: mechanical checks, finder angles, dedup, three-state verify, cite-or-drop, carry-forward, then the classified emit. It dispatches ZERO review subagents and fires no native review command; the panel that used to run here is retired, and the six specialist hunter agents remain individually invocable by their own names.
+
+### 2f. Run the lane fresh (`--fresh`)
+
+With `--fresh`, load [fresh.md](references/fresh.md) and execute it in full. It dispatches exactly ONE fresh-context reviewer at first-round scope. The reviewer is an empty-context subagent, never a fork. It runs [single-lane.md](references/single-lane.md) with only the diff and the plan's acceptance criteria. Width is 1, never a panel. This session keeps ownership: it emits the head-pinned attestation (with `reviewer_context=fresh`, `execution_context=fork`), fixes the findings, and runs any `--verify-fixes`. The inline rule above does not apply to the reviewer's context. It still applies to everything this session itself does.
 
 ## Step 2p: prove-it mode (runtime evidence)
 
@@ -187,7 +191,7 @@ The event is pinned to the current HEAD; if a new commit lands afterward, the de
 
 `peer`, `code-review`, and `declare` are local review producers. Each emits the SAME head-pinned `review_attestation` event via `scripts/emit-attestation.sh <reviewer>` on a pass - the single producer surface loop-check reads:
 
-- **the fno lane** (the default) emits `code-review` through the lane's emit step ([single-lane.md](references/single-lane.md)): `pass` only when `fno do review classify` yields zero blocking findings, `fail` carrying the classified record. One contract, one emit path, no hook-availability dependency.
+- **the fno lane** (the default) emits `code-review` through the lane's emit step ([single-lane.md](references/single-lane.md)). The verdict reads `pass` only on zero blocking findings from `fno do review classify`. `fail` carries the classified record. One contract, one emit path, no hook-availability dependency. A `--fresh` round ([fresh.md](references/fresh.md)) emits through the same step with `reviewer_context=fresh` and `execution_context=fork`, still emitted by the building session.
 - **peer** emits `peer` only after `consume-peer-verdict.sh` validates an explicit clean cross-model verdict with zero blocking findings.
 - **code-review** is the gate entry the fno lane satisfies above.
   - Run `/fno:review` on the final HEAD. Its emit step produces the attestation on every harness without hook support.
@@ -203,11 +207,11 @@ The event is pinned to the current HEAD; if a new commit lands afterward, the de
 
 Head-pinning is mandatory: the helper stamps `git rev-parse HEAD`, and loop-check only counts an attestation whose `head_sha` equals the current HEAD (a pass on a superseded commit is discarded). Absence holds the gate (fail closed).
 
-**Termination (the round budget).** A blocking finding clears two ways, both counted by the round law. Fix it, and the next round covers the fix delta. Or decline it with a cited reason. The citation quotes the proving line at the current head as a double-quoted span and names the failure scenario that does not hold. It is recorded in the attestation's dispositions as `declined`. A decline is not a silent wave-off. The citation is enforced at emit, the row reads as disposed-by-decline, and a round that declines its own findings stays a fail. Under the two-round law it counts against the cap the same as a fix. A non-blocking finding needs no action. Answer it in thread or skip it with a note. At the cap the review phase is complete, hard findings included. The PR merges on green CI, and open findings stay in the conversation. The live law is in `fno inbox decisions review-coverage`. If a gate still refuses at the cap, record the gate defect with `fno backlog encounter` and merge once it clears.
+**Termination (the round budget).** A blocking finding clears two ways, both counted by the round law. Fix it, and the next round covers the fix delta. If the fix landed before the head the raising round attested, the fix delta is empty. Run the next pass with `--verify-fixes`, whose fixed disposition is terminal at the head it reviewed. Or decline it with a cited reason. The citation quotes the proving line at the current head as a double-quoted span and names the failure scenario that does not hold. It is recorded in the attestation's dispositions as `declined`. A decline is not a silent wave-off. The citation is enforced at emit, the row reads as disposed-by-decline, and a round that declines its own findings stays a fail. Under the two-round law it counts against the cap the same as a fix. A non-blocking finding needs no action. Answer it in thread or skip it with a note. At the cap the review phase is complete, hard findings included. The PR merges on green CI, and open findings stay in the conversation. The live law is in `fno inbox decisions review-coverage`. If a gate still refuses at the cap, record the gate defect with `fno backlog encounter` and merge once it clears.
 
 ## The manual coverage emit (sanctioned, with preconditions)
 
-A PR whose session ended still has a certification path: `fno doctor event emit -t review_coverage -d '{...}'` is a sanctioned surface, not a loophole, and the merge-path reader accepts its row. The emit reaches BOTH the project log and the machine-global log (the type rides `GLOBAL_MIRROR_TYPES`), so a row emitted inside a worktree whose journal is not linked to canonical is still found by a canonical merge. Two preconditions keep it honest: `head_sha` in the payload must equal the PR's live `headRefOid` (a row pinned to a stale head is refused by the gate's staleness conjunct, not honored), and a required `code-review` reviewer still needs its own `local_attestation` verdict entry - the coverage row records the state of the world, it does not substitute for the review a configured reviewer owes. Nobody may read this verb as a way to hand-clear the gate.
+A PR whose session ended still has a certification path: `fno doctor event emit -t review_coverage -d '{...}'` is a sanctioned surface, not a loophole, and the merge-path reader accepts its row. The emit reaches BOTH the project log and the machine-global log (the type rides `GLOBAL_MIRROR_TYPES`), so a row emitted inside a worktree whose journal is not linked to canonical is still found by a canonical merge. Two preconditions keep it honest: `head_sha` in the payload must equal the PR's live `headRefOid` (a row pinned to a stale head is refused by the gate's staleness conjunct, not honored), and a required `code-review` reviewer still needs its own `local_attestation` verdict entry - the coverage row records the state of the world, it does not substitute for the review a configured reviewer owes. Nobody may read this command as a way to hand-clear the gate.
 
 
 Each reviewer also declares what it NEEDS in order to run - `code-review` needs only the plugin itself (the lane runs inline on every harness), `declare` needs nothing - in `_RESOLVABLE_REVIEWERS` (`cli/src/fno/config/__init__.py`). `fno do target init` resolves that against the running session and refuses a gate nothing here can satisfy; `fno config doctor --review` reports the same read-only. A reviewer that cannot run is never quietly swapped for `declare`: that would clear the gate with no review behind it.
@@ -255,4 +259,4 @@ A probe is an *observation* - one that mutates the repo races the session's own 
 
 ## Multi-CLI
 
-Claude-Code primary. All modes need `fno` and `gh`/`git`; peer mode additionally needs the `fno agents` daemon for the `codex`/`gemini` one-shot lane, and research mode needs the Task/Agent tool to dispatch its roster. If a dependency is missing, the mode fails loud and reports it - it never fakes a review.
+Claude-Code primary. All modes need `fno` and `gh`/`git`. Peer mode additionally needs the `fno agents` daemon for the `codex`/`gemini` one-shot lane. Research mode needs the Task/Agent tool to dispatch its roster. `--fresh` needs one subagent dispatch ([fresh.md](references/fresh.md) records the not-reviewed fallback). If a dependency is missing, the mode fails loud and reports it - it never fakes a review.

@@ -1,21 +1,18 @@
 """Integration: a parked granted worker's PR merges through the watcher.
 
-The journey this file proves (end to end through the REAL canonical merge
-core - only gh, git, the Rust verdict transport, and the coverage producer
-are faked):
+The journey this file proves (end to end through the REAL drain; the
+authorized-merge door is faked at ``command_call``):
 
-1. CI pending                              -> the merge core is invoked and
-                                              HELD by the checks gate; no
-                                              `gh pr merge` is called
-2. CI turns green, the next drain runs     -> the guarded merge executes and
+1. CI pending                              -> the door answers held and the
+                                              drain emits the held phase; no
+                                              second attempt is spent
+2. CI turns green, the next drain runs     -> the door answers merged and
                                               the positive events name the
                                               actor, the grant session, the
                                               PR, and the node
-3. the standing grant with a dead observer -> status reports
-                                              observer_unavailable
 
 The verdict arms themselves live in crates/fno-agents/src/merge_grant.rs;
-these tests stub the transport to a granted verdict and prove the drain.
+these tests stub the door to a granted verdict and prove the drain.
 """
 from __future__ import annotations
 
@@ -26,8 +23,6 @@ import pytest
 from fno.pr_watch._dispatch import run_execute_queue
 from fno.pr_watch._discover import PrCandidate
 from fno.pr_watch._state import WatermarkStore
-
-from tests.unit.test_pr_merge import FakeRun  # reuse the exhaustive gh/git fake
 
 NODE = "x-watch0001"
 PR = 7
@@ -45,107 +40,30 @@ def _free_gh_budget(monkeypatch):
     monkeypatch.setattr(_dispatch_mod, "_gh_budget_backoff_left", lambda: 0.0)
 
 
-def _grant_verdict():
-    from fno.pr._merge_grant import GRANTED, GrantVerdict
-
-    return GrantVerdict(GRANTED, "newest durable grant approved", node_id=NODE,
-                        claim_state="stale", grant=GRANT)
-
-
 def _arm_world(
     monkeypatch,
     tmp_path: Path,
     *,
     checks_pending: bool,
-) -> FakeRun:
-    """The real merge core over a faked gh/git transport and a stubbed
-    Rust verdict."""
-    from fno.config import AutoMergeBlock
-    import fno.pr._coverage_gate as coverage_gate
-    import fno.pr._merge as merge_mod
+) -> None:
+    """The real drain over a stubbed authorized-merge door: pending checks
+    hold, green authorizes and merges."""
+    def _door(command, payload, timeout=None):
+        if command == "authorized-merge" and payload.get("op") == "merge":
+            if checks_pending:
+                return {
+                    "exit": 2,
+                    "outcome": "held",
+                    "reason": (
+                        "checks are pending; require_checks_pass forbids "
+                        "merging without green"
+                    ),
+                }
+            return {"exit": 0, "outcome": "merged", "detail": "cafe" * 6,
+                    "reason": ""}
+        raise AssertionError(f"journey stub: unexpected command_call {command} {payload!r}")
 
-    monkeypatch.setattr(
-        "fno.pr._merge_grant.resolve_durable_grant",
-        lambda pr, repo: _grant_verdict(),
-    )
-    monkeypatch.setattr(
-        "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
-    )
-    monkeypatch.setattr(merge_mod, "_load_auto_merge", lambda _repo: AutoMergeBlock(enabled=True))
-    monkeypatch.setattr(merge_mod.shutil, "which", lambda _x: "/usr/bin/gh")
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
-    # The journey is about grant/CI sequencing, not the coverage
-    # producer (owned by the coverage suite): serve a covered row at the
-    # merge gate's own seam.
-    monkeypatch.setattr(
-        coverage_gate,
-        "coverage_verdict",
-        lambda pr, repo, recompute=False, head=None: (
-            coverage_gate.COVERED, "", "", "",
-        ),
-    )
-    # Reuse-over-reimplement, and merge-blocking test seams from the unit
-    # suite keep this journey about the watcher.
-    monkeypatch.setattr(merge_mod, "_review_lane_configured", lambda repo, pr_number=0: True)
-    monkeypatch.setattr(
-        merge_mod, "_code_review_attestation_required", lambda repo, pr_number=0: False
-    )
-    monkeypatch.setattr(
-        "fno.pr._reviews._override_label_actor", lambda pr, repo, r: (False, None)
-    )
-    monkeypatch.setattr(
-        "fno.pr._reviews.publish_coverage_status",
-        lambda pr, head=None, cwd=None, repo=None, gate_verdict=None: (True, ""),
-    )
-    rollup = [
-        {"name": "ci", "status": "COMPLETED",
-         "conclusion": "PENDING" if checks_pending else "SUCCESS"},
-    ]
-    fake = FakeRun(
-        gh_merge=None,
-        toplevel=str(tmp_path),
-        checks={"state": "OPEN", "headRefOid": "cafe" * 6, "statusCheckRollup": rollup},
-    )
-    monkeypatch.setattr(merge_mod, "run", fake)
-
-    # The checks verdict, the head pin and the gh argv moved into the
-    # authorized-merge owner, so this journey arms the OWNER rather than the
-    # rollup above. The stub answers what the owner answers: pending checks
-    # hold, green authorizes and merges. The rollup stays because the rest of
-    # the transport still reads it.
-    def _owner(pr_number, repo, *, effect, approved, source, **kwargs):
-        if checks_pending:
-            return {
-                "outcome": "held",
-                "detail": (
-                    "checks are pending; require_checks_pass forbids merging "
-                    "without green"
-                ),
-            }
-        if kwargs.get("decide_only"):
-            return {"outcome": "authorized", "detail": "cafe" * 6}
-        return {"outcome": "merged", "detail": "cafe" * 6}
-
-    monkeypatch.setattr(merge_mod, "_authorized_merge", _owner)
-
-    # The drain reaches the core through the operand door (the native
-    # authorized-merge binary). This journey fakes the transport, not the
-    # core: route the door's merge op back into the in-process run_merge,
-    # which runs through the stubbed owner above, and flatten the flow
-    # receipt the way the native door answers.
-    def _operand_door(verb, payload, timeout=None):
-        if verb == "authorized-merge" and payload.get("op") == "merge":
-            rc = merge_mod.run_merge(
-                list(payload.get("argv") or []),
-                cwd=payload.get("cwd"),
-                authority=payload.get("authority") or "durable_grant",
-                timeout_s=float(timeout or 300.0),
-            )
-            return {"exit": rc, **dict(merge_mod.LAST_RECEIPT)}
-        raise AssertionError(f"journey stub: unexpected verb_call {verb} {payload!r}")
-
-    monkeypatch.setattr("fno.rust_binary.verb_call", _operand_door)
-    return fake
+    monkeypatch.setattr("fno.rust_binary.command_call", _door)
 
 
 def _candidate(tmp_path: Path) -> PrCandidate:
@@ -206,19 +124,19 @@ class TestParkedWorkerJourney:
     def test_granted_drain_holds_on_pending_checks_then_merges_green(
         self, tmp_path, monkeypatch
     ):
-        # (1) CI pending: the merge core runs and the checks gate HOLDS it -
-        # no `gh pr merge` reaches the transport.
+        # (1) CI pending: the door answers held - no merge is dispatched and
+        # the held event carries the gate's reason.
         _arm_world(monkeypatch, tmp_path, checks_pending=True)
         store = _seed_entry(tmp_path)
         events = _drain(tmp_path, store)
         reserved = _grant_events(events, "reserved")
         held = _grant_events(events, "held")
         assert len(reserved) == 1 and len(held) == 1
+        assert "checks are pending" in held[0]["data"]["reason"]
         assert not _grant_events(events, "executed")
 
-        # (2) CI green, next drain: the guarded merge executes through the
-        # canonical core, and the positive events name actor, grant session,
-        # PR, and node.
+        # (2) CI green, next drain: the door authorizes and the executed
+        # events name actor, grant session, PR, and node.
         _arm_world(monkeypatch, tmp_path, checks_pending=False)
         events = _drain(tmp_path, store)
         executed = _grant_events(events, "executed")
@@ -228,4 +146,3 @@ class TestParkedWorkerJourney:
         assert data["pr"] == PR
         assert data["node_id"] == NODE
         assert data["recorded_by"] == "spawner-session"
-

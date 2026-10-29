@@ -1,13 +1,15 @@
 // @vendored-core: this file is vendored byte-identical into
 // crates/fno-agents/src/review_invocation_owner.rs; the parity test
 // owner_core_is_vendored_byte_identical pins the equality. Edit here,
-// then copy - never fork. No `crate::` references: the core must splice
-// into either crate.
+// then copy - never fork. One `crate::` reference is sanctioned:
+// `crate::state_layout` - both host crates carry that module at the
+// crate root with the same signatures, so the splice holds in either.
+// No other `crate::` references.
 //
-// The one owner of the review-invocation vocabulary: the verb parser, the
+// The one owner of the review-invocation vocabulary: the command parser, the
 // canonical flag table, the id mint, and the per-session pending sidecar.
 // Ported from the deleted Python leg (`cli/src/fno/review/invocation.py`)
-// and from the two partial Rust copies that predated it (the mux verb parse
+// and from the two partial Rust copies that predated it (the mux command parse
 // in the fno crate, the codex sidecar in `codex_inject.rs`); every reader
 // now answers from this module.
 
@@ -20,8 +22,8 @@ use std::path::{Path, PathBuf};
 /// the cap gate derives its spelling from [`VERIFY_FIXES`].
 pub const VERIFY_FIXES: &str = "verify-fixes";
 
-const KNOWN_REVIEW_FLAGS: [&str; 3] = ["comment", "fix", VERIFY_FIXES];
-const REVIEW_VERBS: [&str; 4] = ["code-review", "review", "review-changes", "sigma-review"];
+const KNOWN_REVIEW_FLAGS: [&str; 4] = ["comment", "fix", VERIFY_FIXES, "fresh"];
+const REVIEW_COMMANDS: [&str; 4] = ["code-review", "review", "review-changes", "sigma-review"];
 const REVIEW_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Return the canonical `--` spelling when `token` is a review flag.
@@ -58,7 +60,8 @@ pub fn canonical_flag(token: &str) -> Option<String> {
 /// shape across every transport.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ParsedInvocation {
-    pub verb: String,
+    #[serde(rename = "verb")] // verb-wording: allow (review_invocation event field)
+    pub command: String,
     pub args_raw: String,
     pub level: String,
     pub level_source: String,
@@ -76,7 +79,7 @@ pub fn parse_review_invocation(raw: &str) -> Option<ParsedInvocation> {
     let mut parts = candidate.splitn(2, char::is_whitespace);
     let token = parts.next()?.trim_start_matches('/');
     let name = token.rsplit(':').next()?;
-    if !REVIEW_VERBS.contains(&name) {
+    if !REVIEW_COMMANDS.contains(&name) {
         return None;
     }
     let args_raw = parts.next().map(str::trim_start).unwrap_or("");
@@ -124,7 +127,7 @@ pub fn parse_review_invocation(raw: &str) -> Option<ParsedInvocation> {
         .cloned();
     let pr_number = target.as_deref().and_then(pr_number_of);
     Some(ParsedInvocation {
-        verb: format!("/{name}"),
+        command: format!("/{name}"),
         args_raw: args_raw.to_string(),
         level: level.to_string(),
         level_source: level_source.to_string(),
@@ -190,9 +193,11 @@ pub fn pending_invocation_path(
     {
         return Err("target_session_id must be a non-empty path component");
     }
-    Ok(invocation_home(home)
-        .join("review-invocations")
-        .join(format!("{target_session_id}.json")))
+    Ok(crate::state_layout::place_in(
+        &invocation_home(home),
+        "review-invocations",
+        &format!("{target_session_id}.json"),
+    ))
 }
 
 /// Write one pending id without replacing a concurrent sender's id. A
@@ -311,9 +316,11 @@ mod tests {
             canonical_flag("verify-fixes").as_deref(),
             Some("--verify-fixes")
         );
+        assert_eq!(canonical_flag("--fresh").as_deref(), Some("--fresh"));
+        assert_eq!(canonical_flag("\u{2014}fresh").as_deref(), Some("--fresh"));
 
         let parsed = p("/fno:review high --comment 123");
-        assert_eq!(parsed.verb, "/review");
+        assert_eq!(parsed.command, "/review");
         assert_eq!(parsed.level, "high");
         assert_eq!(parsed.level_source, "explicit");
         assert_eq!(parsed.flags, vec!["--comment".to_string()]);
@@ -339,6 +346,12 @@ mod tests {
         // the skipped flags is still the target (the Python leg's rule the
         // goldens pin).
         assert_eq!(p("/review fix").flags, vec!["--fix".to_string()]);
+        let fresh = p("/review --fresh 55");
+        assert_eq!(fresh.flags, vec!["--fresh".to_string()]);
+        assert_eq!(fresh.target.as_deref(), Some("55"));
+        let bare_fresh = p("/review fresh 55");
+        assert_eq!(bare_fresh.flags, vec!["--fresh".to_string()]);
+        assert_eq!(bare_fresh.target.as_deref(), Some("55"));
         let novel = p("/review high --novel 55");
         assert_eq!(novel.flags, vec!["--novel".to_string()]);
         assert_eq!(novel.target.as_deref(), Some("55"));

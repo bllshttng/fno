@@ -1,5 +1,5 @@
 //! Children fno-agents spawns for lifecycle actions: the bounded
-//! `claude stop`, and the all-source heal-token helper shellout. One module
+//! `claude stop`; and the all-source token heal, native now. One module
 //! answers one question - how every such child runs (cwd pinning, bounds,
 //! output contract) - so a dead daemon cwd cannot take them all down at once
 //! (: a daemon lazy-started from a worktree the reaper later deleted
@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::client_verbs::{backfill_row_aliases, is_identity_token, py_repr_str};
+use crate::client_commands::{backfill_row_aliases, is_identity_token, py_repr_str};
 
 /// The cwd a lifecycle child inherits: this process's cwd while getcwd still
 /// resolves, else `fallback`, else the temp dir. These children need no
@@ -82,174 +82,48 @@ fn helper_registry_path(registry_path: &Path) -> std::io::Result<PathBuf> {
     Ok(absolute)
 }
 
-fn token_helper_args(token: &str, registry_path: &Path, cross_project: bool) -> Vec<String> {
-    let mut args = vec![
-        "agents".to_string(),
-        "heal-token".to_string(),
-        token.to_string(),
-        "--registry".to_string(),
-        registry_path.to_string_lossy().into_owned(),
-        "--all-sources".to_string(),
-    ];
-    if cross_project {
-        args.push("--cross-project".to_string());
-    }
-    args
-}
-
-fn token_helper_output(
-    token: &str,
-    registry_path: &Path,
-    cross_project: bool,
-    scope_cwd: Option<&Path>,
-) -> std::io::Result<std::process::Output> {
-    let registry_path = helper_registry_path(registry_path)?;
-    let mut command = std::process::Command::new(crate::scrape::fno_bin());
-    command
-        .args(token_helper_args(token, &registry_path, cross_project))
-        .env("FNO_AGENTS_RUNTIME", "python");
-    match scope_cwd {
-        Some(cwd) => command.current_dir(cwd),
-        // No scope dir named: pin an existing cwd anyway, because a daemon
-        // lazy-started from a worktree the reaper later deleted would hand the
-        // child its own dead cwd, and the Python helper dies at getcwd with a
-        // traceback. The registry's parent (~/.fno/agents) is the
-        // nearest always-there directory.
-        None => command.current_dir(lifecycle_child_cwd(
-            registry_path.parent().unwrap_or_else(|| Path::new(".")),
-        )),
-    };
-    command.output()
-}
-
-/// Ask the Python resolver to union registry and harness-store candidates.
+/// Resolve `token` against the registry and every harness store as one
+/// namespace, adopting one unique store-only session on a registry miss.
 ///
-/// `Ok(Some(row))` on resolution, `Ok(None)` only on the helper's documented
-/// clean miss, and `Err(msg)` on ambiguity or unavailable/incomplete coverage.
-/// `FNO_AGENTS_RUNTIME=python` pins the child to the Python dispatch so the
-/// shellout cannot recurse back into this binary.
-pub(crate) fn heal_token(
-    token: &str,
-    registry_path: &Path,
-    cross_project: bool,
-    scope_cwd: Option<&Path>,
-) -> Result<Option<Value>, String> {
-    let out = match token_helper_output(token, registry_path, cross_project, scope_cwd) {
-        Ok(o) => o,
-        Err(exc) => {
-            return Err(format!(
-                "cannot safely resolve token {} because the all-source identity helper could not run: {exc}. Use the full session id.",
-                py_repr_str(token)
-            ));
-        }
+/// `Ok(Some(row))` on resolution, `Ok(None)` only on a clean miss, and
+/// `Err(msg)` on ambiguity or unavailable coverage.
+pub(crate) fn heal_token(token: &str, registry_path: &Path) -> Result<Option<Value>, String> {
+    let registry_path = helper_registry_path(registry_path).map_err(|exc| {
+        format!(
+            "cannot safely resolve token {} because the registry path does not resolve: {exc}. Use the full session id.",
+            py_repr_str(token)
+        )
+    })?;
+    let healed = crate::store_heal::heal_all_sources(token, &registry_path)
+        .map_err(|err| err.message().to_string())?;
+    let Some(mut row) = healed else {
+        return Ok(None);
     };
-    // The healer adopts best-effort: a failed registry write still returns the
-    // row, with the reason on stderr. Swallowing that would make the degradation
-    // invisible -- the verb works, the roster silently does not.
-    let mut parsed = parse_heal_token_output(token, &out);
-    if let Ok(Some(mut row)) = parsed {
-        recover_onto_healed_row(
-            &mut row,
-            registry_path,
-            &crate::claude_ask::ClaudeHome::from_env().projects_dir(),
-        );
-        parsed = Ok(Some(row));
-    }
-    if matches!(&parsed, Ok(Some(_))) {
-        let warn = String::from_utf8_lossy(&out.stderr);
-        if !warn.trim().is_empty() {
-            eprint!("{warn}");
-        }
-    }
-    parsed
+    finish_healed_row(token, &mut row)?;
+    recover_onto_healed_row(
+        &mut row,
+        &registry_path,
+        &crate::claude_ask::ClaudeHome::from_env().projects_dir(),
+    );
+    Ok(Some(row))
 }
 
-/// Enforce the Python helper's output contract without collapsing unavailable
-/// coverage into a clean miss. Kept pure so malformed/off-contract subprocess
-/// results are mechanically testable without mutating PATH.
-fn parse_heal_token_output(
-    token: &str,
-    out: &std::process::Output,
-) -> Result<Option<Value>, String> {
-    const AMBIGUOUS: i32 = 3;
-    const MISS: i32 = 13;
-
-    if out.status.code() == Some(AMBIGUOUS) {
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if detail.is_empty() {
-            format!(
-                "token {} is ambiguous across harness stores",
-                py_repr_str(token)
-            )
-        } else {
-            detail
-        });
-    }
-    if out.status.code() == Some(MISS) {
-        return Ok(None);
-    }
-    if !out.status.success() {
-        // One labelled line, never the raw multi-line stderr (a traceback
-        // ahead of the refusal is a new error class) - but the CAUSE line, the
-        // helper's LAST stderr line, not its first. A Python traceback opens
-        // with the useless "Traceback" header and names the real failure in
-        // its tail ("OSError: ...deleted"); quoting the first line shipped
-        // "(exit 1): Traceback", a refusal that names nothing.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let cause = stderr
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("");
-        return Err(format!(
-            "cannot safely resolve token {} because the all-source identity helper failed (exit {}){}. Use the full session id.",
-            py_repr_str(token),
-            out.status.code().unwrap_or(-1),
-            if cause.is_empty() { String::new() } else { format!(": {}", cause.trim()) },
-        ));
-    }
-    // The LAST non-empty line, not the whole buffer: a first-run `fno` may print
-    // a setup-migration banner ahead of the payload.
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = match text.lines().rev().find(|l| !l.trim().is_empty()) {
-        Some(l) => l,
-        None => {
-            return Err(format!(
-                "cannot safely resolve token {} because the all-source identity helper returned no row. Use the full session id.",
-                py_repr_str(token)
-            ))
-        }
-    };
-    match serde_json::from_str::<Value>(line) {
-        Ok(mut row) if row.is_object() => {
-            // The healed row skipped `load_registry_entries`, so it gets neither
-            // that loader's alias reconciliation nor its validation. Apply both:
-            // without the backfill the row has no `claude_session_uuid` (resume's
-            // dead arm would refuse); without the field bar, an exit-0 helper returning `{}` or a
-            // partial object would resolve as a SUCCESS and surface as a confusing
-            // missing-cwd error three frames later instead of a clean not-found.
-            let obj = match row.as_object_mut() {
-                Some(o) => o,
-                None => unreachable!("object guard above"),
-            };
-            backfill_row_aliases(obj, false);
-            let has_identity = is_identity_token(obj.get("harness").and_then(Value::as_str));
-            let has_fields = ["name", "cwd", "log_path"]
-                .iter()
-                .all(|k| obj.contains_key(*k));
-            if !has_identity || !has_fields {
-                return Err(format!(
-                    "cannot safely resolve token {} because the all-source identity helper returned an incomplete row. Use the full session id.",
-                    py_repr_str(token)
-                ));
-            }
-            Ok(Some(row))
-        }
-        _ => Err(format!(
-            "cannot safely resolve token {} because the all-source identity helper returned malformed JSON. Use the full session id.",
+/// A healed row skipped `load_registry_entries`, so it gets that loader's
+/// alias reconciliation here; a row with no well-formed harness refuses as
+/// incomplete rather than failing three frames later.
+fn finish_healed_row(token: &str, row: &mut Value) -> Result<(), String> {
+    let incomplete = || {
+        format!(
+            "cannot safely resolve token {} because the healer returned an incomplete row. Use the full session id.",
             py_repr_str(token)
-        )),
+        )
+    };
+    let obj = row.as_object_mut().ok_or_else(incomplete)?;
+    backfill_row_aliases(obj, false);
+    if !is_identity_token(obj.get("harness").and_then(Value::as_str)) || !obj.contains_key("name") {
+        return Err(incomplete());
     }
+    Ok(())
 }
 
 /// Fill a freshly healed bare claude row with the route its transcript's
@@ -293,7 +167,6 @@ fn recover_onto_healed_row(row: &mut Value, registry_path: &Path, projects: &Pat
 mod tests {
     use super::*;
     use crate::claims::test_env_lock;
-    use crate::{path_with, PATH_TEST_MUTEX};
 
     /// a dead cwd (getcwd errored) falls back to an existing fallback;
     /// a missing fallback degrades to the temp dir instead of handing the child
@@ -322,90 +195,12 @@ mod tests {
     }
 
     #[test]
-    fn heal_output_distinguishes_clean_miss_from_broken_coverage() {
-        let miss = std::process::Command::new("sh")
-            .args(["-c", "exit 13"])
-            .output()
-            .unwrap();
-        assert!(parse_heal_token_output("deadbeef", &miss)
-            .unwrap()
-            .is_none());
-
-        let off_contract = std::process::Command::new("sh")
-            .args(["-c", "echo probe-broke >&2; exit 7"])
-            .output()
-            .unwrap();
-        let message = parse_heal_token_output("deadbeef", &off_contract).unwrap_err();
-        assert!(message.contains("cannot safely resolve"));
-        assert!(message.contains("probe-broke"));
-
-        let malformed = std::process::Command::new("sh")
-            .args(["-c", "printf 'not-json\\n'"])
-            .output()
-            .unwrap();
-        assert!(parse_heal_token_output("deadbeef", &malformed)
-            .unwrap_err()
-            .contains("malformed JSON"));
-    }
-
-    fn marked_helper_fno(dir: &Path) {
-        crate::write_exec_stub(
-            dir,
-            "fno",
-            "#!/bin/sh\npwd > \"$FNO_TEST_HELPER_CWD\"\nprintf '%s\\n' \"$5\" > \"$FNO_TEST_HELPER_REGISTRY\"\nexit 0\n",
-        );
-    }
-
-    #[test]
-    fn token_helper_runs_in_explicit_scope_cwd() {
-        // PATH mutation is process-global: take the lib-wide test mutex so a
-        // concurrent PATH-dependent test does not inherit this stub.
-        let _path_guard = PATH_TEST_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _guard = test_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let scope = dir.path().join("replacement");
-        std::fs::create_dir(&scope).unwrap();
-        let marker = dir.path().join("helper-cwd");
-        let registry_marker = dir.path().join("helper-registry");
-        marked_helper_fno(dir.path());
-
-        let old_path = std::env::var_os("PATH");
-        let caller_cwd = std::env::current_dir().unwrap();
-        let relative_registry = Path::new("relative/registry.json");
-        let expected_registry = caller_cwd.join(relative_registry);
-        let prev_bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("PATH", path_with(dir.path()));
-        // The helper execs through scrape::fno_bin, which under cfg!(test)
-        // answers only a declared FNO_BIN: pin the same stub PATH pins.
-        std::env::set_var("FNO_BIN", dir.path().join("fno"));
-        std::env::set_var("FNO_TEST_HELPER_CWD", &marker);
-        std::env::set_var("FNO_TEST_HELPER_REGISTRY", &registry_marker);
-        let output =
-            token_helper_output("deadbeef", relative_registry, false, Some(&scope)).unwrap();
-        match old_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-        match prev_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        std::env::remove_var("FNO_TEST_HELPER_CWD");
-        std::env::remove_var("FNO_TEST_HELPER_REGISTRY");
-
-        assert!(output.status.success());
-        let observed = PathBuf::from(std::fs::read_to_string(&marker).unwrap().trim())
-            .canonicalize()
-            .unwrap();
-        assert_eq!(observed, scope.canonicalize().unwrap());
-        assert_eq!(
-            Path::new(std::fs::read_to_string(registry_marker).unwrap().trim()),
-            expected_registry
-        );
+    fn a_healed_row_without_a_harness_refuses_as_incomplete() {
+        let mut row = serde_json::json!({"name": "w1", "cwd": "/tmp"});
+        let err = finish_healed_row("deadbeef", &mut row).unwrap_err();
+        assert!(err.contains("incomplete row"), "{err}");
+        let mut ok = serde_json::json!({"name": "w1", "harness": "codex"});
+        assert!(finish_healed_row("deadbeef", &mut ok).is_ok());
     }
 
     #[test]

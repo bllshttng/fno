@@ -52,7 +52,7 @@ from fno._lazy_group import make_lazy_group_cls
 # eager inline command above; the `review` root claim moved to the rust
 # front door and carries no python registration;
 # `cost` moved under `whoami` and is a hidden lazy entry like its siblings.
-# Everything hidden here is one `fno help --all` away. New verbs default to
+# Everything hidden here is one `fno help --all` away. New commands default to
 # hidden; promotion to the menu is a deliberate, lint-gated act (see fno doctor lint).
 LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
     # Sub-apps (Typer instances) -----------------------------------------
@@ -61,48 +61,26 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Delivery work: plans, targets, reviews, PRs, state, and supporting operations.",
         {"hidden": True},
     ),
-    "state": ("fno.state.cli:cli", "manage fno do state files", {"hidden": True}),
-    "target": (
-        "fno.target_cli:target_app",
-        "Target sessions: status, resolve-model, and check gates",
-        {"hidden": True},
-    ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "autonomy": (
-        "fno.autonomy_cli:autonomy_app",
-        "Inspect every path that can start a session without an operator asking.",
-        {"hidden": True},
-    ),
-    "lead": (
-        "fno.lead.cli:lead_app",
-        "The lead's board and its session manifest.",
-        {"hidden": True},
-    ),
-    "worker": ("fno.worker.cli:cli", "manage delivery worker phases", {"hidden": True}),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
         "What is waiting on a human: approvals, notify, outstanding, lead board, decisions, law.",
         {"hidden": True},
     ),
-    # Moved to `inbox` (VERB_MOVES). The old top-level registration stays for
+    # Moved to `inbox`; the front door refuses the root word (command-names.tsv). The old registration stays for
     # one release - unreachable via resolve_command (the move intercepts
     # first) so it stays a hidden one-release shim, not a phantom root; the
     # moved-spellings block no longer renders, so the row teaches
     # nothing and exists only for the release clock.
     "approvals": (
-        "fno.approvals.cli:approvals_app",
+        "fno.approvals_cli:approvals_app",
         "Inspect and decide pending approvals for consequential effects.",
         {"hidden": True},
     ),
     "delivery": (
-        "fno.delivery.cli:delivery_app",
+        "fno.do_cli:delivery_app",
         "Evaluate generic delivery evidence.",
-        {"hidden": True},
-    ),
-    "plugins": (
-        "fno.plugins.cli:plugins_app",
-        "Install, verify, activate, and inspect function packs.",
         {"hidden": True},
     ),
     "mail": (
@@ -111,36 +89,19 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # the entries between this comment and `agents` below whose names
-    # sit in VERB_MOVES are one-release shims kept reachable for muscle
-    # memory; their canonical homes are the move destinations.
-    "mcp": (
-        "fno.mcp.cli:mcp_app",
-        "MCP sidecar client verbs (send an envelope to a channel).",
-        {"hidden": True},
-    ),
+    # are retired at the front door (crates/fno/command-names.tsv) and answer
+    # only through fno-py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
-    "pr": ("fno.pr:pr_app", "PR utilities (wraps scripts/lib/pr-*.sh)", {"hidden": True}),
-    "stub-manifest": (
-        "fno.stub_manifest:stub_manifest_app",
-        "Stub-manifest for contract-tier dependents (emit/validate/check-pr).",
-        {"hidden": True},
-    ),
-    "status-fanout": (
-        "fno.status_fanout:status_fanout_app",
-        "Sweep events.jsonl and route status events to configured sinks (tick).",
-        {"hidden": True},
-    ),
-    "bundle": ("fno.bundle:bundle_app", "Skill bundle build + lint.", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
-    "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
-    "project": (
-        "fno.project:project_app",
-        "Isolated per-project fno environments (now `fno config project`).",
+    "bundle": (
+        "fno.doctor_forward:bundle_signpost",
+        "Skill bundle build + lint; moved to `fno doctor bundle`.",
         {"hidden": True},
     ),
+    "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
     "resume": (
-        "fno.resume.cli:cli",
+        "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
         {"hidden": True},
     ),
@@ -149,68 +110,23 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Capture left-out work (deferred decisions, out-of-scope bugs) for retro-triage.",
         {"hidden": True},
     ),
-    "outstanding": (
-        "fno.outstanding:outstanding_app",
-        "What is waiting on a human: unharvested carve-outs and open questions.",
-        {"hidden": True},
-    ),
     "annotate": (
         "fno.annotate:annotate_app",
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
-    "retro": (
-        "fno.retro.cli:retro_app",
-        "Consume retro-triage triggers; file left-out work as backlog nodes.",
-        {"hidden": True},
-    ),
-    "think": (
-        "fno.provenance.cli:think_app",
-        "Think inspection and explicit conversational dispatch.",
-        {"hidden": True},
-    ),
-    "phase": (
-        "fno.phase:phase_app",
-        "Phase utilities (kill-check via the fno-agents binary)",
-        {"hidden": True},
-    ),
-    "roles": (
-        "fno.roles.cli:roles_app",
-        "Inspect bounded business-role definitions and resolutions.",
-        {"hidden": True},
-    ),
-    "config": ("fno.config_cli:app", "Configuration management"),
-    "notify": (
-        "fno.notify:notify_app",
-        "OS notification helper (in-package; macOS osascript / Linux notify-send)",
-        {"hidden": True},
-    ),
+    "config": ("fno.config_writer_cli:app", "Configuration management"),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "setup": (
-        "fno.setup_cli:app",
-        "Interactive settings.yaml wizard",
-        {"hidden": True},
-    ),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
-    "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),
-    "workspace": (
-        "fno.workspace.cli:cli",
-        "Worktree lifecycle and worker registration (now `fno agents workspace`).",
-        {"hidden": True},
-    ),
-    "route": (
-        "fno.route_cli:route_app",
-        "Provider route lanes: ls / set / unset / env (GLM build lane).",
-        {"hidden": True},
-    ),
+    # `fno route` (the hidden root spelling of the provider route lanes)
+    # answers natively: the front classifies it onto route-slot's
+    # config-route mode, so no Python mount remains. The worktree family's
+    # root spellings joined the same way with its port. `fno scoreboard`
+    # joined too: the front prints the command_moves notice and re-spells to
+    # `fno whoami scoreboard`.
     "evals": (
-        "fno.evals.cli:evals_app",
+        "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
-        {"hidden": True},
-    ),
-    "observer": (
-        "fno.observer.cli:observer_app",
-        "Skill eval over a recorded corpus (sweep / replay).",
         {"hidden": True},
     ),
     "pr-watch": (
@@ -218,68 +134,38 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
         {"hidden": True},
     ),
-    "loops": (
-        "fno.loops:loops_app",
-        "Loop level config + pause-all kill switch (pause-all/resume-all/status/ls)",
-        {"hidden": True},
-    ),
-    "skill-diff": (
-        "fno.skill_diff.cli:skill_diff_app",
-        "Skill-diff proposer: observer failure patterns -> cited SKILL.md diff -> PR (tick/reconcile).",
-        {"hidden": True},
-    ),
     # Individual commands (plain functions wrapped as single-command apps) -
+    # `fno whoami` itself is native; this lazy row hosts the four hidden
+    # leaves other families still own (fno.whoami_leaves). `status` and
+    # `cost` are move-intercepted spellings; their rows stay for the release
+    # clock, now pointing at the leaf stub they land on.
     "whoami": (
-        "fno.agent.cli:whoami_app",
+        "fno.whoami_leaves:whoami_app",
         "Operating-stack summary: project + fleet + walker + session + harness.",
     ),
     "status": (
-        "fno.agent.cli:status_command",
+        "fno.whoami_leaves:whoami_app",
         "Session gate satisfaction + bounded events tail + inconsistencies.",
         {"hidden": True},
     ),
-    "context": (
-        "fno.context_probe:context_command",
-        "Context-window usage for this session or a given transcript (hook door).",
-        {"hidden": True},
-    ),
     "cost": (
-        "fno.agent.cli:cost_command",
+        "fno.whoami_leaves:cost_command",
         "Cost + usage metrics from session transcripts and ledger.json.",
         {"hidden": True},
-    ),
-    "doctor": (
-        "fno.doctor_cli:doctor_app",
-        "Diagnose installed-vs-source fno skew (network-free).",
     ),
     "done": (
         "fno.done.cli:done_command",
         "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
         {"hidden": True},
     ),
-    "research": (
-        "fno.research:research_command",
-        "Retrieve + store: ddgs backbone -> self-fetch -> sources.jsonl.",
-        {"hidden": True},
-    ),
-    "scoreboard": (
-        "fno.scoreboard.cli:scoreboard_command",
-        "Read-only telemetry: stop-cause, spend, autonomy, survival, coverage.",
-        {"hidden": True},
-    ),
-    "test": (
-        "fno.test_cmd:test_command",
-        "Run pytest honestly (now `fno doctor test`): worktree-pinned PYTHONPATH, rtk-bypassed, real exit code.",
-        {"hidden": True},
+    "doctor": (
+        "fno.doctor_forward:doctor_app",
+        "Foreign doctor leaves (test, event, evals, lint, harness); the family's own surfaces are native.",
+        {},
     ),
     "update": (
-        "fno.doctor_cli:_update_signpost",
+        "fno.rust_binary:_update_signpost",
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
-        {"hidden": True},
-    ),
-    "restart": (
-        "fno.restart:restart_command",
-        "Restart running fno processes (agents daemon; mux with --mux) onto fresh builds.",
         {"hidden": True},
     ),
 }
@@ -287,13 +173,12 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
 # T1 actions are parsed by the group dispatcher and keep their existing typing.
 # These selected actions remain registered leaves as deliberate readability
 # slack; the checked-in allocation and its reference costs live in
-# scripts/ci/verb-collapse-map.tsv.
+# scripts/ci/command-collapse-map.tsv.
 COLLAPSE_KEEP: dict[str, set[str]] = {
     "agents": {"ask", "list", "logs", "loop", "loop-check", "needs", "resume", "rm", "spawn"},
     "annotate": {"list"},
     "approvals": set(),
     "backlog": {"advance", "done", "get", "next", "queued"},
-    "bundle": set(),
     "carveout": set(),
     "claim": {"release"},
     "config": {"accounts", "get", "set"},
@@ -301,26 +186,11 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "doctor": set(),
     "evals": set(),
     "event": {"emit"},
-    "loops": {"resume-all"},
     "mail": {"send"},
-    "observer": set(),
     "paths": set(),
     "plan": set(),
-    "plugins": set(),
-    "pr": {"merge"},
     "pr-watch": set(),
     "resume": set(),
-    "retro": set(),
-    "roles": set(),
-    "route": set(),
-    "setup": set(),
-    "skill-diff": set(),
-    "state": set(),
-    "stub-manifest": set(),
-    "target": set(),
-    "think": set(),
-    "worker": set(),
-    "worktree": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():
@@ -377,8 +247,7 @@ def _check_migration() -> None:
     """Fast-path stat check; runs migration on first invocation post-upgrade.
 
     The try/except Exception: pass is intentional - this migration is a
-    best-effort startup convenience, not load-bearing.  Hard-fail path
-    remains ``fno config setup migrate-paths`` (called explicitly).
+    best-effort startup convenience, not load-bearing.
 
     Guarded by FNO_SKIP_MIGRATION=1 (explicit opt-out) or PYTEST_CURRENT_TEST
     (pytest sets this automatically in all test processes) for isolation.
@@ -413,52 +282,32 @@ def _check_migration() -> None:
 
 
 class _HonestMenuGroup(make_lazy_group_cls(LAZY_SUBCOMMANDS)):  # type: ignore[misc]
-    """Root group; appends the honest verb-count line to `fno --help`.
+    """Root group; appends the honest command-count line to `fno --help`.
 
     The curated menu is small on purpose (menu-caps). Without a count it reads
-    as the whole surface, so a reader (human or agent) concludes a missing verb
+    as the whole surface, so a reader (human or agent) concludes a missing command
     does not exist and works around its absence. This line states how many
-    top-level verbs really exist and where the rest are. The count is read from
+    top-level commands really exist and where the rest are. The count is read from
     the registry at render time - lazy entries resolve to a hidden-aware stub
     with no module import, so `fno --help` stays fast and works from a bare
-    install. The leaf count lives in scripts/ci/verb-baseline.txt (and the
-    `fno doctor lint verb-ratchet` output) for anyone who wants the full surface.
+    install. The leaf count lives in scripts/ci/command-baseline.txt (and the
+    `fno doctor lint command-ratchet` output) for anyone who wants the full surface.
     """
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         super().format_help(ctx, formatter)
-        from fno.verb_moves import destination_is_registered, move_for
-
         names = self.list_commands(ctx)
-        moved_names = {
-            n
-            for n in names
-            if (move := move_for(n)) is not None
-            and destination_is_registered(move, names)
-        }
-        # Moved spellings are excluded from BOTH counts, so the fraction
-        # stays possible even if a moved entry ever loses its hidden flag
-        # (the test suite pins that flag; this is the runtime backstop).
         visible = 0
         for n in names:
             cmd = self.get_command(ctx, n)
-            if (
-                cmd is not None
-                and not getattr(cmd, "hidden", False)
-                and n not in moved_names
-            ):
+            if cmd is not None and not getattr(cmd, "hidden", False):
                 visible += 1
-        moved = len(moved_names)
-        moved_note = (
-            f", plus {moved} moved spelling{'s' if moved != 1 else ''} that still work"
-            if moved
-            else ""
-        )
         formatter.write_paragraph()
         formatter.write_text(
-            f"Showing {visible} of {len(names) - moved} top-level verbs{moved_note}. "
-            f"`mux` and `version` forward to the Rust front binary. Hidden "
-            f"verbs are invocable: run `fno help --all` for every command."
+            f"Showing {visible} top-level commands. "
+            f"`mux` and `version` forward to the Rust front binary; `restart`, "
+            f"`uninstall` and `update` answer there too. Run `fno <command> --help` "
+            f"for one command."
         )
 
 
@@ -590,13 +439,13 @@ close flags (--skip-stamp, -F --force, -R --reason); any completion
 flag (-p/-l/-m, --backfill) or a title/branch query takes the rich
 completion surface ported from the retired root spelling.
 
-Run `fno help <command>` for any command's full flag list.\
+Run `fno <command> --help` for any command's full flag list.\
 """
 
 SHORTHAND_POINTER = (
     "Shorthands: UPPERCASE shorts are global (-J --json, -A --all, -F --force, "
     "-N --dry-run, -R --reason, -Y --yolo); lowercase shorts are per-command. "
-    "Run `fno help shorthands` for the full legend."
+    "Run `fno-py help shorthands` for the full legend."
 )
 
 # Short help for the eager inline commands (defined in this module, so listing
@@ -613,36 +462,21 @@ def _render_full_menu() -> str:
 
     Reads short-help strings straight from LAZY_SUBCOMMANDS + the eager map -
     it never imports a command module, so a broken sub-app still lists here
-    (AC3-UI). Scope is the TOP LEVEL only: a sub-app's own (hidden) verbs are
+    (AC3-UI). Scope is the TOP LEVEL only: a sub-app's own (hidden) commands are
     one import away and would break the no-import guarantee, so they live behind
-    the scoped door `fno help <group> --all` instead.
+    the scoped door `fno-py help <group> --all` instead.
 
-    A spelling registered in VERB_MOVES is a signpost, not a root: it forwards
-    to its new home and prints the new spelling on use. Moved spellings render
-    nowhere here (operator ruling via d-26002be8: "they can be discovered in
-    their own subcommands") - each alias prints its new home when used, which
-    is the teaching moment that matters.
     """
-    from fno.verb_moves import destination_is_registered, move_for
-
-    # Eager inline commands classify too, not only lazy entries: a later
-    # wave moves `cost`, which is an eager @app.command, and a move on an
-    # eager name must render as a signpost exactly like a lazy one or the
-    # full menu and the --help count line disagree.
     candidates: dict[str, str] = dict(_EAGER_COMMAND_HELP)
     for name, entry in LAZY_SUBCOMMANDS.items():
         candidates[name] = entry[1] if isinstance(entry, tuple) and len(entry) >= 2 else ""
-    rows: dict[str, str] = {}
-    for name, short in candidates.items():
-        move = move_for(name)
-        if move is None or not destination_is_registered(move, candidates):
-            rows[name] = short
+    rows = candidates
     width = max(len(n) for n in rows)
     lines = [
         "fno-py full top-level surface - every fno-py command, including hidden.",
         "The curated menu is `fno --help`; hidden commands are invocable, just not advertised.",
-        "For a group's own verbs (hidden included) run `fno help <group> --all` "
-        "(e.g. `fno help agents --all`), or `fno <group> --help` for its menu.",
+        "For a group's own commands (hidden included) run `fno-py help <group> --all` "
+        "(e.g. `fno-py help agents --all`), or `fno <group> --help` for its menu.",
         "",
         "Commands:",
     ]
@@ -652,10 +486,10 @@ def _render_full_menu() -> str:
 
 def _render_group_full_menu(path: list[str]) -> Optional[str]:
     """Render a sub-app's full command list (hidden included) for
-    `fno help <group> [<subgroup> ...] --all`.
+    `fno-py help <group> [<subgroup> ...] --all`.
 
     Unlike the top-level door this DOES import the named group (one module), so
-    it can enumerate the group's own hidden verbs - the discovery path that the
+    it can enumerate the group's own hidden commands - the discovery path that the
     import-free top-level `help --all` cannot provide. Returns None when the path
     does not resolve to a command group (the caller then forwards to `--help`).
     """
@@ -697,7 +531,7 @@ def _render_group_full_menu(path: list[str]) -> Optional[str]:
     width = max(len(n) for n in rows)
     lines = [
         f"{title} full command surface - every subcommand, including hidden.",
-        f"The curated menu is `{title} --help`; hidden verbs are invocable, just not advertised.",
+        f"The curated menu is `{title} --help`; hidden commands are invocable, just not advertised.",
         "",
         "Commands:",
     ]
@@ -707,6 +541,7 @@ def _render_group_full_menu(path: list[str]) -> Optional[str]:
 
 @app.command(
     name="help",
+    hidden=True,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "Show help for the root command or any subcommand. The git-style "
@@ -728,7 +563,7 @@ def help_command(ctx: typer.Context) -> None:
         rest = [a for a in args if a not in ("--all", "-A")]
         if rest:
             # Scoped door: `fno help <group> [<subgroup>] --all` lists that
-            # group's own verbs, hidden included (imports the one named group).
+            # group's own commands, hidden included (imports the one named group).
             group_menu = _render_group_full_menu(rest)
             if group_menu is not None:
                 typer.echo(group_menu)
@@ -778,7 +613,7 @@ def help_command(ctx: typer.Context) -> None:
 def _run_rust_front(args: list[str]) -> None:
     """Exec the Rust front (`fno`) with `args`, propagating its exit code.
 
-    `mux` and `version` are Rust-front verbs promoted into the Python listings
+    `mux` and `version` are Rust-front commands promoted into the Python listings
     (d-cf2d6fe1): a user typing `fno mux ...` never reaches Python (the Rust
     binary intercepts), but `fno-py mux ...` must still work and the two
     listings must show real rows rather than footnotes about an absence.
@@ -818,7 +653,7 @@ def _run_rust_front(args: list[str]) -> None:
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
-        "Mux pane control and the web console (the Rust front's verb).\n\n"
+        "Mux pane control and the web console (the Rust front's command).\n\n"
         "List panes, send keystrokes, manage layouts and the web view. Run "
         "`fno mux` for the full surface."
     ),
@@ -833,7 +668,7 @@ def mux(
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
-        "Show the installed fno version(s) (the Rust front's verb).\n\n"
+        "Show the installed fno version(s) (the Rust front's command).\n\n"
         "Prints the Rust front's own version report; `fno --version` remains "
         "the Python package's flag form."
     ),

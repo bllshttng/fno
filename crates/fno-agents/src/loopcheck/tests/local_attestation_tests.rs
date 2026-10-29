@@ -28,7 +28,7 @@ fn rounds_bot_review_and_local_attestation_at_one_sha_are_one_round() {
 
 #[test]
 fn a_zero_file_retraction_for_an_old_head_spares_the_newer_pass() {
-    // The verb emits the retraction after any newer pass, so the events
+    // The command emits the retraction after any newer pass, so the events
     // order is pass@head2 then retract@head1: the named (old) pass is
     // already superseded, and revoking it must not also revoke the live
     // head-2 pass nobody asked about.
@@ -65,4 +65,25 @@ fn a_zero_file_retraction_for_an_old_head_spares_the_newer_pass() {
         passes.iter().any(|p| p.head == "head2" && p.is_pass),
         "the newer head-2 pass must survive a retraction naming head-1: {passes:?}"
     );
+}
+
+#[test]
+fn verify_ids_come_from_invocation_rows_carrying_the_flag() {
+    // One review_invocation row carries the flag; rows without flags, a
+    // foreign id, an unjoined id, and unparseable lines contribute nothing.
+    let line = |id: &str, flags: &str| {
+        format!(
+            "{{\"type\":\"review_invocation\",\"data\":{{\"invocation_id\":\"{id}\",\"stage\":\"started\",\"flags\":{flags}}}}}"
+        )
+    };
+    let events = format!(
+        "{}\n{}\n{}\n{}\nnot json\n",
+        line("v1", r#"["--verify-fixes"]"#),
+        line("v2", "[]"),
+        line("v1", "[]"),
+        line("UNJOINED", r#"["--verify-fixes"]"#),
+    );
+    let ids = verify_invocation_ids(&events);
+    assert_eq!(ids.len(), 1);
+    assert!(ids.contains("v1"));
 }

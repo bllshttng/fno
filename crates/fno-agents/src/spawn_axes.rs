@@ -78,15 +78,7 @@ pub(crate) fn repr(s: &str) -> String {
 pub fn decide(payload: &Value) -> Value {
     let route = axis(payload, "route");
     let account = axis(payload, "account");
-    let model = axis(payload, "model");
     let explicit_route = flag(payload, "explicit_route");
-    let explicit_vendor_present = flag(payload, "explicit_vendor_present");
-    let explicit_vendor = payload
-        .get("explicit_vendor")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let explicit_model_present = flag(payload, "explicit_model_present");
-    let has_model = flag(payload, "has_model");
     let grid_candidate_present = flag(payload, "grid_candidate_present");
     let slot_chain: Vec<String> = payload
         .get("slot_chain")
@@ -98,10 +90,6 @@ pub fn decide(payload: &Value) -> Value {
         })
         .unwrap_or_default();
     let prov = payload.get("prov").and_then(Value::as_str).unwrap_or("");
-    let cfg_harness = payload
-        .get("cfg_harness")
-        .and_then(Value::as_str)
-        .unwrap_or("");
 
     let mut inject: Vec<Value> = Vec::new();
     let mut applied: Vec<Value> = Vec::new();
@@ -112,12 +100,7 @@ pub fn decide(payload: &Value) -> Value {
     let mut bundle_inject: Vec<Value> = Vec::new();
 
     // --- route ---------------------------------------------------------- //
-    if !route.value.is_empty()
-        && !explicit_route
-        && !explicit_model_present
-        && !explicit_vendor_present
-        && !grid_candidate_present
-    {
+    if !route.value.is_empty() && !explicit_route && !grid_candidate_present {
         inject.push(json!(["--route", route.value]));
         applied.push(json!([
             "route",
@@ -132,8 +115,6 @@ pub fn decide(payload: &Value) -> Value {
         // candidate excludes an explicit -m anyway.
         let why = if explicit_route {
             "the caller passed --route".to_string()
-        } else if explicit_vendor_present {
-            format!("the caller passed --provider {}", repr(explicit_vendor))
         } else if grid_candidate_present {
             let chain = if slot_chain.is_empty() {
                 "no reason recorded".to_string()
@@ -141,17 +122,12 @@ pub fn decide(payload: &Value) -> Value {
                 slot_chain.join("; ")
             };
             format!("the capacity grid chose a lane ({chain})")
-        } else if explicit_model_present {
-            "the caller passed --model".to_string()
         } else {
             "no suppression reason recorded".to_string()
         };
-        // The caller's own argv is route-shaped when it carries a route, or a
-        // vendor and a model together: the pair carries what --route carries
-        // (spawn_defaults.py reads it that way), so the caller's own route
-        // bills and the "caller default" tail would be false.
-        let caller_route_shaped =
-            explicit_route || (explicit_vendor_present && explicit_model_present);
+        // The caller's own route bills and the "caller default" tail would be
+        // false.
+        let caller_route_shaped = explicit_route;
         let tail = if caller_route_shaped {
             "your own route bills this worker"
         } else {
@@ -164,13 +140,6 @@ pub fn decide(payload: &Value) -> Value {
         ));
         suppressed.push(json!(["route", route.value, route.rung, why,]));
     }
-    // route_present covers BOTH ways --route ends up in the final argv:
-    // injected from config, or already explicit on the caller's argv. An
-    // operator-typed `--route zai/...` with no `-m` must still suppress the
-    // config model below - the route+model collision (five-opus-workers
-    // defect) this exists to prevent.
-    let route_present = route_injected || explicit_route;
-
     // --- account -------------------------------------------------------- //
     let grid_account_injected = flag(payload, "grid_account_injected");
     let account_flag_present = flag(payload, "account_flag_present");
@@ -204,257 +173,8 @@ pub fn decide(payload: &Value) -> Value {
         }
     }
 
-    // --- model ---------------------------------------------------------- //
-    if !model.value.is_empty() && !has_model {
-        // The config model is suppressed when something else already owns
-        // the model: an injected route (route carries vendor/model), a bare
-        // explicit vendor, or a --role that resolves to a real route. An
-        // explicit -m already won via has_model.
-        if route_present {
-            messages.push(format!(
-                "fno agents spawn: --route owns the model; not injecting {}.model {}",
-                model.rung,
-                repr(&model.value),
-            ));
-            suppressed.push(json!([
-                "model",
-                model.value,
-                model.rung,
-                "--route owns the model",
-            ]));
-        } else if explicit_vendor_present {
-            // A bare explicit -P/--provider names the vendor half of a route;
-            // injecting the config model would pair a DIFFERENT vendor's model
-            // behind the explicit vendor.
-            messages.push(format!(
-                "fno agents spawn: --provider {} names a vendor; not injecting \
-                 {}.model {} (add --model yourself to complete the route)",
-                repr(explicit_vendor),
-                model.rung,
-                repr(&model.value),
-            ));
-            suppressed.push(json!([
-                "model",
-                model.value,
-                model.rung,
-                format!("--provider {} names a vendor", repr(explicit_vendor)),
-            ]));
-        } else if flag(payload, "role_resolves") {
-            // resolve_route is fail-SAFE: only a REAL route owns the model.
-            let role = opt_str(payload, "role").unwrap_or_default();
-            messages.push(format!(
-                "fno agents spawn: --role {} resolves to a route; leaving model to \
-                 the route (not injecting {}.model {})",
-                repr(&role),
-                model.rung,
-                repr(&model.value),
-            ));
-            suppressed.push(json!([
-                "model",
-                model.value,
-                model.rung,
-                format!("--role {} resolves to a route", repr(&role)),
-            ]));
-        } else {
-            // A provider-less config model is scoped to its HOME harness (the
-            // config provider, else claude), never the ambient one. Inject
-            // only when the spawn's resolved TARGET equals that home: a codex
-            // spawn must not inherit a claude model (it 400s after the
-            // round-trip). The seam precomputed the target; a resolution
-            // failure degrades open (AC5-FR).
-            let home = if cfg_harness.is_empty() {
-                "claude".to_string()
-            } else {
-                cfg_harness.to_string()
-            };
-            let failed = flag(payload, "harness_target_failed");
-            let target = opt_str(payload, "harness_target").filter(|s| !s.is_empty());
-            if failed {
-                messages.push(
-                    "fno agents spawn: harness resolution failed; leaving model \
-                     to the harness"
-                        .to_string(),
-                );
-                suppressed.push(json!([
-                    "model",
-                    model.value,
-                    model.rung,
-                    "harness resolution failed",
-                ]));
-            } else if let Some(t) = target {
-                if t == home {
-                    inject.push(json!(["--model", model.value]));
-                    applied.push(json!([
-                        "model",
-                        model.value,
-                        format!("{}.model", model.rung),
-                    ]));
-                } else {
-                    messages.push(format!(
-                        "fno agents spawn: config model {} is scoped to {}; spawn \
-                         resolves {}, leaving model to the harness (bind {}.provider \
-                         to apply it cross-harness)",
-                        repr(&model.value),
-                        home,
-                        t,
-                        model.rung,
-                    ));
-                    suppressed.push(json!([
-                        "model",
-                        model.value,
-                        model.rung,
-                        format!("scoped to {home}; spawn resolves {t}"),
-                    ]));
-                }
-            }
-        }
-    }
-
-    // --- effort --------------------------------------------------------- //
-    // The seam pre-validates the effort surface (effort_tokens) and passes
-    // the reason when validation failed; a config value with no reason
-    // injects. Explicit --effort remains fail-closed in cmd_spawn.
-    let effort = axis(payload, "effort");
-    if !flag(payload, "has_effort") && !effort.value.is_empty() {
-        match opt_str(payload, "effort_reason").filter(|s| !s.is_empty()) {
-            None => {
-                inject.push(json!(["--effort", effort.value]));
-                applied.push(json!([
-                    "effort",
-                    effort.value,
-                    format!("{}.effort", effort.rung),
-                ]));
-            }
-            Some(reason) => {
-                messages.push(format!(
-                    "fno agents spawn: effort skipped ({reason}); {}.effort = {} ignored",
-                    effort.rung,
-                    repr(&effort.value),
-                ));
-                suppressed.push(json!(["effort", effort.value, effort.rung, reason]));
-            }
-        }
-    }
-
-    // --- substrate ------------------------------------------------------ //
-    // A config-sourced substrate must be a KNOWN value AND honored by the
-    // resolved provider (the seam precomputes both facts); otherwise it
-    // degrades open with the named condition, never failing at the spawn
-    // parser. The injected value feeds the permission axis' effective lane.
-    let substrate = axis(payload, "substrate");
-    let explicit_substrate = opt_str(payload, "explicit_substrate").filter(|s| !s.is_empty());
-    let mut injected_substrate: Option<String> = None;
-    // `bg` is the Rust-internal kind, never a config spelling: the CLI flag
-    // refuses it and the dispatch resolver refuses it, so a config value that
-    // reached the child as `--substrate bg` would be the ONE untaught door.
-    // Map it to `thread` loudly instead.
-    let mut substrate_mapped = false;
-    let mut substrate_value = substrate.value.clone();
-    if substrate_value == "bg" {
-        substrate_value = "thread".to_string();
-        substrate_mapped = true;
-    }
-    if explicit_substrate.is_none() && !substrate_value.is_empty() {
-        let substrate_ok = flag(payload, "substrate_ok");
-        if !prov.is_empty() && substrate_ok {
-            if substrate_mapped {
-                messages.push(format!(
-                    "fno agents spawn: {}.substrate = \"bg\" is the retired spelling; \
-                     mapping it to \"thread\" (set substrate = \"thread\" to silence this)",
-                    substrate.rung,
-                ));
-            }
-            inject.push(json!(["--substrate", substrate_value]));
-            injected_substrate = Some(substrate_value.clone());
-            applied.push(json!([
-                "substrate",
-                substrate_value,
-                format!("{}.substrate", substrate.rung),
-            ]));
-        } else {
-            let reason = if prov.is_empty() {
-                "harness resolution failed".to_string()
-            } else if flag(payload, "substrate_unknown") {
-                format!(
-                    "unknown substrate (valid: {})",
-                    payload
-                        .get("substrate_valid_list")
-                        .and_then(Value::as_str)
-                        .unwrap_or("pane, thread, headless, bg")
-                )
-            } else {
-                format!(
-                    "{prov} does not support substrate {}; thread requires a \
-                     journey-proven lane (claude and codex today; opencode remains \
-                     unearned), so the spawn falls back to the pane default",
-                    repr(&substrate.value)
-                )
-            };
-            messages.push(format!(
-                "fno agents spawn: substrate skipped ({reason}); {}.substrate = {} ignored",
-                substrate.rung,
-                repr(&substrate.value),
-            ));
-            suppressed.push(json!([
-                "substrate",
-                substrate.value,
-                substrate.rung,
-                reason,
-            ]));
-        }
-    }
-
-    // --- permission mode ------------------------------------------------ //
-    // Same shape as substrate, but mappability depends on the EFFECTIVE
-    // substrate (explicit pin > this-run injection > the pane default): a
-    // non-claude bg/headless lane refuses a mapped --permission-mode. Claude
-    // honors it everywhere; the pane token check is precomputed by the seam.
-    let permission = axis(payload, "permission_mode");
-    if !flag(payload, "has_permission") && !permission.value.is_empty() {
-        let eff = explicit_substrate
-            .or(injected_substrate)
-            .unwrap_or_else(|| "pane".to_string());
-        // The capability table decides which lanes carry the axis; the seam
-        // precomputes both lanes' answers from the one Rust vocabulary (see
-        // codex_posture.rs). Claude is honored everywhere, as the front doors
-        // have always read.
-        let mappable = prov == "claude"
-            || (eff == "pane" && flag(payload, "pane_tokens_ok"))
-            || ((eff == "thread" || eff == "bg") && flag(payload, "thread_tokens_ok"));
-        if !prov.is_empty() && mappable {
-            inject.push(json!(["--permission-mode", permission.value]));
-            applied.push(json!([
-                "permission_mode",
-                permission.value,
-                format!("{}.permission_mode", permission.rung),
-            ]));
-        } else {
-            let reason = if prov.is_empty() {
-                "harness resolution failed".to_string()
-            } else {
-                format!(
-                    "{prov} cannot map permission mode {} on substrate {}",
-                    repr(&permission.value),
-                    repr(&eff)
-                )
-            };
-            messages.push(format!(
-                "fno agents spawn: permission-mode skipped ({reason}); \
-                 {}.permission_mode = {} ignored",
-                permission.rung,
-                repr(&permission.value),
-            ));
-            suppressed.push(json!([
-                "permission_mode",
-                permission.value,
-                permission.rung,
-                reason,
-            ]));
-        }
-    }
-
     // --- pane group ----------------------------------------------------- //
-    // The placement judgment itself is the spawn-overlay verb's; this only
+    // The placement judgment itself is the spawn-overlay command's; this only
     // decides what the seam does with its answer. An unavailable overlay
     // degrades open with a named line, never failing the spawn.
     let pane_group = axis(payload, "pane_group");
@@ -615,7 +335,7 @@ pub fn reentry_mechanism_decide(ask: &Value) -> Value {
 }
 
 /// The `wake_name` field's answer: the identity a wake fork carries, read
-/// from the registry beside the reentry plan (same field-on-a-verb shape).
+/// from the registry beside the reentry plan (same field-on-a-command shape).
 /// An unreadable registry degrades to an empty one, so the full rung chain
 /// (row, tombstone, transcript, alias) still answers: a wake must never
 /// block mail on registry state.
@@ -643,7 +363,44 @@ pub fn wake_name_decide(ask: &Value) -> Value {
     answer
 }
 
-/// The verb entry: JSON payload on stdin, decision JSON on stdout (the
+/// The permission mode a fleet pane spec carries. An explicit ask wins. A
+/// non-empty `fno_id` is the fleet-spawn proof: the spawner assigns it and
+/// bare `footnote` in the user's own terminal never sends one, so only a
+/// fleet pane gets the operator's spawn default, else fno's builtin
+/// unattended answer (the fleet cannot answer a footnote ask). Without an
+/// `fno_id` the spec carries no mode and the user's own settings decide.
+fn fleet_pane_mode(ask: &Value, cwd: &std::path::Path) -> Option<String> {
+    fleet_pane_mode_decided(
+        ask.get("permission_mode").and_then(Value::as_str),
+        ask.get("fno_id").and_then(Value::as_str),
+        || {
+            crate::agents_config::config_lookup(cwd, &["agents", "defaults", "permission_mode"])
+                .and_then(|v| v.as_str().map(str::to_string))
+        },
+    )
+}
+
+/// The decision core, with the config read injected so the test needs no disk.
+fn fleet_pane_mode_decided(
+    explicit: Option<&str>,
+    fno_id: Option<&str>,
+    config: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Some(mode) = explicit.map(str::trim).filter(|m| !m.is_empty()) {
+        return Some(mode.to_string());
+    }
+    fno_id.filter(|id| !id.is_empty())?;
+    Some(
+        config()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                crate::backlog::advance_dispatch::SPAWN_PERMISSION_BUILTIN.to_string()
+            }),
+    )
+}
+
+/// The command entry: JSON payload on stdin, decision JSON on stdout (the
 /// spawn-overlay shape). Exit 0 even for a "no axes" answer; exit 2 only for
 /// transport-level faults (unreadable payload), which the caller reports as
 /// the owner being unavailable.
@@ -674,7 +431,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     };
     // A `dispatch_credit` field answers who answers for a node dispatch:
     // the covering role owner plus, when the role row carries a live
-    // session, the lead to mail at launch (same field-on-a-verb shape as
+    // session, the lead to mail at launch (same field-on-a-command shape as
     // node_seed).
     if let Some(ask) = parsed.get("dispatch_credit") {
         println!("{}", crate::dispatch_credit::covering_role(ask));
@@ -692,20 +449,17 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `spawn_node` field answers which node the spawn works, with the
-    // source that named it (same field-on-a-verb shape as node_seed).
+    // source that named it (same field-on-a-command shape as node_seed).
     if let Some(ask) = parsed.get("spawn_node") {
         println!("{}", crate::node_seed::resolve_node(ask));
         return 0;
     }
     // A `keeper_posture` field asks the agy_launch owner which permission
-    // tokens a launch carries (same field-on-a-verb shape as node_seed).
+    // tokens a launch carries (same field-on-a-command shape as node_seed).
     if let Some(ask) = parsed.get("keeper_posture") {
-        let s = |k: &str| ask.get(k).and_then(Value::as_str).map(|v| v.to_string());
         let answer = match crate::agy_launch::keeper_posture(
             ask.get("harness").and_then(Value::as_str).unwrap_or(""),
             ask.get("lane").and_then(Value::as_str).unwrap_or("pane"),
-            s("permission_mode").as_deref(),
-            ask.get("yolo").and_then(Value::as_bool).unwrap_or(false),
         ) {
             Ok(p) => serde_json::json!({
                 "tokens": p.tokens,
@@ -718,28 +472,6 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         println!("{answer}");
         return 0;
     }
-    // An `agy_mint` field asks for the conversation-mint argv.
-    if let Some(ask) = parsed.get("agy_mint") {
-        let s = |k: &str| ask.get(k).and_then(Value::as_str).map(|v| v.to_string());
-        let answer = match crate::agy_launch::agy_mint_argv(
-            s("model").as_deref(),
-            s("effort").as_deref(),
-            s("permission_mode").as_deref(),
-            ask.get("yolo").and_then(Value::as_bool).unwrap_or(false),
-        ) {
-            Ok(argv) => serde_json::json!({"argv": argv}),
-            Err(reason) => serde_json::json!({"refused": reason}),
-        };
-        println!("{answer}");
-        return 0;
-    }
-    // An `agy_mint_run` field asks the runtime to EXECUTE the mint turn and
-    // answer the conversation id (the argv owner stays in agy_launch.rs; the
-    // process mechanics live in agy_mint.rs).
-    if let Some(ask) = parsed.get("agy_mint_run") {
-        println!("{}", crate::agy_mint::run(ask));
-        return 0;
-    }
     // A `resume_pin` field routes the same way: which model a resume comes
     // back on, answered by crates/fno-agents/src/resume_pin.rs.
     if let Some(pin) = parsed.get("resume_pin") {
@@ -747,7 +479,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `reentry_mechanism` field asks the reentry resolver which relaunch a
-    // wake may take (the same field-on-a-verb shape). It calls the
+    // wake may take (the same field-on-a-command shape). It calls the
     // registry-writing wrapper, so a route the resolver recovered from a
     // bare row's transcript is also persisted here, the same as any door.
     if let Some(ask) = parsed.get("reentry_mechanism") {
@@ -756,20 +488,20 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     }
     // A `wake_name` field asks which identity a wake fork carries: the
     // session's last recorded registry name, else the wake- alias (same
-    // field-on-a-verb shape).
+    // field-on-a-command shape).
     if let Some(ask) = parsed.get("wake_name") {
         println!("{}", wake_name_decide(ask));
         return 0;
     }
     // A `reap_receipt` field asks the receipt builder for the Python
-    // registry choke point's removal receipt (same field-on-a-verb shape).
+    // registry choke point's removal receipt (same field-on-a-command shape).
     if let Some(ask) = parsed.get("reap_receipt") {
         println!("{}", crate::receipt::decide_reap_receipt(ask));
         return 0;
     }
     // A `removal_accounting` field runs the registry write choke point's
     // removal accounting for the Python write primitive (same
-    // field-on-a-verb shape): the before-rows ride the payload, the
+    // field-on-a-command shape): the before-rows ride the payload, the
     // after-rows read from the registry on disk, and the existing
     // accounting stages the receipts and emits the events.
     if let Some(ask) = parsed.get("removal_accounting") {
@@ -777,7 +509,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `pi_session_lookup` field asks the pi store owner what a
-    // (cwd, session id) pair resolves to right now (same field-on-a-verb
+    // (cwd, session id) pair resolves to right now (same field-on-a-command
     // shape as node_seed).
     if let Some(ask) = parsed.get("pi_session_lookup") {
         use std::path::PathBuf;
@@ -834,7 +566,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // A `pi_route` field asks the pi route owner which provider, model and
-    // effort tokens a launch carries (same field-on-a-verb shape).
+    // effort tokens a launch carries (same field-on-a-command shape).
     if let Some(ask) = parsed.get("pi_route") {
         let s = |k: &str| ask.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let route = crate::pi::pi_route(&s("model"), &s("effort"), &s("tools"), &s("deny_tools"));
@@ -851,11 +583,12 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     // session id it names.
     if let Some(ask) = parsed.get("footnote_pane_spec") {
         let s = |k: &str| ask.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+        let cwd = std::path::Path::new(s("cwd").unwrap_or("."));
         let answer = match crate::footnote_harness::write_pane_spec(
-            std::path::Path::new(s("cwd").unwrap_or(".")),
+            cwd,
             s("model").unwrap_or(""),
             s("node"),
-            s("permission_mode"),
+            fleet_pane_mode(ask, cwd).as_deref(),
             s("fno_id"),
         ) {
             Ok((path, fno_id)) => serde_json::json!({"path": path, "fno_id": fno_id}),
@@ -864,15 +597,35 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         println!("{answer}");
         return 0;
     }
-    println!("{}", decide(&parsed));
+    // The fallthrough WAS the axis composition (config --model/--effort/
+    // --substrate/--permission-mode injection); it is retired with the flags.
+    // A stale caller reads the refusal and stops; the field asks above are
+    // the command's live surface.
+    println!(
+        "{}",
+        serde_json::json!({
+            "refused": "the spawn-axis composition is retired; the lane template owns the launch line (docs/HARNESSES.md)"
+        })
+    );
     0
 }
+
+/// The role flags the client parses into spawn params.
+pub const ROLE_FLAGS: &[&str] = &[
+    "--role-level",
+    "--role-scope",
+    "--promote",
+    "--hand-off",
+    "--succeed",
+    "--take-over",
+];
 
 /// One role flag the client parses into spawn params: typed here
 /// so a promoted codex thread row is promoted AT MINT - the seed turn
 /// enqueues inside the lane and must never submit to an unpromoted row.
-/// The level bound is the type the registry row stores (a u32 0..=2);
-/// territory and succession policy live at the Python seam.
+/// The level bound is the type the registry row stores (a u32 0..=2).
+/// `--promote` repeats into the team's scopes, and the promote door
+/// (`spawn_promote`) owns territory and succession policy.
 pub fn insert_role_flag(
     flag: &str,
     args: &mut impl Iterator<Item = String>,
@@ -892,9 +645,115 @@ pub fn insert_role_flag(
             let scope = args.next().ok_or("--role-scope needs a value")?;
             params.insert("role_scope".into(), Value::from(scope));
         }
+        "--promote" => {
+            let scope = args.next().ok_or("--promote needs a value")?;
+            let scopes = params
+                .entry("promote")
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(scopes) = scopes {
+                scopes.push(Value::from(scope));
+            }
+        }
+        "--hand-off" | "--succeed" => {
+            if flag == "--succeed" {
+                eprintln!("--succeed is now --hand-off; the old spelling answers for one release.");
+            }
+            params.insert("hand_off".into(), Value::Bool(true));
+        }
+        "--take-over" => {
+            let reason = args.next().ok_or("--take-over needs a value")?;
+            params.insert("take_over".into(), Value::from(reason));
+        }
         other => return Err(format!("unknown role flag: {other}")),
     }
     Ok(())
+}
+
+/// The spawn-head flags the binary owns end to end (row 9): the typed
+/// parse beside `insert_role_flag`, then the verdicts. The two value
+/// verdicts print the Python door's line bare, so both doors teach one
+/// owner text until row 10 retires the Python stubs (d-19004329).
+pub fn insert_spawn_flag(
+    flag: &str,
+    args: &mut impl Iterator<Item = String>,
+    params: &mut serde_json::Map<String, Value>,
+) -> Result<(), String> {
+    match flag {
+        "--output-format" => {
+            let v = args.next().ok_or("--output-format needs a value")?;
+            params.insert("output_format".into(), Value::from(v));
+        }
+        "--monitor" => {
+            let v = args.next().ok_or("--monitor needs a value")?;
+            params.insert("monitor".into(), Value::from(v));
+        }
+        // An fno flag, never forwarded to the harness: `accounts::launch`
+        // resolves the cutover's record into the launch env.
+        "--dispatch-account" => {
+            let v = args.next().ok_or("--dispatch-account needs a value")?;
+            params.insert("dispatch_account".into(), Value::from(v));
+        }
+        other => return Err(format!("unknown spawn flag: {other}")),
+    }
+    Ok(())
+}
+
+/// The Python door's refusal lines, pinned as constants (plan change 1):
+/// `agents/cli.py` output-format gate and `spawn_defaults.resolve_spawn_gates`.
+/// The zai line is unreachable at this door (every valid pane monitor spawn
+/// stays Python on the pane predicate), pinned so the parity stays one grep
+/// away.
+pub const OUTPUT_FORMAT_GOLDEN: &str =
+    "--output-format supports only 'json' on claude headless spawns";
+pub const MONITOR_VALUE_GOLDEN: &str = "--monitor must be 'happy'";
+pub const MONITOR_PANE_GOLDEN: &str = "--monitor happy needs --as pane; thread and headless workers do not pass the happy launcher seam";
+pub const MONITOR_CLAUDE_GOLDEN: &str = "--monitor happy requires the claude harness; got harness ";
+pub const MONITOR_ZAI_GOLDEN: &str = "--monitor happy currently supports only the zai provider";
+
+/// The `--monitor` verdict: value gate, pane-only gate, claude-only gate, in
+/// `resolve_spawn_gates`' order. `Launch` answers the one combination the
+/// gate admits; the seam's pane predicate keeps that spawn Python, so this
+/// door only ever fires the `Refuse` half in practice.
+pub enum MonitorSeam {
+    None,
+    Launch,
+    Refuse(String),
+}
+
+pub fn monitor_seam(monitor: Option<&str>, provider: &str, substrate: &str) -> MonitorSeam {
+    let Some(v) = monitor else {
+        return MonitorSeam::None;
+    };
+    if v != "happy" {
+        return MonitorSeam::Refuse(format!("{} (got {})", MONITOR_VALUE_GOLDEN, repr(v)));
+    }
+    if substrate != "pane" {
+        return MonitorSeam::Refuse(MONITOR_PANE_GOLDEN.to_string());
+    }
+    if provider != "claude" {
+        return MonitorSeam::Refuse(format!("{MONITOR_CLAUDE_GOLDEN}{}", repr(provider)));
+    }
+    MonitorSeam::Launch
+}
+
+/// The `--output-format` verdict: admitted only for the one shape PR-watch
+/// fires (claude + headless + json). `Some(v)` carries the validated value
+/// to the claude headless argv builder; `Err` is the golden refusal.
+pub fn output_format_seam(
+    format: Option<&str>,
+    provider: &str,
+    substrate: &str,
+) -> Result<Option<String>, String> {
+    match format {
+        None => Ok(None),
+        Some(v) => {
+            if provider != "claude" || substrate != "headless" || v != "json" {
+                Err(OUTPUT_FORMAT_GOLDEN.to_string())
+            } else {
+                Ok(Some(v.to_string()))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -907,6 +766,29 @@ mod tests {
             .as_object()
             .cloned()
             .expect("decision is an object")
+    }
+
+    #[test]
+    fn fleet_pane_mode_answers_explicit_config_builtin_or_none() {
+        let cfg = || Some("default".to_string());
+        // An explicit ask wins; the config read never fires.
+        assert_eq!(
+            fleet_pane_mode_decided(Some(" plan "), Some("u"), cfg),
+            Some("plan".to_string())
+        );
+        // A fleet spawn (fno_id present) rides the operator default...
+        assert_eq!(
+            fleet_pane_mode_decided(None, Some("u"), cfg),
+            Some("default".to_string())
+        );
+        // ...else fno's builtin unattended answer.
+        assert_eq!(
+            fleet_pane_mode_decided(None, Some("u"), || None),
+            Some(crate::backlog::advance_dispatch::SPAWN_PERMISSION_BUILTIN.to_string())
+        );
+        // Bare footnote sends no fno_id: no mode, the user's settings decide.
+        assert_eq!(fleet_pane_mode_decided(None, None, cfg), None);
+        assert_eq!(fleet_pane_mode_decided(None, Some(""), cfg), None);
     }
 
     #[test]
@@ -956,21 +838,99 @@ mod tests {
     }
 
     #[test]
-    fn config_substrate_bg_maps_to_thread_loudly() {
-        // `bg` is the Rust-internal kind: the flag and the dispatch resolver
-        // both refuse it, so a config value must not ride the one untaught
-        // door. Inject `thread` and name the mapping.
-        let out = decide_map(json!({
-            "substrate": {"value": "bg", "rung": "agents.defaults"},
-            "prov": "claude",
-            "substrate_ok": true,
-        }));
-        assert_eq!(out["inject"], json!([["--substrate", "thread"]]));
-        let msg = out["messages"][0].as_str().unwrap();
-        assert!(msg.contains("retired spelling"), "{msg}");
-        // The rung name rides the message in two halves: the composed
-        // 25-char form is a tracked cross-language twin literal.
-        assert!(msg.contains("agents.defaults"), "{msg}");
-        assert!(msg.contains(".substrate = \"bg\""), "{msg}");
+    fn monitor_seam_refuses_with_the_python_golden_lines() {
+        // Byte-for-byte the resolve_spawn_gates receipts (spawn_defaults.py),
+        // in its order: value, pane-only, claude-only.
+        match monitor_seam(Some("grumpy"), "claude", "pane") {
+            MonitorSeam::Refuse(line) => {
+                assert_eq!(line, "--monitor must be 'happy' (got 'grumpy')")
+            }
+            _ => panic!("expected Refuse"),
+        }
+        match monitor_seam(Some("happy"), "claude", "thread") {
+            MonitorSeam::Refuse(line) => assert_eq!(line, MONITOR_PANE_GOLDEN),
+            _ => panic!("expected Refuse"),
+        }
+        match monitor_seam(Some("happy"), "codex", "pane") {
+            MonitorSeam::Refuse(line) => assert_eq!(
+                line,
+                "--monitor happy requires the claude harness; got harness 'codex'"
+            ),
+            _ => panic!("expected Refuse"),
+        }
+        assert!(matches!(
+            monitor_seam(Some("happy"), "claude", "pane"),
+            MonitorSeam::Launch
+        ));
+        assert!(matches!(
+            monitor_seam(None, "codex", "thread"),
+            MonitorSeam::None
+        ));
+    }
+
+    #[test]
+    fn output_format_seam_admits_only_claude_headless_json() {
+        // The PR-watch shape (pr_watch/_dispatch.py) is the one admitted
+        // argv; every other combination refuses with the agents/cli.py line.
+        assert_eq!(
+            output_format_seam(Some("json"), "claude", "headless").expect("admitted"),
+            Some("json".to_string())
+        );
+        for (provider, substrate, value) in [
+            ("claude", "headless", "text"),
+            ("codex", "headless", "json"),
+            ("claude", "thread", "json"),
+            ("claude", "pane", "json"),
+        ] {
+            let err = output_format_seam(Some(value), provider, substrate)
+                .expect_err("the non-PR-watch shape refuses");
+            assert_eq!(err, OUTPUT_FORMAT_GOLDEN);
+        }
+        assert_eq!(output_format_seam(None, "codex", "thread"), Ok(None));
+    }
+
+    #[test]
+    fn insert_spawn_flag_parses_and_stores_both_flags() {
+        // The typed parse beside insert_role_flag: value flags refuse a
+        // missing value and store under the params keys the seam verdicts
+        // read.
+        let mut it = ["json".to_string()].into_iter();
+        let mut params = Map::new();
+        insert_spawn_flag("--output-format", &mut it, &mut params).expect("parses");
+        assert_eq!(params["output_format"], json!("json"));
+        let err = insert_spawn_flag(
+            "--output-format",
+            &mut Vec::<String>::new().into_iter(),
+            &mut params,
+        )
+        .expect_err("a valueless flag refuses");
+        assert!(err.contains("needs a value"), "{err}");
+        let mut it = ["happy".to_string()].into_iter();
+        insert_spawn_flag("--monitor", &mut it, &mut params).expect("parses");
+        assert_eq!(params["monitor"], json!("happy"));
+    }
+
+    #[test]
+    fn monitor_and_zai_goldens_match_the_python_door() {
+        // The five pinned constants (plan change 1): agents/cli.py:1559 and
+        // resolve_spawn_gates' three lines, plus the zai line cli.py pins for
+        // the pane lane this door never sees.
+        assert_eq!(
+            OUTPUT_FORMAT_GOLDEN,
+            "--output-format supports only 'json' on claude headless spawns"
+        );
+        assert_eq!(
+            MONITOR_PANE_GOLDEN,
+            "--monitor happy needs --as pane; thread and headless workers do not pass \
+             the happy launcher seam"
+        );
+        assert_eq!(
+            MONITOR_CLAUDE_GOLDEN,
+            "--monitor happy requires the claude harness; got harness "
+        );
+        assert_eq!(
+            MONITOR_ZAI_GOLDEN,
+            "--monitor happy currently supports only the zai provider"
+        );
     }
 }

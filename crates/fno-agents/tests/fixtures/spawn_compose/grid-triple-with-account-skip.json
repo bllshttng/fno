@@ -11,93 +11,58 @@
   "expect": {
     "argv": [
       "spawn",
-      "--harness",
-      "codex",
-      "--model",
-      "gpt-acct-x",
-      "--effort",
-      "high",
       "--route",
       "zai/glm-x",
-      "--permission-mode",
-      "bypassPermissions",
       "--name",
       "w11",
       "/fno:target x-9"
     ],
     "exit": 0,
     "journal": {
-      "applied": [
-        [
-          "grid",
-          "grid effort(high)",
-          "routing"
+      "data": {
+        "name": "w11",
+        "verb": "target",
+        "seed": "/fno:target x-9",
+        "fingerprint": "7d4d7108bed9",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [
+          [
+            "grid",
+            "grid effort(high)",
+            "routing"
+          ],
+          [
+            "route",
+            "zai/glm-x",
+            "difficulty-grid"
+          ],
+          [
+            "grid",
+            "codex/gpt-acct-x",
+            "difficulty-grid"
+          ]
         ],
-        [
-          "grid",
-          "codex/gpt-acct-x",
-          "difficulty-grid"
-        ],
-        [
-          "effort",
-          "high",
-          "difficulty-grid"
-        ],
-        [
-          "route",
-          "zai/glm-x",
-          "difficulty-grid"
-        ],
-        [
-          "permission_mode",
-          "bypassPermissions",
-          "builtin.autonomous.permission_mode"
-        ]
-      ],
-      "fingerprint": "13f7c9b05408",
-      "kind": "spawn_defaults_applied",
-      "name": "w11",
-      "resolved": {
-        "account": {
-          "rung": null,
-          "value": ""
-        },
-        "effort": {
-          "rung": null,
-          "value": ""
-        },
-        "model": {
-          "rung": null,
-          "value": ""
-        },
-        "pane_group": {
-          "rung": null,
-          "value": ""
-        },
-        "permission_mode": {
-          "rung": "builtin.autonomous",
-          "value": "bypassPermissions"
-        },
-        "provider": {
-          "rung": null,
-          "value": ""
-        },
-        "route": {
-          "rung": null,
-          "value": ""
-        },
-        "substrate": {
-          "rung": null,
-          "value": ""
-        }
+        "suppressed": []
       },
-      "seed": "/fno:target x-9",
-      "suppressed": [],
-      "verb": "target"
+      "type": "spawn_defaults_applied",
+      "source": "agents"
     },
     "stderr": [
       "fno agents spawn: account skipped (claude-only, grid harness 'codex'); 'readyrule' ignored",
-      "fno agents spawn: applied grid=grid effort(high) (routing), grid=codex/gpt-acct-x (difficulty-grid), effort=high (difficulty-grid), route=zai/glm-x (difficulty-grid), permission_mode=bypassPermissions (builtin.autonomous.permission_mode)"
+      "fno agents spawn: applied grid=grid effort(high) (routing), route=zai/glm-x (difficulty-grid), grid=codex/gpt-acct-x (difficulty-grid)"
     ],
     "stdout": null
   },
@@ -111,7 +76,7 @@
     "id": "x-9",
     "priority": "p2"
   },
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

@@ -1,10 +1,10 @@
 //! `sync-canonical`: the post-merge canonical sync, its catch-up sweep, and
-//! its staleness alarm in one native verb. One JSON payload on stdin
+//! its staleness alarm in one native command. One JSON payload on stdin
 //! (`{"action":"sync"|"catchup"|"staleness","cwd":...,"pr":N?,"fetch":bool?}`),
 //! one JSON answer on stdout: always `exit`, `stdout` lines, `stderr` lines;
 //! `catchup` adds `outcome`/`pr_number`/`swept`/`detail`/`stale`; `staleness`
 //! adds `state`/`markerless`/`behind`/`detail`. The Python module
-//! `cli/src/fno/pr/_sync_canonical.py` is the transport around this verb.
+//! `cli/src/fno/pr/_sync_canonical.py` is the transport around this command.
 //!
 //! Ported from `_sync_canonical.py` with receipt strings kept verbatim (tests
 //! and operators grep them). The merged-PR list reads the REST endpoint, not
@@ -66,7 +66,7 @@ const BUILD_WAIT_MAX_MINS: i64 = 60;
 const BUILD_WAIT_FILE: &str = "post-merge-sync-build-wait";
 // The release the update leg downloads from. update_prebuilt.rs in the fno
 // crate reads the same asset name, platform names and env override.
-const DEFAULT_RELEASE_REPO: &str = "bllshttng/footnote";
+const DEFAULT_RELEASE_REPO: &str = "bllshttng/fno";
 
 type GhRun = Rc<dyn Fn(&[String], &Path) -> Result<String, GhErr>>;
 type GitOrigin = Rc<dyn Fn(&Path) -> Option<String>>;
@@ -706,10 +706,26 @@ fn bin_platform() -> Option<&'static str> {
     }
 }
 
-/// Fetch origin, read the merge's crates/ rev (the key main-binaries.yml
-/// publishes under), then ask the download URL for its digest. The download
-/// URL, not the REST listing: the listing is the read that answered 403 on
-/// 2026-10-14.
+/// The crates/ rev the sync's pull lands on: the fetched upstream head,
+/// falling back to the merge sha when the canonical tracks no upstream.
+/// main-binaries.yml builds only the newest main head and cancels older
+/// runs, so the merge's own rev may never publish while a later one does.
+fn pull_crates_rev(canonical: &Path, sha: &str) -> Option<String> {
+    ["@{upstream}", sha].into_iter().find_map(|at| {
+        let mut log = std::process::Command::new("git");
+        log.arg("-C")
+            .arg(canonical)
+            .args(["log", "-1", "--format=%H", at, "--", "crates/"]);
+        let out = crate::bounded_cmd::output_with_timeout(log, PROBE_TIMEOUT_SECS)?;
+        let rev = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !rev.is_empty()).then_some(rev)
+    })
+}
+
+/// Fetch origin, read the crates/ rev the pull lands on (the key
+/// main-binaries.yml publishes under), then ask the download URL for its
+/// digest. The download URL, not the REST listing: the listing is the read
+/// that answered 403 on 2026-10-14.
 fn real_build(canonical: &Path, sha: &str) -> Build {
     let Some(platform) = bin_platform() else {
         return Build::Unknown("CI builds no binary for this platform".to_string());
@@ -723,19 +739,9 @@ fn real_build(canonical: &Path, sha: &str) -> Build {
         Some(out) if out.status.success() => {}
         _ => return Build::Unknown("git fetch origin failed".to_string()),
     }
-    let mut log = std::process::Command::new("git");
-    log.arg("-C")
-        .arg(canonical)
-        .args(["log", "-1", "--format=%H", sha, "--", "crates/"]);
-    let rev = match crate::bounded_cmd::output_with_timeout(log, PROBE_TIMEOUT_SECS) {
-        Some(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
-        _ => String::new(),
-    };
-    if rev.is_empty() {
+    let Some(rev) = pull_crates_rev(canonical, sha) else {
         return Build::Unknown(format!("no crates/ rev readable at {}", sha12(sha)));
-    }
+    };
     let repo =
         std::env::var("FNO_RELEASE_REPO").unwrap_or_else(|_| DEFAULT_RELEASE_REPO.to_string());
     let url = format!(
@@ -1280,7 +1286,7 @@ fn compute_staleness(deps: &Deps, cwd: &Path, fetch: bool) -> Staleness {
     if behind.unwrap_or(0) > 0 || ahead.unwrap_or(0) > 0 {
         stale = true;
     }
-    // The verb's notes ride even when the verdict stays fresh (naming the
+    // The command's notes ride even when the verdict stays fresh (naming the
     // dirt is doctor's job); they never flip it by themselves.
     let notes: Vec<&str> = answer
         .get("notes")
@@ -1452,14 +1458,14 @@ pub(crate) fn run_catchup(deps: &Deps, cwd: &Path) -> CatchupOut {
 }
 
 // ---------------------------------------------------------------------------
-// Verb entry
+// Command entry
 // ---------------------------------------------------------------------------
 
-/// The verb entry: one JSON payload on stdin, one JSON answer on stdout, exit
+/// The command entry: one JSON payload on stdin, one JSON answer on stdout, exit
 /// 0 (the answer carries the real `exit`); malformed stdin prints
 /// `sync-canonical: bad payload: <e>` and exits 2 (same contract as
 /// `canonical-check`).
-pub fn run_sync_canonical_verb(_args: &[String]) -> i32 {
+pub fn run_sync_canonical_command(_args: &[String]) -> i32 {
     use std::io::Read;
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() {
@@ -1523,6 +1529,21 @@ pub fn run_sync_canonical_verb(_args: &[String]) -> i32 {
     };
     println!("{answer}");
     0
+}
+
+/// The in-process sync leg the `do pr` dispatcher rides: parse the payload
+/// (the command's own shape), run the sync, return the triple the command prints.
+pub(crate) fn run_sync_payload(parsed: &Value) -> (i32, Vec<String>, Vec<String>) {
+    let deps = Deps::real();
+    let cwd = PathBuf::from(parsed.get("cwd").and_then(|v| v.as_str()).unwrap_or("."));
+    let Some(pr) = parsed.get("pr").and_then(|v| v.as_u64()) else {
+        return (
+            2,
+            Vec::new(),
+            vec!["sync-canonical: sync requires an integer pr".to_string()],
+        );
+    };
+    run_sync_with_shell(&deps, &cwd, pr, &deps.shell)
 }
 
 #[cfg(test)]
@@ -2058,5 +2079,55 @@ mod tests {
             elapsed < std::time::Duration::from_secs(3),
             "elapsed {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn pull_crates_rev_reads_the_upstream_head_not_the_merge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let origin = tmp.path().join("origin");
+        std::fs::create_dir_all(origin.join("crates")).unwrap();
+        git(&origin, &["init", "-q", "-b", "main"]);
+        let commit = |msg: &str| {
+            std::fs::write(origin.join("crates").join("f"), msg).unwrap();
+            git(&origin, &["add", "."]);
+            git(&origin, &["commit", "-q", "-m", msg]);
+            git(&origin, &["rev-parse", "HEAD"])
+        };
+        let merged = commit("merge one");
+        let canonical = tmp.path().join("canonical");
+        git(
+            tmp.path(),
+            &["clone", "-q", origin.to_str().unwrap(), "canonical"],
+        );
+        // A later burst merge whose build superseded the cancelled one.
+        let newest = commit("merge two");
+        git(&canonical, &["fetch", "-q", "origin"]);
+        assert_eq!(pull_crates_rev(&canonical, &merged), Some(newest));
+
+        // No upstream: the merge sha answers.
+        git(&canonical, &["branch", "--unset-upstream"]);
+        assert_eq!(pull_crates_rev(&canonical, &merged), Some(merged));
     }
 }

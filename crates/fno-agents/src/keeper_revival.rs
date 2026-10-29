@@ -14,7 +14,6 @@
 //! module's launch step with an `interactive_create` form and delete the
 //! Python leg.
 
-use crate::harness_capabilities::HarnessContract;
 use crate::state::RegistryEntry;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -44,42 +43,13 @@ pub(crate) struct LaunchSpec {
 /// the model axis are the only additions, so the revival relaunches the same
 /// conversation the contract names instead of re-deriving the row's extras.
 pub(crate) fn revival_argv(
-    contract: &HarnessContract,
     harness: &str,
-    row: &RegistryEntry,
     base: &[String],
 ) -> Result<(Vec<String>, String), String> {
     let mut argv = base.to_vec();
-    let posture = crate::agy_launch::keeper_posture(
-        harness,
-        "thread",
-        row.requested_permission_mode.as_deref(),
-        false,
-    )?;
+    let posture = crate::agy_launch::keeper_posture(harness, "thread")?;
     argv.extend(posture.tokens);
-    if let Some(model) = revival_model(contract, harness, row) {
-        argv.push("--model".to_string());
-        argv.push(model);
-    }
     Ok((argv, posture.effective))
-}
-
-/// The model axis the keeper lane takes, the row's requested model first -
-/// the same precedence a fresh spawn resolves. Empty answers never ride.
-fn revival_model(contract: &HarnessContract, harness: &str, row: &RegistryEntry) -> Option<String> {
-    let takes_model = contract
-        .capabilities(harness)
-        .ok()
-        .and_then(|caps| caps.keeper.as_ref())
-        .map(|keeper| keeper.takes_model)
-        .unwrap_or(false);
-    if !takes_model {
-        return None;
-    }
-    row.requested_model
-        .clone()
-        .or_else(|| row.model.clone())
-        .filter(|m| !m.is_empty())
 }
 
 /// The production wrapper: real gate, real probe, real launcher. Loads the
@@ -135,7 +105,7 @@ pub(crate) fn revive_with<P, L, K>(
     message: Option<&str>,
     sock: &Path,
     probe: P,
-    mut launch: L,
+    launch: L,
     kill: K,
 ) -> i32
 where
@@ -144,15 +114,7 @@ where
     K: Fn(u32),
 {
     let row_name = &row.name;
-    let contract = match HarnessContract::packaged() {
-        Ok(contract) => contract,
-        Err(error) => {
-            eprintln!("fno agents resume: resume contract is unavailable: {error}");
-            crate::resume_gate::release_revival_claims(session_id);
-            return 13;
-        }
-    };
-    let (completed_argv, posture_word) = match revival_argv(&contract, harness, row, base_argv) {
+    let (completed_argv, posture_word) = match revival_argv(harness, base_argv) {
         Ok(completed) => completed,
         Err(reason) => {
             eprintln!("fno agents resume: {row_name}: {reason}");
@@ -221,8 +183,7 @@ where
         harness: harness.to_string(),
         session_id: session_id.to_string(),
     };
-    let launched = match launch(&spec) {
-        Ok(pid) => pid,
+    let (launched, outcome) = match launch_and_identify(&spec, &probe, launch) {
         Err(reason) => {
             eprintln!(
                 "fno agents resume: {row_name}: failed to launch the keeper on {}: {reason}; \
@@ -233,44 +194,45 @@ where
             crate::resume_gate::release_revival_claims(session_id);
             return 1;
         }
+        Ok(pair) => pair,
     };
     // The keeper binds the socket only after hosting the child, so the first
     // Identify that names BOTH this session id AND this keeper pid proves the
     // launch is ours. Another pid answering the same session id means a
     // concurrent revival won the socket; ours exited refusing to bind a
     // served socket, and the winner owns the row flip.
-    let deadline = std::time::Instant::now() + IDENTIFY_WINDOW;
-    let mut verified: Option<(u32, Option<u32>)> = None;
-    while verified.is_none() {
-        if let crate::daemon::KeeperProbe::Answered(reply) = probe(sock) {
-            let (answered_sid, keeper_pid, child_pid) = reply_parts(&reply);
-            match (answered_sid, keeper_pid) {
-                (Some(s), Some(p)) if s == session_id && p == launched => {
-                    verified = Some((p, child_pid));
-                }
-                (Some(s), Some(_)) if s == session_id => {
-                    println!(
-                        "fno agents resume: {row_name} is live on its keeper at {} \
-                         (a concurrent resume revived it); nothing more was launched",
-                        sock.display()
-                    );
-                    return 0;
-                }
-                (answered, keeper_pid) => {
-                    kill(launched);
-                    eprintln!(
-                        "fno agents resume: {row_name}: the keeper at {} answered session \
-                         {answered:?} pid {keeper_pid:?}, not this revival (pid {launched}); \
-                         see {}",
-                        sock.display(),
-                        keeper_log.display()
-                    );
-                    crate::resume_gate::release_revival_claims(session_id);
-                    return 1;
-                }
-            }
+    let (keeper_pid, child_pid) = match outcome {
+        IdentifyOutcome::Ours {
+            keeper_pid,
+            child_pid,
+        } => (keeper_pid, child_pid),
+        IdentifyOutcome::Wrong {
+            answered_sid: Some(s),
+            ..
+        } if s == session_id => {
+            println!(
+                "fno agents resume: {row_name} is live on its keeper at {} \
+                 (a concurrent resume revived it); nothing more was launched",
+                sock.display()
+            );
+            return 0;
         }
-        if std::time::Instant::now() >= deadline {
+        IdentifyOutcome::Wrong {
+            answered_sid,
+            answered_pid,
+        } => {
+            kill(launched);
+            eprintln!(
+                "fno agents resume: {row_name}: the keeper at {} answered session \
+                 {answered_sid:?} pid {answered_pid:?}, not this revival (pid {launched}); \
+                 see {}",
+                sock.display(),
+                keeper_log.display()
+            );
+            crate::resume_gate::release_revival_claims(session_id);
+            return 1;
+        }
+        IdentifyOutcome::TimedOut => {
             kill(launched);
             eprintln!(
                 "fno agents resume: {row_name}: the keeper at {} never answered Identify \
@@ -282,8 +244,7 @@ where
             crate::resume_gate::release_revival_claims(session_id);
             return 1;
         }
-        std::thread::sleep(IDENTIFY_POLL);
-    }
+    };
     // Proof of life, then the flip: a keeper that exits right after launch
     // unlinks its socket, and a row flipped onto that corpse would read live
     // while hosting nothing.
@@ -308,9 +269,6 @@ where
         crate::resume_gate::release_revival_claims(session_id);
         return 1;
     }
-    let Some((keeper_pid, child_pid)) = verified else {
-        unreachable!("the identify loop leaves only on the verified answer")
-    };
     let outcome = crate::convert::keeper_rebind::RebindOutcome {
         socket: sock.to_string_lossy().into_owned(),
         keeper_pid,
@@ -452,18 +410,88 @@ fn append_resume_event(
     if let Some(reason) = reason {
         fields.push(("reason", Value::String(reason.to_string())));
     }
-    crate::client_verbs::append_agents_event(
-        &crate::client_verbs::trace_events_path(home),
+    crate::client_commands::append_agents_event(
+        &crate::client_commands::trace_events_path(home),
         kind,
         &fields,
     );
+}
+
+/// What the launch-and-Identify step concluded for the keeper it launched.
+/// Killing is the caller's move: the revival and the create arm map these
+/// outcomes onto different refusals (concurrent-won vs collision-vs-identity).
+pub(crate) enum IdentifyOutcome {
+    /// The keeper answered Identify naming BOTH this session id AND this
+    /// keeper pid: the launch is ours.
+    Ours {
+        keeper_pid: u32,
+        child_pid: Option<u32>,
+    },
+    /// A keeper answered but not provably ours. `answered_sid` matching the
+    /// launched session id with a different pid is the revival's
+    /// concurrent-won case; anything else is a collision or an identity bug,
+    /// split by the caller's own pid liveness read.
+    Wrong {
+        answered_sid: Option<String>,
+        answered_pid: Option<u32>,
+    },
+    /// No keeper answered within [`IDENTIFY_WINDOW`].
+    TimedOut,
+}
+
+/// Launch the keeper in `spec` and wait out its first Identify, the step both
+/// keeper launchers share. Extracted from `revive_with` so the create arm
+/// (`keeper_spawn`) launches through the same loop instead of a copy: same
+/// window, same poll cadence, same session-and-pid proof, and no kill here -
+/// every failure leaves the launched pid with the caller, which owns the
+/// refusal text and the autopsy pointer.
+pub(crate) fn launch_and_identify<P, L>(
+    spec: &LaunchSpec,
+    probe: P,
+    mut launch: L,
+) -> Result<(u32, IdentifyOutcome), String>
+where
+    P: Fn(&Path) -> crate::daemon::KeeperProbe,
+    L: FnMut(&LaunchSpec) -> Result<u32, String>,
+{
+    let launched = launch(spec)?;
+    let deadline = std::time::Instant::now() + IDENTIFY_WINDOW;
+    loop {
+        if let crate::daemon::KeeperProbe::Answered(reply) = probe(&spec.sock) {
+            let (answered_sid, keeper_pid, child_pid) = reply_parts(&reply);
+            match (answered_sid, keeper_pid) {
+                (Some(s), Some(p)) if s == spec.session_id && p == launched => {
+                    return Ok((
+                        launched,
+                        IdentifyOutcome::Ours {
+                            keeper_pid: p,
+                            child_pid,
+                        },
+                    ));
+                }
+                (answered_sid, answered_pid) => {
+                    return Ok((
+                        launched,
+                        IdentifyOutcome::Wrong {
+                            answered_sid,
+                            answered_pid,
+                        },
+                    ));
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok((launched, IdentifyOutcome::TimedOut));
+        }
+        std::thread::sleep(IDENTIFY_POLL);
+    }
 }
 
 /// The production launcher: a fresh session for the keeper (the same
 /// detachment `start_new_session=True` gives the Python spawn), stdio dark
 /// except stderr appended to the keeper log the Python lane writes, and the
 /// identity stamp a spawn child carries.
-fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
+pub(crate) fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
     use std::os::unix::process::CommandExt;
     let mut command = std::process::Command::new(&spec.argv[0]);
     command.args(&spec.argv[1..]);
@@ -500,7 +528,7 @@ fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
 
 /// Stop a keeper this revival started or named: SIGTERM, then SIGKILL once
 /// the grace passes, so a wedged keeper never outlives its refusal.
-fn terminate_keeper(pid: u32) {
+pub(crate) fn terminate_keeper(pid: u32) {
     // SAFETY: pid targets the keeper this process launched; SIGTERM carries
     // no payload.
     unsafe {
@@ -627,7 +655,7 @@ mod tests {
     }
 
     fn events_of(home: &crate::paths::AgentsHome) -> String {
-        crate::event_store::journal_text(&crate::client_verbs::trace_events_path(home), &[])
+        crate::event_store::journal_text(&crate::client_commands::trace_events_path(home), &[])
     }
 
     fn read_row(home: &crate::paths::AgentsHome) -> RegistryEntry {
@@ -688,6 +716,28 @@ mod tests {
         let events = events_of(&home);
         assert_eq!(events.matches("\"agent_resumed\"").count(), 1, "{events}");
         assert!(events.contains("\"substrate\":\"thread\""), "{events}");
+    }
+
+    #[test]
+    fn revival_argv_rides_the_lane_default_posture() {
+        // AC2-HP: the axes are retired, so the revival adds only the lane
+        // default - no row pin can reach the argv.
+        let base = vec![
+            "cursor-agent".to_string(),
+            "--resume".to_string(),
+            SID.to_string(),
+            "--trust".to_string(),
+        ];
+        let (argv, word) = revival_argv("cursor-agent", &base).unwrap();
+        assert_eq!(argv, base);
+        assert_eq!(word, "default");
+
+        let (argv, word) = revival_argv("agy", &base_argv()).unwrap();
+        assert!(
+            argv.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "{argv:?}"
+        );
+        assert_eq!(word, "bypass");
     }
 
     #[test]

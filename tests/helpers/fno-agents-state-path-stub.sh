@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Test double for `fno-agents state path <name>`, the verb
+# Test double for `fno-agents state path <name>`, the command
 # hooks/helpers/init-target-state.sh uses to resolve its manifest location.
-# Every other verb delegates to the next real fno-agents on PATH (skipping this
+# Every other command delegates to the next real fno-agents on PATH (skipping this
 # stub's own dir), so harnesses that exercise the real claim path get real
 # claim behavior; with no real binary on PATH the call exits 1, the same as a
 # CI runner with no binary.
@@ -29,6 +29,44 @@ if [[ "${1:-} ${2:-}" == "state mint-id" ]]; then
   printf '%s-%s-%s-%s-%s\n' \
     "${_h:0:8}" "${_h:8:4}" "4${_h:13:3}" "8${_h:17:3}" "${_h:20:12}"
   exit 0
+fi
+
+# FNO_TEST_GATES_GREEN=1 answers the target-family gates green without the
+# real binary: a harness whose subject is NOT the gates (claim-wait, say)
+# still needs them quiet, and the real hold gate would read the ambient graph
+# store and refuse on a sandbox that has none. resolve-owned-identity answers
+# the same KEY=value block the old fno stub canned.
+#
+# The gates are the stub's OWN answers by default (same green), because every
+# harness that copies this double runs under the smoke runner's job-wide
+# FNO_AGENTS_BIN pin: delegating target-gates would hand the real gate a
+# sandbox with no graph store. A harness whose subject IS a gate contract
+# opts out with FNO_TEST_GATE_RC_FILE (the rc for check-review-gate, logged
+# to FNO_TEST_GATE_CALL_LOG when set).
+if [[ "${1:-}" == "target-gates" ]]; then
+  case "${2:-}" in
+    check-review-gate)
+      if [[ -n "${FNO_TEST_GATE_CALL_LOG:-}" ]]; then
+        printf 'gate-called\n' >> "$FNO_TEST_GATE_CALL_LOG"
+      fi
+      if [[ -n "${FNO_TEST_GATE_RC_FILE:-}" && -f "$FNO_TEST_GATE_RC_FILE" ]]; then
+        echo "stub refusal: config.review.github_apps names a bot" >&2
+        exit "$(cat "$FNO_TEST_GATE_RC_FILE")"
+      fi
+      exit 0 ;;
+    check-dispatch-hold|check-contained)
+      exit 0 ;;
+    resolve-owned-identity)
+      # Canned only on opt-in: the old fno stubs answered this command with
+      # nothing and the helper degraded to its own provider detection, which
+      # is the fiction harnesses like the session-id orphan case pin. A
+      # harness that wants the proven block sets FNO_TEST_OWNED_IDENTITY_CANNED.
+      if [[ "${FNO_TEST_OWNED_IDENTITY_CANNED:-}" == "1" ]]; then
+        printf 'HARNESS=claude\nSESSION_ID=%s\nDISPOSITION=proven\nCOLLISION=\n' \
+          "${CLAUDE_CODE_SESSION_ID:-}"
+      fi
+      exit 0 ;;
+  esac
 fi
 
 _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"

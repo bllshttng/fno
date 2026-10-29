@@ -16,7 +16,7 @@ name: review-coverage-gate
 #
 # What fires when:
 #   synchronize - the head is new, so no local attestation can exist for it
-#     yet. Post failure "head moved; re-run the review verb at HEAD" so a
+#     yet. Post failure "head moved; re-run the review command at HEAD" so a
 #     previously-green status can never survive onto a commit nobody reviewed
 #     - UNLESS the coverage-override label is applied (durable shared state a
 #     push does not revoke, re-read first), OR the previous head already
@@ -39,11 +39,11 @@ name: review-coverage-gate
 # silently revoking the valve.
 #   opened/reopened/ready_for_review - no status change. The context starts
 #     absent, which a required-check reads as pending: exactly right for a
-#     PR no review verb has run on yet.
+#     PR no review command has run on yet.
 #   workflow_dispatch - manual re-stamp for the PR named in its required `pr`
 #     input; same invalidate-only stance. The input exists because
 #     `github.sha` on a dispatch is the default-branch tip, and a failure
-#     status there red-marks a commit on main no review verb can answer for.
+#     status there red-marks a commit on main no review command can answer for.
 #
 # FORK PRs ARE SKIPPED, AND THAT IS ACCEPTED. A `pull_request` event from a
 # fork gets a read-only GITHUB_TOKEN whatever `permissions:` says, so a fork
@@ -54,7 +54,7 @@ name: review-coverage-gate
 # does not discover it during an incident.)
 #
 # The local publishers - the stop-hook emitter, the standalone
-# `fno-agents review-coverage` verb, and `fno pr merge` - are what post
+# `fno-agents review-coverage` command, and `fno pr merge` - are what post
 # success. This workflow is the half they cannot do: reacting to pushes made
 # from somewhere other than the reviewing machine.
 #
@@ -92,7 +92,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # Only the synchronize arm needs the carry script on disk; every other
@@ -117,7 +117,7 @@ jobs:
           PR_INPUT: ${{ github.event.inputs.pr || '' }}
           # A PR event names its own head. A dispatch does NOT: `github.sha`
           # there is the default-branch tip, and stamping a failure on it
-          # red-marks a commit on main that no review verb can ever answer for.
+          # red-marks a commit on main that no review command can ever answer for.
           # The dispatch arm resolves the head from its `pr` input instead.
           HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
           BEFORE_SHA: ${{ github.event.before }}
@@ -251,7 +251,7 @@ jobs:
                 cur="$(current_desc)"
                 case "$cur" in
                   coverage-override*)
-                    post failure "coverage-override withdrawn by ${ACTOR}; run the review verb at HEAD"
+                    post failure "coverage-override withdrawn by ${ACTOR}; run the review command at HEAD"
                     echo "override withdrawn: invalidated the override green"
                     ;;
                   *)
@@ -301,7 +301,7 @@ jobs:
                         echo "synchronize: carried the verdict from ${origin:0:8} (patch-id ${pid}) onto ${HEAD_SHA:0:8}"
                         ;;
                       *)
-                        post failure "head moved to ${HEAD_SHA:0:8}; re-run the review verb at HEAD"
+                        post failure "head moved to ${HEAD_SHA:0:8}; re-run the review command at HEAD"
                         # The invalidate arm is the refresher's only chance to
                         # move the diagnostic on heads no fno emitter will
                         # reach: a new head nobody read carries the honest
@@ -309,7 +309,7 @@ jobs:
                         # on an UNANSWERED read), never the prior head's
                         # instrument verdict frozen as pending forever.
                         post pending \
-                          "coverage read unavailable at ${HEAD_SHA:0:8}; retry the review verb" \
+                          "coverage read unavailable at ${HEAD_SHA:0:8}; retry the review command" \
                           "$diag_ctx"
                         echo "synchronize: invalidated at ${HEAD_SHA:0:8} (${decision})"
                         ;;
@@ -329,12 +329,12 @@ jobs:
                 echo "could not resolve the head of PR ${PR_INPUT}" >&2
                 exit 1
               fi
-              post failure "manual invalidate at ${HEAD_SHA:0:8}; run the review verb at HEAD"
+              post failure "manual invalidate at ${HEAD_SHA:0:8}; run the review command at HEAD"
               # Same diagnostic stamp as the synchronize twin: a head nobody
               # read carries the honest unavailable-pending state, never a
               # stale instrument verdict from an earlier read.
               post pending \
-                "coverage read unavailable at ${HEAD_SHA:0:8}; retry the review verb" \
+                "coverage read unavailable at ${HEAD_SHA:0:8}; retry the review command" \
                 "$diag_ctx"
               echo "dispatch: invalidated PR ${PR_INPUT} at ${HEAD_SHA:0:8}"
               ;;

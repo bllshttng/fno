@@ -38,6 +38,9 @@ pub struct Launch {
     /// names none and holds no lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// The session a `claude --bg --resume <id>` line continues.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
     pub cwd: String,
 }
 
@@ -164,6 +167,7 @@ const PROMPT_HARNESSES: &[&str] = &[
     "cursor-agent",
     "grok",
     "zcode",
+    "muse",
 ];
 
 /// Flags that take a value, so the value is not read as the prompt.
@@ -272,6 +276,44 @@ fn redirection_op_len(word: &str) -> Option<usize> {
 
 fn has_any(args: &[String], flags: &[&str]) -> bool {
     args.iter().any(|a| flags.contains(&a.as_str()))
+}
+
+/// The id after `--resume`/`-r`. A bare `-r` opens claude's picker and
+/// names no session.
+fn resume_target(args: &[String]) -> Option<String> {
+    flag_value(args, &["-r", "--resume"]).filter(|v| !v.starts_with('-'))
+}
+
+/// Why an agent-typed `claude --bg` line must not run, or `None`.
+///
+/// An unnamed line lets claude title the row from the first prompt, so a
+/// recovery prompt that opens "Lead X (id): ..." reads as that lead. A
+/// `--resume` copy also inherits the old session's name, so a worker moved
+/// to another node keeps the old node's name. A `--resume` of a session that
+/// still runs starts a COPY under a new id whose status line shows the old
+/// id. `held` answers whether a live process holds a session id.
+pub fn claude_bg_refusal(launches: &[Launch], held: impl Fn(&str) -> bool) -> Option<String> {
+    for launch in launches.iter().filter(|l| l.harness == "claude") {
+        if let Some(id) = launch.resume.as_deref().filter(|id| held(id)) {
+            let short: String = id.chars().take(8).collect();
+            return Some(format!(
+                "claude --bg --resume {id}: that session is still running, and the resume \
+                 would start a copy under a new session id. Mail it with \
+                 `fno agents mail send {short} ...`, attach it with `claude attach {short}`, \
+                 or stop it first."
+            ));
+        }
+        if launch.name.is_none() {
+            return Some(
+                "claude --bg needs --name: without it claude titles the row from the first \
+                 prompt, and a --resume copy keeps the old session's name. Add \
+                 `--name <worker name>` (the node slug for node work), or revive a fleet \
+                 worker with `fno agents session resume <name>`."
+                    .to_string(),
+            );
+        }
+    }
+    None
 }
 
 fn seed_node(seed: Option<&String>) -> Option<String> {
@@ -388,6 +430,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
             let pos = positionals(args);
             Some(Launch {
                 harness: "claude".into(),
+                resume: resume_target(args),
                 name: flag_value(args, &["-n", "--name"]),
                 node: seed_node(pos.last()),
                 slot: None,
@@ -429,6 +472,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                         .unwrap_or_else(|| here.clone());
                     Some(Launch {
                         harness: "codex".into(),
+                        resume: None,
                         name: None,
                         node: seed_node(pos.last()),
                         slot: None,
@@ -450,6 +494,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                         .unwrap_or_else(|| here.clone());
                     Some(Launch {
                         harness: "codex".into(),
+                        resume: None,
                         name: None,
                         node: seed_node(pos_all.last()),
                         slot: None,
@@ -478,6 +523,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 .unwrap_or_else(|| here.clone());
             Some(Launch {
                 harness: flag_value(rest, &["-H", "--harness"]).unwrap_or_else(|| "claude".into()),
+                resume: None,
                 name: flag_value(rest, &["--name"]),
                 node: flag_value(rest, &["--node"]).or_else(|| seed_node(pos.first())),
                 slot: None,
@@ -500,6 +546,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 .or_else(|| pos.last().cloned());
             Some(Launch {
                 harness: other.to_string(),
+                resume: None,
                 name: flag_value(args, &["-n", "--name", "--title"]),
                 node: seed_node(seed.as_ref()),
                 slot: None,

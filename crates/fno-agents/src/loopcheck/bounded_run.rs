@@ -23,7 +23,7 @@ pub(crate) struct BoundedOutput {
 /// Outcome of a bounded, killable child run: the whole point is that a hang
 /// inside the child can never
 /// again read as "the read failed" or wedge forever - it reads as exactly
-/// what happened, with the verb and the elapsed time attached at the call
+/// what happened, with the command and the elapsed time attached at the call
 /// site.
 pub(super) enum BoundedRun {
     Completed(BoundedOutput),
@@ -224,6 +224,17 @@ impl GhReadError {
 
     pub(super) fn parse_failed(read: &str) -> Self {
         Self::failed(read, String::new())
+    }
+
+    /// The one-line cause a caller appends when a fallback also failed: the
+    /// read name and the stderr tail, or the read name alone when the tail
+    /// is empty (a parse failure renders with no stderr to quote).
+    pub(crate) fn cause_line(&self) -> String {
+        if self.stderr_tail.trim().is_empty() {
+            format!("{} failed with no stderr", self.read)
+        } else {
+            format!("{}: {}", self.read, self.stderr_tail.trim())
+        }
     }
 
     pub(super) fn timed_out(read: &str, elapsed: std::time::Duration, stderr_tail: String) -> Self {

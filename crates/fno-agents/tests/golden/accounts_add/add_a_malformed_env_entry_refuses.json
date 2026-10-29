@@ -1,0 +1,18 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "api_key",
+    "--env",
+    "ANTHROPIC_API_KEY"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "error: malformed --env entry 'ANTHROPIC_API_KEY' (expected KEY=VALUE format)\n",
+    "global": null,
+    "project": null
+  }
+}

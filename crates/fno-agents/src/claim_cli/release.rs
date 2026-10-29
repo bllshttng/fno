@@ -3,14 +3,15 @@
 //! `_force_release`) and the do-row close/rollback it drives
 //! (`core._stamp_do_on_release`, `core._rollback_do_on_release`).
 //!
-//! One command, three modes that were three verbs: the default releases a
-//! claim we hold, `--lane <id>` releases a lane slot, `--force` drops a claim
-//! regardless of owner. Output contract: human lines by default, `--json`
-//! for the operator receipt `{"key", "released"}`. The engine leg
-//! (`core.release_claim`) passes `--with-claim` and gets the receipt with
-//! the removed record embedded, the shape `_native_claim_model` reads.
-//! Exit codes: 0 released or no-op; 1 force-release with nothing archived;
-//! 2 validation; 3 contended/transient; 4 holder mismatch under --strict.
+//! One command, three modes that were three commands: the default releases a
+//! claim we hold and closes the do row the acquire opened, `--lane <id>`
+//! releases a lane slot, `--force` drops a claim regardless of owner. Output
+//! contract: human lines by default, `--json` for the operator receipt
+//! `{"key", "released"}`. The engine leg (`core.release_claim`) passes
+//! `--with-claim` and gets the receipt with the removed record embedded, the
+//! shape `_native_claim_model` reads. Exit codes: 0 released or no-op; 1
+//! force-release with nothing archived; 2 validation; 3 contended/transient;
+//! 4 holder mismatch under --strict.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -210,10 +211,17 @@ fn run_keyed(a: &LeafArgs, key: &str) -> i32 {
     match crate::claims::release_with_receipt(key, &a.holder, root.as_deref(), None) {
         Ok(Some(claim)) => {
             if key.starts_with("node:") {
-                if a.stamp_do {
-                    stamp_do_on_release(key, &claim, &a.holder);
-                } else if a.rollback_do {
+                if a.rollback_do {
                     rollback_do_on_release(key, &claim, &a.holder);
+                } else {
+                    // The default closes the do row the acquire opened: a bare
+                    // release that left it open made the spawn gate refuse a
+                    // fresh seat as already-running. --rollback-do is the
+                    // explicit spelling for a release of work that never ran,
+                    // and the default fill never appends: a node with no
+                    // matching row records nothing, so a release that forgot
+                    // the flag still cannot invent a completion.
+                    stamp_do_on_release(key, &claim, &a.holder);
                 }
             }
             if a.json_output {
@@ -226,12 +234,15 @@ fn run_keyed(a: &LeafArgs, key: &str) -> i32 {
         Ok(None) => {
             // Nothing was unlinked - one of four causes the receipt cannot
             // tell apart - so the do row this call would have touched stays
-            // as it was, named rather than silent (cli.py:404-423).
-            if key.starts_with("node:") && (a.stamp_do || a.rollback_do) {
-                let (what, why) = if a.stamp_do {
-                    ("do stamp skipped", "no do row was closed")
-                } else {
+            // as it was, named rather than silent (cli.py:404-423). The
+            // default stamp makes that naming unconditional on node keys: a
+            // no-op release leaving the row open is exactly the state the
+            // spawn gate reads as already-running.
+            if key.starts_with("node:") {
+                let (what, why) = if a.rollback_do {
                     ("do rollback skipped", "no do row was dropped")
+                } else {
+                    ("do stamp skipped", "no do row was closed")
                 };
                 eprintln!("{what} for {key}: release was a no-op (nothing was unlinked, so {why})");
             }

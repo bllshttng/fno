@@ -675,7 +675,7 @@ fn release_mail(owned_session: Option<&str>) -> (String, String) {
 }
 
 fn loops_usage() {
-    println!("usage: fno-agents loops paused|status [--json] | pause-all [--who W] [--ttl D|--ttl-ms N] [--reason R] [--json] | resume-all [--json] | arm --session <id> --every <N>m|h|d -- <prompt> | disarm --session <id> | armed [--json] | table [--json|--markdown]\nFor a smaller halt: fno agents incident stop --session <full-id>|--territory <scope> --reason <why>");
+    println!("usage: fno-agents loops paused|status [--json] | pause-all [--who W] [--ttl D|--ttl-ms N] [--reason R] [--json] | resume-all [--json] | arm --session <id> --every <N>m|h|d -- <prompt> | disarm --session <id> | armed [--json] | table [--json|--markdown] | skill-diff-tick --skill <name> | skill-diff-reconcile [--pr-number N]\nFor a smaller halt: fno agents incident stop --session <full-id>|--territory <scope> --reason <why>");
 }
 
 /// Compute the `(action, output)` pair through breaker state and the mail
@@ -914,6 +914,23 @@ pub fn run_loops(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("table") {
         return run_loops_table(json_out, args.iter().any(|arg| arg == "--markdown"));
     }
+    // `loops ls` + `loops level <name>`: the config reads behind `fno do
+    // loops ls` (see loops_config.rs). Direct dispatch inside the group
+    // door; the pause commands keep their arm below.
+    if args.first().map(String::as_str) == Some("ls") {
+        return crate::loops_config::run(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("level") {
+        return crate::loops_config::run_level(&args[1..]);
+    }
+    // The skill-diff proposer loop: tick and its reconcile closer, ported
+    // from cli/src/fno/skill_diff/. They manage their own output and exit.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("skill-diff-tick") | Some("skill-diff-reconcile")
+    ) {
+        return crate::skill_diff::run(args);
+    }
     match args.first().map(String::as_str) {
         Some("arm") => return crate::pane_loop::run_arm(&args[1..]),
         Some("disarm") => return crate::pane_loop::run_disarm(&args[1..]),
@@ -1109,7 +1126,7 @@ pub fn run_loops_table(json_out: bool, markdown: bool) -> i32 {
             }
             None => println!("launchd: not applicable on this host"),
         }
-        println!("detail per loop: run the row's reader verb, or fno agents loops table --json");
+        println!("detail per loop: run the row's reader command, or fno agents loops table --json");
     }
     if any_red {
         1
@@ -1122,10 +1139,10 @@ pub fn run_loops_table(json_out: bool, markdown: bool) -> i32 {
 /// regenerated file is byte-identical while the loops sit still. One row per
 /// loop, then one paragraph per loop: where it starts (the trigger), where
 /// it ends (the receipt event), and what to run when it looks wrong (the
-/// reader verb).
+/// reader command).
 fn markdown_doc(launchd: &Option<crate::tick_ledger::LaunchdFold>) -> String {
     let mut out = String::from(
-        "# Scheduled loops\n\nThe control plane runs every scheduled loop below. One row names its scheduler, its arming key, its journal receipt, and the verb that reads it in detail. This file is generated. Regenerate it with `fno agents loops table --markdown` after changing `KNOWN_ARMS` in `crates/fno-agents/src/tick_ledger.rs`. When a row reads STALE or FAIL, `fno agents loops table` exits 1. Its plain form prints the same rows against the live journals.\n\n",
+        "# Scheduled loops\n\nThe control plane runs every scheduled loop below. One row names its scheduler, its arming key, its journal receipt, and the command that reads it in detail. This file is generated. Regenerate it with `fno agents loops table --markdown` after changing `KNOWN_ARMS` in `crates/fno-agents/src/tick_ledger.rs`. When a row reads STALE or FAIL, `fno agents loops table` exits 1. Its plain form prints the same rows against the live journals.\n\n",
     );
     out.push_str("| loop | scheduler | interval (s) | armed by | ends with receipt | reads with |\n|---|---|---|---|---|---|\n");
     for spec in crate::tick_ledger::KNOWN_ARMS {

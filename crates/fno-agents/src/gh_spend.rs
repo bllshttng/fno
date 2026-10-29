@@ -4,7 +4,8 @@
 //! The budget ledger (`gh_budget.rs`) stamps `(ms, points)` and prunes at
 //! 60 s, so it can never answer the question an hourly outage asks: WHO
 //! drained the core bucket. This module appends one JSON line per
-//! non-exempt verdict to `machine_locks_dir()/github-request-spend.jsonl`,
+//! non-exempt verdict to the machine locks folder
+//! (`machine_locks_dir()`, file `github-request-spend.jsonl`),
 //! rotated at 8 MiB to one `.1` generation - about 22 hours of rows at the
 //! measured 5,000 lines an hour. Like the ledger, a journal failure never
 //! changes a verdict: append errors are ignored on the admission path.
@@ -134,8 +135,8 @@ fn first_positional(tokens: &[String]) -> Option<&str> {
 
 /// `repos/<owner>/<repo>`, `repos/{owner}/{repo}` and `repos/:owner/:repo`
 /// fold to `repos/{repo}`; a digit run after a `/` folds to `N`; a 40-hex
-/// run folds to `SHA`; `head=<x>` folds to `head=B`. Every other query
-/// parameter stays verbatim.
+/// run folds to `SHA` in the route and in a query value; `head=<x>` folds to
+/// `head=B`. Every other query parameter stays verbatim.
 fn fold_path(path: &str) -> String {
     let (route, query) = match path.split_once('?') {
         Some((r, q)) => (r, Some(q)),
@@ -147,7 +148,7 @@ fn fold_path(path: &str) -> String {
         segs.remove(2);
     }
     for seg in segs.iter_mut().skip(1) {
-        if seg.len() == 40 && seg.chars().all(|c| c.is_ascii_hexdigit()) {
+        if is_sha(seg) {
             *seg = "SHA".to_string();
         } else if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
             *seg = "N".to_string();
@@ -158,18 +159,20 @@ fn fold_path(path: &str) -> String {
         out.push('?');
         out.push_str(
             &q.split('&')
-                .map(|kv| {
-                    if kv.starts_with("head=") {
-                        "head=B"
-                    } else {
-                        kv
-                    }
+                .map(|kv| match kv.split_once('=') {
+                    _ if kv.starts_with("head=") => "head=B".to_string(),
+                    Some((key, value)) if is_sha(value) => format!("{key}=SHA"),
+                    _ => kv.to_string(),
                 })
                 .collect::<Vec<_>>()
                 .join("&"),
         );
     }
     out
+}
+
+fn is_sha(word: &str) -> bool {
+    word.len() == 40 && word.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// The caller label for THIS process, computed once: `FNO_GH_CALLER` wins
@@ -333,7 +336,7 @@ fn is_interpreter(base: &str) -> bool {
 fn fno_agents_label(args: &[String]) -> Label {
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
-        "" | "fleet-incident" | "pr-worktree" => Label::Skip,
+        "" | "fleet-incident" | "pr-worktree" | "gh" | "gh-adapter" => Label::Skip,
         "authorized-merge" => {
             // The spawner wrapper carries no JSON op and skips; an op names
             // the caller down to the wait flavor.
@@ -356,11 +359,16 @@ fn fno_agents_label(args: &[String]) -> Label {
             }
         }
         _ => {
+            // Only a subcommand word extends the label. A flag value (a
+            // `--root` path) or free text (a check-in summary) would split
+            // one poller into a label per value, and the poll-class match
+            // is exact.
             let arg = args
                 .iter()
                 .skip(1)
                 .map(String::as_str)
                 .find(|w| !w.starts_with('-') && !w.starts_with('{') && !w.starts_with('['))
+                .filter(|w| !w.contains('/') && !w.contains(char::is_whitespace))
                 .unwrap_or("");
             if arg.is_empty() {
                 Label::Name(sub.to_string())
@@ -408,6 +416,7 @@ pub fn journal_path() -> PathBuf {
 /// holds. Exempt shapes never journal (a version probe is not spend), and
 /// a temp-ledger caller (every unit test) writes nothing.
 pub(crate) fn journal_verdict(
+    // events-discipline:allow: the spend ledger, not an event journal
     path: &std::path::Path,
     argv: &[String],
     now: i64,
@@ -519,6 +528,18 @@ fn read_rows(journal: &std::path::Path, since_ms: i64) -> Vec<Value> {
     rows
 }
 
+/// The last hour's top `n` callers by unconditional core spend, and the one
+/// unconditional core shape that spent most: the two facts a person needs
+/// to pick what to cache or slow first.
+pub(crate) fn top_spenders(journal: &std::path::Path, now: i64, n: usize) -> Value {
+    let report = spend_report_at(journal, now, 1, None);
+    let callers: Vec<Value> = report["by_caller"]
+        .as_array()
+        .map(|rows| rows.iter().take(n).cloned().collect())
+        .unwrap_or_default();
+    json!({"callers": callers, "top_core_shape": report["top_core_shape"]})
+}
+
 /// The `spend` op body, with the clock and the probe outcome injected so
 /// tests pass a temp journal: `github` is None when not requested,
 /// `Some(Err)` when the exempt read failed, `Some(Ok)` with the
@@ -606,6 +627,15 @@ pub(crate) fn spend_report_at(
 
     let mut shapes: Vec<_> = by_shape.into_iter().collect();
     shapes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    // Picked before the cut: 25 cached or GraphQL shapes can outrank every
+    // uncached core one, and this is the shape a person acts on.
+    let top_core_shape = shapes
+        .iter()
+        .find(|((_, _, bucket, conditional), _)| bucket == "core" && !conditional)
+        .map(|((caller, shape, _, _), count)| {
+            json!({"caller": caller, "shape": shape, "count": count})
+        })
+        .unwrap_or(Value::Null);
     shapes.truncate(25);
 
     let github_value = match github {
@@ -687,6 +717,7 @@ pub(crate) fn spend_report_at(
                 "count": count,
             }))
             .collect::<Vec<_>>(),
+        "top_core_shape": top_core_shape,
         "blind_spots": BLIND_SPOTS,
     });
     if let Some(g) = github_value {
@@ -783,5 +814,74 @@ mod tests {
             report["github"]["outside_ledger_core_min"], 396,
             "400 used - 3 unconditional - 1 conditional"
         );
+    }
+
+    #[test]
+    fn one_poller_folds_to_one_label_and_one_shape() {
+        // A head_sha query value folds like a route sha, so a per-head
+        // runs poller ranks as one shape, not one row per commit.
+        let sha = "3e67cecbb23a9628b9b333bfa08d9ce46aac3f45";
+        let argv = |p: &str| vec!["api".to_string(), p.to_string()];
+        assert_eq!(
+            shape(&argv(&format!(
+                "repos/o/r/actions/runs?head_sha={sha}&per_page=100"
+            ))),
+            "api repos/{repo}/actions/runs?head_sha=SHA&per_page=100"
+        );
+
+        // A flag value or free text never extends the label, so the
+        // poll-class match the core reserve keys on stays exact; a real
+        // subcommand word still does.
+        let label = |argv: &[&str]| {
+            let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+            caller_label_from_at(1, &|pid| (pid == 1).then(|| (argv.clone(), 0)))
+        };
+        let heal = label(&[
+            "fno-agents",
+            "pr-heal",
+            "--all",
+            "--apply",
+            "/Users/x/code/repo",
+        ]);
+        assert_eq!(heal, "pr-heal");
+        assert!(is_poll_class(&heal));
+        let checkin = label(&[
+            "fno-agents",
+            "lead-checkin",
+            "3984 queued; the dead claim respawns",
+        ]);
+        assert_eq!(checkin, "lead-checkin");
+        assert!(is_poll_class(&checkin));
+        assert_eq!(
+            label(&["fno-agents", "backlog", "reconcile"]),
+            "backlog reconcile"
+        );
+
+        // The status line's spender read: callers ranked by unconditional
+        // core, and the top unconditional core shape beside them.
+        let tmp = tempfile::tempdir().unwrap();
+        let journal = tmp.path().join("github-request-spend.jsonl");
+        let now = 1_760_000_000_000i64;
+        let row = |caller: &str, shape: &str, cond: bool| {
+            json!({"ts_ms": now - 1000, "caller": caller, "shape": shape, "bucket": "core",
+                   "conditional": cond, "points": 1, "verdict": "admitted", "cause": Value::Null})
+            .to_string()
+        };
+        let lines = [
+            row("pr-heal", "api repos/{repo}/pulls/N [conditional]", true),
+            row("pr-heal", "api repos/{repo}/pulls/N [conditional]", true),
+            row(
+                "pr-heal",
+                "api repos/{repo}/check-runs/N/annotations",
+                false,
+            ),
+            row("do pr", "api repos/{repo}/pulls/N", false),
+            row("do pr", "api repos/{repo}/pulls/N", false),
+        ];
+        std::fs::write(&journal, lines.join("\n") + "\n").unwrap();
+        let top = top_spenders(&journal, now, 1);
+        assert_eq!(top["callers"].as_array().unwrap().len(), 1);
+        assert_eq!(top["callers"][0]["caller"], "do pr");
+        assert_eq!(top["top_core_shape"]["shape"], "api repos/{repo}/pulls/N");
     }
 }

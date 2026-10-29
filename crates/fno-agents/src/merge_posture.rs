@@ -82,7 +82,7 @@ fn padded(message: &str) -> String {
 
 /// Rewrite the legacy bare token to the flag in a /target-family command.
 /// Scoped to the two positions the legacy injectors actually produced
-/// (round 12): directly after the verb, or trailing. A MID-STRING token is
+/// (round 12): directly after the command, or trailing. A MID-STRING token is
 /// left alone on purpose: a /target argument is free text, and rewriting the
 /// word anywhere would mutate prompt text the operator typed.
 pub fn normalize_legacy_no_merge(command: &str) -> String {
@@ -104,7 +104,7 @@ pub fn normalize_legacy_no_merge(command: &str) -> String {
 }
 
 /// Insert the carrier flag into a /target-family command, right after the
-/// verb token. Skipped when a standalone flag is already present. Non-family
+/// command token. Skipped when a standalone flag is already present. Non-family
 /// commands pass through untouched.
 pub fn inject_no_merge(command: &str) -> String {
     let flag = table().flag.as_str();
@@ -113,23 +113,6 @@ pub fn inject_no_merge(command: &str) -> String {
     }
     let mut parts: Vec<&str> = command.split_whitespace().collect();
     parts.insert(1, flag);
-    parts.join(" ")
-}
-
-/// Remove the carrier from a /target-family command: the first standalone
-/// flag and the first standalone legacy token. A pathological id like
-/// `no-merger-x` is never touched (standalone tokens only), and non-family
-/// commands pass through so a prose brief's text is never mangled.
-pub fn strip_no_merge(command: &str) -> String {
-    if !is_target_family(command) {
-        return command.to_string();
-    }
-    let mut parts: Vec<&str> = command.split_whitespace().collect();
-    for token in [table().flag.as_str(), table().legacy_token.as_str()] {
-        if let Some(pos) = parts[1..].iter().position(|p| *p == token) {
-            parts.remove(pos + 1);
-        }
-    }
     parts.join(" ")
 }
 
@@ -165,8 +148,7 @@ pub fn posture_action(message: &str, prior: Option<&str>) -> (EnvAction, Option<
 
 /// Apply the posture to THIS process's environment so every child spawned
 /// below inherits the carrier (the Rust spawn lane's one application point,
-/// `client::maybe_run_spawn`). The Python spawn lane applies the same
-/// verdict from the same table; both are idempotent, so a lane that runs
+/// `client::maybe_run_spawn`). It is idempotent, so a spawn that runs it
 /// twice converges instead of flip-flopping. Returns whether a loud-clear
 /// note was emitted (the caller prints it on its own stderr).
 pub fn apply_env_from_message(message: &str) -> bool {

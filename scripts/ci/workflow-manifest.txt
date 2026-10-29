@@ -15,6 +15,7 @@ guards.yml
 harness-launch-docs.yml
 install-script-portability.yml
 main-binaries.yml
+merge-queue-gate.yml
 multiplayer-attestation.yml
 release.yml
 pitfalls.yml
@@ -26,3 +27,4 @@ skill-limitations.yml
 rust-ci.yml
 stacked-base-guard.yml
 install-channels.yml
+tracker-live.yml

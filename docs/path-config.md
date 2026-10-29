@@ -69,7 +69,6 @@ plans_dir = ".fno/plans/"   # the legacy default; unset it resolves to <space>/p
 # worktrees_base  = ...   # default: <state_dir>/worktrees/
 # memory_dir      = ...   # default: <state_dir>/memory/
 # hook_logs_dir   = ...   # default: <state_dir>/hook-logs/
-# inbox_dir       = ...   # default: <space>/inbox/
 # handoffs_dir    = ...   # default: <vault>/internal/{project}/handoffs/ when
 #                         # obsidian.enabled, else <state_dir>/handoffs/<project>/
 # spaces_dir      = ...   # default: <state_dir>/spaces/
@@ -144,7 +143,7 @@ plans_dir = ".fno/plans/"
 enabled = false
 ```
 
-All paths derive from `~/.fno/`. This is also what `fno config setup migrate-paths` writes on first run.
+All paths derive from `~/.fno/`. This is also what the first `fno` run writes.
 
 ## Lookup order for path resolution
 
@@ -156,9 +155,11 @@ For each configurable accessor call:
 
 `paths.graph_json()` is the stable store anchor at `<state_dir>/graph.json`; the live SQLite store is its `.db` sibling. It has no path override.
 
+The anchor is the key for every path derived from the store: the lock (`graph.json.lock`), its queue, the keeper socket and the note journal. Every spelling of the store converges through `anchor_path` before `graph_lock_path` appends `.lock`. The spellings are the anchor, its `db/` twin and the legacy root name. All of them flock one file. The lockfile keeps the `graph.json.lock` name on purpose: an older binary that only knows the anchor spelling must share the same lock. Text a person reads names the `.db` store instead.
+
 Under `FNO_TEST_HERMETIC=1`, state accessors reject a resolved path outside the test sandbox. The fence reuses the events `HermeticEscapeError` and allowed-root calculation. `locks_dir()` is the deliberate config-free exception.
 
-Project-relative paths (`plans_dir`, `inbox_dir`) anchor relative strings to the git repo root (or `FNO_REPO_ROOT` in tests).
+Project-relative paths (`plans_dir`) anchor relative strings to the git repo root (or `FNO_REPO_ROOT` in tests).
 
 ## `fno config doctor` output
 
@@ -182,7 +183,7 @@ When a suspicious path is found:
 [doctor] 1 suspicious path(s) detected:
   - state_dir = /private/tmp/fno: temp directory; data will not survive reboot
 
-Run 'fno config setup migrate-paths --force' to regenerate paths.
+Set a durable path with 'fno config set <key> <path>'.
 ```
 
 Suspicious patterns and their reasons:
@@ -196,17 +197,9 @@ Suspicious patterns and their reasons:
 | `~/OneDrive/` | OneDrive sync; conflicted copies on multi-machine setups |
 | `.git/` | Git internal; may be cleaned by git gc |
 
-## `fno config setup migrate-paths` flow
+## First-run config
 
-On first run after install, the CLI automatically writes `~/.fno/config.toml` with built-in defaults. The sentinel `~/.fno/.path-migration-done` prevents re-running.
-
-To regenerate settings explicitly:
-
-```bash
-fno config setup migrate-paths --force
-```
-
-This rewrites `config.toml` from the built-in defaults. Any custom values are overwritten; back up the file first if you have customizations.
+On the first run after install, the CLI writes `~/.fno/config.toml` with built-in defaults. The sentinel `~/.fno/.path-migration-done` prevents a second write. To change a path afterwards, set its key with `fno config set`, or run `fno do wizard`.
 
 ## Deprecation pathway
 
@@ -232,6 +225,8 @@ The helper writes a minimal `config.toml` and sets `FNO_CONFIG`. The settings ca
 `FNO_HOME` does not sandbox the backlog. Config `state_dir` decides where the graph lives. A store write under `FNO_HOME` that targets the default store (`~/.fno`) is refused. Writes to explicit graph paths and to the FNO_CONFIG store are served. To sandbox a shell reproduction, write a `config.toml` that holds `schema_version = 1` and `state_dir = "<tmp dir>"`, then export `FNO_CONFIG=<that file>`.
 
 Confirm with a read before the first write: `fno backlog get <live node id>` must answer "No node matching". A read that returns the live node means the sandbox is not on. Do not write.
+
+The Rust legs read two more locations past `FNO_CONFIG`. They read the global config at `~/.fno/config.toml`, so a global `store.share_backlog = true` still syncs the sandbox with the shared primary. Set `FNO_GLOBAL_SETTINGS_PATH=<tmp dir>/settings.yaml` so the global config resolves to `<tmp dir>/config.toml`. The board renderer reads the graph at `FNO_GRAPH_JSON`, else `~/.fno`, so also set `FNO_GRAPH_JSON=<state dir>/graph.json` and `FNO_STATE_DIR=<state dir>`. `scripts/ops/mux-demo-snapshot.sh` also sets `HOME`, so the mux sideline lists no real sessions.
 
 Known leak: the graph.html render can still drop a file in `~/.fno` under this recipe, even though the store itself stays in the sandbox. A later fix retires this note.
 

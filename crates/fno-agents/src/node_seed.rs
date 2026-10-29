@@ -1,24 +1,24 @@
-//! The node's verb against the payload's verb, decided in one place: a
-//! `--node` spawn runs the verb the node derives, or refuses. The Python
+//! The node's command against the payload's command, decided in one place: a
+//! `--node` spawn runs the command the node derives, or refuses. The Python
 //! seam projects the lifecycle table's answer (never a copy of it), the
 //! seed's slot facts and the team/resume flags; this module answers
 //! pass / profile / compose / refuse, and the seam applies the answer
 //! verbatim before any lane is chosen. `decide_in` is pure over its input; the
-//! Rust client's own check (`spawn_payload_verb_refusal`) reads the node's
+//! Rust client's own check (`spawn_payload_command_refusal`) reads the node's
 //! graph row and the blueprint floor, then asks `decide` for the answer.
 
 use serde_json::{json, Value};
 use std::path::Path;
 
 use crate::law_match::matches_node_id_shape;
-use crate::provider::parse_verb_token;
+use crate::provider::parse_command_token;
 
-/// The node's verb as one canonical `/word`, reusing the seed parser so no
-/// second spelling rule exists. An unparseable stored verb is compared as-is.
-fn canonical(node_verb: &str) -> String {
-    match parse_verb_token(node_verb.trim()) {
+/// The node's command as one canonical `/word`, reusing the seed parser so no
+/// second spelling rule exists. An unparseable stored command is compared as-is.
+fn canonical(node_command: &str) -> String {
+    match parse_command_token(node_command.trim()) {
         Some((word, _)) => format!("/{word}"),
-        None => node_verb.trim().to_string(),
+        None => node_command.trim().to_string(),
     }
 }
 
@@ -26,13 +26,13 @@ fn canonical(node_verb: &str) -> String {
 /// stripped for the `message_eq` form. `None` when there is no slot.
 fn seed_text(payload: &Value) -> Option<String> {
     // A nodeless derive caller may send bare argv: the seed is then the first
-    // verb-shaped token, and a flag value never parses as a verb.
+    // command-shaped token, and a flag value never parses as a command.
     if payload.get("seed_index").and_then(Value::as_u64).is_none() {
         let argv = payload.get("argv")?.as_array()?;
         return argv.iter().skip(1).find_map(|tok| {
             let raw = tok.as_str()?;
             let text = raw.strip_prefix("--message=").unwrap_or(raw);
-            parse_verb_token(text.split_whitespace().next()?).map(|_| text.to_string())
+            parse_command_token(text.split_whitespace().next()?).map(|_| text.to_string())
         });
     }
     let index = payload.get("seed_index")?.as_u64()? as usize;
@@ -97,7 +97,7 @@ fn without_flag(mut argv: Vec<String>, flag: &str) -> Vec<String> {
     argv
 }
 
-/// The strict first-line scan: after a leading verb token, the first
+/// The strict first-line scan: after a leading command token, the first
 /// node-shaped token names the spawn's node even past a modifier (`L`).
 /// Reuses `resolve_node`'s scanner so no second spelling rule exists.
 pub(crate) fn scan_seed_node(text: &str) -> Option<String> {
@@ -107,10 +107,13 @@ pub(crate) fn scan_seed_node(text: &str) -> Option<String> {
         .unwrap_or("")
         .split_whitespace()
         .collect();
-    if !toks.first().is_some_and(|t| parse_verb_token(t).is_some()) {
+    if !toks
+        .first()
+        .is_some_and(|t| parse_command_token(t).is_some())
+    {
         return None;
     }
-    // The node slot is the argument right after the verb, once past a
+    // The node slot is the argument right after the command, once past a
     // single modifier token. A quoted token opens free-text prose: the
     // slot is a title, and no node-shaped word inside it binds.
     toks.iter()
@@ -125,7 +128,7 @@ pub(crate) fn scan_seed_node(text: &str) -> Option<String> {
         })
 }
 
-/// The nodeless arm: read the seed's verb argument as the node the
+/// The nodeless arm: read the seed's command argument as the node the
 /// spawn is FOR, and answer compose with the flag already inserted, so the
 /// Python side applies the answer generically and both lanes see an
 /// explicit node afterwards. A seed naming no node answers pass with a
@@ -149,8 +152,8 @@ fn derive_from_seed(payload: &Value, seed: Option<String>, rows: &[Value]) -> Va
     if toks.iter().any(|tok| *tok == "--reconcile") {
         return pass("reconcile seed names its own command".into());
     }
-    let Some((first, _)) = toks.first().and_then(|t| parse_verb_token(t)) else {
-        return pass("prose seed names no verb".into());
+    let Some((first, _)) = toks.first().and_then(|t| parse_command_token(t)) else {
+        return pass("prose seed names no command".into());
     };
     let family: Vec<String> = payload
         .get("family")
@@ -163,7 +166,7 @@ fn derive_from_seed(payload: &Value, seed: Option<String>, rows: &[Value]) -> Va
         })
         .unwrap_or_default();
     if !family.iter().any(|f| f == &format!("/{first}")) {
-        return pass(format!("verb /{first} is outside the target family"));
+        return pass(format!("command /{first} is outside the target family"));
     }
     let scanned = scan_seed_node(&text);
     let arg = scanned
@@ -243,7 +246,7 @@ fn explicit_headless(argv: &[String]) -> bool {
     }
     // The trailing-positional spelling: `... <seed> headless` normalizes to
     // the flag form before any lane is chosen, so the raw argv names
-    // headless only in this last token. A non-verb one-token seed spelled
+    // headless only in this last token. A non-command one-token seed spelled
     // `headless` derives no node either way, so a stray match there is
     // harmless.
     argv.last().map(String::as_str) == Some("headless")
@@ -301,7 +304,16 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
 
     // 1. Team and resume spawns pass unchanged: their flags already name
     //    the work profile, and the payload carries them as facts.
+    let argv: Vec<String> = payload["argv"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     if payload.get("role").and_then(Value::as_bool) == Some(true)
+        || crate::spawn_compose::argv_has_team(&argv)
         || payload.get("resume").and_then(Value::as_bool) == Some(true)
     {
         return json!({"action": "pass"});
@@ -324,9 +336,9 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
     }
 
     // 3. A seed the lifecycle family does not own passes unchecked: only a
-    //    leading /target or /blueprint claims the node's verb.
+    //    leading /target or /blueprint claims the node's command.
     if let Some(text) = &seed {
-        if let Some((first, _)) = text.split_whitespace().next().and_then(parse_verb_token) {
+        if let Some((first, _)) = text.split_whitespace().next().and_then(parse_command_token) {
             let family: Vec<String> = payload
                 .get("family")
                 .and_then(Value::as_array)
@@ -344,7 +356,7 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
     }
 
     // 4-6. Unknown means refuse, the spawn-gate posture: a missing row, a
-    //    derivation error, or a node with no verb is not evidence of
+    //    derivation error, or a node with no command is not evidence of
     //    /target.
     if payload.get("row_found").and_then(Value::as_bool) != Some(true) {
         let message = if from_payload {
@@ -354,7 +366,7 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
             )
         } else {
             format!(
-                "--node {node} names no readable backlog row; an unknown node is not evidence of a verb"
+                "--node {node} names no readable backlog row; an unknown node is not evidence of a command"
             )
         };
         return json!({"action": "refuse", "message": message});
@@ -366,27 +378,27 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
     {
         return json!({"action": "refuse", "message": format!("--node {node}: {err}")});
     }
-    let raw_verb = payload
-        .get("effective_verb")
+    let raw_command = payload
+        .get("effective_command")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .or_else(|| {
             payload
-                .get("stored_verb")
+                .get("stored_command")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
         });
-    let node_verb = match raw_verb.map(canonical) {
+    let node_command = match raw_command.map(canonical) {
         Some(v) => v,
         None => {
             return json!({"action": "refuse", "message": format!(
-                "--node {node} declares no dispatch verb; encode one with fno backlog update {node} dispatch_verb=<verb>")});
+                "--node {node} declares no dispatch command; encode one with fno backlog update {node} dispatch_command=<command>")});
         }
     };
 
-    // 7. A family verb in the payload must agree with the node's verb.
+    // 7. A family command in the payload must agree with the node's command.
     if let Some(text) = &seed {
-        if let Some((first, _)) = text.split_whitespace().next().and_then(parse_verb_token) {
+        if let Some((first, _)) = text.split_whitespace().next().and_then(parse_command_token) {
             let family: Vec<String> = payload
                 .get("family")
                 .and_then(Value::as_array)
@@ -398,19 +410,19 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
                 })
                 .unwrap_or_default();
             if family.iter().any(|f| f == &format!("/{first}")) {
-                if format!("/{first}") == node_verb {
+                if format!("/{first}") == node_command {
                     return json!({"action": "pass"});
                 }
                 let message = if from_payload {
-                    let word = node_verb.trim_start_matches('/');
+                    let word = node_command.trim_start_matches('/');
                     format!(
-                        "the payload names /{first} {node}, but {node} derives {node_verb}; \
+                        "the payload names /{first} {node}, but {node} derives {node_command}; \
                          spawn /fno:{word} {node} instead"
                     )
                 } else {
                     format!(
-                        "--node {node} derives {node_verb}; the payload names /{first}. \
-                         Drop the verb from the payload: --node supplies it."
+                        "--node {node} derives {node_command}; the payload names /{first}. \
+                         Drop the command from the payload: --node supplies it."
                     )
                 };
                 return json!({"action": "refuse", "message": message});
@@ -418,9 +430,9 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
         }
     }
 
-    let word = node_verb.trim_start_matches('/').to_string();
+    let word = node_command.trim_start_matches('/').to_string();
 
-    // 8. No seed: the profile routes by the derived verb; the door keeps
+    // 8. No seed: the profile routes by the derived command; the door keeps
     //    rendering the command (it also carries the brief env).
     match seed {
         Some(text) if !text.trim().is_empty() => {
@@ -445,14 +457,14 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
     }
 }
 
-/// The refusal for a payload whose family verb disagrees with the verb its
+/// The refusal for a payload whose family command disagrees with the command its
 /// node derives, for a caller that never crossed the Python seam. The seam
 /// refuses the same spawn first; this answer is the Rust client's own, so a
 /// direct client call (the seam marker, `FNO_SPAWN_GATE=0`) cannot launch a
 /// worker the seam would have refused. A node with no row, a derivation
 /// that abstains, and a seed outside the family all answer `None`: the seam
 /// owns those refusals, and this check only closes the mismatch.
-pub fn payload_verb_refusal(
+pub fn payload_command_refusal(
     seed: &str,
     flag_node: Option<&str>,
     skips_check: bool,
@@ -464,14 +476,14 @@ pub fn payload_verb_refusal(
         Some(node) => node.to_string(),
         None => scan_seed_node(seed)?,
     };
-    let verb = match crate::backlog_ready::effective_verb_with_floor(row?, floor) {
-        Ok((Some(verb), _)) => verb,
+    let command = match crate::backlog_ready::effective_command_with_floor(row?, floor) {
+        Ok((Some(command), _)) => command,
         _ => return None,
     };
     let node_source = flag_node.map_or(json!("payload"), |_| Value::Null);
     let payload = json!({
-        "node": node, "row_found": true, "effective_verb": verb,
-        "stored_verb": null, "derive_error": null,
+        "node": node, "row_found": true, "effective_command": command,
+        "stored_command": null, "derive_error": null,
         "node_source": node_source,
         "family": ["/target", "/blueprint"], "role": skips_check, "resume": false,
         "argv": ["spawn", seed], "seed_index": 1, "seed_form": "positional",
@@ -486,9 +498,9 @@ pub fn payload_verb_refusal(
     })
 }
 
-/// [`payload_verb_refusal`] over a spawn request's params: reads the node's
+/// [`payload_command_refusal`] over a spawn request's params: reads the node's
 /// graph row and the operator's blueprint floor from `cwd`'s config.
-pub fn spawn_payload_verb_refusal(params: &Value, cwd: &Path) -> Option<String> {
+pub fn spawn_payload_command_refusal(params: &Value, cwd: &Path) -> Option<String> {
     let seed = params.get("message").and_then(Value::as_str)?;
     let flag_node = params.get("node").and_then(Value::as_str);
     let node = match flag_node.map(str::trim).filter(|n| !n.is_empty()) {
@@ -508,20 +520,20 @@ pub fn spawn_payload_verb_refusal(params: &Value, cwd: &Path) -> Option<String> 
         .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
-    payload_verb_refusal(
+    payload_command_refusal(
         seed,
         flag_node,
-        spawn_skips_verb_check(params),
+        spawn_skips_command_check(params),
         Some(&row),
         &floor,
     )
 }
 
 /// A resume or role-bearing spawn names its work profile by flag, so the seam
-/// passes it without comparing the payload verb. A promoted codex thread
+/// passes it without comparing the payload command. A promoted codex thread
 /// reaches the client carrying `role_level` / `role_scope`.
-fn spawn_skips_verb_check(params: &Value) -> bool {
-    ["resume_id", "role_level", "role_scope"]
+fn spawn_skips_command_check(params: &Value) -> bool {
+    ["resume_id", "role_level", "role_scope", "promote"]
         .iter()
         .any(|key| params.get(*key).is_some())
 }
@@ -682,8 +694,8 @@ mod tests {
     /// The shared shape: node x-1 derives /blueprint, no error, no team.
     fn base() -> Value {
         json!({
-            "node": "x-1", "row_found": true, "effective_verb": "/blueprint",
-            "stored_verb": "/blueprint", "derive_error": null,
+            "node": "x-1", "row_found": true, "effective_command": "/blueprint",
+            "stored_command": "/blueprint", "derive_error": null,
             "family": ["/target", "/blueprint"], "role": false, "resume": false,
         })
     }
@@ -691,7 +703,7 @@ mod tests {
     // --- AC1-HP --------------------------------------------------------- //
 
     #[test]
-    fn disagreeing_family_verb_refuses_naming_both() {
+    fn disagreeing_family_command_refuses_naming_both() {
         let mut p = base().clone();
         p["argv"] = json!(["spawn", "w", "/fno:target x-1", "--node", "x-1"]);
         p["seed_index"] = json!(2);
@@ -729,9 +741,9 @@ mod tests {
     #[test]
     fn team_and_resume_spawns_pass_unchanged() {
         let mut p = base().clone();
-        p["role"] = json!(true);
+        p["argv"] = json!(["spawn", "--promote", "x-1", "/fno:target x-1"]);
         assert_eq!(decide_map(p.clone())["action"], "pass");
-        p["role"] = json!(false);
+        p.as_object_mut().unwrap().remove("argv");
         p["resume"] = json!(true);
         assert_eq!(decide_map(p)["action"], "pass");
     }
@@ -758,10 +770,10 @@ mod tests {
     }
 
     #[test]
-    fn verbless_node_refuses_with_the_encode_hint() {
+    fn commandless_node_refuses_with_the_encode_hint() {
         let mut p = base().clone();
-        p["effective_verb"] = Value::Null;
-        p["stored_verb"] = Value::Null;
+        p["effective_command"] = Value::Null;
+        p["stored_command"] = Value::Null;
         p["argv"] = json!(["spawn", "w", "--node", "x-1"]);
         p["seed_index"] = Value::Null;
         let out = decide_map(p);
@@ -769,7 +781,7 @@ mod tests {
         assert!(out["message"]
             .as_str()
             .unwrap()
-            .contains("fno backlog update x-1 dispatch_verb="));
+            .contains("fno backlog update x-1 dispatch_command="));
     }
 
     #[test]
@@ -832,21 +844,11 @@ mod tests {
 
     // --- the explicit headless lane ------------------------------------- //
 
-    /// The fnh-worker seat: an explicit `--substrate headless` spawn seeded
-    /// with a target-family verb. The derive must not compose `--node`, which
+    /// The fnh-worker seat: an explicit `--once` (headless) spawn seeded
+    /// with a target-family command. The derive must not compose `--node`, which
     /// would pin the spawn to the Python lane that seats no headless footnote.
     fn headless_derive(tail: &[&str]) -> Value {
-        let mut argv = vec![
-            "spawn",
-            "-H",
-            "footnote",
-            "--substrate",
-            "headless",
-            "-m",
-            "zai/glm-5.3-flash",
-            "--name",
-            "w",
-        ];
+        let mut argv = vec!["spawn", "-H", "footnote", "--once", "--name", "w"];
         argv.extend_from_slice(tail);
         // `seed_index` is the seed's position in the full argv (`argv.get`
         // reads it back), so the trailing seed sits at len-1.
@@ -915,7 +917,7 @@ mod tests {
 
     #[test]
     fn a_quoted_title_never_binds_a_node_shaped_word() {
-        // Free text after the verb is a title, not a node slot: a
+        // Free text after the command is a title, not a node slot: a
         // node-shaped word inside it stays prose.
         for seed in [
             "/fno:target \"stop treating x-3333 as a node\"",
@@ -996,16 +998,16 @@ mod tests {
     // --- the Rust client's own refusal ------------------------------------ //
 
     #[test]
-    fn client_refuses_a_payload_verb_the_node_does_not_derive() {
-        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
-        let msg = payload_verb_refusal("$fno:target x-aaaa", None, false, Some(&row), "high")
+    fn client_refuses_a_payload_command_the_node_does_not_derive() {
+        let row = json!({"id": "x-aaaa", "dispatch_command": "/blueprint", "difficulty": "high"});
+        let msg = payload_command_refusal("$fno:target x-aaaa", None, false, Some(&row), "high")
             .expect("a /target payload on a /blueprint node refuses");
         assert!(
             msg.contains("the payload names /target x-aaaa, but x-aaaa derives /blueprint"),
             "{msg}"
         );
         assert!(msg.contains("spawn /fno:blueprint x-aaaa instead"), "{msg}");
-        let flagged = payload_verb_refusal(
+        let flagged = payload_command_refusal(
             "$fno:target x-aaaa",
             Some("x-aaaa"),
             false,
@@ -1021,7 +1023,7 @@ mod tests {
 
     #[test]
     fn client_lets_the_seam_own_every_other_answer() {
-        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
+        let row = json!({"id": "x-aaaa", "dispatch_command": "/blueprint", "difficulty": "high"});
         for (seed, row, skips) in [
             ("$fno:blueprint x-aaaa", Some(&row), false),
             ("$fno:target x-aaaa", None, false),
@@ -1029,15 +1031,15 @@ mod tests {
             ("port the parser", Some(&row), false),
         ] {
             assert_eq!(
-                payload_verb_refusal(seed, None, skips, row, "high"),
+                payload_command_refusal(seed, None, skips, row, "high"),
                 None,
                 "{seed}"
             );
         }
         for key in ["resume_id", "role_level", "role_scope"] {
-            assert!(spawn_skips_verb_check(&json!({ (key): 1 })), "{key}");
+            assert!(spawn_skips_command_check(&json!({ (key): 1 })), "{key}");
         }
-        assert!(!spawn_skips_verb_check(&json!({"message": "x"})));
+        assert!(!spawn_skips_command_check(&json!({"message": "x"})));
     }
 
     // --- the production params shape ------------------------------------- //

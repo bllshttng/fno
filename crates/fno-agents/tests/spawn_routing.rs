@@ -199,54 +199,6 @@ fn restore_config(old: Option<std::ffi::OsString>) {
 }
 
 // ---------------------------------------------------------------------------
-// AC1-HP: ask with unknown name exits 16 (claude path)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn ask_unknown_name_claude_exits_16() {
-    use fno_agents::claude_ask::{dispatch_claude_ask, ClaudeHome};
-
-    let home = AgentsHome::at(tmpdir("ask-unk-cl-home"));
-    let ch = ClaudeHome::at(tmpdir("ask-unk-cl-claude"));
-    let cwd = tmpdir("ask-unk-cl-cwd");
-
-    // Empty registry: name "ghost" does not exist.
-    let out = dispatch_claude_ask(
-        &home,
-        &ch,
-        "ghost",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(3)),
-        &[],
-    );
-
-    assert_eq!(
-        out.exit_code, 16,
-        "expected exit 16 for unknown-name ask, got {} (stderr: {})",
-        out.exit_code, out.stderr
-    );
-    assert!(
-        out.stderr.contains("unknown agent"),
-        "stderr must mention 'unknown agent': {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("ghost"),
-        "stderr must mention the agent name: {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("spawn"),
-        "stderr must mention 'spawn': {}",
-        out.stderr
-    );
-    assert!(out.stdout.is_empty(), "stdout must be empty on error");
-}
-
-// ---------------------------------------------------------------------------
 // AC1-HP: ask with unknown name exits 16 (codex path)
 // ---------------------------------------------------------------------------
 
@@ -361,43 +313,6 @@ fn ask_unknown_name_stderr_byte_parity() {
 }
 
 // ---------------------------------------------------------------------------
-// AC2-HP: ask still works for KNOWN agents (registry row exists)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn ask_known_agent_still_routes_to_followup() {
-    use fno_agents::claude_ask::{dispatch_claude_ask, ClaudeHome};
-
-    let home = AgentsHome::at(tmpdir("ask-known-home"));
-    let ch = ClaudeHome::at(tmpdir("ask-known-claude"));
-    let cwd = tmpdir("ask-known-cwd");
-
-    // Seed a known claude agent.
-    seed_registry(&home, "alice", "claude");
-
-    // dispatch_claude_ask should attempt followup (not exit 16).
-    // It will fail because there's no live socket, but exit code
-    // will NOT be 16 (unknown-name).
-    let out = dispatch_claude_ask(
-        &home,
-        &ch,
-        "alice",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_millis(200)),
-        &[],
-    );
-
-    assert_ne!(
-        out.exit_code, 16,
-        "a known agent must not get exit 16: {}",
-        out.stderr
-    );
-}
-
-// ---------------------------------------------------------------------------
 // AC3-HP: dispatch_claude_spawn - happy path, receipt byte shape
 // ---------------------------------------------------------------------------
 
@@ -438,7 +353,7 @@ fn spawn_claude_receipt_byte_shape() {
         "spawn claude happy path should exit 0, stderr: {}",
         out.stderr
     );
-    // Receipt: {"name": "<name>", "short_id": "<8hex>", "harness": "claude", "status": "live"}\n
+    // Receipt: {"name": "<name>", "short_id": "<8hex>", "harness": "claude", "model_basis": "lane-default", "status": "live"}\n
     let receipt = out.stdout.trim_end_matches('\n');
     assert!(
         receipt.starts_with(r#"{"name": "myspawn", "short_id": "#),
@@ -446,8 +361,9 @@ fn spawn_claude_receipt_byte_shape() {
         out.stdout
     );
     assert!(
-        receipt.ends_with(r#""harness": "claude", "status": "live"}"#),
-        "receipt must end with harness/status: {}",
+        receipt
+            .ends_with(r#""harness": "claude", "model_basis": "lane-default", "status": "live"}"#),
+        "receipt must end with harness/basis/status: {}",
         out.stdout
     );
     // Parse as JSON to verify structure.
@@ -584,40 +500,6 @@ fn spawn_claude_receipt_surfaces_moved_cwd() {
     );
 }
 
-#[test]
-fn spawn_claude_unresolved_identity_stays_spawning_with_warning() {
-    use fno_agents::claude_ask::{dispatch_claude_spawn, ClaudeHome};
-
-    let home = AgentsHome::at(tmpdir("spawn-unresolved-home"));
-    let ch = ClaudeHome::at(tmpdir("spawn-unresolved-claude"));
-    let cwd = tmpdir("spawn-unresolved-cwd");
-    let bin = tmpdir("spawn-unresolved-bin");
-    install_fake_claude(&bin);
-    let path = path_with(&bin);
-
-    let out = dispatch_claude_spawn(
-        &home,
-        &ch,
-        "unresolved-spawn",
-        "hello",
-        "fno",
-        &cwd,
-        false,
-        None,
-        &[("PATH", path.as_str())],
-        None,
-        None,
-        None,
-        fno_agents::claude_ask::HarnessFlags::default(),
-        false,
-    );
-
-    assert_eq!(out.exit_code, 0, "stderr: {}", out.stderr);
-    assert!(out.stderr.contains("harness_session_id"), "{}", out.stderr);
-    let receipt: serde_json::Value = serde_json::from_str(out.stdout.trim()).unwrap();
-    assert_eq!(receipt["status"], "spawning", "{}", out.stdout);
-}
-
 // ---------------------------------------------------------------------------
 // AC3-ERR: dispatch_claude_spawn - collision check (name already exists)
 // ---------------------------------------------------------------------------
@@ -668,82 +550,6 @@ fn spawn_claude_collision_exits_2() {
 }
 
 // ---------------------------------------------------------------------------
-// AC4-HP: dispatch_codex_once - happy path (create + reply + teardown)
-// PATH is injected via set_var under the mutex (same pattern as
-// codex_ask_dispatch.rs tests).
-// ---------------------------------------------------------------------------
-
-#[test]
-fn spawn_codex_once_happy_path() {
-    use fno_agents::codex_ask::dispatch_codex_once;
-
-    let home = AgentsHome::at(tmpdir("once-cx-home"));
-    let cwd = tmpdir("once-cx-cwd");
-    let bin = tmpdir("once-cx-bin");
-    install_fake_codex(&bin, "aaaa1111-0000-0000-0000-000000000001", "once reply");
-
-    let _guard = PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let old_path = std::env::var_os("PATH");
-    unsafe { std::env::set_var("PATH", path_with(&bin)) };
-
-    let out = dispatch_codex_once(
-        &home,
-        "ephemeral-codex",
-        "do something once",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(10)),
-        None,
-        None,
-        None,
-        &[],
-    );
-
-    match old_path {
-        Some(p) => unsafe { std::env::set_var("PATH", p) },
-        None => unsafe { std::env::remove_var("PATH") },
-    }
-
-    assert_eq!(
-        out.exit_code, 0,
-        "once happy path must exit 0, stderr: {}",
-        out.stderr
-    );
-    assert_eq!(
-        out.stdout, "once reply",
-        "stdout must be the reply verbatim"
-    );
-    // Teardown receipt on stderr.
-    assert!(
-        out.stderr.contains("once:"),
-        "teardown receipt must start with 'once:': {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("ephemeral-codex"),
-        "teardown receipt must contain agent name: {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("codex"),
-        "teardown receipt must mention provider: {}",
-        out.stderr
-    );
-
-    // Registry row must be removed after teardown.
-    let registry_path = home.registry_json();
-    if registry_path.exists() {
-        let body = registry_text(&registry_path).unwrap();
-        assert!(
-            !body.contains("ephemeral-codex"),
-            "registry row must be torn down: {}",
-            body
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
 // AC4-ERR: dispatch_codex_once - collision check (name already exists)
 // ---------------------------------------------------------------------------
 
@@ -777,54 +583,6 @@ fn spawn_codex_once_collision_exits_2() {
         "stderr must say already exists: {}",
         out.stderr
     );
-}
-
-// ---------------------------------------------------------------------------
-// AC4-ERR: dispatch_codex_once - create failure = no registry row written
-// ---------------------------------------------------------------------------
-
-#[test]
-fn spawn_codex_once_create_failure_no_registry_entry() {
-    use fno_agents::codex_ask::dispatch_codex_once;
-
-    let home = AgentsHome::at(tmpdir("once-cx-fail-home"));
-    let cwd = tmpdir("once-cx-fail-cwd");
-
-    let _guard = PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let old_path = std::env::var_os("PATH");
-    // Empty PATH so codex binary is not found -> exit 14.
-    unsafe { std::env::set_var("PATH", "/nonexistent-bin-dir-spawn-routing") };
-
-    let out = dispatch_codex_once(
-        &home,
-        "will-fail",
-        "msg",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(3)),
-        None,
-        None,
-        None,
-        &[],
-    );
-
-    match old_path {
-        Some(p) => unsafe { std::env::set_var("PATH", p) },
-        None => unsafe { std::env::remove_var("PATH") },
-    }
-
-    // create failed, so no registry row should have been written.
-    let registry_path = home.registry_json();
-    if registry_path.exists() {
-        let body = registry_text(&registry_path).unwrap();
-        assert!(
-            !body.contains("will-fail"),
-            "no registry entry should exist after create failure: {}",
-            body
-        );
-    }
-    assert_ne!(out.exit_code, 0, "create failure must not exit 0");
 }
 
 // ---------------------------------------------------------------------------
@@ -946,7 +704,7 @@ fn client_ask_unknown_name_exits_16() {
         .envs(fno_agents::test_run::self_owner_env())
         .args(["ask", "ghost-client", "hello"])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .output()
         .expect("failed to run fno-agents");
@@ -1036,60 +794,6 @@ fn client_ask_full_codex_session_id_resumes_named_row() {
     assert!(persisted.contains("\"name\": \"01a03a0e\""), "{persisted}");
 }
 
-/// x-2c27: `spawn --once` is the back-compat alias for `--substrate headless`.
-/// For claude that is the `claude -p` one-shot lane - NOT the `--bg` thread.
-/// It must NOT exit 2, must NOT print the old "--once not supported" message,
-/// and must NOT emit the bg JSON `"short_id"` receipt (which would prove it
-/// hit the bg lane instead of the headless passthrough).
-#[test]
-fn client_spawn_once_claude_is_headless_p_lane_not_bg() {
-    let _guard = PATH_MUTEX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let home_dir = tmpdir("cli-spawn-once-claude-home");
-    let bin_dir = tmpdir("cli-spawn-once-claude-bin");
-    let cwd = tmpdir("cli-spawn-once-claude-cwd");
-    install_fake_claude(&bin_dir);
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!(
-            "skipping client_spawn_once_claude_is_headless_p_lane_not_bg: binary not found at {:?}",
-            bin
-        );
-        return;
-    }
-
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "myagent", "hello", "--harness", "claude", "--once"])
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
-        .env("FNO_AGENTS_HOME", &home_dir)
-        .env("PATH", path_with(&bin_dir))
-        .current_dir(&cwd)
-        .output()
-        .expect("failed to run fno-agents");
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(
-        out.status.code(),
-        Some(2),
-        "claude --once (headless) must not exit 2; stderr: {stderr}"
-    );
-    assert!(
-        !stderr.contains("not supported"),
-        "claude --once must not print the old 'not supported' message: {stderr}"
-    );
-    // The headless `claude -p` lane returns the subprocess output verbatim; it
-    // does NOT wrap it in the bg JSON receipt. Absence of `"short_id"` proves we
-    // took the -p lane, not the --bg lane.
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        !stdout.contains("\"short_id\""),
-        "claude --once (headless) must NOT emit the bg JSON receipt; stdout: {stdout} stderr: {stderr}"
-    );
-}
-
 /// x-2c27 (codex P2): the claude headless lane honors `--timeout` - a hung
 /// `claude -p` is SIGKILLed past the deadline and reported as exit 124, not an
 /// indefinite wedge.
@@ -1119,17 +823,17 @@ fn client_spawn_headless_claude_honors_timeout() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "wk",
             "hello",
             "--harness",
             "claude",
-            "--substrate",
-            "headless",
+            "--once",
             "--timeout",
             "1",
         ])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("PATH", path_with(&bin_dir))
         .current_dir(&cwd)
@@ -1152,101 +856,8 @@ fn client_spawn_headless_claude_honors_timeout() {
     );
 }
 
-/// Codex `bg` is the daemon-hosted app-server thread lane. A missing app-server
-/// must surface as a spawn failure, not as the old substrate incompatibility.
-#[test]
-fn client_spawn_substrate_bg_codex_uses_thread_lane() {
-    let home_dir = tmpdir("cli-spawn-bg-codex-home");
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!("skipping client_spawn_substrate_bg_codex_uses_thread_lane: binary not found");
-        return;
-    }
-
-    let bin_dir = tmpdir("cli-spawn-bg-codex-bin");
-    install_fake_codex_app_server_failure(&bin_dir);
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let _path_guard = PATH_MUTEX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "spawn",
-            "myagent",
-            "hello",
-            "--harness",
-            "codex",
-            "--substrate",
-            "thread",
-        ])
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
-        .env("FNO_AGENTS_HOME", &home_dir)
-        .env("FNO_AGENTS_NO_STARTUP_RECONCILE", "1")
-        .env("PATH", path)
-        .output()
-        .expect("failed to run fno-agents");
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(
-        out.status.code(),
-        Some(2),
-        "codex thread must not use the old substrate refusal; stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("lazy-starting daemon") && !stderr.contains("claude + opencode"),
-        "codex bg must reach the thread lane instead of the old substrate guard: {stderr}"
-    );
-}
-
-/// x-dfa4: --permission-mode on a NON-claude bg/headless lane is fail-closed
-/// (exit 2, pointing at -Y); the one-shot lane cannot honor a mapped mode
-/// without a silent downgrade.
-#[test]
-fn client_spawn_permission_mode_codex_headless_fails_closed() {
-    let home_dir = tmpdir("cli-spawn-perm-codex-home");
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!(
-            "skipping client_spawn_permission_mode_codex_headless_fails_closed: binary not found"
-        );
-        return;
-    }
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "spawn",
-            "myagent",
-            "hi",
-            "--harness",
-            "codex",
-            "--substrate",
-            "headless",
-            "--permission-mode",
-            "acceptEdits",
-        ])
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1")
-        .env("FNO_AGENTS_HOME", &home_dir)
-        .output()
-        .expect("failed to run fno-agents");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "must exit 2; stderr: {stderr}");
-    assert!(
-        stderr.contains("permission-mode")
-            && stderr.contains("-Y")
-            && !stderr.contains("use --substrate pane"),
-        "error must name --permission-mode and point at -Y: {stderr}"
-    );
-}
-
-/// x-dfa4: --permission-mode and --yolo are one knob at a time on the bg lane
-/// too (the pane lane enforces this in Python).
+/// --yolo retired beside --permission-mode, so the old mutual exclusion has
+/// one answer: the first retired spelling refuses by name.
 #[test]
 fn client_spawn_permission_mode_and_yolo_mutually_exclusive() {
     let home_dir = tmpdir("cli-spawn-perm-mutex-home");
@@ -1261,12 +872,11 @@ fn client_spawn_permission_mode_and_yolo_mutually_exclusive() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "myagent",
             "hi",
             "--harness",
             "claude",
-            "--substrate",
-            "thread",
             "--yolo",
             "--permission-mode",
             "plan",
@@ -1279,12 +889,12 @@ fn client_spawn_permission_mode_and_yolo_mutually_exclusive() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "must exit 2; stderr: {stderr}");
     assert!(
-        stderr.contains("mutually exclusive"),
-        "error must name the mutual exclusion: {stderr}"
+        stderr.contains("--yolo is retired"),
+        "error must name --yolo as retired: {stderr}"
     );
 }
 
-/// `--substrate headless --harness opencode` runs the `opencode run` one-shot
+/// `--once --harness opencode` runs the `opencode run` one-shot
 /// in the `--cwd` directory. opencode resolves its project from `$PWD`, not
 /// from the process cwd, so a spawn that sets only the process cwd runs the
 /// worker in the CALLER's directory. A fake `opencode` that prints `$PWD`
@@ -1311,19 +921,19 @@ fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "myagent",
             "hello",
             "--harness",
             "opencode",
-            "--substrate",
-            "headless",
+            "--once",
         ])
         .arg("--cwd")
         .arg(&target)
         .current_dir(&caller)
         .env("PWD", &caller)
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("PATH", format!("{}:/usr/bin:/bin", fake_path.display()))
         .output()
@@ -1337,12 +947,13 @@ fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
     );
 }
 
-/// `spawn --substrate headless` for `harness`, with `path_dir` first on PATH
+/// `spawn --once` for `harness`, with `path_dir` first on PATH
 /// and the endpoint env scrubbed. Returns (exit code, stdout, stderr).
 fn run_headless_spawn(
     harness: &str,
     path_dir: &Path,
     extra: &[&str],
+    env: &[(&str, &str)],
 ) -> Option<(Option<i32>, String, String)> {
     let bin = find_client_bin();
     if !bin.exists() {
@@ -1351,8 +962,8 @@ fn run_headless_spawn(
     }
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "reach", "hello", "--harness", harness])
-        .args(["--substrate", "headless"])
+        .args(["spawn", "--name", "reach", "hello", "--harness", harness])
+        .arg("--once")
         .arg("--cwd")
         .arg(tmpdir("headless-cwd"))
         .args(extra)
@@ -1362,6 +973,7 @@ fn run_headless_spawn(
         .env("HOME", tmpdir("headless-user-home"))
         .env_remove("ANTHROPIC_BASE_URL")
         .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
+        .envs(env.iter().copied())
         .output()
         .expect("failed to run fno-agents");
     Some((
@@ -1371,7 +983,7 @@ fn run_headless_spawn(
     ))
 }
 
-/// `--substrate headless --harness pi` runs one `pi --print --mode json` turn
+/// `--once --harness pi` runs one `pi --print --mode json` turn
 /// and returns the last assistant message. Before the arm existed the call fell
 /// through to the daemon and died on "use --substrate bg|headless".
 #[test]
@@ -1388,7 +1000,7 @@ fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let Some((code, stdout, stderr)) = run_headless_spawn("pi", &fake_path, &[]) else {
+    let Some((code, stdout, stderr)) = run_headless_spawn("pi", &fake_path, &[], &[]) else {
         return;
     };
     assert_eq!(code, Some(0), "stderr: {stderr}");
@@ -1400,16 +1012,44 @@ fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
     );
 }
 
-/// `--substrate headless --harness footnote` reaches footnote's own turn loop.
-/// A bare model id names no provider, and with the endpoint env scrubbed the
-/// loop refuses "no model endpoint"; a gate or daemon fall-through would print
-/// a thread-lane or PTY-hosting refusal instead.
+/// A `claude -p` one-shot mints no registry row: its child carries the
+/// no-row marker under its own name, unless `--mux` (the show-row env) opted
+/// in. The opt-in never rides on to the child.
+#[test]
+fn client_spawn_headless_claude_child_is_rowless_unless_shown() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake_path = tmpdir("headless-claude-rowless");
+    let fake = fake_path.join("claude");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nprintf 'no_row=%s show=%s\\n' \"$FNO_AGENT_NO_ROW\" \"$FNO_SPAWN_SHOW_ROW\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Some((code, stdout, stderr)) = run_headless_spawn("claude", &fake_path, &[], &[]) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "no_row=reach show=");
+    let shown = [(fno_agents::claude_ask::SHOW_ROW_ENV, "1")];
+    let Some((code, stdout, stderr)) = run_headless_spawn("claude", &fake_path, &[], &shown) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "no_row= show=");
+}
+
+/// `--once --harness footnote -- -m <model>` reaches footnote's own turn loop.
+/// The fenced model names no provider, and with the endpoint env scrubbed the
+/// loop refuses "no model endpoint"; a gate or daemon fall-through would print a thread-lane or
+/// PTY-hosting refusal instead.
 #[test]
 fn client_spawn_substrate_headless_footnote_reaches_its_turn_loop() {
     let Some((_, _, stderr)) = run_headless_spawn(
         "footnote",
         &tmpdir("headless-footnote-fakepath"),
-        &["--model", "glm-5.3-flash"],
+        &["--", "-m", "glm-5.3-flash"],
+        &[],
     ) else {
         return;
     };
@@ -1441,15 +1081,14 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "myagent",
             "hello",
             "--harness",
             "opencode",
-            "--substrate",
-            "thread",
         ])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("PATH", "") // no opencode binary anywhere: serve boot fails, not the substrate guard
         .output()
@@ -1459,7 +1098,7 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
     assert_eq!(
         out.status.code(),
         Some(13),
-        "opencode --substrate bg must reach the serve lane (exit 13 = serve boot failure on an empty PATH, never the old exit-2 bg refusal); stderr: {stderr}"
+        "an unflagged opencode spawn must reach the serve lane (exit 13 = serve boot failure on an empty PATH, never the old exit-2 bg refusal); stderr: {stderr}"
     );
     assert!(
         stderr.contains("opencode serve"),
@@ -1467,14 +1106,10 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
     );
 }
 
-/// The bg refusal still fires for a harness whose spawn arm is unbuilt, and it
-/// now names the DERIVED lane instead of a provider list. agy's capability row
-/// declares `interactive_attach` unsupported, so its lane reads `keeper`.
-///
-/// The negative assertion is the load-bearing half. The old text listed
-/// "claude + codex + opencode", which told a reader that every other harness
-/// has no thread lane. That went stale the moment a keeper lane was built and
-/// journey-proven, and it then misdirected the reader it was written to help.
+/// An explicit `--substrate thread` for agy refuses the retired axis before any
+/// lane resolves. The negative assertion stays load-bearing: the refusal must
+/// never list "claude + codex + opencode", which told a reader every other
+/// harness has no thread lane.
 #[test]
 fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
     let home_dir = tmpdir("cli-spawn-bg-agy-home");
@@ -1490,6 +1125,7 @@ fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "myagent",
             "hello",
             "--harness",
@@ -1510,8 +1146,8 @@ fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
         "agy --substrate bg must exit 2; stderr: {stderr}"
     );
     assert!(
-        stderr.contains("keeper lane spawn arm") && stderr.contains("headless"),
-        "agy --substrate bg error must name the derived lane and headless: {stderr}"
+        stderr.contains("--substrate is retired"),
+        "agy --substrate thread must refuse the retired axis: {stderr}"
     );
     assert!(
         !stderr.contains("claude + codex + opencode"),
@@ -1519,56 +1155,7 @@ fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
     );
 }
 
-/// x-df08 (PR 1355 review, P2): gemini's `command_surface` reads `refused` -
-/// a deprecated harness with no dispatch lane at all, never a harness that
-/// merely lacks a built thread-spawn arm. `thread_substrate_refusal` must check
-/// that BEFORE naming a `thread_lane`, or a retired harness reads as future
-/// lane work.
-#[test]
-fn client_spawn_substrate_bg_gemini_names_the_deprecation_not_a_missing_lane() {
-    let home_dir = tmpdir("cli-spawn-bg-gemini-home");
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!(
-            "skipping client_spawn_substrate_bg_gemini_names_the_deprecation_not_a_missing_lane: binary not found"
-        );
-        return;
-    }
-
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "spawn",
-            "myagent",
-            "hello",
-            "--harness",
-            "gemini",
-            "--substrate",
-            "bg",
-        ])
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1")
-        .env("FNO_AGENTS_HOME", &home_dir)
-        .output()
-        .expect("failed to run fno-agents");
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "gemini --substrate bg must exit 2; stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("retired") && stderr.contains("thread"),
-        "gemini --substrate bg must hit the retirement redirect: {stderr}"
-    );
-    assert!(
-        !stderr.contains("keeper lane spawn arm") && !stderr.contains("never a harness limitation"),
-        "gemini's refusal must not describe a retired harness as future lane work: {stderr}"
-    );
-}
-
-/// x-9112: `spawn --substrate bg` without --provider no longer exits 2 with a
+/// `spawn --substrate bg` without --provider no longer exits 2 with a
 /// "provider is required" error - it INFERS the invoking harness, mirroring
 /// Python's resolve_dispatch_harness (and the pane arm). Proven deterministically
 /// here via a single CODEX_SESSION_ID marker: inference resolves codex, which then
@@ -1598,9 +1185,9 @@ fn client_spawn_bg_no_provider_infers_harness() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "myagent", "hello", "--substrate", "thread"])
+        .args(["spawn", "--name", "myagent", "hello"])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("FNO_AGENTS_NO_STARTUP_RECONCILE", "1")
         .env("PATH", path)
@@ -1620,50 +1207,6 @@ fn client_spawn_bg_no_provider_infers_harness() {
     assert!(
         stderr.contains("lazy-starting daemon") && !stderr.contains("provider is required"),
         "missing --provider on bg must infer codex and reach its thread lane: {stderr}"
-    );
-}
-
-/// Pane parity with the optional-provider Python resolver: `spawn` on the pane
-/// substrate (the default) without --provider is NO LONGER a client-side exit 2.
-/// It falls through to the Python re-exec, which resolves the provider from the
-/// invoking harness. With no `fno` front door on PATH the re-exec fails (127),
-/// but the point is the client no longer rejects a missing provider on this arm.
-#[test]
-fn client_spawn_pane_no_provider_falls_through() {
-    let home_dir = tmpdir("cli-spawn-pane-noprov-home");
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!(
-            "skipping client_spawn_pane_no_provider_falls_through: binary not found at {:?}",
-            bin
-        );
-        return;
-    }
-
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "myagent", "hello"]) // pane is the default substrate
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
-        .env("FNO_AGENTS_HOME", &home_dir)
-        // Ensure the `fno` front door cannot be found, so the re-exec fails
-        // deterministically (127) rather than launching a real pane.
-        .env("PATH", "/nonexistent")
-        .output()
-        .expect("failed to run fno-agents");
-
-    assert_ne!(
-        out.status.code(),
-        Some(2),
-        "pane spawn without --provider must NOT be a client-side exit 2; got {:?}; stderr: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("provider is required to spawn a new agent"),
-        "pane arm must no longer emit the client-side provider-required error: {}",
-        stderr
     );
 }
 
@@ -1710,15 +1253,14 @@ fn client_spawn_bg_claude_happy_path_prints_receipt() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "hp-agent",
             "hello there",
             "--harness",
             "claude",
-            "--substrate",
-            "thread",
         ])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("HOME", &claude_home)
         .env("FNO_CLAUDE_DAEMON_DIR", &daemon_dir)
@@ -1792,12 +1334,11 @@ fn client_spawn_bg_claude_bootstraps_the_first_daemon_worker() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "bootstrap-agent",
             "hello there",
             "--harness",
             "claude",
-            "--substrate",
-            "thread",
         ])
         .env("FNO_SPAWN_GATE", "0")
         .env("FNO_E2E", "1")
@@ -1848,7 +1389,7 @@ fn client_host_retired_prints_mux_pointer() {
         .envs(fno_agents::test_run::self_owner_env())
         .args(["host", "host-collide", "--harness", "codex"])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("FNO_AGENTS_DAEMON_BIN", "/usr/bin/false")
         .output()
@@ -1861,7 +1402,7 @@ fn client_host_retired_prints_mux_pointer() {
         "retired host must exit 2; stderr: {stderr}"
     );
     assert!(
-        stderr.contains("retired at G4") && stderr.contains("fno agents spawn"),
+        stderr.contains("retired at G4") && stderr.contains("fno mux"),
         "host must print the mux pointer: {stderr}"
     );
     // It must NOT have taken the daemon path.
@@ -1875,4 +1416,95 @@ fn registry_text(path: &std::path::Path) -> std::io::Result<String> {
     fno_agents::registry_store::read(path)
         .map(|doc| serde_json::to_string_pretty(&doc).unwrap())
         .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+// The cloud lane journey without a live session: a fake claude on PATH
+// prints the measured create markers, the lane parses the id, mints
+// the row, and the receipt names the cloud id. The pty-held create,
+// the parse belt and the row mint all run for real here.
+#[test]
+fn spawn_claude_cloud_receipt_shape() {
+    use fno_agents::claude_cloud::{
+        dispatch_claude_cloud, non_claude_cloud_refusal, refuse_cloud_axes,
+    };
+    use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
+
+    // Phase one, the pure contracts: the router arm (claude+cloud resolves,
+    // codex+cloud refuses naming the claude-harness limit), the axis refusals
+    // by flag name, and the packaged mail argv with its holes filled.
+    assert_eq!(
+        resolve_backend("claude", "cloud"),
+        ResolvedBackend::ClaudeCloud
+    );
+    let refused = resolve_backend("codex", "cloud");
+    match refused {
+        ResolvedBackend::Refused(msg) => {
+            assert!(msg.contains("claude-harness"), "{msg}");
+            assert!(msg.contains("codex"), "{msg}");
+        }
+        other => panic!("codex+cloud must refuse, got {other:?}"),
+    }
+    let params = serde_json::json!({"model": "x"});
+    assert!(refuse_cloud_axes(&params).is_some());
+    let params = serde_json::json!({"harness_args": ["-c"]});
+    assert!(
+        refuse_cloud_axes(&params).is_some(),
+        "passthrough must refuse by name"
+    );
+    assert!(refuse_cloud_axes(&serde_json::json!({})).is_none());
+    assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
+    // Phase two, the lane journey: the pty-held create, the parse belt and
+    // the row mint all run for real here.
+    let home = AgentsHome::at(tmpdir("spawn-cloud-home"));
+    let cwd = tmpdir("spawn-cloud-cwd");
+    let bin = tmpdir("spawn-cloud-bin");
+    install_fake_claude_cloud(&bin);
+    let old_path = std::env::var("PATH").ok();
+    unsafe { std::env::set_var("PATH", path_with(&bin)) };
+    let out = dispatch_claude_cloud(&home, "clouddy", "seed the wave", "fno", &cwd, false);
+    match old_path {
+        Some(p) => unsafe { std::env::set_var("PATH", p) },
+        None => unsafe { std::env::remove_var("PATH") },
+    }
+
+    assert_eq!(out.exit_code, 0, "cloud spawn: {}", out.stderr);
+    // stdout is exactly the receipt JSON (the Python seam parses whole-stdout
+    // JSON); the human create output rides stderr.
+    assert!(
+        out.stderr.contains("Created cloud session"),
+        "{}",
+        out.stderr
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_str(out.stdout.trim()).expect("receipt must be valid JSON");
+    assert_eq!(receipt["name"], "clouddy");
+    assert_eq!(receipt["substrate"], "cloud");
+    assert_eq!(receipt["harness"], "claude");
+    let sid = receipt["short_id"].as_str().unwrap().to_string();
+    assert!(sid.starts_with("session_"), "{sid}");
+    let registry: serde_json::Value =
+        serde_json::from_str(&registry_text(&home.registry_json()).unwrap()).unwrap();
+    let row = &registry["agents"][0];
+    assert_eq!(row["substrate"], "cloud");
+    assert_eq!(row["harness"], "claude");
+    assert_eq!(row["harness_session_id"], sid.as_str());
+    assert_eq!(row["status"], "live");
+    assert!(row.get("pid").is_none_or(|v| v.is_null()));
+}
+
+// A fake claude whose only job is the create form: print the measured
+// markers and exit, the shape the real CLI shows under a pty.
+fn install_fake_claude_cloud(bin_dir: &std::path::Path) {
+    let mut script = String::from("#!/bin/sh\n");
+    script.push_str("printf \'Created cloud session: probe title\\n\'\n");
+    script.push_str(
+        "printf \'View: https://claude.ai/code/session_01CLOUDTEST0123456789?from=cli&m=0\\n\'\n",
+    );
+    script.push_str("printf \'Resume with: claude --teleport session_01CLOUDTEST0123456789\\n\'\n");
+    script.push_str("exit 0\n");
+    let path = bin_dir.join("claude");
+    std::fs::create_dir_all(bin_dir).expect("bin mkdir");
+    std::fs::write(&path, script).expect("write fake claude");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }

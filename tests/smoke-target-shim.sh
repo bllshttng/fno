@@ -324,7 +324,7 @@ echo "Case 9: loc_shrink"
 # ---------------------------------------------------------------------------
 # Case 10: T2 - cross-language seam join (real loop-check producer + resume consumer)
 #
-# T2: produce a REAL termination event via the real binary's loop-check verb,
+# T2: produce a REAL termination event via the real binary's loop-check command,
 # then run the shim/loop against that journal and assert the resume guard closes
 # on it (exit 0, no dispatch marker).
 #

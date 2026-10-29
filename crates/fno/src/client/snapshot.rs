@@ -21,9 +21,9 @@ use serde_json::Value;
 
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
-[--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] \
+[--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -51,6 +51,10 @@ pub enum ViewKind {
     Feed,
     /// The sideline row context menu on the first agent row.
     RowMenu,
+    /// The pointer resting on the third agent row, away from the chosen one.
+    Hover,
+    /// The selector cursor on the fourth agent row, away from the chosen one.
+    Cursor,
     /// The tab-strip context menu on the first tab.
     TabMenu,
     /// The sideline menu popup.
@@ -71,12 +75,77 @@ pub enum ViewKind {
     /// The expanded org fold block on the sideline (the prefix+C surface),
     /// with one inline machine fold so the lines carry real readings.
     OrgBlock,
-    /// The org board in Tree mode.
-    OrgTree,
-    /// The org board in Table mode.
+    /// The org view at one of its five tabs over the whole fleet.
     OrgTable,
-    /// The org board in Graph mode: the node-link canvas.
+    OrgRecent,
+    OrgOverview,
     OrgGraph,
+    OrgHealth,
+    /// The org view's first seat page, its FEED page or its SYSTEM page.
+    OrgSeat,
+    OrgFeed,
+    OrgSystem,
+    /// The Messages board with focus on column 1, 2 or 3.
+    MessagesTree,
+    MessagesChats,
+    MessagesThread,
+    /// The Messages board with column 2's System or Archive tab active.
+    MessagesSystem,
+    MessagesArchive,
+    /// The Messages board on the You tab: the operator's typed-turn threads.
+    MessagesYou,
+    /// The board on the newest You thread's detail, pairs right and left.
+    MessagesYouThread,
+    /// The backlog board full screen in list view, details pane beside it.
+    BacklogList,
+    /// The backlog board full screen in kanban view, details pane beside it.
+    BacklogKanban,
+    /// The prefix+f navigator filtered by the first agent row's PR number.
+    NavigatorPr,
+    /// The prefix+f navigator filtered by the model name `opus`.
+    NavigatorModel,
+    /// The prefix+f navigator with the sideline's row menu (Ctrl-o) open on
+    /// the first agent row.
+    NavigatorMenu,
+    /// The event provenance modal on the first feed row that is not a
+    /// question, with a mouse selection dragged across its longest line.
+    FeedDetail,
+    /// The question page on the first open question, with a mouse selection
+    /// dragged across its longest line.
+    QuestionDetail,
+    /// The connections overlay (prefix+A) on its Accounts tab, with the
+    /// reads the live open kicks run inline.
+    Connections,
+}
+
+/// The seeded demo mail id a Messages view opens on when no --message
+/// names one (scripts/ops/mux-demo-snapshot.sh writes it).
+const DEMO_MESSAGE_ID: &str = "fmail-demo-2";
+
+/// Open the navigator the way prefix+f does, with `query` typed. A query
+/// that matches no row would shoot `no matches`, which proves nothing.
+fn open_navigator(view: &mut View, query: String) -> Result<(), String> {
+    let nav = super::NavView {
+        query,
+        state_filter: None,
+        cursor: 0,
+    };
+    if view.nav_filtered(&nav).is_empty() {
+        return Err(format!("navigator query {:?} matched no rows", nav.query));
+    }
+    view.nav = Some(nav);
+    view.nav_esc.clear();
+    Ok(())
+}
+
+/// Select the longest line of the open modal's body, the way a drag does:
+/// compose once so the frame is recorded, then select. The caller's compose
+/// paints the selection.
+fn select_modal_line(view: &mut View) -> Result<(), String> {
+    let _ = view.compose();
+    crate::modal_select::select_longest_line()
+        .map(|_| ())
+        .ok_or_else(|| "the modal painted no body text to select".to_string())
 }
 
 fn parse_view(v: &str) -> Option<ViewKind> {
@@ -86,6 +155,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "bell-full" => Some(ViewKind::BellFull),
         "feed" => Some(ViewKind::Feed),
         "row-menu" => Some(ViewKind::RowMenu),
+        "hover" => Some(ViewKind::Hover),
+        "cursor" => Some(ViewKind::Cursor),
         "tab-menu" => Some(ViewKind::TabMenu),
         "sideline-menu" => Some(ViewKind::SidelineMenu),
         "composer" => Some(ViewKind::Composer),
@@ -93,9 +164,29 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "settings" => Some(ViewKind::Settings),
         "keys" => Some(ViewKind::Keys),
         "org-block" => Some(ViewKind::OrgBlock),
-        "org-tree" => Some(ViewKind::OrgTree),
         "org-table" => Some(ViewKind::OrgTable),
+        "org-recent" => Some(ViewKind::OrgRecent),
+        "org-overview" => Some(ViewKind::OrgOverview),
         "org-graph" => Some(ViewKind::OrgGraph),
+        "org-health" => Some(ViewKind::OrgHealth),
+        "org-seat" => Some(ViewKind::OrgSeat),
+        "org-feed" => Some(ViewKind::OrgFeed),
+        "org-system" => Some(ViewKind::OrgSystem),
+        "messages-tree" => Some(ViewKind::MessagesTree),
+        "messages-chats" => Some(ViewKind::MessagesChats),
+        "messages-thread" => Some(ViewKind::MessagesThread),
+        "messages-system" => Some(ViewKind::MessagesSystem),
+        "messages-archive" => Some(ViewKind::MessagesArchive),
+        "messages-you" => Some(ViewKind::MessagesYou),
+        "messages-you-thread" => Some(ViewKind::MessagesYouThread),
+        "backlog-list" => Some(ViewKind::BacklogList),
+        "backlog-kanban" => Some(ViewKind::BacklogKanban),
+        "navigator-pr" => Some(ViewKind::NavigatorPr),
+        "navigator-model" => Some(ViewKind::NavigatorModel),
+        "navigator-menu" => Some(ViewKind::NavigatorMenu),
+        "feed-detail" => Some(ViewKind::FeedDetail),
+        "question-detail" => Some(ViewKind::QuestionDetail),
+        "connections" => Some(ViewKind::Connections),
         _ => None,
     }
 }
@@ -112,6 +203,9 @@ pub struct SnapshotArgs {
     /// Attach as a sizing client, so the server lays its panes out at `size`.
     /// It resizes every pane, so it is for a throwaway server only.
     pub fit: bool,
+    /// `(rows, cols)` of a second window held attached as a sizing client
+    /// while the shot is taken, so the shot sees a tab two windows share.
+    pub peer: Option<(u16, u16)>,
     /// The font family drawn first, ahead of the common monospace stack: an
     /// image has no terminal, so its font is named here or left to the stack.
     pub font: Option<String>,
@@ -139,6 +233,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut format = None;
     let mut size = None;
     let mut fit = false;
+    let mut peer = None;
     let mut font = None;
     let mut message = None;
     let mut view = None;
@@ -168,7 +263,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -193,6 +288,12 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
                         ))
                     }
                 })
+            }
+            "--peer" => {
+                let v = value()?;
+                peer = Some(parse_size(&v).ok_or_else(|| {
+                    format!("fno mux serve --snapshot: --peer wants <cols>x<rows>, got {v:?}")
+                })?)
             }
             "--size" => {
                 let v = value()?;
@@ -235,6 +336,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         format,
         size,
         fit,
+        peer,
         font,
         message,
         view,
@@ -260,6 +362,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         args.squad.as_deref(),
         args.size,
         args.fit,
+        args.peer,
         chrome,
         args.message.as_deref(),
         args.view.as_ref(),
@@ -288,8 +391,54 @@ fn write(frame: &Frame, args: &SnapshotArgs) -> Result<(), String> {
             std::fs::write(&args.out, font(frame_html::screen_html(frame, args.theme))).map_err(io)
         }
         Format::Svg => std::fs::write(&args.out, svg()).map_err(io),
-        Format::Png => png(&svg(), frame, &args.out),
+        Format::Png => {
+            png(&svg(), frame, &args.out)?;
+            if super::image_layer::painted() {
+                stamp_no_image_protocol(&args.out)?;
+            }
+            Ok(())
+        }
     }
+}
+
+/// The `tEXt` chunk a snapshot png carries when its frame painted an image.
+/// The snapshot speaks no image protocol, so such a shot shows the half-block
+/// path only. The question intake refuses on it (`question_intake.rs`).
+const NO_IMAGE_PROTOCOL_STAMP: (&str, &str) = ("fno-snapshot", "no-image-protocol");
+
+/// Insert the stamp as a `tEXt` chunk right after the png's `IHDR`.
+fn stamp_no_image_protocol(out: &Path) -> Result<(), String> {
+    let io = |e: std::io::Error| format!("stamp {}: {e}", out.display());
+    let mut png = std::fs::read(out).map_err(io)?;
+    // Signature (8) + IHDR: length (4), type (4), data (13), crc (4).
+    let at = 33;
+    if png.len() < at || &png[12..16] != b"IHDR" {
+        return Err(format!(
+            "stamp {}: not a png with IHDR first",
+            out.display()
+        ));
+    }
+    let (key, text) = NO_IMAGE_PROTOCOL_STAMP;
+    let mut body = b"tEXt".to_vec();
+    body.extend_from_slice(key.as_bytes());
+    body.push(0);
+    body.extend_from_slice(text.as_bytes());
+    let mut chunk = ((body.len() - 4) as u32).to_be_bytes().to_vec();
+    chunk.extend_from_slice(&body);
+    chunk.extend_from_slice(&crc32(&body).to_be_bytes());
+    png.splice(at..at, chunk);
+    std::fs::write(out, png).map_err(io)
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &b in bytes {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
 }
 
 /// Rasterize through headless Chrome: the svg in a zero-margin page, a window
@@ -304,6 +453,14 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     let page = dir.join("shot.html");
     std::fs::write(&page, page_html(svg)).map_err(|e| format!("temp page: {e}"))?;
     let out_abs = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    // The png on disk is the success signal below, so an earlier shot at the
+    // same path would read as this one landing and pass off the stale image.
+    match std::fs::remove_file(&out_abs) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("{}: {e}", out_abs.display()));
+        }
+        _ => {}
+    }
     let mut cmd = std::process::Command::new(&chrome);
     // Chrome hangs on macOS under a HOME that is not the user's, and the demo
     // script sets one so paths read `~/...`. Hand it the passwd home back.
@@ -406,6 +563,7 @@ fn live_frame(
     squad: Option<&str>,
     size: Option<(u16, u16)>,
     fit: bool,
+    peer: Option<(u16, u16)>,
     chrome: crate::theme::Theme,
     message: Option<&str>,
     kind: Option<&ViewKind>,
@@ -419,6 +577,11 @@ fn live_frame(
     let dims = size
         .filter(|_| fit)
         .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims());
+    // The peer attaches first and stays until the shot is composed.
+    let _peer = peer
+        .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims())
+        .map(|d| runtime.block_on(hold_peer(&socket, cwd.clone(), d)))
+        .transpose()?;
     let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims))?;
     if let Some(name) = squad {
         let target = seen
@@ -467,6 +630,19 @@ fn live_frame(
     // snapshot has no event loop, so the tab would paint empty. --message
     // opens the board on that fmail id and runs one gather synchronously;
     // the paint gate's shots come from here (law d-9f18c4d5).
+    use crate::client::messages_view::{ChatTab, Col};
+    // A Messages view: the column that holds focus and column 2's tab.
+    let messages_shot = match kind {
+        Some(ViewKind::MessagesTree) => Some((Col::Tree, ChatTab::Chats)),
+        Some(ViewKind::MessagesChats) => Some((Col::Chats, ChatTab::Chats)),
+        Some(ViewKind::MessagesThread) => Some((Col::Thread, ChatTab::Chats)),
+        Some(ViewKind::MessagesSystem) => Some((Col::Chats, ChatTab::System)),
+        Some(ViewKind::MessagesArchive) => Some((Col::Chats, ChatTab::Archive)),
+        Some(ViewKind::MessagesYou) => Some((Col::Chats, ChatTab::You)),
+        Some(ViewKind::MessagesYouThread) => Some((Col::Thread, ChatTab::You)),
+        _ => None,
+    };
+    let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
     if let Some(id) = message {
         crate::client::messages_view::open_message(&mut view, id.to_string());
         let gen = view
@@ -484,13 +660,39 @@ fn live_frame(
             .and_then(|p| p.get("threads"))
             .and_then(Value::as_array)
             .is_none_or(|t| t.is_empty());
+        // The You views refuse the same way: a gather with no `you` rows
+        // paints "(no You threads)" and proves nothing (law d-9f18c4d5).
+        let you_empty = matches!(messages_shot, Some((_, ChatTab::You)))
+            && mail
+                .as_ref()
+                .ok()
+                .and_then(|p| p.get("you"))
+                .and_then(Value::as_array)
+                .is_none_or(|t| t.is_empty());
         crate::client::messages_view::apply_gather(&mut view, gen, mail, Err("no org tree".into()));
-        if board_empty {
+        if board_empty || you_empty {
             return Err(
                 "messages board rendered empty: mail-threads returned no threads; \
 shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
                     .into(),
             );
+        }
+        if let (Some((col, tab)), Some(b)) = (messages_shot, view.messages_board.as_mut()) {
+            b.col = col;
+            b.col2 = tab;
+        }
+        // The You detail opens on the newest thread: one shot shows the typed
+        // bubble right and the reply left.
+        if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
+            if let Some(sid) = b.active_chat_rows().into_iter().find_map(|row| match row {
+                crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
+                    Some(session_id)
+                }
+                _ => None,
+            }) {
+                b.sel_thread = Some(format!("you:{sid}"));
+                b.cursors[2] = b.you_items(&sid).len().saturating_sub(1);
+            }
         }
     }
     // The messages seam above is the shape: flip the client state the live
@@ -538,7 +740,7 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                 _ => {}
             }
         }
-        Some(ViewKind::Feed) => {
+        Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => {
             // The `e` key's state flip plus the fold the live panel's run
             // loop kicks, run inline: one Head page lands, newest first.
             view.feed = Some(super::feed_view::open_overlay(None, 0));
@@ -558,6 +760,33 @@ shoot a root seeded with questions, mail or backlog activity \
 (scripts/ops/mux-demo-snapshot.sh seeds one)"
                     .into());
             }
+            if let Some(ViewKind::FeedDetail) = kind {
+                // A question row opens the question page, so the provenance
+                // modal opens on the first row that is not one.
+                let item = view
+                    .feed
+                    .as_ref()
+                    .and_then(|f| f.win.items.iter().find(|i| i.kind != "question_asked"))
+                    .cloned()
+                    .ok_or("feed-detail: the feed holds only question rows to open")?;
+                view.feed_detail = Some(super::feed_detail::modal(&view, item));
+                select_modal_line(&mut view)?;
+            }
+        }
+        Some(ViewKind::QuestionDetail) => {
+            // The same gather the bell shots run, then the page the bell
+            // opens on a row.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            let id = super::bell::first_question_id(&view).ok_or(
+                "question-detail: no open question to show; shoot a root seeded with \
+questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
+            )?;
+            view.open_detail_on(&id);
+            if let Some(d) = &view.question_detail {
+                d.wait_decoded(Duration::from_secs(10));
+            }
+            select_modal_line(&mut view)?;
         }
         Some(ViewKind::RowMenu) => {
             let i = view
@@ -566,6 +795,17 @@ shoot a root seeded with questions, mail or backlog activity \
                 .position(|r| matches!(r, super::DisplayRow::Agent(_)))
                 .ok_or("no agent rows to open a row menu on")?;
             view.open_row_menu(i, Anchor::Center);
+        }
+        Some(kind @ (ViewKind::Hover | ViewKind::Cursor)) => {
+            let agents = view.display_rows().into_iter().enumerate();
+            let mut agents = agents.filter(|(_, r)| matches!(r, super::DisplayRow::Agent(_)));
+            let hover = matches!(kind, ViewKind::Hover);
+            let i = agents.nth(if hover { 2 } else { 3 }).map(|(i, _)| i);
+            if hover {
+                view.hover_row = i;
+            } else {
+                view.selector = i;
+            }
         }
         Some(ViewKind::SplitMenu) => {
             let i = view
@@ -585,10 +825,38 @@ shoot a root seeded with questions, mail or backlog activity \
             view.aux_esc.clear();
         }
         Some(ViewKind::Keys) => {
-            // Opened FROM settings, so the dismiss marker rides: the shot
-            // shows the table exactly as the tab handoff paints it.
-            view.keys_modal_return = true;
             view.open_keys_modal();
+        }
+        Some(ViewKind::Connections) => {
+            view.open_connections();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
+            let cv = view
+                .connections
+                .as_mut()
+                .ok_or("connections overlay did not open")?;
+            // A throwaway root reaches no real account, so the live probe and
+            // identity legs only fail. Paint the cached reading the root seeds.
+            let mut cached = true;
+            while let Ok((_, outcome)) = rx.try_recv() {
+                use crate::connections_view::ReadOutcome as R;
+                match outcome {
+                    R::UsageFailed(_) | R::IdentityFailed(_) => {}
+                    R::Usage(_) if !cached => {}
+                    R::Usage(cells) => {
+                        cached = false;
+                        cv.apply_read(R::Usage(cells));
+                    }
+                    other => cv.apply_read(other),
+                }
+            }
+            if cv.accounts.is_empty() {
+                return Err(
+                    "connections view rendered empty: this root registers no accounts; \
+shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds them)"
+                        .into(),
+                );
+            }
         }
         Some(ViewKind::OrgBlock) => {
             // The prefix+C fold runs expanded-only in a reading: flip the
@@ -605,42 +873,84 @@ shoot a root seeded with questions, mail or backlog activity \
             if !read {
                 return Err(
                     "org block rendered without a reading: fno doctor lanes returned none; \
-shoot from a host where the lanes verb answers"
+shoot from a host where the lanes command answers"
                         .into(),
                 );
             }
         }
-        Some(ViewKind::OrgTree) | Some(ViewKind::OrgTable) | Some(ViewKind::OrgGraph) => {
-            // The prefix+V org board at one mode: open it the way the key
-            // does, run one synchronous org gather, then set the mode the
-            // shot names. A root with no leads, nodes or unowned workers
-            // paints the degenerate footer only.
+        Some(
+            ViewKind::OrgTable
+            | ViewKind::OrgRecent
+            | ViewKind::OrgOverview
+            | ViewKind::OrgGraph
+            | ViewKind::OrgHealth
+            | ViewKind::OrgSeat
+            | ViewKind::OrgFeed
+            | ViewKind::OrgSystem,
+        ) => {
+            // The org view at one tab or page: open it the way the key
+            // does, run one synchronous fleet read, then select what the
+            // shot names. A fleet map with no seat refuses the shot.
             view.experimental_org_board = true;
             super::backlog_board::toggle_org_view(&mut view);
             view.board_full = true;
-            let inputs = runtime.block_on(crate::org_model::gather(
+            let inputs = runtime.block_on(super::org_seats::gather(
                 &crate::backlog_view::graph_path(),
                 view.layout.agents.clone(),
             ));
             let gen = view.org_generation;
             super::org_board::apply_fold(&mut view, gen, inputs);
-            let mode = match kind {
-                Some(ViewKind::OrgTable) => crate::view_store::OrgMode::Table,
-                Some(ViewKind::OrgGraph) => crate::view_store::OrgMode::Graph,
-                _ => crate::view_store::OrgMode::Tree,
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            let Some(b) = view.org_board.as_mut() else {
+                return Err("org view did not open".into());
             };
-            if let Some(b) = view.org_board.as_mut() {
-                b.mode = mode;
-            }
-            let populated = view
-                .org_board
-                .as_ref()
-                .is_some_and(|b| !b.mode_rows(0, 0).is_empty());
-            if !populated {
-                return Err(
-                    "org view rendered empty: this root has no leads, nodes or unowned workers; \
-shoot a root seeded with backlog nodes and leads \
+            let first = b.fleet.as_ref().and_then(|f| {
+                f.machines.iter().find_map(|m| {
+                    m.leads
+                        .iter()
+                        .find_map(|p| p.seats.first().map(|s| super::org_board::seat_key(m, p, s)))
+                })
+            });
+            let Some(first) = first else {
+                return Err("org view rendered empty: fleet top answered no seat; \
+shoot a root whose fleet map has seats \
 (scripts/ops/mux-demo-snapshot.sh seeds one)"
+                    .into());
+            };
+            b.tab = match kind {
+                Some(ViewKind::OrgRecent) => crate::view_store::OrgTab::Recent,
+                Some(ViewKind::OrgOverview) => crate::view_store::OrgTab::Overview,
+                Some(ViewKind::OrgGraph) => crate::view_store::OrgTab::Graph,
+                Some(ViewKind::OrgHealth) => crate::view_store::OrgTab::Health,
+                _ => crate::view_store::OrgTab::Table,
+            };
+            match kind {
+                Some(ViewKind::OrgSeat) => b.select(&first),
+                Some(ViewKind::OrgFeed) => b.select("feed"),
+                Some(ViewKind::OrgSystem) => b.select("system"),
+                _ => {}
+            }
+        }
+        Some(ViewKind::BacklogList) | Some(ViewKind::BacklogKanban) => {
+            // The V-cycle backlog board, full screen so the board and
+            // details panes lay out side by side. Set the sideline field
+            // directly: the shot never writes the view prefs.
+            view.sideline_view = crate::view_store::SidelineView::Backlog;
+            runtime.block_on(super::backlog_board::fold_once(&mut view));
+            view.board_full = true;
+            let b = view
+                .backlog_board
+                .as_mut()
+                .ok_or("the backlog board did not open")?;
+            b.query.view = match kind {
+                Some(ViewKind::BacklogList) => crate::backlog_model::View::List,
+                _ => crate::backlog_model::View::Kanban,
+            };
+            if !b.body.as_ref().is_some_and(|body| !body.lanes.is_empty()) {
+                return Err(
+                    "backlog view rendered empty: this root has no backlog nodes; \
+shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
                         .into(),
                 );
             }
@@ -656,6 +966,26 @@ shoot a root seeded with backlog nodes and leads \
                 .ok_or("no tabs to open a tab menu on")?;
             view.open_tab_menu_by_id(tid, Anchor::Center);
         }
+        Some(ViewKind::NavigatorPr) => {
+            let pr = view.layout.agents.iter().find_map(|a| a.pr).ok_or(
+                "no agent row carries a PR; shoot a root whose claimed node has a \
+pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
+            )?;
+            open_navigator(&mut view, pr.to_string())?;
+        }
+        Some(ViewKind::NavigatorModel) => open_navigator(&mut view, "opus".into())?,
+        Some(ViewKind::NavigatorMenu) => {
+            open_navigator(&mut view, String::new())?;
+            let at = view
+                .nav_filtered(view.nav.as_ref().ok_or("navigator did not open")?)
+                .iter()
+                .position(|r| matches!(r.menu, super::row_menu::NavMenu::Agent(_)))
+                .ok_or("no agent rows to open a navigator menu on")?;
+            if let Some(n) = view.nav.as_mut() {
+                n.cursor = at;
+            }
+            view.nav_open_menu();
+        }
         Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
         Some(ViewKind::Composer) => {
             super::agent_launcher::open(&mut view);
@@ -664,10 +994,57 @@ shoot a root seeded with backlog nodes and leads \
                 l.draft.cursor_chars = "fix the mux composer ".chars().count();
             }
         }
-        None => {}
+        // The messages seam above already opened and positioned the board.
+        Some(ViewKind::MessagesTree)
+        | Some(ViewKind::MessagesChats)
+        | Some(ViewKind::MessagesThread)
+        | Some(ViewKind::MessagesSystem)
+        | Some(ViewKind::MessagesArchive)
+        | Some(ViewKind::MessagesYou)
+        | Some(ViewKind::MessagesYouThread)
+        | None => {}
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
+}
+
+/// Attach a second sizing client at `dims` and keep it attached until the
+/// returned half drops. Its stream is drained so the server never stalls on it.
+async fn hold_peer(
+    socket: &Path,
+    cwd: String,
+    dims: (u16, u16),
+) -> Result<tokio::net::unix::OwnedWriteHalf, String> {
+    let stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .map_err(|e| format!("peer cannot connect to {}: {e}", socket.display()))?;
+    let (mut reader, mut writer) = stream.into_split();
+    let attach = ClientMsg::Attach {
+        proto: PROTO_VERSION,
+        build: BUILD_VERSION.to_string(),
+        rows: dims.0,
+        cols: dims.1,
+        cwd,
+    };
+    proto::write_msg(&mut writer, &attach)
+        .await
+        .map_err(|e| format!("peer attach write failed: {e}"))?;
+    loop {
+        let read = proto::read_msg::<_, ServerMsg>(&mut reader);
+        match tokio::time::timeout(Duration::from_secs(10), read).await {
+            Ok(Ok(ServerMsg::Layout { .. })) => break,
+            Ok(Ok(ServerMsg::Bye { reason })) => {
+                return Err(format!("server refused the peer attach: {reason}"))
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(format!("peer read failed: {e}")),
+            Err(_) => return Err("peer saw no layout within 10s".into()),
+        }
+    }
+    tokio::spawn(
+        async move { while proto::read_msg::<_, ServerMsg>(&mut reader).await.is_ok() {} },
+    );
+    Ok(writer)
 }
 
 /// `dims` set attaches as a sizing client at that content area and reads
@@ -782,6 +1159,8 @@ mod tests {
             ("bell-full", ViewKind::BellFull),
             ("feed", ViewKind::Feed),
             ("row-menu", ViewKind::RowMenu),
+            ("hover", ViewKind::Hover),
+            ("cursor", ViewKind::Cursor),
             ("tab-menu", ViewKind::TabMenu),
             ("sideline-menu", ViewKind::SidelineMenu),
             ("composer", ViewKind::Composer),
@@ -789,17 +1168,44 @@ mod tests {
             ("settings", ViewKind::Settings),
             ("keys", ViewKind::Keys),
             ("org-block", ViewKind::OrgBlock),
-            ("org-tree", ViewKind::OrgTree),
             ("org-table", ViewKind::OrgTable),
+            ("org-recent", ViewKind::OrgRecent),
+            ("org-overview", ViewKind::OrgOverview),
             ("org-graph", ViewKind::OrgGraph),
+            ("org-health", ViewKind::OrgHealth),
+            ("org-seat", ViewKind::OrgSeat),
+            ("org-feed", ViewKind::OrgFeed),
+            ("org-system", ViewKind::OrgSystem),
+            ("messages-tree", ViewKind::MessagesTree),
+            ("messages-chats", ViewKind::MessagesChats),
+            ("messages-thread", ViewKind::MessagesThread),
+            ("messages-system", ViewKind::MessagesSystem),
+            ("messages-archive", ViewKind::MessagesArchive),
+            ("messages-you", ViewKind::MessagesYou),
+            ("messages-you-thread", ViewKind::MessagesYouThread),
+            ("backlog-list", ViewKind::BacklogList),
+            ("backlog-kanban", ViewKind::BacklogKanban),
+            ("navigator-pr", ViewKind::NavigatorPr),
+            ("navigator-model", ViewKind::NavigatorModel),
+            ("navigator-menu", ViewKind::NavigatorMenu),
+            ("feed-detail", ViewKind::FeedDetail),
+            ("question-detail", ViewKind::QuestionDetail),
+            ("connections", ViewKind::Connections),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
         }
+        // --peer holds a second window; a malformed size is a usage error.
+        assert_eq!(
+            parse_extra(&["--peer", "120x40"]).unwrap().peer,
+            Some((40, 120))
+        );
+        let e = parse_extra(&["--peer", "wide"]).expect_err("malformed peer");
+        assert!(e.contains("--peer wants <cols>x<rows>"), "{e}");
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
             ),
             "{e}"
         );

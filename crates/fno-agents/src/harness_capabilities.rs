@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,37 @@ use serde::{Deserialize, Serialize};
 /// rust-ci generated-copies dirty-tree step catches a hand-edited
 /// generated copy committed without a rebuild.
 pub const CAPABILITY_TOML: &str = include_str!("harness_capabilities.toml");
+
+/// True when the harness's session-state wiring names no blocked producer
+/// (`blocked = "none"`): its hook lane can report working/done but has no
+/// event that states blocked, so the screen manifest owns that rung for the
+/// harness's rows. The daemon sweep keeps scraping such rows (scrape.rs) and
+/// the badge readers merge a fresh screen `blocked` over the leg. Computed
+/// once per process off the bundled table; unknown harness, non-supported
+/// job, unwired or event-named wiring all read false.
+pub fn session_state_names_no_blocked_producer(harness: &str) -> bool {
+    static NO_PRODUCER: OnceLock<BTreeSet<String>> = OnceLock::new();
+    let set = NO_PRODUCER.get_or_init(|| {
+        let Ok(contract) = HarnessContract::packaged() else {
+            return BTreeSet::new();
+        };
+        contract
+            .harness
+            .keys()
+            .filter(|name| {
+                contract
+                    .hook_job(name, "session_state")
+                    .and_then(|job| job.wiring.as_ref())
+                    .is_some_and(|w| w.blocked == "none")
+                    && contract
+                        .hook_job(name, "session_state")
+                        .is_some_and(|job| job.state == "supported")
+            })
+            .cloned()
+            .collect()
+    });
+    set.contains(harness)
+}
 
 const SESSION_LANES: [&str; 5] = [
     "interactive_create",
@@ -61,7 +93,7 @@ pub fn thread_substrate_refusal(harness: &str) -> String {
         "substrate 'thread' (detached interactive session) is unavailable on harness {}",
         py_repr(harness)
     );
-    let tail = "use --substrate headless for a one-shot";
+    let tail = "use --once for a one-shot";
     let contract = HarnessContract::packaged().ok();
     if let Some(caps) = contract.as_ref().and_then(|c| c.capabilities(harness).ok()) {
         if caps.command_surface == "refused" {
@@ -111,7 +143,7 @@ const FEATURE_KEYS: [&str; 11] = [
 ];
 /// The four states a feature claim may DECLARE. `native` means a wired lane
 /// exists TODAY: the harness's own surface where it exposes one, otherwise a
-/// lane fno hosts itself - opencode ships no attach verb and `fno agents
+/// lane fno hosts itself - opencode ships no attach command and `fno agents
 /// attach` still lands, through the daemon-kept portal. Exposure and
 /// reachability are different answers, and conflating them is the defect
 /// this dimension exists to delete. `capable` is the load-bearing third
@@ -147,8 +179,11 @@ pub const CONVERSION_STRATEGIES: [&str; 4] = [
 
 /// The closed hole vocabulary a launch template's argv may fill. `name` and
 /// `payload` always carry a spawn value; the rest drop with their flag when
-/// the lane has no value, so each must follow its own flag token.
-pub const LAUNCH_HOLES: [&str; 7] = [
+/// the lane has no value, so each must follow its own flag token. `serve_url`
+/// is the lane's shared serve endpoint (opencode), never optional: a serve
+/// lane without it cannot launch at all. `session_id` is the caller-minted
+/// session uuid (pi), filled by the launcher that owns it.
+pub const LAUNCH_HOLES: [&str; 9] = [
     "name",
     "payload",
     "cwd",
@@ -156,10 +191,19 @@ pub const LAUNCH_HOLES: [&str; 7] = [
     "model",
     "effort",
     "permission_mode",
+    "serve_url",
+    "session_id",
 ];
 /// The holes every spawn supplies by construction; a template missing one
 /// cannot launch a named worker with a prompt.
 const LAUNCH_REQUIRED_HOLES: [&str; 2] = ["name", "payload"];
+
+/// The closed hole vocabulary a cloud lane row may fill. Measured on the
+/// installed CLI 2026-10-18: the create form takes only the description
+/// (`{payload}`), the queued follow-up names the session (`{session_id}`)
+/// and carries the message, and teleport names the session. No `{name}`
+/// spelling exists on the create form.
+pub const CLOUD_HOLES: [&str; 3] = ["payload", "message", "session_id"];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("harness capability contract: {0}")]
@@ -300,6 +344,19 @@ pub struct HarnessCapabilities {
     /// list still works as a verbatim pill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_flags: Option<Vec<String>>,
+    /// The composer read-back (pane send --harness <name>): the marker that
+    /// names the composer as still holding the payload, the markers that
+    /// report it queued, the keys that clear a resident payload, and the
+    /// marker an emptied composer shows. Measured per harness; a row without
+    /// them keeps the plain screen-changed confirm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_affordance_marker: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_markers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub composer_clear_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_empty_marker: Option<String>,
     pub resume: String,
     pub autonomous_pane: bool,
     pub route_on_pane: bool,
@@ -313,18 +370,18 @@ pub struct HarnessCapabilities {
     pub command_surface: String,
     #[serde(default)]
     pub slash_prefix: String,
-    /// This harness's own TUI slash verbs, measured. The verb normalizer
+    /// This harness's own TUI slash commands, measured. The command normalizer
     /// rewrites a leading-slash token only when it names a shipped footnote
-    /// verb absent from this list; absent means the harness declares none.
+    /// command absent from this list; absent means the harness declares none.
     #[serde(default)]
     pub native_verbs: Vec<String>,
-    /// Per-verb teaching metadata keyed by the roster verb: when to reach
+    /// Per-command teaching metadata keyed by the roster command: when to reach
     /// for it and the risk class the raw-mail guard enforces. `use_when`
     /// lines marked name-derived in the TOML comments say so there; the
     /// risk class is the guard's authority either way. `default` keeps an
     /// older packaged copy parseable.
     #[serde(default)]
-    pub native_verb_meta: BTreeMap<String, VerbMeta>,
+    pub native_verb_meta: BTreeMap<String, CommandMeta>,
     /// The subset the mail lane maps to a structured review RPC on a daemon
     /// thread; empty when the harness has no such transport.
     #[serde(default)]
@@ -364,6 +421,10 @@ pub struct HarnessCapabilities {
     /// the fill with that named, never another harness's line.
     #[serde(default)]
     pub launch: Option<LaunchTemplate>,
+    /// The cloud-session lane rows ([`CloudArm`]), absent on a harness with
+    /// no measured cloud form. Only claude carries one today.
+    #[serde(default)]
+    pub cloud: Option<CloudArm>,
     /// What this harness can DO, keyed by [`FEATURE_KEYS`] - a second
     /// dimension beside the pane mechanics, not a rewrite of them. A key
     /// ABSENT here reads `unmeasured`, which is legal and renders as a
@@ -401,39 +462,42 @@ pub struct ProviderAction {
     pub proof: String,
 }
 
-/// The raw-mail guard's risk vocabulary for a native verb. A
-/// `session-ending` or `context-destroying` verb is refused on
-/// `mail send --raw` unless the send names it with `--ack-verb-risk`.
+/// The raw-mail guard's risk vocabulary for a native command. A
+/// `session-ending` or `context-destroying` command is refused on
+/// `mail send --raw` unless the send names it with `--ack-command-risk`.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum VerbRisk {
+pub enum CommandRisk {
     Safe,
     ContextDestroying,
     SessionEnding,
 }
 
-impl VerbRisk {
+impl CommandRisk {
     pub fn as_str(self) -> &'static str {
         match self {
-            VerbRisk::Safe => "safe",
-            VerbRisk::ContextDestroying => "context-destroying",
-            VerbRisk::SessionEnding => "session-ending",
+            CommandRisk::Safe => "safe",
+            CommandRisk::ContextDestroying => "context-destroying",
+            CommandRisk::SessionEnding => "session-ending",
         }
     }
 
-    /// True when the raw-mail lane refuses the verb without an explicit ack.
+    /// True when the raw-mail lane refuses the command without an explicit ack.
     pub fn is_guarded(self) -> bool {
-        matches!(self, VerbRisk::ContextDestroying | VerbRisk::SessionEnding)
+        matches!(
+            self,
+            CommandRisk::ContextDestroying | CommandRisk::SessionEnding
+        )
     }
 }
 
-/// One verb's row in `[harness.<name>.native_verb_meta]`.
+/// One command's row in `[harness.<name>.native_verb_meta]`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct VerbMeta {
-    /// One line: when an agent reaches for this verb.
+pub struct CommandMeta {
+    /// One line: when an agent reaches for this command.
     pub use_when: String,
-    pub risk: VerbRisk,
+    pub risk: CommandRisk,
     /// opencode only: a user-defined command can override a built-in by
     /// name, so the roster names built-ins and a custom override is
     /// invisible to this table by construction.
@@ -522,6 +586,92 @@ pub struct ThreadArm {
     /// every token to its argv.
     #[serde(default)]
     pub passthrough: Vec<String>,
+}
+
+/// The cloud-session lane rows, measured on the installed claude CLI
+/// (probes 2026-10-18). The create runs under a locally held pty because the
+/// CLI refuses a non-interactive `--cloud` outright; it prints the minted
+/// session id and exits immediately - the session runs remotely and survives
+/// client death. Absent on every harness without a measured cloud form;
+/// absence is what the router's refusal names.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudArm {
+    /// The create argv. Exactly one `{payload}` hole: the session
+    /// description. Measured spelling: `claude --cloud "{payload}"`.
+    pub launch: Vec<String>,
+    /// The queued follow-up argv. Measured spelling:
+    /// `claude -p "{message}" --cloud {session_id}`. Delivery is
+    /// fire-and-forget ("Sent to cloud session.", exit 0); the reply lands
+    /// in the session, never on stdout.
+    pub followup: Vec<String>,
+    /// The interactive teleport form that pulls a session down to a local
+    /// terminal: `claude --teleport {session_id}`.
+    pub teleport: Vec<String>,
+    /// The id prefix the create read-back parses (`session_`).
+    pub session_id_prefix: String,
+}
+
+impl CloudArm {
+    /// The contract one cloud row must hold: holes come from
+    /// [`CLOUD_HOLES`], the create carries exactly one `{payload}`, and the
+    /// follow-up and teleport forms each name the session.
+    pub fn validate(&self, harness: &str) -> Result<(), ContractError> {
+        let check =
+            |field: &str, argv: &[String], required: &[&str]| -> Result<(), ContractError> {
+                if argv.is_empty() {
+                    return Err(field_error(harness, field, "an empty argv runs nothing"));
+                }
+                let placeholder_re = Regex::new(r"\{([^{}]+)\}").expect("static placeholder regex");
+                let mut seen: Vec<String> = Vec::new();
+                for token in argv {
+                    let captures: Vec<_> = placeholder_re.captures_iter(token).collect();
+                    if captures.is_empty() {
+                        if token.contains('{') || token.contains('}') {
+                            return Err(field_error(harness, field, "malformed placeholder"));
+                        }
+                        continue;
+                    }
+                    if captures.len() > 1 || captures[0][0].len() != token.len() {
+                        return Err(field_error(
+                            harness,
+                            field,
+                            "a hole must be the whole token",
+                        ));
+                    }
+                    let hole = captures[0].get(1).map(|m| m.as_str()).unwrap_or_default();
+                    if !CLOUD_HOLES.contains(&hole) {
+                        return Err(field_error(
+                            harness,
+                            field,
+                            &format!("unknown hole {hole:?}"),
+                        ));
+                    }
+                    seen.push(hole.to_string());
+                }
+                for want in required {
+                    if seen.iter().filter(|h| h == want).count() != 1 {
+                        return Err(field_error(
+                            harness,
+                            field,
+                            &format!("needs exactly one {{{want}}} hole"),
+                        ));
+                    }
+                }
+                Ok(())
+            };
+        check("cloud.launch", &self.launch, &["payload"])?;
+        check("cloud.followup", &self.followup, &["message", "session_id"])?;
+        check("cloud.teleport", &self.teleport, &["session_id"])?;
+        if self.session_id_prefix.is_empty() {
+            return Err(field_error(
+                harness,
+                "cloud",
+                "session_id_prefix is empty; the create read-back has nothing to parse",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// One harness's native launch argv (`[harness.<name>.launch]`), and the
@@ -633,20 +783,20 @@ impl LaunchTemplate {
     }
 }
 
-/// One feature claim: `state` is the claim, and `verbs` names the
-/// harness's own verbs that exercise it, measured. The vocabulary and
+/// One feature claim: `state` is the claim, and `commands` names the
+/// harness's own commands that exercise it, measured. The vocabulary and
 /// the probe coupling are the contract.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeatureClaim {
     /// One of [`FEATURE_STATES`].
     pub state: String,
-    /// The harness's own verbs that exercise this feature, measured.
-    /// Absent means the claim has no verb surface (an fno-hosted lane
+    /// The harness's own commands that exercise this feature, measured.
+    /// Absent means the claim has no command surface (an fno-hosted lane
     /// included), which the consuming lane states in its refusal
     /// instead of implying one.
-    #[serde(default)]
-    pub verbs: Vec<String>,
+    #[serde(default, alias = "verbs")] // verb-wording: allow (the capability table's key)
+    pub commands: Vec<String>,
     /// What settled this claim: the reader that ran, the harness version it
     /// ran against, and the date. A claim without one keeps its state and
     /// its comment, and the matrix renders the cell unmeasured rather than
@@ -727,6 +877,12 @@ pub struct ModelSwitchStrategy {
     pub effort_labels: BTreeMap<String, String>,
     pub status_command: String,
     pub status_pattern: String,
+    /// A narrow pane truncates the `/status` line the main pattern reads
+    /// (measured on codex: `Model: gpt-5.6` and nothing more). The status
+    /// bar carries the same (model, effort) pair and survives the
+    /// truncation; when set, the verify falls back to it.
+    #[serde(default)]
+    pub status_bar_pattern: Option<String>,
 }
 
 impl HarnessCapabilities {
@@ -985,6 +1141,15 @@ impl HarnessContract {
     /// fact its own `features.attach` claim already records. A row
     /// with no `features.attach` stanza reads as absent, never as a claim,
     /// so this never promotes a row silently.
+    /// Whether the claude row carries a cloud carrier row. The router checks
+    /// presence, never content: the content contract is [`CloudArm::validate`]
+    /// at parse time.
+    pub fn cloud_row_present(&self) -> bool {
+        self.harness
+            .get("claude")
+            .is_some_and(|caps| caps.cloud.is_some())
+    }
+
     pub fn thread_lane(&self, harness: &str) -> Result<&'static str, ContractError> {
         let caps = self.capabilities(harness)?;
         if caps
@@ -1309,6 +1474,9 @@ fn validate_instrument(
 }
 
 fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), ContractError> {
+    if let Some(cloud) = &caps.cloud {
+        cloud.validate(harness)?;
+    }
     for (action, recipe) in &caps.provider_actions {
         if !PROVIDER_ACTIONS.contains(&action.as_str()) {
             return Err(field_error(
@@ -1789,24 +1957,24 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// Roster and teaching metadata cannot drift apart: every native verb
-    /// carries a meta row (the render verb promises one line per verb) and
-    /// every meta key names a roster verb (a stale meta row would render a
-    /// verb the harness does not declare).
+    /// Roster and teaching metadata cannot drift apart: every native command
+    /// carries a meta row (the render command promises one line per command) and
+    /// every meta key names a roster command (a stale meta row would render a
+    /// command the harness does not declare).
     #[test]
     fn contract_rows() {
         let contract = HarnessContract::packaged().unwrap();
         for (name, caps) in &contract.harness {
-            for verb in &caps.native_verbs {
+            for command in &caps.native_verbs {
                 assert!(
-                    caps.native_verb_meta.contains_key(verb),
-                    "{name}: roster verb {verb} has no native_verb_meta row"
+                    caps.native_verb_meta.contains_key(command),
+                    "{name}: roster command {command} has no native_verb_meta row"
                 );
             }
-            for verb in caps.native_verb_meta.keys() {
+            for command in caps.native_verb_meta.keys() {
                 assert!(
-                    caps.native_verbs.iter().any(|v| v == verb),
-                    "{name}: native_verb_meta row {verb} is not in the roster"
+                    caps.native_verbs.iter().any(|v| v == command),
+                    "{name}: native_verb_meta row {command} is not in the roster"
                 );
             }
         }
@@ -1815,7 +1983,7 @@ mod tests {
         let claude = contract.capabilities("claude").unwrap();
         assert_eq!(
             claude.native_verb_meta["/clear"].risk,
-            VerbRisk::ContextDestroying
+            CommandRisk::ContextDestroying
         );
         assert!(claude.native_verb_meta["/clear"].risk.is_guarded());
         assert!(!claude.native_verb_meta["/compact"].risk.is_guarded());
@@ -1831,6 +1999,7 @@ mod tests {
                 "footnote",
                 "gemini",
                 "grok",
+                "muse",
                 "opencode",
                 "pi",
                 "zcode"

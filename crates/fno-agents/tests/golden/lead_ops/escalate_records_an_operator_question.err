@@ -1,0 +1,2 @@
+questions.route=ladder (default): a worker's question goes to its lead first, and no relay mail went out. A lead files a decision only the user can make with fno inbox outstanding ask. Set questions.route=direct or triage in .fno/config.toml to opt out.
+lead: recorded <ID>

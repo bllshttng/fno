@@ -675,12 +675,7 @@ where
     if !is_openable(url) {
         return Err(format!("refused to open {}", for_notice(url)));
     }
-    if remote {
-        emit(&terminal_offer_payload(url)).map_err(|e| format!("terminal copy: {e}"))?;
-        return Ok(OpenOutcome::CopiedToTerminal);
-    }
-    run_opener(spawn, url)?;
-    Ok(OpenOutcome::Opened)
+    open_for_session(spawn, emit, remote, url)
 }
 
 // ── open plan (LD3) ─────────────────────────────────────────────────────────
@@ -820,17 +815,46 @@ fn percent_encode_query(s: &str) -> String {
 /// instead it refuses anything not carrying the `obsidian://` prefix. It never
 /// falls back to [`open_url`]: the separation is what keeps pane-sourced output
 /// from ever reaching this path.
-pub fn open_fno_uri(uri: &str) -> Result<(), String> {
-    open_fno_uri_with(spawn_opener, uri)
+///
+/// Over an ssh attach the opener would act on the mux host, so the URI goes to
+/// the attached terminal's clipboard instead ([`OpenOutcome::CopiedToTerminal`]).
+pub fn open_fno_uri(uri: &str) -> Result<OpenOutcome, String> {
+    open_fno_uri_with(spawn_opener, emit_to_terminal, is_remote_session(), uri)
 }
-fn open_fno_uri_with<S>(spawn: S, uri: &str) -> Result<(), String>
+fn open_fno_uri_with<S, E>(
+    spawn: S,
+    emit: E,
+    remote: bool,
+    uri: &str,
+) -> Result<OpenOutcome, String>
 where
     S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
 {
     if !uri.starts_with("obsidian://") {
         return Err(format!("refused to open {}", for_notice(uri)));
     }
-    run_opener(spawn, uri)
+    open_for_session(spawn, emit, remote, uri)
+}
+
+/// The shared remote/local branch: an ssh attach offers `target` to the
+/// terminal's clipboard, a local attach runs the platform opener.
+fn open_for_session<S, E>(
+    spawn: S,
+    emit: E,
+    remote: bool,
+    target: &str,
+) -> Result<OpenOutcome, String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    if remote {
+        emit(&terminal_offer_payload(target)).map_err(|e| format!("terminal copy: {e}"))?;
+        return Ok(OpenOutcome::CopiedToTerminal);
+    }
+    run_opener(spawn, target)?;
+    Ok(OpenOutcome::Opened)
 }
 
 /// Open an fno-resolved plain path with the platform opener. Callers are the
@@ -840,14 +864,23 @@ where
 /// `is_file_uri` send gate before it ever reaches this call. No scheme gate
 /// applies to the path itself; the spawn discipline is shared via
 /// [`run_opener`].
-pub fn open_fno_path(path: &Path) -> Result<(), String> {
-    open_fno_path_with(spawn_opener, path)
+///
+/// Over an ssh attach the path is copied to the terminal's clipboard, as for
+/// [`open_fno_uri`].
+pub fn open_fno_path(path: &Path) -> Result<OpenOutcome, String> {
+    open_fno_path_with(spawn_opener, emit_to_terminal, is_remote_session(), path)
 }
-fn open_fno_path_with<P>(spawn: P, path: &Path) -> Result<(), String>
+fn open_fno_path_with<P, E>(
+    spawn: P,
+    emit: E,
+    remote: bool,
+    path: &Path,
+) -> Result<OpenOutcome, String>
 where
     P: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
 {
-    run_opener(spawn, &path.to_string_lossy())
+    open_for_session(spawn, emit, remote, &path.to_string_lossy())
 }
 
 #[cfg(test)]
@@ -865,8 +898,8 @@ mod tests {
     #[test]
     fn finds_a_bare_url() {
         assert_eq!(
-            urls("see https://github.com/bllshttng/footnote/pull/700 now"),
-            ["https://github.com/bllshttng/footnote/pull/700"]
+            urls("see https://github.com/bllshttng/fno/pull/700 now"),
+            ["https://github.com/bllshttng/fno/pull/700"]
         );
     }
 
@@ -1306,13 +1339,51 @@ mod tests {
                 spawned = true;
                 Ok(status(true))
             },
+            |_| Ok(()),
+            false,
             "https://example.com",
         );
         assert!(out.is_err());
         assert!(!spawned, "a non-obsidian URI must not reach the opener");
         // obsidian:// (fno-constructed) reaches the opener.
-        let out = open_fno_uri_with(|_, _| Ok(status(true)), "obsidian://open?vault=v&file=f");
-        assert!(out.is_ok(), "obsidian:// opens: {out:?}");
+        let out = open_fno_uri_with(
+            |_, _| Ok(status(true)),
+            |_| Ok(()),
+            false,
+            "obsidian://open?vault=v&file=f",
+        );
+        assert_eq!(out, Ok(OpenOutcome::Opened));
+    }
+
+    #[test]
+    fn ssh_attach_offers_obsidian_uri_and_file_path_to_the_terminal() {
+        // Remote: the host opener never runs; the terminal gets the OSC 52 set.
+        let uri = "obsidian://open?vault=v&file=f";
+        let mut sent = Vec::new();
+        let out = open_fno_uri_with(
+            |_, _| panic!("host opener must not run over ssh"),
+            |b| {
+                sent = b.to_vec();
+                Ok(())
+            },
+            true,
+            uri,
+        );
+        assert_eq!(out, Ok(OpenOutcome::CopiedToTerminal));
+        assert_eq!(sent, terminal_offer_payload(uri));
+        let path = Path::new("/tmp/shot.heic");
+        let mut sent = Vec::new();
+        let out = open_fno_path_with(
+            |_, _| panic!("host opener must not run over ssh"),
+            |b| {
+                sent = b.to_vec();
+                Ok(())
+            },
+            true,
+            path,
+        );
+        assert_eq!(out, Ok(OpenOutcome::CopiedToTerminal));
+        assert_eq!(sent, terminal_offer_payload("/tmp/shot.heic"));
     }
 
     /// Minimal percent-decode for the round-trip assertion (ASCII test paths).

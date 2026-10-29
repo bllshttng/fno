@@ -9,7 +9,7 @@ import typer
 import typer.main
 from click.testing import CliRunner
 
-from fno.hook_config import referenced_scripts
+from fno.lint_cli import referenced_scripts
 from fno.lint_cli import lint
 
 

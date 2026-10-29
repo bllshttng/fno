@@ -1,4 +1,4 @@
-//! Tests for the native `fno doctor update` verb. Unit-shaped: pure parsing,
+//! Tests for the native `fno doctor update` command. Unit-shaped: pure parsing,
 //! marker IO, guard parsing, and verdict-row folding. Anything that shells to
 //! cargo/uv belongs to the manual verify pass on a scratch CARGO_INSTALL_ROOT.
 
@@ -38,8 +38,16 @@ fn parse_args_reads_every_flag() {
     assert_eq!(f.source, Some(PathBuf::from("/tmp/src")));
     assert!(f.dry_run && f.force && f.rust && !f.no_rust && !f.check);
 
-    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check"])).expect("parses");
-    assert!(f.dry_run && f.force && f.no_rust && f.check);
+    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--published"])).expect("parses");
+    assert!(f.dry_run && f.force && f.no_rust && f.check && f.published);
+    assert_eq!(f.published_rev, None);
+
+    // A rev after --published pins that build; a flag after it does not.
+    let f = parse_args(&os(&["--published", "a3670af2", "-N"])).expect("parses");
+    assert_eq!(f.published_rev.as_deref(), Some("a3670af2"));
+    assert!(f.published && f.dry_run);
+    let f = parse_args(&os(&["--published", "-N"])).expect("parses");
+    assert!(f.published && f.dry_run && f.published_rev.is_none());
 
     assert!(parse_args(&os(&["--bogus"])).is_err());
     assert!(parse_args(&os(&["--source"])).is_err());
@@ -159,6 +167,95 @@ fn row_status_finds_named_components() {
     assert_eq!(row_status(&report, "fno"), None);
 }
 
+const REV_A: &str = "2e55d52aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const REV_B: &str = "19bbc27bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const REV_C: &str = "ffc2af6ccccccccccccccccccccccccccccccccccc";
+
+#[test]
+fn component_build_revs_reads_cargo_rows_only() {
+    let report: Value = serde_json::json!({
+        "converged": false,
+        "components": [
+            {"component": "fno-agents", "status": "stale", "observed_rev": REV_A},
+            {"component": "fno-agents-daemon", "status": "stale", "observed_rev": null},
+            {"component": "python-tool", "status": "stale", "observed_rev": REV_C},
+            {"component": "fno", "status": "stale", "observed_rev": REV_A}
+        ]
+    });
+    let revs = component_build_revs(Some(&report));
+    // The unanswered daemon row and the python-tool marker stay out: a
+    // python-only HEAD advance is not a mixed build.
+    assert_eq!(
+        revs,
+        vec![
+            ("fno-agents".to_string(), REV_A.to_string()),
+            ("fno".to_string(), REV_A.to_string())
+        ]
+    );
+    assert!(component_build_revs(None).is_empty());
+}
+
+#[test]
+fn mixed_component_line_fires_only_when_two_builds_disagree() {
+    let mixed: Value = serde_json::json!({
+        "components": [
+            {"component": "fno-agents", "observed_rev": REV_A},
+            {"component": "fno", "observed_rev": REV_B}
+        ]
+    });
+    let line = mixed_component_line(Some(&mixed)).expect("a mix is provable");
+    assert!(
+        line.contains(&format!("fno-agents at {}", &REV_A[..12])),
+        "{line}"
+    );
+    assert!(
+        line.contains(&format!("vs fno at {}", &REV_B[..12])),
+        "{line}"
+    );
+    // Same build everywhere, a single self-report, and a dark verdict: no flag.
+    let same: Value = serde_json::json!({
+        "components": [
+            {"component": "fno-agents", "observed_rev": REV_A},
+            {"component": "fno", "observed_rev": REV_A},
+            {"component": "fno-agents-daemon", "observed_rev": null}
+        ]
+    });
+    assert_eq!(mixed_component_line(Some(&same)), None);
+    let single: Value = serde_json::json!({
+        "components": [{"component": "fno", "observed_rev": REV_A}]
+    });
+    assert_eq!(mixed_component_line(Some(&single)), None);
+    assert_eq!(mixed_component_line(None), None);
+}
+
+#[test]
+fn revisions_summary_names_every_compared_rev_with_its_label() {
+    let revs = vec![
+        ("fno-agents".to_string(), REV_A.to_string()),
+        ("fno".to_string(), REV_B.to_string()),
+    ];
+    let line = revisions_summary(&revs, Some(REV_C)).expect("both labels present");
+    assert!(
+        line.contains(&format!(
+            "build revs: fno-agents {}, fno {}",
+            &REV_A[..12],
+            &REV_B[..12]
+        )),
+        "{line}"
+    );
+    assert!(
+        line.contains(&format!("crates/ pin {}", &REV_C[..12])),
+        "{line}"
+    );
+    // A pin with no answering component still names the pin; a dark machine
+    // names nothing.
+    assert_eq!(
+        revisions_summary(&[], Some(REV_C)).as_deref(),
+        Some(format!("crates/ pin {}", &REV_C[..12])).as_deref()
+    );
+    assert_eq!(revisions_summary(&[], None), None);
+}
+
 #[test]
 fn triad_names_carry_exe_suffix_on_windows() {
     let names = triad_names();
@@ -196,6 +293,42 @@ fn guidance_release_branch_names_the_upgrade_command() {
         "guidance: {guidance}"
     );
     assert!(!guidance.contains("treated as a wire bump"));
+}
+
+#[test]
+fn the_check_payload_names_its_compared_revisions() {
+    let _lock = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-revs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::env::set_var("FNO_STATE_DIR", &tmp);
+    let before = std::env::var_os("FNO_AGENTS_BIN");
+    std::env::set_var("FNO_AGENTS_BIN", "/usr/bin/false");
+    let payload = update_readiness(None);
+    std::env::remove_var("FNO_STATE_DIR");
+    match before {
+        Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
+        None => std::env::remove_var("FNO_AGENTS_BIN"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    let revisions = payload
+        .get("revisions")
+        .expect("the named revisions block rides every payload");
+    for key in [
+        "observed",
+        "installed_rev",
+        "rust_subtree_rev",
+        "source_rev",
+        "mixed",
+        "mixed_detail",
+        "summary",
+    ] {
+        assert!(revisions.get(key).is_some(), "{key} is named");
+    }
+    // A dark verdict never reads as a clean bill: `mixed` is null when the
+    // component verdict could not answer at all, a bool otherwise.
+    let mixed = revisions.get("mixed").unwrap();
+    assert!(mixed.is_boolean() || mixed.is_null(), "{mixed}");
 }
 
 #[test]
@@ -310,6 +443,16 @@ fn a_second_update_joins_only_an_update_holder() {
     assert_eq!(update_holder_pid("fno-update-pid4242"), Some(4242));
     assert_eq!(update_holder_pid("target-session:abc"), None);
     assert_eq!(update_holder_pid("fno-update-pidX"), None);
+    // The claim lives exactly as long as the update process: its own pid,
+    // stamped holder-process, never the session that launched it.
+    let args = update_claim_acquire_args(4242);
+    let flag = |name: &str| {
+        let i = args.iter().position(|a| a == name).expect(name);
+        args[i + 1].clone()
+    };
+    assert_eq!(update_holder_pid(&flag("--holder")), Some(4242));
+    assert_eq!(flag("--pid"), "4242");
+    assert_eq!(flag("--pid-provenance"), "holder-process");
 }
 
 #[test]
@@ -333,12 +476,125 @@ fn rev_on_origin_main_reads_merged_local_and_unanswered() {
 }
 
 #[test]
+fn published_is_older_answers_by_ancestry_and_refuses_the_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    let path = repo.to_string_lossy().into_owned();
+    git_ok(tmp.path(), &["init", "-q", "-b", "main", &path]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "old"]);
+    let older = git_ok(&repo, &["rev-parse", "HEAD"]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "new"]);
+    let newer = git_ok(&repo, &["rev-parse", "HEAD"]);
+    // Installing `older` over `newer` moves the bins backwards; installing
+    // `newer` over `older` moves them forward; a rev git cannot resolve (a
+    // foreign or garbage sha) refuses to answer, so the caller refuses to
+    // guess.
+    assert_eq!(published_is_older(&repo, &older, &newer), Some(true));
+    assert_eq!(published_is_older(&repo, &newer, &older), Some(false));
+    assert_eq!(published_is_older(&repo, "deadbeef", &newer), None);
+}
+
+#[test]
+fn crate_bin_names_reads_bin_entries_and_degrades_to_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let toml = tmp.path().join("Cargo.toml");
+    std::fs::write(
+        &toml,
+        "[package]\nname = \"fno-agents\"\n\n[[bin]]\nname = \"fno-agents\"\npath = \"src/bin/client.rs\"\n\n[[bin]]\nname = \"fno-gh-proxy\"\npath = \"src/bin/fno-gh-proxy.rs\"\n\n[profile.release]\n",
+    )
+    .unwrap();
+    let names = crate_bin_names(tmp.path()).expect("bin entries parse");
+    assert_eq!(names, vec!["fno-agents", "fno-gh-proxy"]);
+    let empty = tempfile::tempdir().unwrap();
+    std::fs::write(empty.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+    assert_eq!(crate_bin_names(empty.path()), None);
+    assert_eq!(crate_bin_names(&PathBuf::from("/nonexistent")), None);
+}
+
+#[test]
+fn missing_inventory_bins_names_absent_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let names = vec![
+        "fno-agents".to_string(),
+        "fno-gh-proxy".to_string(),
+        "fno-gh-coverage".to_string(),
+    ];
+    std::fs::write(tmp.path().join("fno-agents"), b"b").unwrap();
+    std::fs::write(tmp.path().join("fno-gh-proxy"), b"b").unwrap();
+    assert_eq!(
+        missing_inventory_bins(&names, tmp.path()),
+        vec!["fno-gh-coverage".to_string()]
+    );
+}
+
+#[test]
+fn the_check_readback_finds_an_update_row_in_the_store() {
+    let _g = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-store-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prior = std::env::var_os("FNO_STATE_DIR");
+    std::env::set_var("FNO_STATE_DIR", &tmp);
+    let envelope = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "type": "fno_update_installed",
+        "source": "python",
+        "data": {"version": "0.4.0", "new_rev": "0123456789ab"},
+    });
+    crate::event_store::append_envelope(&tmp.join("events.jsonl"), &envelope.to_string(), None)
+        .expect("the store beside the journal opened");
+    let found = last_update_event().expect("the store row answers");
+    assert_eq!(found["type"], "fno_update_installed");
+    assert_eq!(found["data"]["version"], "0.4.0");
+    match prior {
+        Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+        None => std::env::remove_var("FNO_STATE_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn the_check_readback_skips_a_corrupt_row_after_the_install() {
+    let _g = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-corrupt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prior = std::env::var_os("FNO_STATE_DIR");
+    std::env::set_var("FNO_STATE_DIR", &tmp);
+    let installed = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "type": "fno_update_installed",
+        "source": "python",
+        "data": {"version": "0.4.0", "new_rev": "0123456789ab"},
+    });
+    // A legacy journal imports the install row, then a corrupt line and a
+    // typeless row land after it. The rejected and empty-type rows those
+    // become must stay out of the strict typed window: the newest stray row
+    // must never read as the update outcome.
+    let legacy = format!(
+        "{}\nnot json at all\n{{\"note\":\"no type or kind\"}}\n",
+        installed
+    );
+    std::fs::write(tmp.join("events.jsonl"), legacy).unwrap();
+    crate::event_store::import_all(&tmp.join("events.jsonl")).expect("legacy import");
+    let found = last_update_event().expect("the install row answers past the strays");
+    assert_eq!(found["type"], "fno_update_installed");
+    assert_eq!(found["data"]["version"], "0.4.0");
+    match prior {
+        Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+        None => std::env::remove_var("FNO_STATE_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn python_holds_whenever_rust_trails_the_source() {
     // The 2026-10-14 iMac shape: no tarball for the merged rev, so the wheel
     // must not move ahead of the bins it talks to.
     for trails in [
         "waiting-ci",
         "installed-newest-published",
+        "newest-published-current",
         "skipped-no-origin",
         "skipped-no-cargo",
         "failed",
@@ -348,6 +604,13 @@ fn python_holds_whenever_rust_trails_the_source() {
             line.contains(trails) && line.starts_with("python held"),
             "{line}"
         );
+        // Only a hold on the newest published build is publish lag: it exits
+        // 0 so `fno update && fno restart` still restarts.
+        let planned = matches!(
+            trails,
+            "installed-newest-published" | "newest-published-current"
+        );
+        assert_eq!(hold_is_planned(Some(trails)), planned, "{trails}");
     }
     // Rust current, wheel-only machines, and --no-rust move Python freely.
     for moves in [
@@ -360,4 +623,31 @@ fn python_holds_whenever_rust_trails_the_source() {
         assert_eq!(python_hold_line(Some(moves)), None, "{moves}");
     }
     assert_eq!(python_hold_line(None), None);
+}
+
+#[test]
+fn last_green_is_the_newest_rev_carrying_the_published_crates_rev() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    git_ok(
+        tmp.path(),
+        &["init", "-q", "-b", "main", &repo.to_string_lossy()],
+    );
+    std::fs::create_dir_all(repo.join("crates")).unwrap();
+    let mut revs = Vec::new();
+    // Crates change, python-only, crates change, python-only.
+    for (n, file) in ["crates/a", "cli", "crates/a", "cli"].iter().enumerate() {
+        std::fs::write(repo.join(file), n.to_string()).unwrap();
+        git_ok(&repo, &["add", "-A"]);
+        git_ok(&repo, &["commit", "-q", "-m", &format!("c{n}")]);
+        revs.push(git_ok(&repo, &["rev-parse", "HEAD"]));
+    }
+    // CI published only the older crates rev: the python-only rev after it
+    // shares those bins and is the newest that does.
+    assert_eq!(last_green_rev(&repo, &revs[0]).unwrap(), revs[1]);
+    // The tip's own crates rev published: the tip is the last green.
+    assert_eq!(last_green_rev(&repo, &revs[2]).unwrap(), revs[3]);
+    // A published rev off this line is named, never guessed.
+    let err = last_green_rev(&repo, "0123456789abcdef").unwrap_err();
+    assert!(err.contains("0123456789ab"), "{err}");
 }

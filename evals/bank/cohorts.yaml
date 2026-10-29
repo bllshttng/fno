@@ -1,0 +1,60 @@
+# The train/held-out split over the capability bank tasks (the first
+# hillclimb slice). bank_rev pins the bank: the pin diff excludes this file,
+# so a commit that only redeclares the split never voids its own pin (the
+# pin exists to catch task changes).
+#
+# Roles: held-out (qualification) tasks never enter a tuning view; a climb
+# verdict claims held-out quality only from these three tasks. validation
+# sits empty until the qualification draw moves tasks in.
+#
+# Slice 3 adds eight stage tasks mined from real failures (four target,
+# four review). They all land in train. The qualification draw is seeded:
+# python3 random.Random(20261020) shuffled each stage's ids, and the first
+# three of each shuffle are the designated qualification candidates. They
+# move only after the user validates their graders (the plan's open
+# question, resolved 2026-10-20 by lead ruling: graders are validated by
+# the user; an opus reviewer may pre-screen first). Draw orders, to be
+# consumed in order:
+#
+#   target candidates:
+#     capability-stage-target-commit-guard
+#     capability-stage-target-fold-order
+#     capability-stage-target-mail-sender
+#   review candidates:
+#     capability-stage-review-argv-split
+#     capability-stage-review-commit-url-leak
+#     capability-stage-review-decorative-test
+#
+# bank_rev pins ca8a544fc1fc2d7522da783f476c76ba9d428f76, the origin/main
+# sha this worker branched from (plan 1.3: the pin names a main commit, so
+# it stays reachable after any merge shape, including a squash). This is
+# the slice-5 re-pin: merged main carries the lane-account seat-form fix
+# (PR 3660), so the eval runner reaches the zai trial lane, and the pin
+# diff is empty again at this branch head and runs pass the gate.
+#
+# Re-pinned for the first stored climb: a renamed hello task and a
+# lane-blueprint edit had moved the bank since the slice-5 pin, so runs
+# were refused until the pin named current main.
+bank_rev: 98955860bcee6fd542eaeeb8cb5ccf3999047805
+
+train:
+  - capability-lane-blueprint
+  - capability-blueprint-batching
+  - capability-lane-review
+  - capability-lane-implementation
+  - capability-judgment-root-cause
+  - capability-stage-target-commit-guard
+  - capability-stage-target-fold-order
+  - capability-stage-target-mail-sender
+  - capability-stage-target-rebuild-scope
+  - capability-stage-review-argv-split
+  - capability-stage-review-commit-url-leak
+  - capability-stage-review-decorative-test
+  - capability-stage-review-swallowed-error
+
+validation: []
+
+qualification:
+  - capability-judgment-design
+  - capability-judgment-blast-radius
+  - capability-judgment-investigate

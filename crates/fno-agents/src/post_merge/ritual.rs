@@ -1,10 +1,10 @@
 //! The post-merge ritual (`fno do pr ritual`), ported from
-//! `cli/src/fno/pr/_ritual.py`. One idempotent verb runs the mechanical legs
+//! `cli/src/fno/pr/_ritual.py`. One idempotent command runs the mechanical legs
 //! in order and prints one receipt line per leg:
 //!
 //!     step=<name> status=<ok|skipped|failed|deferred> detail=<...>
 //!
-//! exit 1 when any leg failed. Legs that shell another family's verb go
+//! exit 1 when any leg failed. Legs that shell another family's command go
 //! through ONE helper (`run_leg` / `stream_leg`) over `crate::scrape::fno_bin()`
 //! - the seam-crossing site the baseline names. Facts the ritual reads live
 //! in Rust already: config, claims, the cleanup mint, the origin slug, the
@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Per-leg default bound so a single hung verb cannot wedge the whole ritual.
+/// Per-leg default bound so a single hung command cannot wedge the whole ritual.
 const LEG_TIMEOUT_SECS: u64 = 120;
 /// The advance leg: bounded + streamed; killing mid-dispatch is safe (advance's
 /// reservations are TTL claims that survive the kill, so a re-run dedups).
@@ -25,7 +25,7 @@ const ADVANCE_TIMEOUT_SECS: u64 = 180;
 /// Headless judgment worker; matched by the outer subprocess bound.
 const JUDGMENT_TIMEOUT_SECS: u64 = 600;
 /// The reconcile leg runs above reconcile's close-probe budget, same as the
-/// merge verb (`POST_MERGE_RECONCILE_TIMEOUT_S` in cli/src/fno/pr/_merge.py).
+/// merge command (`POST_MERGE_RECONCILE_TIMEOUT_S` in cli/src/fno/pr/_merge.py).
 const RECONCILE_TIMEOUT_SECS: u64 = 300;
 /// The mutex TTL: 15m bounds a run that finishes in 1-3 min; the TTL is the
 /// crash backstop.
@@ -210,7 +210,7 @@ impl LegRun {
     }
 }
 
-/// The ONE leg-runner seam: every fno-family verb this ritual shells goes
+/// The ONE leg-runner seam: every fno-family command this ritual shells goes
 /// through here, over `fno_bin()`. Detached legs start their own session so a
 /// detached sync survives the slice kill upstream.
 fn run_leg(argv: &[String], cwd: &Path, timeout: Duration, detached: bool) -> LegRun {
@@ -796,10 +796,16 @@ impl Ritual {
     }
 
     fn leg_harvest(&mut self) {
-        let mut argv: Vec<String> = ["retro", "run", "--pr-number", &self.pr.to_string()]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let mut argv: Vec<String> = [
+            "backlog",
+            "retro",
+            "run",
+            "--pr-number",
+            &self.pr.to_string(),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         if self.autonomous {
             argv.push("--keep-going".to_string());
         }
@@ -841,7 +847,7 @@ impl Ritual {
         );
     }
 
-    /// Step 3d: the guard chain lives in the native verb (sync_canonical.rs).
+    /// Step 3d: the guard chain lives in the native command (sync_canonical.rs).
     fn leg_sync_canonical(&mut self) {
         let Some(pm) = &self.pm else {
             return;
@@ -1103,8 +1109,7 @@ impl Ritual {
         let mut argv: Vec<String> = vec![
             "agents".to_string(),
             "spawn".to_string(),
-            "--substrate".to_string(),
-            "headless".to_string(),
+            "--once".to_string(),
             "--timeout".to_string(),
             JUDGMENT_TIMEOUT_SECS.to_string(),
             "-c".to_string(),
@@ -1115,16 +1120,24 @@ impl Ritual {
         // pairing); deliberately NOT `--role post-merge`, which auto-routes
         // to the secondary provider and this leg renders a judgment.
         let model = self.pm.as_ref().and_then(|pm| pm.model.clone());
+        // The spawn front door refuses --model, so the model rides the
+        // fenced tail as claude's own flag, which needs the prompt before the
+        // fence (a fence with no message before it makes the tail the seed).
+        argv.push("--name".to_string());
+        argv.push(name);
         if let Some(model) = model {
             argv.push("--harness".to_string());
             argv.push("claude".to_string());
+            // argv-fence: exempt (the prompt is this ritual's own judgment
+            // text, never hyphen-leading; the fenced tail carries the model).
+            argv.push(prompt);
+            argv.push("--".to_string());
             argv.push("--model".to_string());
             argv.push(model);
+        } else {
+            argv.push("--".to_string());
+            argv.push(prompt);
         }
-        argv.push("--name".to_string());
-        argv.push(name);
-        argv.push("--".to_string());
-        argv.push(prompt);
         let cwd = self.canon_path();
         let r = run_leg(
             &argv,
@@ -1170,7 +1183,7 @@ impl Ritual {
             "Post-merge judgment for PR #{pr} (autonomous; do not prompt). \
 (a) Triage {deferred} deferral-born node(s) filed from this PR: run \
 `fno backlog find 'deferred from PR #{pr}'` and for each open node decide \
-promote/keep/defer/supersede via the matching `fno backlog` verb, logging \
+promote/keep/defer/supersede via the matching `fno backlog` command, logging \
 undecided ones. \
 (b) Follow-up capture: read `gh pr diff {pr}`, and if the diff (files={files}, \
 lines={lines}) carries genuine follow-up context, append ONE dated section \
@@ -1217,7 +1230,14 @@ Self-end when done; never spawn further work."
         // process itself, so the reap leg runs no stop.
         let mut removed = 0usize;
         for name in &rows {
-            let argv: Vec<String> = vec!["agents".to_string(), "rm".to_string(), name.clone()];
+            // The named reason is what makes rm honor a pinned row's keep mark.
+            let argv: Vec<String> = vec![
+                "agents".to_string(),
+                "rm".to_string(),
+                name.clone(),
+                "--audit-reason".to_string(),
+                "post-merge-ritual".to_string(),
+            ];
             let cwd = self.canon_path();
             let r = run_leg(&argv, &cwd, Duration::from_secs(30), false);
             if r.ok() {
@@ -1268,7 +1288,7 @@ Self-end when done; never spawn further work."
 
     // -- streaming leg -------------------------------------------------------
 
-    /// Run a verb, echoing each stdout line as progress; bounded by timeout.
+    /// Run a command, echoing each stdout line as progress; bounded by timeout.
     fn stream_leg(&mut self, step: &str, argv: &[String], timeout: Duration) {
         let mut cmd = Command::new(crate::scrape::fno_bin());
         cmd.args(argv)

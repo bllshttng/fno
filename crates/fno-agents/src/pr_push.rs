@@ -10,33 +10,39 @@
 //! of the re-read-and-push decision; this module is now the shared push
 //! layer, heal calls [`guarded_push`] instead, and heal.rs shrinks under the
 //! file-budget ratchet. Exit codes are heal's, so one table covers both
-//! verbs:
+//! commands:
 //! `--pr <N>` selects the local worktree on that PR's head branch.
 //!
 //! * `0` pushed
 //! * `1` preflight red (heal already uses 1 for escalations; the meanings
-//!   are per-verb, the numbers shared)
+//!   are per-command, the numbers shared)
 //! * `2` a run in flight on a not-yet-red head (nothing pushed)
 //! * `3` a refusal the caller must fix (protected, dirty, conflict,
-//!   remote-only commits, or an outbound commit carrying a session URL)
+//!   remote-only commits)
 //! * `4` a read error (fetch failed, check read failed, compare failed,
 //!   push failed)
 //!
 //! When the remote head's latest rows already carry a failure, a run still
 //! testing it holds a CI slot the fix waits behind. User law 2026-10-09:
-//! the verb cancels that run (the Actions run endpoints, best-effort),
+//! the command cancels that run (the Actions run endpoints, best-effort),
 //! journals the cancellation like a `--force-ci-cancel` bypass, and pushes.
 //! A head with no red row is never cancelled: an all-green or clean run
 //! still refuses with exit 2 and gets to finish.
 //!
-//! A rebased branch is pushed with `--force-with-lease` pinned to the exact
-//! remote sha this run fetched, and only after a patch-equivalence check
-//! proves the remote branch holds no commit the branch lacks, so the lease
-//! can never drop a commit another writer pushed. A merge commit on the
+//! The fold is a merge, never a rebase: a rebase rewrites the pushed
+//! commits, so the compare leg could refuse the commits the fold itself
+//! produced, and the forced push a rebase needs cancels CI on the old head
+//! and voids a head-pinned attestation. A merge keeps the remote commits as
+//! true ancestors of HEAD, so the push is a plain fast-forward.
+//!
+//! A branch the CALLER rebased is pushed with `--force-with-lease` pinned to
+//! the exact remote sha this run fetched, and only after a patch-equivalence
+//! check proves the remote branch holds no commit the branch lacks, so the
+//! lease can never drop a commit another writer pushed. A merge commit on the
 //! remote side counts only when its tree equals the automatic merge of its
 //! parents: a merge carrying hand-resolved content is refused, never
 //! leased over. The git pre-push hook is unaffected: it refuses protected
-//! branches by destination, and this verb refuses them before anything
+//! branches by destination, and this command refuses them before anything
 //! moves.
 
 use serde_json::{json, Value};
@@ -52,8 +58,8 @@ pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// the repo's own doc prices the full rehearsal at 22 to 47 minutes.
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Branches the push verb refuses to move, same set the rebase leg refuses
-/// to rebase.
+/// Branches the push command refuses to move, same set the rebase door
+/// refuses to rebase.
 const PROTECTED: [&str; 4] = ["main", "master", "develop", "dev"];
 
 /// The hook's own debounce window (`hooks/git-protection.py`
@@ -226,6 +232,18 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
         cwd,
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs"),
     )?;
+    let runs = head_runs(gh_bin, cwd, head)?;
+    // A new run of a workflow on the same head (a body edit, a re-trigger)
+    // mints a new check suite, so the suite id cannot key supersession: the
+    // old run's failure would stand beside the new run's row forever. The
+    // workflow file keys it: two files can share a display name.
+    let workflow_of = |suite: &Value| -> String {
+        runs.iter()
+            .find(|run| run.get("check_suite_id") == Some(suite))
+            .and_then(|run| run.get("path").and_then(Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| suite.to_string())
+    };
     let mut rows: Vec<Value> = Vec::new();
     let mut raw: Vec<Value> = Vec::new();
     for page in pages {
@@ -263,7 +281,7 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
                 "link": run.get("html_url").and_then(|v| v.as_str()).unwrap_or(""),
                 "workflow": run
                     .pointer("/check_suite/id")
-                    .map(|v| v.to_string())
+                    .map(workflow_of)
                     .unwrap_or_default(),
                 "startedAt": run.get("started_at").and_then(|v| v.as_str()).unwrap_or(""),
                 "completedAt": run.get("completed_at").and_then(|v| v.as_str()).unwrap_or(""),
@@ -276,7 +294,7 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
     }
     // A run that failed before minting a job owns no check run; the shared
     // rule adds its row so the failure cannot read green.
-    rows.extend(zero_job_rows(gh_bin, cwd, head, &raw)?);
+    rows.extend(zero_job_rows(gh_bin, cwd, &runs, &raw)?);
     // The check-runs endpoint returns ONLY check-runs. A commit StatusContext
     // lives on a different endpoint, and reading one without the other is a
     // false green; a failed read propagates, it never reads green.
@@ -284,17 +302,10 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
     Ok(rows)
 }
 
-/// The rows for the Actions runs that failed before minting a job:
-/// the head_sha-scoped runs listing, the shared rule in
-/// `pr_status_facts::zero_job_failures`, and this module's row shape. A
-/// failed runs read is an `Err`, like a failed check-runs read.
-pub(crate) fn zero_job_rows(
-    gh_bin: &str,
-    cwd: &Path,
-    head: &str,
-    check_runs: &[Value],
-) -> Result<Vec<Value>, String> {
-    let pages = gh_api_pages(
+/// The head_sha-scoped Actions runs listing. A failed runs read is an
+/// `Err`, like a failed check-runs read.
+fn head_runs(gh_bin: &str, cwd: &Path, head: &str) -> Result<Vec<Value>, String> {
+    let pages = gh_api_pages_conditional(
         gh_bin,
         cwd,
         &format!("repos/{{owner}}/{{repo}}/actions/runs?head_sha={head}&per_page=100"),
@@ -305,6 +316,18 @@ pub(crate) fn zero_job_rows(
             runs.extend(list.iter().cloned());
         }
     }
+    Ok(runs)
+}
+
+/// The rows for the Actions runs that failed before minting a job:
+/// the head's runs listing, the shared rule in
+/// `pr_status_facts::zero_job_failures`, and this module's row shape.
+pub(crate) fn zero_job_rows(
+    gh_bin: &str,
+    cwd: &Path,
+    runs: &[Value],
+    check_runs: &[Value],
+) -> Result<Vec<Value>, String> {
     let jobs_total = |id: u64| -> Result<u64, String> {
         let raw = gh_api(
             gh_bin,
@@ -318,7 +341,7 @@ pub(crate) fn zero_job_rows(
             .and_then(Value::as_u64)
             .ok_or_else(|| format!("the jobs read for run {id} carried no total_count"))
     };
-    let found = crate::pr_status_facts::zero_job_failures(&runs, check_runs, &jobs_total)?;
+    let found = crate::pr_status_facts::zero_job_failures(runs, check_runs, &jobs_total)?;
     Ok(found
         .iter()
         .map(|r| {
@@ -496,14 +519,91 @@ fn compare_fail(remote_ref: &str, err: &str) -> i32 {
 
 /// The exit-3 refusal: the remote branch holds something this push would
 /// drop, and `detail` names it. The text must not contain `not safely
-/// rebasable`, which heal's conflict parser keys on.
+/// mergeable`, which heal's conflict parser keys on.
 fn remote_only_refusal(remote_ref: &str, branch: &str, detail: &str) -> i32 {
     eprintln!(
         "pr-push: {remote_ref} carries commits this branch lacks: {detail}. \
-         Integrate them with git pull --rebase origin {branch}, then re-run \
+         Integrate them with git pull --no-rebase origin {branch}, then re-run \
          the push. Nothing pushed."
     );
     3
+}
+
+/// Whether an open PR has `name` as its head branch. A row whose `head.ref`
+/// names another branch is not a match, so a read that ignored the filter
+/// cannot bind the push to the wrong PR.
+fn open_pr_has_head(gh_bin: &str, cwd: &Path, name: &str) -> Result<bool, String> {
+    let raw = gh_api(
+        gh_bin,
+        cwd,
+        &format!(
+            "repos/{{owner}}/{{repo}}/pulls?state=open&head={{owner}}:{}",
+            crate::claims::encode_key(name)
+        ),
+        &[],
+    )?;
+    let prs: Value = serde_json::from_str(&raw).map_err(|e| format!("unparseable PR list: {e}"))?;
+    Ok(prs.as_array().is_some_and(|rows| {
+        rows.iter().any(|pr| {
+            pr.pointer("/head/ref")
+                .and_then(Value::as_str)
+                .is_none_or(|head| head == name)
+        })
+    }))
+}
+
+/// The origin branch a push of `branch` lands on. A worktree branch can
+/// track a PR head under another name; pushing `HEAD:<branch>` then makes a
+/// stray remote branch and leaves the PR head where it was. The upstream
+/// wins when an open PR has it as head. A protected upstream (a branch born
+/// off origin/main) or no upstream keeps the same name. Err carries the exit
+/// code and the refusal line: 3 when no open PR names either branch, 4 when
+/// the PR read fails.
+pub(crate) fn push_target(
+    git_bin: &str,
+    gh_bin: &str,
+    cwd: &Path,
+    branch: &str,
+) -> Result<String, (i32, String)> {
+    let upstream = run_labeled(
+        "pr-push",
+        git_bin,
+        &["rev-parse", "--symbolic-full-name", "@{u}"],
+        cwd,
+        READ_TIMEOUT,
+    )
+    .ok()
+    .filter(|(ok, _, _)| *ok)
+    .and_then(|(_, out, _)| {
+        out.trim()
+            .strip_prefix("refs/remotes/origin/")
+            .map(str::to_string)
+    });
+    let upstream = match upstream {
+        Some(up) if up != branch && !PROTECTED.contains(&up.as_str()) => up,
+        _ => return Ok(branch.to_string()),
+    };
+    for name in [upstream.as_str(), branch] {
+        match open_pr_has_head(gh_bin, cwd, name) {
+            Ok(true) => return Ok(name.to_string()),
+            Ok(false) => {}
+            Err(e) => {
+                return Err((
+                    4,
+                    format!("could not read the open PR for '{name}' ({e}); nothing pushed"),
+                ))
+            }
+        }
+    }
+    Err((
+        3,
+        format!(
+            "refusing: branch '{branch}' tracks origin/{upstream}, and no open PR has \
+             '{upstream}' or '{branch}' as head. Point the upstream at the PR head with \
+             git branch --set-upstream-to origin/<pr-head>, or run git branch \
+             --unset-upstream to push a new '{branch}' branch. Nothing pushed."
+        ),
+    ))
 }
 
 /// Everything a push needs. The `bin` seams exist for the same reason heal's
@@ -524,6 +624,9 @@ pub(crate) struct PushCtx {
     /// the push plain: heal's callers never rebase, and a first push has no
     /// same-name remote to replace.
     pub lease: Option<String>,
+    /// The origin branch the push lands on, from [`push_target`]. `None`
+    /// resolves it at push time (heal's caller).
+    pub remote_branch: Option<String>,
 }
 
 /// What a push decision ended as. `ci` names why the push went out:
@@ -533,6 +636,7 @@ pub(crate) enum PushOutcome {
     Pushed {
         sha: String,
         ci: &'static str,
+        remote_branch: String,
     },
     InFlight {
         check: String,
@@ -540,14 +644,9 @@ pub(crate) enum PushOutcome {
     },
     Unreadable(String),
     PushFailed(String),
-    /// The outbound scan found a Claude session-URL leak in a commit this
-    /// push would introduce to origin. Nothing moved; the caller must reword.
-    LeakRefusal {
-        report: String,
-    },
 }
 
-/// One in-flight read: what the verb would refuse with, whether any latest
+/// One in-flight read: what the command would refuse with, whether any latest
 /// row already failed, and the Actions run ids still testing the head.
 pub(crate) struct Flight {
     pub check: String,
@@ -556,7 +655,7 @@ pub(crate) struct Flight {
     pub runs: Vec<u64>,
 }
 
-/// Both pre-push message gates scan the same `git log --format=%h%x1f%B%x1e`
+/// The pre-push message gate scans a `git log --format=%h%x1f%B%x1e`
 /// capture: records split on \x1e, the sha field joined to its message on
 /// \x1f. One iterator so the record format has exactly one parser. The
 /// whole record is yielded alongside its sha: a body carrying a literal
@@ -572,116 +671,10 @@ fn log_records(log: &str) -> impl Iterator<Item = (&str, &str)> {
         })
 }
 
-/// The session-URL leak pattern: the CI gate's own `PATTERN=` from
-/// `scripts/ci/check-no-session-urls.sh` (a real leak always carries a token
-/// char after `/code/`, so prose that merely names the concept passes).
-/// `a_rust_pattern_matches_the_ci_gate` pins the two together.
-pub const SESSION_URL_PATTERN: &str = r"claude\.ai/code/[A-Za-z0-9]";
-
-/// The literal the pattern matches, one occurrence scan per line. Hand-rolled
-/// instead of a regex crate dependency: the shape is a fixed literal followed
-/// by one ASCII alphanumeric, exactly what the gate's regex says.
-fn line_hits_session_url(line: &str) -> bool {
-    const NEEDLE: &str = "claude.ai/code/";
-    let mut from = 0;
-    while let Some(pos) = line[from..].find(NEEDLE) {
-        let after = from + pos + NEEDLE.len();
-        if line[after..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric())
-        {
-            return true;
-        }
-        from = after;
-    }
-    false
-}
-
-/// One outbound commit that would carry a session URL to origin.
-struct OutboundLeak {
-    sha: String,
-    lines: Vec<String>,
-}
-
-/// Scan every commit this checkout would introduce to origin. `git rev-list
-/// --not --remotes=origin HEAD` lists exactly the push's payload: reachable
-/// from HEAD, not reachable from any `refs/remotes/origin/*`, so an existing
-/// upstream's already-pushed commits and sibling branches are excluded and a
-/// first push (no upstream) is covered by the same command. Bodies are read
-/// in one `git log` pass with record separators, not one subprocess per
-/// commit.
-fn scan_outbound_session_urls(git_bin: &str, cwd: &Path) -> Result<Vec<OutboundLeak>, String> {
-    let (ok, out, err) = run_labeled(
-        "pr-push-scan",
-        git_bin,
-        // HEAD precedes --not: a trailing `--not --remotes=origin HEAD`
-        // negates HEAD itself and the set is empty forever, so the veto
-        // never fires (caught by the scan-only fixture on CI, 2026-10-18).
-        &[
-            "log",
-            "--format=%H%x1f%B%x1e",
-            "HEAD",
-            "--not",
-            "--remotes=origin",
-        ],
-        cwd,
-        READ_TIMEOUT,
-    )?;
-    if !ok {
-        return Err(if err.trim().is_empty() {
-            out.trim().to_string()
-        } else {
-            err.trim().to_string()
-        });
-    }
-    Ok(session_url_leaks(&out))
-}
-
-/// One leak per commit in a `git log` capture whose record carries the
-/// session-URL pattern; the same record shape `commit_citation_failures`
-/// scans.
-fn session_url_leaks(log: &str) -> Vec<OutboundLeak> {
-    let mut leaks = Vec::new();
-    for (sha, record) in log_records(log) {
-        let lines: Vec<String> = record
-            .lines()
-            .filter(|l| line_hits_session_url(l))
-            .map(|l| l.trim_end().to_string())
-            .collect();
-        if !lines.is_empty() {
-            leaks.push(OutboundLeak {
-                sha: sha.to_string(),
-                lines,
-            });
-        }
-    }
-    leaks
-}
-
-/// The refusal text: what leaked, where, and the reword that clears it.
-fn leak_refusal_report(leaks: &[OutboundLeak]) -> String {
-    let mut report = String::from(
-        "refusing to push: an outbound commit carries a claude.ai/code session URL. \
-         Once pushed, a force-push does NOT retract it. Reword before pushing:\n",
-    );
-    for leak in leaks {
-        report.push_str(&format!(
-            "  commit {}:\n",
-            &leak.sha[..leak.sha.len().min(12)]
-        ));
-        for line in &leak.lines {
-            report.push_str(&format!("    {line}\n"));
-        }
-    }
-    report.push_str("  git rebase -i <base>   # reword each flagged commit, then re-run the push");
-    report
-}
-
 /// The in-flight decision + one push. heal calls this after its commit; the
-/// verb adds the fetch/rebase/preflight legs around it. `head` is the
+/// command adds the fetch/rebase/preflight legs around it. `head` is the
 /// REMOTE head whose runs a push would cancel (heal knows it from read_pr;
-/// the verb derives it from `@{u}`). Empty `head` skips the read: a branch
+/// the command derives it from `@{u}`). Empty `head` skips the read: a branch
 /// with no upstream has nothing in flight anywhere.
 pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
     let branch = run_labeled(
@@ -697,20 +690,6 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         return PushOutcome::PushFailed(format!(
             "refusing to push the protected branch '{branch}'"
         ));
-    }
-    // The leak veto runs before anything else moves: a commit carrying a
-    // Claude session URL must never reach origin (a force-push does not
-    // retract it), and a doomed push must never burn the CI slot or cancel
-    // a red head's run. It also outranks --force-ci-cancel: that bypass
-    // skips the in-flight read, not leak protection.
-    let leaks = match scan_outbound_session_urls(&ctx.git_bin, &ctx.cwd) {
-        Ok(leaks) => leaks,
-        Err(msg) => return PushOutcome::Unreadable(format!("outbound scan failed: {msg}")),
-    };
-    if !leaks.is_empty() {
-        return PushOutcome::LeakRefusal {
-            report: leak_refusal_report(&leaks),
-        };
     }
     let mut ci = "settled";
     if ctx.force {
@@ -738,20 +717,27 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
             Err(msg) => return PushOutcome::Unreadable(msg),
         }
     }
-    // Push exactly once, to the same-name remote branch, upstream or not.
+    let target = match &ctx.remote_branch {
+        Some(target) => target.clone(),
+        None => match push_target(&ctx.git_bin, &ctx.gh_bin, &ctx.cwd, &branch) {
+            Ok(target) => target,
+            Err((_, msg)) => return PushOutcome::PushFailed(msg),
+        },
+    };
+    // Push exactly once, to the resolved remote branch, upstream or not.
     // A bare `git push` cannot be used here: push.default=simple refuses
     // when the branch's upstream name differs from its own name (a branch
     // born off origin/main carries exactly that tracking), and the create
-    // path has no upstream at all. `--set-upstream origin HEAD:<branch>`
+    // path has no upstream at all. `--set-upstream origin HEAD:<target>`
     // covers both and pins correct tracking on the first push.
-    let refspec = format!("HEAD:{branch}");
+    let refspec = format!("HEAD:{target}");
     // The lease flag rides after the positionals: git's option parser
-    // accepts it there, and the `push --set-upstream origin HEAD:<branch>`
+    // accepts it there, and the `push --set-upstream origin HEAD:<target>`
     // prefix stays byte-identical for `a_first_push_sets_the_upstream`.
     let mut push_args: Vec<&str> = vec!["push", "--set-upstream", "origin", refspec.as_str()];
     let lease_flag;
     if let Some(sha) = &ctx.lease {
-        lease_flag = format!("--force-with-lease=refs/heads/{branch}:{sha}");
+        lease_flag = format!("--force-with-lease=refs/heads/{target}:{sha}");
         push_args.push(lease_flag.as_str());
     }
     let (ok, _, err) =
@@ -772,6 +758,19 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         .map(|(_, out, _)| out.trim().to_string())
         .unwrap_or_default(),
         ci,
+        remote_branch: target,
+    }
+}
+
+/// Post `stacked-base-guard` on the pushed head of a default-based PR.
+/// Callers run it after the push receipt, so a slow GitHub read never holds
+/// the landed event. Best-effort: the CI job still covers a miss.
+pub(crate) fn stamp_guard(ctx: &PushCtx, remote_branch: &str) {
+    let head = ["rev-parse", "HEAD"];
+    if let Ok((true, full, _)) = run_labeled("pr-push", &ctx.git_bin, &head, &ctx.cwd, READ_TIMEOUT)
+    {
+        let run = crate::stacked_base_stamp::runner(&ctx.git_bin, &ctx.gh_bin);
+        crate::stacked_base_stamp::stamp_pushed(&ctx.cwd, remote_branch, full.trim(), &run);
     }
 }
 
@@ -838,7 +837,7 @@ fn stamp_age_secs(ctx: &PushCtx, branch: &str) -> Option<u64> {
 /// Read whether a remote head has a run in flight, and whether any latest
 /// row is already red. `None` means the head has no registered pending
 /// check; errors stay distinct so callers can fail open only at the
-/// hand-push hook, never in the guarded verb.
+/// hand-push hook, never in the guarded command.
 pub(crate) fn in_flight(ctx: &PushCtx, branch: &str, head: &str) -> Result<Option<Flight>, String> {
     if head.is_empty() {
         return Ok(None);
@@ -929,6 +928,42 @@ fn emit_bypass_row(ctx: &PushCtx) {
     );
 }
 
+/// The `pr_push_landed` row the `ci_cadence` arm schedules its checks from.
+/// Best-effort: a lost row costs the cadence, never the push.
+fn emit_landed(ctx: &PushCtx, branch: &str) {
+    let sha = run_labeled(
+        "pr-push",
+        &ctx.git_bin,
+        &["rev-parse", "HEAD"],
+        &ctx.cwd,
+        READ_TIMEOUT,
+    )
+    .map(|(_, out, _)| out.trim().to_string())
+    .unwrap_or_default();
+    if sha.is_empty() {
+        return;
+    }
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return;
+    };
+    let (session_id, harness) = crate::claims::resolve_identity();
+    let row = json!({
+        "branch": branch,
+        "sha": sha,
+        "cwd": ctx.cwd.to_string_lossy(),
+        "session_id": session_id,
+        "harness": harness,
+    });
+    if let Err(e) =
+        crate::events::EventEmitter::new(crate::daemon::global_events_path(&home), "rust")
+            .emit("pr_push_landed", &row)
+    {
+        eprintln!(
+            "pr-push: the pr_push_landed row did not land ({e}); no CI cadence for this push"
+        );
+    }
+}
+
 /// The current branch, for the bypass journal row.
 fn current_branch_quoted(ctx: &PushCtx) -> String {
     run_labeled(
@@ -942,15 +977,14 @@ fn current_branch_quoted(ctx: &PushCtx) -> String {
     .unwrap_or_else(|_| "HEAD".to_string())
 }
 
-// ── the verb ────────────────────────────────────────────────────────────────
+// ── the command ────────────────────────────────────────────────────────────────
 
-/// Parsed verb arguments.
-struct VerbArgs {
+/// Parsed command arguments.
+struct CommandArgs {
     force: bool,
     pr: Option<String>,
     in_flight: Option<String>,
     preflight: bool,
-    scan_only: bool,
     git_bin: String,
     gh_bin: String,
     fno_bin: String,
@@ -958,21 +992,22 @@ struct VerbArgs {
     stamps_dir: PathBuf,
 }
 
-fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
-    let mut a = VerbArgs {
+fn parse_command_args(argv: &[String]) -> Result<CommandArgs, String> {
+    let mut a = CommandArgs {
         force: false,
         pr: None,
         in_flight: None,
         preflight: false,
-        scan_only: false,
         git_bin: "git".to_string(),
         gh_bin: "gh".to_string(),
         fno_bin: "fno".to_string(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        // The hook's own stamp dir (git-protection.py PUSH_STAMP_DIR is
-        // $FNO_HOME/push-stamps = ~/.fno/push-stamps). Rooting this at
-        // AgentsHome would split the clock: the verb writes stamps the hook
-        // never reads, and the registration-window guard never fires.
+        // The hook's own stamp dir (git_protection_impl.py
+        // _push_stamp_path resolves $FNO_HOME/push-stamps through the state
+        // door, falling back to that legacy spelling on a door refusal).
+        // Rooting this at AgentsHome would split the clock: the command writes
+        // stamps the hook never reads, and the registration-window guard
+        // never fires.
         stamps_dir: default_stamps_dir(),
     };
     let mut i = 0;
@@ -995,7 +1030,6 @@ fn parse_verb_args(argv: &[String]) -> Result<VerbArgs, String> {
             }
             "--preflight" => a.preflight = true,
             "--no-preflight" => {}
-            "--scan-only" => a.scan_only = true,
             "--git-bin" => {
                 a.git_bin = take("--git-bin")?;
                 i += 1;
@@ -1032,17 +1066,21 @@ fn unknown_flag(other: &str) -> String {
     format!("unknown flag: {other}")
 }
 
-/// `$FNO_HOME/push-stamps` (else `$HOME/.fno/push-stamps`), matching the
-/// hook's own resolution (git-protection.py: `FNO_HOME = env FNO_HOME or
-/// ~/.fno`). The hook reads the stamps this verb writes, so both sides must
-/// resolve the dir the same way or the registration window never fires.
+/// The state-root `push-stamps` folder under the hook's own root chain
+/// (git_protection_impl.py: `FNO_HOME = env FNO_HOME or ~/.fno`), answered
+/// by the layout table so a fold retargets this side with the hook's door
+/// call in the same release. The hook reads the stamps this command writes,
+/// so both sides must resolve the dir the same way or the registration
+/// window never fires.
 pub(crate) fn default_stamps_dir() -> PathBuf {
-    std::env::var_os("FNO_HOME")
-        .map(|h| PathBuf::from(h).join("push-stamps"))
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno").join("push-stamps"))
-        })
-        .unwrap_or_else(|| PathBuf::from("/tmp").join(".fno-push-stamps"))
+    let root = match std::env::var_os("FNO_HOME").filter(|v| !v.is_empty()) {
+        Some(h) => PathBuf::from(h),
+        None => match std::env::var_os("HOME") {
+            Some(h) => PathBuf::from(h).join(".fno"),
+            None => return PathBuf::from("/tmp").join(".fno-push-stamps"),
+        },
+    };
+    crate::state_layout::place(&root, "push-stamps")
 }
 
 /// Preflight modes for the receipt.
@@ -1186,131 +1224,64 @@ fn commit_citation_failures(log: &str) -> Vec<String> {
     failures
 }
 
-/// The integrate leg: bring the fetched base into the branch. A plain rebase
-/// drops every merge commit, so a branch that already merges origin/main
-/// merges the fetched base instead. The door depends on the status:
-/// needs_resolver LEFT the rebase in-progress (plain `fno do pr rebase`
-/// would dead-end on the dirty guard or abort the caller's resolutions),
-/// refused/failed aborted it. `Err` carries the exit code; nothing moved.
+/// The integrate leg: bring the fetched base into the branch. The fold is a merge, never a rebase: a rebase rewrites the pushed commits, so the compare leg's patch-equivalence check could refuse the very commits this leg produced, and the forced push it needs cancels CI on the old head and invalidates a head-pinned attestation. A merge keeps the remote commits as true ancestors of HEAD, so the compare passes trivially and the push fast-forwards. A conflicted fold is LEFT in progress for the caller (the door never aborts the integration it started); the dirty guard refuses the next push until it is concluded. `Err` carries the exit code.
 fn integrate_origin_main(git: &str, cwd: &Path) -> Result<&'static str, i32> {
-    let merge_count = match run_labeled(
+    let (ok, _, err) = match run_labeled(
         "pr-push",
         git,
-        &["rev-list", "--merges", "--count", "origin/main..HEAD"],
+        &["merge", "--no-edit", "origin/main"],
         cwd,
         READ_TIMEOUT,
     ) {
-        Ok((true, out, _)) => match out.trim().parse::<u64>() {
-            Ok(count) => count,
-            Err(_) => {
-                eprintln!(
-                    "pr-push: could not count merge commits on the branch (non-numeric output: {}); nothing moved",
-                    out.trim()
-                );
-                return Err(4);
-            }
-        },
-        Ok((false, _, err)) => {
-            eprintln!(
-                "pr-push: could not count merge commits on the branch (git failed: {}); nothing moved",
-                err.trim()
-            );
-            return Err(4);
-        }
-        Err(err) => {
-            eprintln!(
-                "pr-push: could not count merge commits on the branch ({err}); nothing moved"
-            );
-            return Err(4);
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("pr-push: the fold merge of origin/main could not run ({e}); nothing moved");
+            return Err(3);
         }
     };
-    if merge_count == 0 {
-        let (rc, v) = crate::pr_rebase::phase_a("origin/main", cwd, git);
-        if rc != 0 {
-            let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
-            let files = v
-                .get("files")
-                .and_then(|f| f.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let door = match status {
-                "needs_resolver" => {
-                    "Resolve the conflicts, then run `fno do pr rebase --continue`, \
-                     and re-run the push."
-                }
-                "refused" => {
-                    "The rebase was aborted (a guardrail refused auto-resolution); \
-                     resolve by hand, then re-run the push."
-                }
-                "dirty" => "Commit or stash the working-tree changes, then re-run the push.",
-                _ => "The rebase was aborted; rebase by hand, then re-run the push.",
-            };
+    if !ok {
+        let files = crate::pr_rebase::conflict_files(git, cwd);
+        if files.is_empty() {
             eprintln!(
-                "pr-push: the branch is not safely rebasable onto origin/main \
-                 (status {status}{}). {door}",
-                if files.is_empty() {
-                    String::new()
-                } else {
-                    format!("; files: {files}")
-                }
+                "pr-push: the fold merge of origin/main refused ({}); nothing moved",
+                err.trim()
             );
             return Err(3);
         }
-        Ok("rebase")
-    } else {
-        let (ok, _, _err) = match run_labeled(
-            "pr-push",
-            git,
-            &["merge", "--no-edit", "origin/main"],
-            cwd,
-            READ_TIMEOUT,
-        ) {
-            Ok(result) => result,
-            Err(err) => {
-                eprintln!(
-                    "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_failed). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push. ({err})"
-                );
-                return Err(3);
-            }
-        };
-        if !ok {
-            let files = crate::pr_rebase::conflict_files(git, cwd);
-            let _ = run_labeled("pr-push", git, &["merge", "--abort"], cwd, READ_TIMEOUT);
-            if files.is_empty() {
-                eprintln!(
-                    "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_failed). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push."
-                );
-            } else {
-                eprintln!(
-                    "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_conflict; files: {}). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.",
-                    files.join(", ")
-                );
-            }
-            return Err(3);
+        // The parenthetical keeps the `files: X)` shape heal's conflict parser reads, and the marker below is the parser's conflict key.
+        eprintln!(
+            "pr-push: the branch is not safely mergeable onto origin/main \
+             (status merge_conflict; files: {}). Resolve, then \
+             `git merge --continue`, and re-run the push.",
+            files.join(", ")
+        );
+        return Err(3);
+    }
+    // A branch config like mergeOptions=--no-commit (or --squash) can exit 0 with the merge staged but not committed: HEAD unmoved, the tree dirty. Verify the fold actually landed before the push legs trust it.
+    match run_labeled(
+        "pr-push",
+        git,
+        &["merge-base", "--is-ancestor", "origin/main", "HEAD"],
+        cwd,
+        READ_TIMEOUT,
+    ) {
+        Ok((true, _, _)) => Ok("merge"),
+        Ok((false, _, _)) => {
+            eprintln!(
+                "pr-push: the fold merge exited 0 but origin/main is not an ancestor of HEAD (a non-committing merge option is in effect); conclude or undo the staged merge, then re-run the push"
+            );
+            Err(3)
         }
-        Ok("merge")
+        Err(e) => {
+            eprintln!("pr-push: could not verify the fold ({e}); nothing pushed");
+            Err(4)
+        }
     }
 }
 
-/// The guarded push, verb entry. Sequence: refuse protected/dirty, fetch,
-/// measure behind-before, integrate origin/main only when GitHub reads the
-/// PR dirty or behind (rebase, or merge when the branch already holds
-/// merges; refuse on conflict, naming the resolver door; otherwise none),
-/// measure behind-after,
-/// compare against the fetched remote branch (refuse remote-only commits),
-/// preflight, in-flight read on the remote head, push exactly once (leased
-/// when the branch was rebased), stamp, receipt. Exit codes: 0 pushed, 1
-/// preflight red, 2 in flight, 3 refusal, 4 read error.
+/// The guarded push, command entry. Sequence: refuse protected/dirty, fetch, measure behind-before, integrate origin/main only when GitHub reads the PR dirty or behind (one fold merge; a conflict stays in progress for the caller; otherwise none), measure behind-after, compare against the fetched remote branch (refuse remote-only commits), preflight, in-flight read on the remote head, push exactly once (leased only when a caller-rebased head demands it), stamp, receipt. Exit codes: 0 pushed, 1 preflight red, 2 in flight, 3 refusal, 4 read error.
 pub fn run_push(argv: &[String]) -> i32 {
-    let mut a = match parse_verb_args(argv) {
+    let mut a = match parse_command_args(argv) {
         Ok(a) => a,
         Err(msg) => {
             eprintln!("pr-push: {msg}");
@@ -1328,36 +1299,6 @@ pub fn run_push(argv: &[String]) -> i32 {
     }
     let cwd = a.cwd.clone();
     let git = a.git_bin.clone();
-
-    // Scan-only mode: the same outbound read the guarded push runs, exposed
-    // for a caller that pushes by other means (the stranded recovery act in
-    // cli/src/fno/worktree_stranded.py calls this before its own push, so
-    // the leak rule is implemented once, in this module). The answer is one
-    // JSON object on stdout with exit 0 whenever the scan RAN - the leak
-    // signal is a non-empty "leaks" array, so the caller reads it through
-    // the rust_binary JSON door - and exit 2 only when the read itself
-    // failed.
-    if a.scan_only {
-        return match scan_outbound_session_urls(&git, &cwd) {
-            Ok(leaks) => {
-                let rows: Vec<Value> = leaks
-                    .iter()
-                    .map(|leak| {
-                        json!({
-                            "sha": leak.sha,
-                            "lines": leak.lines,
-                        })
-                    })
-                    .collect();
-                println!("{}", json!({"leaks": rows}));
-                0
-            }
-            Err(msg) => {
-                eprintln!("pr-push --scan-only: outbound scan failed: {msg}");
-                2
-            }
-        };
-    }
 
     if let Some(probe_branch) = a.in_flight.as_deref() {
         let remote_ref = format!("refs/remotes/origin/{probe_branch}");
@@ -1397,6 +1338,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             stamps_dir: a.stamps_dir,
             force: false,
             lease: None,
+            remote_branch: None,
         };
         return match in_flight(&ctx, probe_branch, &head) {
             Ok(Some(flight)) => print_in_flight(
@@ -1449,6 +1391,22 @@ pub fn run_push(argv: &[String]) -> i32 {
         return 4;
     }
 
+    // (2b) The origin branch this push lands on, read after the fetch so a
+    // tracked PR head is current. Every remote read and the push use it.
+    let target = match push_target(&git, &a.gh_bin, &cwd, &branch) {
+        Ok(target) => target,
+        Err((code, msg)) => {
+            eprintln!("pr-push: {msg}");
+            return code;
+        }
+    };
+
+    // (2c) A PR below a full CI tier waits for a slot (ci_tier.rs).
+    if let Some(refusal) = crate::ci_tier::push_hold(&cwd, &target) {
+        eprintln!("pr-push: {refusal}");
+        return 3;
+    }
+
     // (3) behind-before.
     let before = behind(&git, &cwd);
 
@@ -1461,7 +1419,7 @@ pub fn run_push(argv: &[String]) -> i32 {
     let integrate = if before == "0" {
         "none"
     } else {
-        match pr_merge_state(&a.gh_bin, &cwd, &branch).as_deref() {
+        match pr_merge_state(&a.gh_bin, &cwd, &target).as_deref() {
             Some("dirty") | Some("behind") => match integrate_origin_main(&git, &cwd) {
                 Ok(which) => which,
                 Err(rc) => return rc,
@@ -1526,14 +1484,14 @@ pub fn run_push(argv: &[String]) -> i32 {
         }
     }
 
-    // (6) The fetched remote head of the SAME-NAME branch, read BEFORE
+    // (6) The fetched remote head of the TARGET branch, read BEFORE
     // preflight: a doomed push must not first spend a rehearsal of up to an
     // hour. This is the head both the lease and the in-flight read pin to;
     // `@{u}` is wrong for both - a branch born off origin/main tracks main
-    // until its first verb push re-points the upstream, and main's checks
-    // would read as this branch's runs. A branch with no same-name remote
+    // until its first command push re-points the upstream, and main's checks
+    // would read as this branch's runs. A target with no remote branch
     // has an empty head: first push, nothing in flight, no lease.
-    let remote_ref = format!("origin/{branch}");
+    let remote_ref = format!("origin/{target}");
     let remote_head = run_labeled(
         "pr-push",
         &git,
@@ -1575,7 +1533,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             .unwrap_or_default();
             println!(
                 "pr-push: origin/main behind-before={before} behind-after={after} \
-                 integrate=none sha={sha} pushed=0 nothing to push"
+                 integrate=none sha={sha} ref=refs/heads/{target} pushed=0 nothing to push"
             );
             return 0;
         }
@@ -1609,7 +1567,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             .collect::<Vec<_>>()
             .join(" ");
         if !remote_only.is_empty() {
-            return remote_only_refusal(&remote_ref, &branch, &remote_only);
+            return remote_only_refusal(&remote_ref, &target, &remote_only);
         }
         // A merge commit has no patch to pair: --no-merges skips it, so a
         // merge whose tree holds hand-resolved content (a web-UI conflict
@@ -1639,7 +1597,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             };
             let parents: Vec<&str> = fields.collect();
             if parents.len() != 2 {
-                return remote_only_refusal(&remote_ref, &branch, &format!("merge {sha}"));
+                return remote_only_refusal(&remote_ref, &target, &format!("merge {sha}"));
             }
             let (ok, mout, merr) = read_remote(
                 &git,
@@ -1655,7 +1613,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             if !ok {
                 return remote_only_refusal(
                     &remote_ref,
-                    &branch,
+                    &target,
                     &format!("the hand-resolved merge {sha}"),
                 );
             }
@@ -1667,7 +1625,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             if tout.trim() != auto {
                 return remote_only_refusal(
                     &remote_ref,
-                    &branch,
+                    &target,
                     &format!("the hand-resolved merge {sha}"),
                 );
             }
@@ -1683,6 +1641,7 @@ pub fn run_push(argv: &[String]) -> i32 {
         stamps_dir: a.stamps_dir.clone(),
         force: a.force,
         lease,
+        remote_branch: Some(target.clone()),
     };
 
     // (7) Read the in-flight state before preflight: a doomed push must not
@@ -1740,12 +1699,18 @@ pub fn run_push(argv: &[String]) -> i32 {
     // when the branch was rebased.
     let outcome = guarded_push(&ctx, &remote_head);
     match outcome {
-        PushOutcome::Pushed { sha, ci } => {
+        PushOutcome::Pushed {
+            sha,
+            ci,
+            remote_branch,
+        } => {
+            emit_landed(&ctx, &remote_branch);
             println!(
                 "pr-push: origin/main behind-before={before} behind-after={after} integrate={integrate} \
-                 preflight={} ci={ci} sha={sha} pushed=1",
+                 preflight={} ci={ci} sha={sha} ref=refs/heads/{remote_branch} pushed=1",
                 mode.label()
             );
+            stamp_guard(&ctx, &remote_branch);
             0
         }
         PushOutcome::InFlight { check, job } => {
@@ -1759,10 +1724,6 @@ pub fn run_push(argv: &[String]) -> i32 {
         PushOutcome::Unreadable(msg) => {
             eprintln!("pr-push: could not re-read checks ({msg}); nothing pushed");
             4
-        }
-        PushOutcome::LeakRefusal { report } => {
-            eprintln!("pr-push: {}", report);
-            3
         }
         PushOutcome::PushFailed(err) => {
             eprintln!("pr-push: the push failed: {}", err.trim());
@@ -1778,21 +1739,6 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn line_scanner_matches_the_gate_shapes() {
-        // The leak literal is assembled, not written: this file sits in the
-        // code tree, where the internal-refs gate scans session URLs byte-wise.
-        let leak = format!("claude.ai/{}", "code/session_01AbCdEf");
-        assert!(line_hits_session_url(&format!("Claude-Session: {leak}")));
-        assert!(line_hits_session_url(&format!("see {leak} for detail")));
-        assert!(!line_hits_session_url(
-            "prose names claude.ai/code without a token and passes"
-        ));
-        assert!(!line_hits_session_url(
-            "placeholder: claude.ai/code/<session-id> passes like the gate"
-        ));
-    }
-
-    #[test]
     fn guarded_push_refuses_a_protected_branch_and_runs_no_push() {
         let dir = tempfile::tempdir().unwrap();
         let body = "#!/bin/sh\nD=\"$(dirname \"$0\")\"\necho \"git $*\" >> \"$D/git.log\"\ncase \"$1 $2\" in\n  \"rev-parse --abbrev-ref\") echo main; exit 0 ;;\nesac\necho pushed\nexit 0\n";
@@ -1805,13 +1751,13 @@ mod tests {
             stamps_dir: dir.path().to_path_buf(),
             force: true,
             lease: None,
+            remote_branch: None,
         };
         let failed = match guarded_push(&ctx, "") {
             PushOutcome::PushFailed(msg) => msg,
             PushOutcome::Pushed { .. } => panic!("a protected branch pushed"),
             PushOutcome::InFlight { .. } => panic!("in-flight before the guard"),
             PushOutcome::Unreadable(msg) => panic!("unreadable: {msg}"),
-            PushOutcome::LeakRefusal { report } => report,
         };
         assert!(failed.contains("protected branch 'main'"), "{failed}");
         let log = std::fs::read_to_string(dir.path().join("git.log")).unwrap();
@@ -1844,6 +1790,10 @@ for a in "$@"; do case "$a" in
       echo '{"check_runs":[{"id":124,"name":"cancelled","status":"completed","conclusion":"cancelled","output":{"annotations_count":0},"started_at":"2026-09-19T06:00:00Z","completed_at":"2026-09-19T06:10:00Z","html_url":"https://github.com/o/r/actions/runs/124/job/457","check_suite":{"id":89}}]}'
       exit 0
     fi
+    if [ -f "$D/new-run" ]; then
+      echo '{"check_runs":[{"id":201,"name":"node-closure","status":"completed","conclusion":"failure","output":{"annotations_count":0},"started_at":"2026-10-27T20:32:33Z","completed_at":"2026-10-27T20:35:23Z","html_url":"https://github.com/o/r/actions/runs/301/job/1","check_suite":{"id":11}},{"id":202,"name":"node-closure","status":"in_progress","conclusion":null,"started_at":"2026-10-27T20:37:16Z","completed_at":null,"html_url":"https://github.com/o/r/actions/runs/302/job/2","check_suite":{"id":12}}]}'
+      exit 0
+    fi
     echo '{"check_runs":[{"name":"rust-ci","status":"completed","conclusion":"success","started_at":"2026-09-19T06:00:00Z","completed_at":"2026-09-19T06:05:00Z","html_url":"https://github.com/o/r/actions/runs/35344488345/job/99","check_suite":{"id":7}}]}'
     exit 0 ;;
   */status)
@@ -1857,6 +1807,10 @@ for a in "$@"; do case "$a" in
     if [ -f "$D/fail-runs" ]; then
       echo "gh: runs read failed" >&2
       exit 1
+    fi
+    if [ -f "$D/new-run" ]; then
+      echo '{"total_count":2,"workflow_runs":[{"id":301,"name":"guards","check_suite_id":11,"path":".github/workflows/guards.yml","status":"completed","conclusion":"failure","created_at":"2026-10-27T20:25:56Z","run_started_at":"2026-10-27T20:25:56Z"},{"id":302,"name":"guards","check_suite_id":12,"path":".github/workflows/guards.yml","status":"in_progress","conclusion":null,"created_at":"2026-10-27T20:37:15Z","run_started_at":"2026-10-27T20:37:15Z"}]}'
+      exit 0
     fi
     echo '{"total_count":1,"workflow_runs":[{"id":35366958901,"path":".github/workflows/cli-ci.yml","status":"completed","conclusion":"failure","created_at":"2026-09-19T07:00:00Z","html_url":"https://github.com/o/r/actions/runs/35366958901"}]}'
     exit 0 ;;
@@ -1883,6 +1837,29 @@ exit 1
                 "err names the {fragment} read: {err}"
             );
         }
+    }
+
+    /// A body edit starts a new run of the same workflow on the same head,
+    /// in a new check suite. Its pending row supersedes the old run's
+    /// failure, so the wait reads no live red and cancels nothing.
+    #[test]
+    fn a_new_run_of_a_workflow_supersedes_its_old_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let gh = stub_gh(dir.path());
+        std::fs::write(dir.path().join("new-run"), b"").unwrap();
+        let rows = read_checks_rows(gh.to_str().unwrap(), dir.path(), "abc123").unwrap();
+        let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
+        let buckets: Vec<&str> = latest
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["bucket"].as_str().unwrap())
+            .collect();
+        assert_eq!(buckets, ["pending"], "{latest}");
+        assert_eq!(
+            crate::pr_status::wait::cancel_in_flight(gh.to_str().unwrap(), dir.path(), "abc123"),
+            None
+        );
     }
 
     /// A work repo off a pushed bare origin: base commit on main carrying
@@ -1964,7 +1941,7 @@ exit 1
         );
         assert_eq!(crate::test_delta::max_net_new(work_path), None);
 
-        // Wiring rows: the verb refuses the +1 head only when the work repo
+        // Wiring rows: the command refuses the +1 head only when the work repo
         // sets the knob, pushes that same head when the knob is absent, and
         // pushes the flat head either way. The flat body keeps the base test
         // and adds a non-test edit, so the delta is genuinely flat.

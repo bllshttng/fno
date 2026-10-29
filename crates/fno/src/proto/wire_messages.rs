@@ -1,7 +1,7 @@
 use super::*;
 
 /// Client -> server. Everything here rides the reliable channel. `Eq` is NOT
-/// derived: a `Control` verb may carry an [`AnchoredLayoutSpec`] (`f32` weights).
+/// derived: a `Control` command may carry an [`AnchoredLayoutSpec`] (`f32` weights).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ClientMsg {
     /// First message on a fresh connection. `proto`/`build` drive the version
@@ -46,13 +46,14 @@ pub enum ClientMsg {
     KillServer,
     /// The v4 script-API one-shot control connection (`fno mux pane ...`):
     /// `proto`/`build` drive the SAME version handshake as `Attach` (control
-    /// verbs are versioned, unlike the frozen `Query`/`KillServer` pair -
-    /// AC4-FR), then `verb` runs and the server answers with exactly one reply
+    /// commands are versioned, unlike the frozen `Query`/`KillServer` pair -
+    /// AC4-FR), then `command` runs and the server answers with exactly one reply
     /// and closes. No `Attach`, no frame stream, no registered client.
     Control {
         proto: u32,
         build: String,
-        verb: ControlVerb,
+        #[serde(rename = "verb")] // verb-wording: allow (wire name kept across builds)
+        command: ControlCommand,
     },
     /// (v7) A mouse event inside a pane's content rect, forwarded for
     /// server-side routing (brief Locked 2). `pane` names the rect the client
@@ -149,6 +150,21 @@ pub enum ClientMsg {
     SearchClear {
         pane: u64,
     },
+    /// (v118) Keyboard scroll mode (prefix+PgUp): move the pane's SHARED
+    /// per-pane scroll `delta` lines, positive up into history, negative
+    /// toward live. The same offset the wheel drives, so co-viewers track.
+    /// Clamped server-side at the history top / live bottom; each move
+    /// broadcasts a `Frame`.
+    PaneScroll {
+        pane: u64,
+        delta: i32,
+    },
+    /// (v118) Scroll-mode edge jump: `top` anchors the viewport at the oldest
+    /// history line, else snaps to the live bottom (g / G in scroll mode).
+    PaneScrollEdge {
+        pane: u64,
+        top: bool,
+    },
     /// (v83, ) The sideline new-agent popup submits one typed launch
     /// request. The server validates pre-birth, shells canonical
     /// `fno agents spawn` OFF the core loop, and answers this client with
@@ -188,9 +204,11 @@ pub enum ServerMsg {
     /// The squad/tab catalog + computed rects for the receiving client's
     /// viewed tab, relative to the CONTENT AREA. The server sends rects,
     /// never the tree; the client never runs the layout algorithm. Reliable.
-    /// `area` is the clamped (rows, cols) the rects were computed for
-    /// (view-scoped smallest-client clamp); a client larger than `area`
-    /// letterboxes client-side without inferring the bound from the rects.
+    /// `area` is the (rows, cols) the rects were computed for, picked by the
+    /// server's window-size policy (`mux.window_size`: smallest, latest or
+    /// largest viewer). A client larger than `area` letterboxes client-side
+    /// without inferring the bound from the rects; a smaller one crops,
+    /// anchored top-left.
     Layout {
         squads: Vec<SquadMeta>,
         active_squad: u64,
@@ -265,12 +283,12 @@ pub enum ServerMsg {
         squads: u32,
         panes: u32,
     },
-    // -- v4 control-verb replies (one per Control connection, then close) --
-    /// Answer to [`ControlVerb::PaneLs`].
+    // -- v4 control-command replies (one per Control connection, then close) --
+    /// Answer to [`ControlCommand::PaneLs`].
     PaneList {
         panes: Vec<PaneInfo>,
     },
-    /// (v78) Answer to [`ControlVerb::ServerStats`]: the in-memory
+    /// (v78) Answer to [`ControlCommand::ServerStats`]: the in-memory
     /// human_touch emission-failure count with its measurement window
     /// (instance start + measured time); never an all-time fact.
     ServerStats {
@@ -278,7 +296,7 @@ pub enum ServerMsg {
         started_at: String,
         measured_at: String,
     },
-    /// Answer to [`ControlVerb::PaneRead`]: the pane's text (matches
+    /// Answer to [`ControlCommand::PaneRead`]: the pane's text (matches
     /// [`crate::vt::frame_text`]). `block` (v6) carries the command-block
     /// metadata when the request selected a block; `None` for a plain grid/
     /// history read. `#[serde(default)]` so a plain read stays wire-stable.
@@ -295,7 +313,7 @@ pub enum ServerMsg {
         #[serde(default)]
         registry_fno_id: Option<String>,
     },
-    /// Answer to [`ControlVerb::PaneRun`]: the fresh pane's id, machine-read
+    /// Answer to [`ControlCommand::PaneRun`]: the fresh pane's id, machine-read
     /// by the CLI so scripts compose. `placement` (v44) carries the
     /// server-authored exact-placement receipt on `--at current` spawns; `None`
     /// on legacy focused-relative spawns (omitted on the wire via skip-if-none,
@@ -305,20 +323,20 @@ pub enum ServerMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         placement: Option<ResolvedPlacement>,
     },
-    /// A verb that carries no payload succeeded (`PaneSend`, `PaneKill`).
+    /// A command that carries no payload succeeded (`PaneSend`, `PaneKill`).
     Ok,
-    /// (v60) Answer to [`ControlVerb::WorkspaceRestore`]: one row per
+    /// (v60) Answer to [`ControlCommand::WorkspaceRestore`]: one row per
     /// member, including every refusal with its reason.
     WorkspaceRestored {
         rows: Vec<RestoreRow>,
     },
-    /// (v71) Answer to [`ControlVerb::SquadReload`]: counts now held.
+    /// (v71) Answer to [`ControlCommand::SquadReload`]: counts now held.
     SquadReloaded {
         squads: usize,
         members: usize,
         emptied: usize,
     },
-    /// (v75) Answer to [`ControlVerb::RetireSession`]: how many members the
+    /// (v75) Answer to [`ControlCommand::RetireSession`]: how many members the
     /// store tombstoned and how many attached panes closed. Both are zero on
     /// a repeat call: retirement is idempotent, never an error.
     /// The closed panes are NAMED, and any tab the closes emptied
@@ -337,11 +355,11 @@ pub enum ServerMsg {
         #[serde(default)]
         skipped_typing: usize,
     },
-    /// Answer to [`ControlVerb::PaneWait`].
+    /// Answer to [`ControlCommand::PaneWait`].
     WaitDone {
         outcome: WaitOutcome,
     },
-    /// A control verb failed (dead pane, spawn failure, version skew, ...).
+    /// A control command failed (dead pane, spawn failure, version skew, ...).
     /// `code` is one of [`err_code`]; `msg` is one human line.
     Err {
         code: u32,
@@ -389,7 +407,7 @@ pub enum ServerMsg {
     /// (v29) The transcript body for a [`Command::PeekAgent`], sent only
     /// to the requesting client. `seq` echoes the request's counter so the client
     /// drops a stale reply; `name` is the peeked row (for a defensive header
-    /// cross-check); `lines` is the shelled `fno agents peek` output (already
+    /// cross-check); `lines` is the shelled `fno agents session peek` output (already
     /// split into display lines), with any error/timeout text carried in-band as
     /// lines too - the overlay renders whatever comes back and never closes on a
     /// fetch error. Reliable (one small message per keystroke).
@@ -403,21 +421,21 @@ pub enum ServerMsg {
     /// terminal state per request; a duplicate submission is answered with
     /// the SAME attempt, never a second spawn.
     AgentLaunch(crate::proto::agent_launch::AgentLaunchUpdate),
-    // -- v41 (layout-api) control-verb replies --
-    /// Answer to [`ControlVerb::TabLs`].
+    // -- v41 (layout-api) control-command replies --
+    /// Answer to [`ControlCommand::TabLs`].
     TabList {
         tabs: Vec<TabInfo>,
     },
-    /// Answer to [`ControlVerb::LayoutGet`]: the nested tree + per-pane geometry
+    /// Answer to [`ControlCommand::LayoutGet`]: the nested tree + per-pane geometry
     /// for the requested scope (Locked Decision 5).
     LayoutTree {
         squads: Vec<SquadLayout>,
     },
-    /// Answer to [`ControlVerb::AgentRowsGet`]: the row-set receipt.
+    /// Answer to [`ControlCommand::AgentRowsGet`]: the row-set receipt.
     AgentRowsReceipt {
         rows: Vec<AgentRowReceipt>,
     },
-    /// Answer to [`ControlVerb::PaneWhere`]: where an `fno_id` lives right now.
+    /// Answer to [`ControlCommand::PaneWhere`]: where an `fno_id` lives right now.
     /// The multi-tab / multi-pane shape is mirroring-ready (one id can host
     /// several panes across tabs). Never emitted empty-but-successful.
     PaneLocation {
@@ -433,7 +451,7 @@ pub enum ServerMsg {
         /// The pane ids hosting this id.
         panes: Vec<u64>,
     },
-    /// Answer to [`ControlVerb::PaneBreak`]: the id of the freshly created
+    /// Answer to [`ControlCommand::PaneBreak`]: the id of the freshly created
     /// tab, plus (v51) its label pair for the human receipt.
     TabSpawned {
         tab_id: TabId,
@@ -442,7 +460,7 @@ pub enum ServerMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_ordinal: Option<usize>,
     },
-    /// Answer to [`ControlVerb::PaneFocus`]: where the pane was found, and how
+    /// Answer to [`ControlCommand::PaneFocus`]: where the pane was found, and how
     /// many viewers actually ended up looking at it.
     ///
     /// `clients_moved` is load-bearing, not decoration. Accepting the command
@@ -463,7 +481,7 @@ pub enum ServerMsg {
         tab_ordinal: Option<usize>,
         clients_moved: usize,
     },
-    /// (v42) Answer to [`ControlVerb::LayoutApply`]: one [`SlotResult`]
+    /// (v42) Answer to [`ControlCommand::LayoutApply`]: one [`SlotResult`]
     /// per requested slot, in slot order, so a script captures the created pane
     /// ids from the receipt (never predicts them). A top-level `Err` (arity /
     /// fit / unknown template) means nothing was mutated; a `LayoutApplied` with
@@ -471,7 +489,7 @@ pub enum ServerMsg {
     LayoutApplied {
         results: Vec<SlotResult>,
     },
-    /// (v44) Answer to [`ControlVerb::LayoutGraft`]: the committed
+    /// (v44) Answer to [`ControlCommand::LayoutGraft`]: the committed
     /// anchor/squad/tab and one outcome per named slot. Graft is all-or-nothing,
     /// so every slot is filled on this receipt; a refusal is a top-level `Err`.
     LayoutGrafted {
@@ -486,7 +504,7 @@ pub enum ServerMsg {
         tab_ordinal: Option<usize>,
         results: Vec<GraftSlotResult>,
     },
-    /// (v51) Answer to [`ControlVerb::TabWhere`]: what lives at a tab
+    /// (v51) Answer to [`ControlCommand::TabWhere`]: what lives at a tab
     /// location right now. `panes` is every pane in the tab in tree order,
     /// each with its joined worker identity; an occupant with `fno_id: None`
     /// is an EXPLICIT empty pane, never a failed lookup. A tab always holds
@@ -502,7 +520,7 @@ pub enum ServerMsg {
         focus: u64,
         panes: Vec<TabPaneOccupant>,
     },
-    /// Answer to [`ControlVerb::TabClose`]. The receipt names the exact stable
+    /// Answer to [`ControlCommand::TabClose`]. The receipt names the exact stable
     /// tab and every pane reaped; `forced` records the explicit guard override.
     TabClosed {
         tab_id: TabId,
@@ -520,7 +538,7 @@ pub enum ServerMsg {
         title: String,
         body: String,
     },
-    /// (v110) Answer to [`ControlVerb::Notify`]: how many ATTACHED clients the
+    /// (v110) Answer to [`ControlCommand::Notify`]: how many ATTACHED clients the
     /// notice was queued to. `0` is the load-bearing zero: it means no
     /// attached client took the notice, which is the caller's signal to fall
     /// back (osascript). A wedged reliable channel counts as undelivered.

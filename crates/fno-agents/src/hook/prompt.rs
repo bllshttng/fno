@@ -6,7 +6,7 @@
 //! message whose Enter the mux witnessed) and prints one
 //! `hookSpecificOutput` whose `additionalContext` lists the cached
 //! projection (top five ready items) and a count. It never folds a
-//! journal: the daemon's `attention` arm writes `~/.fno/attention/items.json`,
+//! journal: the daemon's `attention` arm writes `~/.fno/state/attention/items.json`,
 //! this reads it.
 
 use serde_json::{json, Value};
@@ -118,10 +118,15 @@ fn render_block(items: &[Value]) -> String {
                 .and_then(|a| a.get("handle"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            let host = i
+                .get("host")
+                .and_then(Value::as_str)
+                .map(|h| format!(" on {h}"))
+                .unwrap_or_default();
             if asker.is_empty() {
-                format!("- {kind}: {title}")
+                format!("- {kind}: {title}{host}")
             } else {
-                format!("- {kind}: {title} (from {asker})")
+                format!("- {kind}: {title} (from {asker}{host})")
             }
         })
         .collect();

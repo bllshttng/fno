@@ -1,6 +1,6 @@
 """Mux-pane spawn back half (4a-G2): host an agent's PTY as a mux pane.
 
-``fno agents spawn --substrate pane`` (the closable fallback lane) lands here: the
+``fno agents spawn`` (the closable pane lane) lands here: the
 front half - name validation, provider selection, per-agent flock, collision
 check, role routing, billing guard - is the same machinery the daemon/bg paths
 use; only the HOSTING call differs. Instead of the fno-agents daemon spawning
@@ -56,7 +56,7 @@ from fno.agents.codex_rollout import (  # noqa: F401 - re-export: dispatch and t
     _codex_session_id_for_pid,
 )
 from fno.agents.harness_map import DispatchResolveError, normalize_command, render_seed
-from fno.config._dispatch_verbs import is_verb_seed
+from fno.config._dispatch_commands import is_command_seed
 from fno.agents.writable_dirs import (
     ADD_DIR_PROVIDERS,
     add_dir_tokens,
@@ -237,7 +237,6 @@ def _shell_integration() -> str:
 
 
 # Moved to fno.agents.mux_server (file budget); re-exported here.
-from fno.agents.mux_server import mux_server_env as mux_server_env  # noqa: E402
 from fno.agents.mux_server import resolve_mux_session  # noqa: E402
 
 
@@ -454,14 +453,26 @@ def happy_pane_argv(
             "config.agents.happy_routed_panes = false to accept a local-only pane.",
             exit_code=127,
         )
-    from fno.agents.account_env import SECRET_ROUTE_VARS
+    from fno.agents.spawn_overlay_client import compose_credentials
 
+    secret = compose_credentials(None, None, {})["secret"]
     claude_env: list[str] = []
     for key, value in route_env.items():
-        if key in SECRET_ROUTE_VARS:
+        if key in secret:
             continue
         claude_env += ["--claude-env", f"{key}={value}"]
     return ["happy", *claude_env, *argv[1:]]
+
+
+def passthrough_model(passthrough: Optional[Sequence[str]]) -> Optional[str]:
+    """The model a fenced passthrough names, the last one winning as the CLI reads it."""
+    toks, found = list(passthrough or ()), None
+    for i, tok in enumerate(toks):
+        if tok in ("--model", "-m") and i + 1 < len(toks):
+            found = toks[i + 1]
+        elif tok.startswith("--model="):
+            found = tok.split("=", 1)[1]
+    return found or None
 
 
 def inject_route_model_argv(
@@ -496,26 +507,6 @@ def claude_argv_is_interactive(argv: list[str]) -> bool:
     return not any(tok in ("-p", "--print") for tok in argv)
 
 
-# Providers with an interactive-pane form below. This is the pane-hostable set -
-# a DISTINCT invariant from READABLE_PROVIDERS (which only means "the registry
-# loader tolerates this string in a row"). The two coincide today (opencode
-# graduated from staged-manifest-only to hosted at) but diverge the
-# moment the next readable-but-argvless provider is staged. Gate the pane path
-# on THIS, so a staged provider is refused with an honest message rather than
-# slipping to build_pane_argv's backstop raise.
-# Keep in sync with the branches in build_pane_argv (the round-trip test enforces it).
-PANE_HOSTABLE_PROVIDERS: tuple[str, ...] = (
-    "claude",
-    "codex",
-    "gemini",
-    "agy",
-    "opencode",
-    "pi",
-    "cursor-agent",
-    "grok",
-    "footnote",
-)
-
 #: : the token shape an UNDECLARED harness name must match before the
 #: pane lane will even look it up on PATH. Checked first, so a shell-hostile
 #: string never reaches shutil.which() or an argv. Undeclared names name CLI
@@ -523,7 +514,7 @@ PANE_HOSTABLE_PROVIDERS: tuple[str, ...] = (
 _UNDECLARED_HARNESS_TOKEN = re.compile(r"[a-z][a-z0-9._-]{0,31}")
 
 
-def permission_pane_tokens(provider: str, mode: str) -> list[str]:
+def permission_pane_tokens(provider: str, mode: str, role_level: Optional[int] = None) -> list[str]:
     """Map a ``--permission-mode`` value to provider-native pane argv tokens.
 
     Fail-closed (Locked Decision 1): an unmappable (provider, value) pair raises
@@ -531,13 +522,19 @@ def permission_pane_tokens(provider: str, mode: str) -> list[str]:
     downgrade. The vocabulary lives in Rust (crates/fno-agents/src/codex_posture.rs),
     so this is a transport bridge: one subprocess round-trip.
     agy ``skip`` maps to ``[]`` because its argv already carries
-    ``--dangerously-skip-permissions`` unconditionally. An empty mode is
-    refused by the owner (the same literal, one source)."""
-    from fno.rust_binary import VerbUnavailable, verb_call
+    ``--dangerously-skip-permissions`` unconditionally. An empty mode with a
+    ``role_level`` asks the owner's role-aware pane default (a promoted pane
+    launches full access); an empty mode without one is refused by the owner
+    (the same literal, one source)."""
+    from fno.rust_binary import command_call
+    from fno.rust_binary import CommandUnavailable
 
+    payload: dict = {"provider": provider, "mode": mode}
+    if role_level is not None:
+        payload["role_level"] = role_level
     try:
-        answer = verb_call("permission-tokens", {"provider": provider, "mode": mode}, VerbUnavailable)
-    except VerbUnavailable as exc:
+        answer = command_call("permission-tokens", payload, CommandUnavailable)
+    except CommandUnavailable as exc:
         raise DispatchAskError(
             f"the permission vocabulary owner (fno-agents) is unavailable: {exc}",
             exit_code=2,
@@ -546,90 +543,8 @@ def permission_pane_tokens(provider: str, mode: str) -> list[str]:
         raise DispatchAskError(answer["refusal"], exit_code=2)
     return [str(token) for token in answer.get("tokens") or []]
 
-def tier3_pane_tokens(
-    provider: str,
-    *,
-    add_dir: Optional[str] = None,
-    computed_dirs: Sequence[str] = (),
-    agent: Optional[str] = None,
-    tools: Optional[str] = None,
-    deny_tools: Optional[str] = None,
-) -> list[str]:
-    """Map the Tier-3 harness-native passthrough flags to provider-native pane
-    argv tokens, in a fixed order (add-dir, agent, allowedTools,
-    disallowedTools). Fail-closed per cell: a set flag with no equivalent for
-    ``provider`` raises before spawn - never a silent drop. An empty/None value
-    is unset (no token). Mirrors the Rust HarnessFlags mapping + the client.rs
-    guard, so pane and bg/headless agree on which cells exist.
-
-    ``computed_dirs`` is fno's own writable-directory set and is the one cell
-    that degrades instead of raising; see :func:`add_dir_tokens`."""
-
-    def unsupported(flag: str) -> "list[str]":
-        raise DispatchAskError(
-            f"{flag} is not supported for harness {provider!r}; if it is the "
-            "harness's own flag, pass it after the -- fence",
-            exit_code=2,
-        )
-
-    out: list[str] = []
-    # --add-dir: claude/codex/agy grant extra write access. opencode --dir SETS
-    # cwd (not additive) and gemini is unverified, so both fail closed.
-    out += add_dir_tokens(provider, add_dir, computed_dirs, unsupported=unsupported)
-    # --agent: claude and opencode select a sub-agent by name.
-    if agent:
-        if provider in ("claude", "opencode"):
-            out += ["--agent", agent]
-        else:
-            unsupported("--agent")
-    # --tools / --deny-tools: claude only (--allowedTools / --disallowedTools).
-    # codex/opencode tool scope is a different axis (sandbox / config presets).
-    if tools:
-        if provider == "claude":
-            out += ["--allowedTools", tools]
-        elif provider == "pi":
-            # pi's own allowlist flag, spanning built-in, extension and custom
-            # tools in one comma-separated list.
-            out += ["--tools", tools]
-        else:
-            unsupported("--tools")
-    if deny_tools:
-        if provider == "claude":
-            out += ["--disallowedTools", deny_tools]
-        elif provider == "pi":
-            out += ["--exclude-tools", deny_tools]
-        else:
-            unsupported("--deny-tools")
-    return out
 
 
-def effort_tokens(harness: str, value: str) -> list[str]:
-    """Translate effort without maintaining a provider/model value catalog.
-
-    Keyed by HARNESS, not vendor: every branch of the owner is a CLI binary,
-    and the flag spelling that has to be translated is the binary's. The
-    vocabulary lives in Rust (crates/fno-agents/src/effort_surface.rs), so
-    this is a transport bridge: one subprocess round-trip, the shape of
-    `permission_pane_tokens`. The owner answers the whole deny set (gemini,
-    cursor-agent, an undeclared harness) with the same strings this module
-    used to raise."""
-    from fno.rust_binary import VerbUnavailable, verb_call
-
-    try:
-        answer = verb_call(
-            "spawn-overlay",
-            {"kind": "compat", "harness": harness, "effort": value},
-            VerbUnavailable,
-        )
-    except VerbUnavailable as exc:
-        raise DispatchAskError(
-            f"the effort surface owner (fno-agents) is unavailable: ({exc})",
-            exit_code=2,
-        ) from exc
-    entry = answer.get("effort") or {}
-    if entry.get("refusal"):
-        raise DispatchAskError(entry["refusal"], exit_code=2)
-    return [str(token) for token in entry.get("tokens") or []]
 
 
 def apply_opencode_variant(model: str, effort: str, *, state_path: Optional[Path] = None) -> None:
@@ -784,8 +699,7 @@ def _backfill_opencode_session_id(
 # Codex writes its rollout at session start, but the TUI has to boot first, so
 # the first look can legitimately land before the file exists. More attempts and
 # a longer nap than opencode's SQLite read for exactly that reason. One extra
-# attempt buys the stability gate in _backfill_codex_session_id its confirmation
-# probe without shrinking the capture window (Codex P2, #603).
+# attempt widens the capture window.
 _CODEX_BACKFILL_ATTEMPTS = 5
 _CODEX_BACKFILL_DELAY_S = 0.75
 
@@ -802,13 +716,13 @@ def _backfill_codex_session_id(
 ) -> Optional[str]:
     """Best-effort capture of a freshly spawned codex pane's session id.
 
-    With the pane's child pid, the id is read race-free from the child's open
-    rollout (see :func:`_codex_session_id_for_pid`): codex mints no ``--session``
-    id, but its process holds the rollout open and the filename embeds the id, so
-    each pane resolves its own session even when two spawn in one cwd at once.
-    Without a child pid (direct/test callers only) this falls back to cwd +
-    started-after-spawn discovery, stability-gated -- that path cannot fully
-    separate a same-cwd sibling and is not used by production spawns.
+    The id is read race-free from the child's open rollout (see
+    :func:`_codex_session_id_for_pid`): codex mints no ``--session`` id, but its
+    process holds the rollout open and the filename embeds the id, so each pane
+    resolves its own session even when two spawn in one cwd at once. Without a
+    child pid there is nothing to correlate, so the answer is None: a cwd and
+    start-time guess cannot separate a same-cwd sibling. ``cwd``, ``since_ms``
+    and ``sessions_dir`` are unread.
 
     A miss leaves the row id-less so ``_discover_from_registry`` drops it before
     name matching, which is what makes a live codex worker unreachable by truth,
@@ -819,60 +733,36 @@ def _backfill_codex_session_id(
     death between probes, which a bare retry loop cannot see. Direct callers keep
     the default.
     """
-    from fno.agents.discover import codex_session_ids_started_in
-
     naptime = sleep or time.sleep
     tries = _CODEX_BACKFILL_ATTEMPTS if attempts is None else max(int(attempts), 1)
-    if child_pid is not None:
-        # Race-free primary path: the child's open rollout identifies its own
-        # session. codex opens the rollout shortly after start, so retry until it
-        # appears; never fall through to cwd/time guessing when we have a pid.
-        for attempt in range(tries):
-            if attempt:
-                naptime(_CODEX_BACKFILL_DELAY_S)
-            sid = _codex_session_id_for_pid(child_pid, psutil_mod=psutil_mod)
-            if sid is not None:
-                return sid
+    if child_pid is None:
         return None
-
-    # No child pid: direct/test caller only. Two same-cwd panes can surface
-    # rollouts out of order, so accept only once the same single id repeats on
-    # the next probe -- a transiently-unique sibling then grows to an ambiguous
-    # pair (-> None below) or is displaced first (Codex P1 residual, #603).
-    prev: Optional[str] = None
-    # Floored at 2: the stability gate below accepts an id only when the SAME
-    # single id repeats, and `prev` is None on the first pass, so one attempt
-    # can never return anything. A caller passing attempts=1 here would get a
-    # guaranteed silent miss rather than one honest probe.
-    for attempt in range(max(tries, 2)):
+    # codex opens the rollout shortly after start, so retry until it appears;
+    # never fall through to cwd/time guessing.
+    for attempt in range(tries):
         if attempt:
             naptime(_CODEX_BACKFILL_DELAY_S)
-        ids = codex_session_ids_started_in(cwd, since_ms, sessions_dir=sessions_dir)
-        if len(ids) > 1:
-            return None  # ambiguous; retrying cannot narrow it
-        if len(ids) == 1 and ids[0] == prev:
-            return ids[0]
-        prev = ids[0] if ids else None
+        sid = _codex_session_id_for_pid(child_pid, psutil_mod=psutil_mod)
+        if sid is not None:
+            return sid
     return None
 
 
-def pane_passthrough_tokens(
+
+def refuse_passthrough_collision(
     passthrough: Optional[Sequence[str]],
     emitted: Sequence[str],
-) -> list[str]:
-    """Validate `--` passthrough tokens against what fno itself emitted, for
-    splicing into a provider arm.
+) -> None:
+    """Refuse a `--` passthrough token naming a flag fno itself emitted.
 
-    A passthrough token naming a flag the arm already carries is a named
-    refusal, never a silent last-wins: two sources for one value make the
-    spawn receipt disagree with the process. ``emitted`` is every option token
-    the arm will carry, INCLUDING the tail spliced after the passthrough
-    position (gemini/opencode permission tokens), minus the message. The
-    ``--`` fence itself and value tokens are not flags; an ``=``-joined flag
-    compares by its name.
+    Two sources for one value make the spawn receipt disagree with the
+    process; the refusal is named, never a silent last-wins. The ``--``
+    fence itself and value tokens are not flags; an ``=``-joined flag
+    compares by its name. (The splice half of the old pane_passthrough_tokens
+    died with the axes: the arms append the raw passthrough now.)
     """
     if not passthrough:
-        return []
+        return
     emitted_flags = {
         tok.split("=", 1)[0] for tok in emitted if tok.startswith("-") and tok != "--"
     }
@@ -887,7 +777,6 @@ def pane_passthrough_tokens(
                 "value is the defect, not the collision. Drop one.",
                 exit_code=2,
             )
-    return list(passthrough)
 
 
 _CURSOR_NATIVE_WORKTREE_FLAGS = frozenset({"-w", "--worktree", "--worktree-base"})
@@ -980,18 +869,11 @@ def build_pane_argv(
     provider: str,
     message: str,
     cwd: Path,
-    yolo: bool,
     session_uuid: Optional[str],
-    model: Optional[str] = None,
-    permission_mode: Optional[str] = None,
-    effort: Optional[str] = None,
-    add_dir: Optional[str] = None,
-    agent: Optional[str] = None,
-    tools: Optional[str] = None,
-    deny_tools: Optional[str] = None,
     name: Optional[str] = None,
     passthrough: Optional[Sequence[str]] = None,
     computed_dirs: Optional[Sequence[str]] = None,
+    role_level: Optional[int] = None,
 ) -> list[str]:
     """The interactive PANE argv for ``provider`` - the bare-TUI form a mux
     pane hosts. This is DISTINCT from each provider's Rust ``create_argv``
@@ -999,12 +881,6 @@ def build_pane_argv(
     form for the `--substrate headless` lane; the two intentionally differ
     (e.g. opencode: bare ``opencode --prompt`` here vs ``opencode run
     --dangerously-skip-permissions`` there, NOT the stale docs' ``--auto``); no parity contract.
-
-    ``model`` : an explicit ``--model`` forwarded to the provider's own
-    TUI flag (claude/codex/gemini/agy ``--model <m>``; opencode
-    ``--model <provider/model>``). Exact passthrough, no fuzzy resolution;
-    empty/None = provider default. A CLI ``--model`` arg beats any role-routing
-    model set via env (``resolve_route``), so explicit intent wins.
 
     ``name`` is the worker's registry name, forwarded to claude's ``--name``
     (its session DISPLAY name). Parity with the bg lane, which has always
@@ -1020,13 +896,9 @@ def build_pane_argv(
     :func:`dispatch_spawn_pane` - so they inherit the same guards fno's own
     flags pass through, rather than appending past them. Absent/empty composes
     a byte-identical argv."""
-    message = normalize_command(message, provider) if is_verb_seed(message) else message
+    message = normalize_command(message, provider) if is_command_seed(message) else message
 
-    from fno.agents.harness_map import (
-        DispatchResolveError,
-        is_declared,
-        render_session_argv,
-    )
+    from fno.agents.harness_map import is_declared, render_session_argv
 
     # An undeclared harness has no resume contract to render an identity from,
     # and none is invented: the generic arm below is the bare binary. Any
@@ -1045,19 +917,17 @@ def build_pane_argv(
     # resolve the Tier-3 passthrough tokens once, up front, so an
     # unmappable (provider, flag) cell fails closed BEFORE any provider arm builds
     # an argv. Supported cells return the tokens; every arm splices them in below.
-    tier3 = tier3_pane_tokens(
+    # fno's own state directories: the one cell that survives the axis
+    # retirement. Computed here, at the ONE pane funnel, so the arms below
+    # cannot disagree about which spawn gets the grant.
+    dirs = worker_writable_dirs(cwd) if computed_dirs is None else computed_dirs
+    grant = add_dir_tokens(
         provider,
-        add_dir=add_dir,
-        # fno's own state directories. Computed here, at the ONE pane funnel, so
-        # the claude/codex/agy arms below cannot disagree about which spawn gets
-        # the grant. Without it a bounded worker cannot write ~/.fno/claims, so
-        # it holds no claim and the graph reads free while it works.
-        computed_dirs=(
-            worker_writable_dirs(cwd) if computed_dirs is None else computed_dirs
+        None,
+        dirs,
+        unsupported=lambda flag: (_ for _ in ()).throw(
+            DispatchAskError(f"{flag} is not supported for harness {provider!r}", exit_code=2)
         ),
-        agent=agent,
-        tools=tools,
-        deny_tools=deny_tools,
     )
     if provider == "claude":
         # `claude --session-id <uuid> [message]`: the pinned session id makes
@@ -1066,17 +936,9 @@ def build_pane_argv(
         argv = identity
         if name:
             argv += ["--name", name]
-        if model:
-            argv += ["--model", model]
-        if permission_mode:
-            argv += permission_pane_tokens("claude", permission_mode)
-        elif yolo:
-            # AC4-HP: claude --yolo now means bypassPermissions (was a no-op).
-            argv += ["--permission-mode", "bypassPermissions"]
-        if effort:
-            argv += effort_tokens("claude", effort)
-        argv += tier3
-        argv += pane_passthrough_tokens(passthrough, argv)
+        argv += grant
+        if passthrough:
+            argv += list(passthrough)
         if message:
             # The seed rides behind `--` so a leading-flag seed ("--model x
             # ...") reaches claude as the prompt positional instead of dying
@@ -1086,18 +948,18 @@ def build_pane_argv(
     if provider == "codex":
         # `codex [OPTIONS] [PROMPT]` with no subcommand is the interactive CLI.
         argv = [*identity, "-C", str(cwd)]
-        bypass_posture = permission_mode in ("yolo", "bypassPermissions") if permission_mode else yolo
-        if permission_mode:
-            argv += permission_pane_tokens("codex", permission_mode)
-        else:
-            argv += (
-                ["--dangerously-bypass-approvals-and-sandbox"]
-                if yolo
-                # The bounded default is the thread lane's own CodexPosture::bounded()
-                # pair, routed through the Rust owner so pane and thread cannot
-                # disagree about what "bounded" means.
-                else permission_pane_tokens("codex", "workspace-write:never")
-            )
+        # The bounded default is the thread lane's own CodexPosture::bounded()
+        # pair, routed through the Rust owner so pane and thread cannot
+        # disagree about what "bounded" means. The mode axis is retired; the
+        # lane default is the only answer left. A promoted pane (a lead rank
+        # on the spawn) launches at the role-aware default instead - full
+        # access, because a lead must write the state root; the
+        # owner answers both through one vocabulary.
+        argv += permission_pane_tokens(
+            "codex",
+            "" if role_level is not None else "workspace-write:never",
+            role_level=role_level,
+        )
         # Codex 0.148 parks a pane on a `Hooks need review` modal for a new or
         # changed hook, and no posture clears it. Sandbox and approval stay.
         argv += codex_hook_trust_args()
@@ -1106,15 +968,13 @@ def build_pane_argv(
         # cannot commit without the grant. Only the two bypass postures skip it.
         from fno.agents.harnesses.codex import git_writable_args, plan_writable_args
 
-        if not bypass_posture:
-            argv += git_writable_args(cwd)
-            argv += plan_writable_args(cwd)
-        if model:
-            argv += ["--model", model]
-        if effort:
-            argv += effort_tokens("codex", effort)
-        argv += tier3
-        argv += pane_passthrough_tokens(passthrough, argv)
+        # The bounded posture never carries bypass, so the carveouts always
+        # ride now.
+        argv += git_writable_args(cwd)
+        argv += plan_writable_args(cwd)
+        argv += grant
+        if passthrough:
+            argv += list(passthrough)
         argv = strip_remote_add_dirs(argv)
         if message:
             # Same fence as the claude arm: clap itself prescribes `--` ("to
@@ -1123,13 +983,10 @@ def build_pane_argv(
             argv += ["--", message]
         return argv
     if provider == "gemini":
-        if effort:
-            effort_tokens("gemini", effort)
         # `-i` executes the prompt then stays interactive; --skip-trust avoids
         # the workspace-trust modal blocking the TUI.
         argv = [*identity, "--skip-trust"]
-        if model:
-            argv += ["--model", model]
+        argv += grant
         # Permission tokens are computed before the passthrough splice so the
         # duplicate-flag refusal sees them (they append after the -i pair, past
         # the splice position). Output order is unchanged. The emitted set also
@@ -1138,40 +995,28 @@ def build_pane_argv(
         # of the two names, so an alias-shaped passthrough (--yolo against an
         # --approval-mode arm or the reverse) is a named refusal, never a
         # silent last-wins.
-        perm = (
-            permission_pane_tokens("gemini", permission_mode)
-            if permission_mode
-            else (["--yolo"] if yolo else ["--approval-mode", "default"])
-        )
-        emitted = [*argv, *perm, "--yolo", "--approval-mode"]
-        if message:
-            emitted.append("-i")
-        argv += pane_passthrough_tokens(passthrough, emitted)
+        argv += ["--approval-mode", "default"]
+        if passthrough:
+            argv += list(passthrough)
         if message:
             # argv-fence: exempt (gemini CLI deprecated 2026-07-27; the -i
             # value form is pinned by tests and left as-is).
             argv += ["-i", message]
-        argv += perm
         return argv
     if provider == "agy":
-        effort_argv = effort_tokens("agy", effort) if effort else []
         # agy (Antigravity) interactive pane (US1). Posture tokens are the
         # Rust owner's answer (agy_launch.keeper_posture, lane pane): the lane
-        # default is the never-prompt bypass and an explicit mode REPLACES it.
-        # This LANE mints no session id; `-p`/`--print` is agy's HEADLESS form
-        # and must NOT be used for a pane. The readiness gate submits the seed.
+        # default is the never-prompt bypass. This LANE mints no session id;
+        # `-p`/`--print` is agy's HEADLESS form and must NOT be used for a
+        # pane. The readiness gate submits the seed.
         from fno.agents.spawn_axes_client import keeper_posture
 
-        argv = ["agy", *keeper_posture("agy", "pane", permission_mode, yolo)]
-        argv += effort_argv
-        if model:
-            argv += ["--model", model]
-        argv += tier3
-        argv += pane_passthrough_tokens(passthrough, argv)
+        argv = ["agy", *keeper_posture("agy", "pane")]
+        argv += grant
+        if passthrough:
+            argv += list(passthrough)
         return argv
     if provider == "opencode":
-        if effort:
-            effort_tokens("opencode", effort)
         # Bare `opencode` is the TUI; `opencode run` is the HEADLESS
         # form and must not be pane-hosted. The positional is a PROJECT PATH,
         # not a prompt, so the message rides --prompt (argv pinned from
@@ -1188,25 +1033,12 @@ def build_pane_argv(
         # opencode expects the provider/model form. An explicit --model wins,
         # else the per-harness default table (opencode is the only entry);
         # inject nothing if the table has no entry for this provider.
-        _default_model = model or _PER_HARNESS_MODEL_SPELLING.get(provider)
+        _default_model = _PER_HARNESS_MODEL_SPELLING.get(provider)
         if _default_model:
             argv += ["--model", _default_model]
-        argv += tier3
-        # Computed before the splice (like gemini) so the duplicate refusal sees
-        # the permission tokens that append after the splice position. When the
-        # axis is set, --auto's hidden aliases (--yolo /
-        # --dangerously-skip-permissions, per the arm comment above) count as
-        # the same flag: a passthrough carrying one is a second source.
-        perm = (
-            permission_pane_tokens("opencode", permission_mode)
-            if permission_mode
-            else (["--auto"] if yolo else [])
-        )
-        emitted = [*argv, *perm]
-        if perm:
-            emitted += ["--yolo", "--dangerously-skip-permissions"]
-        argv += pane_passthrough_tokens(passthrough, emitted)
-        argv += perm
+        argv += grant
+        if passthrough:
+            argv += list(passthrough)
         return argv
     if provider == "pi":
         # pi's WATCHING lane: the plain TUI, never `--mode rpc` (mutually
@@ -1216,14 +1048,16 @@ def build_pane_argv(
         # route owner (keeper and pane share it). No permission popups, so
         # `yolo` maps to nothing.
         from fno.agents.spawn_axes_client import spawn_axes_call
-        from fno.agents.keeper_thread import _pi_axes
 
-        route = spawn_axes_call({"pi_route": _pi_axes(model, effort, None, None)})
+        # The one pi route owner (keeper and pane share it); the axes that
+        # fed it are retired, so the ask carries the ambient route only.
+        route = spawn_axes_call(
+            {"pi_route": {"model": "", "effort": "", "tools": "", "deny_tools": ""}}
+        )
         argv = [*identity, *(str(t) for t in route["tokens"])]
-        if permission_mode:
-            argv += permission_pane_tokens("pi", permission_mode)
-        argv += tier3
-        argv += pane_passthrough_tokens(passthrough, argv)
+        argv += grant
+        if passthrough:
+            argv += list(passthrough)
         if message:
             # argv-fence: exempt. Probed on pi 0.84.2: `pi -- --version` PRINTS
             # the version, so `--` is not an end-of-options marker here and a
@@ -1241,40 +1075,37 @@ def build_pane_argv(
         # Workspace Trust Required. -w/--worktree is never passed; the
         # worktree is fno's.
         argv = identity
-        if model:
-            argv += ["--model", model]
-        if permission_mode:
-            argv += permission_pane_tokens("cursor-agent", permission_mode)
-        elif yolo:
-            argv += ["--force"]
-        if effort:
-            argv += effort_tokens("cursor-agent", effort)
-        argv += tier3
+        argv += grant
         refuse_cursor_native_worktree_tokens(passthrough)
-        argv += pane_passthrough_tokens(passthrough, argv)
+        if passthrough:
+            argv += list(passthrough)
         return argv
     if provider == "footnote":
         # The TUI takes one launch spec, not a session flag; the Rust owner
-        # resolves the endpoint and writes the 0600 file.
+        # resolves the endpoint and writes the 0600 file. The model rides the
+        # fence (`-- -m <provider>/<model>`), read the way the headless lane's
+        # `fenced_model` reads it, and goes into the spec, never the TUI argv.
         from fno.agents.spawn_axes_client import footnote_pane_spec
 
-        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode, session_uuid)]
+        fenced = list(passthrough or [])
+        model = None
+        for i, tok in enumerate(fenced):
+            if tok in ("-m", "--model") and i + 1 < len(fenced):
+                model = fenced[i + 1]
+                break
+            if tok.startswith("--model="):
+                model = tok.split("=", 1)[1]
+                break
+        return [*identity, footnote_pane_spec(str(cwd), model, None, session_uuid)]
     if provider == "grok":
         # grok's pane hosts the plain TUI; the declared form carries only the
         # caller-assigned `--session-id`. The bypass, model and effort axes
         # append here so pane and keeper compose the same argv. grok maps no
         # --add-dir and its permission vocabulary is claude's.
         argv = identity
-        if permission_mode:
-            argv += permission_pane_tokens("grok", permission_mode)
-        elif yolo:
-            argv += ["--always-approve"]
-        if model:
-            argv += ["--model", model]
-        if effort:
-            argv += effort_tokens("grok", effort)
-        argv += tier3
-        argv += pane_passthrough_tokens(passthrough, argv)
+        argv += grant
+        if passthrough:
+            argv += list(passthrough)
         return argv
     if not is_declared(provider):
         # The undeclared lane: fno is the VIEWPORT, nothing more. No identity
@@ -1287,7 +1118,8 @@ def build_pane_argv(
         # False and `_submit_spawn_seed` types it after readiness, the same path
         # agy already takes. Nothing new is written for it.
         argv = [provider]
-        argv += pane_passthrough_tokens(passthrough, argv)
+        if passthrough:
+            argv += list(passthrough)
         return argv
     try:
         render_session_argv(provider, "headless_create", session_uuid)
@@ -1400,18 +1232,17 @@ def _mesh_env_pairs(
         # the completeness refusals must fire on it like every other path.
         resolved_route = resolve_spawn_route(role, None)
     if account_env or resolved_route:
-        from fno.agents.account_env import SCRUB_AUTH_VARS, compose_worker_credentials
+        from fno.agents.spawn_overlay_client import compose_credentials
 
-        composed, _decision = compose_worker_credentials(
-            account_env, resolved_route, {}
-        )
-        # The scrub floor is claude-shaped (SCRUB_AUTH_VARS are all
+        answer = compose_credentials(account_env, resolved_route, {})
+        composed = answer["env"]
+        # The scrub floor is claude-shaped (the scrub list is all
         # ANTHROPIC_*/CLAUDE_* vars): an OpenAI-protocol route on another
         # harness must not strip unrelated inherited Claude auth. `env -u` on
         # an unset var is a harmless no-op; `unset +=` (not `=`) so the
         # identity/provenance unsets above are preserved.
         if harness == "claude":
-            for _k in SCRUB_AUTH_VARS:
+            for _k in answer["scrub"]:
                 unset += ["-u", _k]
         pairs += [f"{k}={v}" for k, v in composed.items()]
     # The inherited-model scrub runs OUTSIDE the account/route block above: the
@@ -1715,7 +1546,7 @@ def _group_tab_rows(
     """Tabs in the squad the pane landed in, keyed by name.
 
     Scoped with ``--workspace id:<squad_id>`` and never unscoped. An unscoped
-    ``tab ls`` resolves ``CurrentRoute``, which on the tab verbs means the squad
+    ``tab ls`` resolves ``CurrentRoute``, which on the tab commands means the squad
     the operator happens to be LOOKING at - while the pane run resolved the same
     token by CWD. Two defaults for one token is what put panes at one squad and
     the tabs read for them at another.
@@ -1767,7 +1598,7 @@ def place_pane_in_group_tab(
 
     The old shape pre-read ``tab ls`` to PREDICT where the pane would land, then
     placed it with ``--tab``. The prediction was the wrong half: the pane run
-    resolves its squad from the spawn's cwd and the tab verbs resolve theirs from
+    resolves its squad from the spawn's cwd and the tab commands resolve theirs from
     the operator's gaze, so three panes asking for one tab landed on three.
 
     Here every read is keyed on a pane that already exists. The pane names its own
@@ -1957,7 +1788,7 @@ def _lookup_child_pid(
 _WAIT_EXITED = 12
 
 #: `fno mux pane run` exit code when the mux never answered the control read
-#: (crates/fno EXIT_CONTROL_UNANSWERED). The verb REACHED the server, so
+#: (crates/fno EXIT_CONTROL_UNANSWERED). The command REACHED the server, so
 #: unlike every other non-zero code this does not prove the pane is absent.
 _MUX_CONTROL_UNANSWERED = 20
 
@@ -1988,7 +1819,7 @@ def _reconcile_unanswered_run(
 ) -> int:
     """After ``mux pane run`` exits ``_MUX_CONTROL_UNANSWERED``, decide whether a
     pane exists rather than asserting it does not (LD2/LD3). Never retries the
-    run (LD1): the verb already reached the server, and re-sending it risks a
+    run (LD1): the command already reached the server, and re-sending it risks a
     second pane and a second worker.
 
     Enumerates the session's panes and looks for exactly one candidate that
@@ -2193,7 +2024,7 @@ _BINDING_POLL_S = 0.75
 _PROBE_TIMEOUT_S = 2.0
 #: How long the wait may stay silent before it says what it is doing. A spawn
 #: that used to return in 3s can now take the full window, and a silent block on
-#: an interactive verb reads as a hang, so the wait announces itself once.
+#: an interactive command reads as a hang, so the wait announces itself once.
 _BINDING_ANNOUNCE_S = 3.0
 #: Pane scrollback retained per tick, and the slice echoed to stderr on death.
 _PANE_TAIL_LINES = 200
@@ -3182,9 +3013,9 @@ def _submit_spawn_seed(
             # --raw, and the reason is the seed's own shape, not an oversight.
             # An empty payload is a bare submit (the seed rode in on argv), which
             # has nothing to attribute. A non-empty payload is the SEED, a
-            # leading-slash verb whose routing keys off that first character;
-            # whether an envelope can ride behind the verb line without the
-            # harness REPL swallowing it into the verb's ARGUMENTS is a separate,
+            # leading-slash command whose routing keys off that first character;
+            # whether an envelope can ride behind the command line without the
+            # harness REPL swallowing it into the command's ARGUMENTS is a separate,
             # probe-gated question (node task 5). Until that probe answers,
             # this arm types the seed verbatim rather than forcing a shape the
             # harness may refuse.
@@ -3309,9 +3140,7 @@ def validate_pane_provider(
     each before any pane exists; a declared harness skips all three. The
     declared/undeclared fact is read from the TABLE (is_declared), the same
     predicate build_pane_argv's generic arm and the UNDECLARED receipt below
-    read, so they can never disagree about a harness. PANE_HOSTABLE_PROVIDERS
-    stays the declared pane ROSTER (spawn defaults, probes); the roster gains
-    no member here."""
+    read, so they can never disagree about a harness."""
     from fno.agents.harness_map import is_declared
 
     if is_declared(provider):
@@ -3373,7 +3202,7 @@ def dispatch_spawn_pane(
     enforce_tab_capacity: bool = False,
     role_level: Optional[int] = None,
     role_scope: Optional[str] = None,
-    succession: bool = False,
+    succession: bool = False, take_over: Optional[str] = None,
     provenance: Optional[dict[str, str]] = None,
     account_env: Optional[dict[str, str]] = None,
     route_env: Optional[dict[str, str]] = None,
@@ -3408,6 +3237,9 @@ def dispatch_spawn_pane(
     # in-process caller hands (level, scope) straight to this signature, and a
     # value that skipped validation is written to the SHARED registry. Fail
     # closed before the pane exists, so a refusal leaves no worker behind.
+    # A grid or lane pick with no route rides the fence as `--model`: the row
+    # records it as the request, the same as a route's model.
+    route_model = route_model or passthrough_model(passthrough)
     role_problem = role_validation_error(role_level, role_scope) if role_level is not None or role_scope is not None else None
     if role_problem is not None:
         raise DispatchAskError(role_problem, exit_code=2)
@@ -3419,11 +3251,11 @@ def dispatch_spawn_pane(
         # successor from launching unpromoted. Both doors check, either is a door.
         role_caller_name = getattr((caller_row := calling_agent_row()), "name", None)
         role_refusal, role_plan = plan_spawn_role(
-            role_scope or "", caller_row, succession, proposed_name=name,
+            role_scope or "", caller_row, succession, proposed_name=name, take_over=take_over,
         )
         if role_refusal is not None:
             raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
-        name = adopt_drawn_name(succession, role_plan, name)
+        name = adopt_drawn_name(role_plan, name)
 
     conflict = pane_placement_conflict(
         pane, workspace=squad, split=split, at=at, tab=tab, tab_id=tab_id,
@@ -3592,7 +3424,7 @@ def dispatch_spawn_pane(
             model_name = codex_route.model
 
     effective_message: Optional[str] = None
-    if is_verb_seed(message):
+    if is_command_seed(message):
         try:
             message = render_seed(message, provider)
         except DispatchResolveError as exc:
@@ -3661,7 +3493,7 @@ def dispatch_spawn_pane(
     )
     if provider == "cursor-agent":
         # cursor-agent's create-chat mints the full UUID. It is a distinct
-        # create verb, so there is no pi-style create claim to hold: read the
+        # create command, so there is no pi-style create claim to hold: read the
         # id, terminate that non-exiting helper, then launch the pane on it.
         from fno.agents.harnesses.cursor_agent import create_chat
 
@@ -3674,18 +3506,11 @@ def dispatch_spawn_pane(
         provider,
         message,
         cwd,
-        yolo,
         session_uuid,
-        model,
-        permission_mode,
-        effort,
-        add_dir=add_dir,
-        agent=agent,
-        tools=tools,
-        deny_tools=deny_tools,
         name=name,
         passthrough=passthrough,
         computed_dirs=computed_writable_dirs,
+        role_level=role_level,
     )
     codex_seed = ""
     fence = len(argv) > 1 and argv[-2] == "--"
@@ -3697,7 +3522,7 @@ def dispatch_spawn_pane(
         from fno.agents.codex_pane import codex_shell_env_args
 
         env_config_args = codex_shell_env_args(mesh_pairs)
-        pane_passthrough_tokens(passthrough, env_config_args)
+        refuse_passthrough_collision(passthrough, env_config_args)
         argv = [argv[0], *env_config_args, *argv[1:]]
     elif provider == "codex" and argv:
         print(f"codex pane: identity leaves skipped; argv[0] is {argv[0]!r}", file=sys.stderr)
@@ -3707,7 +3532,7 @@ def dispatch_spawn_pane(
         # in-arm duplicate-flag check never saw them; re-run it against the
         # route tokens or a passthrough `-c`/`--model` flag is a silent
         # last-wins against the route's own setting.
-        pane_passthrough_tokens(passthrough, codex_route.config_args)
+        refuse_passthrough_collision(passthrough, codex_route.config_args)
     from fno.agents.spawn_defaults import resolve_lane_vendor
 
     resolved_lane_provider = route_provider or resolve_lane_vendor(
@@ -3873,6 +3698,14 @@ def dispatch_spawn_pane(
             json_receipt = bool(at or tab_id)
             if json_receipt:
                 run_args.append("--json")
+            # A `preassigned` binding harness starts with the id this spawn
+            # minted, so the pane is addressable before its registry row
+            # exists: naming it records the birthright the send gate reads.
+            from fno.agents.harness_map import capabilities_or_undeclared
+
+            spawn_binding = capabilities_or_undeclared(provider).get("session_binding") or {}
+            if session_uuid is not None and spawn_binding.get("strategy") == "preassigned":
+                run_args += ["--fno-id", session_uuid]
             run_args += ["--", *wrapped]
         # pop FNO_SPAWN_TRIGGER BEFORE this env snapshot, mirroring the
         # bg_create ordering fix in dispatch.py. `{**os.environ, ...}` here
@@ -3959,7 +3792,7 @@ def dispatch_spawn_pane(
         if existing_pane is not None:
             pane_id = pane
         elif proc.returncode == _MUX_CONTROL_UNANSWERED:
-            # The verb reached the server; only the reply did not come back
+            # The command reached the server; only the reply did not come back
             # (LD2). Reconcile instead of asserting no pane was created - the
             # reconcile itself never retries the run (LD1).
             #
@@ -4097,28 +3930,16 @@ def dispatch_spawn_pane(
         if message and readiness != "failed" and not codex_seed:
             seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unattempted":
-                # One retry, and ONLY from `unattempted`. That state means no
-                # send was made, so a second attempt cannot double-type: an
-                # `unconfirmed` submit may have typed the seed, and re-deriving
-                # the payload from a frame holding a partial seed would submit
-                # fragment+seed into a live pane.
-                # Failing that spawn is the safer answer than typing twice.
-                #
-                # "Nothing can already be in the buffer" was FALSE for a seed
-                # that rode in the argv: that one is committed at exec time,
-                # before the first probe runs, and a late-painting pane read
-                # `unattempted` while already running its task. Recovering it
-                # left a queued duplicate verb behind a live pipeline. The
-                # premise holds now for a different reason - an argv seed is
-                # classified before the frame is consulted and never reaches
-                # this state - so the retry keeps serving the pane-send path it
-                # was written for and can no longer double-seed an argv one.
-                #
-                # The sleep is load-bearing, not politeness. `unattempted` IS
-                # the late-paint state, and `_run_mux` neither polls nor backs
-                # off, so an immediate re-read lands milliseconds later on the
-                # same blank frame and the retry recovers nothing it was written
-                # to recover.
+                # One retry, and ONLY from `unattempted`: no send was made, so
+                # a second attempt cannot double-type. An argv seed once read
+                # `unattempted` while already running its task, and recovering
+                # it double-seeded a live pane; argv seeds are now classified
+                # before the frame is consulted and never reach this state, so
+                # the retry keeps serving only the pane-send path it was
+                # written for. The sleep is load-bearing, not politeness:
+                # `unattempted` IS the late-paint state and `_run_mux` neither
+                # polls nor backs off, so an immediate re-read lands
+                # milliseconds later on the same blank frame.
                 time.sleep(_SEED_RETRY_DELAY_S)
                 seed_state, seed_detail, seed_source, seed_pane = _seed_once()
             if seed_state == "unconfirmed":
@@ -4652,7 +4473,7 @@ def dispatch_spawn_pane(
                     account_record_id=account_record_id,
                 )
             if entry.role_level is not None and entry.role_scope:
-                from fno.lead.state import arm_lead_manifest
+                from fno.agents.role import arm_lead_manifest
 
                 try:
                     lead_loop_armed = arm_lead_manifest(

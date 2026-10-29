@@ -28,12 +28,12 @@ Work it with the levers below; anything it proposes that you cannot decide from 
 
 ## The levers (allowlist - nothing else)
 
-You may use ONLY these verbs.
+You may use ONLY these commands.
 Each is reversible or additive, which is what makes an unattended daily pass safe.
 
 | Lever | Use it for |
 |-------|-----------|
-| `fno backlog supersede <new-id> --replaces <old-id> --cause "..." --surface <path>` | A node genuinely replaced by another (dedup families, retitles). `--cause` and `--surface` are required: the old node stays open until a merged PR covers every surface |
+| `fno backlog supersede <new-id> --replaces <old-id> --cause "..." --surface <path> --reason "..." --covers "..."` | A node genuinely replaced by another (dedup families, retitles). `--cause`, `--surface` and `--reason` are required. `--covers` says how the new node covers the old one's done condition. A new node that covers only part of it needs the rest filed first and named with `--leftover <id>` |
 | `fno backlog defer <id>... --reason "..."` | Work that should stop being selected, with the why recorded |
 | `fno backlog undefer <id>...` | A deferred node whose blocker is demonstrably gone |
 | `fno backlog update <id> priority=<p0..p3>` | A priority the evidence contradicts. Say the evidence in the same breath |
@@ -98,8 +98,8 @@ The report carries, in this order:
 2. **Mutations** - every lever you pulled, one line each, with its receipt (node id + what changed).
 3. **Pile** - what is in the triage pile now, and what you added to it today.
 4. **Anomalies** - starvation receipts, guard exclusions, anything that looks wrong but was not yours to fix.
-5. **Net mint rate** - nodes opened minus nodes closed today, so the trend is visible without asking.
-6. **PR ratio** - PRs opened vs nodes closed over the same window, one line. A ratio well above 1 means work is split across more PRs than it closes. That runs against the standing preference for batching small work. Report the number and leave the judgment to the reader.
+5. **Net mint rate** - nodes opened minus nodes closed today, so the trend is visible without asking. Count opened with `fno backlog list "created:>=<YYYY-MM-DD>" --count`. Count closed with `fno backlog list "done:>=<YYYY-MM-DD>" --count`. Both read the UTC day.
+6. **PR ratio** - PRs opened vs nodes closed over the same window, one line. A ratio well above 1 means work is split across more PRs than it closes. That runs against the standing preference for batching small work. Report the number and leave the judgment to the reader. Count PRs opened with `fno do pr list --state all --since <YYYY-MM-DD>`. Each row carries `createdAt`, `closedAt` and `mergedAt`. The read stops at the first PR older than that day.
 
 A day with no defensible action is a valid day: report "no action", exit 0, mutate nothing.
 Still send the report, and still lead it with the Mechanical line - a quiet night and a night the pass never ran look identical otherwise.
@@ -111,7 +111,7 @@ A row with `source_kind: external_request` holds visitor text from the public bo
 ## Boundaries
 
 - **Empty delta day** - nothing changed since the last pass: report "no action", exit 0.
-- **Dies mid-run** - every lever is an atomic CLI verb, so a partial run leaves only completed mutations, each with its receipt. Report what completed; do not attempt to unwind.
+- **Dies mid-run** - every lever is an atomic CLI command, so a partial run leaves only completed mutations, each with its receipt. Report what completed; do not attempt to unwind.
 - **Second run same day** - `fno backlog groom` dedups on a daily claim, so this should not happen. If you were invoked anyway, check the day's report was already sent before acting.
 
 ## Known Limitations and Deferred Work

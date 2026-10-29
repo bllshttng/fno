@@ -1,4 +1,4 @@
-//! The merge gates that used to live in the Python merge verb, ported so
+//! The merge gates that used to live in the Python merge command, ported so
 //! `authorized_merge::decide` is the one merge decision. Each gate
 //! evaluates one input and answers `Option<Blocker>`: None clears. The pure
 //! halves take their facts as arguments so unit tests need no filesystem or
@@ -7,107 +7,50 @@
 use crate::authorized_merge::{
     node_carries_tag, pr_bound_entry, Blocker, PrFacts, ProbeOutcome, Probes, MAIN_REPAIR_TAG,
 };
+use crate::loopcheck::coverage_gate::{refusal_line, GateState};
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// `fno do pr coverage-check <n> --recompute`'s exit contract (the verb's
-/// own help text is the source of truth).
-pub(crate) const COVERAGE_CLEAR: i32 = 0;
-pub(crate) const COVERAGE_UNCOVERED: i32 = 3;
-pub(crate) const COVERAGE_IMPOSSIBLE: i32 = 5;
-
-/// The coverage gate, exit-code polarity kept. The verb runs the operator
-/// waiver overlay inside itself: a waived PR exits 0 here, and the verb
-/// prints its `override: ` note on stdout, so the waiver travels with the
-/// gate's answer instead of a caller re-deriving it.
+/// The coverage gate, polarity kept. The native verdict is the one
+/// computation: it applies the operator waiver overlay inside itself, so a
+/// waived PR reads Covered with the `override: ` note, and the waiver
+/// travels with the gate's answer instead of a caller re-deriving it.
 /// Returns (blocker, waiver).
 pub(crate) fn coverage_gate<P: Probes>(
     probes: &P,
     cwd: &Path,
     pr: u64,
 ) -> (Option<Blocker>, Option<String>) {
-    let args = vec![
-        "do".to_string(),
-        "pr".to_string(),
-        "coverage-check".to_string(),
-        pr.to_string(),
-        "--recompute".to_string(),
-    ];
-    match probes.fno_shell(cwd, &args) {
-        Ok((Some(code), stdout, stderr)) => {
-            let detail = {
-                let err = String::from_utf8_lossy(&stderr).trim().to_string();
-                if err.is_empty() {
-                    String::from_utf8_lossy(&stdout).trim().to_string()
-                } else {
-                    err
-                }
-            };
-            match code {
-                COVERAGE_CLEAR => {
-                    let line = String::from_utf8_lossy(&stdout).trim().to_string();
-                    // The prefix literal matches Python's OVERRIDE_NOTE_PREFIX.
-                    let waiver = line.strip_prefix("override: ").map(str::to_string);
-                    (None, waiver)
-                }
-                COVERAGE_UNCOVERED => (
-                    Some(Blocker::held(
-                        "review_coverage_uncovered",
-                        if detail.is_empty() {
-                            "unreviewed merge refused".to_string()
-                        } else {
-                            format!("unreviewed merge refused: {detail}")
-                        },
-                    )),
-                    None,
-                ),
-                COVERAGE_IMPOSSIBLE => (
-                    Some(Blocker::held(
-                        "review_coverage_impossible",
-                        if detail.is_empty() {
-                            "review coverage impossible at this head".to_string()
-                        } else {
-                            format!("unreviewed merge refused: {detail}")
-                        },
-                    )),
-                    None,
-                ),
-                other => (
-                    Some(Blocker::unknown(
-                        "review_coverage_unknown",
-                        if detail.is_empty() {
-                            format!("coverage probe failed, merge refused (exit {other})")
-                        } else {
-                            format!("coverage probe failed, merge refused: {detail}")
-                        },
-                    )),
-                    None,
-                ),
-            }
+    let v = probes.coverage_verdict(cwd, pr);
+    match v.state {
+        GateState::Covered => {
+            // The prefix literal matches Python's OVERRIDE_NOTE_PREFIX.
+            (None, v.note.strip_prefix("override: ").map(str::to_string))
         }
-        Ok((None, stdout, stderr)) => {
-            let detail = String::from_utf8_lossy(&stderr).trim().to_string();
+        GateState::Refused => {
+            let line = refusal_line(&v.refusal, &v.note);
             (
-                Some(Blocker::unknown(
-                    "review_coverage_unknown",
-                    if detail.is_empty() {
-                        format!(
-                            "coverage probe failed, merge refused: {}",
-                            String::from_utf8_lossy(&stdout).trim()
-                        )
+                Some(Blocker::held(
+                    "review_coverage_uncovered",
+                    if line.is_empty() {
+                        "unreviewed merge refused".to_string()
                     } else {
-                        format!("coverage probe failed, merge refused: {detail}")
+                        format!("unreviewed merge refused: {line}")
                     },
                 )),
                 None,
             )
         }
-        Err(error) => (
+        GateState::Unanswered => (
             Some(Blocker::unknown(
                 "review_coverage_unknown",
-                format!("coverage probe failed, merge refused: {error}"),
+                if v.note.is_empty() {
+                    "coverage probe failed, merge refused".to_string()
+                } else {
+                    format!("coverage probe failed, merge refused: {}", v.note)
+                },
             )),
             None,
         ),
@@ -178,38 +121,53 @@ pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64) -> Option<String>
 }
 
 /// Every PR number a graph row carries: the persisted `pr_number` field plus
-/// the `additional_prs` entries (typed rows carry `{number}` or `{url}`
-/// objects; legacy rows carry bare ints or `/pull/<n>` URL strings). A
-/// contract dependent whose PR is recorded only in `additional_prs` must
-/// still be found or the gate is bypassed.
+/// the `additional_prs` entries. A contract dependent whose PR is recorded
+/// only in `additional_prs` must still be found or the gate is bypassed.
 fn pr_numbers_of(entry: &Value) -> Vec<u64> {
+    pr_refs_of(entry).into_iter().map(|r| r.number).collect()
+}
+
+/// One PR a graph row records, with the URL it names when it names one.
+pub(crate) struct PrRef {
+    pub(crate) number: u64,
+    pub(crate) url: Option<String>,
+    pub(crate) primary: bool,
+}
+
+/// Every PR ref a graph row carries: `pr_number` with its `pr_url`, then the
+/// `additional_prs` entries (typed rows carry `{number}` or `{url}` objects;
+/// legacy rows carry bare ints or `/pull/<n>` URL strings).
+pub(crate) fn pr_refs_of(entry: &Value) -> Vec<PrRef> {
     let mut out = Vec::new();
+    let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_owned);
     if let Some(n) = entry.get("pr_number").and_then(Value::as_u64) {
-        out.push(n);
+        out.push(PrRef {
+            number: n,
+            url: text(entry.get("pr_url")),
+            primary: true,
+        });
     }
     if let Some(list) = entry.get("additional_prs").and_then(Value::as_array) {
         for raw in list {
-            match raw {
-                Value::Number(n) => {
-                    if let Some(n) = n.as_u64() {
-                        out.push(n);
-                    }
-                }
+            let (number, url) = match raw {
+                Value::Number(n) => (n.as_u64(), None),
                 Value::Object(o) => {
-                    if let Some(n) = o.get("number").and_then(Value::as_u64) {
-                        out.push(n);
-                    } else if let Some(url) = o.get("url").and_then(Value::as_str) {
-                        if let Some(n) = pull_number_from_url(url) {
-                            out.push(n);
-                        }
-                    }
+                    let url = text(o.get("url"));
+                    let number = o.get("number").and_then(Value::as_u64);
+                    (
+                        number.or_else(|| url.as_deref().and_then(pull_number_from_url)),
+                        url,
+                    )
                 }
-                Value::String(url) => {
-                    if let Some(n) = pull_number_from_url(url) {
-                        out.push(n);
-                    }
-                }
-                _ => {}
+                Value::String(url) => (pull_number_from_url(url), Some(url.clone())),
+                _ => (None, None),
+            };
+            if let Some(number) = number {
+                out.push(PrRef {
+                    number,
+                    url,
+                    primary: false,
+                });
             }
         }
     }
@@ -417,13 +375,15 @@ fn breadcrumb(message: &str) {
 
 /// The overlap gate (parallel-mode G4, LD#9), polarity kept: only arms while
 /// live lanes run; `_behind_by` miss disarms; base-move and PR-file misses
-/// HOLD (fail closed) because the base already moved.
+/// HOLD (fail closed) because the base already moved. Its remedy pulls main
+/// into a branch GitHub calls mergeable, so it rides `require_fresh_ci`
+/// (default off) with `ci_base_stale`: by default only a conflict pulls main.
 pub(crate) fn overlap_blocker<P: Probes>(
     probes: &P,
     cwd: &Path,
     facts_number: u64,
 ) -> Option<Blocker> {
-    if probes.live_lanes(cwd) == 0 {
+    if !probes.require_fresh_ci(cwd) || probes.live_lanes(cwd) == 0 {
         return None;
     }
     let behind = behind_by(probes, cwd, facts_number);
@@ -478,7 +438,11 @@ pub(crate) fn overlap_blocker<P: Probes>(
 }
 
 /// (base, head) ref names for a PR, or None on any read miss.
-fn pr_base_head_refs<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Option<(String, String)> {
+pub(crate) fn pr_base_head_refs<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    pr: u64,
+) -> Option<(String, String)> {
     let args = vec![
         "pr".to_string(),
         "view".to_string(),
@@ -630,8 +594,8 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
 
 /// The visual-approval gate: a PR whose changed files touch a configured
 /// paint path holds until an ANSWERED question page names the PR, or a
-/// role-recorded decision row transcribes the user's chat approval of this
-/// exact head. The user's look is the only clear, mechanizing the prose
+/// role-recorded decision row transcribes the user's chat or board approval
+/// of this exact head. The user's look is the only clear, mechanizing the prose
 /// rulings this gate replaces (rebrand and splash PRs merged with no user
 /// look). `merge.visual_paint_paths` lists the lines the gate watches; an
 /// explicit empty list disarms it, and no key at all arms footnote's own mux
@@ -676,26 +640,32 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         return None;
     }
     // The page auto-files on the first hold read of this head: node, PR,
-    // paint files, and the mux shots embedded, deduped per head. Best-effort:
+    // paint files, and the mux shots as --image, deduped per head. Best-effort:
     // a failed filing never softens the hold, it only names the remedy.
     let root = vault_root(cwd);
-    if answered_question_names_pr(&root, pr) || role_chat_clears_pr(probes, cwd, pr, head) {
+    let node_id = entry.as_ref().and_then(crate::graph_store::entry_id);
+    if answered_question_names_pr(&root, pr, head)
+        || node_id
+            .as_deref()
+            .is_some_and(|node| role_chat_clears_pr(probes, cwd, pr, head, node))
+    {
         return None;
     }
-    let node_id = entry.as_ref().and_then(crate::graph_store::entry_id);
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let shots = node_id
         .as_deref()
         .map(|n| mux_shots(&root, home.as_deref(), n))
         .unwrap_or_default();
     let mut detail = format!(
-        "PR {pr} touches the paint surface the config lists ({}); the user's look is \
-         the only clear: an answered question page naming the PR, or a role-recorded \
-         decision whose rationale attests the chat and whose text names the PR and \
-         its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
-         --authority role --rationale 'user in chat: <the user's words>'`). Ask via \
+        "PR {pr} touches the paint surface the config lists ({}); full CI is held at \
+         this head, and the daemon cancels every run but rust-ci (the shots) until the \
+         look clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
+         decision whose text names the PR and its head sha (`fno backlog decide <node> \
+         'Approved: PR {pr} at {head}' --authority role --rationale 'user in chat: \
+         <the user's words>'`). For a board answer, cite the answered page that names \
+         the PR instead (`--rationale 'user answered <q-id> on the board'`). Ask via \
          `fno inbox outstanding ask`, then the user answers the page or the lead \
-         records the chat approval.",
+         records the approval. Pass each shot with --image.",
         touched.join(", ")
     );
     match (node_id.as_deref(), shots.as_slice()) {
@@ -704,11 +674,13 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
              re-read status - the gate files no empty page"
         )),
         (None, _) => detail.push_str(
-            "; no node is bound to this PR (by pr_number), so the page has no shots \
-             key: bind the node, then re-read status",
+            "; no node is bound to this PR (by pr_number or additional_prs), so the \
+             page has no shots key: bind the node, then re-read status",
         ),
         (Some(node), shots) => {
             let short = head.chars().take(8).collect::<String>();
+            let mux = crate::escalation::vault_dir_with_home(&root, home.as_deref(), "mux");
+            let shots: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
             detail.push_str(&file_visual_question(
                 &root,
                 pr,
@@ -716,7 +688,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
                 &short,
                 node,
                 &touched.join(", "),
-                shots,
+                &shots,
             ));
         }
     }
@@ -779,21 +751,10 @@ fn visual_page_filed(root: &Path, pr: u64, head: &str) -> bool {
 }
 
 /// The question-file text the gate files: title names the PR, the context
-/// carries head + paint files, the shots embed on option 1 (the option the
-/// user ticks after looking), and `why_user: taste` is what lets a
-/// reversible question reach the user at all.
-fn visual_question_markdown(
-    pr: u64,
-    head: &str,
-    short: &str,
-    node: &str,
-    files: &str,
-    shots: &[String],
-) -> String {
-    let mut embeds = String::new();
-    for shot in shots {
-        embeds.push_str(&format!("\n![[{shot}]]"));
-    }
+/// carries head + paint files, and `why_user: taste` is what lets a
+/// reversible question reach the user at all. The shots ride `--image`, so
+/// the page shows them under its Screens heading.
+fn visual_question_markdown(pr: u64, head: &str, short: &str, node: &str, files: &str) -> String {
     format!(
         "---\n\
          recommend: 1\n\
@@ -805,17 +766,17 @@ fn visual_question_markdown(
          paint surface the config lists ({files}). The user's look is the only clear.\n\n\
          ## Options\n\
          1. Merge as painted. What happens next: the answered page or a role decision \
-         clears the gate and the PR merges{embeds}\n\
+         clears the gate and the PR merges\n\
          2. Hold for changes. What happens next: say what to change; the worker \
          reshoots and the PR re-asks at its new head\n\n\
          ## Why these options\n\
-         Option 1 ships exactly the paint in the embedded shots. Option 2 keeps the \
+         Option 1 ships exactly the paint in the shots under Screens. Option 2 keeps the \
          surface unchanged until you name the change.\n\n\
          ## Recommendation\n\
-         1, because the embedded shots show this head's own paint; the diff is already \
+         1, because the shots show this head's own paint; the diff is already \
          review-green and CI-green.\n\n\
          ## Not thought through\n\
-         Whether the embedded shots cover every surface PR {pr} paints: they are the \
+         Whether the shots cover every surface PR {pr} paints: they are the \
          mux captures named internal/fno/mux/{node}-*.png.\n\n\
          ## Reversible\n\
          yes\n\n\
@@ -824,7 +785,7 @@ fn visual_question_markdown(
     )
 }
 
-/// File the question through the ask verb (journal + index now, the page
+/// File the question through the ask command (journal + index now, the page
 /// itself materialized by the attention arm's next beat). Best-effort: the
 /// returned line appends to the hold detail, never softens the hold. The
 /// intake's dedup (same subject + node already open) refuses before a second
@@ -839,7 +800,7 @@ fn file_visual_question(
     short: &str,
     node: &str,
     files: &str,
-    shots: &[String],
+    shots: &[PathBuf],
 ) -> String {
     if visual_page_filed(root, pr, head) {
         return format!("; the question page for PR {pr} at {short} is already filed");
@@ -848,7 +809,7 @@ fn file_visual_question(
         "fno-visual-ask-{pr}-{short}-{}.md",
         std::process::id()
     ));
-    let markdown = visual_question_markdown(pr, head, short, node, files, shots);
+    let markdown = visual_question_markdown(pr, head, short, node, files);
     if let Err(e) = std::fs::write(&path, markdown) {
         return format!("; the question could not be staged: {e}");
     }
@@ -859,6 +820,11 @@ fn file_visual_question(
         .arg(&path)
         .args(["--node", node])
         .args(["--subject", &subject])
+        .args(
+            shots
+                .iter()
+                .flat_map(|s| [std::ffi::OsStr::new("--image"), s.as_os_str()]),
+        )
         .output();
     match out {
         Ok(o) if o.status.success() => {
@@ -874,7 +840,7 @@ fn file_visual_question(
             };
             format!(
                 "; the question page could not be filed (ask exited {:?}{note}); file it by \
-                 hand: fno inbox outstanding ask --question-file {} --node {node}",
+                 hand: fno inbox outstanding ask --question-file {} --node {node} --image <each shot>",
                 o.status.code(),
                 path.display()
             )
@@ -886,7 +852,7 @@ fn file_visual_question(
 /// Does one changed file match the paint-path list? Two pattern shapes: a
 /// `dir/**` subtree and a bare file name (any directory). `ponytail:` no glob
 /// engine; a mid-pattern `**` or `*` wildcard is added when a config needs it.
-fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
+pub(crate) fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| {
         let p = p.trim();
         if let Some(prefix) = p.strip_suffix("/**") {
@@ -901,24 +867,47 @@ fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
     })
 }
 
-/// True when any ANSWERED question page in this project's questions directory
-/// names the PR: the pages the lead check-in reads, parsed the same way.
-fn answered_question_names_pr(root: &Path, pr: u64) -> bool {
+/// True when an ANSWERED question page in this project's questions directory
+/// names the PR at this exact head and its answer picks the approve option:
+/// the pages the lead check-in reads, parsed the same way. "Hold for
+/// changes" or "none of these" is an answer too, and it must keep the hold.
+/// Head-scoped like the role row: a push after the user looked holds again.
+fn answered_question_names_pr(root: &Path, pr: u64, head: &str) -> bool {
+    !head.is_empty()
+        && approving_pages(root, pr)
+            .iter()
+            .any(|(_, text)| text.contains(head))
+}
+
+/// Every ANSWERED question page that picks the approve option and names the
+/// PR, as `(question id, page text)`, at any head.
+fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
     let dir = crate::escalation::questions_dir(root);
     // Answered pages are archived into done/ after the fact; an approval
     // must not lapse because its page moved there.
-    let mut dirs = vec![dir.clone()];
-    dirs.push(dir.join("done"));
-    dirs.iter().any(|d| {
-        crate::lead_answers::read_question_pages(d).is_ok_and(|pages| {
-            pages.iter().any(|(_stem, text)| {
-                crate::attention_file::parse_page(text)
-                    .map(|(front, _)| front.status == "answered")
-                    .unwrap_or(false)
-                    && page_names_pr(text, pr)
-            })
+    [dir.clone(), dir.join("done")]
+        .iter()
+        .flat_map(|d| crate::lead_answers::read_question_pages(d).unwrap_or_default())
+        .filter_map(|(_stem, text)| {
+            let (front, _) = crate::attention_file::parse_page(&text)?;
+            (front.status == "answered"
+                && front.answer.as_deref().is_some_and(answer_approves)
+                && page_names_pr(&text, pr))
+            .then_some((front.question_id, text))
         })
-    })
+        .collect()
+}
+
+/// Does a recorded answer pick the approve option? A numbered answer
+/// approves only as option 1 (the filed page's "Merge as painted"). A bare
+/// answer approves when it opens with an approve word. Anything else holds.
+fn answer_approves(answer: &str) -> bool {
+    let a = answer.trim().to_ascii_lowercase();
+    let digits: String = a.chars().take_while(char::is_ascii_digit).collect();
+    if !digits.is_empty() {
+        return digits == "1";
+    }
+    ["merge", "approve", "yes"].iter().any(|w| a.starts_with(w))
 }
 
 /// The page text names the PR: a word-start `pr` (any case), an optional
@@ -982,24 +971,48 @@ fn row_is_chat_attested(row: &Value) -> bool {
         .is_some_and(|r| r.to_lowercase().contains("user in chat"))
 }
 
-/// True when a live role decision row transcribes the user's chat approval
-/// of this PR at this head: authority `role` (the decide door scopes who may
-/// mint one), a chat-attested rationale, and text naming both the PR and the
-/// exact head sha the user looked at. Head-scoped like the operator head
-/// grant: a push invalidates the approval. An unreadable index never clears.
-fn role_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
+/// The rationale cites one of these question ids as a whole token. The
+/// user answered that page on the board, so the board is the channel and
+/// the lead need not write a chat attestation that would be false.
+fn row_cites_any(row: &Value, ids: &[String]) -> bool {
+    let Some(r) = row.get("rationale").and_then(Value::as_str) else {
+        return false;
+    };
+    let tokens: Vec<&str> = r
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .collect();
+    ids.iter().any(|id| tokens.contains(&id.as_str()))
+}
+
+/// True when a live role decision row transcribes the user's approval of
+/// this PR at this head: authority `role`, the PR's bound node as subject
+/// (the decide door lets only the lead whose territory covers that node mint
+/// it), a rationale that attests the user's chat words or cites an answered
+/// question page that approves this PR, and text naming both the PR and the
+/// exact head sha the lead re-pinned. Head-scoped like the operator head grant: a
+/// push invalidates the approval. An unreadable index never clears.
+pub(crate) fn role_chat_clears_pr<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    pr: u64,
+    head: &str,
+    node: &str,
+) -> bool {
     if head.is_empty() {
         return false;
     }
+    // Subject-scoped and uncapped: a capped newest-first read of the whole
+    // lane loses an approval once enough other rows land after it.
     let args: Vec<String> = [
         "backlog",
         "decisions",
+        node,
         "--lane",
         "unattributed",
         "--state",
         "all",
         "--limit",
-        "200",
+        "0",
         "--json",
     ]
     .iter()
@@ -1011,17 +1024,23 @@ fn role_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -
     let Ok(payload) = serde_json::from_slice::<Value>(&out) else {
         return false;
     };
+    let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)
+        .into_iter()
+        .map(|(id, _)| id)
+        .filter(|id| !id.is_empty())
+        .collect();
     payload
         .get("decisions")
         .and_then(Value::as_array)
         .is_some_and(|rows| {
             rows.iter().any(|row| {
                 row.get("authority_source").and_then(Value::as_str) == Some("role")
+                    && row.get("subject").and_then(Value::as_str) == Some(node)
                     && matches!(
                         row.get("lifecycle").and_then(Value::as_str),
                         Some("live") | Some("unscoped")
                     )
-                    && row_is_chat_attested(row)
+                    && (row_is_chat_attested(row) || row_cites_any(row, &approved))
                     && {
                         let text = row_text(row);
                         text.contains(head) && page_names_pr(&text, pr)

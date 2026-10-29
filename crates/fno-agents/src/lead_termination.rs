@@ -107,6 +107,12 @@ pub(crate) fn stand_down_gate(
     transcript: &Path,
     cwd: &Path,
 ) -> Option<StandDownGate> {
+    // Same spent-line refusal the board takes: past the reserve line the
+    // transcript scan would spend the drain's slice, and the gate already
+    // fails open (None) on anything it cannot measure.
+    if crate::loopcheck::stopgate_pre_drain_spent() {
+        return None;
+    }
     let session = manifest
         .harness_session_id
         .as_deref()
@@ -144,6 +150,10 @@ pub(crate) struct OrgBoard {
     pub(crate) unreadable_sources: bool,
     pub(crate) actionable_ids: Vec<String>,
     pub(crate) spawn_held_ids: Vec<String>,
+    /// Unplanned rows the lifecycle table routes to `/blueprint`: a plan
+    /// must be written before a worker can take them. They hold the stop
+    /// open only through the gate refusal or the blueprint ceiling.
+    pub(crate) blueprint_held_ids: Vec<String>,
     pub(crate) blind_queues: Vec<String>,
     pub(crate) operator_question_sessions: Vec<String>,
     pub(crate) operator_questions_unreadable: bool,
@@ -171,11 +181,41 @@ fn row_identity(queue: &str, row: &Value) -> String {
     format!("{queue}:{}", id.trim_matches('"'))
 }
 
+/// Whether the lifecycle table sends one planless unplanned row to
+/// `/target`. An unanswerable row returns false, so it keeps the block
+/// pointed at it: a row this read cannot classify is never counted as held.
+fn unplanned_routes_to_target(row: &Value, floor: &str) -> bool {
+    matches!(
+        crate::backlog_ready::effective_command_with_floor(row, floor),
+        Ok((Some(command), _)) if command == "/target"
+    )
+}
+
+/// Whether the lifecycle table sends one planless unplanned row to
+/// `/blueprint` (a plan must be written before any worker can take it).
+/// An unanswerable row returns false, so it keeps the block pointed at it:
+/// a row this read cannot classify is never counted as held.
+fn unplanned_routes_to_blueprint(row: &Value, floor: &str) -> bool {
+    matches!(
+        crate::backlog_ready::effective_command_with_floor(row, floor),
+        Ok((Some(command), _)) if command == "/blueprint"
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn parse_org_board_value(value: &Value) -> Option<OrgBoard> {
+    parse_org_board_value_with_floor(value, crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR)
+}
+
+/// [`parse_org_board_value`] under the operator's `dispatch.blueprint_floor`.
+/// The floor decides which unplanned rows the lifecycle table sends to
+/// `/target`, and a `/target` row waits on spawn capacity like any other.
+pub(crate) fn parse_org_board_value_with_floor(value: &Value, floor: &str) -> Option<OrgBoard> {
     let actionable = value.get("actionable")?.as_i64()?;
     let mut top_row = None;
     let mut actionable_ids: Vec<String> = Vec::new();
     let mut spawn_held_ids: Vec<String> = Vec::new();
+    let mut blueprint_held_ids: Vec<String> = Vec::new();
     let mut blind_queues: Vec<String> = Vec::new();
     let mut operator_question_sessions: Vec<String> = Vec::new();
     let mut operator_questions_unreadable = false;
@@ -229,8 +269,20 @@ pub(crate) fn parse_org_board_value(value: &Value) -> Option<OrgBoard> {
                 if top_row.is_none() {
                     top_row = Some(identity.clone());
                 }
-                if spawn_held {
+                // The unplanned queue is labelled /fno:blueprint as a whole, but
+                // the lifecycle table sends each planless row by its own
+                // difficulty. A row it sends to /target waits on spawn capacity;
+                // a row it sends to /blueprint holds the stop open only through
+                // the gate refusal or the blueprint ceiling.
+                let routes_to_target =
+                    name == "unplanned" && unplanned_routes_to_target(row, floor);
+                let routes_to_blueprint =
+                    name == "unplanned" && unplanned_routes_to_blueprint(row, floor);
+                if spawn_held || routes_to_target {
                     spawn_held_ids.push(identity.clone());
+                }
+                if routes_to_blueprint {
+                    blueprint_held_ids.push(identity.clone());
                 }
                 actionable_ids.push(identity);
             }
@@ -242,6 +294,7 @@ pub(crate) fn parse_org_board_value(value: &Value) -> Option<OrgBoard> {
         unreadable_sources,
         actionable_ids,
         spawn_held_ids,
+        blueprint_held_ids,
         blind_queues,
         operator_question_sessions,
         operator_questions_unreadable,
@@ -331,6 +384,7 @@ pub(crate) fn read_org_board(
     fno_bin: &str,
     cwd: &Path,
     state_path: &Path,
+    registry: Option<&crate::state::Registry>,
 ) -> Result<OrgBoard, String> {
     let _ = fno_bin;
     // Past the reserve line the board refuses instead of reading at the 1ms
@@ -344,9 +398,13 @@ pub(crate) fn read_org_board(
         max_pr_reads: crate::org_board::DEFAULT_MAX_PR_READS,
         state_path: Some(state_path.to_path_buf()),
         cwd: Some(cwd.to_path_buf()),
+        registry: registry.cloned(),
     };
     let payload = crate::org_board::read_board(&opts);
-    parse_org_board_value(&payload).ok_or_else(|| {
+    let floor = crate::agents_config::config_lookup(cwd, &["dispatch", "blueprint_floor"])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+    parse_org_board_value_with_floor(&payload, &floor).ok_or_else(|| {
         "unparseable board payload: the collector returned a shape parse_org_board_value cannot read"
             .to_string()
     })
@@ -425,20 +483,25 @@ pub(crate) fn probe_dispatch_capacity(fno_bin: &str, cwd: &Path) -> Result<GateP
     parse_gate_probe(&payload).ok_or_else(|| "spawn gate status payload unparseable".to_string())
 }
 
-/// The saturation decision for one board fire: a refused gate blocks rows
-/// from queues with `/fno:target` (currently `undispatched`, `unheld_progress`,
-/// and `undriven_pr`). A readable non-spawn row keeps the block pointed at it.
-/// `probe: None` (not asked, or asked and failed) and an accepted probe return
-/// `None` - a broken probe must never convert a block into an allow.
+/// The saturation decision for one board fire. Two independent legs hold
+/// rows: a refused gate holds the spawn-routed rows, and the blueprint
+/// ceiling holds the board-order tail of blueprint-routed rows past the
+/// check-in's `open` count regardless of the gate. A refused gate never
+/// holds a blueprint-routed row: a blueprint runs through the session's own
+/// subagent surface, spends no spawn share, and starts fine at a full seat
+/// count. A readable non-dispatch row keeps the block pointed at it.
+/// `probe: None` (not asked, or asked and failed) only disables the refusal
+/// leg; a broken probe must never convert a block into an allow. A `None`
+/// blueprint reading keeps the ceiling leg inert for the same reason: an
+/// unmeasured ceiling never reads as waiting.
 #[derive(Debug)]
 pub(crate) enum SaturationOutcome {
-    /// Every readable actionable row uses `/fno:target` and needs dispatch
-    /// capacity. Current kinds are `undispatched`, `unheld_progress`, and
-    /// `undriven_pr`.
+    /// Every readable actionable row waits: on dispatch capacity (a refused
+    /// gate), on the blueprint ceiling, or on both.
     Saturated { blocked: i64 },
-    /// Every readable row needs dispatch, and at least one queue was not read.
+    /// Every readable row waits, and at least one queue was not read.
     SaturatedBlind { blocked: i64 },
-    /// Capacity-blocked rows exist but a non-dispatch row is still actionable,
+    /// Waiting rows exist but a non-dispatch row is still actionable,
     /// so the block survives - pointed at that row instead.
     BlockedWithNext { next: String, blocked: i64 },
 }
@@ -446,19 +509,24 @@ pub(crate) enum SaturationOutcome {
 pub(crate) fn saturation_verdict(
     board: &OrgBoard,
     probe: Option<&GateProbe>,
+    blueprint: Option<&crate::lead_checkin_blueprint::BlueprintWait>,
 ) -> Option<SaturationOutcome> {
-    let parsed = probe?;
-    if parsed.verdict != "refused" {
+    let refused = probe.is_some_and(|p| p.verdict == "refused");
+    let mut waiting: Vec<String> = Vec::new();
+    if refused {
+        waiting.extend(board.spawn_held_ids.iter().cloned());
+    }
+    if let Some(bp) = blueprint {
+        // Board-order tail past `open`: the mirror of the check-in's
+        // take(open)/skip(open), so the stop check and the beat always
+        // name the same rows as startable.
+        waiting.extend(board.blueprint_held_ids.iter().skip(bp.open).cloned());
+    }
+    if waiting.is_empty() {
         return None;
     }
-    let blocked = board.spawn_held_ids.len() as i64;
-    if blocked == 0 {
-        return None;
-    }
-    let next = board
-        .actionable_ids
-        .iter()
-        .find(|id| !board.spawn_held_ids.contains(id));
+    let blocked = waiting.len() as i64;
+    let next = board.actionable_ids.iter().find(|id| !waiting.contains(id));
     if let Some(next) = next {
         return Some(SaturationOutcome::BlockedWithNext {
             next: next.clone(),
@@ -474,16 +542,17 @@ pub(crate) fn saturation_verdict(
 /// What the capacity gate decided for this fire, rendered and ready for the
 /// caller's two verdicts. Composition of the probe read, the pure
 /// saturation verdict, and the two messages the lead block carries.
+#[derive(Debug)]
 pub(crate) enum CapacityGate {
-    /// Every readable actionable row uses `/fno:target` (`undispatched`,
-    /// `unheld_progress`, or `undriven_pr`) and the gate refuses. With no blind
-    /// queues, the caller may terminate NoWork with this message.
+    /// Every readable actionable row waits and the caller may terminate
+    /// NoWork: on a refused gate (the `/fno:target` queues plus the
+    /// `/blueprint`-routed unplanned rows) or on a full blueprint ceiling.
     Saturated {
         message: String,
         blocked: i64,
         fires: u64,
     },
-    /// Every readable row waits on dispatch while at least one queue is blind.
+    /// Every readable row waits while at least one queue was not read.
     SaturatedBlind { message: String, actionable: i64 },
     /// Keep the block, pointed at a non-dispatch row, with the honest split.
     Split {
@@ -494,6 +563,22 @@ pub(crate) enum CapacityGate {
     },
 }
 
+/// The one-clause statement of a blueprint ceiling: what runs, what the
+/// count is, and who clears it. The stop check's naming of the running
+/// blueprint.
+fn blueprint_ceiling_clause(bp: &crate::lead_checkin_blueprint::BlueprintWait) -> String {
+    let names = if bp.running.is_empty() {
+        "none running".to_string()
+    } else {
+        bp.running.join(", ")
+    };
+    format!(
+        "blueprint ceiling {running} of {ceiling}: {names}; owner: the running blueprint finishing",
+        running = bp.running_count,
+        ceiling = bp.ceiling,
+    )
+}
+
 pub(crate) fn capacity_gate(
     board: &OrgBoard,
     fno_bin: &str,
@@ -501,6 +586,7 @@ pub(crate) fn capacity_gate(
     session_id: &str,
     dry: u64,
     _emit: &dyn Fn(&str, Value),
+    blueprint: Option<&crate::lead_checkin_blueprint::BlueprintWait>,
 ) -> Option<CapacityGate> {
     let probe = if board.spawn_held_ids.is_empty() {
         None
@@ -511,16 +597,62 @@ pub(crate) fn capacity_gate(
             Err(_) => None,
         }
     };
-    let verdict = saturation_verdict(board, probe.as_ref())?;
-    let probe = probe.as_ref()?;
-    let constraint = probe.constraint();
-    let owner = probe.owner();
+    let refused = probe.as_ref().is_some_and(|p| p.verdict == "refused");
+    let verdict = saturation_verdict(board, probe.as_ref(), blueprint)?;
+    // The two waiting sides, counted separately so the message names what
+    // each side waits on. The ceiling side needs no probe; the capacity side
+    // exists only on a refusal.
+    let capacity_waiting = if refused {
+        board.spawn_held_ids.len() as i64
+    } else {
+        0
+    };
+    let ceiling_waiting = blueprint
+        .map(|bp| board.blueprint_held_ids.len().saturating_sub(bp.open) as i64)
+        .unwrap_or(0);
+    let probe = probe.as_ref();
+    let constraint = probe.map(|p| p.constraint()).unwrap_or_default();
+    let owner = probe.map(|p| p.owner()).unwrap_or_default();
+    let ceiling_hold = blueprint
+        .map(|bp| format!("waiting on the {}", blueprint_ceiling_clause(bp)))
+        .unwrap_or_default();
+    let capacity_only = ceiling_waiting == 0 && capacity_waiting > 0;
+    let ceiling_only = capacity_waiting == 0 && ceiling_waiting > 0;
+    // Single-leg holds keep the legacy count-less shape; the mixed hold
+    // names each side's count, so its message prefixes a colon instead of a
+    // bare count that would read as a double count.
+    let (hold, mixed) = if capacity_only {
+        (
+            format!("waiting on dispatch capacity ({constraint}; owner: {owner})"),
+            false,
+        )
+    } else if ceiling_only {
+        (ceiling_hold.clone(), false)
+    } else {
+        (
+            format!(
+                "{capacity_waiting} waiting on dispatch capacity ({constraint}; owner: {owner}) and \
+                 {ceiling_waiting} {ceiling_hold}"
+            ),
+            true,
+        )
+    };
     match verdict {
         SaturationOutcome::Saturated { blocked } => {
-            let message = format!(
-                "fleet saturated: {constraint}; \
-                 {blocked} actionable rows all blocked on dispatch capacity; owner: {owner}"
-            );
+            let message = if ceiling_waiting == 0 {
+                format!(
+                    "fleet saturated: {constraint}; \
+                     {blocked} actionable rows all blocked on dispatch capacity; owner: {owner}"
+                )
+            } else if capacity_waiting == 0 {
+                format!("{blocked} actionable rows all {ceiling_hold}")
+            } else {
+                format!(
+                    "fleet saturated: {constraint}; \
+                     {capacity_waiting} actionable rows blocked on dispatch capacity \
+                     (owner: {owner}) and {ceiling_waiting} {ceiling_hold}"
+                )
+            };
             Some(CapacityGate::Saturated {
                 message,
                 blocked,
@@ -529,10 +661,13 @@ pub(crate) fn capacity_gate(
         }
         SaturationOutcome::SaturatedBlind { blocked } => {
             let blind = board.blind_queues.join(", ");
+            let prefix = if mixed {
+                format!("{blocked} rows:")
+            } else {
+                format!("{blocked} rows")
+            };
             Some(CapacityGate::SaturatedBlind {
-                message: format!(
-                    "{blocked} rows waiting on dispatch capacity ({constraint}; owner: {owner}); not read: {blind}"
-                ),
+                message: format!("{prefix} {hold}; not read: {blind}"),
                 actionable: board.actionable,
             })
         }
@@ -542,9 +677,13 @@ pub(crate) fn capacity_gate(
             } else {
                 format!("; not read: {}", board.blind_queues.join(", "))
             };
+            let prefix = if mixed {
+                format!("{blocked} rows:")
+            } else {
+                format!("{blocked}")
+            };
             let message = format!(
-                "{} actionable now; next: {next}; \
-                 {blocked} waiting on dispatch capacity ({constraint}; owner: {owner}){blind}",
+                "{} actionable now; next: {next}; {prefix} {hold}{blind}",
                 board.actionable - blocked,
             );
             let journal = serde_json::json!({
@@ -554,6 +693,9 @@ pub(crate) fn capacity_gate(
                 "blocked_on_capacity": blocked,
                 "waiting_owner": owner,
                 "actionable_ids": board.actionable_ids,
+                "blueprint_ceiling": blueprint.map(|bp| {
+                    serde_json::json!({"running": bp.running_count, "ceiling": bp.ceiling})
+                }),
                 "cleared": false,
             });
             Some(CapacityGate::Split {
@@ -711,7 +853,7 @@ mod tests {
         ])))
         .unwrap();
         let verdict =
-            saturation_verdict(&board, Some(&refused_probe())).expect("blocked with next");
+            saturation_verdict(&board, Some(&refused_probe()), None).expect("blocked with next");
         match verdict {
             SaturationOutcome::BlockedWithNext { next, blocked } => {
                 assert_eq!(next, "unplanned:x-3");
@@ -737,8 +879,16 @@ mod tests {
         let fno = gate_status_stub(tmp.path());
         let emit = |_: &str, _: Value| {};
 
-        let gate = capacity_gate(&board, fno.to_str().unwrap(), tmp.path(), "lead", 0, &emit)
-            .expect("a refused probe must classify the spawn-held queues");
+        let gate = capacity_gate(
+            &board,
+            fno.to_str().unwrap(),
+            tmp.path(),
+            "lead",
+            0,
+            &emit,
+            None,
+        )
+        .expect("a refused probe must classify the spawn-held queues");
         match gate {
             CapacityGate::Saturated {
                 blocked, message, ..
@@ -748,6 +898,300 @@ mod tests {
             }
             _ => panic!("expected all spawn-held rows to be saturated"),
         }
+    }
+
+    #[test]
+    fn a_refused_probe_with_only_unplanned_low_rows_ends_the_lead_saturated() {
+        // The lifecycle table sends a planless low or medium node to /target,
+        // so a refused gate holds it exactly like undispatched work.
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 2,
+                "queues": [
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [ // verb-wording: allow
+                        {"id": "x-1", "difficulty": "low"},
+                        {"id": "x-2", "difficulty": "medium"},
+                    ]},
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let fno = gate_status_stub(tmp.path());
+        let emit = |_: &str, _: Value| {};
+
+        let gate = capacity_gate(
+            &board,
+            fno.to_str().unwrap(),
+            tmp.path(),
+            "lead",
+            0,
+            &emit,
+            None,
+        )
+        .expect("a refused probe must hold unplanned low rows");
+        match gate {
+            CapacityGate::Saturated { blocked, .. } => assert_eq!(blocked, 2),
+            _ => panic!("expected unplanned low rows to saturate, not block on a blueprint"),
+        }
+    }
+
+    #[test]
+    fn a_refused_gate_with_a_full_ceiling_names_both_holds() {
+        // Both legs at once: the gate holds the undispatched row, the full
+        // ceiling holds every blueprint row, and the saturated message names
+        // each side and the running blueprint.
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 3,
+                "queues": [
+                    {"name": "undispatched", "status": "ok", "actionable": true,
+                     "verb": "/fno:target", "rows": [{"id": "x-1"}]}, // verb-wording: allow
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [
+                        {"id": "x-2", "difficulty": "high"},
+                        {"id": "x-3", "difficulty": "high"},
+                    ]}, // verb-wording: allow
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        let bp = crate::lead_checkin_blueprint::BlueprintWait {
+            running: vec!["x-999".to_string()],
+            running_count: 1,
+            ceiling: 1,
+            open: 0,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let fno = gate_status_stub(tmp.path());
+        let emit = |_: &str, _: Value| {};
+        let gate = capacity_gate(
+            &board,
+            fno.to_str().unwrap(),
+            tmp.path(),
+            "lead",
+            0,
+            &emit,
+            Some(&bp),
+        )
+        .expect("both holds must saturate");
+        match gate {
+            CapacityGate::Saturated {
+                blocked, message, ..
+            } => {
+                assert_eq!(blocked, 3);
+                assert!(
+                    message.contains("dispatch capacity"),
+                    "the capacity side must be named: {message}"
+                );
+                assert!(
+                    message.contains("blueprint ceiling 1 of 1") && message.contains("x-999"),
+                    "the ceiling side and its running blueprint must be named: {message}"
+                );
+            }
+            other => panic!("expected Saturated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_open_gate_with_an_open_ceiling_keeps_the_blueprint_row_actionable() {
+        // AC1-EDGE / AC2-EDGE: no refusal and no readable ceiling keeps
+        // today's healthy block pointed at the blueprint row; an unmeasured
+        // ceiling never converts actionable into waiting.
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 1,
+                "queues": [
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [{"id": "x-2", "difficulty": "high"}]}, // verb-wording: allow
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        assert!(saturation_verdict(&board, None, None).is_none());
+        assert!(saturation_verdict(&board, Some(&accepted_probe()), None).is_none());
+    }
+
+    #[test]
+    fn a_ceiling_full_reading_holds_the_board_order_tail() {
+        // AC2-HP tail form: ceiling 1, none running, open 1 - the first
+        // blueprint row in board order stays startable, the tail waits, and
+        // the message names the ceiling.
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 2,
+                "queues": [
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [
+                        {"id": "x-2", "difficulty": "high"},
+                        {"id": "x-3", "difficulty": "high"},
+                    ]}, // verb-wording: allow
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        let bp = crate::lead_checkin_blueprint::BlueprintWait {
+            running: vec![],
+            running_count: 0,
+            ceiling: 1,
+            open: 1,
+        };
+        let verdict = saturation_verdict(&board, Some(&accepted_probe()), Some(&bp))
+            .expect("the tail past open must wait");
+        match verdict {
+            SaturationOutcome::BlockedWithNext { next, blocked } => {
+                assert_eq!(next, "unplanned:x-2");
+                assert_eq!(blocked, 1);
+            }
+            other => panic!("expected BlockedWithNext, got {other:?}"),
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let fno = accepted_probe_stub(tmp.path());
+        let emit = |_: &str, _: Value| {};
+        let gate = capacity_gate(
+            &board,
+            fno.to_str().unwrap(),
+            tmp.path(),
+            "lead",
+            0,
+            &emit,
+            Some(&bp),
+        )
+        .expect("the ceiling split must render");
+        match gate {
+            CapacityGate::Split { message, .. } => {
+                assert!(
+                    message.contains("blueprint ceiling 0 of 1"),
+                    "the ceiling must be named: {message}"
+                );
+                assert!(message.contains("next: unplanned:x-2"), "{message}");
+            }
+            other => panic!("expected Split, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_ceiling_full_reading_saturates_and_names_the_running_blueprint() {
+        // AC2-HP saturated form: open 0 holds every blueprint row, and the
+        // message names the running blueprint by node id.
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 2,
+                "queues": [
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [
+                        {"id": "x-2", "difficulty": "high"},
+                        {"id": "x-3", "difficulty": "high"},
+                    ]}, // verb-wording: allow
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        let bp = crate::lead_checkin_blueprint::BlueprintWait {
+            running: vec!["x-999".to_string()],
+            running_count: 1,
+            ceiling: 1,
+            open: 0,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let fno = accepted_probe_stub(tmp.path());
+        let emit = |_: &str, _: Value| {};
+        let gate = capacity_gate(
+            &board,
+            fno.to_str().unwrap(),
+            tmp.path(),
+            "lead",
+            0,
+            &emit,
+            Some(&bp),
+        )
+        .expect("a full ceiling must saturate");
+        match gate {
+            CapacityGate::Saturated {
+                blocked, message, ..
+            } => {
+                assert_eq!(blocked, 2);
+                assert!(
+                    message.contains("blueprint ceiling 1 of 1") && message.contains("x-999"),
+                    "the running blueprint must be named: {message}"
+                );
+            }
+            other => panic!("expected Saturated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_refused_split_holds_only_spawn_rows_and_points_at_the_blueprint_row() {
+        // The refusal leg holds spawn-routed rows only. A blueprint runs
+        // through the session's own subagent surface, spends no spawn share,
+        // and starts fine at a full seat count: a blueprint-only board with
+        // an open ceiling never saturates on a worker-capacity refusal, and
+        // a mixed board keeps the blueprint row as the actionable next row
+        // the block points at.
+        let blueprint_only = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 2,
+                "queues": [
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [
+                        {"id": "x-1", "difficulty": "high"},
+                        {"id": "x-2", "difficulty": "high"},
+                    ]}, // verb-wording: allow
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        assert!(saturation_verdict(&blueprint_only, Some(&refused_probe()), None).is_none());
+        let board = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 3,
+                "queues": [
+                    {"name": "undispatched", "status": "ok", "actionable": true,
+                     "verb": "/fno:target", "rows": [{"id": "x-1"}]}, // verb-wording: allow
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [{"id": "x-2", "difficulty": "high"}]}, // verb-wording: allow
+                    {"name": "mergeable_pr", "status": "ok", "actionable": true,
+                     "count": 1, "rows": [{"number": 1702}]},
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        let verdict =
+            saturation_verdict(&board, Some(&refused_probe()), None).expect("blocked with next");
+        match verdict {
+            SaturationOutcome::BlockedWithNext { next, blocked } => {
+                assert_eq!(next, "unplanned:x-2");
+                assert_eq!(blocked, 1);
+            }
+            other => panic!("expected BlockedWithNext, got {other:?}"),
+        }
+    }
+
+    fn accepted_probe() -> GateProbe {
+        GateProbe {
+            verdict: "accepted".to_string(),
+            reason: None,
+            message: None,
+        }
+    }
+
+    fn accepted_probe_stub(dir: &Path) -> PathBuf {
+        let payload = json!({
+            "verdict": "accepted",
+        });
+        crate::write_exec_stub(
+            dir,
+            "fno",
+            &format!("#!/bin/sh\nprintf '%s\\n' '{payload}'\n"),
+        )
     }
 
     #[test]
@@ -764,7 +1208,8 @@ mod tests {
             ],
         }))
         .unwrap();
-        let verdict = saturation_verdict(&board, Some(&refused_probe())).expect("saturated blind");
+        let verdict =
+            saturation_verdict(&board, Some(&refused_probe()), None).expect("saturated blind");
         match verdict {
             SaturationOutcome::SaturatedBlind { blocked } => assert_eq!(blocked, 2),
             _ => panic!("expected a blind saturation verdict"),
@@ -772,8 +1217,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let fno = gate_status_stub(tmp.path());
         let emit = |_: &str, _: Value| {};
-        let gate = capacity_gate(&board, fno.to_str().unwrap(), tmp.path(), "lead", 0, &emit)
-            .expect("the blind saturation remains a gate result");
+        let gate = capacity_gate(
+            &board,
+            fno.to_str().unwrap(),
+            tmp.path(),
+            "lead",
+            0,
+            &emit,
+            None,
+        )
+        .expect("the blind saturation remains a gate result");
         match gate {
             CapacityGate::SaturatedBlind {
                 message,
@@ -808,7 +1261,7 @@ mod tests {
     #[test]
     fn a_broken_probe_never_allows_the_stop() {
         let board = board_undispatched_only();
-        assert!(saturation_verdict(&board, None).is_none());
+        assert!(saturation_verdict(&board, None, None).is_none());
     }
 
     #[test]

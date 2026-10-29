@@ -1,7 +1,7 @@
 """Plan fidelity as a gate decision.
 
-The fold (`fno.scoreboard.fold.build_plan_fidelity`) computes the planned-to-
-delivered join for TELEMETRY: an unjoined plan is unmeasurable, never 0%. That
+The fold (``fno whoami scoreboard --plan-fidelity`` shares the native join)
+computes the planned-to-delivered join for TELEMETRY: an unjoined plan is unmeasurable, never 0%. That
 is exactly wrong for a gate, where an unjoined planned row means a declared
 deliverable never shipped. The inversion is ONE parameter on the same join
 (``unmeasurable='refuse'``), not a second implementation - so the scoreboard and
@@ -19,6 +19,51 @@ from pathlib import Path
 from typing import Any, Optional
 
 __all__ = ["fidelity_refusal", "compute_plan_fidelity"]
+
+
+def _plan_key(plan_path, project=None) -> str | None:
+    """Normalize a plan_path for join, scoped to a `project`. Uses the last two
+    path segments (parent dir + file) rather than the bare basename, so a
+    recurring folder-plan filename (`00-INDEX.md`) does not collapse unrelated
+    plans in the GLOBAL ledger; the `project` prefix scopes across repos. Still
+    prefix-independent, so the planning row and its shipped row match regardless
+    of the worktree each was stamped under."""
+    if not isinstance(plan_path, str) or not plan_path:
+        return None
+    p = Path(plan_path.split("#", 1)[0])
+    tail = f"{p.parent.name}/{p.name}" if p.parent.name else p.name
+    if not tail or tail == "/":
+        return None
+    return f"{project or ''}::{tail}"
+
+
+def _load_ledger_rows(path):
+    """The gate's client-side ledger read, feeding the native keeper op.
+
+    Mirrors the tolerant native reader (`crates/fno-agents/src/scoreboard/
+    readers.rs load_ledger_rows`, the one owner): missing file reads empty,
+    a parse error retries once (the writer holds the flock for milliseconds),
+    rows unwrap from the `entries` key, non-object rows drop. Any failure
+    reads empty: no planned rows is the gate's nothing-to-measure."""
+    import json
+
+    for attempt in range(2):
+        try:
+            with open(path, encoding="utf-8") as f:
+                value = json.load(f)
+        except (OSError, ValueError):
+            if attempt == 0:
+                import time
+
+                time.sleep(0.1)
+                continue
+            return []
+        if isinstance(value, dict):
+            value = value.get("entries")
+        if not isinstance(value, list):
+            return []
+        return [row for row in value if isinstance(row, dict)]
+    return []
 
 
 def fidelity_refusal(
@@ -76,7 +121,7 @@ def compute_plan_fidelity(
     from datetime import datetime
 
     from fno import paths as _paths
-    from fno.scoreboard.fold import _plan_key, build_plan_fidelity, load_ledger_rows
+    from fno.graph.store import request_scoreboard_plan_fidelity
 
     now = now or datetime.now()
 
@@ -87,7 +132,7 @@ def compute_plan_fidelity(
         )
 
     try:
-        rows = load_ledger_rows(_paths.ledger_json())
+        rows = _load_ledger_rows(_paths.ledger_json())
     except Exception:  # noqa: BLE001 - a missing ledger is no planned rows, not a crash
         rows = []
     graph_nodes = _load_graph_nodes()
@@ -116,7 +161,7 @@ def compute_plan_fidelity(
     # Any declared value but `allowed` is forbidden, so a typo fails closed.
     forbidden = fm.get("carveouts") is not None and str(fm["carveouts"]).strip().lower() != "allowed"
     node_id = fm.get("node") or fm.get("claims")
-    pf = build_plan_fidelity(
+    pf = request_scoreboard_plan_fidelity(
         rows, graph_nodes, since_days=since_days, now=now, unmeasurable="refuse"
     )
     if pf.get("state") != "ok":
@@ -217,18 +262,36 @@ def _plan_frontmatter(plan_file: Path) -> dict:
 
 def _read_pr_body(pr_number: int, repo_root: Optional[str]) -> Optional[str]:
     """REST read, never `gh pr view` (the GraphQL reserve refuses it)."""
+    import json
+
     from fno import paths as _paths
-    from fno.pr._proc import run
+    from fno.graph._reconcile import resolve_current_repo_slug
+    from fno.rust_binary import call_binary_json
 
     try:
         cwd = repo_root or str(_paths.resolve_repo_root())
-        res = run(
-            ["gh", "api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}", "--jq", ".body"],
-            cwd=cwd, timeout=30,
+        slug = resolve_current_repo_slug(cwd) or ""
+        error, row = call_binary_json(
+            "authorized-merge",
+            [
+                json.dumps(
+                    {
+                        "op": "status-rest-get",
+                        "cwd": cwd,
+                        "path": f"repos/{slug}/pulls/{pr_number}",
+                    }
+                )
+            ],
+            timeout=60,
         )
     except Exception:  # noqa: BLE001 - any read failure is unreadable
         return None
-    return res.stdout if res.ok else None
+    if error is not None or not isinstance(row, dict) or not row.get("ok"):
+        return None
+    try:
+        return (json.loads(row.get("stdout") or "")).get("body")
+    except ValueError:
+        return None
 
 
 def _body_carveout_refusal(pr_body: str) -> Optional[str]:
@@ -237,7 +300,10 @@ def _body_carveout_refusal(pr_body: str) -> Optional[str]:
 
     from fno import paths as _paths
 
-    script = _paths.resolve_plugin_script("scripts/ci/check-oos-tracked.sh")
+    rel = "scripts/ci/check-oos-tracked.sh"
+    script = _paths.resolve_plugin_script(rel)
+    if not script.is_file():
+        script = _paths.installed_plugin_script(rel) or script
     try:
         proc = subprocess.run(
             ["bash", str(script)],

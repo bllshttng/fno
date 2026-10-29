@@ -1,4 +1,4 @@
-"""The machine-lane channel shim: one ``verb_call("fleet-task", ...)``.
+"""The machine-lane channel shim: one ``command_call("fleet-task", ...)``.
 
 The reconcile fold for the machine writers (heal, pr-nudge, the watchdog
 lanes) lives in ``crates/fno-agents/src/fleet_task.rs``; Python sends one
@@ -66,14 +66,41 @@ def already_asked(root: Path, key: str, *, marker: str = MARKER) -> "str | None"
 
     One shared dedupe fold for every durable question emitter: a marker key
     asked once stays asked, and a second emitter with its own marker reuses
-    this fold rather than growing a second copy of it.
+    this fold rather than growing a second copy of it. The open-question read
+    is the native listing (`fno-agents compaction outstanding --json`), the
+    same fold the mux needs-me queue serves; a listing that cannot run reads
+    as un-asked, and the ask door's own dedup refusal catches the duplicate.
     """
-    from fno.outstanding.core import read_open_questions
+    _ = root  # The question store is machine-wide; the listing folds it whole.
+    import json
+    import subprocess
 
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), "compaction", "outstanding", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        payload = json.loads(proc.stdout)
+    except ValueError:
+        return None
     needle = f"[{marker}:{key}]"
-    for question in read_open_questions(root):
-        if needle in question.question:
-            return question.id
+    for question in payload.get("questions") or ():
+        qid = question.get("id")
+        if qid and needle in (question.get("question") or ""):
+            return qid
     return None
 
 
@@ -86,11 +113,11 @@ def reconcile_channel(
     Rust fleet-task door: same key is a duplicate, a changed set supersedes,
     an empty set closes. ``question``/``ask`` are callables taking the
     dedupe ``key``; outcome in ``none | duplicate | asked | closed``. A
-    failed transport raises the ``verb_call`` refusal and writes nothing."""
-    from fno.rust_binary import verb_call
+    failed transport raises the ``command_call`` refusal and writes nothing."""
+    from fno.rust_binary import command_call
 
     key = dedupe_key(identities)
-    answer = verb_call(
+    answer = command_call(
         "fleet-task",
         {
             "op": "reconcile",

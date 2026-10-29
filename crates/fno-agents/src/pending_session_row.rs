@@ -9,7 +9,7 @@
 //! typed `RegistryEntry` is the writer that must not silently drop the
 //! field (the `node`/`substrate` lesson). Transport-only, like
 //! `launch-workdir`: registers no client action (the shrink law allows
-//! none); Python reaches it through `verb_call`. One JSON payload in on
+//! none); Python reaches it through `command_call`. One JSON payload in on
 //! stdin, one JSON answer out - the route-slot transport shape.
 
 use crate::backlog::api::{self, Store};
@@ -108,7 +108,7 @@ fn payload_graph(payload: &Value) -> PathBuf {
 /// stamps `started_at` here because the park IS the spawn instant - the
 /// spawn-side path (spawn_lineage) stamps its open at the same moment - so
 /// the deferred open never reads a later start than a spawn-side row.
-fn park(payload: &Value) -> Result<Value, String> {
+pub(crate) fn park(payload: &Value) -> Result<Value, String> {
     let registry = payload_registry(payload);
     let name = payload
         .get("name")
@@ -160,7 +160,7 @@ fn open(payload: &Value) -> Result<Value, String> {
         .get("session_id")
         .and_then(Value::as_str)
         .ok_or("open payload carries no session_id")?;
-    let rows = crate::client_verbs::load_registry_entries(&registry)
+    let rows = crate::client_commands::load_registry_entries(&registry)
         .map_err(|e| format!("registry load failed: {e}"))?;
     let Some(row) = rows
         .iter()
@@ -272,12 +272,12 @@ mod tests {
 
         let first = park(&payload).unwrap();
         assert_eq!(first["parked"], json!(true));
-        let rows = crate::client_verbs::load_registry_entries(&registry).unwrap();
+        let rows = crate::client_commands::load_registry_entries(&registry).unwrap();
         assert_eq!(rows[0]["pending_session_row"]["phase"], json!("execute"));
 
         let second = park(&park_payload(&registry, "review")).unwrap();
         assert_eq!(second["parked"], json!(false));
-        let rows = crate::client_verbs::load_registry_entries(&registry).unwrap();
+        let rows = crate::client_commands::load_registry_entries(&registry).unwrap();
         assert_eq!(rows[0]["pending_session_row"]["phase"], json!("execute"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(sessions[0]["effort"], json!("xhigh"));
         // The row carries the PARK instant as its start, not the open instant.
         assert!(sessions[0]["started_at"].is_string());
-        let rows = crate::client_verbs::load_registry_entries(&registry).unwrap();
+        let rows = crate::client_commands::load_registry_entries(&registry).unwrap();
         assert!(rows[0].get("pending_session_row").is_none());
 
         // A second observation adds no twin row.

@@ -2,23 +2,21 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
-import sys
 import tempfile
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 from fno.paths import github_cli_proxy_dir
+from fno.rust_binary import resolve_binary
 
-PROXY_EXEC_LINE = 'exec fno-gh-proxy "$@"'
-# The OTHER shape a shim takes: pip and uv write a console script importing the
-# entry point, with no exec line, so it read as a real binary. On 2026-09-07
-# `~/.local/bin/gh` was one, and every gh read died on the re-entry refusal.
-PROXY_IMPORT_LINE = "from fno.pr.gh_proxy import main"
-_WRAPPER = f"#!/bin/sh\n{PROXY_EXEC_LINE}\n"
+# The proxy is the `gh` subcommand of fno-agents, exec'd by absolute path, so
+# no PATH entry or helper binary stands between the shim and it. A reinstall
+# that dropped the old fno-gh-proxy helper broke gh in every session.
+# The native broker still recognizes the older shim shapes on disk.
 _PROXY_DIR_ENV = "FNO_GH_PROXY_DIR"
 # The proxy stamps this into the env it hands `os.execve`, so its own successor
 # can recognize itself. It is good for that one hop only. Anything else building
@@ -42,12 +40,64 @@ def fallback_proxy_dir() -> Path:
     return Path(tempfile.gettempdir()) / f"fno-{uid}" / "github-cli"
 
 
-def _is_wrapper(path: Path) -> bool:
+def _wrapper(binary: Path) -> str:
+    return f'#!/bin/sh\nexec {shlex.quote(str(binary))} gh "$@"\n'
+
+
+def _shim_binary() -> Optional[Path]:
+    """The fno-agents a shim names. A cargo build dir is swept with its
+    worktree, so an installed copy on PATH wins over it."""
+    binary = resolve_binary()
+    if binary is not None and binary.parent.parent.name == "target":
+        installed = _WHICH("fno-agents")
+        if installed:
+            return Path(installed)
+    return binary
+
+
+# Temp roots a fixture or a fallback shim can live under, fixed at import so
+# the verdict cannot drift with the caller's env: a scrubbed-env driver
+# floors tempfile.gettempdir() to /tmp while the fixture sits under the OS
+# temp root, and one misread wrote the durable shim a sweep deletes.
+_TEMP_BASES = (
+    os.path.realpath(tempfile.gettempdir()), tempfile.gettempdir(),
+    "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+    "/var/folders", "/private/var/folders",
+)
+
+
+def _in_temp(path: Path) -> bool:
+    # The path's own spellings, raw and resolved, strictly under a base: the
+    # caller's tempdir need not be the binary's, and a sibling sharing the
+    # prefix string is not under it.
+    spellings = (str(path), os.path.realpath(path))
+    return any(
+        spelling.startswith(base + os.sep)
+        for spelling in spellings
+        for base in _TEMP_BASES
+    )
+
+
+def _read_text(path: Path) -> Optional[str]:
     # A stock CI runner's gh is a compiled binary, not utf-8 text.
     try:
-        return path.read_text() == _WRAPPER
+        return path.read_text()
     except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _is_wrapper(path: Path) -> bool:
+    """Any shim this installer wrote, current or from an older install."""
+    text = _read_text(path)
+    if text == '#!/bin/sh\nexec fno-gh-proxy "$@"\n':
+        return True
+    if text is None or not text.startswith("#!/bin/sh\nexec "):
         return False
+    try:
+        words = shlex.split(text.splitlines()[1])
+    except (IndexError, ValueError):
+        return False
+    return len(words) == 4 and Path(words[1]).name == "fno-agents" and words[2:] == ["gh", "$@"]
 
 
 def ensure_proxy(
@@ -59,30 +109,42 @@ def ensure_proxy(
     resolved = real_gh or (Path(found) if (found := which("gh")) else None)
     if resolved is None:
         raise FileNotFoundError("real gh executable not found on PATH")
+    binary = _shim_binary()
+    if binary is None:
+        # No fno-agents to exec, so the shim would strand every gh call.
+        # Degrade: leave the real gh unswrapped and let the quota policy
+        # stand down for this process tree.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
+    if not (binary.is_file() and os.access(binary, os.X_OK)):
+        # resolve_binary checked runnable, but a sweep can delete the file
+        # between resolve and install, and a shim that execs a missing
+        # binary breaks every gh call on the machine.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
     root = directory or github_cli_proxy_dir()
+    if _in_temp(binary) and not _in_temp(root):
+        # A durable shim must not pin a binary a temp sweep deletes: links
+        # into a reaped mktemp dir once broke every gh read on the machine.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
+    wrapper = _wrapper(Path(os.path.abspath(binary)))
     root.mkdir(parents=True, exist_ok=True)
-    link = root / "fno-gh-proxy"
-    helper = shutil.which("fno-gh-proxy") or str(Path(sys.executable).with_name("fno-gh-proxy"))
-    if not link.exists() and os.path.isfile(helper):
-        link.unlink(missing_ok=True)
-        with suppress(FileExistsError):
-            link.symlink_to(helper)
+    # Retired: the old shim exec'd this link by PATH name.
+    (root / "fno-gh-proxy").unlink(missing_ok=True)
     proxy = root / "gh"
     resolved = resolved.resolve()
     if resolved == proxy.resolve():
         raise RuntimeError("resolved gh delegate points back to the Footnote proxy")
 
     backup = None
-    changed = not proxy.exists() or not _is_wrapper(proxy)
+    changed = _read_text(proxy) != wrapper
     if changed:
-        if proxy.exists():
+        if proxy.exists() and not _is_wrapper(proxy):
             backup = proxy.with_name("gh.pre-fno")
             if not backup.exists():
                 shutil.copy2(proxy, backup)
         fd, raw_tmp = tempfile.mkstemp(prefix=".gh.", dir=root)
         try:
             with os.fdopen(fd, "w") as handle:
-                handle.write(_WRAPPER)
+                handle.write(wrapper)
                 handle.flush()
                 os.fsync(handle.fileno())
             tmp = Path(raw_tmp)
@@ -146,10 +208,25 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
             except Exception:
                 keep = True
         if keep:
+            # An older shim may exec a helper a reinstall removed: refresh it
+            # in place. On failure the shim stays as it was.
+            outside = os.pathsep.join(
+                p for p in env.get("PATH", "").split(os.pathsep)
+                if p and Path(p).resolve() != parent
+            )
+            try:
+                ensure_proxy(directory=parent, which=lambda name: _WHICH(name, path=outside))
+            except Exception:
+                pass
             env[_PROXY_DIR_ENV] = str(parent)
             env.pop("FNO_REAL_GH", None)
             return env
     else:
+        if resolve_binary() is None:
+            # No fno-agents: no shim install and no PATH prepend. The children
+            # resolve gh by plain PATH order and the quota policy stands
+            # down for this process tree.
+            return env
         try:
             result = ensure_proxy(
                 directory=Path(requested_dir) if requested_dir else None,

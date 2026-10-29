@@ -52,6 +52,22 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
         None => return,
     };
     for marker in markers {
+        // A pinned session stays up: the marker is spent, so an unpin later
+        // hands the session to the registry sweep, not to a stop that fires
+        // the moment the pin lifts. The row's lineage counts, as in every
+        // other reaper.
+        let keep = match crate::reap_release::load_registry_row(home, &marker.uuid) {
+            Some(row) => crate::keep_mark::for_row(home, &row),
+            None => crate::keep_mark::for_session(home, &marker.uuid),
+        };
+        if let Some(keep) = keep {
+            eprintln!(
+                "daemon: terminal-stop sweep: {} kept ({keep}); marker spent, no stop",
+                marker.uuid
+            );
+            crate::terminal_stop::remove_marker(home, &marker.uuid);
+            continue;
+        }
         let short = roster.find(&marker.uuid).map(|w| w.short_id().to_string());
         match crate::terminal_stop::stop_decision(short) {
             crate::terminal_stop::StopAction::Stop(short) => {
@@ -126,6 +142,10 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
                             }
                         })
                         .await;
+                        // The row left the live set; its receipt must not sit
+                        // around teaching the gate a skip that no longer
+                        // applies.
+                        crate::terminal_run::remove_receipt(home, &marker.uuid);
                         crate::terminal_stop::remove_marker(home, &marker.uuid);
                     }
                     // Non-fatal: leave the marker so the next tick retries.

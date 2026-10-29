@@ -1,4 +1,4 @@
-//! The `seed-provenance` front verb: re-wrap the sidecar that records what
+//! The `seed-provenance` front command: re-wrap the sidecar that records what
 //! message started this session, so a receiver can attribute its seed and
 //! reply to the sender instead of running the quoted copy twice.
 //!
@@ -55,7 +55,7 @@ pub fn run(_args: &[String]) -> i32 {
     let mut payload = json!({
         "mode": "wrap",
         "body": format!("{BODY_PREFIX}{seed}{BODY_SUFFIX}"),
-        "from": env_stripped(ENV_FROM).unwrap_or_else(|| "fno".into()),
+        "from": crate::system_sender::stamp_or_unknown(env_stripped(ENV_FROM).as_deref(), || None),
         "from_session": from_session,
     });
     for (key, env) in [

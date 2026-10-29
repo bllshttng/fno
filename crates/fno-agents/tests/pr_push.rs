@@ -21,8 +21,8 @@ fn log_of(dir: &Path, name: &str) -> String {
 }
 
 /// Stub git. Behavior is file-flag driven: write `dirty` to make
-/// `status --porcelain` report a change, write `conflict` to make the rebase
-/// fail with two conflicting paths, drop `no-upstream` to make `@{u}` fail,
+/// `status --porcelain` report a change, write `conflict` to make the fold
+/// merge fail with two conflicting paths, drop `no-upstream` to make `@{u}` fail,
 /// drop `no-remote-branch` to make the same-name remote branch absent (a
 /// first push), write `remote-only` to make the cherry-pick log report one
 /// remote-only commit, write `remote-only-merge` to make the merges log
@@ -30,10 +30,10 @@ fn log_of(dir: &Path, name: &str) -> String {
 /// merge conflicted under `merge-tree` with a tree that differs from the
 /// parent auto-merge. Write `same-head` to make `rev-parse HEAD` answer the
 /// sha the remote branch carries (deadbeef0000000), so a no-integration run
-/// reads as a no-op. `rev-list --count` answers 3 until a rebase or merge
+/// reads as a no-op. `rev-list --count` answers 3 until the fold merge
 /// touches `counted` (the integration happened), so the receipt reads
 /// behind-before=3 behind-after=0 on an integrating push and 3/3 on one that
-/// integrates nothing. `rev-list --merges --count` always answers 0.
+/// integrates nothing.
 fn stub_git(dir: &Path) {
     write_exec(
         dir,
@@ -74,13 +74,13 @@ case "$1" in
   fetch) exit 0 ;;
   rebase)
     touch "$D/counted"
+    exit 0 ;;
+  merge)
+    touch "$D/counted"
     if [ -f "$D/conflict" ]; then
       echo "CONFLICT (content): Merge conflict in src/a.rs" >&2
       exit 1
     fi
-    exit 0 ;;
-  merge)
-    touch "$D/counted"
     exit 0 ;;
   diff) if [ -f "$D/conflict" ]; then printf "src/a.rs\nsrc/b.rs\n"; fi; exit 0 ;;
   log)
@@ -113,7 +113,7 @@ exit 0
 /// Stub gh: a settled read (completed failure buckets as not pending) by
 /// default; write `pending` for a run in flight with a job link, or
 /// `red-pending` for a head whose latest rows already failed while a run
-/// is still testing it. The pulls reads (the push verb's integration
+/// is still testing it. The pulls reads (the push command's integration
 /// gate) answer a DIRTY PR by default, so the integrating tests keep
 /// exercising the rebase/merge leg: the list read resolves only the PR's
 /// number, and the single `pulls/7` read carries `mergeable_state`
@@ -191,7 +191,7 @@ fn write_stubs(dir: &Path) {
     stub_fno(dir);
 }
 
-fn run_verb(dir: &Path, extra: &[&str]) -> (i32, String, String) {
+fn run_command(dir: &Path, extra: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .envs(fno_agents::test_run::self_owner_env())
         .args(["pr-push"])
@@ -225,10 +225,10 @@ fn tmpdir() -> (tempfile::TempDir, PathBuf) {
 #[test]
 fn behind_rows() {
     let (_t, d) = tmpdir();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("behind-before=3 behind-after=0"), "{out}");
-    assert!(out.contains("integrate=rebase"), "{out}");
+    assert!(out.contains("integrate=merge"), "{out}");
     assert!(out.contains("preflight=skipped"), "{out}");
     assert!(out.contains("ci=settled"), "{out}");
     assert!(out.contains("sha=abc1234"), "{out}");
@@ -250,7 +250,7 @@ fn behind_rows() {
 
     let (_t, d) = tmpdir();
     std::fs::write(d.join("clean-pr"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("integrate=none"), "{out}");
     assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
@@ -275,7 +275,7 @@ fn behind_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("clean-pr"), "").unwrap();
     std::fs::write(d.join("same-head"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("integrate=none"), "{out}");
     assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
@@ -296,7 +296,7 @@ fn behind_rows() {
     // the branch pushes as it stands, with no rebase.
     let (_t, d) = tmpdir();
     std::fs::write(d.join("null-state"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("integrate=none"), "{out}");
     assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
@@ -312,7 +312,7 @@ fn behind_rows() {
 fn inflight_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("pending"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(err.contains("guards"), "the check name: {err}");
     assert!(err.contains("42"), "the job id: {err}");
@@ -329,14 +329,14 @@ fn inflight_rows() {
         "preflight.sh",
         "#!/bin/sh\necho ran > \"$(dirname \"$0\")/../../preflight.log\"\nexit 0\n",
     );
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(!d.join("preflight.log").exists(), "preflight did not run");
     assert!(!log_of(&d, "git.log").contains("git push"));
 
     let (_t, d) = tmpdir();
     std::fs::write(d.join("pending"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &["--in-flight", "feature/x"]);
+    let (code, out, err) = run_command(&d, &["--in-flight", "feature/x"]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(out.contains("\"in_flight\":true"), "{out}");
     assert!(out.contains("\"check\":\"guards\""), "{out}");
@@ -346,28 +346,28 @@ fn inflight_rows() {
     assert!(!log_of(&d, "git.log").contains("rebase"));
 
     std::fs::remove_file(d.join("pending")).unwrap();
-    let (code, out, err) = run_verb(&d, &["--in-flight", "feature/x"]);
+    let (code, out, err) = run_command(&d, &["--in-flight", "feature/x"]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("\"in_flight\":false"), "{out}");
 
     std::fs::write(d.join("gh-error"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &["--in-flight", "feature/x"]);
+    let (code, out, err) = run_command(&d, &["--in-flight", "feature/x"]);
     assert_eq!(code, 4, "{out}\n{err}");
     assert!(out.contains("\"error\""), "{out}");
     assert!(!out.contains("\"in_flight\""), "{out}");
 
     let (_t, d) = tmpdir();
     std::fs::write(d.join("no-remote-branch"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &["--in-flight", "feature/x"]);
+    let (code, out, err) = run_command(&d, &["--in-flight", "feature/x"]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("\"in_flight\":false"), "{out}");
     assert!(!log_of(&d, "gh.log").contains("check-runs"));
 
     let (_t, d) = tmpdir();
     std::fs::write(d.join("conflict"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 3, "{out}\n{err}");
-    assert!(err.contains("fno do pr rebase"), "the door: {err}");
+    assert!(err.contains("git merge --continue"), "the door: {err}");
     assert!(
         err.contains("src/a.rs") && err.contains("src/b.rs"),
         "the paths: {err}"
@@ -379,7 +379,7 @@ fn inflight_rows() {
 
     let (_t, d) = tmpdir();
     std::fs::write(d.join("dirty"), "").unwrap();
-    let (code, _out, err) = run_verb(&d, &[]);
+    let (code, _out, err) = run_command(&d, &[]);
     assert_eq!(code, 3, "{err}");
     assert!(
         !log_of(&d, "git.log").contains("fetch"),
@@ -394,7 +394,7 @@ fn red_cancel_rows() {
     // and the fix pushes with no flag (user law 2026-10-09).
     let (_t, d) = tmpdir();
     std::fs::write(d.join("red-pending"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("ci=red-cancel"), "{out}");
     let gh = log_of(&d, "gh.log");
@@ -410,7 +410,7 @@ fn red_cancel_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("red-pending"), "").unwrap();
     std::fs::write(d.join("cancel-fails"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("ci=red-cancel"), "{out}");
     assert!(err.contains("cancel of run 7 failed"), "{err}");
@@ -423,7 +423,7 @@ fn red_cancel_rows() {
     // A run on a head with no red row is never cancelled.
     let (_t, d) = tmpdir();
     std::fs::write(d.join("pending"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 2, "{out}\n{err}");
     assert!(
         !log_of(&d, "gh.log").contains("cancel"),
@@ -436,7 +436,7 @@ fn red_cancel_rows() {
 fn preflight_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("pending"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &["--force-ci-cancel"]);
+    let (code, out, err) = run_command(&d, &["--force-ci-cancel"]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("ci=bypassed"), "{out}");
     assert!(
@@ -452,7 +452,7 @@ fn preflight_rows() {
         "preflight.sh",
         "#!/bin/sh\necho ran > \"$(dirname \"$0\")/../../preflight.log\"\nexit 3\n",
     );
-    let (code, out, err) = run_verb(&d, &["--no-preflight"]);
+    let (code, out, err) = run_command(&d, &["--no-preflight"]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("preflight=skipped"), "{out}");
     assert!(!d.join("preflight.log").exists(), "runner did not run");
@@ -464,7 +464,7 @@ fn preflight_rows() {
         "preflight.sh",
         "#!/bin/sh\necho ran > \"$(dirname \"$0\")/../../preflight.log\"\nexit 3\n",
     );
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("preflight=skipped"), "{out}");
     assert!(!d.join("preflight.log").exists(), "runner did not run");
@@ -476,7 +476,7 @@ fn preflight_rows() {
         "preflight.sh",
         "#!/bin/sh\necho red > \"$(dirname \"$0\")/../../preflight.log\"\nexit 3\n",
     );
-    let (code, _out, err) = run_verb(&d, &["--preflight"]);
+    let (code, _out, err) = run_command(&d, &["--preflight"]);
     assert_eq!(code, 1, "{err}");
     assert!(d.join("preflight.log").exists(), "preflight ran");
     assert!(
@@ -487,7 +487,7 @@ fn preflight_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("no-upstream"), "").unwrap();
     std::fs::write(d.join("no-remote-branch"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     let log = log_of(&d, "git.log");
     assert!(
@@ -504,9 +504,9 @@ fn preflight_rows() {
 fn window_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("no-runs"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "first push lands: {out}\n{err}");
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 2, "the window holds: {out}\n{err}");
     assert!(
         err.contains("may not be registered yet"),
@@ -519,19 +519,19 @@ fn window_rows() {
     );
 
     let (_t, d) = tmpdir();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     // The stamp is now young, but the rows are registered and settled: the
     // live read outranks the clock.
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "settled rows outrank the stamp: {out}\n{err}");
     assert_eq!(log_of(&d, "git.log").matches("git push").count(), 2);
 
     let (_t, d) = tmpdir();
     std::fs::write(d.join("no-runs"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
-    let (code, out, err) = run_verb(&d, &["--force-ci-cancel"]);
+    let (code, out, err) = run_command(&d, &["--force-ci-cancel"]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(log_of(&d, "fno.log").contains("push_debounce_bypass"));
     assert_eq!(log_of(&d, "git.log").matches("git push").count(), 2);
@@ -549,16 +549,16 @@ fn remote_rows() {
         "preflight.sh",
         "#!/bin/sh\necho ran > \"$(dirname \"$0\")/../../preflight.log\"\nexit 0\n",
     );
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 3, "{out}\n{err}");
     assert!(err.contains("abc1234"), "the remote-only sha: {err}");
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     assert!(err.contains("Nothing pushed"), "{err}");
     assert!(
-        !err.contains("not safely rebasable"),
+        !err.contains("not safely mergeable"),
         "the refusal must not key heal's conflict phrase: {err}"
     );
     assert!(
@@ -573,15 +573,15 @@ fn remote_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("remote-only-merge"), "").unwrap();
     std::fs::write(d.join("dirty-merge"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 3, "{out}\n{err}");
     assert!(err.contains("m1234567"), "the merge sha: {err}");
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     assert!(
-        !err.contains("not safely rebasable"),
+        !err.contains("not safely mergeable"),
         "the refusal must not key heal's conflict phrase: {err}"
     );
     assert!(
@@ -591,7 +591,7 @@ fn remote_rows() {
 
     let (_t, d) = tmpdir();
     std::fs::write(d.join("remote-only-merge"), "").unwrap();
-    let (code, out, err) = run_verb(&d, &[]);
+    let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("pushed=1"), "{out}");
     assert!(
@@ -601,13 +601,13 @@ fn remote_rows() {
     );
 
     let (_t, root, a, b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     // main moves from clone B, then clone A commits again.
     commit_file(&b, "main.txt", "m\n", "main moves");
     git_in(&b, &["push", "origin", "main"]);
     commit_file(&a, "two.txt", "2\n", "two");
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "the leased second push: {out}\n{err}");
     assert!(out.contains("pushed=1"), "{out}");
     let remote = git_in(
@@ -622,10 +622,10 @@ fn remote_rows() {
     );
 
     let (_t, root, a, _b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     commit_file(&a, "two.txt", "2\n", "two");
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "{out}\n{err}");
     let remote = git_in(
         &root.join("remote.git"),
@@ -662,7 +662,7 @@ fn commit_file(repo: &Path, name: &str, body: &str, msg: &str) {
 }
 
 /// Bare remote + two clones. main is seeded from clone A, feature/x carries
-/// one commit, and the stub gh/fno ride in the root. The first verb push is
+/// one commit, and the stub gh/fno ride in the root. The first command push is
 /// each test's own act: it is the act under test.
 fn real_repo() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let t = tempfile::tempdir().unwrap();
@@ -691,8 +691,8 @@ fn real_repo() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     (t, root, a, b)
 }
 
-/// The verb against the real repo, global git config severed the same way.
-fn run_verb_real(a: &Path, root: &Path) -> (i32, String, String) {
+/// The command against the real repo, global git config severed the same way.
+fn run_command_real(a: &Path, root: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .envs(fno_agents::test_run::self_owner_env())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -721,7 +721,7 @@ fn run_verb_real(a: &Path, root: &Path) -> (i32, String, String) {
 #[test]
 fn merge_rows() {
     let (_t, root, a, b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     commit_file(&b, "main.txt", "m\n", "main moves");
     git_in(&b, &["push", "origin", "main"]);
@@ -734,7 +734,7 @@ fn merge_rows() {
     );
     commit_file(&b, "second-main.txt", "m2\n", "main moves again");
     git_in(&b, &["push", "origin", "main"]);
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "the merge-bearing push: {out}\n{err}");
     assert!(out.contains("integrate=merge"), "{out}");
     let new_remote = git_in(
@@ -760,7 +760,7 @@ fn merge_rows() {
     );
 
     let (_t, root, a, b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     commit_file(&b, "main.txt", "m\n", "main moves");
     git_in(&b, &["push", "origin", "main"]);
@@ -768,7 +768,7 @@ fn merge_rows() {
     git_in(&a, &["merge", "--no-edit", "origin/main"]);
     git_in(&a, &["push", "origin", "feature/x"]);
     let before = git_in(&a, &["rev-parse", "HEAD"]);
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "the up-to-date merge-bearing push: {out}\n{err}");
     assert!(out.contains("integrate=none"), "{out}");
     let after = git_in(&a, &["rev-parse", "HEAD"]);
@@ -783,7 +783,7 @@ fn merge_rows() {
     );
 
     let (_t, root, a, b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     commit_file(&b, "main.txt", "m\n", "main moves");
     git_in(&b, &["push", "origin", "main"]);
@@ -793,17 +793,20 @@ fn merge_rows() {
     commit_file(&b, "one.txt", "main\n", "main conflicts");
     git_in(&b, &["push", "origin", "main"]);
     let before = git_in(&a, &["rev-parse", "HEAD"]);
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 3, "the merge conflict: {out}\n{err}");
-    assert!(err.contains("not safely rebasable"), "{err}");
+    assert!(err.contains("not safely mergeable"), "{err}");
     assert!(err.contains("status merge_conflict"), "{err}");
     assert!(err.contains("files: one.txt"), "{err}");
-    assert!(err.contains("Merge origin/main by hand"), "{err}");
+    assert!(err.contains("git merge --continue"), "{err}");
     assert_eq!(before.trim(), git_in(&a, &["rev-parse", "HEAD"]).trim());
-    assert!(!a.join(".git/MERGE_HEAD").exists());
+    assert!(
+        a.join(".git/MERGE_HEAD").exists(),
+        "the conflicted fold stays in progress for the caller"
+    );
 
     let (_t, root, a, b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     // Another writer pushes a NEW commit to feature/x, then main moves.
     git_in(&b, &["fetch", "origin"]);
@@ -818,14 +821,14 @@ fn merge_rows() {
         &root.join("remote.git"),
         &["rev-parse", "refs/heads/feature/x"],
     );
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 3, "the remote-only refusal: {out}\n{err}");
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     assert!(
-        !err.contains("not safely rebasable"),
+        !err.contains("not safely mergeable"),
         "the refusal must not key heal's conflict phrase: {err}"
     );
     let after = git_in(
@@ -839,7 +842,7 @@ fn merge_rows() {
     );
 
     let (_t, root, a, b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     // Clone B folds content into a merge commit itself: no non-merge
     // commit carries the hand.txt content, only the merge's tree does.
@@ -858,14 +861,14 @@ fn merge_rows() {
         &root.join("remote.git"),
         &["rev-parse", "refs/heads/feature/x"],
     );
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 3, "the hand-resolved merge refusal: {out}\n{err}");
     assert!(
         err.contains("the hand-resolved merge"),
         "the refusal names the merge: {err}"
     );
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     let after = git_in(
@@ -879,7 +882,7 @@ fn merge_rows() {
     );
 
     let (_t, root, a, b) = real_repo();
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "first push: {out}\n{err}");
     // Clone B merges the moved main into feature/x cleanly (GitHub's
     // "Update branch" shape): the merge adds nothing, so the lease lands.
@@ -888,7 +891,7 @@ fn merge_rows() {
     git_in(&b, &["merge", "origin/main"]);
     git_in(&b, &["push", "origin", "feature/x"]);
     commit_file(&a, "two.txt", "2\n", "two");
-    let (code, out, err) = run_verb_real(&a, &root);
+    let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 0, "the leased second push: {out}\n{err}");
     assert!(out.contains("pushed=1"), "{out}");
     let remote = git_in(
@@ -899,7 +902,7 @@ fn merge_rows() {
     assert_eq!(
         remote.trim(),
         head.trim(),
-        "the remote branch equals the rebased HEAD"
+        "the remote branch equals the folded HEAD"
     );
 }
 
@@ -918,7 +921,7 @@ fn seed_fno_home(root: &Path) -> PathBuf {
     home
 }
 
-fn run_verb_with_fno_home(dir: &Path, fno_home: &Path) -> (i32, String, String) {
+fn run_command_with_fno_home(dir: &Path, fno_home: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .envs(fno_agents::test_run::self_owner_env())
         .env("FNO_HOME", fno_home)
@@ -948,7 +951,7 @@ fn cite_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("bad-commit-msg"), "").unwrap();
     let home = seed_fno_home(&d);
-    let (code, out, err) = run_verb_with_fno_home(&d, &home);
+    let (code, out, err) = run_command_with_fno_home(&d, &home);
     assert_eq!(code, 3, "{out}\n{err}");
     assert!(err.contains("commit abc1234"), "{err}");
     assert!(err.contains("d-deadbeef"), "{err}");
@@ -961,151 +964,43 @@ fn cite_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("live-commit-msg"), "").unwrap();
     let home = seed_fno_home(&d);
-    let (code, out, err) = run_verb_with_fno_home(&d, &home);
+    let (code, out, err) = run_command_with_fno_home(&d, &home);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("pushed=1"), "{out}");
     assert_eq!(log_of(&d, "git.log").matches("git push").count(), 1);
 }
 
-// AC4-HP: live ids read clean and the push path continues unchanged.
-
-// ── the session-URL leak veto ───────────────────────────────────────────────
-
-/// Real git, no success assert: reads against an absent ref come back None.
-fn git_in_opt(repo: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("/usr/bin/git")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .current_dir(repo)
-        .args(args)
-        .output()
-        .expect("git");
-    if out.status.success() {
-        Some(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        None
-    }
-}
-
-fn run_verb_real_args(a: &Path, root: &Path, extra: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
-        .envs(fno_agents::test_run::self_owner_env())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .args(["pr-push"])
-        .args(extra)
-        .arg("--cwd")
-        .arg(a)
-        .arg("--git-bin")
-        .arg("/usr/bin/git")
-        .arg("--gh-bin")
-        .arg(root.join("gh"))
-        .arg("--fno-bin")
-        .arg(root.join("fno"))
-        .arg("--stamps-dir")
-        .arg(root.join("stamps"))
-        .arg("--no-preflight")
-        .output()
-        .expect("run fno-agents");
-    (
-        out.status.code().unwrap_or(1),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-fn commit_with_trailer(repo: &Path, name: &str, msg: &str) {
-    std::fs::write(repo.join(name), "x\n").unwrap();
-    git_in(repo, &["add", name]);
-    git_in(repo, &["commit", "-m", msg]);
-}
-
+// A worktree branch that tracks a PR head under another name pushes to that
+// head and makes no stray remote branch; with no open PR on either name it
+// refuses and names the remedy.
 #[test]
-fn a_push_of_a_commit_carrying_a_session_url_is_refused_before_anything_moves() {
+fn target_rows() {
     let (_t, root, a, _b) = real_repo();
-    commit_with_trailer(
-        &a,
-        "leak.txt",
-        "fix: thing\n\nClaude-Session: claude.ai/code/session_01AbCdEfGhIjKl\n",
-    );
-    let (code, out, err) = run_verb_real_args(&a, &root, &[]);
-    assert_eq!(code, 3, "the leak veto exits 3: {out}\n{err}");
-    assert!(err.contains("refusing to push"), "{err}");
-    assert!(
-        err.contains("rebase -i"),
-        "the refusal names the remedy: {err}"
-    );
-    assert!(
-        !out.contains("pushed=1"),
-        "no receipt on a refused push: {out}"
-    );
+    let remote = root.join("remote.git");
+    let (code, out, err) = run_command_real(&a, &root);
+    assert_eq!(code, 0, "first push: {out}\n{err}");
+    git_in(&a, &["checkout", "-b", "x-land", "origin/feature/x"]);
+    commit_file(&a, "two.txt", "two\n", "two");
+    let head = git_in(&a, &["rev-parse", "HEAD"]);
+    let (code, out, err) = run_command_real(&a, &root);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("ref=refs/heads/feature/x pushed=1"), "{out}");
     assert_eq!(
-        git_in_opt(
-            &root.join("remote.git"),
-            &["rev-parse", "--verify", "refs/heads/feature/x"]
-        ),
-        None,
-        "the remote branch stays absent: nothing moved"
+        git_in(&remote, &["rev-parse", "refs/heads/feature/x"]).trim(),
+        head.trim()
     );
-}
+    assert_eq!(git_in(&remote, &["for-each-ref", "refs/heads/x-land"]), "");
 
-#[test]
-fn scan_only_answers_json_and_names_the_leak() {
-    let (_t, root, a, _b) = real_repo();
-    let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
-    assert_eq!(code, 0, "a clean branch scans clean: {out}\n{err}");
-    assert!(
-        out.contains("\"leaks\":[]") || out.contains("\"leaks\": []"),
-        "an empty leaks array answers a clean scan: {out}"
-    );
-
-    commit_with_trailer(
-        &a,
-        "leak.txt",
-        "fix: thing\n\nClaude-Session: claude.ai/code/session_01AbCdEfGhIjKl\n",
-    );
-    let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
-    assert_eq!(code, 0, "the scan still exits 0 when it ran: {out}\n{err}");
-    assert!(out.contains("\"sha\""), "{out}");
-    assert!(
-        out.contains("claude.ai/code/session_01AbCdEfGhIjKl"),
-        "the offending line is named: {out}"
-    );
-
-    // A commit already on origin is not this push's payload: the scan must
-    // not flag it again.
-    git_in(&a, &["push", "origin", "feature/x"]);
-    let (code, out, err) = run_verb_real_args(&a, &root, &["--scan-only"]);
+    std::fs::write(root.join("no-pr"), "").unwrap();
+    git_in(&a, &["checkout", "-b", "y-land", "origin/feature/x"]);
+    commit_file(&a, "three.txt", "three\n", "three");
+    let (code, out, err) = run_command_real(&a, &root);
+    assert_eq!(code, 3, "{out}\n{err}");
+    assert!(err.contains("tracks origin/feature/x"), "{err}");
+    assert!(err.contains("--set-upstream-to"), "{err}");
     assert_eq!(
-        code, 0,
-        "once on origin the commit is no longer outbound: {out}\n{err}"
+        git_in(&remote, &["rev-parse", "refs/heads/feature/x"]).trim(),
+        head.trim()
     );
-    assert!(
-        out.contains("\"leaks\":[]") || out.contains("\"leaks\": []"),
-        "the pushed leak is no longer outbound: {out}"
-    );
-}
-
-#[test]
-fn a_rust_pattern_matches_the_ci_gate() {
-    let gate = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../scripts/ci/check-no-session-urls.sh"
-    ))
-    .expect("the CI gate script sits in this repo");
-    let pattern_line = gate
-        .lines()
-        .find(|l| l.trim_start().starts_with("PATTERN="))
-        .expect("the gate declares its PATTERN");
-    let gate_pattern = pattern_line
-        .split('=')
-        .nth(1)
-        .unwrap()
-        .trim()
-        .trim_matches('\'');
-    assert_eq!(
-        gate_pattern,
-        fno_agents::pr_push::SESSION_URL_PATTERN,
-        "the Rust pattern and the CI gate's PATTERN must stay identical"
-    );
+    assert_eq!(git_in(&remote, &["for-each-ref", "refs/heads/y-land"]), "");
 }

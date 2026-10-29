@@ -1,5 +1,5 @@
-//! The pane argv grammar (`fno mux pane <verb> ...`): one parser, [`parse_pane_args`],
-//! for every pane verb including `run`'s embedded command argv. A child
+//! The pane argv grammar (`fno mux pane <command> ...`): one parser, [`parse_pane_args`],
+//! for every pane command including `run`'s embedded command argv. A child
 //! module of `mux_cli` on purpose: the file-budget gate keeps the parent
 //! shrink-only, and `use super::*` keeps the proto types, the selector
 //! parsers, and the shared `MuxCommon` group in one place.
@@ -117,11 +117,15 @@ pub(crate) fn anchor_or_refuse(
     }
 }
 
+/// Parse the tokens after `mux pane`. Pure, so the whole grammar (commands, flags,
+/// the exit-code-bearing outcomes) is unit-testable without a socket, and the
+/// agents daemon's tests can feed a refusal's printed command to this real
+/// parser rather than a copy of its grammar.
 pub fn parse_pane_args(
     op: &crate::cli_args::PaneOp,
     args: &[OsString],
 ) -> Result<ParsedPane, String> {
-    // Hidden verb subtree: `pane keeper list` reads the keeper sockets
+    // Hidden command subtree: `pane keeper list` reads the keeper sockets
     // directly (no server), so it parses here and dispatches before any
     // session resolution.
     if matches!(op, crate::cli_args::PaneOp::Keeper { .. }) {
@@ -158,6 +162,7 @@ pub fn parse_pane_args(
         let mut cwd = None;
         let mut claim = false;
         let mut worker = None;
+        let mut fno_id = None;
         let mut squad = None;
         let mut split = None;
         let mut tab = None;
@@ -216,6 +221,24 @@ pub fn parse_pane_args(
                         );
                     }
                     worker = Some(name);
+                    i += 1;
+                }
+                // The caller's preassigned session id for a harness whose
+                // binding strategy is `preassigned`: the id rode into the
+                // child at exec time, so the server can treat the pane as
+                // addressable before its registry row exists.
+                "--fno-id" => {
+                    let Some(v) = sargs.get(i + 1) else {
+                        return Err("--fno-id needs a value".into());
+                    };
+                    // Stored TRIMMED: the birthright key must equal the id
+                    // the registry row later carries, or the two identity
+                    // sources split and the pane reads unresolvable again.
+                    let id = v.trim();
+                    if id.is_empty() {
+                        return Err("--fno-id needs a nonblank session id".into());
+                    }
+                    fno_id = Some(id.to_string());
                     i += 1;
                 }
                 "--workspace" | "--squad" | "-s" | "workspace" | "squad" => {
@@ -347,15 +370,16 @@ pub fn parse_pane_args(
                 argv,
                 claim,
                 worker,
+                fno_id,
                 placement,
                 size,
             },
         });
     }
 
-    // Every other verb: a single flag/positional pass (no embedded argv).
+    // Every other command: a single flag/positional pass (no embedded argv).
     // The common flags stay loop arms (not MuxCommon::take) for the same
-    // reason run has them inline: the verbs' flag VALUES are arbitrary text,
+    // reason run has them inline: the commands' flag VALUES are arbitrary text,
     // and a fence-less pre-pass would strip a value that spells
     // --json/--server/--session instead of reading it.
     let mut session = None;
@@ -367,6 +391,8 @@ pub fn parse_pane_args(
     let mut guarded = false;
     let mut submit = false;
     let mut raw = false;
+    let mut harness: Option<String> = None;
+    let mut clear_composer = false;
     let mut hold_pass = false;
     let mut style_exception: Option<String> = None;
     let mut provenance: Option<String> = None;
@@ -437,6 +463,14 @@ pub fn parse_pane_args(
             "--guarded" => guarded = true,
             "--submit" => submit = true,
             "--raw" => raw = true,
+            // Composer read-back opt-in: the harness name selects the
+            // capabilities row whose keys drive the recovery loop.
+            "--harness" => {
+                harness = Some(value_of!());
+            }
+            // Send the harness's composer-clear keys and verify the empty
+            // marker before any payload.
+            "--clear-composer" => clear_composer = true,
             // (v94) Hidden: exists for the Rust hold gate's transport arms
             // (own send, control mail, parked replay), never interactive use.
             "--hold-pass" => hold_pass = true,
@@ -449,9 +483,9 @@ pub fn parse_pane_args(
             "--pattern" => pattern = Some(value_of!()),
             // `pane kill --hand-off-to <socket>` is the opposite of a kill:
             // the keeper socket moves to that path and the child keeps
-            // running. It rides `kill` because it is the same verb from the
+            // running. It rides `kill` because it is the same command from the
             // server's side - this pane stops being ours - and a second
-            // verb would duplicate the pane-resolution and refusal ladder.
+            // command would duplicate the pane-resolution and refusal ladder.
             "--hand-off-to" => hand_off_to = Some(value_of!()),
             "--timeout" => {
                 let v = value_of!();
@@ -544,6 +578,8 @@ pub fn parse_pane_args(
                 style_exception,
                 provenance,
                 hold_pass,
+                harness,
+                clear_composer,
             }
         }
         crate::cli_args::PaneOp::Wait(_) => PaneCmd::Wait {
@@ -605,10 +641,164 @@ mod tests {
         use crate::cli_args::{MuxTail, PaneOp};
         let t = || MuxTail { tail: Vec::new() };
         match word {
+            "run" => PaneOp::Run(t()),
             "send" => PaneOp::Send(t()),
             "read" => PaneOp::Read(t()),
             _ => panic!("no test op mapping for {word}"),
         }
+    }
+
+    /// Moved from mux_cli.rs: this file owns the run grammar, the test
+    /// travels with it. Leading flags are ours; the command argv (incl.
+    /// ITS flags) is not; the preassigned id parses into the Run command.
+    #[test]
+    fn pane_parse_run_argv_rows() {
+        let p = parse_pane_args(
+            &op_of("run"),
+            &os(&["--cwd", "/code/foo", "--", "claude", "--print", "hi"]),
+        )
+        .unwrap();
+        assert_eq!(
+            p,
+            ParsedPane {
+                session: None,
+                json: false,
+                cmd: PaneCmd::Run {
+                    cwd: Some("/code/foo".into()),
+                    argv: vec!["claude".into(), "--print".into(), "hi".into()],
+                    claim: false,
+                    placement: PanePlacement::default(),
+                    worker: None,
+                    fno_id: None,
+                    size: None,
+                },
+            }
+        );
+        // The preassigned id parses into the Run command; a blank value
+        // refuses at the parser like any value-carrying flag.
+        let p = parse_pane_args(
+            &op_of("run"),
+            &os(&["--worker", "peer", "--fno-id", "019f-id", "--", "footnote"]),
+        )
+        .unwrap();
+        assert!(matches!(
+            p.cmd,
+            PaneCmd::Run {
+                worker: Some(ref w),
+                fno_id: Some(ref id),
+                ..
+            } if w == "peer" && id == "019f-id"
+        ));
+        assert!(parse_pane_args(&op_of("run"), &os(&["--fno-id", " ", "--", "x"])).is_err());
+        // The `--` is optional: the first bare token begins the argv.
+        assert_eq!(parse_size("144x40"), Ok((144, 40)));
+        assert!(parse_pane_args(&op_of("run"), &os(&["--size", "144", "sh"])).is_err());
+        let p = parse_pane_args(&op_of("run"), &os(&["echo", "marker"])).unwrap();
+        assert!(
+            matches!(p.cmd, PaneCmd::Run { argv, .. } if argv == vec!["echo".to_string(), "marker".into()])
+        );
+        // An empty command is a usage error.
+        assert!(parse_pane_args(&op_of("run"), &os(&["--cwd", "/x"])).is_err());
+
+        let p = parse_pane_args(
+            &op_of("run"),
+            &os(&["squad", "review", "split", "left", "claude", "--print"]),
+        )
+        .unwrap();
+        assert!(matches!(
+            p.cmd,
+            PaneCmd::Run {
+                placement: PanePlacement {
+                    tab: None,
+                    at: None,
+                    target: PaneTarget::SquadName(ref name),
+                    split: Some(crate::tree::Dir::Left),
+                    ..
+                },
+                ref argv,
+                ..
+            } if name == "review" && argv == &["claude", "--print"]
+        ));
+        let aliases = parse_pane_args(
+            &op_of("run"),
+            &os(&["-s", "review", "-x", "right", "--", "echo"]),
+        )
+        .unwrap();
+        assert!(matches!(
+            aliases.cmd,
+            PaneCmd::Run {
+                placement: PanePlacement {
+                    tab: None,
+                    at: None,
+                    target: PaneTarget::SquadName(ref name),
+                    split: Some(crate::tree::Dir::Right),
+                    ..
+                },
+                ..
+            } if name == "review"
+        ));
+        let long = parse_pane_args(
+            &op_of("run"),
+            &os(&["--squad", "review", "--split", "up", "--", "echo"]),
+        )
+        .unwrap();
+        assert!(matches!(
+            long.cmd,
+            PaneCmd::Run {
+                placement: PanePlacement {
+                    tab: None,
+                    at: None,
+                    target: PaneTarget::SquadName(ref name),
+                    split: Some(crate::tree::Dir::Up),
+                    ..
+                },
+                ..
+            } if name == "review"
+        ));
+        // --workspace is an alias for --squad (US2): same PaneTarget.
+        let ws = parse_pane_args(
+            &op_of("run"),
+            &os(&["--workspace", "review", "--split", "up", "--", "echo"]),
+        )
+        .unwrap();
+        assert!(matches!(
+            ws.cmd,
+            PaneCmd::Run {
+                placement: PanePlacement {
+                    target: PaneTarget::SquadName(ref name),
+                    ..
+                },
+                ..
+            } if name == "review"
+        ));
+        assert!(parse_pane_args(&op_of("run"), &os(&["squad", " ", "--", "echo"])).is_err());
+        assert!(parse_pane_args(&op_of("run"), &os(&["--workspace", " ", "--", "echo"])).is_err());
+        assert!(parse_pane_args(&op_of("run"), &os(&["split", "diagonal", "--", "echo"])).is_err());
+        assert!(
+            parse_pane_args(&op_of("run"), &os(&["--target", "review", "--", "echo"])).is_err()
+        );
+        // Bare "at" (mux_spawn.py's placement_args contract) used to have no
+        // alias, so the parser broke its loop on "at" and folded it plus
+        // everything after into argv instead of recognizing it as placement
+        // - here paired with bare "split", the combo that crashed.
+        let bare_at = parse_pane_args(
+            &op_of("run"),
+            &os(&["split", "right", "at", "3", "--json", "--", "codex"]),
+        )
+        .unwrap();
+        assert!(bare_at.json);
+        assert!(matches!(
+            bare_at.cmd,
+            PaneCmd::Run {
+                placement: PanePlacement {
+                    split: Some(crate::tree::Dir::Right),
+                    at: Some(3),
+                    ..
+                },
+                ref argv,
+                ..
+            } if argv == &["codex"]
+        ));
     }
 
     /// Moved from mux_cli.rs beside the `--hold-pass` flag (this file owns
@@ -630,6 +820,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         assert_eq!(
@@ -646,6 +838,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         assert_eq!(
@@ -665,6 +859,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         // --hold-pass rides beside --raw: the gate-passed delivery's flag.
@@ -685,6 +881,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: true,
+                harness: None,
+                clear_composer: false,
             }
         );
         // Every other source-less form is still a usage error.

@@ -60,7 +60,7 @@ pub fn run(args: &[String]) -> i32 {
 
 /// `--harness <h> <event>` in either the space or `=` spelling.
 fn parse_args(args: &[String]) -> Option<(String, String)> {
-    let args = crate::client_verbs::expand_eq(args);
+    let args = crate::client_commands::expand_eq(args);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == "--harness" {

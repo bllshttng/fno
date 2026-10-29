@@ -16,14 +16,9 @@ Historical contradictions are resolved at read time forever - no backfill, no mu
 
 ### 1. Read side: derived `_resolved_cwd`
 
-`project_root_from_settings(project)` in `cli/src/fno/graph/_intake.py` is the inverse of `detect_project_from_settings`: project name -> work-map path. Both directions consume the same `_settings_candidate_paths()` (project-local, `config_file()`, global - the shared candidate list), so forward and inverse cannot drift. It walks both schemas (`work.workspaces.{ws}.projects[]` and legacy flat `work.projects.{name}`), returns `abspath(expanduser(path))` of the first match, and is a pure map lookup - no `stat()`, no git calls. A mapped-but-nonexistent path fails loudly at launch (`fno agents mail ask --cwd <missing>` errors, surfaced as a `failed` outcome line) rather than silently substituting a possibly-wrong recorded cwd.
+The inverse lookup is native: project name -> work-map path through `settings.rs` `project_root` (the `fno backlog project-root` command and the settings-read door). Both directions consume the same candidate walk in Rust (`settings.rs` `candidates()`: project-local, `FNO_CONFIG`, global), so forward and inverse cannot drift. It walks both schemas (`work.workspaces.{ws}.projects[]` and legacy flat `work.projects.{name}`), returns the expanded path of the first match, and is a pure map lookup - no `stat()`, no git calls. A mapped-but-nonexistent path fails loudly at launch (`fno agents mail ask --cwd <missing>` errors, surfaced as a `failed` outcome line) rather than silently substituting a possibly-wrong recorded cwd.
 
-`fno backlog get` emits the derived field at the serialization boundary:
-
-```python
-root = project_root_from_settings(e["project"]) if e.get("project") else None
-e["_resolved_cwd"] = root or e.get("cwd")
-```
+`fno backlog get` emits the derived field at the serialization boundary (`get_cli.rs`): resolve `settings.rs` `project_root` on the row's project, then stamp `_resolved_cwd` to that root or fall back to the row's recorded `cwd`.
 
 Underscore prefix = derived, matching `status`. Unlike `status` it is **never persisted** to graph.json - a persisted copy would go stale when the work-map changes; read-time derivation stays current forever.
 
@@ -37,11 +32,11 @@ node_cwd="$(printf '%s' "$node_json" | jq -r '._resolved_cwd // .cwd // empty' 2
 
 The `// .cwd` fallback is a locked back-compat contract. An older installed fno lacks `_resolved_cwd` and degrades to the pre-fix behavior instead of breaking. The shell script upgrades with the repo checkout. `fno` upgrades through `fno doctor update`. The fallback makes the unsynchronized paths safe in either order. Both outcome lines carry `cwd=<path>`, so a wrong-repo boot is visible at dispatch time.
 
-The `/agents` skill (spawn verb) passes the same `_resolved_cwd`-with-fallback to `spawn.sh --cwd`. The advance drain reads `_resolved_cwd` on its own selection, so it is fixed transitively. The retired megawalk walker was unaffected - it was project-scoped and never relocated via node.cwd.
+The `/agents` skill (spawn command) passes the same `_resolved_cwd`-with-fallback to `spawn.sh --cwd`. The advance drain reads `_resolved_cwd` on its own selection, so it is fixed transitively. The retired megawalk walker was unaffected - it was project-scoped and never relocated via node.cwd.
 
 ### 3. Write side: filing derives cwd from explicit project
 
-All five filing sites apply one rule when the project is EXPLICIT (CLI flag or plan frontmatter) and no explicit `--cwd` was given: derive cwd via `project_root_from_settings`, falling back to the previous behavior (`repo_root()` / `canonical_root`) when unmapped. Explicit `--cwd` always wins at write - stored verbatim (abspath'd). Auto-detected projects are unchanged (cwd was the match source; already consistent).
+All five filing sites apply one rule when the project is EXPLICIT (CLI flag or plan frontmatter) and no explicit `--cwd` was given: derive cwd from the native work map (`settings.rs` `project_root`, the `fno backlog project-root` command), falling back to the previous behavior (`repo_root()` / `canonical_root`) when unmapped. Explicit `--cwd` always wins at write - stored verbatim (abspath'd). Auto-detected projects are unchanged (cwd was the match source; already consistent).
 
 | Site | Behavior |
 |---|---|

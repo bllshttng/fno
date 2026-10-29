@@ -170,6 +170,7 @@ impl ReaderState {
             // Stamp machine-armed holds after the badges; a hold
             // mark is orthogonal to the badge, like `dnd` itself.
             overlay_hold_marks(&mut reg_rows, now_secs);
+            overlay_keep_marks(&mut reg_rows);
         }
         self.last_good_reg = Some(reg_rows.clone());
 

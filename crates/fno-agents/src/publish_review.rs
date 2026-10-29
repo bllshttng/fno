@@ -10,8 +10,8 @@
 //! port; Python keeps the two doors and nothing else). One JSON payload on
 //! stdin, one JSON answer on stdout, same contract as `spawn-axes`. The emit
 //! chokepoint (`fno event emit -t review_attestation`) and the hidden
-//! `fno do pr publish-review` verb are the two doors; the payload is the same
-//! shape for both, with the verb door passing empty `verdict` to have the
+//! `fno do pr publish-review` command are the two doors; the payload is the same
+//! shape for both, with the command door passing empty `verdict` to have the
 //! default resolved from the newest head-pinned attestation for HEAD.
 //!
 //! Fail-closed by construction, in this order: config missing -> skipped;
@@ -23,8 +23,8 @@
 //! trusting the POST receipt - a receipt saying "posted APPROVE" while GitHub
 //! recorded COMMENTED is the exact lie this module exists to remove.
 //!
-//! Each gh call is unbounded here; the Python transport (`verb_call`) bounds
-//! the whole verb, so a hung network stack costs one timeout and a
+//! Each gh call is unbounded here; the Python transport (`command_call`) bounds
+//! the whole command, so a hung network stack costs one timeout and a
 //! `skipped (mirror error ...)` receipt, never a wedged emit.
 //!
 //! `publish_round` is the second, identity-independent leg: it posts a
@@ -120,7 +120,7 @@ impl Answer {
         }
     }
 
-    /// The verb door's process exit: 0 posted or dry-run-skipped, 2 the
+    /// The command door's process exit: 0 posted or dry-run-skipped, 2 the
     /// no-attestation default miss, 1 everything else.
     pub fn exit(&self) -> i32 {
         match self.status {
@@ -326,6 +326,57 @@ pub(crate) fn newest_branch_attestation(journals: &[PathBuf], branch: &str) -> O
         }
     }
     newest.map(|(_, data)| data)
+}
+
+/// The level and round the summary line names. The row's own fields win.
+/// A row without them still names both: an emitter from an install staged
+/// before the fields existed (a plugin stage lags every merge until it is
+/// restaged) wrote none, and every summary it fed read `level=unset
+/// round=unscoped`. The level falls back to the diff-sized tier of the row's
+/// own reviewed counts, the rule `fno do review resolve-level` applies, and
+/// the round to the chain counter `fno do pr review-hold round` reads, over
+/// the same journals this row came from. Only a row that carries neither
+/// count, or a chain that counts no round, keeps the placeholder.
+fn summary_level_and_round(
+    att: &Value,
+    journals: &[PathBuf],
+    branch: &str,
+    reviewed_head: &str,
+) -> (String, String) {
+    let level = att
+        .get("level")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && *s != "unset")
+        .map(str::to_string)
+        .or_else(|| {
+            let files = att.get("reviewed_file_count").and_then(Value::as_u64)?;
+            let lines = att.get("reviewed_line_count").and_then(Value::as_u64)?;
+            Some(crate::review_level::level_for_diff(files, lines).to_string())
+        })
+        .unwrap_or_else(|| "unset".to_string());
+    let round = att
+        .get("review_round")
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            let text: Vec<String> = journals
+                .iter()
+                .filter_map(|p| {
+                    crate::loopcheck::event_lines_of(p, &["review_attestation"])
+                        .ok()
+                        .map(|l| l.join("\n"))
+                })
+                .collect();
+            let used = crate::loopcheck::rounds_since_last_pass(
+                &text.join("\n"),
+                branch,
+                reviewed_head,
+                None,
+            );
+            (used > 0).then_some(used)
+        })
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "unscoped".to_string());
+    (level, round)
 }
 
 /// The one marker a round's review ends with; idempotency keys on it. Also
@@ -558,17 +609,7 @@ pub fn publish_round(payload: &Value, gh: &dyn Gh, journals: &[PathBuf]) -> Roun
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let level = att
-        .get("level")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("unset")
-        .to_string();
-    let round_label = att
-        .get("review_round")
-        .and_then(Value::as_i64)
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "unscoped".to_string());
+    let (level, round_label) = summary_level_and_round(&att, journals, &branch, &reviewed_head);
     let verdict = att
         .get("verdict")
         .and_then(Value::as_str)
@@ -695,7 +736,7 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
         .unwrap_or(false);
     let pr_number = payload.get("pr_number").and_then(Value::as_u64);
 
-    // Default resolution (the verb door): verdict/head/reviewer come from the
+    // Default resolution (the command door): verdict/head/reviewer come from the
     // newest head-pinned attestation for HEAD, never from memory.
     let mut verdict = payload
         .get("verdict")
@@ -942,17 +983,29 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
     a
 }
 
-/// The verb entry: one JSON payload on stdin, one JSON answer on stdout,
+/// The command entry: one JSON payload on stdin, one JSON answer on stdout,
 /// always exit 0 (the answer carries the caller-facing exit under "exit";
 /// only a transport failure - unreadable or malformed stdin - exits 2).
 /// Two independent legs ride one answer: the verdict mirror under the bot
 /// identity, and the held-findings post under the caller's own auth (`held`).
-pub fn run_publish_review(_args: &[String]) -> i32 {
+pub fn run_publish_review(args: &[String]) -> i32 {
+    // The argv door beside the JSON door (the pr-port-4 wave): the deleted
+    // Python typer command parsed these flags and shelled this command with
+    // the payload built below, so the port keeps both halves in one place.
+    // Flags mean the argv door; the events-cli caller pipes its payload
+    // with no args and keeps the stdin door.
+    if !args.is_empty() {
+        return run_publish_argv(args);
+    }
+
     use std::io::Read;
 
     let mut payload = String::new();
-    if std::io::stdin().read_to_string(&mut payload).is_err() {
-        eprint!("publish-review: cannot read payload\n");
+    if std::io::stdin().read_to_string(&mut payload).is_err() || payload.trim().is_empty() {
+        // A bare call with nothing piped is the deleted typer door's
+        // no-flag form (command_call always writes a payload), so it gets the
+        // typer's missing-option refusal, not a malformed-payload error.
+        eprint!("publish-review: missing option --pr-number\n");
         return 2;
     }
     let parsed: Value = match serde_json::from_str(&payload) {
@@ -968,6 +1021,92 @@ pub fn run_publish_review(_args: &[String]) -> i32 {
     answer["round"] = publish_round(&parsed, &GhReal, &journals).to_json();
     println!("{answer}");
     0
+}
+
+/// The typer-shaped flags: `--pr-number N`, the hidden deprecated `--pr N`
+/// alias, `--verdict V`, `--dry-run`/`-N`; `--flag=value` spellings work
+/// throughout. Prints only the bot-review receipt on stderr and exits with
+/// the answer's own exit (the deleted Python door's exact contract), though
+/// both legs run on this call like the stdin door.
+fn run_publish_argv(args: &[String]) -> i32 {
+    let mut pr_number: Option<i64> = None;
+    let mut pr_legacy: Option<i64> = None;
+    let mut verdict: Option<String> = None;
+    let mut dry_run = false;
+    let mut it = args.iter();
+    while let Some(tok) = it.next() {
+        let (flag, inline) = match tok.split_once('=') {
+            Some((f, v)) => (f, Some(v.to_string())),
+            None => (tok.as_str(), None),
+        };
+        // The deleted typer door refused unknown options, an option value that
+        // looked like another flag, and a value on a boolean flag; the port
+        // keeps all three refusals so a mistyped --dry-run cannot fall
+        // through to a live POST.
+        let mut value = |inline: &Option<String>| -> Option<String> {
+            match inline {
+                Some(v) => Some(v.clone()),
+                None => match it.next() {
+                    Some(v) if !v.starts_with('-') => Some(v.clone()),
+                    _ => None,
+                },
+            }
+        };
+        match flag {
+            "--pr-number" => pr_number = value(&inline).and_then(|v| v.parse().ok()),
+            "--pr" => pr_legacy = value(&inline).and_then(|v| v.parse().ok()),
+            "--verdict" => verdict = value(&inline),
+            "--dry-run" | "-N" => {
+                if inline.is_some() {
+                    eprint!("publish-review: {flag} takes no value\n");
+                    return 2;
+                }
+                dry_run = true;
+            }
+            _ => {
+                eprint!("publish-review: unknown option {flag}\n");
+                return 2;
+            }
+        }
+    }
+    // The alias fold mirrors cli/src/fno/_flag_aliases.py::merge_deprecated_alias:
+    // both-passed refuses even when the values agree; alias-only warns and wins.
+    let pr_number = match (pr_number, pr_legacy) {
+        (Some(_), Some(_)) => {
+            eprint!("error: pass either --pr-number or --pr (deprecated), not both\n");
+            return 2;
+        }
+        (None, Some(legacy)) => {
+            eprint!(
+                "warning: --pr is deprecated; use --pr-number instead. \
+The alias will be removed in a future release.\n"
+            );
+            legacy
+        }
+        (Some(canonical), None) => canonical,
+        (None, None) => {
+            eprint!("publish-review: missing option --pr-number\n");
+            return 2;
+        }
+    };
+    let payload = json!({
+        "pr_number": pr_number,
+        "head_sha": "",
+        "verdict": verdict.unwrap_or_default(),
+        "reviewer": "",
+        "cwd": std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .display()
+            .to_string(),
+        "dry_run": dry_run,
+    });
+    let mut answer = publish(&payload, &GhReal, &|name: &str| std::env::var(name).ok()).to_json();
+    let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
+    let journals = [crate::paths::events_path(cwd)];
+    answer["round"] = publish_round(&payload, &GhReal, &journals).to_json();
+    let receipt = answer.get("receipt").and_then(Value::as_str).unwrap_or("");
+    eprint!("{receipt}\n");
+    answer.get("exit").and_then(Value::as_i64).unwrap_or(1) as i32
 }
 
 #[cfg(test)]
@@ -1028,7 +1167,7 @@ mod tests {
         GhOut {
             ok: true,
             code: 0,
-            stdout: r#"{"number": 931, "author": {"login": "bllshttng"}, "headRefOid": "abc123", "url": "https://github.com/bllshttng/footnote/pull/931"}"#.to_string(),
+            stdout: r#"{"number": 931, "author": {"login": "bllshttng"}, "headRefOid": "abc123", "url": "https://github.com/bllshttng/fno/pull/931"}"#.to_string(),
             stderr: String::new(),
         }
     }
@@ -1328,5 +1467,69 @@ mod tests {
         assert_eq!(no_att.exit(), 2);
         let refused = Answer::done("refused", "bot identity b is the PR author");
         assert_eq!(refused.exit(), 1);
+    }
+
+    /// The posted summary names a level and a round whenever the journal can
+    /// supply them. The rows mirror the ones a stale plugin stage wrote for a
+    /// real PR: two reviewed heads, no `level`, no `review_round`, 3 files and
+    /// 53 lines. That PR's summary read `level=unset round=unscoped`.
+    #[test]
+    fn round_summary_names_level_and_round() {
+        let dir = temp_repo("round-summary");
+        let journal = dir.join("events.jsonl");
+        let row = |ts: &str, head: &str, extra: &str| {
+            format!(
+                "{{\"type\":\"review_attestation\",\"ts\":\"{ts}\",\"data\":{{\"reviewer\":\"code-review\",\"head_sha\":\"{head}\",\"verdict\":\"pass\",\"branch\":\"feat/x\",\"reviewed_file_count\":3,\"reviewed_line_count\":53,\"findings\":[]{extra}}}}}\n"
+            )
+        };
+        let view = || {
+            GhOut {
+            ok: true,
+            code: 0,
+            stdout: r#"{"number": 931, "headRefOid": "head2", "headRefName": "feat/x", "url": "https://github.com/o/r/pull/931"}"#.to_string(),
+            stderr: String::new(),
+        }
+        };
+        let empty_list = || GhOut {
+            ok: true,
+            code: 0,
+            stdout: "[]".to_string(),
+            stderr: String::new(),
+        };
+        let posted_summary = |journal_text: String| {
+            std::fs::write(&journal, journal_text).unwrap();
+            let fake = GhFake::new(vec![view(), empty_list(), post_ok()]);
+            let answer = publish_round(
+                &json!({"pr_number": 931, "cwd": dir.to_string_lossy()}),
+                &fake,
+                &[journal.clone()],
+            );
+            assert_eq!(answer.status, "posted");
+            let calls = fake.calls();
+            calls[2]
+                .iter()
+                .find_map(|a| a.strip_prefix("body=").map(str::to_string))
+                .unwrap()
+        };
+
+        let legacy = posted_summary(format!(
+            "{}{}",
+            row("2026-10-23T05:47:52Z", "head1", ""),
+            row("2026-10-23T05:49:12Z", "head2", "")
+        ));
+        assert!(
+            legacy.starts_with("fno review: level=low round=2 "),
+            "{legacy}"
+        );
+
+        let declared = posted_summary(row(
+            "2026-10-23T05:49:12Z",
+            "head2",
+            ",\"level\":\"high\",\"review_round\":5",
+        ));
+        assert!(
+            declared.starts_with("fno review: level=high round=5 "),
+            "{declared}"
+        );
     }
 }

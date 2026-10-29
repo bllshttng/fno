@@ -14,11 +14,11 @@ An interactive agent used to be a daemon-owned PTY worker (`fno-agents-worker`),
 
 - **Grid + drive** — the TUI compositor and the WebSocket drive/watch surface. Agent panes now live in the mux; observe them in the sideline and script them with `fno mux pane ls|read|run|send|wait|kill`. `fno mux block pipe --from <pane> --to <pane> [--block last|<seq>] [--json]` composes two of those into cross-pane block piping: read a completed, typed block from the source pane and land its text in the target pane's input (trailing newlines stripped, so it fills the input line and never submits). An open or byte-cap-truncated source block refuses with exit 14 (partial text never pipes). A receive-side idle guard mirrors the block-rerun guard's policy on the target: an agent badged working/blocked refuses (busy), an agent row with no fresh report refuses fail-closed (not provably idle), while done agents, plain shell panes (no registry row), and exited agents receive; session-scoped, since pane ids collide across sessions. `--force` overrides the idle guard only, and a guard refusal exits 15 so scripts can tell it from an error.
 - **Daemon PTY hosting** — the `handle_spawn` PTY back-half, the PTY worker (`worker.rs` + `pty.rs`), the `agent.deliver` PTY inject lane, and the injection gate.
-- **`host` / `promote` / `grid` / `drive`** — retired verbs. Each prints a one-line pointer to the mux and exits non-zero rather than silently doing nothing.
+- **`host` / `promote` / `grid` / `drive`** — retired commands. Each prints a one-line pointer to the mux and exits non-zero rather than silently doing nothing.
 
 ## Spawn substrates after the migration
 
-`fno agents spawn --substrate <pane|thread|headless>` names where an off-thread agent runs:
+Each harness's native lane names where an off-thread agent runs (the substrate flags are retired; docs/HARNESSES.md names the forms):
 
 - **`pane`** (default) — a mux-hosted PTY pane. The spawn front half is reused; only the hosting call changed. Python owns this back half (`fno.agents.mux_spawn`).
 - **`bg`** — a detached `claude --bg` thread. Crash-isolated from the mux (survives a mux server crash). claude-only.

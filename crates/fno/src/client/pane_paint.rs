@@ -6,6 +6,27 @@
 use super::*;
 
 impl View {
+    /// The part of the server's `Layout.area` this window can show: the
+    /// elementwise min of the area and the local content area. A window
+    /// smaller than the tab's area crops (content anchors top-left, nothing
+    /// pans); a larger one letterboxes. `(0, 0)` is the pre-Layout
+    /// placeholder.
+    pub(super) fn visible_area(&self) -> (u16, u16) {
+        let (rows, cols) = self.layout.area;
+        if (rows, cols) == (0, 0) {
+            return (0, 0);
+        }
+        let (c_rows, c_cols) = self.content_dims();
+        (rows.min(c_rows), cols.min(c_cols))
+    }
+
+    /// Whether a content-relative cell lies inside [`View::visible_area`]
+    /// (always true before the first Layout).
+    pub(super) fn in_visible(&self, cr: u16, cc: u16) -> bool {
+        let (rows, cols) = self.visible_area();
+        rows == 0 || (cr < rows && cc < cols)
+    }
+
     pub(super) fn paint_panes(
         &self,
         cells: &mut [Cell],
@@ -15,6 +36,16 @@ impl View {
         origin_c: usize,
         now: Instant,
     ) {
+        // Panes clip at this window's content edge, never under the status
+        // row or a side panel.
+        let (vis_r, vis_c) = self.visible_area();
+        let (clip_r, clip_c) = match (vis_r, vis_c) {
+            (0, 0) => (rows, cols),
+            (vr, vc) => (
+                (origin_r + vr as usize).min(rows),
+                (origin_c + vc as usize).min(cols),
+            ),
+        };
         // Content area: dividers first (uncovered cells), panes blitted over.
         let mut covered = vec![false; rows * cols];
         // cells owned by the focused pane, so the divider pass can accent
@@ -29,12 +60,12 @@ impl View {
             let is_framed = crate::pane_border::framed(*rect);
             for fr in 0..rect.rows as usize {
                 let r = origin_r + rect.y as usize + fr;
-                if r >= rows {
+                if r >= clip_r {
                     break;
                 }
                 for fc in 0..rect.cols as usize {
                     let c = origin_c + rect.x as usize + fc;
-                    if c >= cols {
+                    if c >= clip_c {
                         break;
                     }
                     covered[r * cols + c] = true;
@@ -59,12 +90,12 @@ impl View {
                 let fcols = (f.cols as usize).min(content.cols as usize);
                 for fr in 0..frows {
                     let r = origin_r + content.y as usize + fr;
-                    if r >= rows {
+                    if r >= clip_r {
                         break;
                     }
                     for fc in 0..fcols {
                         let c = origin_c + content.x as usize + fc;
-                        if c >= cols {
+                        if c >= clip_c {
                             break;
                         }
                         let cell = &mut cells[r * cols + c];
@@ -186,7 +217,7 @@ impl View {
         // beyond `area` up to the local content edge is visibly-inert dim
         // filler, never divider glyphs. `(0, 0)` is the pre-Layout
         // placeholder: no filler until the first real Layout names a bound.
-        let (a_rows, a_cols) = self.layout.area;
+        let (a_rows, a_cols) = (vis_r, vis_c);
         let boxed = self.layout.area != (0, 0);
         // A drag keeps the accent on the seam it grabbed even as the pointer
         // runs ahead of it, so the thing being moved stays the thing lit.
@@ -376,7 +407,7 @@ impl View {
         let agent = self.layout.agents.iter().find(|a| a.pane_id == Some(pid));
         let status = agent.map(|a| {
             let st = agent_lattice_state(a);
-            let ls = lattice_style(st, self.theme.needs_you);
+            let ls = lattice_style(st, self.theme.needs_you, self.theme.ok);
             (status_glyph(st), ls.flags, ls.fg, status_word(st))
         });
         let fields = crate::pane_border::EdgeFields {
@@ -496,6 +527,7 @@ impl View {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::{meta, text_frame};
     use super::*;
 
     const BAND: char = '\u{0243}';
@@ -540,5 +572,61 @@ mod tests {
         // `terminal` is the byte-identical no-op: the band stays as drawn.
         let (band, _) = composed_fg("terminal", Color::Rgb(0x37, 0x37, 0x37));
         assert_eq!(band, Color::Rgb(0x70, 0x70, 0x70));
+    }
+
+    fn view_with(area: (u16, u16), rect: (u16, u16)) -> View {
+        let mut view = View::new(
+            (30, 100),
+            "main".into(),
+            LayoutView {
+                squads: vec![meta(1, "footnote", 1, 0)],
+                active_squad: 1,
+                panes: vec![(
+                    10,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        rows: rect.0,
+                        cols: rect.1,
+                    },
+                )],
+                focus: 10,
+                area,
+                agents: vec![],
+                focus_node: None,
+            },
+        );
+        view.frames.insert(10, text_frame(rect.0, rect.1, 'a'));
+        view
+    }
+
+    /// A 29x72 local content area under a tab sized by another client:
+    /// a smaller tab area letterboxes with dim filler (AC1-UI), a larger one
+    /// crops at the window's own edge with no filler and no cursor in chrome.
+    #[test]
+    fn compose_letterboxes_a_small_tab_and_crops_a_large_one() {
+        let frame = view_with((20, 50), (20, 50)).compose();
+        let cols = frame.cols as usize;
+        assert_eq!(frame.cells[cols + 28].c, '╭');
+        assert_eq!(frame.cells[2 * cols + 29].c, 'a');
+        let beyond_col = &frame.cells[cols + 28 + 50];
+        assert_eq!(beyond_col.c, '·', "beyond-area column must be filler");
+        assert!(beyond_col.flags & cell_flags::DIM != 0);
+        assert_eq!(frame.cells[(1 + 20) * cols + 28].c, '·', "beyond-area row");
+        assert!(frame.cursor_row < 1 + 20 && frame.cursor_col < 28 + 50);
+
+        let view = view_with((60, 200), (60, 200));
+        // 30 rows minus the tab strip and the status row; 100 minus the panel.
+        assert_eq!(view.visible_area(), (28, 72));
+        assert_eq!(view.hit_test(5, 40).map(|h| h.0), Some(10));
+        let frame = view.compose();
+        assert_eq!(frame.cells[5 * cols + 40].c, 'a');
+        let filler = (1..29)
+            // rows 1..=28 are content; row 29 is the status row.
+            .flat_map(|r| (28..100).map(move |c| (r, c)))
+            .filter(|&(r, c)| frame.cells[r * cols + c].c == '·')
+            .count();
+        assert_eq!(filler, 0, "a cropped window paints no letterbox filler");
+        assert!(frame.cursor_row < 1 + 28 && frame.cursor_col < 28 + 72);
     }
 }

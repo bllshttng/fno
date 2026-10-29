@@ -147,7 +147,7 @@ fn classify_group_dep(
 
 /// Strip any `#fragment` from an epic plan_path to get the base doc path.
 /// An epic with no plan_path cannot address group fragments; the remedy
-/// names the folding verb.
+/// names the folding command.
 fn plan_base(plan_path: Option<&str>) -> Result<String, DecomposeErr> {
     match plan_path {
         Some(pp) if !pp.is_empty() => Ok(pp.split('#').next().unwrap_or(pp).to_string()),
@@ -305,68 +305,94 @@ pub(crate) enum MaxChildren {
     Invalid(String),
 }
 
-/// Resolve the decompose ceiling and a human label naming its source.
-/// `max_children` (the epic author's durable cap) overrides the config
-/// default upward; an explicit `--max-prs` may only tighten it. Fail-closed
-/// on a present-but-invalid cap: a typo'd cap must fail loud, never protect
-/// nothing.
+/// The project PR ceiling and a label naming where it came from:
+/// `config.blueprint.max_prs_per_epic`, else the default 4. Every cap a plan
+/// or epic declares may only tighten it; a project raises it in its own
+/// config. `Err` names a present-but-invalid value.
+pub(crate) fn pr_ceiling(cwd: &Path) -> Result<(i64, String), String> {
+    match crate::agents_config::config_lookup(cwd, &["blueprint", "max_prs_per_epic"]) {
+        Some(v) => match v.as_integer() {
+            Some(n) if n >= 1 => Ok((n, format!("config.blueprint.max_prs_per_epic = {n}"))),
+            _ => Err(
+                "could not read config.blueprint.max_prs_per_epic: it must be an integer >= 1"
+                    .to_string(),
+            ),
+        },
+        None => Ok((4, "the default 4".to_string())),
+    }
+}
+
+fn over_ceiling(cap_src: &str, cap: i64, ceiling: i64, ceiling_src: &str) -> DecomposeErr {
+    DecomposeErr::new(
+        format!(
+            "{cap_src} asks for {cap} PRs, over the PR ceiling {ceiling} ({ceiling_src}); \
+             lower it, or raise the ceiling with config.blueprint.max_prs_per_epic in the \
+             project's .fno/config.toml"
+        ),
+        1,
+    )
+}
+
+/// Resolve the decompose cap and a human label naming its source. The
+/// ceiling (`pr_ceiling`) is hard: `max_children` (the epic author's durable
+/// cap) and an explicit `--max-prs` may only tighten it, and `--max-prs` may
+/// only tighten `max_children`. Fail-closed on a present-but-invalid cap: a
+/// typo'd cap must fail loud, never protect nothing.
 fn resolve_effective_cap(
     max_children: &MaxChildren,
     explicit_max_prs: Option<i64>,
-    config_default: Option<i64>,
+    ceiling: Option<(i64, &str)>,
     epic_doc_rel: Option<&str>,
 ) -> Result<(i64, String), DecomposeErr> {
+    let loc = epic_doc_rel
+        .map(|r| format!(" (in {r})"))
+        .unwrap_or_default();
+    let invalid = |shown: &str| {
+        DecomposeErr::new(
+            format!(
+                "max_children in the epic frontmatter is invalid: {shown}{loc}; \
+                 it must be an integer >= 1 (remove the key to fall back to \
+                 --max-prs / config)"
+            ),
+            1,
+        )
+    };
     match max_children {
-        MaxChildren::Unset => {
-            if let Some(flag) = explicit_max_prs {
-                return Ok((flag, format!("--max-prs {flag}")));
-            }
-            match config_default {
-                Some(d) => Ok((d, format!("config default {d}"))),
-                None => Err(DecomposeErr::new(
-                    "could not read config.blueprint.max_prs_per_epic",
-                    1,
-                )),
-            }
+        MaxChildren::Invalid(shown) => return Err(invalid(shown)),
+        MaxChildren::Value(n) if *n < 1 => return Err(invalid(&n.to_string())),
+        _ => {}
+    }
+    let Some((ceiling, ceiling_src)) = ceiling else {
+        return Err(DecomposeErr::new(
+            "could not read config.blueprint.max_prs_per_epic",
+            1,
+        ));
+    };
+    if let Some(flag) = explicit_max_prs {
+        if flag > ceiling {
+            return Err(over_ceiling("--max-prs", flag, ceiling, ceiling_src));
         }
-        MaxChildren::Invalid(shown) => {
-            let loc = epic_doc_rel
-                .map(|r| format!(" (in {r})"))
-                .unwrap_or_default();
-            Err(DecomposeErr::new(
-                format!(
-                    "max_children in the epic frontmatter is invalid: {shown}{loc}; \
-                     it must be an integer >= 1 (remove the key to fall back to \
-                     --max-prs / config)"
-                ),
-                1,
-            ))
-        }
-        MaxChildren::Value(n) if *n < 1 => {
-            let loc = epic_doc_rel
-                .map(|r| format!(" (in {r})"))
-                .unwrap_or_default();
-            Err(DecomposeErr::new(
-                format!(
-                    "max_children in the epic frontmatter is invalid: {n}{loc}; \
-                     it must be an integer >= 1 (remove the key to fall back to \
-                     --max-prs / config)"
-                ),
-                1,
-            ))
-        }
+    }
+    match max_children {
         MaxChildren::Value(n) => {
             let src = match epic_doc_rel {
                 Some(rel) => format!("max_children={n} (from {rel})"),
                 None => format!("max_children={n}"),
             };
-            if let Some(flag) = explicit_max_prs {
-                if flag < *n {
-                    return Ok((flag, format!("--max-prs {flag} (tightening {src})")));
-                }
+            if *n > ceiling {
+                return Err(over_ceiling(&src, *n, ceiling, ceiling_src));
             }
-            Ok((*n, src))
+            match explicit_max_prs {
+                Some(flag) if flag < *n => {
+                    Ok((flag, format!("--max-prs {flag} (tightening {src})")))
+                }
+                _ => Ok((*n, src)),
+            }
         }
+        _ => match explicit_max_prs {
+            Some(flag) => Ok((flag, format!("--max-prs {flag}"))),
+            None => Ok((ceiling, ceiling_src.to_string())),
+        },
     }
 }
 
@@ -1331,7 +1357,7 @@ fn refuse_dead_owner(owner: &Value, context: &str) -> Option<DecomposeErr> {
     Some(DecomposeErr::new(
         format!(
             "{context} resolves to {owner_id}, which {how}; {containment}, so stamping \
-             containment here would leave every adoptee undispatchable with no verb to \
+             containment here would leave every adoptee undispatchable with no command to \
              free it. {remedy}"
         ),
         2,
@@ -1639,23 +1665,17 @@ pub fn run_decompose(tail: &[String]) -> i32 {
             }
         }
     }
-    let mut config_default: Option<i64> = None;
-    if matches!(max_children, MaxChildren::Unset) && max_prs.is_none() {
-        match crate::agents_config::config_lookup(&cwd, &["blueprint", "max_prs_per_epic"]) {
-            Some(v) => match v.as_integer() {
-                Some(n) if n >= 1 => config_default = Some(n),
-                _ => {
-                    eprintln!("Error: could not read config.blueprint.max_prs_per_epic: it must be an integer >= 1");
-                    return 1;
-                }
-            },
-            None => config_default = Some(4),
+    let ceiling = match pr_ceiling(&cwd) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("Error: {msg}");
+            return 1;
         }
-    }
+    };
     let (effective_cap, cap_source) = match resolve_effective_cap(
         &max_children,
         max_prs,
-        config_default,
+        Some((ceiling.0, ceiling.1.as_str())),
         epic_doc_rel.as_deref(),
     ) {
         Ok(pair) => pair,
@@ -2594,7 +2614,7 @@ fn decompose_post_steps(
 /// the seed prompt (origin pointer + transcribed why + the /blueprint chain
 /// instruction), named per the dispatcher's provenance naming. The wheel
 /// resolved harness/model through resolve_dispatch/node_model before
-/// spawning; the port leaves both to the spawn verb's own defaults (that
+/// spawning; the port leaves both to the spawn command's own defaults (that
 /// resolution ladder is not decompose-owned).
 fn fanout_spawn_think(child: &Value, why_digest: &str, lane: &'static str) -> FanoutRow {
     let node_id = text_at(child, "id").unwrap_or("?").to_string();
@@ -2748,17 +2768,19 @@ mod tests {
 
     #[test]
     fn cap_resolution_flag_tightens_frontmatter_and_invalid_fails_closed() {
+        let ceiling = Some((8, "config.blueprint.max_prs_per_epic = 8"));
         let (cap, src) =
-            resolve_effective_cap(&MaxChildren::Value(6), Some(3), Some(4), Some("d.md"))
+            resolve_effective_cap(&MaxChildren::Value(6), Some(3), ceiling, Some("d.md"))
                 .expect("tighten ok");
         assert_eq!(cap, 3);
         assert!(src.contains("tightening"));
-        let (cap, _) = resolve_effective_cap(&MaxChildren::Value(6), None, Some(4), None)
-            .expect("frontmatter wins");
+        let (cap, _) = resolve_effective_cap(&MaxChildren::Value(6), None, ceiling, None)
+            .expect("frontmatter under the ceiling binds");
         assert_eq!(cap, 6);
-        let (cap, _) =
-            resolve_effective_cap(&MaxChildren::Unset, None, Some(4), None).expect("config");
-        assert_eq!(cap, 4);
+        let (cap, src) =
+            resolve_effective_cap(&MaxChildren::Unset, None, Some((4, "the default 4")), None)
+                .expect("config");
+        assert_eq!((cap, src.as_str()), (4, "the default 4"));
         assert_eq!(
             resolve_effective_cap(&MaxChildren::Value(0), None, None, Some("d.md"))
                 .unwrap_err()
@@ -2772,6 +2794,49 @@ mod tests {
             1
         );
         assert!(resolve_effective_cap(&MaxChildren::Unset, None, None, None).is_err());
+    }
+
+    #[test]
+    fn an_explicit_cap_over_the_ceiling_refuses() {
+        let default = Some((4, "the default 4"));
+        let flag = resolve_effective_cap(&MaxChildren::Unset, Some(25), default, None).unwrap_err();
+        assert_eq!(flag.exit_code, 1);
+        assert!(
+            flag.message.contains("--max-prs asks for 25 PRs"),
+            "{}",
+            flag.message
+        );
+        assert!(
+            flag.message.contains("ceiling 4 (the default 4)"),
+            "{}",
+            flag.message
+        );
+        assert!(
+            flag.message.contains("config.blueprint.max_prs_per_epic"),
+            "{}",
+            flag.message
+        );
+        let mc =
+            resolve_effective_cap(&MaxChildren::Value(6), None, default, Some("d.md")).unwrap_err();
+        assert!(
+            mc.message.contains("max_children=6 (from d.md) asks for 6"),
+            "{}",
+            mc.message
+        );
+        // A project ceiling of 6 lets the same caps through.
+        let six = Some((6, "config.blueprint.max_prs_per_epic = 6"));
+        assert_eq!(
+            resolve_effective_cap(&MaxChildren::Value(6), None, six, None)
+                .unwrap()
+                .0,
+            6
+        );
+        assert_eq!(
+            resolve_effective_cap(&MaxChildren::Unset, Some(6), six, None)
+                .unwrap()
+                .0,
+            6
+        );
     }
 
     #[test]

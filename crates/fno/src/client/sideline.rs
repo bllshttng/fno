@@ -23,6 +23,24 @@ const SIDELINE_RIGHT_SLOT_W: u16 = 6;
 /// The card edge bar: leads every card line, accent-toned on the chosen
 /// card, theme-dim on a resting one.
 const CARD_EDGE_BAR: char = '\u{258e}';
+pub(super) const PIN_STAR: char = '\u{2605}';
+pub(super) const PIN_OUTLINE: char = '\u{2606}';
+/// The cell a row's pin star sits in: a card's line 2 under the status
+/// mark, else the list gutter. Paint and click both read it.
+fn pin_star_cell<'a>(
+    drow: &DisplayRow<'a>,
+    rects: &[RtRect],
+    card: bool,
+    density: Density,
+) -> Option<(usize, &'a AgentRow)> {
+    match *drow {
+        DisplayRow::CardDetail(a) if card => {
+            Some(((rects[0].x + rects[0].width).saturating_sub(1) as usize, a))
+        }
+        DisplayRow::Agent(a) if !card || density == Density::Slim => Some((0, a)),
+        _ => None,
+    }
+}
 const CARD_COLUMNS: [Constraint; 5] = [
     Constraint::Length(5),
     Constraint::Min(22),
@@ -75,12 +93,13 @@ impl View {
         if self.sideline_layout == sideline_color::SidelineLayout::Card {
             return vec![Constraint::Length(2), Constraint::Min(8)];
         }
+        let text_w = text_w.saturating_sub(self.pin_gutter());
         // The name takes a quarter of the surplus over the fixed cells, the
         // description first (d-36438ea4); the message keeps the Fill(3)
         // surplus. Both layouts use the same rule. `Min`, not `Length`: the
         // name keeps the old yield order under deficit (names starve last),
-        // and name_w floors at 22 so the narrow rail solves as it did before
-        // the formula existed.
+        // and name_w floors at 22 (less the pin gutter) so the narrow rail
+        // solves as it did before the formula existed.
         let list_wide = self.sideline_layout == sideline_color::SidelineLayout::List
             && (self.density == Density::Extended || self.sideline_full)
             // Fixed cells and six gaps leave at least eight message columns.
@@ -98,7 +117,7 @@ impl View {
         } else {
             vec![
                 CARD_COLUMNS[0],
-                Constraint::Min(row_meter::name_w(text_w, 17, 4)),
+                Constraint::Min(row_meter::name_w(text_w, 17, 4).saturating_sub(self.pin_gutter())),
                 CARD_COLUMNS[2],
                 CARD_COLUMNS[3],
                 CARD_COLUMNS[4],
@@ -107,10 +126,31 @@ impl View {
     }
 
     pub(super) fn worker_column_rects(&self, text_w: u16) -> std::rc::Rc<[RtRect]> {
+        let gutter = self.pin_gutter();
         Layout::horizontal(self.worker_columns(text_w).iter().copied())
             .flex(Flex::Start)
             .spacing(1)
-            .split(RtRect::new(0, 0, text_w, 1))
+            .split(RtRect::new(gutter, 0, text_w.saturating_sub(gutter), 1))
+    }
+
+    /// The agent whose pin star sits under a sideline click, if any.
+    pub(super) fn pin_star_at(&self, row: u16, col: u16) -> Option<AgentRow> {
+        let i = self.sideline_row_at(row, col)?;
+        let rects = self.worker_column_rects(self.sideline_paint_w().checked_sub(1)? as u16);
+        let card = self.sideline_layout == sideline_color::SidelineLayout::Card;
+        let density = if self.sideline_full {
+            Density::Extended
+        } else {
+            self.density
+        };
+        let rows = self.painted_rows();
+        let (c, a) = pin_star_cell(rows.get(i)?, &rects, card, density)?;
+        (c == col as usize).then(|| a.clone())
+    }
+
+    /// A list row's column 0 is the pin gutter, so a pin never moves a name.
+    pub(super) fn pin_gutter(&self) -> u16 {
+        u16::from(self.sideline_layout == sideline_color::SidelineLayout::List)
     }
 
     /// Rows of chrome the full-screen sideline paints under (the tab strip),
@@ -313,6 +353,31 @@ impl View {
     pub(super) fn paint_top_row(&self, cells: &mut [Cell], cols: usize, text_w: usize) {
         let limit = text_w.min(cols.saturating_sub(1));
         let rest_fg = crate::theme::dim_fg(&self.theme);
+        // The count folds the same state function as every section rollup,
+        // so it always equals the sum of the section ▲ counts.
+        let need = self
+            .layout
+            .agents
+            .iter()
+            .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
+            .count();
+        if need > 0 && self.sideline_view == crate::view_store::SidelineView::Agents {
+            let stop = self
+                .top_row_spans()
+                .first()
+                .map_or(limit, |s| s.0.saturating_sub(1));
+            for (col, ch) in format!(" {need} need input").chars().enumerate() {
+                if col >= stop.min(limit) {
+                    break;
+                }
+                cells[col] = Cell {
+                    c: ch,
+                    fg: self.theme.needs_you,
+                    bg: Color::Default,
+                    flags: cell_flags::BOLD,
+                };
+            }
+        }
         for ((start, _, view), (word, _)) in
             self.top_row_spans().into_iter().zip(self.top_row_words())
         {
@@ -462,7 +527,8 @@ impl View {
         // The widget area is the top slice of the column; the dock paints
         // into the same Buffer below it, before the one blit. The strip row
         // is painted AFTER this blit (it owns row 0, which the blit wipes).
-        let table_area = RtRect::new(0, 1, text_w as u16, table_h as u16);
+        let g = self.pin_gutter();
+        let table_area = RtRect::new(g, 1, (text_w as u16).saturating_sub(g), table_h as u16);
         // The selector rides the TableState's `selected`, which is what the
         // widget's render-time scroll keeps visible.
         let mut st = self
@@ -579,10 +645,20 @@ impl View {
                     rollup,
                     view,
                     ..
-                } => Some((
-                    header_band_text(&format!("{}{label}", view_caret(*view)), rollup, band_w),
-                    header_band_flags(false),
-                )),
+                } => {
+                    let caret_label = format!("{}{label}", view_caret(*view));
+                    // A harness band names what it spent in the gap.
+                    let text = match super::agent_group::band_spend(self, label) {
+                        Some(spend) => super::header_band::header_band_hinted(
+                            &caret_label,
+                            &spend,
+                            rollup,
+                            band_w,
+                        ),
+                        None => header_band_text(&caret_label, rollup, band_w),
+                    };
+                    Some((text, header_band_flags(false)))
+                }
                 // Card lines 2 and 3 indent under the name TEXT (the
                 // operator's 2026-10-04 mockup): the name cell's own
                 // `{mark} ` prefix plus the row's lineage depth, on top of
@@ -626,7 +702,7 @@ impl View {
                     Some((
                         crate::chrome::clip(
                             &format!(
-                                "{} {}",
+                                " {} {}",
                                 status_glyph(lat),
                                 card_line::slug(a, &self.backlog)
                             ),
@@ -669,7 +745,12 @@ impl View {
                 if matches!(drow, DisplayRow::Agent(_)) && density == Density::Slim {
                     // The slim rail's agent lines wear the lattice color.
                     if let DisplayRow::Agent(a) = drow {
-                        let fg = lattice_style(agent_lattice_state(a), self.theme.needs_you).fg;
+                        let fg = lattice_style(
+                            agent_lattice_state(a),
+                            self.theme.needs_you,
+                            self.theme.ok,
+                        )
+                        .fg;
                         for cell in &mut cells[r * cols..r * cols + text_w] {
                             cell.fg = fg;
                         }
@@ -701,7 +782,20 @@ impl View {
                 // included: the chosen fill wins on hover.
                 highlit = true;
             }
-            if highlit && card_chosen {
+            // The selector's cursor row (or card) inverts and wins over the chosen fill.
+            let head = match drow {
+                DisplayRow::CardDetail(..) => i.saturating_sub(1),
+                DisplayRow::CardMetrics(..) => i.saturating_sub(2),
+                _ => i,
+            };
+            let driven = self.list_selector().is_some_and(|s| {
+                if card_pair {
+                    (head..=head + 2).contains(&s)
+                } else {
+                    s == i
+                }
+            });
+            if highlit && card_chosen && !driven {
                 // The chosen card fills all 3 lines with the theme accent
                 // plus a left bar (the operator's 2026-10-04 sideline
                 // ruling): the fill wins on hover, and no lane accent rides
@@ -722,7 +816,11 @@ impl View {
                 // to contrast with it, never per-span inversion, so a span's
                 // own color cannot patch the highlight and the band reads the
                 // same on a dark and a light terminal.
-                let (fg, bg, flags) = crate::theme::band_style(&self.theme);
+                let (fg, bg, flags) = if driven {
+                    crate::theme::focus_style(&self.theme)
+                } else {
+                    crate::theme::band_style(&self.theme)
+                };
                 for cell in &mut cells[r * cols..r * cols + text_w] {
                     cell.bg = bg;
                     cell.fg = fg;
@@ -732,9 +830,10 @@ impl View {
                 // list's state word) only (the operator's color ruling); the
                 // band owns the remaining cells. A row with no colored state
                 // (Default) keeps the band's own explicit pair everywhere.
-                if let DisplayRow::Agent(a) = drow {
+                // The inverted cursor row keeps its one pair throughout.
+                if let (false, DisplayRow::Agent(a)) = (driven, drow) {
                     let lat = agent_lattice_state(a);
-                    let style = lattice_style(lat, self.theme.needs_you);
+                    let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
                     let accent = if a.pane_id == Some(self.layout.focus) && a.exited {
                         self.theme.brand
                     } else {
@@ -764,6 +863,28 @@ impl View {
                 self.paint_card_identity(cells, r, cols, text_w, drow, highlit);
                 if let DisplayRow::CardMetrics(a) = drow {
                     self.paint_card_activity(cells, r, cols, text_w, a, card_indent + depth * 2);
+                }
+                if driven {
+                    let (fg, bg, flags) = crate::theme::focus_style(&self.theme);
+                    for cell in &mut cells[r * cols..r * cols + text_w] {
+                        (cell.fg, cell.bg, cell.flags) = (fg, bg, flags);
+                    }
+                }
+            }
+            // The pin star, painted after every band: filled in the accent
+            // when pinned, an outline on any highlighted row or card (chosen,
+            // cursor, hover).
+            if let Some((col, a)) = pin_star_cell(drow, &rects, card, density) {
+                if col < text_w && (a.pinned || highlit || driven) {
+                    let cell = &mut cells[r * cols + col];
+                    cell.c = if a.pinned { PIN_STAR } else { PIN_OUTLINE };
+                    if cell.bg == Color::Default {
+                        cell.fg = if a.pinned {
+                            self.theme.brand
+                        } else {
+                            crate::theme::dim_fg(&self.theme)
+                        };
+                    }
                 }
             }
         }
@@ -877,7 +998,7 @@ impl View {
             }
             DisplayRow::Agent(a) => {
                 let lat = agent_lattice_state(a);
-                let style = lattice_style(lat, self.theme.needs_you);
+                let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
                 let mut flags = style.flags;
                 if a.external && lat != LatticeState::Blocked {
                     flags |= cell_flags::DIM;
@@ -922,18 +1043,17 @@ impl View {
                 } else {
                     format!("{mark} ")
                 };
-                let mut suffix = if a.dnd {
+                let mut suffix = String::new();
+                if a.dnd {
                     // A machine-armed hold reads as its own state; a
                     // lead seeing [DND] thinks it armed the hold and invents
                     // a reason.
-                    if a.held_conversation {
-                        " [HELD]".to_string()
+                    suffix.push_str(if a.held_conversation {
+                        " [HELD]"
                     } else {
-                        " [DND]".to_string()
-                    }
-                } else {
-                    String::new()
-                };
+                        " [DND]"
+                    });
+                }
                 // A card names its model on line 2; the token is the list's.
                 if let Some(tok) =
                     sideline_color::deviation_token(a.harness.as_deref(), a.model.as_deref())
@@ -969,17 +1089,15 @@ impl View {
                 let prefix_width = prefix.width();
                 let suffix_width = suffix.width();
                 let base_width = name_w.saturating_sub(prefix_width);
-                let label = if card {
-                    // Row 1 carries the role vocabulary: a lead's
-                    // people title after its slug (`sorrel · lead of mux`), a
-                    // worker's lead after its thread slug (`t-x0eee · sorrel`).
-                    let slug = card_line::slug(a, &self.backlog);
-                    match self.lead_label(a) {
-                        Some(role) => format!("{slug} \u{b7} {role}"),
-                        None => slug,
-                    }
-                } else {
-                    a.name.clone()
+                // Row 1 carries the role vocabulary: a lead's people title
+                // after its slug (`sorrel · lead of mux`), a worker's lead
+                // after its thread slug (`t-x0eee · sorrel`).
+                let card_parts =
+                    card.then(|| (card_line::slug(a, &self.backlog), self.lead_label(a)));
+                let label = match &card_parts {
+                    Some((slug, Some(role))) => format!("{slug} \u{b7} {role}"),
+                    Some((slug, None)) => slug.clone(),
+                    None => a.name.clone(),
                 };
                 // (US3, inline) A member with a different project or worktree
                 // path shows it inline in parens after the slug or name, only
@@ -996,12 +1114,17 @@ impl View {
                     }
                     None => label,
                 };
+                let fit = |w: usize| match &card_parts {
+                    // A card cuts the role, never the slug it leads with.
+                    Some((slug, role)) if crate::chrome::str_cols(&label) > w => {
+                        card_line::card_label(slug, role.as_deref(), w)
+                    }
+                    _ => crate::chrome::clip_tail(&label, w),
+                };
                 let name = if suffix_width < base_width {
-                    let base = crate::chrome::clip_tail(&label, base_width - suffix_width);
-                    format!("{prefix}{base}{suffix}")
+                    format!("{prefix}{}{suffix}", fit(base_width - suffix_width))
                 } else {
-                    let base = crate::chrome::clip_tail(&label, base_width);
-                    format!("{prefix}{base}")
+                    format!("{prefix}{}", fit(base_width))
                 };
                 // The message column reads the sentence, not the markup, and
                 // leads with the separator. A PR row with no output names the
@@ -1202,7 +1325,7 @@ impl View {
 
     /// The `+ new` footer row, painted over the blitted cells in its legacy
     /// full-width composition: the menu button rides the footer's right edge
-    /// at the exact column [`View::footer_menu_range`] names, because that
+    /// at the exact column [`View::footer_buttons`] names, because that
     /// range routes a click there - paint and hit range cannot diverge.
     fn paint_new_squad_footer(
         &self,
@@ -1212,14 +1335,7 @@ impl View {
         text_w: usize,
         panel_w: usize,
     ) {
-        let (base, menu, range) = self.footer_labels(panel_w);
-        let label = match range {
-            Some(range) => format!(
-                "{}{menu}",
-                pad_to(&crate::chrome::clip(&base, range.start), range.start)
-            ),
-            None => base,
-        };
+        let label = self.footer_buttons(panel_w).text;
         paint_legacy_row(cells, r, cols, text_w, &label, cell_flags::BOLD);
     }
 
@@ -1244,9 +1360,16 @@ impl View {
             agent_lane_fg(
                 agent,
                 lattice,
-                lattice_style(lattice, self.theme.needs_you).fg,
+                lattice_style(lattice, self.theme.needs_you, self.theme.ok).fg,
             )
         };
+        // A resting card's state glyph wears the state color, as a list row's does.
+        let glyph = status_glyph(lattice);
+        if let Some(cell) = line.iter_mut().find(|c| c.c == glyph).filter(|_| !highlit) {
+            if status_fg != Color::Default {
+                cell.fg = status_fg;
+            }
+        }
         let spans = card_line::identity_spans(agent, text_w);
         // Read before the ifs below move the span fields.
         let identity_free = spans.node.is_none() && spans.pr.is_none();
@@ -1255,12 +1378,28 @@ impl View {
         // vanish - the composed contrast test pins this at 3:1).
         let (fill_fg, _, _) = crate::theme::chosen_card_style(&self.theme);
         let on_chosen_fill = agent.pane_id == Some(self.layout.focus) && !agent.exited;
-        if let (Some(node), Some(span)) = (agent.node.as_deref(), spans.node) {
+        // The name matters most: the node may not start before the slug's
+        // end plus one space. It cuts its front, or drops, to fit.
+        let slug = card_line::slug(agent, &self.backlog);
+        let painted: String = line.iter().map(|c| c.c).collect();
+        let keep = painted.find(&slug).map_or(0, |b| {
+            painted[..b].chars().count() + slug.chars().count() + 1
+        });
+        let fitted = agent
+            .node
+            .as_deref()
+            .zip(spans.node)
+            .and_then(|(node, span)| card_line::fit_node(node, span, keep));
+        self.card_node_spans.borrow_mut().insert(
+            agent.name.clone(),
+            fitted.as_ref().map(|(span, _)| span.clone()),
+        );
+        if let (Some(node), Some((span, text))) = (agent.node.as_deref(), fitted.as_ref()) {
             let node_start = span.start;
             // An inferred current binding dims the node: the row's node is
             // a guess (branch, spawn, name, history), not a stamp.
             let inferred = agent.bindings.iter().any(|b| b.node == node && b.inferred);
-            for (cell, ch) in line[span].iter_mut().zip(node.chars()) {
+            for (cell, ch) in line[span.clone()].iter_mut().zip(text.chars()) {
                 cell.c = ch;
                 cell.fg = if on_chosen_fill { fill_fg } else { status_fg };
                 cell.flags = if inferred {
@@ -1269,11 +1408,16 @@ impl View {
                     cell_flags::BOLD
                 };
             }
-            // The name yields before the node: an ellipsis marks the cut
-            // and one space keeps the gap. Under three columns
-            // there is no room for both, so the name side blanks past the
-            // glyph and the node stands alone.
-            if node_start >= 3 {
+            // The text after the slug yields before the node: an ellipsis
+            // marks the cut and one space keeps the gap. The slug itself
+            // never yields: with no room for ` …` past it, the cells
+            // between slug and node just blank. Under three columns the
+            // name side blanks past the glyph and the node stands alone.
+            if keep > 0 && node_start < keep + 2 {
+                for cell in line[keep.saturating_sub(1).max(1)..node_start].iter_mut() {
+                    cell.c = ' ';
+                }
+            } else if node_start >= 3 {
                 if line[node_start - 1].c != ' ' {
                     line[node_start - 1].c = '…';
                 }
@@ -1286,7 +1430,7 @@ impl View {
                 }
             }
         }
-        if let Some(span) = spans.separator {
+        if let Some(span) = spans.separator.filter(|_| fitted.is_some()) {
             for (cell, ch) in line[span].iter_mut().zip(" · ".chars()) {
                 cell.c = ch;
             }

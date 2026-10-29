@@ -14,6 +14,7 @@
 //! source, never an empty territory list and never a silently-drained scope.
 
 use crate::agents_config::config_lookup;
+use crate::loop_lead::{canonical_members, same_territory};
 use crate::org_board::{graph_json_path, project_map};
 use crate::paths::AgentsHome;
 use crate::state::{load_registry, Registry, RegistryEntry};
@@ -55,124 +56,16 @@ pub(crate) fn compile_territory(
     projects: &Result<HashMap<String, String>, String>,
 ) -> Result<(String, HashSet<String>), String> {
     use crate::org_board::s_str;
-    let canonical_scope = |scopes: &[String]| {
-        let mut sorted: Vec<String> = scopes.to_vec();
-        sorted.sort();
-        sorted.dedup();
-        sorted.join(",")
-    };
-    let members: Vec<String> = scope
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if members.is_empty() {
-        return Err("a team needs a scope: name an epic or a project".to_string());
-    }
-    // An unreadable project map means no alias is known, which is the Python
-    // resolver's answer too. A member the graph names as an epic needs no map.
-    let (projects, map_error) = match projects {
-        Ok(map) => (map.clone(), None),
-        Err(e) => (HashMap::new(), Some(e.clone())),
-    };
-    let not_found = |m: &str| {
-        let mut text = format!(
-            "{m:?} is neither a configured project nor a backlog node; \
-             nothing to lead over (check for a typo)"
-        );
-        if let Some(e) = &map_error {
-            text.push_str(&format!(
-                ". The project map could not be read ({e}), so a project name \
-                 cannot resolve on this machine"
-            ));
-        }
-        text
-    };
+    let members: Vec<String> = scope.split(',').map(str::to_string).collect();
+    let entry_by_id = |id: &str| entries.iter().find(|e| s_str(e, "id") == Some(id));
+    let (rung, canonical) = resolve_role(&members, entry_by_id, entries.is_empty(), projects)?;
 
-    let entry_by_id = |id: &str| {
-        entries
-            .iter()
-            .find(|e| s_str(e, "id").map(|i| i == id).unwrap_or(false))
-    };
-
-    // resolve_team: the (level, canonical) pair, derived together. A
-    // multi-member scope is a project portfolio OR a rung-2 SET of epics -
-    // the Python twin (lead/scope.py) rules both; mixed is a refusal, and an
-    // epic-set member must be a live epic exactly as a single-epic scope must.
-    let (level_two, canonical): (bool, String) = if members.len() > 1 {
-        let mut project_members: Vec<String> = Vec::new();
-        let mut epic_members: Vec<String> = Vec::new();
-        for m in &members {
-            match projects.get(m.as_str()) {
-                Some(canon) => project_members.push(canon.clone()),
-                None => epic_members.push(m.clone()),
-            }
-        }
-        if !project_members.is_empty() && !epic_members.is_empty() {
-            return Err(format!(
-                "a multi-scope team rules PROJECTS or EPICS, never both at once: {}. \
-                 Name projects only (a portfolio) or epics only (a set).",
-                members
-                    .iter()
-                    .map(|m| match projects.get(m.as_str()) {
-                        Some(canon) => format!("{canon} (a project)"),
-                        None => match entry_by_id(m) {
-                            Some(e) if s_str(e, "type") == Some("epic") => {
-                                format!("{m} (an epic)")
-                            }
-                            Some(e) => format!(
-                                "{m} (a {}, not an epic)",
-                                s_str(e, "type").unwrap_or("node")
-                            ),
-                            None => format!("{m} (not a configured project or a known node)"),
-                        },
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if !epic_members.is_empty() {
-            for m in &epic_members {
-                match entry_by_id(m) {
-                    None => return Err(member_not_found(m, entries, not_found(m))),
-                    Some(entry) => {
-                        if s_str(entry, "type") != Some("epic") {
-                            return Err(format!(
-                                "{m:?} is a {}, not an epic. Implementers get no teams - \
-                                 a single node is work, not a territory. Team the epic \
-                                 above it, or its project.",
-                                s_str(entry, "type").unwrap_or("node")
-                            ));
-                        }
-                    }
-                }
-            }
-            (true, canonical_scope(&epic_members))
-        } else {
-            (false, canonical_scope(&project_members))
-        }
-    } else {
-        let raw = members[0].as_str();
-        if let Some(canon) = projects.get(raw) {
-            (false, canon.clone())
-        } else {
-            match entry_by_id(raw) {
-                None => return Err(member_not_found(raw, entries, not_found(raw))),
-                Some(entry) => {
-                    if s_str(entry, "type") != Some("epic") {
-                        return Err(format!("team scope {raw:?} is not an epic in the graph"));
-                    }
-                    (true, raw.to_string())
-                }
-            }
-        }
-    };
-
-    if level_two {
-        let mut ids: HashSet<String> = HashSet::new();
+    if rung == 2 {
         // descendants_of: BFS over parent links, cycle-safe. A rung-2 scope
         // is a SET: the board sees the nodes under EVERY member, so the walk
-        // starts from each root, not just the first.
+        // starts from each root, not just the first. resolve_role already
+        // proved every root is an epic in `entries`.
+        let mut ids: HashSet<String> = HashSet::new();
         let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
         for e in entries {
             if let (Some(id), Some(parent)) = (s_str(e, "id"), s_str(e, "parent")) {
@@ -180,26 +73,7 @@ pub(crate) fn compile_territory(
             }
         }
         let mut frontier: Vec<&str> = Vec::new();
-        for root_id in canonical
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            match entry_by_id(root_id) {
-                None => {
-                    return Err(member_not_found(
-                        root_id,
-                        entries,
-                        format!("team scope {root_id:?} is not an epic in the graph"),
-                    ))
-                }
-                Some(entry) if s_str(entry, "type") != Some("epic") => {
-                    return Err(format!(
-                        "team scope {root_id:?} is not an epic in the graph"
-                    ));
-                }
-                _ => {}
-            }
+        for root_id in canonical.split(',') {
             ids.insert(root_id.to_string());
             if let Some(next) = children.get(root_id) {
                 frontier.extend(next.iter().copied());
@@ -218,6 +92,7 @@ pub(crate) fn compile_territory(
         return Ok((canonical, ids));
     }
 
+    let projects = projects.as_ref().ok();
     let project_set: HashSet<String> = canonical
         .split(',')
         .map(|s| s.trim().to_string())
@@ -229,12 +104,365 @@ pub(crate) fn compile_territory(
             continue;
         };
         let project = s_str(e, "project").unwrap_or("").to_string();
-        let canonical_project = projects.get(project.as_str()).unwrap_or(&project);
+        let canonical_project = projects
+            .and_then(|map| map.get(project.as_str()))
+            .unwrap_or(&project);
         if project_set.contains(canonical_project) {
             ids.insert(id.to_string());
         }
     }
     Ok((canonical, ids))
+}
+
+/// The org ladder: the rung a team scope implies and its canonical stored
+/// form, derived together so the two cannot disagree. Rung 0 is a portfolio
+/// (2+ canonical projects), 1 one project, 2 a set of epics. Aliases resolve
+/// before the count, so `alpha` and its short name `a` read as one project.
+/// A non-epic node is work, not territory, and is refused, as is a scope that
+/// mixes projects and epics. `graph_empty` says the graph read behind
+/// `entry_of` returned no rows, so a missing member is unknown, not absent.
+pub(crate) fn resolve_role<'a>(
+    members: &[String],
+    entry_of: impl Fn(&str) -> Option<&'a Value>,
+    graph_empty: bool,
+    projects: &Result<HashMap<String, String>, String>,
+) -> Result<(u8, String), String> {
+    use crate::org_board::s_str;
+    let canonical = canonical_scope(&members.join(","));
+    let members: Vec<&str> = canonical.split(',').filter(|m| !m.is_empty()).collect();
+    if members.is_empty() {
+        return Err("a team needs a scope: name an epic or a project".to_string());
+    }
+    // An unreadable project map means no alias is known. A member the graph
+    // names as an epic needs no map.
+    let alias = |m: &str| projects.as_ref().ok().and_then(|map| map.get(m)).cloned();
+    let not_found = |m: &str| {
+        if graph_empty {
+            return format!("the graph read returned 0 nodes, so {m:?} is unknown, not absent");
+        }
+        let mut text = format!(
+            "{m:?} is neither a configured project nor a backlog node; \
+             nothing to lead over (check for a typo)"
+        );
+        if let Err(e) = projects {
+            text.push_str(&format!(
+                ". The project map could not be read ({e}), so a project name \
+                 cannot resolve on this machine"
+            ));
+        }
+        text
+    };
+    let resolved: Vec<(&str, Option<String>)> = members.iter().map(|&m| (m, alias(m))).collect();
+    let project_names: Vec<String> = resolved.iter().filter_map(|(_, c)| c.clone()).collect();
+    let epics: Vec<&str> = resolved
+        .iter()
+        .filter(|(_, c)| c.is_none())
+        .map(|(m, _)| *m)
+        .collect();
+
+    if epics.is_empty() {
+        let scope = canonical_scope(&project_names.join(","));
+        // One project named twice collapses to one project, not a portfolio.
+        let rung = if scope.contains(',') { 0 } else { 1 };
+        return Ok((rung, scope));
+    }
+    if !project_names.is_empty() {
+        let named: Vec<String> = resolved
+            .iter()
+            .map(|&(m, ref canon)| match (canon, entry_of(m)) {
+                (Some(canon), _) => format!("{canon} (a project)"),
+                (None, Some(e)) if s_str(e, "type") == Some("epic") => format!("{m} (an epic)"),
+                (None, Some(e)) => {
+                    format!(
+                        "{m} (a {}, not an epic)",
+                        s_str(e, "type").unwrap_or("node")
+                    )
+                }
+                (None, None) => format!("{m} (not a configured project or a known node)"),
+            })
+            .collect();
+        return Err(format!(
+            "a multi-scope team rules PROJECTS or EPICS, never both at once: {}. \
+             Name projects only (a portfolio) or epics only (a set).",
+            named.join(", ")
+        ));
+    }
+    // One message set for a single epic and an epic set alike: a member of a
+    // set that is a typo or a non-epic node gets the remedy it would get alone.
+    for &m in &epics {
+        match entry_of(m) {
+            None => return Err(not_found(m)),
+            Some(e) if s_str(e, "type") == Some("epic") => {}
+            Some(e) => {
+                return Err(format!(
+                    "{m:?} is a {}, not an epic. Implementers get no teams - a single \
+                     node is work, not a territory. If {m} IS meant to be an epic: \
+                     fno backlog update {m} type=epic. Otherwise team the epic above \
+                     it, or its project.",
+                    s_str(e, "type").unwrap_or("node")
+                ))
+            }
+        }
+    }
+    Ok((2, epics.join(",")))
+}
+
+/// The `role-resolve` spawn-overlay kind: [`resolve_role`] served to Python.
+/// A payload `projects` alias map and `entries` member rows stand in for this
+/// machine's reads, so a caller keeps its own sources. An absent field reads
+/// `project_map` and `graph_entries` from the cwd; an unreadable graph counts
+/// as an empty one. Answer: `{"level", "scope"}` or `{"refusal"}`.
+pub(crate) fn resolve_role_kind(payload: &Value) -> Result<Value, String> {
+    use crate::org_board::s_str;
+    let scopes: Vec<String> = payload
+        .get("scopes")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let projects = match payload.get("projects").and_then(Value::as_object) {
+        Some(map) => Ok(map
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|c| (k.clone(), c.to_string())))
+            .collect()),
+        None => project_map(&cwd),
+    };
+    let (entries, graph_empty) = match payload.get("entries").and_then(Value::as_array) {
+        Some(rows) => (rows.clone(), false),
+        None => {
+            let rows = graph_entries(&cwd).unwrap_or_default();
+            let empty = rows.is_empty();
+            (rows, empty)
+        }
+    };
+    let entry_of = |id: &str| entries.iter().find(|e| s_str(e, "id") == Some(id));
+    Ok(
+        match resolve_role(&scopes, entry_of, graph_empty, &projects) {
+            Ok((level, scope)) => json!({"level": level, "scope": scope}),
+            Err(refusal) => json!({"refusal": refusal}),
+        },
+    )
+}
+
+/// Does a team over `outer` strictly contain one over `inner`? A project sits
+/// in a portfolio by name, an epic carries its project, and an epic set is
+/// contained when every member is. An equal scope is a peer, never contained.
+/// The graph stores a node's project raw (the alias it was filed under), so the
+/// row's project resolves through `projects` before the comparison.
+pub(crate) fn scope_contains<'a>(
+    outer: &str,
+    inner: &str,
+    entry_of: &dyn Fn(&str) -> Option<&'a Value>,
+    projects: &HashMap<String, String>,
+) -> bool {
+    use crate::org_board::s_str;
+    let outer_members = canonical_members(outer, projects);
+    let inner_members = canonical_members(inner, projects);
+    if outer_members.is_empty() || inner_members.is_empty() || inner_members == outer_members {
+        return false;
+    }
+    if inner_members.len() > 1 {
+        // A portfolio inside a wider portfolio, else an epic set: epic ids never
+        // equal project names, so the set is placed member by member.
+        return inner_members.is_subset(&outer_members)
+            || inner
+                .split(',')
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .all(|m| scope_contains(outer, m, entry_of, projects));
+    }
+    let name = inner_members.iter().next().expect("one member");
+    if outer_members.contains(name) {
+        return true;
+    }
+    match entry_of(name.as_str()).and_then(|e| s_str(e, "project")) {
+        Some(raw) if !raw.is_empty() => {
+            outer_members.contains(projects.get(raw).map(String::as_str).unwrap_or(raw))
+        }
+        _ => false,
+    }
+}
+
+/// Why this caller may not grant a team over `requested`, or `None`: you
+/// cannot hand down authority you do not hold. An attended human may grant
+/// anything. An agent must hold a live team that strictly contains the
+/// request; an equal scope is a transfer, legal only with succession intent. A
+/// caller this check cannot place (unreadable registry, unregistered agent,
+/// terminal grantor) fails closed. `allow_terminal_recovery` admits only the
+/// same territory a terminal holder already holds.
+fn grant_refusal<'a>(
+    payload: &Value,
+    entry_of: &dyn Fn(&str) -> Option<&'a Value>,
+    projects: &HashMap<String, String>,
+) -> Option<String> {
+    let text = |key: &str| payload.get(key).and_then(Value::as_str).unwrap_or("");
+    let flag = |key: &str| payload.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let caller = payload.get("caller").cloned().unwrap_or(Value::Null);
+    let field = |key: &str| caller.get(key).and_then(Value::as_str).unwrap_or("");
+    let requested = text("requested");
+    match field("kind") {
+        "human" => None,
+        "unreadable" => Some(match text("stray_agent_self") {
+            "" => "cannot verify the grantor's authority: the agent registry could not \
+                   be read, so this session is treated as an agent whose authority is \
+                   unknown, not as an attended human. A role may not be granted when \
+                   the grantor cannot be checked; retry, or ask your lead to grant it."
+                .to_string(),
+            stray => format!(
+                "cannot verify the grantor's authority: this shell carries \
+                 FNO_AGENT_SELF={stray} with no harness session, so it reads \
+                 as an agent fno cannot resolve, not an attended human. A \
+                 shell that once hosted a worker keeps that variable. If you \
+                 are the human at this shell, rerun as: \
+                 env -u FNO_AGENT_SELF fno agents org promote <args>."
+            ),
+        }),
+        "unregistered" => Some(
+            "cannot verify the grantor's authority: this session carries an agent \
+             identity but has no registry row (it spawned before its row landed, \
+             or has not run /fno-me), so it is an agent with no verified authority, \
+             not an attended human. Run /fno-me to join or wait for the row, then \
+             retry; or ask your lead to grant it."
+                .to_string(),
+        ),
+        "agent" => {
+            let status = field("status");
+            let held = field("role_scope");
+            if crate::announce::TERMINAL_STATUSES.contains(&status) {
+                if flag("allow_terminal_recovery") && same_territory(held, requested, projects) {
+                    return None;
+                }
+                return Some(format!(
+                    "cannot verify the grantor's authority: its STORED status is \
+                     '{status}', which is terminal, so it cannot grant a role. \
+                     Re-register the grantor in its live session, or ask your lead to grant it."
+                ));
+            }
+            if held.is_empty() {
+                return Some(format!(
+                    "a role is handed DOWN, and this session holds none: an unpromoted \
+                     agent cannot grant one. Ask a lead whose scope contains \
+                     '{requested}' to grant it."
+                ));
+            }
+            if same_territory(held, requested, projects) {
+                if flag("allow_succession") {
+                    return None;
+                }
+                return Some(format!(
+                    "this session already holds its own role over '{requested}'; \
+                     a same-scope spawn is a transfer, not a grant. Re-run with \
+                     `--hand-off`, or choose a different scope so this session keeps its role."
+                ));
+            }
+            if !scope_contains(held, requested, entry_of, projects) {
+                return Some(format!(
+                    "this session's role over '{held}' neither contains nor equals \
+                     '{requested}', so it cannot grant it. A grant must be a \
+                     strict subset of what the grantor holds; an equal scope is allowed \
+                     only as succession, which hands YOUR scope to a successor."
+                ));
+            }
+            None
+        }
+        other => Some(format!(
+            "cannot verify the grantor's authority: unknown caller kind {other:?}"
+        )),
+    }
+}
+
+/// Live rows whose team the vacated scope contained and the new one does not:
+/// advisory receipt data about a re-scope. `[]` when no territory left the new
+/// scope, `None` when the graph could not be read, which is not `[]`. A single
+/// member that is neither a known node nor a project is listed: its containment
+/// is unknowable, and one stale row must not silence every determinate answer.
+fn stranded_rows<'a>(
+    payload: &Value,
+    entry_of: &dyn Fn(&str) -> Option<&'a Value>,
+    graph_read: bool,
+    projects: &HashMap<String, String>,
+) -> Option<Vec<String>> {
+    use crate::org_board::s_str;
+    let new_scope = payload
+        .get("new_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let Some(vacated) = payload.get("vacated").and_then(Value::as_str) else {
+        return Some(Vec::new());
+    };
+    if same_territory(vacated, new_scope, projects) {
+        return Some(Vec::new());
+    }
+    if !graph_read {
+        return None;
+    }
+    let target = payload
+        .get("target_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let rows = payload
+        .get("rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut stranded = Vec::new();
+    for row in &rows {
+        let name = s_str(row, "name").unwrap_or("");
+        let status = s_str(row, "status").unwrap_or("");
+        if name == target || crate::announce::TERMINAL_STATUSES.contains(&status) {
+            continue;
+        }
+        let scope = s_str(row, "role_scope").unwrap_or("");
+        let members: Vec<&str> = scope
+            .split(',')
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .collect();
+        let unresolvable = members.len() == 1
+            && entry_of(members[0]).is_none()
+            && !projects.contains_key(members[0]);
+        if unresolvable
+            || (scope_contains(vacated, scope, entry_of, projects)
+                && !scope_contains(new_scope, scope, entry_of, projects))
+        {
+            stranded.push(name.to_string());
+        }
+    }
+    Some(stranded)
+}
+
+/// The `role-grant` spawn-overlay kind: the grant decision (`op: check`) and
+/// the re-scope strand scan (`op: stranded`), served to Python. The payload
+/// carries the alias map and the member rows the caller read; `entries: null`
+/// means the graph could not be read. Answers `{"refusal"}` or `{"stranded"}`.
+pub(crate) fn role_grant_kind(payload: &Value) -> Result<Value, String> {
+    use crate::org_board::s_str;
+    let projects: HashMap<String, String> = payload
+        .get("projects")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| v.as_str().map(|c| (k.clone(), c.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let entries = payload.get("entries").and_then(Value::as_array);
+    let graph_read = entries.is_some();
+    let rows: Vec<Value> = entries.cloned().unwrap_or_default();
+    let entry_of = |id: &str| rows.iter().find(|e| s_str(e, "id") == Some(id));
+    match payload.get("op").and_then(Value::as_str) {
+        Some("check") => Ok(json!({"refusal": grant_refusal(payload, &entry_of, &projects)})),
+        Some("stranded") => Ok(json!({
+            "stranded": stranded_rows(payload, &entry_of, graph_read, &projects)
+        })),
+        other => Err(format!(
+            "role-grant: unknown op {other:?}; expected check|stranded"
+        )),
+    }
 }
 
 /// The canonical comma-joined form of a raw scope spelling: members split on
@@ -759,7 +987,12 @@ pub fn run_territory_rows(args: &[String]) -> i32 {
 /// print as an empty list. Invoked by the `fno config active-backlog`
 /// passthrough and rank's dispatcher note.
 pub fn run_active_backlog_receipt(args: &[String]) -> i32 {
-    let _ = args;
+    // The status-fanout target resolver nests here as an argv op
+    // (crate::status_sinks), so it adds no fno-agents root action (shrink
+    // law d-fe66560a): receipt and fanout are the drain family.
+    if args.first().map(String::as_str) == Some("status-sinks") {
+        return crate::status_sinks::run(&args[1..]);
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let registry = AgentsHome::from_env().registry_json();
     let report = crate::active_backlog::resolve_targets_report(&cwd, &registry);
@@ -819,7 +1052,7 @@ pub(crate) fn live_held_in(node_ids: &HashSet<String>, held: &HashSet<String>) -
 /// One readout row per territory: scope, membership state, rung, leadless
 /// state, team holder, mission, and live count against the cap. The
 /// projection the status payload, the hidden config
-/// verb, the lead check-in, and the operational probe share, so none of them
+/// command, the lead check-in, and the operational probe share, so none of them
 /// can disagree. Fail-safe per row: an unreadable source shrinks that row's
 /// answer (membership "unknown", live null), never the whole
 /// projection.
@@ -1360,5 +1593,109 @@ max_concurrent = 0
         // And with no root to resolve at all: unavailable, not zero.
         let error = live_node_claims_from(None).unwrap_err();
         assert!(error.0.contains("claims path unavailable"), "{error:?}");
+    }
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn projects() -> HashMap<String, String> {
+        [("alpha", "alpha"), ("a", "alpha"), ("beta", "beta")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn graph() -> Vec<Value> {
+        vec![
+            json!({"id": "e-1", "type": "epic", "project": "alpha"}),
+            json!({"id": "e-2", "type": "epic", "project": "a"}),
+            json!({"id": "e-3", "type": "epic", "project": "beta"}),
+        ]
+    }
+
+    fn contains(outer: &str, inner: &str) -> bool {
+        let rows = graph();
+        let entry_of = |id: &str| rows.iter().find(|e| e["id"] == id);
+        scope_contains(outer, inner, &entry_of, &projects())
+    }
+
+    #[test]
+    fn containment_holds_across_the_ladder_and_through_aliases() {
+        assert!(contains("alpha,beta", "alpha")); // project in portfolio
+        assert!(contains("alpha", "e-1")); // epic in its project
+        assert!(contains("alpha", "e-2")); // epic filed under the alias
+        assert!(contains("alpha,beta", "e-3"));
+        assert!(!contains("beta", "e-1")); // epic of another project
+        assert!(!contains("alpha", "alpha")); // a peer, not below
+        assert!(contains("a,beta", "alpha")); // aliases normalize
+        assert!(contains("e-1,e-2", "e-1")); // a set holds each member
+        assert!(!contains("e-2,e-1", "e-1,e-2")); // a peer set
+        assert!(!contains("e-1", "e-1,e-2")); // narrower holds less
+        assert!(contains("alpha", "e-1,e-2")); // every member in alpha
+        assert!(!contains("alpha", "e-1,e-3")); // spans two projects
+        assert!(!contains("alpha", "e-ghost")); // unknown node
+    }
+
+    fn check(caller: Value, requested: &str, succession: bool) -> Option<String> {
+        let answer = role_grant_kind(&json!({
+            "op": "check", "requested": requested, "caller": caller,
+            "allow_succession": succession, "allow_terminal_recovery": false,
+            "projects": projects(), "entries": graph(),
+        }))
+        .unwrap();
+        answer["refusal"].as_str().map(str::to_string)
+    }
+
+    #[test]
+    fn the_grant_check_admits_only_what_the_grantor_holds() {
+        let agent = |status: &str, scope: &str| json!({"kind": "agent", "status": status, "role_scope": scope});
+        assert_eq!(check(json!({"kind": "human"}), "anything", false), None);
+        assert_eq!(check(agent("busy", "alpha,beta"), "e-1", false), None);
+        let outside = check(agent("busy", "beta"), "e-1", false).unwrap();
+        assert!(outside.contains("neither contains nor equals"), "{outside}");
+        let peer = check(agent("busy", "a"), "alpha", false).unwrap();
+        assert!(peer.contains("`--hand-off`"), "{peer}");
+        assert_eq!(check(agent("busy", "a"), "alpha", true), None);
+        let unpromoted = check(agent("idle", ""), "e-1", false).unwrap();
+        assert!(unpromoted.contains("holds none"), "{unpromoted}");
+        let dead = check(agent("exited", "alpha"), "e-1", false).unwrap();
+        assert!(dead.contains("'exited', which is terminal"), "{dead}");
+        for kind in ["unreadable", "unregistered", "bogus"] {
+            let refused = check(json!({"kind": kind}), "e-1", false).unwrap();
+            assert!(
+                refused.starts_with("cannot verify the grantor's authority"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_strand_scan_lists_roles_the_move_left_behind() {
+        let rows = json!([
+            {"name": "mover", "status": "busy", "role_scope": "beta"},
+            {"name": "sub-1", "status": "busy", "role_scope": "e-1"},
+            {"name": "sub-3", "status": "busy", "role_scope": "e-3"},
+            {"name": "gone", "status": "exited", "role_scope": "e-1"},
+            {"name": "stale", "status": "busy", "role_scope": "e-ghost"},
+        ]);
+        let scan = |vacated: Value, entries: Value| {
+            role_grant_kind(&json!({
+                "op": "stranded", "vacated": vacated, "new_scope": "beta",
+                "target_name": "mover", "rows": rows, "projects": projects(),
+                "entries": entries,
+            }))
+            .unwrap()["stranded"]
+                .clone()
+        };
+        assert_eq!(
+            scan(json!("alpha"), json!(graph())),
+            json!(["sub-1", "stale"])
+        );
+        assert_eq!(scan(json!("alpha"), Value::Null), Value::Null);
+        assert_eq!(scan(Value::Null, Value::Null), json!([]));
+        assert_eq!(scan(json!("beta"), Value::Null), json!([]));
     }
 }

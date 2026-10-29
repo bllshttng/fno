@@ -135,58 +135,11 @@ def test_register_rejects_unknown_provider(tmp_path: Path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# `fno agents register` verb (the /fno-me seam): self-service join resolved
-# from the ambient harness identity, no --session-id argument.
+# `fno agents register` (the /fno-me seam) answers from the Rust client command
+# (crates/fno-agents/src/register.rs); without the binary the Python front
+# refuses. Its contracts are pinned by crates/fno-agents/tests/golden/register/
+# and tests/register_parity.rs, so no CliRunner cases live here anymore.
 # ---------------------------------------------------------------------------
-
-_MARKERS = (
-    "CODEX_THREAD_ID",
-    "CODEX_SESSION_ID",
-    "GEMINI_SESSION_ID",
-    "CLAUDE_CODE_SESSION_ID",
-    "FNO_AGENT_SELF",
-)
-
-
-def test_register_verb_joins_under_canonical_handle(tmp_path: Path, monkeypatch) -> None:
-    """A claude session self-registers under its canonical ambient-id first-eight."""
-    use_tmpdir(monkeypatch, tmp_path)
-    for m in _MARKERS:
-        monkeypatch.delenv(m, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "deadbeef-1111-2222-3333-444455556666")
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(agents_app, ["register"])
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
-    # delivery_policy rides the payload since the bus-only flag; a
-    # plain register carries no policy, so it reads back None.
-    assert payload == {
-        "registered": True,
-        "name": "deadbeef",
-        "harness": "claude",
-        "delivery_policy": None,
-    }
-    rows = load_registry()
-    assert len(rows) == 1 and rows[0].name == "deadbeef" and rows[0].status == "idle"
-
-
-def test_register_verb_exit3_without_ambient_identity(tmp_path: Path, monkeypatch) -> None:
-    """No harness marker in env -> nothing addressable -> exit 3, no row written."""
-    use_tmpdir(monkeypatch, tmp_path)
-    for m in _MARKERS:
-        monkeypatch.delenv(m, raising=False)
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(agents_app, ["register"])
-    assert result.exit_code == 3
-    assert load_registry() == []
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +595,7 @@ def test_a_refused_observation_is_visible_and_the_hook_stays_fail_soft(
     assert BIRTH in err and FORK in err, "both recorded ids are in the visible line"
     assert (
         f"fno agents adopt {THIRD}" in err
-    ), "the refusal names the adopt verb that mints the parked id a row"
+    ), "the refusal names the adopt command that mints the parked id a row"
 
 
 # ---------------------------------------------------------------------------
@@ -665,29 +618,6 @@ def _write_pane_row(name: str, harness: str, **overrides):
         setattr(row, key, value)
     write_registry([row])
     return row
-
-
-def test_register_verb_refuses_when_fno_agent_self_row_exists(tmp_path: Path, monkeypatch) -> None:
-    """/fno-me inside a spawned or recovered pane worker must
-    refuse instead of minting a SECOND row named by the bare short-id beside
-    the worker's real row. The refusal names the row; nothing is written."""
-    use_tmpdir(monkeypatch, tmp_path)
-    for m in _MARKERS:
-        monkeypatch.delenv(m, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cafe1111-2222-3333-4444-555566667777")
-    monkeypatch.setenv("FNO_AGENT_SELF", "x-f75e-mux-chrome")
-    _write_pane_row("x-f75e-mux-chrome", "claude")
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(agents_app, ["register"])
-    assert result.exit_code == 1, result.output
-    assert "x-f75e-mux-chrome" in result.output
-    assert "duplicate row" in result.output
-    names = [row.name for row in load_registry()]
-    assert names == ["x-f75e-mux-chrome"], names
 
 
 # ---------------------------------------------------------------------------
@@ -769,21 +699,3 @@ def test_session_start_first_fill_opens_the_parked_row(
     assert row.harness_session_id == REMINT
 
 
-def test_register_verb_refuses_in_the_row_pending_window(tmp_path: Path, monkeypatch) -> None:
-    """x-0345 review: the row-pending marker names the row the spawner is
-    about to write, so /fno-me in that window refuses too - not just when
-    the row already exists."""
-    use_tmpdir(monkeypatch, tmp_path)
-    for m in _MARKERS:
-        monkeypatch.delenv(m, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "beef1111-2222-3333-4444-555566667777")
-    monkeypatch.setenv("FNO_AGENT_SELF", "t-pending-worker")
-    monkeypatch.setenv("FNO_AGENT_ROW_PENDING", "t-pending-worker")
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(agents_app, ["register"])
-    assert result.exit_code == 1, result.output
-    assert load_registry() == [], "a refused pending-window register wrote a row"

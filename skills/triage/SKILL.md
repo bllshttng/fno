@@ -61,11 +61,11 @@ Value-carriers (flags with arguments): `--project NAME`, `--roadmap-id ID`.
 
 ### Invocation surface (CLI-source-agnostic)
 
-The skill issues triage verbs through whichever implementation is
+The skill issues triage commands through whichever implementation is
 available. Preference order:
 
-1. `fno backlog triage <verb> <flags>` - the v2 CLI (canonical)
-2. `python3 scripts/triage.py <verb> <flags>` - the shim, which itself
+1. `fno backlog triage <command> <flags>` - the v2 CLI (canonical)
+2. `python3 scripts/triage.py <command> <flags>` - the shim, which itself
    forwards to v2 when `fno` is on PATH or falls back to the in-repo
    module via `cli/src`
 
@@ -377,5 +377,5 @@ A row with `source_kind: external_request` holds visitor text from the public bo
   (or falls back to the in-repo module when `fno` is not on PATH)
 - `cli/src/fno/graph/store.py` — `locked_mutate_graph()` entry point
 - `~/.fno/cache/pages/graph.md` — the kanban view that reflects applied changes
-- `cli/src/fno/health_monitor.py` — threshold evaluation,
+- `crates/fno-agents/src/backlog/triage_health.rs` — threshold evaluation,
   notification dispatch, history append/read, trend summary

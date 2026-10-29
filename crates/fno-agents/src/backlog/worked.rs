@@ -208,6 +208,14 @@ fn fleet_rows_from(
             }
         }
     }
+    // A promoted lead is never a node worker (the `worked-nodes` role gate),
+    // including a launch-window lead whose vendor row has no session id yet.
+    let promoted: BTreeSet<&str> = entries
+        .into_iter()
+        .flatten()
+        .filter(|e| e.role_level.is_some() && !e.name.is_empty())
+        .map(|e| e.name.as_str())
+        .collect();
     // One pass over the vendor rows: sid -> row, so the spine join is a
     // map lookup, not a rescan per spine entry.
     let mut vendor_by_sid: BTreeMap<String, &Value> = BTreeMap::new();
@@ -217,6 +225,11 @@ fn fleet_rows_from(
         }
     }
     for (sid, e) in spine.iter() {
+        // A promoted lead stays in the spine so its vendor row is not
+        // vendor-only, and lists as no worker.
+        if e.role_level.is_some() {
+            continue;
+        }
         let vendor = vendor_by_sid.get(*sid).copied();
         let (state, warn) = match vendor {
             Some(r) => row_state(r),
@@ -270,6 +283,9 @@ fn fleet_rows_from(
         let Some(sid) = raw_row_sid(r) else {
             let cwd = r.get("cwd").and_then(Value::as_str).unwrap_or("");
             let name = r.get("name").and_then(Value::as_str).unwrap_or("unknown");
+            if promoted.contains(name) {
+                continue;
+            }
             let node = if is_linked_worktree(cwd) {
                 node_id_from_worktree(cwd)
             } else {
@@ -332,7 +348,7 @@ fn fleet_rows_from(
         });
     }
     for entry in entries.into_iter().flatten() {
-        if entry.harness.as_deref() == Some("claude") {
+        if entry.harness.as_deref() == Some("claude") || entry.role_level.is_some() {
             continue;
         }
         if !is_live_status(entry.status) {
@@ -392,15 +408,22 @@ fn fleet_rows_from(
         });
     }
 
+    // Advisory, never blocking: an unattributable row is unmeasurable
+    // liveness, so the read answers from the rows it can vouch for instead of
+    // refusing (one stuck no-provenance pane blanked the unplanned queue).
+    // The summary literal is the msg-twin the reachable-paths ratchet
+    // baselines; the prefix rides a second interpolation so the literal
+    // stays intact on both legs.
     if skipped_no_sid > 0 {
-        warnings.push(format!(
-            "{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped"
-        ));
+        let summary =
+            format!("{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped");
+        warnings.push(format!("{ADVISORY}{summary}"));
     }
     if skipped_nonclaude_no_id > 0 {
-        warnings.push(format!(
+        let summary = format!(
             "{skipped_nonclaude_no_id} non-claude row(s) carried no session id, unmeasurable, skipped"
-        ));
+        );
+        warnings.push(format!("{ADVISORY}{summary}"));
     }
     warnings.extend(unmapped);
     (out, warnings)
@@ -847,6 +870,15 @@ fn worker_reachability(row: &FleetRow, listing: &[Hit]) -> Reach {
 /// Node id -> names of its REACHABLE roster workers. An unread roster is an
 /// Err naming why, so a reaper holds instead of reading "no worker".
 pub(crate) fn reachable_workers_by_node() -> Result<BTreeMap<String, Vec<String>>, String> {
+    reachable_workers_by_node_excluding(None)
+}
+
+/// The same read, minus one caller's own row: a succession's departing
+/// worker spawns its replacement while its own roster row is still live, so
+/// the spawn gate's occupancy arm must not charge the caller to its node.
+pub(crate) fn reachable_workers_by_node_excluding(
+    caller_session: Option<&str>,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
     let reading = read_roster();
     if !reading.consulted {
         return Err(reading.reason);
@@ -856,6 +888,7 @@ pub(crate) fn reachable_workers_by_node() -> Result<BTreeMap<String, Vec<String>
     for (node, rows) in &reading.workers_by_node {
         let names: Vec<String> = rows
             .iter()
+            .filter(|r| Some(r.row_id.as_str()) != caller_session)
             .filter(|r| worker_reachability(r, &listing).verdict == REACHABLE)
             .map(|r| r.name.clone())
             .collect();
@@ -889,8 +922,42 @@ pub(crate) fn classify_node_workers(rows: &[FleetRow]) -> (Vec<&FleetRow>, Vec<&
 
 pub(crate) const UNMEASURABLE_LABEL_MARK: &str = "(unmeasurable:";
 
+/// The node's open execute rows in the graph, newest last, as
+/// `(harness, session_id)` pairs. The spawn gate's worker-row refusal names
+/// these rows and prints one reap-open command per row, so a row's harness
+/// must ride beside its session id: the reap is identity-aware, and a bare
+/// session id cannot address the row.
+pub(crate) fn open_execute_row_ids(node_id: &str) -> Vec<(String, String)> {
+    let graph = super::settings::graph_path();
+    let Ok(entries) = crate::graph_store::read_rows_strict(&graph) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for entry in &entries {
+        if entry.get("id").and_then(Value::as_str) != Some(node_id) {
+            continue;
+        }
+        for row in entry
+            .get("sessions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if is_open_phase_row(row, "execute") {
+                if let (Some(h), Some(sid)) = (
+                    row.get("harness").and_then(Value::as_str),
+                    row.get("session_id").and_then(Value::as_str),
+                ) {
+                    out.push((h.to_string(), sid.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// One graph session row: a valid, unfinished window of `phase`.
-fn is_open_phase_row(row: &Value, phase: &str) -> bool {
+pub(crate) fn is_open_phase_row(row: &Value, phase: &str) -> bool {
     row.get("phase").and_then(Value::as_str) == Some(phase)
         && row
             .get("harness")
@@ -1050,7 +1117,7 @@ pub(crate) fn fold_over_entries(
 }
 
 // ---------------------------------------------------------------------------
-// The verb
+// The command
 // ---------------------------------------------------------------------------
 
 /// The strict authority both spellings serve: the graph rows and the
@@ -1234,9 +1301,150 @@ mod tests {
         let (rows, warnings) = fleet_rows_from(again, None);
         assert_eq!(rows.len(), 1);
         assert!(!warnings.iter().any(|w| w.contains("vendor-only")));
+
+        // A promoted lead is never a node worker, on either harness leg, even
+        // when its row names the node it dispatched.
+        let mut lead = crate::state::RegistryEntry::default();
+        lead.harness = Some("claude".into());
+        lead.name = "wren".into();
+        lead.harness_session_id = Some("aa2f99d7-0000-0000-0000-000000000000".into());
+        lead.status = crate::AgentStatus::Live;
+        lead.node = Some("n-dispatched".into());
+        lead.role_level = Some(2);
+        let mut codex_lead = lead.clone();
+        codex_lead.harness = Some("codex".into());
+        codex_lead.name = "rook".into();
+        codex_lead.harness_session_id = Some("01a10e75-0000-0000-0000-000000000000".into());
+        // A launch-window lead: its vendor row has no session id yet but sits
+        // in a node worktree, the shape the unmeasurable fold would admit.
+        let tree = std::env::temp_dir().join(format!("worked-lead-tree-{}", std::process::id()));
+        std::fs::create_dir_all(tree.join(".fno")).unwrap();
+        std::fs::write(tree.join(".git"), "gitdir: elsewhere\n").unwrap();
+        std::fs::write(
+            tree.join(".fno").join("target-state.md"),
+            "graph_node_id: n-dispatched\n",
+        )
+        .unwrap();
+        let mut window_lead = lead.clone();
+        window_lead.name = "kestrel".into();
+        window_lead.harness_session_id = None;
+        let vendor_lead = RawAgents {
+            rows: vec![
+                serde_json::json!({
+                    "sessionId": "aa2f99d7-0000-0000-0000-000000000000",
+                    "name": "wren",
+                    "state": "working"
+                }),
+                serde_json::json!({
+                    "name": "kestrel",
+                    "cwd": tree.to_string_lossy(),
+                    "state": "working"
+                }),
+            ],
+            warnings: Vec::new(),
+        };
+        let (rows, warnings) = fleet_rows_from(vendor_lead, Some(&[lead, codex_lead, window_lead]));
+        let _ = std::fs::remove_dir_all(&tree);
+        assert!(
+            !warnings.iter().any(|w| w.contains("node=n-dispatched")),
+            "{warnings:?}"
+        );
+        assert!(
+            rows.is_empty(),
+            "{:?}",
+            rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("vendor-only")),
+            "{warnings:?}"
+        );
         match spaces_backup {
             Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
+    }
+
+    // An unattributable no-sid row is unmeasurable liveness, never a refusal:
+    // the skip's summary warns advisory-classified so the roster reading
+    // stays consulted. Blocking-classified, one stuck no-provenance pane
+    // blanked the unplanned queue.
+    #[test]
+    fn an_unattributable_no_sid_row_skips_advisory_never_blocks() {
+        let mut ghost = crate::state::RegistryEntry::default();
+        ghost.harness = Some("codex".into());
+        ghost.name = "c3po-codex".into();
+        ghost.status = crate::AgentStatus::Live;
+        let empty_vendor = RawAgents {
+            rows: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let (rows, warnings) = fleet_rows_from(empty_vendor, Some(&[ghost]));
+        assert!(rows.is_empty());
+        let summary = warnings
+            .iter()
+            .find(|w| w.contains("non-claude row(s) carried no session id"))
+            .expect("the skip is named");
+        assert!(summary.starts_with(ADVISORY), "{summary}");
+
+        // The claude-leg twin: a vendor row with no session id skips the
+        // same way.
+        let headless = RawAgents {
+            rows: vec![serde_json::json!({
+                "name": "headless",
+                "state": "working",
+                "cwd": "/tmp/nowhere"
+            })],
+            warnings: Vec::new(),
+        };
+        let (rows, warnings) = fleet_rows_from(headless, None);
+        assert!(rows.is_empty());
+        let summary = warnings
+            .iter()
+            .find(|w| w.contains("row(s) carried no session id"))
+            .expect("the skip is named");
+        assert!(summary.starts_with(ADVISORY), "{summary}");
+    }
+
+    /// The spawn gate's refusal names the node's open execute rows, so the
+    /// reader must see exactly those: an open execute row lists, a closed
+    /// one and an open ship row do not, and another node's rows stay out.
+    #[test]
+    fn open_execute_row_ids_reads_the_node_open_execute_rows() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("worked-open-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let db = root.join("db/graph.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let entry = serde_json::json!({
+            "id": "x-openrows",
+            "title": "open rows",
+            "status": "ready",
+            "project": "fno",
+            "slug": "open-rows",
+            "sessions": [
+                {"session_id": "sess-open-1", "phase": "execute", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z", "ended_at": null},
+                {"session_id": "sess-done", "phase": "execute", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z", "ended_at": "2026-10-25T01:00:00Z"},
+                {"session_id": "sess-ship", "phase": "ship", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z", "ended_at": null}
+            ]
+        });
+        crate::graph_store::seed_rows(&db, &[entry]).expect("seed graph");
+        let backup = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", &root);
+        let rows = open_execute_row_ids("x-openrows");
+        match backup {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        assert_eq!(
+            rows,
+            vec![("claude".to_string(), "sess-open-1".to_string())]
+        );
+        assert!(open_execute_row_ids("x-absent").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

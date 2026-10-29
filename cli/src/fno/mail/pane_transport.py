@@ -6,8 +6,8 @@ prompt.
 
 Two callers share it. The Python mail lane
 (:func:`fno.agents.dispatch._mux_pane_send`) imports :func:`prepare` directly.
-The Rust ``fno mux pane send`` verb renders through the paired fno-agents
-binary's ``mail pane-prepare`` verb (the former Python leaf, ported) and FAILS
+The Rust ``fno mux pane send`` command renders through the paired fno-agents
+binary's ``mail pane-prepare`` command (the former Python leaf, ported) and FAILS
 CLOSED when that call cannot run -- there is no
 bare-paste fallback, because a silent fallback rebuilds the unattributed send
 this module exists to close, and does so exactly when something is already wrong.
@@ -391,11 +391,11 @@ def wrap(
             # And an id to quote. Without one the recipient has a sender but no
             # `reply --to`, so three of the four defects the envelope closes came
             # back and the fourth did not. A bare pane drive writes no bus row,
-            # but it does not need to: `resolve_live_sender` recovers a sender
-            # off the transcript for an id the bus never saw, and it reads
-            # `from_session` first, so the recovered address is the collision-safe
-            # one. The mail lane never reaches here -- it mints its own id and
-            # hands this function an already-wrapped body.
+            # but it does not need to: the reply leaf recovers a sender off the
+            # transcript for an id the bus never saw, and it reads `from_session`
+            # first, so the recovered address is the collision-safe one. The mail
+            # lane never reaches here -- it mints its own id and hands this
+            # function an already-wrapped body.
             id=msg_id or generate_msg_id(),
         )
     except ForgedEnvelopeError as exc:

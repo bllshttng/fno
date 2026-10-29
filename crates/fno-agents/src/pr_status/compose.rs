@@ -305,7 +305,7 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
 }
 
 /// One human line for the payload; the fleet greps stderr for
-/// `"settled": true` on this verb, so stdout stays the machine contract.
+/// `"settled": true` on this command, so stdout stays the machine contract.
 pub(crate) fn verdict_line(payload: &Value) -> String {
     let checks = payload.get("checks").cloned().unwrap_or(json!({}));
     let unsettled = checks.get("unsettled").and_then(Value::as_i64);
@@ -530,6 +530,12 @@ fn entry_name(c: &Value) -> String {
 }
 
 fn push_review_notes(unresolved: &Value, resolved_unchanged: &Value, out: &mut Vec<String>) {
+    if unresolved.is_null() {
+        out.push(
+            "note: optional review findings unreadable; ready does not wait on them. Required reviewers still gate through review coverage."
+                .to_string(),
+        );
+    }
     if let Some(n) = unresolved.as_i64() {
         if n > 0 {
             out.push(format!(

@@ -1,7 +1,7 @@
 //! Multi-client e2e (task 3.6): the Phase 3 brief's clamp, per-client-view,
-//! session, and mux-verb ACs scripted through the socket seam (fake wire
+//! session, and mux-command ACs scripted through the socket seam (fake wire
 //! clients with distinct viewports against the real headless server binary)
-//! plus plain subprocess runs of the real binary for the mux verbs.
+//! plus plain subprocess runs of the real binary for the mux commands.
 
 mod common;
 
@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{spawn_server, Absorbed, ClientHarness, FakeClient};
-use fno::proto::Command;
+use fno::proto::{
+    read_msg_sync, write_msg_sync, ClientMsg, Command, ControlCommand, ServerMsg, BUILD_VERSION,
+    PROTO_VERSION,
+};
 use fno::tree::Dir;
 
 struct Scratch(PathBuf);
@@ -41,9 +44,17 @@ fn sh_server(scratch: &Scratch) -> common::ServerProc {
     spawn_server(&scratch.sock(), &[("SHELL", "/bin/sh")])
 }
 
+/// The pre-`latest` behaviour: the tab takes the smallest viewer's size.
+fn sh_server_smallest(scratch: &Scratch) -> common::ServerProc {
+    spawn_server(
+        &scratch.sock(),
+        &[("SHELL", "/bin/sh"), ("FNO_MUX_WINDOW_SIZE", "smallest")],
+    )
+}
+
 /// Run the real `fno` binary with `FNO_MUX_DIR` pointed at this scratch (no
-/// TTY - the mux verbs are plain subprocess surfaces). FNO_AGENTS_HOME rides
-/// along so a store-touching verb (workspace prune) writes the SAME isolated
+/// TTY - the mux commands are plain subprocess surfaces). FNO_AGENTS_HOME rides
+/// along so a store-touching command (workspace prune) writes the SAME isolated
 /// store the server uses instead of tripping the build-tree guard against
 /// the developer's real ~/.fno.
 fn fno_cmd(scratch: &Scratch, args: &[&str]) -> std::process::Output {
@@ -60,7 +71,7 @@ fn fno_cmd(scratch: &Scratch, args: &[&str]) -> std::process::Output {
 #[test]
 fn multiclient_clamp_letterbox_area_and_regrow_on_abrupt_death() {
     let scratch = Scratch::new("clamp");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
@@ -106,7 +117,7 @@ fn multiclient_clamp_below_min_pane_size_recovers_exactly() {
     // the tree at min pane size - no panic, no overlap, exact recovery when
     // the tiny client leaves.
     let scratch = Scratch::new("tiny");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
@@ -152,7 +163,7 @@ fn multiclient_clamp_below_min_pane_size_recovers_exactly() {
 #[test]
 fn multiclient_coviewed_tui_repaints_and_redraw_binding_nudges() {
     let scratch = Scratch::new("repaint");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
@@ -185,7 +196,21 @@ while :; do sleep 0.2; done\n",
     )
     .unwrap();
     a.input(b"sh ./winchpaint.sh\r");
-    a.wait_pane_text(15, pane, |t| t.contains("INPUTBOX n=1"));
+    let count = |t: &str| -> i32 {
+        t.split("INPUTBOX n=")
+            .nth(1)
+            .and_then(|rest| rest.split(['\r', '\n', ' ']).next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-1)
+    };
+    // Wait for the FIRST paint, not the literal "n=1": the script's init
+    // paint can coalesce with an early nudge before the client ever observes
+    // an intermediate frame, so n can already read 2 the first time this
+    // client sees any INPUTBOX at all (CI job 117926446680, 2026-10-19: text
+    // showed "INPUTBOX n=2" with no "n=1" frame ever seen, a real flake, not
+    // a loaded-runner timeout).
+    a.wait_pane_text(15, pane, |t| count(t) >= 1);
+    let initial = count(&a.pane_text(pane));
 
     // A smaller coviewer clamps the pane 40x120 -> 20x80. The resize ioctl
     // signals once and the nudge jiggles twice more; a shell may coalesce
@@ -194,14 +219,7 @@ while :; do sleep 0.2; done\n",
     a.wait_layout(10, "a clamped", |l| l.area == (20, 80));
     b.wait_layout(10, "b clamped", |l| l.area == (20, 80));
 
-    let count = |t: &str| -> i32 {
-        t.split("INPUTBOX n=")
-            .nth(1)
-            .and_then(|rest| rest.split(['\r', '\n', ' ']).next())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(-1)
-    };
-    let settled = a.wait_pane_text(15, pane, |t| count(t) >= 3);
+    let settled = a.wait_pane_text(15, pane, |t| count(t) >= initial + 2);
     assert_eq!(
         settled.matches("TOPMARK").count(),
         1,
@@ -245,6 +263,161 @@ while :; do sleep 0.2; done\n",
         Some(c.notices.iter().any(|n| n.contains("repaint requested")))
     });
     b.wait_pane_text(15, pane, |t| count(t) > before.max(0));
+}
+
+/// Deliver bytes to one pane through a control connection, the way the mail
+/// pane lane does (`fno mux pane send --stdin --raw`): a `Control` first
+/// message never registers a client, so it can neither resize nor count as
+/// activity.
+fn control_pane_send(sock: &Path, pane: u64, bytes: &[u8]) {
+    let mut stream = common::connect_with_retry(sock);
+    write_msg_sync(
+        &mut stream,
+        &ClientMsg::Control {
+            proto: PROTO_VERSION,
+            build: BUILD_VERSION.to_string(),
+            command: ControlCommand::PaneSend {
+                pane,
+                bytes: bytes.to_vec(),
+                guarded: false,
+                expected_identity: None,
+                hold_pass: false,
+            },
+        },
+    )
+    .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    match read_msg_sync::<_, ServerMsg>(&mut stream) {
+        Ok(ServerMsg::Ok) => {}
+        other => panic!("pane send failed: {other:?}"),
+    }
+}
+
+/// (x-27c7) One mail delivery - a bracketed paste, then a separate Enter -
+/// must resize no pane and change no client's area, with two clients of
+/// different sizes attached. Both panes run the WINCH-counting painter, so
+/// a stray winsize write on the receiver or its tab neighbour moves a count.
+#[test]
+fn multiclient_mail_delivery_resizes_no_pane() {
+    let scratch = Scratch::new("mailresize");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    std::fs::write(
+        cwd.join("winchpaint.sh"),
+        "#!/bin/sh\n\
+tag=$1\n\
+n=0\n\
+paint() {\n\
+  n=$((n+1))\n\
+  printf '%s' \"$n\" > \"cnt.$tag\"\n\
+}\n\
+trap 'paint' WINCH\n\
+paint\n\
+while :; do sleep 0.2; done\n",
+    )
+    .unwrap();
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let mut b = FakeClient::attach(&scratch.sock(), 30, 100, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| l.area == (30, 100));
+    a.cmd(Command::SplitDir(Dir::Right));
+    let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
+    let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
+    // Each painter counts its WINCHes in a file: the pasted body scrolls the
+    // screen, so a count painted on screen would not survive the delivery.
+    for (pane, tag) in [(receiver, "r"), (neighbour, "n")] {
+        let cmd = format!("sh ./winchpaint.sh {tag}\r");
+        control_pane_send(&scratch.sock(), pane, cmd.as_bytes());
+    }
+    let count = |tag: &str| -> i32 {
+        std::fs::read_to_string(cwd.join(format!("cnt.{tag}")))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(-1)
+    };
+    let started = std::time::Instant::now();
+    while count("r") < 1 || count("n") < 1 {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "painters never ran"
+        );
+        a.pump(Duration::from_millis(200));
+    }
+    // Let the split's own nudges drain before the baseline: the delivery is
+    // the only event inside the measured window.
+    a.pump(Duration::from_millis(2500));
+    let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    // Client b compares against the same settled layout, so it must hold
+    // the split before the delivery, not catch up on it afterwards.
+    b.wait_layout(10, "b settled", |l| l.panes == settled.panes);
+    let baseline = [count("r"), count("n")];
+
+    let mut paste = b"\x1b[200~".to_vec();
+    for line in 0..60 {
+        paste.extend_from_slice(
+            format!("line {line:02} of a long mail body {}\n", "x".repeat(40)).as_bytes(),
+        );
+    }
+    paste.extend_from_slice(b"\x1b[201~");
+    control_pane_send(&scratch.sock(), receiver, &paste);
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // Past NUDGE_DELAY (300 ms) plus the 1 s nudge tick.
+    a.pump(Duration::from_millis(2500));
+    b.pump(Duration::from_millis(100));
+
+    for ((pane, tag), before) in [(receiver, "r"), (neighbour, "n")]
+        .into_iter()
+        .zip(baseline)
+    {
+        assert_eq!(
+            count(tag),
+            before,
+            "mail delivery sent a SIGWINCH to pane {pane}"
+        );
+    }
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            c.layout.as_ref().map(|l| (l.area, l.panes.clone())),
+            Some((settled.area, settled.panes.clone())),
+            "mail delivery changed client {who}'s layout"
+        );
+    }
+}
+
+/// The default `latest` policy: the tab takes the size of the client that
+/// last attached, typed or resized, so a big window is not letterboxed by a
+/// small one it is not using.
+#[test]
+fn multiclient_window_size_latest_follows_the_active_client() {
+    let scratch = Scratch::new("latest");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_prompt(pane);
+    // B attached last, so B owns the size.
+    let mut b = FakeClient::attach(&scratch.sock(), 20, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "a follows b", |l| l.area == (20, 80));
+    b.wait_layout(10, "b owns the size", |l| l.area == (20, 80));
+
+    // A types: the tab follows A, and the shell's kernel winsize with it.
+    a.input(b"echo sz=$(stty size)#\r");
+    a.wait_layout(10, "a owns the size", |l| l.area == (40, 120));
+    b.wait_layout(10, "b follows a", |l| l.area == (40, 120));
+    a.wait_pane_text(15, pane, |t| t.contains("sz=38 118#"));
+
+    // B resizes its window: B is the latest client again.
+    b.resize(22, 90);
+    a.wait_layout(10, "a follows b's resize", |l| l.area == (22, 90));
+    b.wait_layout(10, "b owns its resized size", |l| l.area == (22, 90));
+    b.input(b"echo sz2=$(stty size)#\r");
+    b.wait_pane_text(15, pane, |t| t.contains("sz2=20 88#"));
 }
 
 // -- AC2: two clients, different views --------------------------------------
@@ -376,7 +549,7 @@ fn multiclient_resize_storm_while_coviewing_settles_on_final_clamp() {
     // (The strict SIGWINCH count bound is covered structurally by the
     // no-op-tail rule in push_layout plus per-client channel coalescing.)
     let scratch = Scratch::new("storm");
-    let _server = sh_server(&scratch);
+    let _server = sh_server_smallest(&scratch);
     let cwd = scratch.dir("w");
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
@@ -465,7 +638,7 @@ fn plant_stale_socket(path: &Path) {
 }
 
 #[test]
-fn multiclient_mux_ls_reports_live_counts_and_stale_without_unlinking() {
+fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
     let scratch = Scratch::new("ls");
     let _server = sh_server(&scratch); // session "main"
     let cwd = scratch.dir("w");
@@ -495,14 +668,52 @@ fn multiclient_mux_ls_reports_live_counts_and_stale_without_unlinking() {
         stdout.contains(needle),
         "live row with counts; got: {stdout}"
     );
-    assert!(stdout.contains("dead: stale"), "stale row; got: {stdout}");
+    // A refused socket with no pid sidecar is a proven corpse: ls heals it
+    // away instead of listing it, and the files go with it.
+    assert!(
+        !stdout.contains("dead:"),
+        "corpse row healed; got: {stdout}"
+    );
+    assert!(
+        !scratch.0.join("dead.sock").exists(),
+        "ls removes a proven-dead session's socket"
+    );
+    let journal = scratch.0.join("iso-agents").join("events.jsonl");
+    let healed = fno::event_store::journal_text(&journal, &["mux_session_healed"]);
+    // The silent-empty failure mode names nothing, so the panic carries the checked read's own Err and what the store directory actually holds.
+    let checked = fno::event_store::journal_text_checked(
+        &journal,
+        &fno::event_store::EventQuery::of_types(&["mux_session_healed"]),
+    );
+    let listing: Vec<String> = std::fs::read_dir(journal.parent().expect("journal has a parent"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    // The store's dead-letter names the commit error a finally-lost row died
+    // of; unreadable reads as a placeholder so the assert never masks itself.
+    let lost = std::fs::read_to_string(
+        journal
+            .parent()
+            .expect("journal has a parent")
+            .join("events.db.lost.jsonl"),
+    )
+    .unwrap_or_else(|e| format!("unreadable: {e}"));
+    assert!(
+        healed.contains("mux_session_healed") && healed.contains("dead.sock"),
+        "the heal journals one row naming the session; got: {healed:?}; \
+         checked: {checked:?}; store dir: {listing:?}; lost: {lost:?}"
+    );
     assert!(
         stdout.contains("odd: alive (unqueryable"),
         "unanswering server degrades per-row (AC4-ERR); got: {stdout}"
     );
     assert!(
-        scratch.0.join("dead.sock").exists(),
-        "ls is read-only: it never unlinks (AC4-HP)"
+        scratch.0.join("odd.sock").exists(),
+        "a socket that accepts is never removed"
     );
     // The probed live session is unharmed: the client still works.
     let pane = c.focus();
@@ -633,7 +844,7 @@ fn concurrent_strict_spawn_only_one_commits() {
     // tab). A 5-row viewport admits one MIN_ROWS split but not a second.
     use common::connect_with_retry;
     use fno::proto::{
-        read_msg_sync, write_msg_sync, ClientMsg, ControlVerb, PanePlacement, PaneTarget,
+        read_msg_sync, write_msg_sync, ClientMsg, ControlCommand, PanePlacement, PaneTarget,
         PlacementFallback, ServerMsg, BUILD_VERSION, PROTO_VERSION,
     };
     use fno::tree::Dir;
@@ -656,7 +867,7 @@ fn concurrent_strict_spawn_only_one_commits() {
     let req = ClientMsg::Control {
         proto: PROTO_VERSION,
         build: BUILD_VERSION.into(),
-        verb: ControlVerb::PaneRun {
+        command: ControlCommand::PaneRun {
             cwd: cwd.to_string_lossy().into_owned(),
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
             cols: None,
@@ -678,6 +889,7 @@ fn concurrent_strict_spawn_only_one_commits() {
                 fit: false,
             },
             worker: None,
+            fno_id: None,
         },
     };
     // Queue both before reading either: the server serializes them in arrival
@@ -722,7 +934,7 @@ fn concurrent_graft_one_commits_one_refuses() {
     // on min-size (no partial tree, no orphan shell).
     use common::connect_with_retry;
     use fno::proto::{
-        read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, ControlVerb, GraftOutcome,
+        read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, ControlCommand, GraftOutcome,
         LayoutBinding, LayoutSlot, LayoutTreeChild, LayoutTreeSpec, PaneTarget, ServerMsg,
         BUILD_VERSION, PROTO_VERSION,
     };
@@ -774,7 +986,7 @@ fn concurrent_graft_one_commits_one_refuses() {
     let req = ClientMsg::Control {
         proto: PROTO_VERSION,
         build: BUILD_VERSION.into(),
-        verb: ControlVerb::LayoutGraft {
+        command: ControlCommand::LayoutGraft {
             squad: PaneTarget::CurrentRoute,
             anchor: pane1,
             spec: spec(),

@@ -1,0 +1,38 @@
+# Stage tier (slice 3), review stage: a decorative test. Source: node
+# x-8cb0 - its plan records the slice-1 interval incident, where the only
+# test over the cohort interval asserted bracketing, which the wrong bounds
+# also pass, so the broken math shipped green. The lane must flag a
+# replacement test that can never fail as blocking, not bless it because it
+# runs green.
+id: capability-stage-review-decorative-test
+tier: capability
+prompt: |
+  Review a proposed test change the way you would review a real PR on this
+  repo.
+
+  The material is in evals/fixtures/stage-tasks/review-decorative-test/:
+  clamp.py is the function under test and test_clamp.py is the suite that
+  would replace the current tests after this change. Review whether the
+  suite still tests clamp_repeat's documented behavior. Do not fix
+  anything and do not modify the fixture directory.
+
+  Write your findings to review-findings.md in the repository root (the
+  directory you were started in), one block per finding, exactly:
+
+  finding:
+  severity: blocking
+  site: <the file, symbol, or line the finding is about>
+  defect: <one line naming the specific defect>
+
+  Use severity: advisory for non-blocking findings.
+grade:
+  - kind: file-exists
+    path: review-findings.md
+  - kind: exit
+    # Grade the defect, not the site: some finding block must read
+    # severity: blocking AND its defect line must say why the test proves
+    # nothing (a test that cannot fail, a tautology, an assertion that
+    # never fires). Naming the test symbol alone fails here.
+    command: 'python3 -c "import re,sys; t=open(''review-findings.md'').read(); bs=re.split(r''(?m)^finding:\s*$'',t)[1:]; ok=any((''severity: blocking'' in b and re.search(r''(?im)^defect:.*\b(never fail|cannot fail|tautolog|asserts nothing|tests nothing|isinstance|vacuous|decorative)'',b)) for b in bs); sys.exit(0 if ok else 1)"'
+timeout_minutes: 15
+tags: [stage-climb, review]

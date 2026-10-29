@@ -1,7 +1,7 @@
 //! Characterization over the spawn_compose goldens
 //! (`tests/fixtures/spawn_compose/`): the pure compose answers the argv,
-//! the stderr lines, the exit, the stdout and the journal row the Python
-//! seam produced at the merge base.
+//! the stderr lines, the exit, the stdout and the journal row the store
+//! holds for it (typed envelope, ts dropped).
 
 //! parity-stage: characterization
 //! parity-oracle: fno.agents.spawn_defaults.inject_spawn_defaults
@@ -44,7 +44,7 @@ fn inputs_from(case: &Value, config: &toml::Table) -> fno_agents::spawn_compose:
         .get("profiles")
         .cloned()
         .unwrap_or_else(|| empty.clone());
-    let dispatch_verbs = subtree(config, &["dispatch", "verbs"]);
+    let dispatch_commands = subtree(config, &["dispatch", "command_registry"]);
     fno_agents::spawn_compose::Inputs {
         argv: case["argv"]
             .as_array()
@@ -56,11 +56,11 @@ fn inputs_from(case: &Value, config: &toml::Table) -> fno_agents::spawn_compose:
             .unwrap_or_default(),
         defaults,
         profiles,
-        dispatch_verbs,
+        dispatch_commands,
         // The goldens were captured with harness markers scrubbed, so the
         // ambient inference answered the builtin default.
-        roster: fno_agents::provider::footnote_verbs_public(),
-        node_verb: case["node_verb"].as_str().map(str::to_string),
+        roster: fno_agents::provider::footnote_commands_public(),
+        node_command: case["node_command"].as_str().map(str::to_string),
         env_node: case["env_node"].as_str().map(str::to_string),
         ambient_harness: "claude".to_string(),
         apply_permission_builtin: case["apply_permission_builtin"].as_bool().unwrap_or(true),
@@ -177,20 +177,27 @@ fn compose_goldens_reproduce_the_python_seam() {
         );
         let journal = read_journal(&events);
         let mut expect_journal = expect["journal"].clone();
-        if expect_journal.is_object()
-            && expect_journal
-                .get("fingerprint")
-                .and_then(Value::as_str)
-                .is_some_and(|f| !f.is_empty())
+        if expect_journal
+            .get("data")
+            .and_then(|d| d.get("fingerprint"))
+            .and_then(Value::as_str)
+            .is_some_and(|f| !f.is_empty())
         {
             // The capture stamped the pre-canonical formula; this port made
             // the fingerprint key-sorted (one-time value change, documented
             // in the PR). Arm-presence stays pinned: the no-consult cases
             // keep "" and must still match.
-            if let Some(obj) = expect_journal.as_object_mut() {
+            if let Some(obj) = expect_journal
+                .get_mut("data")
+                .and_then(Value::as_object_mut)
+            {
                 obj.insert(
                     "fingerprint".into(),
-                    journal.get("fingerprint").cloned().unwrap_or(Value::Null),
+                    journal
+                        .get("data")
+                        .and_then(|d| d.get("fingerprint"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
                 );
             }
         }
@@ -214,9 +221,13 @@ fn parse_error_config(case: &Value) -> toml::Table {
 }
 
 fn read_journal(events: &Path) -> Value {
-    let Ok(text) = std::fs::read_to_string(events) else {
-        return Value::Null;
-    };
+    // The writer commits to the store; the reader goes through the same
+    // typed window the production readers use. `journal_text` folds the
+    // committed rows with any live tail and opens no file.
+    let text = fno_agents::event_store::journal_text(
+        events,
+        &["spawn_defaults_applied", "spawn_gate_refused"],
+    );
     let last = text.lines().filter(|l| !l.trim().is_empty()).last();
     match last {
         Some(line) => {

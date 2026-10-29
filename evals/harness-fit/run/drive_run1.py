@@ -11,6 +11,13 @@ projection must stay under the manifest ceiling, else stop.
 Top-up (Amendment 4): per available lane and task, rerun the attempts that never
 started, up to 3 graded or stalled per task, at most 3 passes. A worker that ran
 out its budget started: a stall, scored, never rerun.
+
+A `logs/drain` file holds new work before it starts (Amendment 9), so a held
+attempt loses nothing. A lane whose newest history rows are consecutive
+identical `worker_started: false` spawn errors is stopped after
+BREAKER_N of them: the rows pollute the history and the driver looks alive to a
+liveness watcher, so the lane logs a `stop` event (the same row the ceiling
+stop writes, which status.py reads) and never re-enters the top-up.
 """
 import json
 import os
@@ -30,6 +37,8 @@ TASKS = 10
 FLOOR = 0.25  # USD per attempt, as Run 0's per-task floor
 ROUNDS = 3
 COOLDOWN = 900
+DRAIN = LOGS / "drain"
+BREAKER_N = 3
 
 
 def log(**row) -> None:
@@ -77,6 +86,38 @@ def lane(name: str, repeat: int, task: str = "") -> int:
     return subprocess.call(args + ([task] if task else []))
 
 
+def wait_drain(name: str) -> None:
+    """Hold before new work while a logs/drain file exists; a held attempt loses nothing."""
+    held = False
+    while DRAIN.exists():
+        if not held:
+            log(event="hold", lane=name, reason="drain")
+            held = True
+        time.sleep(30)
+
+
+def spawn_fail_streak(name: str) -> tuple[int, str]:
+    """Consecutive newest history rows for this lane whose worker_started read false, and their shared reason.
+
+    Any started, graded or differently-failing row breaks the streak: only
+    identical consecutive spawn failures are the breaker's signal.
+    """
+    streak = 0
+    reason = ""
+    for r in reversed(rows()):
+        if r.get("experiment_id") != f"harness-fit-{name}":
+            continue
+        if (r.get("obs") or {}).get("worker_started") is not False:
+            break
+        row_reason = r.get("reason") or ""
+        if streak == 0:
+            reason = row_reason
+        elif row_reason != reason:
+            break
+        streak += 1
+    return streak, reason
+
+
 def main() -> int:
     LOGS.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(MANIFEST.read_text())
@@ -85,6 +126,7 @@ def main() -> int:
     order = LANES[:]
     random.Random(SEED).shuffle(order)
     log(event="order", seed=SEED, order=order)
+    broken: set[str] = set()
     for name in order:
         if any(r.get("experiment_id") == f"harness-fit-{name}" for r in rows()):
             log(event="skip-ran", lane=name)
@@ -95,8 +137,13 @@ def main() -> int:
         if s + projection >= ceiling:
             log(event="stop", lane=name, reason="ceiling")
             return 3
+        wait_drain(name)
         log(event="start", lane=name)
         log(event="end", lane=name, rc=lane(name, REPEAT))
+        streak, why = spawn_fail_streak(name)
+        if streak >= BREAKER_N:
+            broken.add(name)
+            log(event="stop", lane=name, reason="spawn-failures", streak=streak, error=why)
     tasks = sorted(p.stem for p in (REPO / "evals/harness-fit/bank").glob("*.yaml"))
     for rnd in range(1, ROUNDS + 1):
         counts = done_counts()
@@ -106,6 +153,14 @@ def main() -> int:
         if not todo:
             break
         for name, task, missing in todo:
+            if name in broken:
+                continue
+            streak, why = spawn_fail_streak(name)
+            if streak >= BREAKER_N:
+                broken.add(name)
+                log(event="stop", lane=name, reason="spawn-failures", streak=streak, error=why)
+                continue
+            wait_drain(name)
             s = spent(prices)
             if s + 3 * missing * FLOOR >= ceiling:
                 log(event="stop", lane=name, reason="ceiling", spent=round(s, 4))

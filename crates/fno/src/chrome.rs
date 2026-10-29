@@ -148,13 +148,6 @@ impl Chrome {
         }
     }
 
-    /// No esc chip on the top border (construction-time): the pane is one of
-    /// several in an overlay whose chip rides another pane.
-    pub fn without_close(mut self) -> Self {
-        self.closeable = false;
-        self
-    }
-
     /// The flat frame (construction-time, like [`Self::full`]): border,
     /// title, chip and footer resolve through the panel slots - thin rules,
     /// bold head, dim meta - with no INVERSE band anywhere on the frame.
@@ -314,6 +307,8 @@ pub struct BodyLine {
     /// `(target, offset, len)` hit spans within `text`, offsets relative to the
     /// line's first char.
     pub hits: Vec<(usize, usize, usize)>,
+    /// How this line follows the one above (see [`Join`]).
+    pub join: Join,
 }
 
 impl BodyLine {
@@ -336,6 +331,34 @@ pub struct FramedLine {
     pub text: String,
     pub roles: Vec<Role>,
     pub hits: Vec<(usize, usize, usize)>,
+    /// The part of a body row the mouse can select. `None` on a border,
+    /// title, tab or footer row.
+    pub body: Option<BodySpan>,
+}
+
+/// How a laid-out row follows the one above it. A wrap is a layout choice,
+/// not a line break in the text, so a mouse copy joins a wrapped row back:
+/// with a space where the wrap stood at one, with nothing where it split a
+/// word, so a wrapped URL pastes whole.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Join {
+    /// A new logical line.
+    #[default]
+    Line,
+    /// Continues the row above; the wrap stood at a space.
+    Space,
+    /// Continues the row above; the wrap split a word.
+    Seam,
+}
+
+/// The selectable text of one framed body row: char offsets into
+/// [`FramedLine::text`] (past the left border, short of the scrollbar and
+/// the right border), and how the row follows the one above.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BodySpan {
+    pub start: usize,
+    pub end: usize,
+    pub join: Join,
 }
 
 /// A fully framed block: the lines to draw and the total framed width.
@@ -488,10 +511,12 @@ thread_local! {
 /// Start collecting the esc-close spans the painters put on screen.
 pub fn close_chips_begin() {
     CLOSE_CHIPS.with(|c| *c.borrow_mut() = Some(Vec::new()));
+    crate::modal_select::frame_begin();
 }
 
 /// Stop collecting and return what the frame painted, top layer last.
 pub fn close_chips_end() -> Vec<CloseSpan> {
+    crate::modal_select::frame_end();
     CLOSE_CHIPS.with(|c| c.borrow_mut().take().unwrap_or_default())
 }
 
@@ -616,6 +641,14 @@ pub fn blit(
             theme,
         );
         record_close_spans((rows, cols), (r0 + i, c0), framed.width, &line.hits);
+        crate::modal_select::paint_line(
+            cells,
+            (rows, cols),
+            theme,
+            (r0 + i, c0),
+            &line.text,
+            line.body,
+        );
     }
 }
 
@@ -635,6 +668,7 @@ fn flatten(mut row: Vec<Seg>) -> FramedLine {
         text,
         roles,
         hits: Vec::new(),
+        body: None,
     }
 }
 
@@ -882,6 +916,7 @@ fn body_row(
         });
     }
 
+    let body_end = text.chars().count();
     if let Some(s) = scroll {
         let (ch, role) = scroll_cell(row_idx, s);
         text.push(ch);
@@ -899,7 +934,16 @@ fn body_row(
         .map(|(t, off, len)| (*t, off + 1 + pad, *len))
         .collect();
 
-    FramedLine { text, roles, hits }
+    FramedLine {
+        text,
+        roles,
+        hits,
+        body: Some(BodySpan {
+            start: 1,
+            end: body_end,
+            join: line.join,
+        }),
+    }
 }
 
 /// The scrollbar cell for viewport row `row_idx`: `█` (thumb) over the rows the

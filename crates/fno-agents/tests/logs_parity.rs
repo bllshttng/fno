@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.agents.read.read_logs
 //!
-//! Characterization harness for the `logs` verb port. The goldens were
+//! Characterization harness for the `logs` command port. The goldens were
 //! captured from the Python leg (cli/src/fno/agents/read.py) while it still
 //! ran its own body, through the recipe in this directory (`capture.py` plus
 //! the README): one throwaway root per case, a registry seed, the empty
@@ -305,13 +305,10 @@ fn build_fixture(root: &Path, case: &Case) -> Option<PathBuf> {
                 std::fs::write(&p, CODEX_LOG).unwrap();
                 p.display().to_string()
             };
-            // The session-head token is session-shaped, so the client heals
-            // it through the `fno agents heal-token` helper. Point FNO_BIN at
-            // a per-fixture helper speaking the documented contract (exit 0,
-            // the row JSON as the last stdout line): a CI runner is a
-            // first-run machine, and the helper's bootstrap banner would
-            // otherwise ride through heal_token's stderr forwarding. The
-            // token-to-row mechanics stay with the helper's own tests.
+            // The session-head token is session-shaped, so the client
+            // checks it against the harness stores, which hold no session
+            // here: the registry row answers. The helper stub below still
+            // answers any other fno call the fixture makes.
             let row_json = codex_row(Some(&log_path));
             let helpers = root.join("helpers");
             std::fs::create_dir_all(&helpers).unwrap();

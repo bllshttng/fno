@@ -2,11 +2,12 @@
 # test_lead_postcompact_reinject.sh
 #
 # Unit tests for hooks/lead-postcompact-reinject.sh: the post-compaction
-# re-injection of the lead's operating brief. Verifies: the teamed claude case
-# delivers the brief through hookSpecificOutput.additionalContext; the teamed
-# codex case delivers through systemMessage; unpromoted rows, unknown sessions,
-# non-compact sources, and a missing fno all degrade to empty output with exit 0;
-# and the brief stays inside its byte budget (it is paid on every compaction).
+# pointers a lead reads. Verifies: the teamed claude case names the brief,
+# canon doc and FAQ files through hookSpecificOutput.additionalContext and
+# pastes none of their text; the teamed codex case delivers through
+# systemMessage; unpromoted rows, unknown sessions, non-compact sources, and a
+# missing fno all degrade to empty output with exit 0; and the brief stays
+# inside its byte budget (every lead reads it on every compaction).
 
 set -uo pipefail
 
@@ -37,11 +38,11 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry-json" ]; then
-  # Mirror the real Rust client: the verb refuses while the anti-recursion
+  # Mirror the real Rust client: the command refuses while the anti-recursion
   # pin is set (a leaked FNO_AGENTS_RUNTIME=python). The hook must
   # strip the pin before the read.
   if [ -n "${FNO_AGENTS_RUNTIME:-}" ]; then
-    echo "no Python implementation -- this verb runs only on the 'fno-agents' Rust runtime" >&2
+    echo "no Python implementation -- this command runs only on the 'fno-agents' Rust runtime" >&2
     exit 127
   fi
   cat "$LEAD_REG_FIXTURE"
@@ -53,9 +54,9 @@ elif [ "$1" = "agents" ] && [ "$2" = "org" ] && [ "$3" = "faq" ] && [ "$4" = "li
 elif [ "$1" = "config" ] && [ "$2" = "paths" ] && [ "$3" = "handoff" ]; then
   cat "$LEAD_HANDOFF_PATH_FIXTURE" 2>/dev/null || true
 elif [ "$1" = "backlog" ] && [ "$2" = "get" ]; then
-  # Batch node read: the fixture answers with the real verb's shape (a JSON
+  # Batch node read: the fixture answers with the real command's shape (a JSON
   # array, misses as {"id":...,"error":"not found"}). Absent fixture = the
-  # verb itself failing (empty stdout, nonzero exit).
+  # command itself failing (empty stdout, nonzero exit).
   if [ -n "$LEAD_BACKLOG_FIXTURE" ] && [ -f "$LEAD_BACKLOG_FIXTURE" ]; then
     cat "$LEAD_BACKLOG_FIXTURE"
   else
@@ -89,18 +90,17 @@ run_lead() { # $1 = event JSON ; FNO_PLATFORM env selects the lane
   printf '%s' "$1" | FNO_PLATFORM="$FNO_PLATFORM" bash "$LEAD" 2>/dev/null
 }
 
-# 1. Teamed row, source=compact, claude lane: the brief must arrive on the
-#    model-context carrier with both the team line and the first rule.
+# 1. Teamed row, source=compact, claude lane: the team line and a pointer
+#    to the brief arrive on the model-context carrier. The brief's rules are
+#    read from the file, never pasted.
 registry_fixture "$TEAMED_ROW"
 FNO_PLATFORM=claude
 OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
-[[ $RC -eq 0 ]] && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-    | contains("level 1 over fno") and contains("Encode, then step_down")
-      and contains("--substrate thread") and contains("glm-5.3-flash[1m]")
-      and contains("status=retasked") and contains("spawn_required")
-      and (contains("retier: ") | not)' >/dev/null 2>&1 \
-  && pass "teamed claude: additionalContext carries team + first rule + retask receipts" \
+[[ $RC -eq 0 ]] && echo "$OUT" | jq -e --arg brief "$BRIEF" '.hookSpecificOutput.additionalContext
+    | contains("level 1 over fno") and contains("Read this file: " + $brief)
+      and (contains("Encode, then step down") | not)' >/dev/null 2>&1 \
+  && pass "teamed claude: additionalContext carries team + brief pointer, no pasted rules" \
   || fail "teamed claude rc=$RC payload=$OUT"
 
 # 2. Teamed row, no source field, codex lane resolved through CODEX_THREAD_ID:
@@ -156,157 +156,55 @@ OUT="$(printf '%s' "{\"source\":\"compact\",\"session_id\":\"$SID\"}" \
   && pass "pinned env: team read survives the strip, reinjection arrives (AC5-HP)" \
   || fail "pinned env rc=$RC payload=$OUT err=$(cat "$PIN_ERR" 2>/dev/null)"
 
-# 7b. A teamed lead with matching FAQ entries gets them after the static
-#     brief; an empty FAQ fixture (the default, case 1 above) adds nothing.registry_fixture "$TEAMED_ROW"
-printf 'Q: what do I do?\nA: lead on.\n---\n' > "$LEAD_FAQ_FIXTURE"
+# 7b. Each FAQ entry file for the scope rides as one pointer line; a listed
+#     path that is not a file adds nothing. The stub answers --paths with the
+#     fixture's lines.
+registry_fixture "$TEAMED_ROW"
+FAQ_ENTRY="$TMP/lead-faq-1.md"
+printf -- '---\nscope: fno\n---\nQ: what do I do?\nA: SENTINEL_FAQ_ANSWER\n' > "$FAQ_ENTRY"
+printf '%s\n%s\n' "$FAQ_ENTRY" "$TMP/lead-faq-missing.md" > "$LEAD_FAQ_FIXTURE"
 OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
-[[ $RC -eq 0 ]] && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-    | contains("This team'"'"'s FAQ") and contains("lead on.")' >/dev/null 2>&1 \
-  && pass "teamed with matching FAQ entries: appended after the brief" \
+[[ $RC -eq 0 ]] && echo "$OUT" | jq -e --arg faq "$FAQ_ENTRY" '.hookSpecificOutput.additionalContext
+    | contains("Read this file: " + $faq) and (contains("lead-faq-missing") | not)
+      and (contains("SENTINEL_FAQ_ANSWER") | not)' >/dev/null 2>&1 \
+  && pass "FAQ entries: one pointer per file, text not pasted" \
   || fail "teamed+FAQ rc=$RC payload=$OUT"
 : > "$LEAD_FAQ_FIXTURE"
-OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
-RC=$?
-# Positive marker required alongside the absence: a regression to empty
-# output would also pass "no FAQ heading", so require the base brief too.
-[[ $RC -eq 0 ]] && echo "$OUT" | grep -q "level 1 over fno" && ! echo "$OUT" | grep -q "This team's FAQ" \
-  && pass "teamed with empty FAQ fixture: no FAQ heading added" \
-  || fail "teamed+empty-FAQ rc=$RC payload=$OUT"
 
-# 7c. An oversized FAQ payload is truncated to the byte budget, never
-#     reinjected whole - one detailed entry can already outgrow context.
-python3 -c "print('Q: big?\nA: ' + ('x' * 6000) + '\n---')" > "$LEAD_FAQ_FIXTURE"
-OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
-RC=$?
-[[ $RC -eq 0 ]] && echo "$OUT" | grep -q "truncated at" \
-  && pass "oversized FAQ payload is truncated to the byte budget" \
-  || fail "oversized-FAQ rc=$RC payload=${OUT:0:200}"
-
-# 7d. The truncation cut is UTF-8-safe: a multi-byte character straddling the
-#     4000-byte boundary must not survive as a raw split byte. A raw `head -c`
-#     cut there landed a lone/invalid UTF-8 byte in the JSON payload.
-python3 -c "
-prefix = 'Q: big?\nA: '
-s = prefix + ('x' * 3988) + (chr(0xe9) * 20) + '\n---\n'
-import sys
-sys.stdout.write(s)
-" > "$LEAD_FAQ_FIXTURE"
-OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
-RC=$?
-# A raw byte-boundary cut through this exact character lands a lone/invalid
-# UTF-8 byte that json.dumps can only represent as an escaped lone surrogate
-# (\udcXX, the D800-DFFF range) - grep for that escape rather than just
-# json-parsing, since Python's own json.load tolerates a lone surrogate and
-# would report the payload valid either way.
-[[ $RC -eq 0 ]] && ! printf '%s' "$OUT" | grep -qE '\\ud[89a-f][0-9a-f]{2}' \
-  && pass "UTF-8-straddling truncation carries no lone-surrogate escape" \
-  || fail "UTF-8-straddling truncation rc=$RC leaked a lone surrogate: ${OUT:0:200}"
-
-# 7e. Canon read-back: the precompact doc's FILLED judgment blocks ride back
-#     after the compact; default placeholders (their signature text) do not.
-registry_fixture "$TEAMED_ROW"
-FNO_PLATFORM=claude
+# 7e. Canon pointer: the hook names the precompact doc as a file to read; it
+#     pastes none of the doc's sections.
 CANON_DOC="$TMP/canon-doc.md"
 cat > "$CANON_DOC" <<'DOC'
 # Canon doc: team fno
 
-Session id (authoritative): `sess-lead`  |  refreshed by precompact-canon-doc.sh.
-
-## Merge order and why (session)
+## Workarounds in force (session)
 <!-- fno:session -->
-Ship the sibling's PR before the read-back wave.
-SENTINEL_CANON_MERGE
+SENTINEL_CANON_WORKAROUND restart sqld yourself.
 <!-- /fno:session -->
 
-## Open decisions awaiting the operator (session)
-<!-- fno:session -->
-_Open decisions awaiting the operator. Nothing external knows this. The session fills it at full context._
-<!-- /fno:session -->
+Recall word: 00000009
 DOC
+# 0x9 % 8 = 1 picks the second opener: the recall word drives the rotation.
 printf '%s\n' "$CANON_DOC" > "$LEAD_HANDOFF_PATH_FIXTURE"
 OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
 [[ $RC -eq 0 ]] \
-  && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-      | contains("Your team'"'"'s handoff") and contains("SENTINEL_CANON_MERGE") and contains("Full canon doc")' >/dev/null 2>&1 \
-  && ! printf '%s' "$OUT" | grep -q "Nothing external knows this" \
-  && pass "canon read-back: filled blocks injected, placeholders dropped" \
-  || fail "canon read-back rc=$RC payload=${OUT:0:300}"
+  && echo "$OUT" | jq -e --arg doc "$CANON_DOC" '.hookSpecificOutput.additionalContext
+      | contains("Fresh brain, who dis? Your memory is here. Read all of it: " + $doc)' >/dev/null 2>&1 \
+  && ! printf '%s' "$OUT" | grep -q "SENTINEL_CANON_WORKAROUND" \
+  && pass "canon pointer: doc path named, no section pasted" \
+  || fail "canon pointer rc=$RC payload=${OUT:0:300}"
 : > "$LEAD_HANDOFF_PATH_FIXTURE"
 
-# 7f. No resolvable canon doc: no handoff section, base brief still present
+# 7f. No resolvable canon doc: no canon line, brief pointer still present
 #     (positive marker, not absence alone).
 OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
 [[ $RC -eq 0 ]] && echo "$OUT" | grep -q "level 1 over fno" \
-  && ! echo "$OUT" | grep -q "Your team's handoff" \
-  && pass "no canon doc: no handoff section, brief intact" \
+  && ! echo "$OUT" | grep -q "canon-doc.md" \
+  && pass "no canon doc: no canon line, brief intact" \
   || fail "no-canon-doc rc=$RC payload=${OUT:0:300}"
-
-# 7g. The fno:user block: the user's own words ride back verbatim under their
-#     own heading, alongside the session-filled judgment blocks.
-cat > "$CANON_DOC" <<'DOC'
-# Canon doc: team fno
-
-Session id (authoritative): `sess-lead`  |  refreshed by precompact-canon-doc.sh.
-
-## Merge order and why (session)
-<!-- fno:session -->
-Ship the sibling's PR before the read-back wave.
-SENTINEL_CANON_MERGE
-<!-- /fno:session -->
-
-## User notes (you write here; the machine only ever reads this)
-<!-- fno:user -->
-SENTINEL_USER_REPLY_TO_ME directly, not through the board.
-<!-- /fno:user -->
-DOC
-printf '%s\n' "$CANON_DOC" > "$LEAD_HANDOFF_PATH_FIXTURE"
-OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
-RC=$?
-[[ $RC -eq 0 ]] \
-  && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-      | contains("User notes (from your canon doc)") and contains("SENTINEL_USER_REPLY_TO_ME directly, not through the board.")' >/dev/null 2>&1 \
-  && pass "user block surfaced verbatim under its own heading" \
-  || fail "user-block surfacing rc=$RC payload=${OUT:0:300}"
-
-# 7h. Placeholder-only user block: no section, base brief intact. A drifted
-#     placeholder copy would surface the seed line as if the user typed it.
-python3 - "$CANON_DOC" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p).read()
-s = re.sub(r"(?s)<!-- fno:user -->\n.*?<!-- /fno:user -->",
-           "<!-- fno:user -->\n_(write here; the machine reads this every refresh and never edits it)_\n<!-- /fno:user -->",
-           s, count=1)
-open(p, "w").write(s)
-PY
-OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
-RC=$?
-[[ $RC -eq 0 ]] && echo "$OUT" | grep -q "level 1 over fno" \
-  && ! echo "$OUT" | grep -q "User notes (from your canon doc)" \
-  && pass "placeholder-only user block: silent, brief intact" \
-  || fail "placeholder-only rc=$RC payload=${OUT:0:300}"
-
-# 7i. An oversized user block is truncated to the byte budget, never
-#     reinjected whole.
-python3 - "$CANON_DOC" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-import re
-s = re.sub(r"(?s)<!-- fno:user -->\n.*?<!-- /fno:user -->",
-           "<!-- fno:user -->\n" + ("y" * 6000) + "\n<!-- /fno:user -->",
-           s, count=1)
-open(p, "w").write(s)
-PY
-OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
-RC=$?
-[[ $RC -eq 0 ]] && echo "$OUT" | grep -q "truncated at" \
-  && pass "oversized user block truncated to the byte budget" \
-  || fail "oversized-user rc=$RC payload=${OUT:0:200}"
-: > "$LEAD_HANDOFF_PATH_FIXTURE"
 
 # 8. Summary id resolution: the NEWEST isCompactSummary entry (by line
 #    position) has its node-id candidates resolved through `fno backlog get`
@@ -345,7 +243,7 @@ printf '%s' "$OUT" | grep -q "abcd-1234" \
   || pass "uuid masked before id extraction"
 
 # 8c. An error row from the batch read is unresolved, never resolved: the
-#     verb reports the miss as data and the hook relays it as a correction.
+#     command reports the miss as data and the hook relays it as a correction.
 printf '%s' "$OUT" | grep -q "unresolved: ee-77778888" \
   && pass "batch error row lands under unresolved" \
   || fail "error row not surfaced as unresolved: ${OUT:0:200}"

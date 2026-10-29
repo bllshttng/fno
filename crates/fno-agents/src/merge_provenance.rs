@@ -158,7 +158,7 @@ fn write_span(journal: &Path, span_kind: &str, trace: Trace, attrs: Map<String, 
 }
 
 /// The merge owner record: one span per Merged/Armed outcome of
-/// [`crate::authorized_merge::run`], so every fno merge path (the verb,
+/// [`crate::authorized_merge::run`], so every fno merge path (the command,
 /// the pr-watch queue, the finalize arm) leaves an actor row behind. A
 /// failed write never moves the Outcome; it names itself on stderr.
 pub fn record_outcome(request: &Request, facts: &PrFacts, outcome: &Outcome) {
@@ -253,7 +253,7 @@ pub fn merge_request_pr(command: &[String]) -> Option<u64> {
 
 /// The gh-side record: the proxy draft door and the PostToolUse hook feed
 /// every delegated gh argv here, so an agent merge that never ran the fno
-/// verb still leaves a `merge_requested` row naming the path.
+/// command still leaves a `merge_requested` row naming the path.
 pub fn record_request(command: &[String], cwd: Option<&str>, path: &str) {
     if !recording_enabled() {
         return;
@@ -480,6 +480,7 @@ mod tests {
             &Outcome::Armed {
                 head: "abc123".into(),
                 merge_grant: None,
+                queued: false,
             },
         );
         let mut finalize = request.clone();
@@ -491,6 +492,7 @@ mod tests {
             &Outcome::Armed {
                 head: "abc123".into(),
                 merge_grant: None,
+                queued: false,
             },
         );
 

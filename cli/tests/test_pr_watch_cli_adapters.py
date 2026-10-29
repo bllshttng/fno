@@ -9,7 +9,6 @@ then make them green.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,7 +75,6 @@ def test_real_tick_composition_survives_route_metadata_and_records_live_sweep(
     from types import SimpleNamespace
 
     from fno.adapters.providers.loader import load_providers
-    from fno.pr._proc import Result
     from fno.pr_watch._dispatch import DispatchResult, tick
     from fno.pr_watch._discover import PrCandidate, PrObservation, read_tracked_pr_states
     from fno.pr_watch._state import WatermarkStore
@@ -120,15 +118,15 @@ route = "zai/glm-5.3[1m]"
         repo_slug="owner/repo",
     )
 
-    def rest_runner(cmd, **_kwargs):
-        path = cmd[2]
-        if "state=open" in path:
-            return Result(returncode=0, stdout=json.dumps([
-                {"number": 1134, "state": "open", "merged": False}
-            ]), stderr="")
-        # x-c79d: the stale key is absent from the open listing, which is the
-        # whole answer now - no closed read backs it up.
-        raise AssertionError(f"unexpected closed or exact read: {cmd}")
+    # x-c79d: the stale key is absent from the open listing, which is the
+    # whole answer now - no closed read backs it up. The listing rides the
+    # status-pr-list op on the authorized-merge door.
+    def _listing_door(command, payload, timeout=None):
+        assert command == "authorized-merge" and payload.get("op") == "status-pr-list"
+        assert payload["slug"] == "owner/repo"
+        return {"rows": [{"number": 1134, "state": "OPEN"}], "error": None}
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _listing_door)
 
     events_path = tmp_path / "events.jsonl"
 
@@ -158,9 +156,7 @@ route = "zai/glm-5.3[1m]"
             latest_review_ts=None,
             opened_at="2026-08-23T00:00:00Z",
         ),
-        read_tracked_states_fn=lambda keys: read_tracked_pr_states(
-            keys, runner=rest_runner
-        ),
+        read_tracked_states_fn=lambda keys: read_tracked_pr_states(keys),
         fire_skill_fn=lambda *_args, **_kwargs: DispatchResult(
             ok=True, rc=0, is_error=False, raw="{}"
         ),
@@ -465,14 +461,14 @@ def test_phase_caps_fit_ceiling():
     # cover the read bound plus one attempt at the drain's floor.
     from fno.pr_watch.cli import _GRANT_QUEUE_READ_TIMEOUT_S
 
-    merge_room = ceiling - sum(_EVERY_TICK_CAP_S[k] for k in ("settings", "lead_wake"))
+    merge_room = ceiling - sum(_EVERY_TICK_CAP_S[k] for k in ("settings",))
     merge_cap = _PHASE_CAP_S["merge"]
     assert 0 < merge_cap <= merge_room - _EVERY_TICK_CAP_S["sweep"]
     tight_ceiling = _resolve_tick_deadline(
         SimpleNamespace(tick_timeout_seconds=480, interval_seconds=600)
     )
     tight_merge_room = tight_ceiling - sum(
-        _EVERY_TICK_CAP_S[k] for k in ("settings", "lead_wake", "sweep")
+        _EVERY_TICK_CAP_S[k] for k in ("settings", "sweep")
     )
     assert merge_cap <= tight_merge_room and merge_cap >= (
         _MERGE_FLOOR_S + _GRANT_QUEUE_READ_TIMEOUT_S
@@ -529,7 +525,7 @@ def _run_merge_tick_with_counts(monkeypatch, counts, *, queue_call=None, load_pe
                 "queue": [{"node_id": "x-planted", "pr": 88, "repo_slug": "owner/repo",
                            "cwd": str(Path.cwd()), "grant": {"source": "config"}}],
             }
-    monkeypatch.setattr("fno.rust_binary.verb_call", queue_call)
+    monkeypatch.setattr("fno.rust_binary.command_call", queue_call)
 
     def drain(queue, **_kw):
         drained.extend(queue)
@@ -569,10 +565,10 @@ def test_merge_phase_uses_load_scaled_queue_bound_before_the_sweep(monkeypatch):
     assert observed_timeouts == [191.25]
     assert len(drained) == 1
 
-    from fno.rust_binary import VerbUnavailable
+    from fno.rust_binary import CommandUnavailable
 
     def timeout(*_args, **_kwargs):
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             "fno-agents authorized-merge failed: Command timed out after 90.0 seconds"
         )
 
@@ -691,8 +687,8 @@ def test_armed_breaker_completes_the_tick(monkeypatch, _no_global_tick_events, t
     )
     # The merge leg's queue read: an empty grant queue still reports its scan.
     monkeypatch.setattr(
-        "fno.rust_binary.verb_call",
-        lambda verb, payload, **kw: {"candidates": 0, "verdicts": {}, "queue": []},
+        "fno.rust_binary.command_call",
+        lambda command_name, payload, **kw: {"candidates": 0, "verdicts": {}, "queue": []},
     )
     monkeypatch.setattr(prcli, "_run_notify_watch_phase",
                         lambda _roots=None, timeout_s=None, **_kw: None, raising=True)

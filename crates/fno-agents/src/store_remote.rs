@@ -15,13 +15,19 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 const CONNECT_WAIT: Duration = Duration::from_secs(3);
 const REPLY_WAIT: Duration = Duration::from_secs(15);
 const KEY: &str = "store.remote_url";
+const ADDRS_KEY: &str = "store.remote_addrs";
 const UNREACHABLE: &str = "is unreachable";
+/// The primary took the request and sent nothing back in time. Callers
+/// still fail closed on it, but the words must not say "unreachable": the
+/// host answers, and the cure is on the primary, not the network.
+const QUIET: &str = "did not answer";
+const NO_REPLY: &str = "no reply within";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlValue {
@@ -43,6 +49,13 @@ impl SqlValue {
     pub fn integer(&self) -> Option<i64> {
         match self {
             SqlValue::Integer(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn real(&self) -> Option<f64> {
+        match self {
+            SqlValue::Real(value) => Some(*value),
             _ => None,
         }
     }
@@ -135,6 +148,7 @@ pub struct Remote {
     port: u16,
     path: String,
     token: Option<String>,
+    fallbacks: Vec<SocketAddr>,
 }
 
 impl Remote {
@@ -167,11 +181,35 @@ impl Remote {
             port,
             path,
             token: token.filter(|t| !t.is_empty()),
+            fallbacks: Vec::new(),
         })
+    }
+
+    /// Addresses to dial, in order, after the host name's own: a Tailscale
+    /// IP still works when MagicDNS does not. An entry is an IP or an
+    /// IP:port; a bare IP takes the URL's port.
+    pub fn with_fallbacks(mut self, addrs: &[String]) -> Result<Self, String> {
+        let port = self.port;
+        self.fallbacks = addrs
+            .iter()
+            .map(|addr| {
+                let addr = addr.trim();
+                addr.parse::<SocketAddr>()
+                    .or_else(|_| addr.parse::<IpAddr>().map(|ip| SocketAddr::new(ip, port)))
+                    .map_err(|_| format!("{ADDRS_KEY} entry {addr:?}: not an IP or IP:port"))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(self)
     }
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// The store host from `store.remote_url`: the ssh rescue's last-resort
+    /// peer key.
+    pub fn host(&self) -> &str {
+        &self.host
     }
 
     pub fn execute(&self, sql: &str, args: &[SqlValue]) -> Result<Reply, String> {
@@ -337,22 +375,60 @@ impl Remote {
     }
 
     fn unreachable(&self, error: &str) -> String {
+        let verdict = if error.starts_with(NO_REPLY) {
+            QUIET
+        } else {
+            UNREACHABLE
+        };
         format!(
-            "remote store {} ({KEY}) {UNREACHABLE}: {error}. Nothing was written locally. \
-             A request that timed out can still have reached the primary. \
-             Unset {KEY} in the global config to use the local store.",
+            "remote store {} ({KEY}) {verdict}: {error}. Nothing was written locally. \
+             A request that timed out can still have reached the primary.",
             self.url
         )
     }
 
+    /// Connect to the first address that answers: the host name's, then each
+    /// fallback. Only the connect moves on. A request already written can
+    /// have reached the primary, so it is never sent to a second address.
+    fn connect(&self) -> Result<TcpStream, String> {
+        let mut failures = Vec::new();
+        let resolved = self.resolve().unwrap_or_else(|error| {
+            failures.push(format!("resolve {}: {error}", self.host));
+            Vec::new()
+        });
+        let fallbacks = self.fallbacks.iter().filter(|a| !resolved.contains(a));
+        for address in resolved.iter().chain(fallbacks) {
+            match TcpStream::connect_timeout(address, CONNECT_WAIT) {
+                Ok(stream) => return Ok(stream),
+                Err(e) => failures.push(format!("connect {address}: {e}")),
+            }
+        }
+        Err(failures.join("; "))
+    }
+
+    /// The host name's addresses. The system resolver takes no timeout, and
+    /// a dead MagicDNS server can hold it for its whole retry schedule, so
+    /// the lookup runs on its own thread and waits at most CONNECT_WAIT.
+    fn resolve(&self) -> Result<Vec<SocketAddr>, String> {
+        let (host, port) = (self.host.clone(), self.port);
+        let (send, receive) = std::sync::mpsc::channel::<std::io::Result<Vec<SocketAddr>>>();
+        std::thread::spawn(move || {
+            let _ = send.send(
+                (host.as_str(), port)
+                    .to_socket_addrs()
+                    .map(Iterator::collect),
+            );
+        });
+        match receive.recv_timeout(CONNECT_WAIT) {
+            Ok(Ok(addrs)) if addrs.is_empty() => Err("no address".into()),
+            Ok(Ok(addrs)) => Ok(addrs),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Err(format!("no answer in {}s", CONNECT_WAIT.as_secs())),
+        }
+    }
+
     fn post(&self, route: &str, body: &str) -> Result<String, String> {
-        let address = (self.host.as_str(), self.port)
-            .to_socket_addrs()
-            .map_err(|e| e.to_string())?
-            .next()
-            .ok_or("the host name resolves to no address")?;
-        let mut stream =
-            TcpStream::connect_timeout(&address, CONNECT_WAIT).map_err(|e| e.to_string())?;
+        let mut stream = self.connect()?;
         stream
             .set_read_timeout(Some(REPLY_WAIT))
             .and_then(|()| stream.set_write_timeout(Some(REPLY_WAIT)))
@@ -378,19 +454,35 @@ impl Remote {
     }
 }
 
-/// Is this error the fail-closed refusal of an unreachable primary?
+/// Is this error the fail-closed refusal of a primary that could not be
+/// reached or did not answer in time?
 pub fn is_unreachable(error: &str) -> bool {
-    error.starts_with("remote store ") && error.contains(UNREACHABLE)
+    error.starts_with("remote store ") && (error.contains(UNREACHABLE) || error.contains(QUIET))
+}
+
+/// A read error in words. A read that hit [`REPLY_WAIT`] says so: macOS
+/// reports it as os error 35, "Resource temporarily unavailable", which
+/// reads like a refused connection when the primary took the request and
+/// went quiet.
+fn io_error(error: std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!(
+            "{NO_REPLY} {}s (the primary took the request and went quiet; \
+             `fno agents claim backlog probe` times one read and one write)",
+            REPLY_WAIT.as_secs()
+        ),
+        _ => error.to_string(),
+    }
 }
 
 fn read_response(mut reader: impl BufRead) -> Result<String, String> {
     let mut status = String::new();
-    reader.read_line(&mut status).map_err(|e| e.to_string())?;
+    reader.read_line(&mut status).map_err(io_error)?;
     let code = status.split_whitespace().nth(1).unwrap_or("");
     let (mut length, mut chunked) = (None, false);
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+        if reader.read_line(&mut line).map_err(io_error)? == 0 {
             break;
         }
         let line = line.trim_end();
@@ -409,11 +501,11 @@ fn read_response(mut reader: impl BufRead) -> Result<String, String> {
     if chunked {
         loop {
             let mut size = String::new();
-            reader.read_line(&mut size).map_err(|e| e.to_string())?;
+            reader.read_line(&mut size).map_err(io_error)?;
             let size = usize::from_str_radix(size.trim().split(';').next().unwrap_or(""), 16)
                 .map_err(|_| "bad chunk size in reply".to_string())?;
             let mut chunk = vec![0; size + 2];
-            reader.read_exact(&mut chunk).map_err(|e| e.to_string())?;
+            reader.read_exact(&mut chunk).map_err(io_error)?;
             if size == 0 {
                 break;
             }
@@ -421,9 +513,9 @@ fn read_response(mut reader: impl BufRead) -> Result<String, String> {
         }
     } else if let Some(length) = length {
         body.resize(length, 0);
-        reader.read_exact(&mut body).map_err(|e| e.to_string())?;
+        reader.read_exact(&mut body).map_err(io_error)?;
     } else {
-        reader.read_to_end(&mut body).map_err(|e| e.to_string())?;
+        reader.read_to_end(&mut body).map_err(io_error)?;
     }
     let body = String::from_utf8_lossy(&body).into_owned();
     if code != "200" {
@@ -451,12 +543,28 @@ pub fn configured() -> Result<Option<Remote>, String> {
                         .and_then(|v| v.as_str().map(str::to_string))
                         .filter(|v| !v.trim().is_empty())
                 };
-                lookup("remote_url")
-                    .map(|url| Remote::parse(&url, lookup("remote_token")))
-                    .transpose()
+                let Some(url) = lookup("remote_url") else {
+                    return Ok(None);
+                };
+                Remote::parse(&url, lookup("remote_token"))?
+                    .with_fallbacks(&configured_addrs()?)
+                    .map(Some)
             })
             .clone()
     }
+}
+
+/// `store.remote_addrs`: unset is no fallback, and anything but a list of
+/// strings refuses, so a typo never drops the fallback in silence.
+#[cfg(not(test))]
+fn configured_addrs() -> Result<Vec<String>, String> {
+    let Some(value) = crate::agents_config::config_lookup_global(&["store", "remote_addrs"]) else {
+        return Ok(Vec::new());
+    };
+    value
+        .as_array()
+        .and_then(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect())
+        .ok_or_else(|| format!("{ADDRS_KEY} = {value}: expected a list of IPs"))
 }
 
 /// The primary that holds the shared backlog. Both `store.remote_url` and
@@ -493,12 +601,31 @@ pub(crate) mod test_primary {
     use super::*;
     use std::io::Read;
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     pub(crate) struct Primary {
         pub remote: Remote,
         pub db: Arc<Mutex<rusqlite::Connection>>,
+        /// A statement reply over this many bytes is refused, the way sqld
+        /// refuses one over its response size limit. Unlimited by default.
+        pub cap: Arc<AtomicUsize>,
         _dir: tempfile::TempDir,
+    }
+
+    impl Primary {
+        /// The bytes of the reply `sql` would get, measured the way the cap is.
+        pub(crate) fn reply_len(&self, sql: &str, args: &[SqlValue]) -> usize {
+            let args: Vec<Value> = args.iter().map(SqlValue::to_hrana).collect();
+            statement(&self.db.lock().unwrap(), &json!({"sql": sql, "args": args}))
+                .unwrap()
+                .to_string()
+                .len()
+        }
+
+        pub(crate) fn set_cap(&self, cap: usize) {
+            self.cap.store(cap, Ordering::SeqCst);
+        }
     }
 
     pub(crate) fn start() -> Primary {
@@ -512,14 +639,17 @@ pub(crate) mod test_primary {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let served = Arc::clone(&db);
+        let cap = Arc::new(AtomicUsize::new(usize::MAX));
+        let limit = Arc::clone(&cap);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                serve(stream, &served);
+                serve(stream, &served, limit.load(Ordering::SeqCst));
             }
         });
         Primary {
             remote: Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap(),
             db,
+            cap,
             _dir: dir,
         }
     }
@@ -534,7 +664,7 @@ pub(crate) mod test_primary {
         Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap()
     }
 
-    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>) {
+    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>, cap: usize) {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut length = 0;
         loop {
@@ -555,7 +685,7 @@ pub(crate) mod test_primary {
             .as_array()
             .unwrap()
             .iter()
-            .map(|r| answer(&connection, r))
+            .map(|r| answer(&connection, r, cap))
             .collect();
         let reply = json!({"baton": null, "results": results}).to_string();
         let mut stream = stream;
@@ -651,7 +781,7 @@ pub(crate) mod test_primary {
         Ok(json!({"cols": cols, "rows": out, "affected_row_count": connection.changes()}))
     }
 
-    fn answer(connection: &rusqlite::Connection, request: &Value) -> Value {
+    fn answer(connection: &rusqlite::Connection, request: &Value, cap: usize) -> Value {
         let failed =
             |e: rusqlite::Error| json!({"type": "error", "error": {"message": e.to_string()}});
         match request["type"].as_str() {
@@ -661,6 +791,9 @@ pub(crate) mod test_primary {
                 Err(e) => failed(e),
             },
             Some("execute") => match statement(connection, &request["stmt"]) {
+                Ok(result) if result.to_string().len() > cap => {
+                    json!({"type": "error", "error": {"message": "Response is too large"}})
+                }
                 Ok(result) => {
                     json!({"type": "ok", "response": {"type": "execute", "result": result}})
                 }
@@ -668,5 +801,61 @@ pub(crate) mod test_primary {
             },
             _ => json!({"type": "ok", "response": {"type": "close"}}),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_that_does_not_resolve_falls_back_to_the_listed_addresses() {
+        let primary = test_primary::start();
+        let lost = Remote::parse(
+            &format!("http://r2d2.invalid:{}", primary.remote.port),
+            None,
+        )
+        .unwrap();
+        let error = lost.execute("SELECT 1", &[]).unwrap_err();
+        assert!(
+            is_unreachable(&error) && error.contains("resolve r2d2.invalid"),
+            "{error}"
+        );
+
+        // A dead fallback is skipped; the bare IP takes the URL's port.
+        let dead = format!("127.0.0.1:{}", test_primary::dead().port);
+        let found = lost.with_fallbacks(&[dead, "127.0.0.1".into()]).unwrap();
+        let reply = found.execute("SELECT 1", &[]).unwrap();
+        assert_eq!(reply.rows, vec![vec![SqlValue::Integer(1)]]);
+    }
+
+    #[test]
+    fn a_fallback_that_is_not_an_ip_refuses() {
+        let remote = Remote::parse("http://r2d2:18080", None).unwrap();
+        let error = remote.with_fallbacks(&["r2d2.lan".into()]).unwrap_err();
+        assert!(error.contains(ADDRS_KEY), "{error}");
+    }
+
+    #[test]
+    fn a_reply_timeout_says_the_primary_did_not_answer_and_still_fails_closed() {
+        let remote = Remote::parse("http://r2d2:18080", None).unwrap();
+        let quiet = remote.unreachable(&io_error(std::io::ErrorKind::WouldBlock.into()));
+        assert!(
+            quiet.contains("did not answer: no reply within 15s"),
+            "{quiet}"
+        );
+        assert!(
+            !quiet.contains(UNREACHABLE) && is_unreachable(&quiet),
+            "{quiet}"
+        );
+        // The local-store advice predates the share: a local write today
+        // splits the claim store, so the text must never send a reader there.
+        assert!(!quiet.contains("local store"), "{quiet}");
+        let refused = remote.unreachable("connect 1.2.3.4:18080: refused");
+        assert!(
+            refused.contains(UNREACHABLE) && is_unreachable(&refused),
+            "{refused}"
+        );
+        assert!(!refused.contains("local store"), "{refused}");
     }
 }

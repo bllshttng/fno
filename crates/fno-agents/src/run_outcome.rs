@@ -15,6 +15,15 @@ impl TerminationReason {
                 | TerminationReason::NoWork
         )
     }
+
+    /// The string-path twin: whether a wire reason (the string the shim hands
+    /// finalize) frees the node. An unknown string reads as NOT releasing -
+    /// an unparseable reason keeps the seat, the fail-safe direction.
+    pub fn releases_claim_str(reason: &str) -> bool {
+        serde_json::from_value::<TerminationReason>(serde_json::Value::String(reason.to_string()))
+            .map(|r| r.releases_claim())
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,6 +363,35 @@ impl From<RunOutcome> for TerminationReason {
                     _ => unreachable!("RunOutcome constructors preserve the wire mapping"),
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminationReason;
+
+    /// The string twin agrees with the predicate: the four releasing
+    /// reasons pass, a keep-claim Done* and an unparseable string do not.
+    #[test]
+    fn releases_claim_str_matches_the_predicate_and_fails_closed() {
+        for reason in ["DonePRGreen", "DoneAdvisory", "DoneDelivery", "NoWork"] {
+            assert!(
+                TerminationReason::releases_claim_str(reason),
+                "{reason} releases the claim"
+            );
+        }
+        for reason in [
+            "DoneUnreviewed",
+            "DoneAwaitingMerge",
+            "Budget",
+            "NoProgress",
+            "",
+        ] {
+            assert!(
+                !TerminationReason::releases_claim_str(reason),
+                "{reason} keeps the claim"
+            );
         }
     }
 }

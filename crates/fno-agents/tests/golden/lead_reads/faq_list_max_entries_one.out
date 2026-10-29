@@ -1,0 +1,21 @@
+---
+created: 2026-10-01T09:00:00Z
+lead: gavin
+session: s-one
+scope: fno
+---
+
+# Why does merge hold on a ready PR?
+
+## Answer
+
+The pr-worktree lookup timed out.
+
+## Specimen
+
+PR 3854, 2026-10-24
+
+## Exit
+
+The gh shim stops queueing on the budget lock.
+---

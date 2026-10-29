@@ -1,1 +1,1 @@
-[{"claimable":true,"claimed":true,"delivery":"durable","id":"m-l1","kind":"send","landed":true,"to":"worker6","to_kind":null,"ts":"TS"}]
+[{"body":"hello","claimable":true,"claimed":true,"delivery":"durable","id":"m-l1","kind":"send","landed":true,"to":"worker6","to_kind":null,"ts":"TS"}]

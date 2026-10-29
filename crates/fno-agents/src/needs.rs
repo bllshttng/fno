@@ -14,7 +14,7 @@
 //!
 //! The two event envelopes (Python nested `{"type","data":{...}}` and the
 //! retired Rust flat `{"kind",...}`) are both read, same as digest. Read-only:
-//! the verb writes nothing and is rerunnable at will.
+//! the command writes nothing and is rerunnable at will.
 
 use crate::paths::AgentsHome;
 use serde::Serialize;
@@ -194,6 +194,10 @@ pub fn fold(events_raw: &str, ledger_raw: &str, since: u64, fires_floor: u64) ->
             let Some(qid) = str_field(&v, "question_id") else {
                 continue;
             };
+            if !crate::question_ladder::envelope_on_board(&v) {
+                questions.remove(qid);
+                continue;
+            }
             let question = str_field(&v, "question").unwrap_or("");
             let evidence = str_field(&v, "ask").unwrap_or(question);
             let node = str_field(&v, "node").map(str::to_string);
@@ -841,6 +845,12 @@ fn run_items(home: &AgentsHome, cwd: &Path) -> i32 {
         .map(|(id, _)| id)
         .collect();
     mark_settled(&mut items, &settled);
+    for item in items.iter_mut() {
+        if let Some(node) = item.node.clone() {
+            item.node_title = facts.titles.get(&node).cloned();
+            item.node_stage = facts.statuses.get(&node).cloned();
+        }
+    }
     let as_of = now_secs();
     let answered = crate::attention::answered(&journals_raw, as_of);
     let payload = json!({
@@ -967,6 +977,11 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         eprintln!("fno-agents: not open: {item_id} (state {})", item.state);
         return 2;
     }
+    // The clear door refuses a copy, so an answer recorded here never lands.
+    if let Some(host) = &item.host {
+        eprintln!("fno-agents: {item_id} was asked on {host}; answer it there");
+        return 2;
+    }
     let answer = if let Some(n) = args.option {
         if n as usize > item.options.len() {
             eprintln!(
@@ -991,7 +1006,14 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
     } else {
         crate::attention_file::FileAnswer::Words(args.words.clone().unwrap_or_default())
     };
-    match crate::attention_arm::append_answer_row(item_id, "mux", &answer, "sink", "mux") {
+    match crate::attention_arm::append_answer_row(
+        item_id,
+        "mux",
+        &answer,
+        "sink",
+        "needs_door",
+        "mux",
+    ) {
         Ok((_, superseded)) => {
             println!(
                 "{}",
@@ -1350,6 +1372,7 @@ pub(crate) fn settled_questions(
                     if CLOSED_RUNGS.contains(&status.as_str()) {
                         let user_only = crate::escalation::why_user_is_user_only(
                             data.get("why_user").and_then(Value::as_str).unwrap_or(""),
+                            &crate::question_ladder::Rules::default(),
                         );
                         let word = if user_only { "moot" } else { "node-closed" };
                         reason = Some(format!("{word}: {n} {status}"));
@@ -1534,7 +1557,7 @@ pub fn carveout_age_item(carveouts_raw: &str, now: u64) -> Option<NeedItem> {
 }
 
 /// A claim's identity + age, read by the IO layer from the claims directory
-/// (mirrors what `client_verbs::claim_sweep_payload` already scans) and handed
+/// (mirrors what `client_commands::claim_sweep_payload` already scans) and handed
 /// to [`stale_claim_item`], which stays pure and testable.
 pub struct ClaimAge {
     pub key: String,
@@ -1679,7 +1702,7 @@ fn now_secs() -> u64 {
 }
 
 /// Scan `dir` for `node:` / `dispatch:` claim files and their age, for
-/// [`stale_claim_item`]. Same prefix pair `client_verbs::claim_sweep_payload`
+/// [`stale_claim_item`]. Same prefix pair `client_commands::claim_sweep_payload`
 /// scans (an orphaned dispatch lock is as dead as an orphaned node lock), and
 /// the same read primitives. Fail-open: a missing/unreadable dir or an
 /// unparseable lockfile yields fewer entries, never an error - same posture
@@ -1698,7 +1721,7 @@ fn scan_claim_ages(dir: &Path) -> Vec<ClaimAge> {
         .collect();
     // One primed witness: a per-row verdict paid a cold truth run per session.
     let states: Vec<_> = {
-        let (witness, _answer) = crate::claim_verbs::session_witness_primed_for(&records);
+        let (witness, _answer) = crate::claim_commands::session_witness_primed_for(&records);
         records
             .iter()
             .map(|rec| {
@@ -1727,9 +1750,9 @@ fn scan_claim_ages(dir: &Path) -> Vec<ClaimAge> {
 
 /// The whole needs fold over explicit sources: events read + fold + the three
 /// non-event legs (carveout age, stale claims, refused workers) + liveness
-/// stamp. Shared by the `needs` verb and the lead board's in-process needs
+/// stamp. Shared by the `needs` command and the lead board's in-process needs
 /// read, so the two surfaces cannot drift (the lead board is why this is `pub`).
-/// `cwd` anchors the carveout leg: the verb passes the process cwd it inherits,
+/// `cwd` anchors the carveout leg: the command passes the process cwd it inherits,
 /// the board passes its own resolved cwd (the process cwd is not guaranteed to
 /// be the project for an in-process caller).
 pub fn collect_needs_items(
@@ -1781,7 +1804,7 @@ pub fn collect_needs_items(
     stamp_liveness(items)
 }
 
-/// The `fno-agents needs` verb. Read-only; exits 0 on empty/corrupt input (only
+/// The `fno-agents needs` command. Read-only; exits 0 on empty/corrupt input (only
 /// a usage error exits 2), so the overlay caller never sees a failure it must
 /// handle beyond a nonzero exit.
 pub async fn run_needs(rest: &[String], home: &AgentsHome) -> i32 {
@@ -2230,6 +2253,7 @@ mod tests {
                 .collect(),
             merged_prs,
             raw: String::new(),
+            ..Default::default()
         }
     }
 
@@ -2683,6 +2707,7 @@ mod tests {
             "questions",
             &crate::attention_file::FileAnswer::Words("narrow".to_string()),
             "file_edit",
+            "attention_arm",
             "file:q-sup",
         )
         .unwrap();
@@ -2692,6 +2717,7 @@ mod tests {
             "mux",
             &crate::attention_file::FileAnswer::Words("wide".to_string()),
             "sink",
+            "needs_door",
             "mux",
         )
         .unwrap();
@@ -2702,6 +2728,7 @@ mod tests {
             "mux",
             &crate::attention_file::FileAnswer::Delegate,
             "sink",
+            "needs_door",
             "mux",
         )
         .unwrap();

@@ -89,7 +89,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             if provider.trim().is_empty() {
                 return Err("--provider must not be empty".into());
             }
-            if super::advance_dispatch::launch_harness_axis(provider, None).is_none() {
+            if super::advance_dispatch::launch_harness_axis(provider).is_none() {
                 return Err(format!(
                     "--provider {provider:?} names no known harness or account record"
                 ));
@@ -311,7 +311,7 @@ pub(super) struct Budget {
     pub(super) used: BTreeMap<String, i64>,
 }
 pub(super) fn budget() -> Budget {
-    let probe = crate::spawn_gate_verb::probe_answer(
+    let probe = crate::spawn_gate_command::probe_answer(
         &json!({"mode":"probe","caller_session":crate::claims::resolve_identity().1}),
     );
     let fleet = if matches!(s(&probe, "verdict"), "unknown" | "refused") {
@@ -746,6 +746,36 @@ fn run_request() -> i32 {
         "guard" => Ok(
             json!({"reason":advance::node_dispatch_block_reason(s(&v,"node_id"),v["cwd"].as_str(),None,None,None)}),
         ),
+        // The family-2 spawn guard for the Python door. The caller's pid rides
+        // the payload so the keys name the spawner, not this subprocess.
+        "spawn-guard" => {
+            let node = s(&v, "node_id");
+            // A malformed TTL fails closed: guessing a window would take a key
+            // for a span the caller never asked for.
+            let ttl_ms = match v["ttl"].as_str() {
+                None => Some(crate::spawn_guard::RESERVATION_TTL_MS),
+                Some(raw) => crate::claims::parse_ttl_ms(raw),
+            };
+            let (verdict, exit) = match ttl_ms {
+                None => (
+                    json!({"verdict": "error",
+                        "detail": format!("malformed --ttl {:?}; not dispatching", s(&v, "ttl"))}),
+                    3,
+                ),
+                Some(ttl_ms) => crate::spawn_guard::decide(&crate::spawn_guard::GuardRequest {
+                    node_id: node,
+                    holder: s(&v, "holder"),
+                    ttl_ms,
+                    no_reserve: v["no_reserve"].as_bool().unwrap_or(false),
+                    cwd: v["cwd"].as_str(),
+                    handover_holder: v["handover_holder"].as_str(),
+                    root: None,
+                    pid: v["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
+                }),
+            };
+            let line = crate::spawn_guard::refusal_line(node, &verdict);
+            Ok(json!({"verdict": verdict, "exit": exit, "line": line}))
+        }
         "spawn" => {
             let node = &v["node"];
             let id = v["node_id"].as_str().unwrap_or_else(|| s(node, "id"));
@@ -775,7 +805,6 @@ fn run_request() -> i32 {
                 }
                 super::advance_dispatch::launch_resolved(
                     id,
-                    node,
                     args,
                     reservation,
                     v["caller"].as_str().unwrap_or("unknown"),

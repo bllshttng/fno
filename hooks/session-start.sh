@@ -172,14 +172,11 @@ hydrate_state_provider_context() {
 
 # 1. using-fno preamble — names both surfaces (slash commands + fno
 #    CLI) and the HARD-GATE forbidden writes. Highest priority because
-#    it teaches the agent the verbs the rest of the context will use.
+#    it teaches the agent the commands the rest of the context will use.
+# Codex runs this script under the cached context-run.sh, which replays the
+# project's previous pass; the using-fno preamble is per session (joined or
+# not), so codex-hooks.json runs session-start-using-fno.sh directly instead.
 using_fno_content=""
-if [[ -f "${SCRIPT_DIR}/session-start-using-fno.sh" ]]; then
-    raw_using_fno=$(bash "${SCRIPT_DIR}/session-start-using-fno.sh" 2>/dev/null || true)
-    if [[ -n "$raw_using_fno" ]]; then
-        using_fno_content=$(echo "$raw_using_fno" | jq -r '.hookSpecificOutput.additionalContext // .additional_context // .additionalContext // empty' 2>/dev/null || echo "$raw_using_fno")
-    fi
-fi
 
 # 2. project vision — what this codebase is and why.
 vision_content=""
@@ -363,14 +360,14 @@ if command -v fno >/dev/null 2>&1 && [[ -d .fno && -f "$orphan_lib" ]]; then
             elif (( orphan_rc != 0 )); then
                 # ANY non-zero with no stdout, not just the 124 time bound. The
                 # likeliest case is a stale deployed `fno` with no `orphans`
-                # verb, which exits non-zero with its error on stderr and stderr
+                # command, which exits non-zero with its error on stderr and stderr
                 # is discarded here. The stamp is already written, so silence
                 # would cost a full window - the exact outcome the sweep exists
                 # to make impossible.
                 if (( orphan_rc == 124 )); then
                     orphan_reason="hit its 20s bound and was killed. Any reap it started is unrecorded."
                 else
-                    orphan_reason="failed with exit ${orphan_rc}. A deployed \`fno\` predating the verb is the usual cause; try \`fno doctor --fix\`."
+                    orphan_reason="failed with exit ${orphan_rc}. A deployed \`fno\` predating the command is the usual cause; try \`fno doctor --fix\`."
                 fi
                 orphan_content="## Orphan processes"$'\n'"the sweep ${orphan_reason} Run \`fno agents fleet orphans\` by hand."
             fi

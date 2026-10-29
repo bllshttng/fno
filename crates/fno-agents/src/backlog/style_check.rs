@@ -2,7 +2,8 @@
 //! for the encounter surface: `--evidence` on a node birth must keep its gate
 //! with Python gone. Pure: no filesystem, no state, no network. Rules 1 to 8
 //! with the masking pass first, so code costs one word and quoted spans never
-//! trip the word-level rules. The Rust regex crate has no lookbehind,
+//! trip the word-level rules. Rule 9 (glue, capped surfaces only) reads the
+//! vendored wordlist beside this file. The Rust regex crate has no lookbehind,
 //! lookahead, or backreferences, so four spots are hand-rolled to the same
 //! contract: sentence splitting, the condition keyword, flag masking, and the
 //! thematic-break line shape.
@@ -608,6 +609,7 @@ fn rule_names(rule: &u32) -> &'static str {
         6 => "wrap",
         7 => "wordcap",
         8 => "filler",
+        9 => "glue",
         _ => "?",
     }
 }
@@ -657,6 +659,12 @@ pub fn format_violations(violations: &[Violation], surface: &str) -> String {
             "Approval: Problem X. Options Y or Z. I recommend Z because A. Your call?".into(),
         );
         lines.push("Put findings on the node and link it.".into());
+    }
+    if by_rule.contains_key(&9) {
+        lines.push("Split the glued tokens into their words.".into());
+        lines.push(
+            "When the cap is the pressure, put the detail in a node note and link the node.".into(),
+        );
     }
     if by_rule.contains_key(&3) || by_rule.contains_key(&4) {
         let first = by_rule
@@ -712,9 +720,9 @@ pub fn word_count(text: &str) -> usize {
 
 /// Rule 7 against `cap`, which the refusal names. The number is an argument
 /// rather than a module read so the refusal always states the cap enforced.
-fn check_message_length(text: &str, cap: usize) -> Vec<Violation> {
-    let masked = mask(text);
-    let count = word_count(text);
+/// The masked text and its word count arrive precomputed: the capped branch
+/// of `check` masks once and feeds both this and the glue check.
+fn check_message_length(masked: &str, count: usize, cap: usize) -> Vec<Violation> {
     if count <= cap {
         return Vec::new();
     }
@@ -727,15 +735,201 @@ fn check_message_length(text: &str, cap: usize) -> Vec<Violation> {
     }]
 }
 
+/// The glue wordlists. The split tier (`style_words.txt`) validates split
+/// PARTS: google-10000-english (MIT) filtered to ASCII words of 3+ letters,
+/// minus morphology-only entries that would carry prefix and suffix splits,
+/// plus a tech and fleet supplement. The protection tier
+/// (`style_protect.txt`) covers the WHOLE token: dwyl english-words (public
+/// domain) entries at least 10 letters long or attested in a subtitle
+/// frequency slice, so an established compound never fires while obscure
+/// junk that shields fabricated glue stays outside. Both lists are closed;
+/// the rebuild script and the measurement record live in
+/// docs/style-rules.md.
+static GLUE_WORDLIST: &str = include_str!("style_words.txt");
+static GLUE_PROTECT: &str = include_str!("style_protect.txt");
+
+const GLUE_MIN_TOKEN: usize = 8;
+const GLUE_MIN_PART: usize = 3;
+const GLUE_MIN_DIGIT_RUN: usize = 4;
+
+fn dictionary() -> &'static BTreeSet<&'static str> {
+    static SET: OnceLock<BTreeSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| GLUE_WORDLIST.split_whitespace().collect())
+}
+
+fn protection() -> &'static BTreeSet<&'static str> {
+    static SET: OnceLock<BTreeSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| GLUE_PROTECT.split_whitespace().collect())
+}
+
+/// True when a light inflection of `token` is a listed word, so "backfilled"
+/// is protected by "backfill" and "footnotes" by "footnote".
+fn stem_hit(token: &str, dict: &BTreeSet<&'static str>) -> bool {
+    let hit = |cand: &str| cand.len() >= GLUE_MIN_PART && dict.contains(cand);
+    if let Some(base) = token.strip_suffix('s') {
+        if hit(base) {
+            return true;
+        }
+    }
+    if let Some(base) = token.strip_suffix("ed") {
+        if hit(base) || hit(&format!("{base}e")) {
+            return true;
+        }
+    }
+    if let Some(base) = token.strip_suffix("ing") {
+        if hit(base) || hit(&format!("{base}e")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Greedy longest-prefix split that must consume the whole token into parts
+/// of `GLUE_MIN_PART`+ letters. No backtracking: a miss ends the split, which
+/// keeps the trigger conservative.
+fn greedy_split<'a>(token: &'a str, dict: &BTreeSet<&'static str>) -> Option<Vec<&'a str>> {
+    let n = token.len();
+    if n < 2 * GLUE_MIN_PART {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let mut matched = None;
+        for end in (i + GLUE_MIN_PART..=n).rev() {
+            if dict.contains(&token[i..end]) {
+                matched = Some(end);
+                break;
+            }
+        }
+        let end = matched?;
+        parts.push(&token[i..end]);
+        i = end;
+    }
+    if parts.len() >= 2 {
+        Some(parts)
+    } else {
+        None
+    }
+}
+
+/// Digit-glue check for a lowercased mixed token. Hex-shaped tokens are bare
+/// ids and shas, never prose. A long digit run abutting a letter refuses
+/// ("PIDs76751"); a short run between letter runs refuses when at least two
+/// letters sit on both sides ("same9dflogicalID"), whose false-positive class
+/// (bare random slugs) is measured and documented in docs/style-rules.md.
+fn number_glue(token: &str) -> bool {
+    if token
+        .bytes()
+        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return false;
+    }
+    let bytes = token.as_bytes();
+    // Letters immediately before and after the run count from the run edge,
+    // so both walks examine the adjacent byte first.
+    let letter_run = |start: usize, step: isize| -> usize {
+        let mut count = 0usize;
+        let mut pos = start as isize;
+        loop {
+            if pos < 0 || pos as usize >= bytes.len() || !bytes[pos as usize].is_ascii_alphabetic()
+            {
+                return count;
+            }
+            count += 1;
+            pos += step;
+        }
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            let run = i - start;
+            let left_letter = start > 0 && bytes[start - 1].is_ascii_alphabetic();
+            let right_letter = i < bytes.len() && bytes[i].is_ascii_alphabetic();
+            if run >= GLUE_MIN_DIGIT_RUN && (left_letter || right_letter) {
+                return true;
+            }
+            if run < GLUE_MIN_DIGIT_RUN
+                && left_letter
+                && right_letter
+                && letter_run(start - 1, -1) >= 2
+                && letter_run(i, 1) >= 2
+            {
+                return true;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Rule 9 against glued tokens, on the capped surfaces only: the word cap is
+/// the pressure that pays for gluing, so the refusal travels with it. The
+/// masked text arrives precomputed from `check`.
+fn check_glue(masked: &str) -> Vec<Violation> {
+    let dict = dictionary();
+    let mut violations = Vec::new();
+    for raw in masked.split_whitespace() {
+        let tok = raw.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        if tok.is_empty() || !tok.is_ascii() || !tok.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            continue;
+        }
+        let low = tok.to_ascii_lowercase();
+        let violation = |detail: String| Violation {
+            rule: 9,
+            sentence_index: 0,
+            sentence: tok.to_string(),
+            detail,
+        };
+        if low.bytes().all(|b| b.is_ascii_alphabetic()) {
+            if low.len() >= GLUE_MIN_TOKEN
+                && !protection().contains(low.as_str())
+                && !dict.contains(low.as_str())
+                && !stem_hit(&low, dict)
+            {
+                if let Some(parts) = greedy_split(&low, dict) {
+                    let detail = if parts.len() == 2 {
+                        format!(
+                            "the token \"{tok}\" joins \"{}\" and \"{}\". Write them apart.",
+                            parts[0], parts[1]
+                        )
+                    } else {
+                        format!(
+                            "the token \"{tok}\" joins {} words. Write them apart.",
+                            parts.len()
+                        )
+                    };
+                    violations.push(violation(detail));
+                }
+            }
+        } else if number_glue(&low) {
+            violations.push(violation(
+                "the token joins words and digits with no separator. Write them apart.".to_string(),
+            ));
+        }
+    }
+    violations
+}
+
 /// Return every violation found in `text`. Every surface runs rules 1 to 8;
-/// the capped surfaces (mail, encounter) also carry the prose word cap.
+/// the capped surfaces (mail, encounter) also carry the prose word cap and
+/// the glue refusal.
 pub fn check(text: &str, surface: &str, word_cap: Option<usize>) -> Vec<Violation> {
     let mut violations = run(text);
     if matches!(surface, "mail" | "encounter") {
+        let masked = mask(text);
+        let count = masked.split_whitespace().count();
         violations.extend(check_message_length(
-            text,
+            &masked,
+            count,
             word_cap.unwrap_or(MESSAGE_WORD_CAP),
         ));
+        violations.extend(check_glue(&masked));
     }
     violations
 }
@@ -842,7 +1036,7 @@ fn split_semicolons(line: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// The hidden `style-check` verb: the full Python `fno doctor lint style`
+// The hidden `style-check` command: the full Python `fno doctor lint style`
 // contract (cli/src/fno/lint_cli.py `style` + its diff helpers). Without
 // --json the byte contract is the frozen goldens; with --json it is the door
 // the Python callers exec.
@@ -852,8 +1046,8 @@ const STYLE_SURFACES: [&str; 5] = ["mail", "encounter", "pr-body", "markdown", "
 
 /// Repo root, Python `resolve_repo_root` order: FNO_REPO_ROOT pin, then
 /// `git rev-parse --show-toplevel` from cwd, then cwd.
-fn repo_root() -> PathBuf {
-    if let Some(pin) = std::env::var_os("FNO_REPO_ROOT") {
+pub(crate) fn repo_root() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_REPO_ROOT").filter(|v| !v.is_empty()) {
         let path = std::path::PathBuf::from(&pin);
         if let Ok(resolved) = path.canonicalize() {
             return resolved;
@@ -1265,9 +1459,23 @@ fn run_json(text: &str, surface: &str, word_cap: Option<usize>) -> i32 {
     let count = word_count(text);
     let violations = check(text, surface, word_cap);
     let report = format_violations(&violations, surface);
+    // The configured encounter cap (or the model's 80 default) rides the
+    // receipt, so the long-note advisory learns cap and count in this one
+    // spawn instead of its own in-process config read.
+    let configured_cap = super::settings::config_candidates()
+        .iter()
+        .find_map(|doc| {
+            doc.get("style")?
+                .get("word_cap")?
+                .get("encounter")?
+                .as_u64()
+        })
+        .map(|n| n as usize)
+        .unwrap_or(MESSAGE_WORD_CAP);
     let payload = serde_json::json!({
         "exception": exception,
         "word_count": count,
+        "word_cap": configured_cap,
         "violations": violations_json(&violations),
         "report": report,
     });
@@ -1291,7 +1499,7 @@ fn parse_word_cap(raw: &str) -> Result<Option<usize>, i32> {
 /// Python leg printed, carried over as the command's own documentation).
 fn print_usage() {
     print!(
-        "Check text against the eight style rules in docs/style-rules.md.
+        "Check text against the nine style rules in docs/style-rules.md.
 
 Usage: fno doctor lint style [OPTIONS]
 
@@ -1301,7 +1509,9 @@ contractions. If a sentence carries \"if\" or \"when\", that word starts the
 sentence. A paragraph is one physical line. No filler: \"please\", \"thanks\",
 \"basically\", and the phrases \"thank you\", \"of course\", \"happy to\", \"feel
 free\". Code, paths, flags, and quoted output do not count. Mail and encounter
-prose also carry an 80 masked-word cap.
+prose also carry an 80 masked-word cap, and refuse a glued token: one that is
+not a word but joins two or more wordlist words, or a word and a long run of
+digits with no separator.
 
 Options:
   --surface <s>    Where the text is read: mail, encounter, pr-body, markdown,
@@ -1323,7 +1533,7 @@ because every input carried a style-exception.
     );
 }
 
-/// The hidden binary-direct `style-check` verb: the full
+/// The hidden binary-direct `style-check` command: the full
 /// `fno doctor lint style` contract, from `--stdin`/`--text`/`--files`/
 /// `--diff-base` to the receipts and exit codes the goldens freeze.
 pub fn run_cli(args: &[String]) -> i32 {
@@ -1353,7 +1563,7 @@ pub fn run_cli(args: &[String]) -> i32 {
             "--diff-base" => diff_base = it.next().cloned(),
             "--fix" => fix_mode = true,
             // Both spellings: the json_output contract guard requires the
-            // short form beside the long one on every parsing verb.
+            // short form beside the long one on every parsing command.
             "--json" | "-J" => json_mode = true,
             "--word-cap" => match it.next().map(|v| parse_word_cap(v)) {
                 Some(Ok(cap)) => word_cap = cap,
@@ -1564,5 +1774,62 @@ diff --git a/n.md b/n.md
         );
         let none = check(&"word ".repeat(80), "mail", None);
         assert!(none.iter().all(|v| v.rule != 7));
+    }
+
+    #[test]
+    fn glue_rule_fires_on_specimens_and_spares_controls() {
+        let glue = |body: &str| {
+            check(body, "mail", None)
+                .iter()
+                .filter(|v| v.rule == 9)
+                .count()
+        };
+        for token in [
+            "Staticprogress",
+            "underhold",
+            "readyplan",
+            "requiredgate",
+            "Oldbuild",
+            "PIDs76751",
+            "same9dflogicalID",
+            "twentyone",
+        ] {
+            assert!(
+                glue(&format!("{token} proves the gate here.\n")) > 0,
+                "{token} must fire"
+            );
+        }
+        for body in [
+            "understand the workaround before you judge it.\n",
+            "the workflow ships on github today.\n",
+            "base64 and sha256 and utf8 and k8s all pass.\n",
+            "backfilled and conflicting and withheld work.\n",
+            "merged at deadbeef123 without drama.\n",
+            "well-formed ids and PR 3430 both moved.\n",
+            "the `Staticprogress` token is quoted, so it passes.\n",
+            "ownership of the footnote moved meanwhile.\n",
+            "handle this beforehand and report alongside.\n",
+            "the bottleneck bookkeeping aftermath is concurrent.\n",
+            "rebasing broke the basename matchers again.\n",
+            "the appended note drifted from the source.\n",
+        ] {
+            assert_eq!(glue(body), 0, "must stay clean: {body:?}");
+        }
+        // A junk run of one repeated character cannot split: the list holds
+        // no tiling entries.
+        let runs = "x".repeat(600);
+        assert_eq!(
+            check(&runs, "mail", None)
+                .iter()
+                .filter(|v| v.rule == 9)
+                .count(),
+            0
+        );
+        // The rule rides the capped surfaces with the word cap.
+        let pr = check("Staticprogress proves the gate here.\n", "pr-body", None);
+        assert!(pr.iter().all(|v| v.rule != 9));
+        assert!(check("Staticprogress proves it here.\n", "encounter", None)
+            .iter()
+            .any(|v| v.rule == 9));
     }
 }

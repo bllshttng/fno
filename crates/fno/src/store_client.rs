@@ -1,5 +1,5 @@
 //! The mux's native path onto the ported graph store. The reorder
-//! verbs used to shell the `fno` porcelain server-side; the store is ported
+//! commands used to shell the `fno` porcelain server-side; the store is ported
 //! now, so the server speaks the store keeper's framed protocol directly:
 //! `u8 tag | u32 LE length | payload`, the pane keeper's shape (mirrored in
 //! `pty.rs`), with the protocol version riding Identify.
@@ -11,7 +11,7 @@
 //! and a missing keeper is never spawned: the request rides the one-shot
 //! `--store-exec` lane instead, because a resident keeper's memory grows
 //! with the requests it serves. A refused store is a REFUSAL,
-//! never an empty answer: the verbs surface the failure as the card's
+//! never an empty answer: the commands surface the failure as the card's
 //! notice line.
 
 use serde_json::{json, Value};
@@ -407,7 +407,7 @@ fn format_rank(v: f64) -> String {
 
 /// The kanban column for an entry, claim-blind (see [`rank_top`]).
 fn backlog_column(e: &Value) -> Option<&'static str> {
-    // `kanban_column` needs claim/underway facts the verb deliberately does
+    // `kanban_column` needs claim/underway facts the command deliberately does
     // not fetch; false for both is the unclaimed view the float targets.
     crate::backlog_view::kanban_column(e, false, false, None)
 }

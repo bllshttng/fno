@@ -10,6 +10,9 @@ pub(super) struct RunPanePlan {
     cwd: String,
     placement: PanePlacement,
     worker: Option<String>,
+    /// The `(harness, session id)` birthright pair resolved off the spawn
+    /// argv in prepare, when the caller preassigned an id.
+    birthright: Option<(String, String)>,
     dest: Option<u64>,
     create_name: Option<String>,
 }
@@ -52,9 +55,10 @@ impl Core {
         claim: bool,
         placement: PanePlacement,
         worker: Option<String>,
+        fno_id: Option<String>,
         tail: impl FnOnce(&mut Core, Result<u64, (u32, String)>) -> Flow + Send + 'static,
     ) -> Flow {
-        match self.run_pane_prepare(squad_key, cwd, argv, rows, cols, placement, worker) {
+        match self.run_pane_prepare(squad_key, cwd, argv, rows, cols, placement, worker, fno_id) {
             Ok((order, plan)) => self.spawn_then(order, None, move |core, spawned| {
                 let placed = match spawned {
                     Ok(pid) => core.run_pane_place(pid, claim, plan),
@@ -78,6 +82,7 @@ impl Core {
         cols: u16,
         placement: PanePlacement,
         worker: Option<String>,
+        fno_id: Option<String>,
     ) -> Result<(SpawnOrder, RunPanePlan), (u32, String)> {
         let mut placement = placement;
         placement.max_panes = Some(crate::process_admission::configured_pane_group_max(
@@ -91,6 +96,20 @@ impl Core {
                 return Err((
                     err_code::BAD_REQUEST,
                     "worker name must be a registry name ([A-Za-z0-9._-], <=64 chars)".into(),
+                ));
+            }
+        }
+        // Same fail-closed posture for the preassigned id: it keys the
+        // resume birthright, so a blank or whitespace-riddled value must
+        // refuse before any pane exists, not land as an unjoinable key.
+        if let Some(id) = fno_id.as_deref().map(str::trim) {
+            if id.is_empty()
+                || id.len() > 128
+                || !id.chars().all(|c| c.is_ascii() && !c.is_whitespace())
+            {
+                return Err((
+                    err_code::BAD_REQUEST,
+                    "--fno-id needs a session id of 1-128 non-whitespace ASCII characters".into(),
                 ));
             }
         }
@@ -121,7 +140,7 @@ impl Core {
             _ => {
                 // `CurrentRoute` here defaults to the squad owning the spawn's
                 // CWD, not the active/gazed-at squad that `resolve_squad`
-                // (the tab and layout verbs) passes for the same token. Both
+                // (the tab and layout commands) passes for the same token. Both
                 // defaults are deliberate; the pair is not interchangeable.
                 let current = self.session.find_by_cwd(&squad_key);
                 let dest = self
@@ -144,33 +163,28 @@ impl Core {
                     format!("COLORFGBG={}", osc_reply::colorfgbg(&theme)),
                     format!("FNO_AGENT_SELF={worker}"),
                 ];
+                // A lead's own `fno agents spawn` runs inside this pane: the
+                // env carries the claude theme to the `claude --bg` it starts.
+                if let Some(name) = crate::theme::claude_theme(&theme) {
+                    wrapped.push(format!("FNO_CLAUDE_THEME={name}"));
+                }
                 wrapped.extend(spawn_argv);
                 spawn_argv = wrapped;
-            }
-        }
-        // A claude pane launches with the plugin's shipped theme that matches
-        // the mux theme (`theme::claude_theme`): the OSC 11 answer resolves
-        // `auto` to the theme's ground, and the custom theme sets the user
-        // message band that `band_remap` gives readable text. `--settings` is
-        // per-session; settings.json is never touched. Skipped when the argv
-        // already names a settings file - a duplicate flag would let the theme
-        // blob win and drop the user's file (parsers take the last
-        // occurrence). Appended last: claude's parser takes flags after any
-        // positional, and the spawn argv is never a shell string.
-        if argv_runs_claude(&spawn_argv)
-            && !spawn_argv
-                .iter()
-                .any(|a| a == "--settings" || a.starts_with("--settings="))
-        {
-            if let Some(name) = crate::theme::claude_theme(&theme) {
-                spawn_argv.push("--settings".to_string());
-                spawn_argv.push(format!("{{\"theme\":\"{name}\"}}"));
             }
         }
         // Every spawned pane takes the keeper road in production, worker or
         // not; unit fixtures keep today's split (short-lived fixtures can
         // exit before a keeper answers Identify).
         let keeper = KEEPER_ROAD || worker.is_some();
+        // The birthright harness slot names the child's basename past the
+        // env wrapper (`cmd_from_argv`); the identity join reads the session
+        // id and never the harness, matching the resume path's fill. The id
+        // is stored TRIMMED - the same normalization the validation reads -
+        // so a padded value can never split the birthright key from the id
+        // the registry row later carries.
+        let birthright = fno_id
+            .map(|id| id.trim().to_string())
+            .map(|id| (cmd_from_argv(&spawn_argv).unwrap_or_default(), id));
         let order = SpawnOrder {
             argv: spawn_argv,
             rows,
@@ -186,6 +200,7 @@ impl Core {
                 cwd,
                 placement,
                 worker,
+                birthright,
                 dest,
                 create_name,
             },
@@ -205,6 +220,7 @@ impl Core {
             cwd,
             placement,
             worker,
+            birthright,
             mut dest,
             mut create_name,
         } = plan;
@@ -260,6 +276,13 @@ impl Core {
             if let Some(worker) = &worker {
                 self.record_worker_member(sid, worker, pid, &cwd, None);
             }
+        }
+        // A preassigned id makes the pane addressable NOW: the seed the
+        // spawn types right after readiness lands before any registry row
+        // exists, and the send gate resolves the id through this birthright
+        // exactly as it does for a resumed pane.
+        if let Some((harness, session_id)) = birthright {
+            self.worker_session_pane.insert((harness, session_id), pid);
         }
         // Keep any attached client's view consistent; a script-only session
         // has no clients, so this is then a cheap no-op.
@@ -317,6 +340,27 @@ impl Core {
         placement: PanePlacement,
         worker: Option<String>,
     ) -> Result<u64, (u32, String)> {
+        self.run_pane_with_fno_id(
+            squad_key, cwd, argv, rows, cols, claim, placement, worker, None,
+        )
+    }
+
+    /// The test form that also carries a preassigned id, for the birthright
+    /// fixtures.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run_pane_with_fno_id(
+        &mut self,
+        squad_key: String,
+        cwd: String,
+        argv: Vec<String>,
+        rows: u16,
+        cols: u16,
+        claim: bool,
+        placement: PanePlacement,
+        worker: Option<String>,
+        fno_id: Option<String>,
+    ) -> Result<u64, (u32, String)> {
         let slot = Arc::new(Mutex::new(None));
         let fill = Arc::clone(&slot);
         self.run_pane_then(
@@ -328,6 +372,7 @@ impl Core {
             claim,
             placement,
             worker,
+            fno_id,
             move |_, outcome| {
                 *fill.lock().unwrap() = Some(outcome);
                 Flow::Continue

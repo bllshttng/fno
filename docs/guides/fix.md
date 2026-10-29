@@ -1,6 +1,6 @@
 # Fix
 
-One verb repairs a broken state.
+One command repairs a broken state.
 `/fno:fix` routes between fast repair and methodical diagnosis based on how much you already know.
 
 ## Two modes
@@ -69,5 +69,5 @@ fno config doctor                   # what resolved, and any suspicious values
 
 ## Related
 
-- [Troubleshooting](../troubleshooting.md) covers the stuck-run cases this verb does not fix.
-- [Getting started](../getting-started.md) covers install and first-run failures.
+- [Troubleshooting](../troubleshooting.md) covers the stuck-run cases this command does not fix.
+- [Install](../install.md) covers install and first-run failures.

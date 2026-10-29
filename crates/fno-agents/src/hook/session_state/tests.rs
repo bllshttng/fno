@@ -134,6 +134,42 @@ fn the_row_map_wires_claude_and_codex() {
     // An unwired event decides nothing.
     assert_eq!(decide(&claude, &ev("PreCompact", json!({}))), None);
 }
+
+/// opencode reads a permission prompt as blocked (the plugin sends it as a
+/// Notification), pi has no such producer; both map a turn to working and
+/// its end to done, and both carry the served `provider/model` to the report.
+#[test]
+fn the_row_map_wires_opencode_and_pi() {
+    let opencode = job("opencode");
+    assert_eq!(opencode.blocked, "Notification");
+    let ask = decide(
+        &opencode,
+        &adapter::normalize(
+            "opencode",
+            "Notification",
+            &json!({"session_id": "ses_1", "message": "Run: rm -rf build"}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(ask.state, "blocked");
+    assert_eq!(ask.reason, "Run: rm -rf build");
+
+    let pi = job("pi");
+    assert_eq!(pi.blocked, "none");
+    for (harness, wiring) in [("opencode", &opencode), ("pi", &pi)] {
+        let turn = adapter::normalize(
+            harness,
+            "UserPromptSubmit",
+            &json!({"session_id": "s-1", "model": "zai/glm-5.3"}),
+        );
+        assert_eq!(turn.model, "zai/glm-5.3");
+        assert_eq!(decide(wiring, &turn).unwrap().state, "working");
+        let tool = adapter::normalize(harness, "PreToolUse", &json!({"session_id": "s-1"}));
+        assert_eq!(decide(wiring, &tool).unwrap().state, "working");
+        let stop = adapter::normalize(harness, "Stop", &json!({"session_id": "s-1"}));
+        assert_eq!(decide(wiring, &stop).unwrap().state, "done");
+    }
+}
 // --- the marker bytes (the OSC 133 lane) ---
 
 // --- the transition gate (the 120 s record) ---

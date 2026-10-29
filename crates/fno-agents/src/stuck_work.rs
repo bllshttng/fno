@@ -1,4 +1,4 @@
-//! What work is stuck: a verb process running far past its own deadline, and
+//! What work is stuck: a command process running far past its own deadline, and
 //! a single-flight lock whose holder pid is gone. One module answers "is any
 //! work stuck on this machine" for the three readers that page or print it
 //! (`fno agents status`, arm_watch, the lead check-in), so a hung `backlog
@@ -12,7 +12,7 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// The age past which a verb with no declared timeout reads hung: 3 x the
+/// The age past which a command with no declared timeout reads hung: 3 x the
 /// 10-minute-class default, the wall clock the drain's own lease carries.
 // ponytail: fixed 1800 s floor and 300 s holder grace, move to [notify] keys if a lane needs a different clock
 const DEFAULT_HUNG_FLOOR_S: u64 = 1800;
@@ -45,13 +45,13 @@ pub struct Finding {
     pub claim_key: Option<String>,
 }
 
-/// A verb is hung when its age passes three times its declared `--timeout`
-/// (else 1800 s). The verb rule and the excluded shapes are the whole
+/// A command is hung when its age passes three times its declared `--timeout`
+/// (else 1800 s). The command rule and the excluded shapes are the whole
 /// classifier; every shape here is pinned by a test.
-pub(crate) fn hung_verbs(rows: &[(u32, u64, String)], now_unix: u64) -> Vec<Finding> {
+pub(crate) fn hung_commands(rows: &[(u32, u64, String)], now_unix: u64) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (pid, age_s, args) in rows {
-        let Some(finding) = hung_verb(*pid, *age_s, args, now_unix) else {
+        let Some(finding) = hung_command(*pid, *age_s, args, now_unix) else {
             continue;
         };
         findings.push(finding);
@@ -59,19 +59,19 @@ pub(crate) fn hung_verbs(rows: &[(u32, u64, String)], now_unix: u64) -> Vec<Find
     findings
 }
 
-fn hung_verb(pid: u32, age_s: u64, args: &str, now_unix: u64) -> Option<Finding> {
+fn hung_command(pid: u32, age_s: u64, args: &str, now_unix: u64) -> Option<Finding> {
     let tokens: Vec<&str> = args.split_whitespace().collect();
     let argv0 = tokens.first()?;
     let base = argv0.rsplit('/').next().unwrap_or(argv0);
-    let is_verb = matches!(base, "fno" | "fno-py" | "fno-agents")
+    let is_command = matches!(base, "fno" | "fno-py" | "fno-agents")
         || (base.starts_with("python") && tokens.get(1).is_some_and(|a| a.ends_with("/fno-py")));
-    if !is_verb {
+    if !is_command {
         return None;
     }
     // Long-lived shapes: the daemon and the mux clients run for days by
-    // design; a bare `fno` is a shell, not a verb. The exclusion tokens
+    // design; a bare `fno` is a shell, not a command. The exclusion tokens
     // count only in the subcommand prefix, before the first flag, so an
-    // argument like `--project mux` can never swallow a real verb.
+    // argument like `--project mux` can never swallow a real command.
     let subcommand: Vec<&str> = tokens
         .iter()
         .skip(1)
@@ -98,10 +98,10 @@ fn hung_verb(pid: u32, age_s: u64, args: &str, now_unix: u64) -> Option<Finding>
         None => format!("over {DEFAULT_HUNG_FLOOR_S}s"),
     };
     Some(Finding {
-        kind: "hung_verb",
+        kind: "hung_command",
         key: format!("hung:{pid}@{}", now_unix.saturating_sub(age_s)),
         line: format!(
-            "hung verb pid {pid} {} {} ({basis})",
+            "hung command pid {pid} {} {} ({basis})",
             fmt_age(age_s),
             cut(args, ARGV_CAP)
         ),
@@ -178,7 +178,7 @@ fn ps_rows() -> Result<Vec<(u32, u64, String)>, String> {
 /// Dead holders among the `flight:` claims: rows `long_holds` already aged
 /// past the grace whose pid probe read `absent` on this host. Only `flight:`
 /// holds count - they are pid-scoped by design; a session claim outlives its
-/// ambient pid on purpose. Each line ends with the release verb, so the page
+/// ambient pid on purpose. Each line ends with the release command, so the page
 /// alone is enough to clear it.
 pub fn dead_holders(dirs: &[PathBuf]) -> Result<Vec<Finding>, String> {
     let now_unix = crate::claims::now_ms() / 1000;
@@ -209,7 +209,7 @@ pub fn dead_holders(dirs: &[PathBuf]) -> Result<Vec<Finding>, String> {
             let repair = match &root {
                 Some(r) => format!(
                     "; repair: {} heal=auto",
-                    crate::arm_repair::release_verb(key, holder, Some(r))
+                    crate::arm_repair::release_command(key, holder, Some(r))
                 ),
                 None => "; heal=operator".to_string(),
             };
@@ -231,7 +231,7 @@ pub fn dead_holders(dirs: &[PathBuf]) -> Result<Vec<Finding>, String> {
 }
 
 /// The claims root behind a `<root>/.fno/claims` dir. The space dir's claims
-/// has no such root, so no release verb can reach it.
+/// has no such root, so no release command can reach it.
 fn claims_root_of(dir: &Path) -> Option<PathBuf> {
     if !dir.ends_with(".fno/claims") {
         return None;
@@ -261,7 +261,7 @@ pub fn claims_dirs(cwd: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// The full read: hung verbs first, then dead holders. An error from either
+/// The full read: hung commands first, then dead holders. An error from either
 /// leg fails the whole read - a partially blind answer reads as a failed
 /// read, never as a clean empty.
 pub fn collect(cwd: &Path) -> Result<Vec<Finding>, String> {
@@ -269,7 +269,7 @@ pub fn collect(cwd: &Path) -> Result<Vec<Finding>, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let mut findings = hung_verbs(&ps_rows()?, now_unix);
+    let mut findings = hung_commands(&ps_rows()?, now_unix);
     findings.extend(dead_holders(&claims_dirs(cwd))?);
     Ok(findings)
 }
@@ -280,7 +280,7 @@ pub fn status_value(cwd: &Path) -> Value {
         Ok(findings) => {
             let hung: Vec<&str> = findings
                 .iter()
-                .filter(|f| f.kind == "hung_verb")
+                .filter(|f| f.kind == "hung_command")
                 .map(|f| f.line.as_str())
                 .collect();
             let holders: Vec<&str> = findings
@@ -288,7 +288,7 @@ pub fn status_value(cwd: &Path) -> Value {
                 .filter(|f| f.kind == "dead_holder")
                 .map(|f| f.line.as_str())
                 .collect();
-            json!({"hung_verbs": hung, "dead_holders": holders})
+            json!({"hung_commands": hung, "dead_holders": holders})
         }
         Err(e) => json!({"error": e}),
     }
@@ -301,7 +301,7 @@ pub fn render_lines(value: &Value) -> Vec<String> {
         return vec![format!("stuck work: unreadable ({err})")];
     }
     let hung = value
-        .get("hung_verbs")
+        .get("hung_commands")
         .and_then(Value::as_array)
         .map(|a| a.len())
         .unwrap_or(0);
@@ -315,7 +315,7 @@ pub fn render_lines(value: &Value) -> Vec<String> {
     }
     let mut lines = vec!["stuck work:".to_string()];
     for item in value
-        .get("hung_verbs")
+        .get("hung_commands")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -410,14 +410,14 @@ mod tests {
             "/x/python3 /x/fno-py backlog advance --loose --project fno --source ab --json"
                 .to_string(),
         )];
-        let findings = hung_verbs(&rows, now);
+        let findings = hung_commands(&rows, now);
         assert_eq!(findings.len(), 1);
         let f = &findings[0];
-        assert_eq!(f.kind, "hung_verb");
+        assert_eq!(f.kind, "hung_command");
         assert_eq!(f.key, format!("hung:66853@{}", now - 12_540));
         assert!(
             f.line
-                .starts_with("hung verb pid 66853 3h29m /x/python3 /x/fno-py backlog advance"),
+                .starts_with("hung command pid 66853 3h29m /x/python3 /x/fno-py backlog advance"),
             "{}",
             f.line
         );
@@ -440,13 +440,16 @@ mod tests {
                 "fno-agents loop run --driver target".to_string(),
             ),
         ];
-        assert!(hung_verbs(&rows, now).is_empty());
+        assert!(hung_commands(&rows, now).is_empty());
     }
 
     #[test]
     fn bad_ps_is_an_error_not_an_empty_list() {
         // A ps whose exit is non-zero is Err; this stub never runs, so the
-        // error kind is the spawn failure itself.
+        // error kind is the spawn failure itself. The swap to a nonexistent
+        // dir rides the shared PATH guard: a concurrent git-spawning test
+        // must never inherit it.
+        let _path = crate::path_test_guard();
         let prev = std::env::var_os("PATH");
         std::env::set_var("PATH", "/nonexistent-for-stuck-work");
         let result = ps_rows();
@@ -457,9 +460,9 @@ mod tests {
         assert!(result.is_err(), "a failed ps is Err");
     }
 
-    // The line carries the release verb, and the release it names clears it.
+    // The line carries the release command, and the release it names clears it.
     #[test]
-    fn dead_holder_line_carries_a_release_verb_that_releases() {
+    fn dead_holder_line_carries_a_release_command_that_releases() {
         let td = TempDir::new().unwrap();
         let claims_dir = td.path().join(".fno/claims");
         write_rec(
@@ -474,11 +477,11 @@ mod tests {
         let findings = dead_holders(std::slice::from_ref(&claims_dir)).unwrap();
         assert_eq!(findings.len(), 1);
         let f = &findings[0];
-        let verb = format!(
+        let command = format!(
             "; repair: FNO_CLAIMS_ROOT={} fno agents claim release flight:k --holder single-flight:9:ab heal=auto",
             td.path().display()
         );
-        assert!(f.line.ends_with(&verb), "{}", f.line);
+        assert!(f.line.ends_with(&command), "{}", f.line);
         assert_eq!(f.root.as_deref(), Some(td.path()));
         assert_eq!(f.claim_key.as_deref(), Some("flight:k"));
         assert_eq!(f.holder.as_deref(), Some("single-flight:9:ab"));

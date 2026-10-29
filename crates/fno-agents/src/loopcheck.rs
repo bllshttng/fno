@@ -1,4 +1,4 @@
-//! `fno-agents loop-check` verb (Task 1.1, ).
+//! `fno-agents loop-check` command (Task 1.1, ).
 //!
 //! Single entry-point decision-maker for the target stop hook. Reads external
 //! state (manifest, transcript, git, gh, events, ledger) and returns a JSON
@@ -89,6 +89,10 @@ pub enum TerminationReason {
     /// the same still-open question, so the loop terminates instead of
     /// re-asking. The journal (not the fingerprint) carries the held state.
     /// Terminal, NOT a ship reason: the operator answers, a later run ships.
+    /// The same shape covers the dispatch hold: a run whose every dispatch is
+    /// refused on a cap (lead share, provider) while the node reads
+    /// undispatched blocks once naming the hold, then terminates here instead
+    /// of re-waking into the same refusal until budget.
     HeldOnQuestion,
     Interrupted,
     Aborted,
@@ -131,6 +135,7 @@ mod attestation_journal;
 mod authorship;
 mod awaiting_merge;
 mod coverage_receipt;
+mod held_refusal;
 mod holds;
 mod lead_decide;
 mod range_tiling;
@@ -150,19 +155,23 @@ mod budget;
 mod ci_checks;
 mod coverage;
 mod coverage_classify;
+pub(crate) mod coverage_gate;
+// The verdict rides the pub `Probes::coverage_verdict` surface, so external
+// Probes implementors must be able to name its types.
+pub use coverage_gate::{GateState, GateVerdict};
 pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
 mod footnote_evidence;
-mod gh_read;
+pub(crate) mod gh_read;
 pub(crate) mod intent;
 mod local_attestation;
 mod plan_fidelity;
 mod posture;
 mod pr_read;
-mod review_coverage_verb;
+mod review_coverage_command;
 mod review_findings;
-mod review_inputs;
+pub(crate) mod review_inputs;
 pub(crate) mod self_review_floor;
 pub(crate) mod settings;
 pub(crate) mod watch_lease;
@@ -222,18 +231,23 @@ use fire_history::{
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
 #[cfg(test)]
+use gh_read::cause_for_silent_exit;
+#[cfg(test)]
 use gh_read::is_no_pr_stderr;
 use gh_read::{
-    attestation_in_scope, git_head_branch, git_head_sha, graphql_exhausted_reason, head_is_shipped,
-    pr_head_oid, probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
-    stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail, GraphqlQuota,
+    attestation_in_scope, failed_read_tail, git_head_branch, git_head_sha,
+    graphql_exhausted_reason, head_is_shipped, pr_head_oid, primary_exhaustion_park_s,
+    probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
+    stderr_is_unauthenticated, stderr_smells_rate_limit, GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
+pub(crate) use gh_read::{read_pr_view_fields, PR_INFO_FALLBACK_FIELDS};
 pub(crate) use intent::read_tail_lines;
 #[cfg(test)]
 use intent::INTENT_LOOKBACK_ENTRIES;
 pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
+pub(crate) use local_attestation::verify_invocation_ids;
 use local_attestation::{
     author_is_bot, author_is_known_bot, in_scope_chain, line_carries_keyed_findings,
     local_attestation_verdict, local_latest_attestations, local_refused_verdicts,
@@ -250,9 +264,12 @@ use posture::{
     resolved_required_bots_for_author, PostureConfig, PostureVerdict, LOCAL_PEER_REVIEWER,
     SAME_MODEL_LOCAL_PEER_SENTINEL, SAME_MODEL_PEER_SENTINEL,
 };
+#[cfg(test)]
+use pr_read::manifest_node_pr_selector;
+use pr_read::node_done_pr_merged;
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
-pub use review_coverage_verb::{run_review_coverage, run_review_coverage_capture};
+pub use review_coverage_command::{run_review_coverage, run_review_coverage_capture};
 use review_findings::{
     build_findings_block_reason, demote_unmeasured_coverage, open_findings_from_store,
     review_journal_text,
@@ -293,7 +310,7 @@ pub(crate) fn loopcheck_fno_bin() -> String {
 }
 
 /// `$HOME/.fno/events.jsonl`, the global-log fallback every direct-dispatch
-/// verb reaches for when no `--global-events` override is given. Hand-built
+/// command reaches for when no `--global-events` override is given. Hand-built
 /// (no Rust resolver for events.jsonl exists yet, debt this file
 /// already carries) rather than a new duplicate of the same literal in
 /// every caller.
@@ -406,6 +423,9 @@ pub(crate) fn decide_with_payload(
     // here: it arms in `lead_decide` (`stopgate_hold_drain_reserve`), the one
     // place both lead routes converge, so the route into the lead path, not
     // the `--driver` string on the fire, decides who pays for the drain.
+    // The fire's own wall clock, read on the watching idle row (dur_ms): the
+    // watching-stop latency this fire's transcript bucket can only estimate.
+    let fire_started = std::time::Instant::now();
     stopgate_stamp_fire(
         parsed.read_timeout_ms.unwrap_or(0),
         std::time::Instant::now() + STOPGATE_FIRE_BUDGET,
@@ -421,7 +441,7 @@ pub(crate) fn decide_with_payload(
     }
     // The lead uses a separate manifest and decision path.
     if parsed.driver == "lead" {
-        return lead_decide::lead_decide(&parsed);
+        return lead_decide::lead_decide(&parsed, None);
     }
 
     // Session binding: when the caller names the harness session that asked,
@@ -505,6 +525,10 @@ pub(crate) fn decide_with_payload(
     // the frontmatter by `fno do target init`, so scan the whole manifest for them
     // (parse_manifest is frontmatter-bounded and would miss them). Root=None
     // routes node:<id> to the global claims root inside renew.
+    // What the renewal just proved, keyed by the pair it proved it for: the
+    // watching idle below reuses that answer instead of writing the store a
+    // second time on the same fire.
+    let mut renewed_lease: Option<(String, String)> = None;
     if let (Some(key), Some(holder)) = (
         scan_manifest_field(&manifest_content, "target_claim_key"),
         scan_manifest_field(&manifest_content, "target_claim_holder"),
@@ -519,7 +543,9 @@ pub(crate) fn decide_with_payload(
         // can claim nothing new. A claim another machine took after this
         // lease ran out means the work belongs to that machine now.
         match crate::claims::renew(&key, &holder, ttl_ms, None) {
-            Ok(true) => {}
+            Ok(true) => {
+                renewed_lease = Some((key.clone(), holder.clone()));
+            }
             Ok(false) => {
                 if let Some(reason) = crate::claim_store::lost_to_peer(&key, &holder) {
                     let message =
@@ -545,7 +571,7 @@ pub(crate) fn decide_with_payload(
     }
 
     // Resolve paths + settings + reviewer sets through the ONE shared resolver
-    //: the standalone review-coverage verb resolves exactly these,
+    //: the standalone review-coverage command resolves exactly these,
     // from the same overlay, so there is no second precedence implementation.
     let inputs = resolve_review_inputs(
         &cwd,
@@ -611,6 +637,17 @@ pub(crate) fn decide_with_payload(
         .or(manifest.harness_session_id.as_deref())
         .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("null"))
         .map(str::to_string);
+    // The receipt's clear half: a loop-check fire means the loop was
+    // entered again. Clear before deciding; a terminal-allowing fire
+    // re-writes the receipt in finalize moments later. Same population as
+    // the write, so operator and loop-run sessions never clear each other.
+    if let Some(key) = crate::terminal_run::should_record(
+        std::env::var_os("FNO_AGENT_SELF").is_some(),
+        std::env::var_os("FNO_DRIVER_LIB").is_some(),
+        harness_session.as_deref(),
+    ) {
+        crate::terminal_run::remove_receipt(&crate::paths::AgentsHome::from_env(), key);
+    }
     let _ = crate::distress::scan_and_emit(
         &project_events,
         &global_events,
@@ -626,7 +663,7 @@ pub(crate) fn decide_with_payload(
     //     // ── Step 1: cancel sentinel ────────────────────────────
     // F6: a self-cancel the SESSION wrote through its own assistant is a
     // stuck signal, not a stop. The transcript is the truth: the newest
-    // user entry carrying the cancel verb proves a user typed it. The
+    // user entry carrying the cancel command proves a user typed it. The
     // sentinel's own `via:` is advisory (the command writes it best-effort);
     // the loop re-derives from the transcript at honor time.
     if let Some(hit) = check_cancel_sentinel(&cwd, &state_path, &manifest.created_at, "target") {
@@ -753,6 +790,18 @@ pub(crate) fn decide_with_payload(
         manifest.plan_path.as_deref(),
         &project_events,
     );
+    // The intent, read once, ahead of the gates that may return first: every
+    // branch below (the advisory fold, the watching idle, the promise and
+    // dispatch arms) judges the same stopping message, and the reading is
+    // pure on these inputs.
+    let (intent, intent_source) =
+        detect_intent(last_assistant_message.as_deref(), &transcript_path);
+    // A watching tag on a plan-less manifest can idle on the lease alone:
+    // the idle decision reads no PR state and no revision, so the gh probe
+    // below is work it never consumes. The plan-less bound keeps a
+    // generic-delivery fire's probe and advisory fold exactly as they were.
+    let watching_planless =
+        matches!(&intent, Intent::Watching { .. }) && manifest.plan_path.is_none();
     // ── Steps 3b/3c: the question gates (decided-but-unrecorded; held-on-open)
     // Both folds live in `holds` beside the scans they drive; the journal
     // union, the emit rows, and the order (unrecorded first, then held) are
@@ -776,26 +825,127 @@ pub(crate) fn decide_with_payload(
             }
         }
     }
+    // ── Done-node early allow ─────────────────────────────────────────────────
+    // A finished worker must not re-fight its own stop gate: once the graph
+    // store records the node done and its PR merged, the REST read can only
+    // re-learn a known fact, and under a loaded machine that read is the one
+    // thing that can still time out - each timeout re-blocked the finished
+    // session so it never went idle and never took its queued mail. Retire
+    // the fire on the store's own stamp, before the probe and done()
+    // can pay for a read. Batched units ship via the batch PR (their terminal
+    // is DoneBatched) and advisory/plan units have their own folds, so none of
+    // them take this verdict. A failed store read or an open node keeps the
+    // REST read, which is the pre-existing behavior (fail-open).
+    if !manifest.batched && !manifest.planned && !manifest.advisory && !manifest.no_ship {
+        if let Some(pr_number) = node_done_pr_merged(&cwd, node_id.as_deref()) {
+            // The shortcut must not outrank the terminal gates that ride the
+            // full done() read: an open operator finding holds every success
+            // terminal, unshipped local work is not delivered work, and a red
+            // done_probe is the final DonePRGreen conjunct. Each one falls
+            // through to the full gate, which blocks with its own reason.
+            // Plan fidelity rides the node itself: the done stamp is
+            // reconcile's own all-ships-landed verdict.
+            let held_by_findings = match node_id.as_deref() {
+                Some(n) => {
+                    let (open_findings, findings_read_error) =
+                        open_findings_from_store(&crate::graph_get::default_graph_path(), n);
+                    !open_findings.is_empty() || findings_read_error.is_some()
+                }
+                None => false,
+            };
+            let git_bin = &parsed.git_bin;
+            let local_output = |args: &[&str]| {
+                git_bounded(git_bin.as_ref(), args, &cwd)
+                    .filter(|out| out.status.success())
+                    .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            };
+            let unshipped_or_dirty = match (
+                local_output(&["rev-parse", "HEAD"]),
+                local_output(&["rev-parse", "@{push}"]),
+                local_output(&["status", "--porcelain"]),
+            ) {
+                (Some(head), Some(upstream), Some(status)) => {
+                    head != upstream || !status.is_empty()
+                }
+                // An unreadable checkout says nothing about what shipped, so
+                // it keeps the REST read.
+                _ => true,
+            };
+            let mut shortcut_holds = !held_by_findings && !unshipped_or_dirty;
+            if shortcut_holds {
+                shortcut_holds = !matches!(
+                    evaluate_done_probes(
+                        manifest.plan_path.as_deref(),
+                        settings.done_probes.as_ref(),
+                        &cwd,
+                        &project_events,
+                        &session_id,
+                        PROBE_TIMEOUT,
+                    ),
+                    ProbeGate::Fail { .. }
+                );
+            }
+            if shortcut_holds {
+                let reason = format!(
+                    "node {node} done and PR #{n} recorded merged in the graph store; retiring the fire without the REST read",
+                    node = node_id.as_deref().unwrap_or(""),
+                    n = pr_number
+                );
+                // The termination row is the only journal row: a custom event
+                // type would need the schema.yaml inventory plus its cargo
+                // regen, and an unregistered type is rejected by the judge.
+                emit(
+                    "termination",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "reason": "DonePRGreen",
+                        "message": reason
+                    }),
+                );
+                return (
+                    0,
+                    allow_output(
+                        "allow",
+                        Some(TerminationReason::DonePRGreen),
+                        &reason,
+                        0,
+                        None,
+                    ),
+                );
+            }
+        }
+    }
     // ── Check gh binary availability ──────────────────────────────────────────
     // Only a NotFound spawn reads as absence. Every other spawn failure is
     // SpawnTrouble: gh exists but could not be spawned right now, which is
     // not a fact about the world and must not degrade the session. The probe
     // outcome is emitted as an event row so what it concluded is observable.
     let gh_bin = &parsed.gh_bin;
-    let gh_probe = probe_gh_bin(gh_bin.as_ref(), &cwd);
+    // The lease-only idle consumes no gh answer, so a watching plan-less fire
+    // skips the probe and its row; a fire that reaches the advisory fold or
+    // the done gate below probes there instead (the done gate re-probes in
+    // every case). Optimistic availability here only gates the advisory fold
+    // the idle path never reads.
+    let gh_probe = if watching_planless {
+        None
+    } else {
+        Some(probe_gh_bin(gh_bin.as_ref(), &cwd))
+    };
     // Type is deliberately NOT "loop_check": read_prior_fires treats every
     // loop_check row for this session as a fire observation, and a probe row
     // with no fingerprint would break the no-progress streak on each fire.
     // The probe is its own observable, not a fire decision.
-    emit(
-        "gh_probe",
-        serde_json::json!({
-            "session_id": session_id,
-            "outcome": gh_probe.outcome_str(),
-            "detail": gh_probe.detail_str(),
-        }),
-    );
-    let gh_available = !matches!(gh_probe, GhProbeOutcome::Absent);
+    if let Some(ref probe) = gh_probe {
+        emit(
+            "gh_probe",
+            serde_json::json!({
+                "session_id": session_id,
+                "outcome": probe.outcome_str(),
+                "detail": probe.detail_str(),
+            }),
+        );
+    }
+    let gh_available = !matches!(gh_probe.as_ref(), Some(GhProbeOutcome::Absent));
 
     if !gh_available
         && matches!(
@@ -835,9 +985,9 @@ pub(crate) fn decide_with_payload(
                 "attended": manifest.attended
             }),
         );
-        let (advisory_intent, _advisory_intent_source) =
-            detect_intent(last_assistant_message.as_deref(), &transcript_path);
-        if let Intent::Aborted { ref reason } = advisory_intent {
+        // The intent is already read above; the advisory fold judges the
+        // same message.
+        if let Intent::Aborted { ref reason } = intent {
             emit(
                 "termination",
                 serde_json::json!({
@@ -857,7 +1007,7 @@ pub(crate) fn decide_with_payload(
                 ),
             );
         }
-        if advisory_intent == Intent::Promise {
+        if intent == Intent::Promise {
             emit(
                 "termination",
                 serde_json::json!({
@@ -889,9 +1039,8 @@ pub(crate) fn decide_with_payload(
         );
     }
 
-    // ── Step 4: intent + backstop ─────────────────────────────────────────────
-    let (intent, intent_source) =
-        detect_intent(last_assistant_message.as_deref(), &transcript_path);
+    // ── Step 4: backstop history (the intent is read above, beside the
+    // question gates) ────────────────────────────────────────────────────────
     let git_bin = &parsed.git_bin;
     let head_sha = git_head_sha(git_bin, &cwd);
     let gh_bin = &parsed.gh_bin;
@@ -1015,11 +1164,27 @@ pub(crate) fn decide_with_payload(
         };
         let window_ms = watch_window_ms(timeout.as_deref());
         let claim = watch_lease::claim_pair(&manifest_content);
-        let renew_outcome = claim
-            .as_ref()
-            .map(|(key, holder)| crate::claims::renew(key, holder, window_ms, None));
-        let renewed = matches!(renew_outcome.as_ref(), Some(Ok(true)));
-        if can_idle && renewed && routable == Ok(true) {
+        // The generic renewal this fire already ran answered for this same
+        // pair milliseconds ago; reusing that answer saves the second
+        // shared-store write every watching fire used to pay, and the claim
+        // ends at the claim's own TTL - no shorter than the idle window this
+        // renewal would have written.
+        let renewed = match claim.as_ref() {
+            Some((key, holder)) if matches!(&renewed_lease, Some((k, h)) if k == key && h == holder) => {
+                true
+            }
+            Some((key, holder)) => {
+                matches!(crate::claims::renew(key, holder, window_ms, None), Ok(true))
+            }
+            None => false,
+        };
+        // An unclaimed session may still idle on a LOCAL watch: its wake is
+        // its own harness-tracked task exit, and it holds no node claim a
+        // renewal could keep alive. A PR wait still requires the renewed
+        // lease.
+        let claimless_local =
+            watch_lease::local_watch_without_claim(claim.is_some(), reason, task_id.as_deref());
+        if can_idle && (renewed || claimless_local) && routable == Ok(true) {
             let (blocker, pr_number) = watch_target(reason, pr.as_deref());
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1063,7 +1228,8 @@ pub(crate) fn decide_with_payload(
                         "pr_state": last_pr_state,
                         "ci": last_ci,
                         "reviewed": false,
-                        "fp_read_failed": false
+                        "fp_read_failed": false,
+                        "dur_ms": fire_started.elapsed().as_millis() as u64
                     }),
                 );
                 return terminal(
@@ -1073,7 +1239,7 @@ pub(crate) fn decide_with_payload(
                 );
             }
             watching_codex_refusal = Some((EMIT_FAILED_REFUSAL, "emit_failed"));
-        } else if can_idle && renewed && routable != Ok(true) {
+        } else if can_idle && (renewed || claimless_local) && routable != Ok(true) {
             // A codex session that could idle except for the channel: the
             // routability refusal, not the generic harness text. Only when
             // the lease ALSO failed does the generic path keep the more
@@ -1390,11 +1556,11 @@ pub(crate) fn decide_with_payload(
             || !required_reviewers.is_empty();
         let self_review_required = settings.self_review_required.unwrap_or(true);
         // The floor applies where a session can satisfy it: a harness with a
-        // self-review verb (claude /code-review, codex /review, opencode
+        // self-review command (claude /code-review, codex /review, opencode
         // /review-changes), or a harness that could not be attributed at all -
-        // ambiguity is not permission. A KNOWN verbless harness
+        // ambiguity is not permission. A KNOWN commandless harness
         // (gemini/agy) stays unfloored: the floor would demand an attestation no
-        // verb there produces, wedging the loop; route 3 (a spawned reviewer) is
+        // command there produces, wedging the loop; route 3 (a spawned reviewer) is
         // those harnesses' path and is deferred.
         let floor_applies =
             self_review_floor_applies(author_harness.as_deref(), inputs.author_harness_pinned_none);
@@ -1409,7 +1575,7 @@ pub(crate) fn decide_with_payload(
         }
         //: DoneUnreviewed applies only when review is required. A stock
         // install that opts out (self_review_required=false AND no lane, or a
-        // harness with no self-review verb) has zero coverage as its configured
+        // harness with no self-review command) has zero coverage as its configured
         // state, not a defect - those green PRs still reach DonePRGreen.
         let review_required = lane_configured || self_review_floor.is_some();
 
@@ -1419,6 +1585,10 @@ pub(crate) fn decide_with_payload(
         } else {
             gh_bin.to_string()
         };
+        // The manifest node's own PR pins the terminal read (merged, deleted
+        // and detached heads stay readable); an absent node or PR keeps the
+        // branch-resolved read exactly as before.
+        let node_pr_selector = pr_read::manifest_node_pr_selector(&cwd, node_id.as_deref());
         let done_result = run_done(
             &done_gh_bin,
             git_bin,
@@ -1444,6 +1614,8 @@ pub(crate) fn decide_with_payload(
             carry_interdiff_lines_resolved(&settings),
             Some(&resolve_posture_config(&settings)),
             &resolved_local_peer_reviewers_for_author(&settings, author_harness.as_deref()),
+            node_pr_selector.as_deref(),
+            node_id.as_deref(),
         );
 
         match done_result {
@@ -1690,6 +1862,28 @@ pub(crate) fn decide_with_payload(
                         own_footnote_session,
                         &pr_info.head_oid,
                     );
+                    // A claim the check rejected on a PR that passes anyway
+                    // is a half-fail; it goes back to its origin node.
+                    let half_fails = footnotes.send_half_fails(
+                        &cwd.join(".fno").join("footnote-half-fails"),
+                        node_id.as_deref(),
+                        |argv| {
+                            let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+                            matches!(
+                                run_bounded(
+                                    parsed.fno_bin.as_ref(),
+                                    &args,
+                                    &cwd,
+                                    read_bounds::stopgate_read_timeout(),
+                                ),
+                                BoundedRun::Completed(out) if out.status.success()
+                            )
+                        },
+                    );
+                    let with_half_fails = |msg: String| match (half_fails, node_id.as_deref()) {
+                        (0, _) | (_, None) => msg,
+                        (n, Some(node)) => format!("{msg}; {n} half-fail(s) sent back to {node}"),
+                    };
                     // Coverage gate: the three pr_passes conjuncts all ask
                     // "did anyone object"; coverage asks "did anyone review". A
                     // passing PR nothing reviewed terminates DoneUnreviewed, not
@@ -1746,10 +1940,10 @@ pub(crate) fn decide_with_payload(
                                     "{cov_line}; operator waiver authority unknown (decision probe)"
                                 );
                             }
-                            let done_msg = footnotes.on_reason(format!(
+                            let done_msg = with_half_fails(footnotes.on_reason(format!(
                                 "PR #{} is green but UNREVIEWED - {}. Not mergeable by the autonomous path (DoneUnreviewed); merge by hand or after a review.",
                                 pr_info.number, cov_line
-                            ));
+                            )));
                             term_row("DoneUnreviewed", &done_msg);
                             fire_row(
                                 "allow",
@@ -1796,7 +1990,7 @@ pub(crate) fn decide_with_payload(
                         Some(owner) => format!("{done_msg}; merge owned by {owner}"),
                         None => done_msg,
                     };
-                    let done_msg = footnotes.on_reason(done_msg);
+                    let done_msg = with_half_fails(footnotes.on_reason(done_msg));
                     term_row("DonePRGreen", &done_msg);
                     fire_row(
                         "allow",
@@ -2003,6 +2197,95 @@ pub(crate) fn decide_with_payload(
                         .missing_bots
                         .iter()
                         .any(|b| b == SAME_MODEL_PEER_SENTINEL);
+
+                // ── The undispatched-node hold ──────────────────────────────
+                // A run whose every dispatch is refused on a cap (lead share,
+                // provider) while the node reads undispatched can neither act
+                // nor stop: the ordinary block below never clears. When the
+                // freshest cap refusal for THIS node is inside the hold
+                // window, the promise block classifies as held: the first
+                // fire blocks once naming the refusal and the clears (the
+                // marker rides this fire's loop_check row), the second
+                // terminates HeldOnQuestion with the held help, so a run at
+                // its share stops instead of re-waking into the same refusal
+                // until budget. Sits BEFORE the backstop: a held run is not a
+                // progress-less one, and the truthful verdict should reach
+                // the journal first.
+                if intent == Intent::Promise
+                    && matches!(pr_info.state, PrState::None)
+                    && node_id.is_some()
+                {
+                    let node = node_id.as_deref().unwrap_or_default();
+                    let mut hold_journals = vec![project_events.clone(), global_events.clone()];
+                    if let Some(canon) = crate::paths::canonical_repo_root(&cwd) {
+                        let canonical_journal = crate::paths::events_path(&canon);
+                        if !hold_journals.contains(&canonical_journal) {
+                            hold_journals.push(canonical_journal);
+                        }
+                    }
+                    if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
+                        let home_journal = home.events_jsonl();
+                        if !hold_journals.contains(&home_journal) {
+                            hold_journals.push(home_journal);
+                        }
+                    }
+                    match held_refusal::held_gate(
+                        &hold_journals,
+                        fire_rows.as_deref(),
+                        &session_id,
+                        node,
+                        now,
+                    ) {
+                        held_refusal::HeldRefusalStop::None => {}
+                        held_refusal::HeldRefusalStop::Block { reason, marker } => {
+                            fire_row(
+                                "block",
+                                "promise",
+                                false,
+                                serde_json::json!({
+                                    "done_probes": probe_results,
+                                    "held_refusal": marker,
+                                }),
+                            );
+                            return (
+                                0,
+                                allow_output("block", None, &reason, this_fire, Some(fingerprint)),
+                            );
+                        }
+                        held_refusal::HeldRefusalStop::Terminate { message } => {
+                            // The held help routes off-session to the holder;
+                            // best-effort, never a verdict input.
+                            let _ = crate::distress::emit_help_distress_blocked(
+                                &project_events,
+                                &global_events,
+                                &cwd,
+                                &session_id,
+                                node_id.as_deref(),
+                                harness.as_deref(),
+                                &crate::distress::help_distress_held(message.clone(), None),
+                                "held-refusal",
+                                harness_session.as_deref(),
+                            );
+                            term_row("HeldOnQuestion", &message);
+                            fire_row(
+                                "allow",
+                                "promise",
+                                false,
+                                serde_json::json!({
+                                    "held_refusal": {
+                                        "node": node,
+                                        "terminal": true,
+                                    },
+                                }),
+                            );
+                            return terminal(
+                                "allow",
+                                Some(TerminationReason::HeldOnQuestion),
+                                &message,
+                            );
+                        }
+                    }
+                }
                 // `probe_block.is_some()` keeps a probe that can never pass in
                 // this environment on the NoProgress escape rather than looping
                 // to the budget ceiling: PR+CI+review all hold, so without it
@@ -2285,6 +2568,123 @@ pub(crate) fn decide_with_payload(
                         quota.as_ref().and_then(|q| q.core_reset_epoch).unwrap_or(0),
                     );
                 }
+                // PRIMARY EXHAUSTION parks instead of block-and-retry:
+                // with the bucket at 0 the read cannot succeed until the reset,
+                // and a block re-wakes the session at every stop, each wake
+                // firing the same refused read - the measured spin that kept a
+                // finished worker live and burning the shared user quota for a
+                // whole reset window. The park is an ALLOW plus a
+                // `loop_check_watch_idle` row (blocker `quota`): the session
+                // spends no turns, the daemon's expiry arm re-wakes it at the
+                // stored reset, and the next fire re-reads with the bucket
+                // refilled. A harness the daemon cannot wake (loop-run child,
+                // unknown harness) keeps the block: an allow it can never be
+                // re-woken from strands the run.
+                let is_loop_run_child = std::env::var("FNO_DRIVER_LIB").is_ok();
+                if harness_can_idle(author_harness.as_deref(), is_loop_run_child) {
+                    // The reset rides the fleet's ONE quota memory - the ledger
+                    // `gh-budget status` reads - never a second reader. The
+                    // core observation above just landed there; the graphql
+                    // reset comes from the live exempt probe this fire
+                    // already paid for.
+                    let ledger_core_reset_in_s =
+                        crate::gh_budget::snapshot(&budget_ledger, now.timestamp_millis())
+                            .core_reset_in_s;
+                    if let Some(park_s) = primary_exhaustion_park_s(
+                        &failed_read,
+                        &failed_stderr,
+                        quota.as_ref(),
+                        ledger_core_reset_in_s,
+                        now.timestamp(),
+                    ) {
+                        const QUOTA_PARK_MAX_MS: i64 = 2 * 60 * 60_000;
+                        // saturating: a corrupt ledger reset must not
+                        // overflow the multiply before the clamp applies.
+                        let park_ms = park_s
+                            .saturating_mul(1000)
+                            .max(60_000)
+                            .min(QUOTA_PARK_MAX_MS);
+                        let expires_at_ms =
+                            now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
+                        // A parked session keeps its node: renew the claim
+                        // lease over the window, as the build park does.
+                        if let Some((key, holder)) = watch_lease::claim_pair(&manifest_content) {
+                            let _ = crate::claims::renew(
+                                &key,
+                                &holder,
+                                park_ms + 2 * watch_lease::WATCH_SLACK_MS,
+                                None,
+                            );
+                        }
+                        // The fire row lands BEFORE the watch-idle row: a
+                        // later `loop_check` row with a non-watching intent
+                        // would mark the watch superseded
+                        // (`is_current_watch`) and the daemon would never
+                        // wake the parked session.
+                        fire_row(
+                            "allow",
+                            if intent == Intent::Promise {
+                                "promise"
+                            } else {
+                                "none"
+                            },
+                            true,
+                            serde_json::json!({
+                                "pr_state": "unknown",
+                                "ci": "unknown",
+                                "reviewed": false
+                            }),
+                        );
+                        emit(
+                            "loop_check_gh_error",
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "read": failed_read,
+                                "outcome": read_err.outcome(),
+                                "stderr_tail": failed_stderr,
+                                "waited_on": read_err.waited_on(),
+                                "parked": true,
+                                "park_until_ms": expires_at_ms,
+                                "graphql_remaining": quota.as_ref().map(|q| q.remaining),
+                                "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
+                                "rate_limit_class": "primary"
+                            }),
+                        );
+                        let idle_row = serde_json::json!({
+                            "session_id": session_id,
+                            "pr": null,
+                            "blocker": "quota",
+                            "reason": "quota",
+                            "expires_at_ms": expires_at_ms,
+                            "harness": scan_manifest_field(&manifest_content, "harness"),
+                            "cwd": &cwd,
+                        });
+                        if let Err(e) = fire_history::emit_to_both_checked(
+                            &project_events,
+                            &global_events,
+                            "loop_check_watch_idle",
+                            idle_row,
+                        ) {
+                            eprintln!(
+                                "loop-check: quota park not recorded ({e}); no daemon wake is armed"
+                            );
+                        }
+                        let bucket = if is_graphql_read { "GraphQL" } else { "core" };
+                        let mins = park_ms / 60_000;
+                        let reason = format!(
+                            "gh read '{failed_read}' is refused with the {bucket} quota at 0: \
+                             the hourly bucket is spent and the read cannot succeed until it \
+                             resets (~{mins}m). The session is PARKED, not blocked: stop \
+                             working and end the turn; the fno daemon re-wakes this session \
+                             at the reset and the gate re-reads then. Do not retry the read \
+                             or spend quota on it."
+                        );
+                        return (
+                            0,
+                            allow_output("allow", None, &reason, this_fire, Some(fingerprint)),
+                        );
+                    }
+                }
                 emit(
                     "loop_check_gh_error",
                     serde_json::json!({
@@ -2412,32 +2812,49 @@ fn run_done(
     carry_interdiff_lines: usize,
     posture: Option<&PostureConfig>,
     peer_reviewers: &[String],
+    // The PR selector the manifest's node resolves (`manifest_node_pr_selector`):
+    // pins the terminal read to the session's own PR so a merged, deleted or
+    // detached head cannot turn the read into a branch-resolution failure.
+    pr_selector: Option<&str>,
+    node_id: Option<&str>,
 ) -> Result<PrInfo, GhReadError> {
-    let info = read_pr_info(
-        gh_bin,
-        git_bin,
-        cwd,
-        ci_declared_none,
-        no_external,
-        required_bots,
-        optional_bots,
-        optional_lane_configured,
-        external_reviewers,
-        reviewers,
-        nudge_configs,
-        head_sha,
-        events_path,
-        global_events_path,
-        repo_slug,
-        author_session,
-        None,
-        None,
-        github_approval_satisfies,
-        max_rounds,
-        carry_interdiff_lines,
-        posture,
-        peer_reviewers,
-    )?;
+    let read = |selector: Option<&str>| {
+        read_pr_info(
+            gh_bin,
+            git_bin,
+            cwd,
+            ci_declared_none,
+            no_external,
+            required_bots,
+            optional_bots,
+            optional_lane_configured,
+            external_reviewers,
+            reviewers,
+            nudge_configs,
+            head_sha,
+            events_path,
+            global_events_path,
+            repo_slug,
+            author_session,
+            selector,
+            None,
+            github_approval_satisfies,
+            max_rounds,
+            carry_interdiff_lines,
+            posture,
+            peer_reviewers,
+        )
+    };
+    let mut info = read(pr_selector)?;
+    // A closed PR whose node shipped through a replacement: read the live
+    // one instead, so the write-once manifest never pins done() to it.
+    if matches!(info.state, PrState::Closed) {
+        if let Some(live) = node_id
+            .and_then(|node| pr_read::live_fixes_pr(gh_bin, cwd, repo_slug, node, info.number))
+        {
+            info = read(Some(live.as_str()))?;
+        }
+    }
     // read_pr_info stays read-only against GitHub; the CALLER owns
     // the write. A row was just emitted for this PR, so the publisher has the
     // same evidence the merge gate will read, and the status targets the live
@@ -2740,7 +3157,7 @@ mod tests {
     mod plan_fidelity_tests;
     mod posture_tests;
     mod pr_read_tests;
-    mod review_coverage_verb_tests;
+    mod review_coverage_command_tests;
     mod review_findings_tests;
     mod self_review_floor_tests;
     mod settings_tests;

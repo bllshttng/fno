@@ -14,6 +14,7 @@ pub struct DayInputs {
     pub decisions_raw: String,
     pub decisions_path: String,
     pub graph_entries: Vec<Value>,
+    pub graph_path: String,
     pub event_journals: Vec<(String, String)>,
     /// (path, state) pairs parallel to `event_journals`: `read`, `missing` or
     /// `unreadable`. Empty means every provided journal was read.
@@ -198,12 +199,21 @@ fn collect_retractions(raw: &str, kind: &str, out: &mut Vec<Value>) {
         }
         let Some(ts) = stamp(&row) else { continue };
         let Some(fields) = data(&row) else { continue };
-        out.push(json!({
+        let mut item = json!({
             "kind": kind,
-            "target": string(fields, "target").or_else(|| string(fields, "decision_id")).unwrap_or_default(),
+            "target": string(fields, "target_decision_id")
+                .or_else(|| string(fields, "target"))
+                .or_else(|| string(fields, "decision_id"))
+                .unwrap_or_default(),
             "reason": string(fields, "reason").unwrap_or_default(),
             "ts": ts,
-        }));
+        });
+        for key in ["authority_source", "retracted_by", "quote"] {
+            if let Some(value) = string(fields, key) {
+                item[key] = json!(value);
+            }
+        }
+        out.push(item);
     }
 }
 
@@ -379,7 +389,7 @@ pub fn fold_day(inputs: &DayInputs) -> Result<Value, String> {
     let mut receipts = vec![
         json!({"source":"questions", "path": inputs.questions_path, "state": inputs.questions_state, "scanned": inputs.questions_raw.lines().count(), "matched": open_items.len()}),
         json!({"source":"decisions", "path": inputs.decisions_path, "state":"read", "scanned": inputs.decisions_raw.lines().count(), "matched": retractions.iter().filter(|r| r["kind"] == "decision").count()}),
-        json!({"source":"graph", "path":"graph.json", "state":"read", "scanned": inputs.graph_entries.len(), "matched": completed_items.len()}),
+        json!({"source":"graph", "path": inputs.graph_path, "state":"read", "scanned": inputs.graph_entries.len(), "matched": completed_items.len()}),
     ];
     for (path, raw) in &inputs.event_journals {
         let state = inputs
@@ -507,7 +517,71 @@ fn graph_path(home: &crate::paths::AgentsHome) -> PathBuf {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    crate::state_layout::place(&root, "graph.json")
+    crate::state_layout::graph_anchor(&root)
+}
+
+/// The journals the deleted Python relay expanded from
+/// `fno.paths.event_journals()`: the global journal (state root), the agents
+/// home journal, and the project journal, each contributing its ephemeral
+/// sibling and its numeric rotations when they exist, resolved and deduped,
+/// the project journal first. The commit arm takes this order as-is: [0] is
+/// the live project journal.
+pub(crate) fn default_event_journals(home: &crate::paths::AgentsHome) -> Vec<PathBuf> {
+    fn expand(journal: &Path) -> Vec<PathBuf> {
+        let live = crate::event_store::live_journal(journal);
+        let ephemeral = live.with_extension("jsonl.ephemeral");
+        let mut bases: Vec<PathBuf> = vec![live.clone()];
+        if ephemeral.exists() {
+            bases.push(ephemeral);
+        }
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for base in bases {
+            let parent = base.parent().unwrap_or_else(|| Path::new("."));
+            let prefix = format!(
+                "{}.",
+                base.file_name().unwrap_or_default().to_string_lossy()
+            );
+            let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let Some(suffix) = name.strip_prefix(&prefix) else {
+                        continue;
+                    };
+                    let Ok(n) = suffix.parse::<u32>() else {
+                        continue;
+                    };
+                    if entry.path().exists() {
+                        rotated.push((n, entry.path()));
+                    }
+                }
+            }
+            rotated.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+            rotated.dedup_by_key(|(n, _)| *n);
+            for (_, path) in rotated {
+                candidates.push(crate::paths::resolve_loose(&path));
+            }
+            candidates.push(crate::paths::resolve_loose(&base));
+        }
+        let mut out: Vec<PathBuf> = Vec::new();
+        for path in candidates {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let global = if let Some(dir) = std::env::var_os("FNO_STATE_DIR") {
+        PathBuf::from(dir).join("events.jsonl")
+    } else {
+        crate::decision_index::default_state_path("events.jsonl")
+    };
+    let mut journals = Vec::new();
+    journals.extend(expand(&global));
+    journals.extend(expand(&home.events_jsonl()));
+    journals.extend(expand(&crate::paths::events_path(&cwd)));
+    journals
 }
 
 pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
@@ -549,6 +623,11 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         eprintln!("fno-agents day: --kind start|end is required");
         return 2;
     };
+    // The deleted Python relay expanded the journals; with no caller-supplied
+    // --events-path the native leg resolves the same stores itself.
+    if event_paths.is_empty() {
+        event_paths = default_event_journals(home);
+    }
     let state_dir = home
         .root()
         .parent()
@@ -627,6 +706,9 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         decisions_raw,
         decisions_path: decisions_path.display().to_string(),
         graph_entries,
+        graph_path: crate::backlog::database_path(&graph_path(home))
+            .display()
+            .to_string(),
         event_journals: journals,
         journal_states,
         checkin_scan,
@@ -671,9 +753,34 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
     }
 }
 
-/// The durable boundary row: ids and counts only, never titles. Full
-/// evidence stays in its owning sources.
-fn boundary_event_line(payload: &Value) -> Result<String, String> {
+/// One locked O_APPEND write, mirroring the Python journal writer's lock
+/// convention: a `<file>.lock.d` mkdir mutex, an owner file, one atomic append.
+pub(crate) fn append_row(path: &Path, line: &str) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("events.jsonl"); // events-discipline:allow: a day-ledger fallback name, not the state-root journal
+    let lock_dir = path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(format!("{name}.lock.d"));
+    let token =
+        crate::claims::acquire_dir_mutex(&lock_dir, std::time::Duration::from_secs(30), true)
+            .ok_or_else(|| format!("lock timeout: {}", lock_dir.display()))?;
+    let result = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(line.as_bytes()))
+        .map_err(|e| e.to_string());
+    crate::claims::release_dir_mutex(&lock_dir, &token);
+    result
+}
+
+/// The boundary row's fields: ids and counts only, never titles. Full
+/// evidence stays in its owning sources. Sized against the validated limit
+/// so a refusal names the boundary instead of substituting a meta-event.
+fn boundary_fields(payload: &Value) -> Result<serde_json::Map<String, Value>, String> {
     let questions = payload.get("questions").cloned().unwrap_or(json!({}));
     let mut fields = serde_json::Map::new();
     fields.insert("boundary_id".into(), payload["boundary_id"].clone());
@@ -713,6 +820,12 @@ fn boundary_event_line(payload: &Value) -> Result<String, String> {
             encoded.len()
         ));
     }
+    Ok(fields)
+}
+
+/// The durable boundary row: [`boundary_fields`] wrapped in the envelope.
+fn boundary_event_line(payload: &Value) -> Result<String, String> {
+    let fields = boundary_fields(payload)?;
     let event = json!({
         "ts": crate::events::now_rfc3339(),
         "type": "day_boundary",
@@ -722,30 +835,6 @@ fn boundary_event_line(payload: &Value) -> Result<String, String> {
     let mut line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
     line.push('\n');
     Ok(line)
-}
-
-/// One locked O_APPEND write, mirroring the Python journal writer's lock
-/// convention: a `<file>.lock.d` mkdir mutex, an owner file, one atomic append.
-pub(crate) fn append_row(path: &Path, line: &str) -> Result<(), String> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("events.jsonl");
-    let lock_dir = path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(format!("{name}.lock.d"));
-    let token =
-        crate::claims::acquire_dir_mutex(&lock_dir, std::time::Duration::from_secs(30), true)
-            .ok_or_else(|| format!("lock timeout: {}", lock_dir.display()))?;
-    let result = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| file.write_all(line.as_bytes()))
-        .map_err(|e| e.to_string());
-    crate::claims::release_dir_mutex(&lock_dir, &token);
-    result
 }
 
 /// Commit the fold's boundary row: project journal first, then the
@@ -778,12 +867,23 @@ fn commit_boundary(
         append_row(journal_path, &line)
             .map_err(|e| format!("project journal append failed: {e}"))?;
     }
-    append_row(questions_path, &line).map_err(|e| {
+    // The routed question index takes the row through the store: a raw
+    // append on a routed stem strands the boundary from every committed
+    // read. The fields are the same ones the line wraps.
+    let data = boundary_fields(payload).map_err(|e| {
         format!(
             "boundary {} landed in the project journal but not the question index: {e}",
             payload["boundary_id"]
         )
-    })
+    })?;
+    crate::events::EventEmitter::new(questions_path, "target")
+        .emit_fields("day_boundary", data)
+        .map_err(|e| {
+            format!(
+                "boundary {} landed in the project journal but not the question index: {e}",
+                payload["boundary_id"]
+            )
+        })
 }
 
 #[cfg(test)]
@@ -813,10 +913,15 @@ mod tests {
             json!({"id":"x-in","title":"inside","completed_at":"2026-09-10T09:00:00Z"}),
             json!({"id":"x-out","title":"outside","completed_at":"2026-09-10T07:00:00Z"}),
         ];
+        input.decisions_raw = r#"{"ts":"2026-09-10T10:00:00Z","type":"decision_retracted","data":{"target_decision_id":"d-x","reason":"r","authority_source":"chat_attested","retracted_by":"testf4c6","quote":"drop it"}}"#.to_string();
         let payload = fold_day(&input).unwrap();
         assert_eq!(payload["completed"]["count"], json!(1));
         assert_eq!(payload["window"]["from"], json!("2026-09-10T08:00:00Z"));
         assert_eq!(payload["prior_boundary_id"], json!("day-end-old"));
+        let retraction = &payload["retractions"][0];
+        assert_eq!(retraction["target"], json!("d-x"));
+        assert_eq!(retraction["quote"], json!("drop it"));
+        assert_eq!(retraction["authority_source"], json!("chat_attested"));
     }
 
     #[test]

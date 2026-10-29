@@ -369,7 +369,7 @@ fn refuse_tracker_owned(label: &str) -> Result<(), Refusal> {
     if backend != "graph" {
         return Err(refused(
             format!(
-                "fno backlog {label}: this verb owns graph state; under the {backend} \
+                "fno backlog {label}: this command owns graph state; under the {backend} \
                  tracker backend it is refused. Track the item in the tracker by its id."
             ),
             1,
@@ -529,9 +529,32 @@ pub(crate) fn session_provenance(
     )
 }
 
+/// The retired ids every row carries as aliases, best-effort. A rename keeps
+/// the old id on the row, so the minter must never mint it again. A read
+/// failure degrades to an empty pool, like the archive pool.
+pub(crate) fn alias_pool() -> std::collections::BTreeSet<String> {
+    alias_pool_at(&super::settings::graph_path())
+}
+
+/// The same pool at an explicit store path. The env-resolving wrapper reads
+/// FNO_STATE_DIR per call, which races the parallel tests that move it; the
+/// unit test seeds and reads one explicit path instead.
+pub(crate) fn alias_pool_at(graph: &std::path::Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let Ok(rows) = crate::graph_store::read_rows(graph) else {
+        return out;
+    };
+    for row in &rows {
+        if let Some(items) = row.get("aliases").and_then(Value::as_array) {
+            out.extend(items.iter().filter_map(|v| v.as_str().map(str::to_string)));
+        }
+    }
+    out
+}
+
 /// Mint a fresh, collision-free node id against the snapshot's ids, the
-/// legacy archive pool, the mint tombstones, and every id a plan
-/// frontmatter names. Must run inside the locked write.
+/// legacy archive pool, the mint tombstones, every id a plan
+/// frontmatter names, and every retired alias. Must run inside the locked write.
 pub(crate) fn mint_node_id(
     existing: &std::collections::BTreeSet<String>,
 ) -> Result<String, String> {
@@ -540,9 +563,10 @@ pub(crate) fn mint_node_id(
     let archive_ids = archived_id_pool();
     let tombstones = load_id_tombstones();
     let plan_ids = plan_frontmatter_ids();
+    let aliases = alias_pool();
     let minted = mint_node_id_with_prefix(
         existing,
-        &[&archive_ids, &tombstones, &plan_ids],
+        &[&archive_ids, &tombstones, &plan_ids, &aliases],
         &prefix,
         width,
     )?;
@@ -637,24 +661,12 @@ fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
 /// One best-effort SQLite archive read, over every row shape the store has
 /// used: entries blob rows, the typed nodes table, and nodes_raw, which the
 /// working import parks an unrepresentable row in (both tables count as
-/// live, so all three feed the exclusion set). The open is read-only: an
-/// ordinary open creates the file it opens. A WAL-mode twin whose -shm is
-/// gone (a daemon that exited clean) refuses a plain read-only open, so a
-/// second attempt reads it immutable: safe with no live writer, and only
-/// reached after the ordinary open failed.
+/// live, so all three feed the exclusion set). The open is the shared
+/// read-only archive open.
 fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
-    let conn = match rusqlite::Connection::open_with_flags(path, flags) {
-        Ok(conn) => conn,
-        Err(_) => {
-            let uri = format!("file:{}?immutable=1", uri_path(path));
-            let uri_flags = flags | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-            match rusqlite::Connection::open_with_flags(uri, uri_flags) {
-                Ok(conn) => conn,
-                Err(_) => return out,
-            }
-        }
+    let Some(conn) = crate::graph_store::open_read_only_wal_safe(path) else {
+        return out;
     };
     for sql in [
         "SELECT id FROM entries",
@@ -671,21 +683,6 @@ fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
             if let Ok(id) = row.get::<_, String>(0) {
                 out.insert(id);
             }
-        }
-    }
-    out
-}
-
-/// Percent-encoded path for a `file:` URI: the query (`?immutable=1`) must
-/// survive, so reserved characters in the path itself are escaped.
-fn uri_path(path: &Path) -> String {
-    let mut out = String::new();
-    for byte in path.to_string_lossy().as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
-                out.push(*byte as char);
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
     out
@@ -839,7 +836,7 @@ fn plan_frontmatter_ids_in(dir: &Path) -> std::collections::BTreeSet<String> {
 
 /// The dedup net: score the just-born node against every live node plus the
 /// archived residents. Warn-only; stderr keeps stdout machine-readable.
-fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &str) {
+pub(crate) fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &str) {
     let candidates = relatedness::similar_nodes(node, entries, 3, None);
     if candidates.is_empty() {
         return;
@@ -1368,8 +1365,11 @@ pub(crate) fn create_node(
             }
         }
     }
-    // The read-back guard: a write the store cannot confirm is an error.
-    let readback = crate::graph_store::read_rows_where(
+    // The read-back guard: a write the store cannot confirm is an error. The
+    // arms split a failed read from a read that worked and found the row
+    // gone: the first is a store fault, the second means the write did not
+    // land, which under a shared backlog is a refused flush's take-back.
+    match crate::graph_store::read_rows_where(
         &graph,
         &crate::backlog::RowQuery {
             filter: crate::backlog::api::NodeFilter {
@@ -1379,31 +1379,53 @@ pub(crate) fn create_node(
             with_blockers: true,
             ..Default::default()
         },
-    )
-    .ok()
-    .and_then(|rows| {
-        rows.iter()
+    ) {
+        Err(error) => {
+            return Err(refused(
+                format!(
+                    "Error: filed {minted} but the read-back failed: {error}; verify before re-filing"
+                ),
+                1,
+            ));
+        }
+        Ok(rows) => match rows
+            .iter()
             .find(|r| r.get("id").and_then(Value::as_str) == Some(minted.as_str()))
-            .cloned()
-    });
-    match readback {
-        None => {
-            return Err(refused(
-                format!(
-                    "Error: filed {minted} but the read-back could not confirm it (store read failed); verify before re-filing"
-                ),
-                1,
-            ));
-        }
-        Some(row) if row.is_null() => {
-            return Err(refused(
-                format!(
-                    "Error: filed {minted} but it does not read back from the store; the write did not land"
-                ),
-                1,
-            ));
-        }
-        _ => {}
+        {
+            Some(row) if !row.is_null() => {}
+            _ => {
+                // The read worked and found no (live) row: the write did not
+                // land. Under a shared backlog, a refused flush takes rows
+                // back; point the operator at the audit table.
+                let at = crate::backlog::open(&graph).ok().and_then(|connection| {
+                    connection
+                        .query_row("SELECT MAX(at) FROM backlog_refused", [], |r| {
+                            r.get::<_, Option<i64>>(0)
+                        })
+                        .ok()
+                });
+                let share_hint = match crate::store_remote::share_backlog() {
+                    Ok(Some(_)) => format!(
+                        " A refused shared-backlog flush takes rows back; run `fno agents claim backlog sync` and inspect backlog_refused{}.",
+                        at.flatten()
+                            .map(|ms| format!(
+                                " (last refusal {})",
+                                chrono::DateTime::from_timestamp_millis(ms)
+                                    .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                                    .unwrap_or_else(|| format!("{ms} ms"))
+                            ))
+                            .unwrap_or_default()
+                    ),
+                    _ => String::new(),
+                };
+                return Err(refused(
+                    format!(
+                        "Error: filed {minted} but it does not read back from the store; the write did not land.{share_hint}"
+                    ),
+                    1,
+                ));
+            }
+        },
     }
     Ok(Born {
         id: minted,
@@ -1873,37 +1895,6 @@ pub fn parse_idea(tail: &[String]) -> ParsedIdea {
             ParsedIdea::Args(idea)
         }
     }
-}
-
-/// Read --details from a file ("-" = stdin) when --details-file names one.
-/// The refusal texts are the shared seam's (fno/text_or_file.py), which the
-/// intake and capture verbs still serve: the twin must stay byte-equal.
-fn read_text_arg(
-    details: &Option<String>,
-    details_file: &Option<String>,
-) -> Result<Option<String>, Refusal> {
-    if details_file.is_none() {
-        return Ok(details.clone());
-    }
-    if details.is_some() {
-        return Err(refused(
-            "error: provide the details once - inline or as a file, not both",
-            1,
-        ));
-    }
-    let path = details_file.clone().expect("checked");
-    let body = if path == "-" {
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(|e| refused(format!("error: cannot read -: {e}"), 1))?;
-        buf
-    } else {
-        std::fs::read_to_string(&path)
-            .map_err(|e| refused(format!("error: cannot read {path}: {e}"), 1))?
-    };
-    Ok(Some(body))
 }
 
 /// shlex.quote: wrap in single quotes when the token is not shell-safe.
@@ -2548,7 +2539,7 @@ fn confirm(prompt: &str) -> bool {
     })
 }
 
-/// `fno backlog idea` — the plan-less capture verb with the pre-mint fold
+/// `fno backlog idea` — the plan-less capture command with the pre-mint fold
 /// gate and wave filing. Share add's create path once the gate passes.
 pub fn run_idea(tail: &[String]) -> i32 {
     let idea = match parse_idea(tail) {
@@ -2586,7 +2577,12 @@ fn wave_normalize_difficulty(raw: &str) -> Result<String, Refusal> {
 fn idea_create(idea: &IdeaArgs) -> Result<(), Refusal> {
     refuse_tracker_owned("idea")?;
     let add = &idea.add;
-    let details = read_text_arg(&add.details, &idea.details_file)?;
+    let details = crate::text_or_file::read_text_arg(
+        add.details.as_deref(),
+        idea.details_file.as_deref(),
+        "the details",
+    )
+    .map_err(|e| refused(e, 1))?;
     let wave_body: Option<String> = details.clone().or_else(|| add.description.clone());
 
     if let Some(wave_of) = &idea.wave_of {

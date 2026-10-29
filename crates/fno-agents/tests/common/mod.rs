@@ -437,6 +437,14 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
                 .unwrap_or_else(|e| panic!("[{label}] missing golden {err_path:?}: {e}")),
         );
     }
+    // The capture machine's macOS canonical prefix is an artifact, not
+    // content: a golden recorded on macOS names /private<FIXTURE> where a
+    // Linux runner spells <FIXTURE>, so the token folds on the golden side
+    // exactly as the per-suite normalizers fold it on the rust side.
+    let golden_streams: Vec<String> = golden_streams
+        .into_iter()
+        .map(|s| s.replace("/private<FIXTURE>", "<FIXTURE>"))
+        .collect();
 
     assert_eq!(
         golden_exit,
@@ -461,4 +469,12 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
             "[{label}] stream {i} differs from golden:\ngolden={g:?}\nrust={r:?}"
         );
     }
+}
+
+/// The suite-wide env mutex: Rust integration tests share one process env,
+/// so every test that pins HOME or FNO_STATE_DIR serializes here before it
+/// touches the environment.
+pub fn env_mutex() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }

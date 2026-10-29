@@ -43,7 +43,7 @@ jobs:
           # identical packaging. The x86_64 wheel is smoke-tested on real Intel
           # hardware post-publish.
           - { name: macos-x64, runs-on: macos-14, rust-target: x86_64-apple-darwin, wheel-platform: macosx_10_12_x86_64 }
-          - { name: linux-x64, runs-on: ubuntu-latest, rust-target: x86_64-unknown-linux-musl, wheel-platform: manylinux_2_17_x86_64 }
+          - { name: linux-x64, runs-on: ubuntu-24.04, rust-target: x86_64-unknown-linux-musl, wheel-platform: manylinux_2_17_x86_64 }
           - { name: linux-arm64, runs-on: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-musl, wheel-platform: manylinux_2_17_aarch64 }
     steps:
       - name: Checkout
@@ -100,7 +100,7 @@ jobs:
           # US6 + x-538e: stage the fno front door (the mux binary that owns
           # `fno` on PATH) plus the client + daemon + worker so the wheel is
           # binary-complete - the advertised `fno` command AND daemon-backed
-          # verbs work on a pip-only box with no second install. The build hook
+          # commands work on a pip-only box with no second install. The build hook
           # hard-fails if any is missing (a partial set never ships).
           cp "crates/fno/target/${{ matrix.target.rust-target }}/release/fno" \
              "cli/src/fno/_bin/fno"
@@ -127,15 +127,15 @@ jobs:
           echo "mechanism; the x86_64 wheel is smoke-tested on real Intel hardware"
           echo "after publish. The wheel is still built, tagged, and uploaded below."
 
-      - name: Clean-machine smoke (binaries on PATH, verbs run, clone-only verbs degrade)
+      - name: Clean-machine smoke (binaries on PATH, commands run, clone-only commands degrade)
         if: matrix.target.name != 'macos-x64'
         working-directory: cli
         shell: bash
         run: |
           # US5/US6: the freshly built wheel must be binary-complete (all three
-          # binaries), run the internalized/folded verbs from in-package code,
-          # and degrade the clone-only verbs - on a clean machine with no clone.
-          # Per-verb pass/fail; fails the release before PyPI on any miss.
+          # binaries), run the internalized/folded commands from in-package code,
+          # and degrade the clone-only commands - on a clean machine with no clone.
+          # Per-command pass/fail; fails the release before PyPI on any miss.
           wheel="$(ls dist/*.whl | head -1)"
           bash tests/smoke/clean_machine_smoke.sh "$wheel"
 

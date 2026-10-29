@@ -160,10 +160,15 @@ async fn messages_reply_board_contracts() {
     assert_eq!(partner, "first");
     let chats_lines = b.chats_column(100);
     assert!(
-        chats_lines[0].text.starts_with("Chats"),
+        chats_lines[0].text.starts_with(" Chats "),
         "{:?}",
         chats_lines[0].text
     );
+    // The active tab is one full inverted cell, pad included; the
+    // inactive cells never invert.
+    let strip = &chats_lines[0];
+    assert!(strip.roles[..7].iter().all(|r| *r == BRole::Tab));
+    assert!(!strip.roles[7..].contains(&BRole::Tab));
     b.col2 = ChatTab::System;
     let sys = b.chat_rows("s-c");
     assert!(
@@ -485,6 +490,36 @@ async fn messages_reply_board_contracts() {
         "the ... click opens the chat popup"
     );
     view.messages_board.as_mut().unwrap().detail = None;
+    // The band follows focus: the focused column's cursor row is the
+    // terminal pair swapped, every other column's selection a dim swap.
+    {
+        let b = view.messages_board.as_mut().unwrap();
+        b.sel_agent = Some("s-c".into());
+        b.col2 = ChatTab::Chats;
+        b.cursors = [0, 0, 0];
+    }
+    let band_fg = |view: &View, x: usize| {
+        let mut cells = vec![Cell::default(); 24 * 100];
+        super::paint(view, &mut cells, 24, 100, 100, 24);
+        (1..23)
+            .map(|r| cells[r * 100 + x])
+            .find(|c| c.flags & crate::proto::cell_flags::INVERSE != 0 && c.c == ' ')
+            .map(|c| c.fg)
+    };
+    let dim = crate::theme::dim_fg(&view.theme);
+    // Each column's last cell: past the row text, so only the band paints it.
+    let ends = [(Col::Tree, col1_w - 1), (Col::Chats, col1_w + col2_w - 1)];
+    for (col, _) in ends {
+        view.messages_board.as_mut().unwrap().col = col;
+        for (owner, x) in ends {
+            let want = if owner == col {
+                crate::proto::Color::Default
+            } else {
+                dim
+            };
+            assert_eq!(band_fg(&view, x), Some(want), "{col:?} x={x}");
+        }
+    }
     crate::view_store::clear_test_path();
 }
 
@@ -564,4 +599,104 @@ fn fixture_projection() -> serde_json::Value {
         "announcements": [],
         "unreadable": 0,
     })
+}
+
+/// The You tab: rows read the projection's `you` array
+/// (newest first, one per session, unread off the chat-id read marks) and
+/// the detail paints the typed turn right, the reply left, per item.
+#[tokio::test]
+async fn messages_you_tab_contract() {
+    use super::super::LayoutView;
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "system": {},
+        "channels": [],
+        "announcements": [],
+        "unreadable": 0,
+        "you": [
+            {"session_id":"older","name":"older-worker","last_ts":"2026-10-01T09:00:00Z","items":[{"ts":"2026-10-01T09:00:00Z","typed_text":"earlier question","reply_text":""}]},
+            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"mid-turn follow-up","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
+        ],
+    }));
+    b.col2 = ChatTab::You;
+    let rows = b.chat_rows("");
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(
+        matches!(&rows[0], ChatRow::YouThread { name, unread, .. } if name == "gavin" && *unread),
+        "{rows:?}"
+    );
+    b.cursors[1] = 0;
+    b.col = Col::Chats;
+    // Enter opens the thread: sel_thread you:<sid>, the read mark saves.
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_ref().unwrap();
+    assert_eq!(b.sel_thread.as_deref(), Some("you:fresh"));
+    let marks = crate::view_store::load_messages_read_marks();
+    assert_eq!(
+        marks.get("you:fresh"),
+        Some(&"2026-10-01T10:00:00Z".to_string())
+    );
+    // The detail: typed right-aligned, reply left-aligned, title names it.
+    let (lines3, _) = b.thread_lines(50);
+    let texts: Vec<String> = lines3.iter().map(|l| l.text.clone()).collect();
+    assert!(texts[0].starts_with("gavin"), "{texts:?}");
+    let typed_i = texts
+        .iter()
+        .position(|t| t.ends_with("why did the gate refuse?"))
+        .expect("typed bubble");
+    assert_eq!(texts[typed_i].chars().count(), 49, "right edge: {texts:?}");
+    assert_eq!(
+        texts
+            .iter()
+            .find(|t| t.as_str() == "Because the base was stale."),
+        Some(&"Because the base was stale.".to_string()),
+        "reply starts at column 0: {texts:?}"
+    );
+    // Navigation needs no column-1 selection: the You tab is session-wide,
+    // and the detail's j/k walks the item bubbles, not conversation rows.
+    let b = view.messages_board.as_mut().unwrap();
+    b.sel_agent = None;
+    b.col = Col::Chats;
+    b.cursors[1] = 0;
+    super::keys(&mut view, b"j", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    assert_eq!(
+        view.messages_board.as_ref().unwrap().cursors,
+        [0, 1, 1],
+        "j moves on the You tab"
+    );
+    let b = view.messages_board.as_mut().unwrap();
+    b.sel_thread = Some("you:fresh".into());
+    b.col = Col::Thread;
+    b.cursors[2] = 1;
+    super::keys(&mut view, b"k", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    assert_eq!(
+        view.messages_board.as_ref().unwrap().cursors,
+        [0, 1, 0],
+        "k walks the You thread's items"
+    );
 }

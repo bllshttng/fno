@@ -47,7 +47,7 @@ pub fn route(url: &str) -> Route {
     Route::Web
 }
 
-type LinkTx = UnboundedSender<(String, LinkOutcome)>;
+pub(crate) type LinkTx = UnboundedSender<(String, LinkOutcome)>;
 
 /// What the off-loop leg did: ran an outside opener, or read a file for the
 /// viewer, which only the UI loop can open.
@@ -113,8 +113,7 @@ pub fn start(url: &str, link_tx: LinkTx) -> Option<Routed> {
                         Target::Viewer { path, line, shape } => Ok(LinkDone::View(Box::new(
                             super::file_viewer::load(path, line, shape),
                         ))),
-                        outside => crate::open_router::launch(&outside)
-                            .map(|()| LinkDone::Opened(crate::link::OpenOutcome::Opened)),
+                        outside => crate::open_router::launch(&outside).map(LinkDone::Opened),
                     },
                     Route::Web => crate::link::open_url_for_session(&url).map(LinkDone::Opened),
                     _ => unreachable!("message, handle and sender routes return early"),

@@ -14,11 +14,11 @@ SKILL = Path(__file__).resolve().parents[3] / "skills" / "groom" / "SKILL.md"
 
 # (command, flags the brief teaches for it), each bound to the real CLI below.
 LEVERS = [
-    ("supersede", ("--replaces", "--reason")),
+    ("supersede", ("--replaces", "--reason", "--covers", "--leftover")),
     ("defer", ("--reason",)),
     ("undefer", ()),
     ("update", ("priority=",)),
-    # rank left this table when it became the operator's pin: the verb refuses
+    # rank left this table when it became the operator's pin: the command refuses
     # a groom worker, so teaching it here would teach a refusal. The vote it
     # was replaced by is the lever below.
     ("encounter", ("--evidence",)),

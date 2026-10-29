@@ -18,24 +18,25 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare V] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare V] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
 /// unparseable, missing `tier` is "unknown"). `raw` is kept so the attempt
 /// verdict comes from the ONE native classifier, never a second fold.
 #[derive(Clone)]
-struct Row {
-    task_id: String,
+pub(crate) struct Row {
+    pub(crate) task_id: String,
     tier: String,
     pass: bool,
     ts: Option<DateTime<Utc>>,
     variant: Option<String>,
-    bank_rev: Option<String>,
+    pub(crate) bank_rev: Option<String>,
+    pub(crate) experiment_id: Option<String>,
     raw: Value,
 }
 
-fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<Row> {
+pub(crate) fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<Row> {
     let text = std::fs::read_to_string(history).unwrap_or_default();
     let mut rows: Vec<Row> = Vec::new();
     for line in text.lines() {
@@ -76,6 +77,10 @@ fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<
             variant: v.get("variant").and_then(Value::as_str).map(str::to_string),
             bank_rev: v
                 .get("bank_rev")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            experiment_id: v
+                .get("experiment_id")
                 .and_then(Value::as_str)
                 .map(str::to_string),
             raw: v,
@@ -506,17 +511,16 @@ fn compare_variants(rows: &[Row], variant: &str) -> Value {
 /// Scored rows are natively `graded` rows that the lane evidence does not
 /// exclude (not `substituted`, no `excluded_reason`); everything else is
 /// counted by reason and never scored. Cost is priced only when every scored
-/// row carries usage and a price line: `unmeasured` otherwise, never a
-/// partial sum (AC3-EDGE).
+/// row carries usage and a complete price line (input and output rates, plus
+/// a cache rate for any cache tokens the row carries): `unmeasured`
+/// otherwise, never a partial sum (AC3-EDGE).
 fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
     let mut cohorts: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
     for r in rows {
         let id = r
-            .raw
-            .get("experiment_id")
-            .and_then(Value::as_str)
-            .unwrap_or("(no cohort)")
-            .to_string();
+            .experiment_id
+            .clone()
+            .unwrap_or_else(|| "(no cohort)".into());
         cohorts.entry(id).or_default().push(r);
     }
     let mut out = Map::new();
@@ -526,7 +530,7 @@ fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
     json!({ "cohorts": Value::Object(out) })
 }
 
-fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
+pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     let mut statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut lane_statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
@@ -560,7 +564,7 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
         }
     }
     let accepted = scored.iter().filter(|r| r.pass).count();
-    let (rate, lo, hi) = bootstrap_rate(scored.len(), accepted);
+    let (rate, lo, hi) = wilson_rate(scored.len(), accepted);
     let mut durations: Vec<f64> = scored
         .iter()
         .filter_map(|r| r.raw.get("duration_s").and_then(Value::as_f64))
@@ -609,11 +613,33 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             measured = false;
             continue;
         };
-        let per_m = |k: &str| price.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-        cost_total += (input as f64 * per_m("input_per_m")
-            + output as f64 * per_m("output_per_m")
-            + cache_read as f64 * per_m("cache_read_per_m")
-            + cache_write as f64 * per_m("cache_write_per_m"))
+        // A price line missing a rate the row's usage needs prices that token
+        // class at $0 silently. Treat it like no price line at all: a cell
+        // reads unmeasured rather than measured-cheap (a partial line once
+        // let a typo'd key read `propose` on near-zero cost).
+        let rate_of = |k: &str| price.get(k).and_then(Value::as_f64);
+        let (Some(in_rate), Some(out_rate)) = (rate_of("input_per_m"), rate_of("output_per_m"))
+        else {
+            measured = false;
+            continue;
+        };
+        let cache_rate = |k: &str, tokens_used: u64| -> Option<f64> {
+            if tokens_used == 0 {
+                return Some(0.0);
+            }
+            rate_of(k)
+        };
+        let (Some(read_rate), Some(write_rate)) = (
+            cache_rate("cache_read_per_m", cache_read),
+            cache_rate("cache_write_per_m", cache_write),
+        ) else {
+            measured = false;
+            continue;
+        };
+        cost_total += (input as f64 * in_rate
+            + output as f64 * out_rate
+            + cache_read as f64 * read_rate
+            + cache_write as f64 * write_rate)
             / 1_000_000.0;
     }
     if usage_missing > 0 {
@@ -629,9 +655,21 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     json!({
         "attempts": rows.len(),
         "graded": statuses.get("graded").copied().unwrap_or(0),
+        "scored": scored.len(),
         "accepted": accepted,
-        "pass_rate": round4(rate),
-        "pass_rate_ci95": [round4(lo), round4(hi)],
+        // A zero-scored cell has no measured rate: wilson(0, 0) emits a
+        // bracketing [0, 0] that reads as a measured 0 percent to a human,
+        // so the cell nulls the rate and the interval instead.
+        "pass_rate": if scored.is_empty() {
+            Value::Null
+        } else {
+            json!(round4(rate))
+        },
+        "pass_rate_ci95": if scored.is_empty() {
+            Value::Null
+        } else {
+            json!([round4(lo), round4(hi)])
+        },
         "median_wall_s": round4(median_wall_s),
         "lane_status_counts": lane_statuses,
         "status_counts": statuses,
@@ -650,40 +688,24 @@ fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     })
 }
 
-/// Deterministic bootstrap over the pass indicator (B = 2000, xorshift64*
-/// seeded once, percentile CI). Same numbers on every run of the same rows:
-/// a report is reproducible evidence, not a die roll.
-fn bootstrap_rate(n: usize, passes: usize) -> (f64, f64, f64) {
+/// The 95% Wilson score interval over the pass indicator (z = 1.96), the
+/// closed form the harness-fit study scored with
+/// (evals/harness-fit/run/score_run1.py). Same numbers on every run of the
+/// same rows: a report is reproducible evidence, not a die roll. Closed form
+/// behaves at small n, where lane cohorts sit; the bootstrap percentile it
+/// replaces bracketed about [0.01, 0.99] at every n and could never
+/// separate two cohorts.
+pub(crate) fn wilson_rate(n: usize, passes: usize) -> (f64, f64, f64) {
     if n == 0 {
         return (0.0, 0.0, 0.0);
     }
+    let z = 1.96_f64;
     let rate = passes as f64 / n as f64;
-    let mut state: u64 = 0x5EED_D00D;
-    let mut next = || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    };
-    const B: usize = 2000;
-    let mut below = 0usize;
-    let mut above = 0usize;
-    for _ in 0..B {
-        let mut hits = 0usize;
-        for _ in 0..n {
-            // Resample the pass indicator: the first `passes` draws read true.
-            let idx = (next() % n as u64) as usize;
-            if idx < passes {
-                hits += 1;
-            }
-        }
-        let share = hits as f64 / n as f64;
-        below += (share < rate).then_some(1).unwrap_or(0);
-        above += (share > rate).then_some(1).unwrap_or(0);
-    }
-    let lo_q = (below as f64 / B as f64) * 0.025;
-    let hi_q = 1.0 - (above as f64 / B as f64) * 0.025;
-    (rate, lo_q, hi_q)
+    let denom = 1.0 + z * z / n as f64;
+    let center = (rate + z * z / (2.0 * n as f64)) / denom;
+    let half =
+        z * (rate * (1.0 - rate) / n as f64 + z * z / (4.0 * n as f64 * n as f64)).sqrt() / denom;
+    (rate, (center - half).max(0.0), (center + half).min(1.0))
 }
 
 /// The summary document `evals_health_summary` reads: alarm, regressed set,
@@ -737,6 +759,34 @@ fn print_summary(history: &str, stale_days: i64, now: DateTime<Utc>) -> i32 {
     0
 }
 
+/// The health projection (the deleted Python leg's evals_health_summary
+/// shape): the summary's fields under the health keys, or the literal null
+/// when no history or no baseline rows exist. One denominator authority:
+/// the callers never re-fold.
+fn print_health(history: &str, stale_days: i64, now: DateTime<Utc>) -> i32 {
+    let payload = summary_payload(history, stale_days, now);
+    let row_count = payload
+        .get("row_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if row_count == 0 {
+        println!("null");
+        return 0;
+    }
+    let health = json!({
+        "regression_pass_rate": payload.get("regression_pass_rate").cloned().unwrap_or(Value::Null),
+        "flake_count": payload.get("flake_count").and_then(Value::as_i64).unwrap_or(0),
+        "regression_alarm": payload.get("regression_alarm").cloned().unwrap_or(json!([])),
+        "regressed": payload.get("regressed").cloned().unwrap_or(json!([])),
+        "window_days": stale_days,
+        "age_days": payload.get("age_days").cloned().unwrap_or(Value::Null),
+        "stale": payload.get("stale").and_then(Value::as_bool).unwrap_or(false),
+        "never_ran": payload.get("never_ran").and_then(Value::as_bool).unwrap_or(false),
+    });
+    println!("{}", serde_json::to_string(&health).unwrap_or_default());
+    0
+}
+
 /// The qualification projection surface, shared by the `--qualification`
 /// flag and the stdin `{"op": "qualification"}` payload. A missing history
 /// file folds over zero rows: every scenario reports missing, which is the
@@ -782,8 +832,34 @@ fn qualification_report(
 }
 
 pub fn run_evals_trend(args: &[String]) -> i32 {
+    // `--mode stability` rides this command in any argument position rather
+    // than growing the over-cap fno-agents root; stability_report owns the
+    // remaining flags.
+    let mut mode_index: Option<usize> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        if args[i] == "--mode" || args[i].starts_with("--mode=") {
+            mode_index = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    if let Some(index) = mode_index {
+        let inline = args[index].split_once('=').map(|(_, v)| v.to_string());
+        let skip = if inline.is_some() { 1 } else { 2 };
+        let value = match &inline {
+            Some(v) => Some(v.as_str()),
+            None => args.get(index + 1).map(String::as_str),
+        };
+        if value == Some("stability") {
+            let mut rest: Vec<String> = Vec::new();
+            rest.extend_from_slice(&args[..index]);
+            rest.extend_from_slice(&args[index + skip..]);
+            return crate::stability_report::run(&rest);
+        }
+    }
     if args.is_empty() {
-        // stdin summary: a JSON payload on stdin (the verb_call shape),
+        // stdin summary: a JSON payload on stdin (the command_call shape),
         // `{"op": "summary", "history": "...", "stale_days": N}`; the flags
         // below remain the human surface.
         use std::io::Read;
@@ -799,6 +875,20 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                         .to_string();
                     let stale_days = v.get("stale_days").and_then(Value::as_i64).unwrap_or(7);
                     return print_summary(&history, stale_days, Utc::now());
+                }
+                // The health projection: the deleted Python leg's
+                // evals_health_summary (report.py) shape, now the door's own
+                // answer. None rules (no history, no rows) read as the
+                // literal null so the callers keep their None-on-error
+                // posture.
+                if v.get("op").and_then(Value::as_str) == Some("health") {
+                    let history = v
+                        .get("history")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let stale_days = v.get("stale_days").and_then(Value::as_i64).unwrap_or(7);
+                    return print_health(&history, stale_days, Utc::now());
                 }
                 if v.get("op").and_then(Value::as_str) == Some("qualification") {
                     let history = v
@@ -834,6 +924,12 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
     let mut prices: Option<Value> = None;
+    let mut climb = false;
+    let mut climb_baseline: Option<String> = None;
+    let mut climb_trial: Option<String> = None;
+    let mut cohorts_yaml: Option<String> = None;
+    let mut stage: Option<String> = None;
+    let mut trial_lane: Option<String> = None;
     let mut now: Option<DateTime<Utc>> = None;
     let mut i = 0usize;
     while i < args.len() {
@@ -926,6 +1022,27 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 Err(()) => return EXIT_USAGE,
             },
             "--by-cohort" => by_cohort = true,
+            "--climb" => climb = true,
+            "--baseline" => match value("--baseline") {
+                Ok(v) => climb_baseline = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--trial" => match value("--trial") {
+                Ok(v) => climb_trial = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--cohorts-yaml" => match value("--cohorts-yaml") {
+                Ok(v) => cohorts_yaml = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--stage" => match value("--stage") {
+                Ok(v) => stage = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--trial-lane" => match value("--trial-lane") {
+                Ok(v) => trial_lane = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
             "--prices" => {
                 match value("--prices")
                     .and_then(|v| serde_json::from_str::<Value>(&v).map_err(|_| ()))
@@ -966,6 +1083,10 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     if mode == "summary" {
         return print_summary(&history, stale_days, now);
     }
+    if climb && (mode != "report" || qualification.is_some() || by_cohort || compare.is_some()) {
+        eprintln!("evals-trend: --climb is a report-mode fold and refuses other views (got mode '{mode}')");
+        return EXIT_USAGE;
+    }
 
     if mode == "trend" {
         if !PathBuf::from(&history).exists() {
@@ -987,14 +1108,14 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             );
             if let Some(tasks) = view["tasks"].as_object() {
                 for (tid, t) in tasks {
+                    let prior = t["prior"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let prior_runs = t["prior"]["runs"].to_string();
+                    let recent = t["recent"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let recent_runs = t["recent"]["runs"].to_string();
+                    let delta = t["delta"].as_f64().unwrap_or(0.0);
+                    let verdict = t["verdict"].as_str().unwrap_or_default();
                     println!(
-                        "  {tid}  prior {:.0}% ({})  recent {:.0}% ({})  delta={:+.2}  {}",
-                        t["prior"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["prior"]["runs"],
-                        t["recent"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["recent"]["runs"],
-                        t["delta"].as_f64().unwrap_or(0.0),
-                        t["verdict"].as_str().unwrap_or_default(),
+                        "  {tid}  prior {prior:.0}% ({prior_runs})  recent {recent:.0}% ({recent_runs})  delta={delta:+.2}  {verdict}"
                     );
                 }
             }
@@ -1007,7 +1128,8 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
                 if !ids.is_empty() {
-                    println!("  missing in {label}: {}", ids.join(", "));
+                    let id_list = ids.join(", ");
+                    println!("  missing in {label}: {id_list}");
                 }
             }
             let regressed_ids: Vec<&str> = view["regressed"]
@@ -1022,6 +1144,26 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     }
 
     // --mode report
+    if climb {
+        let Some(baseline) = &climb_baseline else {
+            eprintln!("evals-trend: --climb needs --baseline <cohort>");
+            return EXIT_USAGE;
+        };
+        let Some(trial) = &climb_trial else {
+            eprintln!("evals-trend: --climb needs --trial <cohort>");
+            return EXIT_USAGE;
+        };
+        return crate::evals_climb::run_climb(&crate::evals_climb::ClimbArgs {
+            history: &history,
+            baseline,
+            trial,
+            cohorts_yaml: cohorts_yaml.as_deref(),
+            stage: stage.as_deref(),
+            trial_lane: trial_lane.as_deref(),
+            prices: prices.as_ref(),
+            json_out,
+        });
+    }
     if let Some(qpath) = &qualification {
         return qualification_report(&history, qpath, json_out, since);
     }
@@ -1061,19 +1203,19 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     } else {
                         "cost unmeasured".to_string()
                     };
+                    let attempts = c["attempts"].to_string();
+                    let graded = c["graded"].to_string();
+                    let accepted = c["accepted"].to_string();
+                    let rate_pct = rate * 100.0;
+                    let lo_pct = lo * 100.0;
+                    let hi_pct = hi * 100.0;
+                    let median = c["median_wall_s"].to_string();
+                    let tok_in = c["tokens"]["input"].to_string();
+                    let tok_out = c["tokens"]["output"].to_string();
+                    let cache_r = c["tokens"]["cache_read"].to_string();
+                    let cache_w = c["tokens"]["cache_write"].to_string();
                     println!(
-                        "  {id}: attempts={} graded={} accepted={} rate={:.1}% [{:.1},{:.1}] median={}s in={} out={} cache_r={} cache_w={} {cost}",
-                        c["attempts"],
-                        c["graded"],
-                        c["accepted"],
-                        rate * 100.0,
-                        lo * 100.0,
-                        hi * 100.0,
-                        c["median_wall_s"],
-                        c["tokens"]["input"],
-                        c["tokens"]["output"],
-                        c["tokens"]["cache_read"],
-                        c["tokens"]["cache_write"],
+                        "  {id}: attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
                     );
                 }
             }
@@ -1094,15 +1236,15 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         } else {
             if let Some(tasks) = cmp["tasks"].as_object() {
                 for (tid, t) in tasks {
+                    let base_pct = t["baseline"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let base_runs = t["baseline"]["runs"].to_string();
+                    let variant_name = cmp["variant"].as_str().unwrap_or_default();
+                    let var_pct = t["variant"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let var_runs = t["variant"]["runs"].to_string();
+                    let delta = t["delta"].as_f64().unwrap_or(0.0);
+                    let verdict = t["verdict"].as_str().unwrap_or_default();
                     println!(
-                        "  {tid}  baseline {:.0}% ({})  {} {:.0}% ({})  delta={:+.2}  {}",
-                        t["baseline"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["baseline"]["runs"],
-                        cmp["variant"].as_str().unwrap_or_default(),
-                        t["variant"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["variant"]["runs"],
-                        t["delta"].as_f64().unwrap_or(0.0),
-                        t["verdict"].as_str().unwrap_or_default(),
+                        "  {tid}  baseline {base_pct:.0}% ({base_runs})  {variant_name} {var_pct:.0}% ({var_runs})  delta={delta:+.2}  {verdict}"
                     );
                 }
             }
@@ -1116,7 +1258,8 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
                 if !ids.is_empty() {
-                    println!("  missing in {label}: {}", ids.join(", "));
+                    let id_list = ids.join(", ");
+                    println!("  missing in {label}: {id_list}");
                 }
             }
             println!(
@@ -1161,12 +1304,10 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     println!("Evals report:");
     if let Some(tiers) = report["tiers"].as_object() {
         for (tier, agg) in tiers {
-            println!(
-                "  {tier}: {}/{} pass ({:.0}%)",
-                agg["passes"],
-                agg["runs"],
-                agg["pass_rate"].as_f64().unwrap_or(0.0) * 100.0
-            );
+            let passes = agg["passes"].to_string();
+            let runs = agg["runs"].to_string();
+            let pct = agg["pass_rate"].as_f64().unwrap_or(0.0) * 100.0;
+            println!("  {tier}: {passes}/{runs} pass ({pct:.0}%)");
         }
     }
     if let Some(tasks) = report["tasks"].as_array() {

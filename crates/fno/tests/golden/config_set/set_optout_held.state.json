@@ -1,0 +1,17 @@
+{
+ "agents_calls": [
+  "claim acquire config-optout:review.self_review_required --holder sess-fixture --ttl-ms 3600000 --reason merge-gating opt-out --metadata {\"config_key\":\"review.self_review_required\",\"config_path\":\"<FIXTURE>/fake_home/.fno/config.toml\",\"scope\":\"global\",\"prior_present\":false,\"prior_value\":null} --pid <PID> --json"
+ ],
+ "claims": [
+  "config-optout__review.self_review_required.json"
+ ],
+ "global": {
+  "review": {
+   "self_review_required": false
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [],
+ "shared": null
+}

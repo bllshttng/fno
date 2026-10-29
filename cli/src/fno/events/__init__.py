@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import yaml as _yaml
 
-from ..config._dispatch_verbs import is_verb_seed
+from ..config._dispatch_commands import is_command_seed
 from ..paths import EPHEMERAL_EVENTS_SUFFIX as EPHEMERAL_SUFFIX
 from .store_client import EventStoreUnavailable, resolve_native_bin
 from .verify_child_promise import FanInTally, tally_fan_in, verify_child_promise
@@ -296,9 +296,10 @@ def _utc_timestamp(value: Any) -> _dt.datetime | None:
 def _validate_via_store(event: dict[str, Any]) -> None:
     """Judge through the native door: the store's judge is the one owner.
 
-    Kept only until the reader families (pr, scoreboard, worktree_cli)
+    Kept only until the reader families (pr, scoreboard)
     port their read-side re-validation in their own children; the dual
-    inventory row names it. Served as the module attribute ``validate``
+    inventory row names it. The worktree reader left with the family's
+    Python removal. Served as the module attribute ``validate``
     through ``__getattr__`` so the judge symbol itself stays deleted.
     """
     import subprocess
@@ -632,7 +633,7 @@ def operator_notice(
     """Build an ``operator_notice`` event (the notify chokepoint's journal leg).
 
     A notice is a pointer to the durable queue, never a second inbox, so
-    ``pointer`` carries the verb that shows the content and ``body`` carries
+    ``pointer`` carries the command that shows the content and ``body`` carries
     counts, not rows.
     """
     data: dict[str, Any] = {
@@ -642,63 +643,6 @@ def operator_notice(
     if pointer:
         data["pointer"] = pointer[:NOTICE_CAP]
     return _build("operator_notice", source, data)
-
-
-def operator_decision(
-    *,
-    decision_id: str,
-    decision: str,
-    subject: str | None = None,
-    question_id: str | None = None,
-    question: str | None = None,
-    asked_by: str | None = None,
-    asked_at: str | None = None,
-    expiry_ref: dict[str, Any] | None = None,
-    options: "list[str] | None" = None,
-    decided_by: str | None = None,
-    attested_by: str | None = None,
-    relayed_by: str | None = None,
-    origin: str | None = None,
-    authority_source: str | None = None,
-    graduation: dict[str, str] | None = None,
-    rationale: str | None = None,
-    supersedes: str | None = None,
-    reads: "list[dict[str, Any]] | None" = None,
-    scope: str | None = None,
-    source: str = "target",
-) -> dict[str, Any]:
-    """Build an ``operator_decision`` event (a durable decision record).
-
-    Modeled on ``approval_decided``: who decided, under what authority, and
-    what was on the table. ``subject`` is the recovery key a later agent
-    queries; ``supersedes`` orders two decisions on one subject so a reader
-    of the older one can tell it is not current. ``reads`` carries the
-    executed evidence rows for a code fact the ruling asserts (see
-    the evidence gate): cmd, exit code, output head.
-    """
-    data: dict[str, Any] = {"decision_id": decision_id, "decision": decision[:QUESTION_CAP]}
-    for key, value in (
-        ("subject", subject),
-        ("question_id", question_id),
-        ("question", question[:QUESTION_CAP] if question else None),
-        ("asked_by", asked_by),
-        ("asked_at", asked_at),
-        ("expiry_ref", expiry_ref),
-        ("options", options),
-        ("decided_by", decided_by),
-        ("attested_by", attested_by),
-        ("relayed_by", relayed_by),
-        ("origin", origin),
-        ("authority_source", authority_source),
-        ("graduation", graduation),
-        ("rationale", rationale[:QUESTION_CAP] if rationale else None),
-        ("supersedes", supersedes),
-        ("reads", reads),
-        ("scope", scope),
-    ):
-        if value is not None:
-            data[key] = value
-    return _build("operator_decision", source, data)
 
 
 def decision_retracted(
@@ -744,7 +688,7 @@ def agent_raw_inject(
     target_head: str | None = None,
     confirmed: bool | None = None,
     origin: str | None = None,
-    verb: str | None = None,
+    command: str | None = None,
     self_send: bool = False,
     source: str = "daemon",
 ) -> dict[str, Any]:
@@ -761,8 +705,8 @@ def agent_raw_inject(
     after the send, and its ``False`` covers both a clean refusal and a landed
     payload the confirm budget missed.
     """
-    if verb is None and is_verb_seed(payload):
-        verb = payload.split(maxsplit=1)[0]
+    if command is None and is_command_seed(payload):
+        command = payload.split(maxsplit=1)[0]
     if not isinstance(self_send, bool):
         raise ValidationError("agent_raw_inject self_send must be a boolean")
     data: dict[str, Any] = {
@@ -770,7 +714,7 @@ def agent_raw_inject(
         "payload": payload,
         "harness": harness,
         "lane": lane,
-        "verb": verb,
+        "verb": command,
         "self_send": self_send,
     }
     if sender is not None:
@@ -1361,7 +1305,6 @@ __all__ = [
     "QUESTION_CAP",
     "operator_question",
     "operator_question_closed",
-    "operator_decision",
     "decision_retracted",
     "phase_0_decision",
     "phase_transition",

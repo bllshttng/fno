@@ -11,80 +11,38 @@
   "expect": {
     "argv": [
       "spawn",
-      "--harness",
-      "gemini",
-      "--permission-mode",
-      "bypassPermissions",
       "--name",
       "w23",
       "/fno:target x-21"
     ],
     "exit": 0,
     "journal": {
-      "applied": [
-        [
-          "harness",
-          "gemini",
-          "agents.defaults.provider"
-        ],
-        [
-          "permission_mode",
-          "bypassPermissions",
-          "builtin.autonomous.permission_mode"
-        ]
-      ],
-      "fingerprint": "",
-      "kind": "spawn_defaults_applied",
-      "name": "w23",
-      "resolved": {
-        "account": {
-          "rung": null,
-          "value": ""
+      "data": {
+        "name": "w23",
+        "verb": "target",
+        "seed": "/fno:target x-21",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
         },
-        "effort": {
-          "rung": null,
-          "value": ""
-        },
-        "model": {
-          "rung": null,
-          "value": ""
-        },
-        "pane_group": {
-          "rung": null,
-          "value": ""
-        },
-        "permission_mode": {
-          "rung": "builtin.autonomous",
-          "value": "bypassPermissions"
-        },
-        "provider": {
-          "rung": "agents.defaults",
-          "value": "gemini"
-        },
-        "route": {
-          "rung": null,
-          "value": ""
-        },
-        "substrate": {
-          "rung": "agents.defaults",
-          "value": "thread"
-        }
+        "applied": [],
+        "suppressed": []
       },
-      "seed": "/fno:target x-21",
-      "suppressed": [
-        [
-          "substrate",
-          "thread",
-          "agents.defaults",
-          "gemini does not support substrate 'thread'; thread requires a journey-proven lane (claude and codex today; opencode remains unearned), so the spawn falls back to the pane default"
-        ]
-      ],
-      "verb": "target"
+      "type": "spawn_defaults_applied",
+      "source": "agents"
     },
-    "stderr": [
-      "fno agents spawn: substrate skipped (gemini does not support substrate 'thread'; thread requires a journey-proven lane (claude and codex today; opencode remains unearned), so the spawn falls back to the pane default); agents.defaults.substrate = 'thread' ignored",
-      "fno agents spawn: applied harness=gemini (agents.defaults.provider), permission_mode=bypassPermissions (builtin.autonomous.permission_mode)"
-    ],
+    "stderr": [],
     "stdout": null
   },
   "facts": {
@@ -93,7 +51,7 @@
   },
   "node": null,
   "node_row": null,
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

@@ -2,7 +2,7 @@
 //! file ONE p1 node for it.
 //!
 //! Agents author throwaway scripts under `<jobs>/<job>/tmp/` to answer
-//! questions the fno verbs answer badly. The census in
+//! questions the fno commands answer badly. The census in
 //! `internal/fno/briefs/20260908-scratch-script-shapes-findings.md` split
 //! 4422 py/sh files by git blob hash (2675 are exact repo copies) and named
 //! recurring shapes over the 1727 authored ones. This module walks the jobs
@@ -68,12 +68,12 @@ macro_rules! rule {
 
 const RULES: &[Rule] = &[
     // 1. Long text through a positional arg: a heredoc / read -d marker AND
-    //    an fno verb that takes the long body. Both halves required.
+    //    an fno command that takes the long body. Both halves required.
     rule!("longtext_arg", [], [
         "read -r -d ''|<<-?\\s*['\"]?[A-Za-z_]|<<-?\\s*\\w",
         "agents mail (send|reply)|backlog (note|idea|update|encounter|add)|inbox (law|decide|outstanding|operator ack)|agents (spawn|ask)|mux pane send",
     ]),
-    // 2. Wrap an fno verb to parse or bound its output.
+    // 2. Wrap an fno command to parse or bound its output.
     rule!("fno_wrap_json", [
         "fno \\S+[^\\n]*\\|\\s*(python3?|jq)\\b",
         "subprocess\\.run\\(\\s*\\[\\s*['\"]fno['\"]",
@@ -218,7 +218,7 @@ pub fn fingerprint(content: &str) -> String {
 
 // ---------------------------------------------------------------------------
 // Remedies: the census brief section 4 remedy per shape, verified against
-// the live CLI surface on 2026-09-14. A node that says which verb and which
+// the live CLI surface on 2026-09-14. A node that says which command and which
 // flag is a blueprint input; a node that says "agents write scripts" is noise.
 // ---------------------------------------------------------------------------
 
@@ -232,7 +232,7 @@ struct Remedy {
     shape: &'static str,
     title: &'static str,
     hint: &'static str,
-    /// low = a flag/lint on an existing verb, medium = a new verb or none.
+    /// low = a flag/lint on an existing command, medium = a new command or none.
     difficulty: &'static str,
     /// Only a shape with a missing fno remedy may file a node. The rest are
     /// report-only: they still emit `scratch_shape_observed` rows.
@@ -255,24 +255,24 @@ macro_rules! remedy {
 const REMEDIES: &[Remedy] = &[
     remedy!("longtext_arg", "Long text through a positional arg",
         "existing: --body-file on mail send/reply and backlog note, --details-file on backlog idea/update, --prompt-file on agents spawn", "low", report_only),
-    remedy!("fno_wrap_json", "Wrap an fno verb to parse its output",
-        "JSON-stdout contract: every -J verb prints exactly one document, [] on empty; documented envelope keys; --timeout on mail send/ask (rank 1)", "low",
+    remedy!("fno_wrap_json", "Wrap an fno command to parse its output",
+        "JSON-stdout contract: every -J command prints exactly one document, [] on empty; documented envelope keys; --timeout on mail send/ask (rank 1)", "low",
         ["agents", "mail", "send", "--help"], r"--timeout\b"),
     remedy!("ci_probe", "CI state for a commit, main, or PR",
-        "no verb today: fno do ci status <sha|main|pr> --watch is the asked remedy; do pr status is PR-keyed and carries no per-check names (rank 4)", "medium",
-        ["help", "do", "--all"], r"(?im)^\s*ci\s"),
+        "existing: fno do ci status <sha|main|pr> [--watch] prints per-check names; do pr status keeps the merge verdict (rank 4)", "medium",
+        ["do", "ci", "--help"], r"(?m)^\s*status <sha"),
     remedy!("pr_threads", "PR review threads: list, reply, resolve",
-        "no verb today: fno do pr threads list|reply|resolve (rank 11)", "medium",
+        "no command today: fno do pr threads list|reply|resolve (rank 11)", "medium",
         ["do", "pr", "--help"], r"(?im)^\s*threads\s"),
     remedy!("gate_wait", "Wait for the spawn gate, then spawn",
         "existing: agents spawn --wait; hidden agents gate-status", "low", report_only),
     remedy!("liveness", "Is this worker alive",
-        "no verb today: fno agents liveness <handle> -J with transcript mtime + pid and a self-row positive control (rank 2)", "medium",
-        ["help", "agents", "--all"], r"(?im)^\s*liveness\s"),
+        "no command today: fno agents liveness <handle> -J with transcript mtime + pid and a self-row positive control (rank 2)", "medium",
+        ["agents", "admit", "--help"], r"(?im)^\s*liveness\s"),
     remedy!("transcript", "Transcript search and tail",
         "existing: agents peek --grep with -A/--all", "low", report_only),
     remedy!("events", "Events journal query",
-        "flag: --last / field-exclude on doctor event find; fno review prior-head as the named verb the review skill calls (rank 7)", "low",
+        "flag: --last / field-exclude on doctor event find; fno review prior-head as the named command the review skill calls (rank 7)", "low",
         ["doctor", "event", "find", "--help"], r"--last\b"),
     remedy!("file_patch", "Programmatic source patch",
         "none: harness bypass-mode policy, not an fno cause", "medium", report_only),
@@ -283,21 +283,21 @@ const REMEDIES: &[Remedy] = &[
     remedy!("pr_state", "PR state for several PRs",
         "existing: fno do pr info and fno do pr list already answer this (cause two)", "low", report_only),
     remedy!("graph", "Graph read: subtree walk or batch status",
-        "no verb today: fno backlog tree <id> -J [--status !done] (rank 10)", "medium",
-        ["help", "backlog", "--all"], r"(?im)^\s*tree\s"),
+        "existing: fno backlog list in:\"<id>\" -s:done -J walks the whole subtree; fno backlog list n:\"<a>\",\"<b>\" -J reads batch status (quote ids: a bare value is a prefix match)", "low",
+        ["backlog", "list", "--help"], r"(?m)^\s*in:"),
     remedy!("fno_internal", "Import fno internals to probe one function",
         "none: one-off probe targeting code under change", "medium", report_only),
     remedy!("vault_doc", "Vault doc append", "none: vault writes", "medium", report_only),
     remedy!("config", "Config probe", "none: one-off", "medium", report_only),
     remedy!("copy_for_diff", "Copy a file at a revision to compare sides",
-        "no verb today: fno do show <rev>:<path> and fno do diff <rev-a> <rev-b> -- <path>, worktree-Bash safe (rank 12)", "medium",
-        ["help", "do", "--all"], r"(?im)^\s*show\s"),
+        "no command today: fno do show <rev>:<path> and fno do diff <rev-a> <rev-b> -- <path>, worktree-Bash safe (rank 12)", "medium",
+        ["do", "--help"], r"(?im)^\s*show\s"),
 ];
 
 const UNKNOWN_REMEDY: Remedy = remedy!(
     "unknown",
     "Recurring scratch shape",
-    "no verb: unknown recurring shape; see the census brief",
+    "no command: unknown recurring shape; see the census brief",
     "medium",
     report_only
 );
@@ -980,7 +980,7 @@ fn details_body(shape: &str, jobs: usize, files: usize, pairs: &[Pair], hint: &s
         "Scratch-shape sweep (census {BRIEF_PATH}, section 6 rule table, first hit wins). \
          rule {shape}: {files} authored files across {jobs} jobs inside the window; first {first}, last {last}. \
          Newest specimens: {names}. \
-         Verb hint: {hint}. \
+         Command hint: {hint}. \
          One recurrence is one (job, shape) pair: files per job measure one agent's habit, distinct jobs measure fleet need.",
         names = names.join(", ")
     )
@@ -1025,7 +1025,7 @@ fn receipt_node(stdout: &str) -> Option<String> {
     obj.get("id").and_then(|v| v.as_str()).map(str::to_string)
 }
 
-fn last_json_object(stdout: &str) -> Option<serde_json::Value> {
+pub(crate) fn last_json_object(stdout: &str) -> Option<serde_json::Value> {
     // Reverse scan: the receipt is the LAST stdout block, and an earlier
     // object (or a nested one) can parse from a prefix only when the JSON
     // extends to end-of-string, which the true last block does.
@@ -1201,7 +1201,7 @@ fn repo_root_of_cwd() -> PathBuf {
     )
 }
 
-/// Entry for the binary-direct `scratch` verb (client.rs). Never lazy-starts
+/// Entry for the binary-direct `scratch` command (client.rs). Never lazy-starts
 /// a daemon; reads files and prints state words. A present flag with a
 /// missing or malformed value is a refusal (exit 2), never a silent default.
 pub fn run_cli(args: &[String]) -> i32 {
@@ -1235,7 +1235,7 @@ pub fn run_cli(args: &[String]) -> i32 {
             let paths = SweepPaths {
                 jobs_dir,
                 journal: fno_state_root().join("events.jsonl"),
-                graph: fno_state_root().join("graph.json"),
+                graph: crate::state_layout::graph_anchor(&fno_state_root()),
                 repo_root,
                 fixtures_dir: fixtures,
             };
@@ -1584,7 +1584,7 @@ mod tests {
         assert_eq!(flag(c, "--origin-evidence"), Some("scratch-shape:ci_probe"));
         assert!(c.contains(&"--separate".to_string()), "got {c:?}");
         assert!(
-            fake.calls().iter().any(|c| c == &["help", "do", "--all"]),
+            fake.calls().iter().any(|c| c == &["do", "ci", "--help"]),
             "the remedy probe runs before filing: {:?}",
             fake.calls()
         );
@@ -1703,7 +1703,7 @@ mod tests {
         assert_eq!(lines, vec!["ok"], "got {lines:?}");
         assert!(
             fake.calls().is_empty(),
-            "dry run must call no fno verb at all: {:?}",
+            "dry run must call no fno command at all: {:?}",
             fake.calls()
         );
         assert_eq!(journal_count(&paths.journal, "scratch_shape_observed"), 0);

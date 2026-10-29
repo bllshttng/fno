@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test_agent_normalize.sh - verify skills/agent/scripts/normalize.sh
-# (input normalization for /fno:agent spawn verb, task 1.2).
+# (input normalization for /fno:agent spawn command, task 1.2).
 #
 # Covers:
 #   AC4-EDGE   smart quotes (U+201C/201D/2018/2019) -> straight; name derived
@@ -36,7 +36,7 @@ STUB_CODEX="$TMP/stub-codex.sh"; printf '#!/usr/bin/env bash\necho codex\n' > "$
 STUB_GARBAGE="$TMP/stub-garbage.sh"; printf '#!/usr/bin/env bash\necho not-a-provider\n' > "$STUB_GARBAGE"; chmod +x "$STUB_GARBAGE"
 # Pin node-slug resolution too, so the derived name never depends on a real graph
 # read (mirrors the provider stub). Default: empty (no slug). STUB_SLUG echoes a
-# fixed slug for the case that asserts the <verb>-<id>-<slug> tail.
+# fixed slug for the case that asserts the <command>-<id>-<slug> tail.
 STUB_SLUG="$TMP/stub-slug.sh"; printf '#!/usr/bin/env bash\necho dashless-spawn\n' > "$STUB_SLUG"; chmod +x "$STUB_SLUG"
 export NODE_SLUG_RESOLVER="$STUB_EMPTY"
 
@@ -51,7 +51,7 @@ export NODE_SLUG_RESOLVER="$STUB_EMPTY"
 STUB_FAMILY="$TMP/stub-family.sh"
 cat > "$STUB_FAMILY" <<'EOF'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -81,7 +81,7 @@ export FAMILY_RESOLVER="$STUB_FAMILY"
 FBIN="$TMP/failing-fno"; mkdir -p "$FBIN"
 cat > "$FBIN/fno" <<'EOF'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -131,7 +131,7 @@ else
   fail "AC4-EDGE smart single-quote: $OUT"
 fi
 
-# Node with no --name -> spawn-<node-hex>-<slug> (verb prefix + bare hex +
+# Node with no --name -> spawn-<node-hex>-<slug> (command prefix + bare hex +
 # title-derived slug), node captured, /target message. Slug resolution is stubbed
 # (NODE_SLUG_RESOLVER) for hermeticity, mirroring the provider stub.
 OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" NODE_SLUG_RESOLVER="$STUB_SLUG" bash "$NORM" --input "ab-deadbeef" --provider claude)"
@@ -276,7 +276,7 @@ fi
 
 # --- US4: payload modes (seed / build / passthrough) + provider-aware messages ---
 
-# AC4-HP: a free-text SEED (x-cbb0, the successor to the retired `ask` verb) ->
+# AC4-HP: a free-text SEED (x-cbb0, the successor to the retired `ask` command) ->
 # prompt VERBATIM, no /target, no no-merge, no brief.
 OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --provider codex \
        --input "what is the time complexity of bubble sort")"
@@ -306,8 +306,8 @@ else
   fail "codex passthrough normalize: $OUT"
 fi
 
-# opencode is a slash surface via its fno plugin: a passthrough `/verb` is
-# namespaced to `/fno:verb` (x-de43). FBIN forces the static fallback so the
+# opencode is a slash surface via its fno plugin: a passthrough `/command` is
+# namespaced to `/fno:command` (x-de43). FBIN forces the static fallback so the
 # surface is deterministic regardless of the installed fno's freshness.
 OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" PATH="$FBIN:$PATH" bash "$NORM" --provider opencode --input "/goal ship it")"
 if [[ "$(field "$OUT" status)" == "ok" ]] && [[ "$(field "$OUT" message)" == "/fno:goal ship it" ]]; then
@@ -501,7 +501,7 @@ OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --input "ab-deadbee
 STUB_FNO_TRUE_DIR="$TMP/bin-fno-true"; mkdir -p "$STUB_FNO_TRUE_DIR"
 cat > "$STUB_FNO_TRUE_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -518,7 +518,7 @@ chmod +x "$STUB_FNO_TRUE_DIR/fno"
 STUB_FNO_ERR_DIR="$TMP/bin-fno-err"; mkdir -p "$STUB_FNO_ERR_DIR"
 cat > "$STUB_FNO_ERR_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -548,7 +548,7 @@ OUT="$(PATH="$STUB_FNO_TRUE_DIR:$PATH" DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" 
 
 # P2-2c (x-cbb0): a free-text SEED is exempt from the vocabulary scan - a flag
 # token in verbatim conversational text is content, not a mangled dispatch flag
-# (this is the retired `ask` verb's exemption, now the default seed behavior).
+# (this is the retired `ask` command's exemption, now the default seed behavior).
 OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --provider codex --input "what does grep -i do")"
 if [[ "$(field "$OUT" status)" == "ok" ]] \
    && [[ "$(field "$OUT" payload_mode)" == "seed" ]] \
@@ -622,7 +622,7 @@ OUT="$(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 DISPATCH_PROVIDER_RESOLVER="$STUB_EMP
   && pass "invalid-utf8 byte does not abort or truncate" || fail "locale guard: $OUT"
 
 # --- x-3218: node-driven naming delegates to the canonical owner -------------
-# normalize.sh's node branch used to assemble <verb>-<node>-<slug> itself. It now
+# normalize.sh's node branch used to assemble <command>-<node>-<slug> itself. It now
 # calls `fno agents name`, the single owner. Overflow is not reachable HERE (the
 # tier-1 detector bounds a node id at ~17 chars, so the worst assembly is ~57);
 # what matters at this seam is PARITY - the same name is the spawn dedup token,
@@ -634,13 +634,18 @@ if [[ ! -x "$VENV_PY" ]]; then
   CANON="$(cd "$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"
   [[ -n "$CANON" ]] && VENV_PY="$CANON/cli/.venv/bin/python"
 fi
+REAL_AGENTS_BIN="$("$VENV_PY" -c "
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/src')
+from fno import rust_binary
+b = rust_binary.find_dev_binary() or rust_binary.resolve_binary()
+print(b or '')" 2>/dev/null || true)"
 # A REAL fno on PATH; the suite otherwise pins a failing one suite-wide. The
 # capabilities ask is answered from the fixture table first (x-3873): it is a
 # Rust-leaf read, and the installed binary may predate this branch.
 REAL_FNO_DIR="$TMP/real-fno"; mkdir -p "$REAL_FNO_DIR"
 {
   echo '#!/usr/bin/env bash'
-  echo '# The nested agents spellings answer like the flat verbs they forward to.'
+  echo '# The nested agents spellings answer like the flat commands they forward to.'
   echo 'case "$1 $2" in'
   echo '  "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;'
   echo '  "agents admit")'
@@ -656,6 +661,8 @@ REAL_FNO_DIR="$TMP/real-fno"; mkdir -p "$REAL_FNO_DIR"
   echo "    *) printf '{\"command_surface\":\"refused\"}\\n'; exit 0 ;;"
   echo '  esac'
   echo 'fi'
+  # The name door is native, and the default router never execs a dev build.
+  echo "[[ \"\$1 \$2\" == \"agents name\" ]] && exec \"$REAL_AGENTS_BIN\" status --name \"\${@:3}\""
   echo "exec \"$VENV_PY\" -c 'import sys; sys.path.insert(0, \"$REPO_ROOT/cli/src\"); from fno.cli import app; app()' \"\$@\""
 } > "$REAL_FNO_DIR/fno"
 chmod +x "$REAL_FNO_DIR/fno"
@@ -687,13 +694,13 @@ print(agent_name('spawn', 'ab-deadbeef', slug='path consolidation wave 0 delegat
     && pass "x-3218 ordinary node names are unchanged by the bridge" \
     || fail "x-3218 ordinary name drifted: $OUT"
 
-  # A stale installed fno (no `name` verb) exits 2 like any Click usage error.
+  # A stale installed fno (no `name` command) exits 2 like any Click usage error.
   # That must DEGRADE, never read as "unrepresentable" - misreading it would
   # refuse every node on an out-of-date install.
   STALE_DIR="$TMP/stale-fno"; mkdir -p "$STALE_DIR"
   cat > "$STALE_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -717,10 +724,10 @@ EOF
   OUT="$(NODE_SLUG_RESOLVER="$STUB_EMPTY" DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" \
          PATH="$REAL_FNO_DIR:$PATH" bash "$NORM" --input "ab-deadbeef")"
   [[ "$(field "$OUT" name)" == "spawn-deadbeef" ]] \
-    && pass "x-3218 slugless node still degrades to <verb>-<hex>" \
+    && pass "x-3218 slugless node still degrades to <command>-<hex>" \
     || fail "x-3218 slugless: $OUT"
 else
-  fail "x-3218 bridge unreachable: no cli venv at $VENV_PY"
+  fail "x-3218 bridge unreachable: venv $VENV_PY, binary '${REAL_AGENTS_BIN}'"
 fi
 
 # --- x-0413: the handoff SEED carries the every-lane decisions check ---

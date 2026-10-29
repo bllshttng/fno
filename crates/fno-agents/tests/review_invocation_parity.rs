@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.review.invocation
 //!
-//! Golden parity for the `review_invocation` port (the verb parser, the
+//! Golden parity for the `review_invocation` port (the command parser, the
 //! sidecar join, the reserve, the emit, and the settle sweep), frozen
 //! against the live Python leg before its deletion. The case table lives in
 //! `golden/review_invocation/cases.json`, written by
@@ -151,7 +151,7 @@ fn fixture_envelope(row: &Value, now_ms: i64) -> String {
     let ts = rfc3339_ms(now_ms - age_ms);
     let kind = row["kind"].as_str().unwrap();
     let id = row["id"].as_str().unwrap();
-    let verb = row["verb"].as_str().unwrap_or("/code-review");
+    let command = row["verb"].as_str().unwrap_or("/code-review");
     match kind {
         "sent" => serde_json::json!({
             "ts": ts,
@@ -160,7 +160,7 @@ fn fixture_envelope(row: &Value, now_ms: i64) -> String {
             "data": {
                 "invocation_id": id,
                 "stage": "sent",
-                "verb": verb,
+                "verb": command,
                 "transport": "mail_send_raw",
                 "receipt": "delivered (hosted)",
             },
@@ -172,7 +172,7 @@ fn fixture_envelope(row: &Value, now_ms: i64) -> String {
             "data": {
                 "invocation_id": id,
                 "stage": "refused",
-                "verb": verb,
+                "verb": command,
                 "reason": "empty_diff",
             },
         }),
@@ -282,9 +282,10 @@ fn compare_sidecar(runtime_base: &Path, case: &Value, problems: &mut Vec<String>
         return;
     }
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let sidecar = root
-        .join("review-invocations")
-        .join(format!("{session}.json"));
+    // The read follows the table: place_in answers the seeded legacy file
+    // while it exists, else the folded destination the join minted into.
+    let sidecar =
+        fno_agents::state_layout::place_in(&root, "review-invocations", &format!("{session}.json"));
     match case["expect"]["id"].as_str() {
         Some(want) => {
             if id != want {

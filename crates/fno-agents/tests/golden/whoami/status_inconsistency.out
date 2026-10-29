@@ -1,0 +1,6 @@
+project:  <FIXTURE>/project
+session:  20260512T010101Z-99999-fixaaa phase=external status=IN_PROGRESS
+gates:
+  [n] external_review_passed: False
+inconsistencies:
+  WARNING: pr_number=1234 but external_review_passed: false -> /fno:ship pr check probably owed

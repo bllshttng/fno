@@ -131,11 +131,11 @@ reconcile_maybe_fire() {
         cd "$1" 2>/dev/null || exit 0
         "$2" backlog reconcile --json > "$3.tmp" 2>/dev/null \
             && mv -f "$3.tmp" "$3" 2>/dev/null
-        "$2" retro run >/dev/null 2>&1 || true
+        "$2" backlog retro run >/dev/null 2>&1 || true
         "$2" backlog capture tidy >/dev/null 2>&1 || true
-        "$2" retro drain-postmortems >/dev/null 2>&1 || true
+        "$2" backlog retro drain-postmortems >/dev/null 2>&1 || true
         "$2" agents prove-it-verdicts --route >/dev/null 2>&1 || true
-        # Orphan-plan binder, best-effort like every co-fired verb: a plan
+        # Orphan-plan binder, best-effort like every co-fired command: a plan
         # whose `claims:` bind write never landed keeps its node unplanned
         # forever, so retry the bind inside the same window. The result
         # publishes whenever the binary produced JSON, exit code aside: exit 1

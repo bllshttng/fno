@@ -25,11 +25,7 @@ execution unit; a group bundles 1+ waves. See
 A **non-epic** doc with no `group`/`max_prs:` keeps the single-doc lean mutation
 unchanged - auto-group only changes the default for `scope: epic` inputs.
 
-**Resolve the ceiling `N`** as the minimum of every ceiling that applies, with
-the config default as the floor of last resort. This mirrors decompose's own
-`effective = min(max_children, explicit)` exactly, so blueprint's `N`
-and the `--max-prs` it forwards stay in lockstep with the CLI and the two
-surfaces never disagree about the cap.
+**Resolve the ceiling `N`.** `config.blueprint.max_prs_per_epic` (default 4) is a hard ceiling on the PRs one plan or epic can open. A project raises it in its own `.fno/config.toml`. Every other cap can only tighten it. Decompose resolves the cap the same way, so blueprint's `N` and the `--max-prs` it forwards never disagree.
 
 Let `explicit` = the `group N` arg if present, else the per-plan `max_prs:`
 frontmatter if present, else unset. Let `mc` = the epic doc's `max_children` if
@@ -50,18 +46,15 @@ value, nor silently falls back to the default on one.
 | both `explicit` and `mc` set | `min(explicit, mc)` |
 | only `explicit` set | `explicit` |
 | only `mc` set | `mc` |
-| neither set | `config.blueprint.max_prs_per_epic` (default 4) |
+| neither set | the ceiling, `config.blueprint.max_prs_per_epic` (default 4) |
+
+An `N` over the ceiling refuses. `fno backlog decompose` exits 1 and names the cap, the ceiling and its source. The plan validator runs `fno-agents wave check`, which warns on a plan whose `max_prs` or declared ship count is over the ceiling. Lower the cap, or raise the ceiling in the project config.
 
 Read the config floor with:
 ```bash
 N=$(fno config get config.blueprint.max_prs_per_epic 2>/dev/null || echo 4)
 ```
-If `fno config get` is unavailable, default to 4. **Auto-group MUST degrade to
-today's single-doc behavior (not error) if the config read fails** - treat an
-unreadable ceiling as 4, never abort the blueprint. Because the epic's own
-`max_children` now sits above the config default in this ladder, an author who
-declares `max_children: 6` above a default of 4 gets 6 honored on the bare
-`/blueprint <epic-doc>` path (US3), not silently clamped to 4.
+If `fno config get` is unavailable, default to 4. If the config read fails, auto-group MUST degrade to today's single-doc behavior (not error). Treat an unreadable ceiling as 4, and never abort the blueprint. An epic with `max_children: 6` and a default of 4 must raise the project ceiling to 6 first.
 
 `N` is a **ceiling, not a quota** (Locked Decision #3): cohesive work uses
 fewer groups; never pad to `N`. This guardrail applies identically to
@@ -70,6 +63,8 @@ auto-group - an auto-decompose must never produce more than `N` groups, and a
 it in `## Delivery Groups`, never force a split). Reject `group 0` / negative
 `N` with a non-zero exit and the message `group N must be >= 1` (AC1-ERR),
 creating nothing.
+
+**Bundle leaves into one PR.** A group bundles several leaves. Adopt (contain) each leaf under the group child (step 5b), and one worker ships the group. Its PR body closes the owner and each contained leaf on one `Fixes` line, which `fno do pr closure-trailer <group-child>` prints. `fno do pr create` refuses a second PR with exit 7 while a sibling node is on an open PR. A sibling PR merged in the last two hours also refuses it. Add the work to that PR. A deliberate split writes `Separate PR: <reason>` in the body.
 
 **Procedure** (after the epic node is intaken in step 3b, so `EPIC_ID`
 is known):
@@ -128,7 +123,7 @@ is known):
 
    Before the epic is blueprinted (no plan yet), the same fold is available directly: `fno backlog contain <epic> <id>...` stamps containment with no group scaffolding. A later decompose that names those ids in a group converges, re-stamping the group child. A decompose that leaves one out names it in the unadopted warning.
 
-   There is no epic-scoped child listing verb, so let decompose tell you. It is
+   There is no epic-scoped child listing command, so let decompose tell you. It is
    idempotent, so running it and refining the spec is safe: any child no group
    adopted is named on stderr as
 
@@ -184,7 +179,7 @@ is known):
    One node may appear in at most one group's `adopt` list, and a group child
    (this epic's or another epic's) can never be adopted - demoting a group into
    a task reshapes the epic.
-   The verb creates one child node per group (`parent=$EPIC_ID`, its own
+   The command creates one child node per group (`parent=$EPIC_ID`, its own
    self-contained quick-plan scaffold at the canonical `fno do plan path` name in
    the child's own project plans dir - the path it prints as `scaffolded plan:`
    / reports in the `--json` `scaffolded[]`), `blocked_by` resolved from
@@ -194,7 +189,7 @@ is known):
    group slug) rather than duplicating (US4). A bad spec leaves the
    graph untouched (AC1-FR) because the whole decomposition lands in one
    locked mutation. If a re-decomposition drops a slug that already
-   shipped a PR, the verb refuses (exit 2) unless you pass `--force`; unshipped
+   shipped a PR, the command refuses (exit 2) unless you pass `--force`; unshipped
    dropped groups are left in place and reported as a warning.
 
    **Set `needs_think: true` on a group that owns genuine unknowns** - a

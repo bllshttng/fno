@@ -111,7 +111,7 @@ pub fn cli_version_of(bin: impl AsRef<std::ffi::OsStr>) -> Option<String> {
 
 /// The LIVE app-server's version, read two independent ways and required to
 /// agree: the initialize response's server user-agent info, and the vendor
-/// `codex app-server daemon version` verb as a positive control (it may
+/// `codex app-server daemon version` command as a positive control (it may
 /// itself fail to inspect the managed pid under a sandbox, so it is never
 /// the only reader). Disagreeing or empty readings are `None` - unknown,
 /// never current.
@@ -138,11 +138,14 @@ pub fn live_version_readings() -> Vec<(String, Option<String>)> {
                     .map(str::to_string)
             }),
         ),
-        ("daemon version verb".to_string(), daemon_version_verb()),
+        (
+            "daemon version command".to_string(),
+            daemon_version_command(),
+        ),
     ]
 }
 
-fn daemon_version_verb() -> Option<String> {
+fn daemon_version_command() -> Option<String> {
     let out = std::process::Command::new(codex_cli_path()?)
         .args(["app-server", "daemon", "version"])
         .output()

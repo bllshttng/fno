@@ -10,7 +10,7 @@ The autonomous pipeline ships many small PRs, and GitHub Actions bills per run. 
 
 The auto-continue daemon (`crates/fno-agents/src/active_backlog.rs`, the keep-set - `loop_megawalk.rs` is untouched) drives it:
 
-1. **Prepare (before dispatch).** `BatchDispatcher` shells `fno backlog batch prepare --node <id> --repo <root>`. The Python verb consults `decide_batch_action`:
+1. **Prepare (before dispatch).** `BatchDispatcher` shells `fno backlog batch prepare --node <id> --repo <root>`. The Python command consults `decide_batch_action`:
    - `ship_solo` (batching off, or `size:L`/`p0`) → dispatch today's `/target --no-merge <id>`.
    - `start` → `fno agents workspace worktree ensure` a shared batch worktree off `origin/main` + `fno backlog batch open`.
    - `join` → reuse the open batch's recorded worktree/branch.
@@ -38,7 +38,7 @@ Any batched member returning FAILED/BLOCKED, or a batch PR that cannot open, **a
 | `DoneBatched` terminal | `crates/fno-agents/src/loopcheck.rs`, `loop_target.rs` |
 | `batched` manifest flag | `hooks/helpers/init-target-state.sh` |
 | Batched member run | `skills/target/SKILL.md` (§0c) |
-| Per-repo enable in daemon config | `cli/src/fno/active_backlog.py` |
+| Per-repo enable in daemon config | `crates/fno-agents/src/status_sinks.rs` |
 
 ## Acceptance
 

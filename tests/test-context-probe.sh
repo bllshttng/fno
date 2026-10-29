@@ -7,10 +7,19 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$REPO_ROOT/skills/target/scripts/context-probe.sh"
 
-# Pin the probe's CLI door to the source under test. The probe prefers `fno-py`;
-# an ambient deployed `fno` predating the verb fold does not know
-# `fno whoami context` and would empty every reading without failing a single
-# setup assert. Reuse the worktree venv when present, else shim python3.
+# Pin the probe's CLI door to the source under test. The shim calls the
+# native door (`fno`, the front binary): a checkout that has built it puts
+# the fresh binary ahead of a stale deployed one, and the smoke gate builds
+# exactly these directories before the journey runs.
+for _bin_dir in "$REPO_ROOT/crates/fno/target/debug" "$REPO_ROOT/crates/fno-agents/target/debug"; do
+  if [ -x "$_bin_dir/fno" ]; then
+    PATH="$_bin_dir:$PATH"
+  fi
+done
+# The worktree venv stays on PATH for the suite's own `fno-py` helpers; an
+# ambient deployed `fno` predating the command fold would empty every reading
+# without failing a single setup assert. Reuse the venv when present, else
+# shim python3.
 if [ -x "$REPO_ROOT/cli/.venv/bin/fno-py" ]; then
   PATH="$REPO_ROOT/cli/.venv/bin:$PATH"
   export PATH

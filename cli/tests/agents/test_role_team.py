@@ -12,8 +12,24 @@ from tests.fixtures.graph_seed import seed_graph
 import json
 from pathlib import Path
 
+import pytest
 
 from fno.paths_testing import use_tmpdir
+
+
+def _read_manifest(path) -> dict:
+    """The manifest's fields through the native lead `read` op."""
+    from fno.agents.role import lead_manifest_call
+
+    return lead_manifest_call("read", path=str(path))["fields"]
+
+
+def _write_manifest(path, **fields) -> None:
+    """Write one manifest through the native spawn-team `manifest` op."""
+    from fno.agents.spawn_overlay_client import spawn_overlay_call
+
+    answer = spawn_overlay_call({"kind": "spawn-team", "op": "manifest", "path": str(path), **fields})
+    assert not answer.get("error"), answer
 
 
 def _entry(name: str, **kw):
@@ -25,21 +41,42 @@ def _entry(name: str, **kw):
     return AgentEntry(name=name, log_path="", harness=harness, **kw)
 
 
+def _stub_project_resolver(monkeypatch, tmp_path) -> None:
+    """Pin the native project resolver's door (the project-family port) to a stub binary:
+    `_canonical_project` answers through one fno-agents round trip, so the
+    fixture registry rides FNO_AGENTS_BIN instead of a pinned settings path.
+    $4 is the name to resolve; every other spawn-overlay shape execs the real
+    binary (the ladder door rides the same env pin)."""
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    real = find_dev_binary() or resolve_binary()
+    stub = tmp_path / "agents-stub"
+    fallback = f'exec "{real}" "$@"\n' if real else "exit 1\n"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{\"alpha\":\"alpha\",\"a\":\"alpha\",\"beta\":\"beta\"}'; exit 0\n"
+        "  fi\n"
+        '  case "$4" in\n'
+        "    alpha|a) echo alpha; exit 0;;\n"
+        "    beta) echo beta; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n" + fallback,
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
+
+
 def _prepare(monkeypatch, tmp_path, rows, graph_entries=None) -> None:
     from fno import paths
     from fno.agents.registry import write_registry
-    from fno.projects import resolve as proj_resolve
 
     use_tmpdir(monkeypatch, tmp_path)
     write_registry(rows)
-    config = tmp_path / "config.toml"
-    config.write_text(
-        '[work.workspaces.ws1]\n'
-        'projects = [{ name = "alpha", short_name = "a" }, { name = "beta" }]\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", config)
-    proj_resolve._clear_cache()
+    _stub_project_resolver(monkeypatch, tmp_path)
     if graph_entries is not None:
         graph_path = paths.graph_json()
         graph_path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +128,6 @@ def test_unreadable_graph_answers_null_never_true_or_false(
     """AC7-EDGE: every affected row reads agree=null with a stated reason, and
     the unknown count is tracked separately from disagreements."""
     from fno.agents.team import gather_team
-    from fno.tracker import metadata
 
     _prepare(
         monkeypatch,
@@ -107,8 +143,7 @@ def test_unreadable_graph_answers_null_never_true_or_false(
         ],
     )
     monkeypatch.setattr(
-        metadata,
-        "read_entries",
+        "fno.graph.api.read_entries",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("unreadable")),
     )
 
@@ -287,11 +322,11 @@ def _agreeing_reader(scope: str, session: str) -> dict:
     }
 
 
+@pytest.mark.dev_build
 def test_team_names_the_manifest_and_role_source_per_scope(
     tmp_path: Path, monkeypatch
 ) -> None:
     """A promoted row with a matching promoted manifest renders source `both`."""
-    import fno.lead.state as lead_state
     from fno.agents.team import gather_team
     from fno.paths import space_dir
 
@@ -310,7 +345,7 @@ def test_team_names_the_manifest_and_role_source_per_scope(
         graph_entries=[{"id": "e-1", "type": "epic", "project": "alpha", "status": "ready"}],
     )
     manifest = space_dir(tmp_path) / "leads" / "e-1.md"
-    lead_state.write_manifest(
+    _write_manifest(
         manifest,
         scope="e-1",
         harness_session_id="lead-session",
@@ -332,6 +367,7 @@ def test_team_names_the_manifest_and_role_source_per_scope(
     assert team["summary"]["splits"] == 0
 
 
+@pytest.mark.dev_build
 def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -339,7 +375,6 @@ def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
     disagreement and not an unknown: the summary counts it separately."""
     from fno.agents.team import gather_team
     from fno.paths import space_dir
-    import fno.lead.state as lead_state
 
     row = _entry(
         "lead",
@@ -355,7 +390,7 @@ def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
         [row],
         graph_entries=[{"id": "e-1", "type": "epic", "project": "alpha", "status": "ready"}],
     )
-    lead_state.write_manifest(
+    _write_manifest(
         space_dir(tmp_path) / "leads" / "e-1.md",
         scope="e-1",
         harness_session_id="someone-else",
@@ -379,6 +414,7 @@ def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
     assert team["summary"]["splits"] == 1
 
 
+@pytest.mark.dev_build
 def test_a_manifest_role_survives_its_project_having_no_rows_at_all(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -386,13 +422,12 @@ def test_a_manifest_role_survives_its_project_having_no_rows_at_all(
     names the project and no cwd can be derived. The sweep must key on the
     spaces root, not on rows, or the orphan role is invisible exactly when
     the fleet lost it."""
-    import fno.lead.state as lead_state
     from fno.agents.team import gather_team
     from fno.paths import space_dir
 
     _prepare(monkeypatch, tmp_path, [], graph_entries=[])
     manifest = space_dir(tmp_path) / "leads" / "x-dede.md"
-    lead_state.write_manifest(
+    _write_manifest(
         manifest,
         scope="x-dede",
         harness_session_id="gone-lead",
@@ -419,13 +454,13 @@ def test_a_manifest_role_survives_its_project_having_no_rows_at_all(
     assert "no live registry row" in orphan["reason"]
 
 
+@pytest.mark.dev_build
 def test_total_counts_row_roles_only_so_the_census_keeps_its_arithmetic(
     tmp_path: Path, monkeypatch
 ) -> None:
     """doctor_lanes._census reads summary.total as a ROW count and computes
     workers = len(rows) - total; an orphan inside total subtracts a worker
     that still exists. manifest-only roles count in their own field."""
-    import fno.lead.state as lead_state
     from fno.agents.team import gather_team
     from fno.paths import space_dir
 
@@ -433,7 +468,7 @@ def test_total_counts_row_roles_only_so_the_census_keeps_its_arithmetic(
         monkeypatch, tmp_path, [_entry("plain-worker", cwd=str(tmp_path), status="busy")]
     )
     manifest = space_dir(tmp_path) / "leads" / "x-dede.md"
-    lead_state.write_manifest(
+    _write_manifest(
         manifest, scope="x-dede", harness_session_id="gone-lead",
         owner_cwd=str(tmp_path), role_level=2, role_scope="x-dede",
     )
@@ -451,7 +486,7 @@ def test_total_counts_row_roles_only_so_the_census_keeps_its_arithmetic(
 def test_a_sweep_that_cannot_run_is_an_absence_never_zero_orphans(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A stale binary without the org-vacancies verb exits non-zero; reading
+    """A stale binary without the org-vacancies command exits non-zero; reading
     that as [] would print a clean team. The ran marker must say it never ran."""
     from fno.agents.team import gather_team, render_team
 

@@ -16,11 +16,15 @@ The command prints the URL and a token once at bind. The token is in the query s
 
 The page's **backlog** link renders the backlog live from the store through the same token. You get lanes by project or epic, six columns, stats, filters, and a node panel with sessions. It needs no render step and never caches. A missing or wrong token returns no backlog bytes.
 
-On a bridge bound to loopback, the node panel can also act. You can edit a node's title, priority, size and status. You can rank a card to the top or bottom of its column. You can launch a blueprint or a target for the node. Every write runs the same `fno` verb an agent runs, and the verb's own refusal is what you see. Every write answers to three conditions. The bridge must be bound to loopback. The request's Host header must name loopback. When your browser sends an Origin header, it must name loopback too. The reason is plain: a web page on another site must not be able to drive the bridge through your browser. On a bridge bound wider than loopback, the page shows no write controls at all.
+On a bridge bound to loopback, the node panel can also act. You can edit a node's title, priority, size and status. You can rank a card to the top or bottom of its column. You can launch a blueprint or a target for the node. Every write runs the same `fno` command an agent runs, and the command's own refusal is what you see. Every write answers to three conditions. The bridge must be bound to loopback. The request's Host header must name loopback. When your browser sends an Origin header, it must name loopback too. The reason is plain: a web page on another site must not be able to drive the bridge through your browser. On a bridge bound wider than loopback, the page shows no write controls at all.
 
 The bridge also serves the backlog as JSON through the same token. `/backlog/model.json` takes `lanes`, `project`, `epic`, `status`, `priority`, `size`, `lead`, `q` and `all`. `/backlog/node.json?id=<id>` returns one node. When the store holds no such node, the answer is 404. When the store read failed, it is 503. Each body carries `"schema": 1`. The bridge re-reads at most every 30 seconds unless the store changed.
 
-The **rundown** page serves `rundown.html` (`/role` and `term.html` stay as the one-release aliases). If it is older than five minutes, the bridge re-renders it. The **fleet** page serves `fleet.html`. The fno-agents daemon renders it every 30 minutes. If `/fleet` returns 404, the daemon has not ticked yet.
+The **rundown** page serves `rundown.html` (`/role` and `term.html` stay as the one-release aliases). If it is older than five minutes, the bridge re-renders it.
+
+The **command** page (`/command`) shows what waits on you and every machine of the fleet. It reads `/command/model.json` every 60 seconds while the tab is visible. Questions group by the machine that asked them, each with the command that answers it. The page offers no write control. When a read fails, the page names the failure and keeps what it can show.
+
+`/command/model.json` serves the org view's fleet fold through the same token: every machine, its leads and seats and the open questions. The first read waits for one `fno agents fleet top --machines --json` read. After that, the bridge answers from its last read at once. When that read is older than 60 seconds, the bridge also starts one background refresh. A failed refresh keeps the last good fold and names the failure in `fleet_error`. A failed question read says why in `waiting.questions_error`, never an empty list.
 
 The bridge also writes these values to `<mux dir>/web-<session>.json` at mode 0600. You can get the URL again from this file. The bridge removes the file on exit.
 
@@ -37,7 +41,7 @@ fno mux serve --web --stop --server work  # the bridge that serves session work
 
 Stop reads the bridge's own state file, checks the pid still names that bridge, and sends the gentle signal first. If the bridge hangs, stop escalates. It removes the marker file either way.
 
-A bridge that died some other way, such as a kill or a reboot, leaves the marker behind with its token. `fno mux web reap` finds every marker whose port refuses and removes those corpses. Unreadable markers are named and left alone. It prints one receipt line, and `--json` prints rows instead.
+A bridge that died some other way, such as a kill or a reboot, leaves the marker behind with its token. `fno mux web reap` removes every marker whose recorded pid is gone. A marker whose port refuses is also a corpse. A stranger process holding the dead bridge's port does not save the marker. Unreadable markers are named and left alone. It prints one receipt line, and `--json` prints rows instead.
 
 ## Get the link for one agent
 
@@ -77,7 +81,7 @@ CAUTION: Do not use `--bind 0.0.0.0`. It opens the port on every interface, incl
 
 ## Share one pane with someone on another network
 
-A teacher can watch a learner's agent from another network with no tailscale and no SSH setup. The share is experimental, so it is off until you turn it on. Open the mux sideline menu and switch on `pane share` under `experimental`.
+A teacher can watch a learner's agent from another network with no tailscale and no SSH setup. The share is experimental, so it is off until you turn it on. Open the mux menu, then `settings`, and switch on `pane share` on the `experimental` tab.
 
 The quick way: focus the pane and press `prefix X`, or pick `share focused pane` in the menu. The mux starts a tunnelled share, copies the join link, and keeps running it until you pick `stop sharing` or close the mux. Press `prefix X` again to copy the link again. This path needs `cloudflared`.
 

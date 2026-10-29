@@ -1,10 +1,11 @@
-//! The `fno mux web reap` verb: the corpse sweep for the `--web` bridge marker
+//! The `fno mux web reap` command: the corpse sweep for the `--web` bridge marker
 //! (`web-<session>.json`, written and Drop-removed by `mux serve --web`,
 //! crates/fno/src/web.rs). A bridge killed by anything but its own Drop -
 //! SIGKILL, a crash, a machine reboot - leaves the file and its 64-hex token
 //! on disk forever. Stopping a live bridge is `fno mux serve --web --stop`;
-//! this verb removes what a death without Drop left behind: every marker whose
-//! port refuses.
+//! this command removes what a death without Drop left behind: every marker whose
+//! recorded pid is gone, or whose port refuses - a bare TCP answer is not
+//! ownership, so a stranger holding a dead bridge's port does not save the marker.
 
 use std::ffi::OsString;
 use std::net::TcpStream;
@@ -12,6 +13,7 @@ use std::time::Duration;
 
 use super::{EXIT_OK, EXIT_USAGE};
 use crate::proto;
+use crate::web::recorded_pid_is_live;
 
 pub fn web(op: crate::cli_args::WebOp, args: &[OsString], _env_session: Option<&str>) -> i32 {
     match op {
@@ -95,11 +97,14 @@ fn reap_partition(dir: &std::path::Path) -> (Vec<String>, Vec<String>, Vec<Strin
             continue;
         };
         // The marker is written only after the listener binds, so a refused
-        // port means the listener is gone: this is a corpse. Remove it only
+        // port means the listener is gone: this is a corpse. The pid record
+        // says so a rung earlier: once the recorded pid is gone or was
+        // recycled, the bridge is gone even when another process answers the
+        // probe - a bare TCP answer is not ownership. Remove it only
         // while the file still holds the bytes this verdict came from: a
         // replacement bridge that overwrote the path between read and unlink
         // must not lose its marker to the sweep.
-        if bridge_alive(bind, port) {
+        if recorded_pid_is_live(&state) && bridge_alive(bind, port) {
             live.push(session);
         } else if std::fs::read_to_string(&path)
             .map(|now| now == raw)
@@ -178,7 +183,7 @@ mod tests {
 
     #[test]
     fn bare_reap_and_unexpected_arguments_are_usage() {
-        // Unknown verbs and a bare `mux web` refuse at the classifier now;
+        // Unknown commands and a bare `mux web` refuse at the classifier now;
         // what reaches this parser is a well-formed reap, and its own flag
         // grammar still refuses the junk.
         // A bare reap is the happy empty answer, not a usage error.
@@ -241,5 +246,29 @@ mod tests {
             "{\"bind\":\"127.0.0.1\",\"port\":1,\"token\":\"b\",\"pid\":1}",
         );
         assert_eq!(web_reap(&[OsString::from("-J")]), EXIT_OK);
+    }
+
+    #[test]
+    fn reap_takes_a_corpse_marker_even_when_a_stranger_holds_the_port() {
+        // A dead bridge's port can be taken by another process; a bare TCP
+        // answer is not ownership. The dead-pid marker is a corpse even when
+        // the probe is answered - the sweep must not keep it as "live".
+        let stranger = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = stranger.local_addr().unwrap().port();
+        // A pid proven dead: spawned, reaped, gone.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        write_marker(
+            "reapstranger",
+            &format!(
+                "{{\"bind\":\"127.0.0.1\",\"port\":{port},\"token\":\"c\",\"pid\":{dead_pid}}}"
+            ),
+        );
+        assert_eq!(web_reap(&[]), EXIT_OK);
+        assert!(
+            !marker_path("reapstranger").exists(),
+            "dead pid = corpse even with the port answering"
+        );
     }
 }

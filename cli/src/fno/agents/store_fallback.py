@@ -3,10 +3,10 @@ sessions when the fno registry misses.
 
 The registry is a cache of reality, not a gate in front of it. A session with no
 roster row -- reaped after a terminal stop, or never spawn-created -- was
-unreachable by every fno verb even though the harness itself resumes it fine.
+unreachable by every fno command even though the harness itself resumes it fine.
 This module owns the store probes behind ``registry.resolve_agent``. Every short
 session-shaped registry hit is checked against them for cross-source ambiguity;
-on a registry miss, exactly one match is registered so the verb proceeds AND the
+on a registry miss, exactly one match is registered so the command proceeds AND the
 session returns to the roster.
 
 Three rules keep it from guessing:
@@ -18,18 +18,11 @@ Three rules keep it from guessing:
 - **Never live** -- a store row proves the session EXISTS, never that it is
   running, so the adopted row is ``orphaned``. Store membership must not
   resurrect a dead session into lane caps or live anycast (the lesson).
-- **Project confinement** -- a store hit is adopted only into the CALLER's
-  project. The probes scan machine-wide (a transcript store is global), and
-  before this rule a bare handle from a foreign repo healed into scope and got
-  woken as a side effect (defect 1: a regready session revived from footnote).
-  Membership is settings ``project`` first, then the shared ``git-common-dir``
-  (NOT toplevel -- footnote is worktree-first, so toplevel differs per worktree
-  and would refuse canonical->worktree traffic), then refuse. An out-of-project
-  hit is refused with the candidate named, copying the ambiguity posture; an
-  explicit ``cross_project`` flag overrides it, and a full session id needs
-  no flag (it is globally unique). The confinement lives here and batch
-  callers must route verified hits
-  through :func:`confine_store_hits`; ``resume`` does not adopt store hits (it
+- **Machine-wide, not project-confined** -- the probes scan machine-wide (a
+  transcript store is global) and adoption resolves from any project; the
+  retired ``--cross-project`` flag had authorized exactly that. The one guard
+  left is uniqueness: more than one store hit refuses with the candidate list.
+  ``resume`` does not adopt store hits (it
   matches loaded registry entries via ``resolve_agent_in``), so it is uncovered
   by design.
 """
@@ -37,7 +30,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 import re
 import sys
 from dataclasses import dataclass
@@ -281,153 +273,6 @@ def complete_store_hits(token: str) -> list[StoreHit]:
     return probe_stores(token, require_complete=True)
 
 
-def _git_common_dir(cwd: Path) -> Optional[str]:
-    """The shared git common-dir for ``cwd``, absolute and worktree-stable.
-
-    ``git rev-parse --git-common-dir`` is ``<canonical>/.git`` from the canonical
-    checkout AND from every one of its worktrees (including ones outside the
-    checkout, like ``~/.fno/worktrees/...``), so it identifies a project across
-    its whole worktree family. ``--show-toplevel`` does NOT -- it differs per
-    worktree, so it would refuse canonical->worktree traffic. Returns None for a
-    non-repo or any git failure (the caller then refuses to adopt).
-    """
-    from fno.paths import git_common_dir
-
-    common = git_common_dir(cwd, timeout=2)
-    try:
-        return str(common.resolve()) if common else None
-    except OSError:
-        return None
-
-
-def _project_identity(cwd: Optional[str]) -> "tuple[Optional[str], Optional[str]]":
-    """A comparable project identity for ``cwd``: ``(settings_project_id, git_common_dir)``.
-
-    Either field may be None. Settings project id wins when both cwds answer it
-    (the canonical fno notion of project); the git common-dir is the
-    worktree-stable fallback for a cwd whose project config did not link.
-    """
-    pid: Optional[str] = None
-    if cwd:
-        try:
-            from fno.inbox.store import ProjectIdentificationError, resolve_project
-
-            pid = resolve_project(cwd=Path(cwd))
-        except ImportError:
-            # The import itself failed (module or dep missing); naming
-            # ProjectIdentificationError here would raise UnboundLocalError.
-            pid = None
-        except ProjectIdentificationError:
-            pid = None
-        except Exception:  # noqa: BLE001 - membership must degrade, never crash the verb
-            pid = None
-    gdir = _git_common_dir(Path(cwd)) if cwd else None
-    return (pid, gdir)
-
-
-def _membership(
-    s_ident: "tuple[Optional[str], Optional[str]]",
-    h_ident: "tuple[Optional[str], Optional[str]]",
-) -> Optional[bool]:
-    """True if two project identities match; False if a different project; None
-    if membership is unresolvable (cannot be proven either way).
-
-    Settings project id compared first; when one or both lack it, the git
-    common-dir decides. Two foreign repos differ; a canonical checkout and its
-    worktree match (same common-dir). Unresolvable on both axes -> None.
-    """
-    s_pid, s_gdir = s_ident
-    h_pid, h_gdir = h_ident
-    if s_pid is not None and h_pid is not None:
-        return s_pid == h_pid
-    if s_gdir is not None and h_gdir is not None:
-        return s_gdir == h_gdir
-    # One resolved by settings, the other only by git (or not at all). A settings
-    # project id cannot be cross-compared to a git dir, so we cannot prove a match.
-    return None
-
-
-def _same_project(scope_cwd: Optional[str], hit_cwd: Optional[str]) -> Optional[bool]:
-    """True if ``hit_cwd`` is in ``scope_cwd``'s project; False if a different one;
-    None if membership is unresolvable (the caller refuses).
-
-    Thin two-cwd wrapper over :func:`_membership`; callers that resolve one side
-    once across many hits ( confinement ) should call ``_membership`` directly
-    with the precomputed scope identity rather than re-spawning git per hit.
-    """
-    if not scope_cwd or not hit_cwd:
-        return None
-    return _membership(_project_identity(scope_cwd), _project_identity(hit_cwd))
-
-
-def confine_store_hits(
-    token: str,
-    hits: list[StoreHit],
-    *,
-    scope_cwd: Optional[str],
-    cross_project: bool,
-) -> list[StoreHit]:
-    """Filter ``hits`` to the caller's project; refuse when none is in-project.
-
-    The refused posture copies ambiguity: an out-of-project candidate is named,
-    never silently adopted and woken. A full session id waives the flag: it is
-    globally unique. Returns ``hits`` unchanged when confinement does not
-    apply -- ``cross_project`` set, a full-id token, or the scope is itself
-    not a known project. Raises :class:`AgentResolutionError` on the refuse.
-    """
-    from fno.harness_identity import harness_of_session_id
-
-    if cross_project or harness_of_session_id(token) is not None:
-        return hits
-    scope = scope_cwd or os.getcwd()
-    # The scope is invariant across the batch, and _project_identity spawns a
-    # git subprocess. Resolve it once instead of repeating that work per hit.
-    s_ident = _project_identity(scope)
-    if s_ident == (None, None):
-        return hits
-    in_project: list[StoreHit] = []
-    cross: list[StoreHit] = []
-    unknown: list[StoreHit] = []
-    for h in hits:
-        verdict = _membership(s_ident, _project_identity(h.cwd))
-        if verdict is True:
-            in_project.append(h)
-        elif verdict is False:
-            cross.append(h)
-        else:
-            unknown.append(h)
-    if in_project:
-        return in_project
-    from fno.agents.registry import AgentResolutionError
-
-    refused = sorted(cross + unknown, key=lambda h: (h.harness, h.session_id))
-    cands = ", ".join(
-        f"{h.session_id} ({h.harness}, cwd={h.cwd or '?'})"
-        for h in refused
-    )
-    # Name the real reason: confirmed foreign, unresolvable (e.g. a transcript
-    # that never recorded a cwd, or a since-deleted worktree), or both. Calling
-    # an unresolvable hit "cross-project" sends the operator looking in the wrong
-    # place.
-    if cross and unknown:
-        reason = (
-            "cross-project and project-unresolvable candidate(s) refused"
-        )
-    elif cross:
-        reason = "cross-project candidate(s) refused"
-    else:
-        reason = (
-            "candidate(s) whose project membership could not be determined "
-            "(cwd unset or no longer resolvable)"
-        )
-    raise AgentResolutionError(
-        f"token {token!r} matches no session in this project; "
-        f"{reason}: {cands}. "
-        f"Disambiguate with the full session id in scope, or pass --cross-project.",
-        ambiguous=True,
-    )
-
-
 def _transcript_last_write(hit: "StoreHit") -> Optional[str]:
     """The adopted session's last transcript write, as a UTC stamp, or None.
 
@@ -507,16 +352,15 @@ def adopt_store_hit(
     token: Optional[str] = None,
     log_path: str = "",
 ) -> "AgentEntry":
-    """Register one verified and project-confined hit as an adopted orphan.
+    """Register one store hit as an adopted orphan.
 
     ``log_path`` is the follow-up transcript path for the adopted row; a
     caller that adopts for a lane which will resume the thread by full
     session id passes it HERE so the row is complete at the moment it
     lands, not patched in a second write the caller must survive.
 
-    This function does not scan harness stores or establish project membership.
-    Batch callers must first pass their hits through :func:`confine_store_hits`.
-    Registry write failures return a synthetic row so the caller can still
+    This function does not scan harness stores. Registry write failures
+    return a synthetic row so the caller can still
     address the real harness session.
     """
     from fno.agents.registry import (
@@ -598,7 +442,6 @@ def adopt_store_hit(
 
 def heal_from_harness_store(
     token: str, *, registry_path: Optional[Path] = None,
-    scope_cwd: Optional[str] = None, cross_project: bool = False,
 ) -> Optional["AgentEntry"]:
     """Adopt the session ``token`` names into the registry and return its row.
 
@@ -607,26 +450,16 @@ def heal_from_harness_store(
     :class:`~fno.agents.registry.AgentResolutionError` naming the candidates when
     more than one session matches: an ambiguous token is refused, never guessed.
 
-    Adoption is CONFINED to the caller's project unless ``cross_project`` is set
-    (defect 1: a bare handle from a foreign repo healed into scope and got woken).
-    ``scope_cwd`` defaults to the process cwd; an out-of-project hit is refused
-    with the candidate named, copying the ambiguity posture. See the module
-    docstring's project-confinement rule.
+    Adoption resolves from any project (the retired ``--cross-project`` flag had
+    authorized exactly that); uniqueness across stores is the one guard.
 
     Registration is best-effort. If the registry write fails, the synthesized row
-    is still returned so the verb reaches the session anyway -- reaching it wins,
+    is still returned so the command reaches the session anyway -- reaching it wins,
     and the row appears on the next resolution.
     """
     from fno.agents.registry import AgentResolutionError
 
     hits = complete_store_hits(token)
-    if not hits:
-        return None
-    # Project confinement: adopt only a session in the caller's project, else
-    # refuse (an out-of-project hit named, not silently healed and woken).
-    hits = confine_store_hits(
-        token, hits, scope_cwd=scope_cwd, cross_project=cross_project
-    )
     if not hits:
         return None
     if len(hits) > 1:

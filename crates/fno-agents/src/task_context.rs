@@ -9,7 +9,7 @@
 //!
 //! Every enforced decision lives here: structural validation, the canonical
 //! digest, stage monotonicity, and live-source revalidation. Python
-//! (`fno do resume receipt ...`) is a thin transport that shells these verbs
+//! (`fno do resume receipt ...`) is a thin transport that shells these commands
 //! through the binary, exactly like the evidence gate; it owns no verdict.
 
 use serde::{Deserialize, Serialize};
@@ -265,7 +265,7 @@ fn print_refusal(reason: &str) {
 
 /// Shared transport shape: request rides stdin, answer prints on stdout, a
 /// semantic refusal is data (exit 0), only an unreadable request is exit 2.
-fn run_stdin_verb(args: &[String], usage: &str, f: impl FnOnce(Value)) -> i32 {
+fn run_stdin_command(args: &[String], usage: &str, f: impl FnOnce(Value)) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("usage: fno-agents {usage}");
         return 0;
@@ -289,16 +289,16 @@ fn run_stdin_verb(args: &[String], usage: &str, f: impl FnOnce(Value)) -> i32 {
 /// `task-context-prepare`: validate the binding the caller assembled and stamp
 /// its digest. An optional `out` path writes the bound file (the binding plus
 /// its stamped digest) straight to the artifact slot, so the retired Python
-/// leaf's only added behavior is the verb's own.
+/// leaf's only added behavior is the command's own.
 pub fn run_prepare(args: &[String]) -> i32 {
-    run_stdin_verb(
+    run_stdin_command(
         args,
         "task-context-prepare  (one JSON request on stdin: binding, out?)",
         |req| println!("{}", prepare_request(&req)),
     )
 }
 
-/// The prepare verdict table, shared by the binary verb and the unit tests.
+/// The prepare verdict table, shared by the binary command and the unit tests.
 pub fn prepare_request(req: &Value) -> Value {
     let parsed: BindResult<(TaskContextBinding, String)> = req
         .get("binding")
@@ -351,7 +351,7 @@ fn write_bound_file(binding: &Value, digest: &str, out: &Path) -> std::io::Resul
 /// `task-context-stage`: advance the observation stage on an existing bound
 /// binding, forward-only, re-stamping the digest for the new stage.
 pub fn run_stage(args: &[String]) -> i32 {
-    run_stdin_verb(
+    run_stdin_command(
         args,
         "task-context-stage  (one JSON request on stdin: binding, to)",
         |req| {
@@ -392,7 +392,7 @@ pub fn run_stage(args: &[String]) -> i32 {
 /// show). Legacy/unbound never reaches here: the receipt transport reports
 /// `bound: false` itself.
 pub fn run_show(args: &[String]) -> i32 {
-    run_stdin_verb(
+    run_stdin_command(
         args,
         "task-context-show  (one JSON request on stdin: binding)",
         |req| match req
@@ -452,10 +452,25 @@ pub fn payload_block(binding: &Value) -> Option<String> {
 /// missing or corrupt file yields block:null (no block rides), which is the
 /// absent case, never a fabricated pointer.
 pub fn run_payload(args: &[String]) -> i32 {
-    run_stdin_verb(
+    run_stdin_command(
         args,
-        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE)",
+        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE; fleet_laws: true renders the fleet-law block for cwd?)",
         |req| {
+            if req.get("fleet_laws").is_some_and(|v| v.as_bool() == Some(true)) {
+                let cwd = req
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let delivered = crate::fleet_law::active_laws_at(&cwd);
+                let answer = serde_json::json!({
+                    "ok": true,
+                    "block": delivered.as_ref().map(|d| d.block.clone()),
+                    "subjects": delivered.map(|d| d.subjects),
+                });
+                println!("{answer}");
+                return;
+            }
             let path = req
                 .get("path")
                 .and_then(Value::as_str)
@@ -482,7 +497,7 @@ pub fn run_payload(args: &[String]) -> i32 {
 /// `root`. Content digests decide staleness; a moved code HEAD alone never
 /// fails an unchanged source.
 pub fn run_revalidate(args: &[String]) -> i32 {
-    run_stdin_verb(
+    run_stdin_command(
         args,
         "task-context-revalidate  (one JSON request on stdin: binding, expect{node,attempt,session}, root)",
         |req| {
@@ -507,7 +522,7 @@ fn root_matches(root: &str, bound_worktree: &str) -> bool {
     }
 }
 
-/// The revalidation verdict table, shared by the binary verb and the unit
+/// The revalidation verdict table, shared by the binary command and the unit
 /// tests. Returns the answer object (ok or a named refusal).
 pub fn revalidate_request(req: &Value) -> Value {
     let root = req
@@ -583,8 +598,8 @@ pub fn revalidate_request(req: &Value) -> Value {
     }
 }
 
-/// `task-context-gate`: the DECLARED required-binding gate, the verb the
-/// retired Python `target_context_gate` module only transported. With no
+/// `task-context-gate`: the DECLARED required-binding gate, which
+/// this command only transports. With no
 /// `binding` in the request it loads the declared env path (the request's
 /// `env` map, else the process environment); nothing declared is an absent
 /// gate, never a refusal. The node rides expect always, so a gate that knows
@@ -592,14 +607,14 @@ pub fn revalidate_request(req: &Value) -> Value {
 /// the full native answer as `detail`, the shape every door maps to its own
 /// output.
 pub fn run_gate(args: &[String]) -> i32 {
-    run_stdin_verb(
+    run_stdin_command(
         args,
         "task-context-gate  (one JSON request on stdin: node, root, binding?, expect?, env?)",
         |req| println!("{}", gate_request(&req)),
     )
 }
 
-/// The declared-gate verdict table, shared by the binary verb and the unit
+/// The declared-gate verdict table, shared by the binary command and the unit
 /// tests.
 pub fn gate_request(req: &Value) -> Value {
     let node = req

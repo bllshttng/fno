@@ -48,15 +48,56 @@ pub fn cpu_time_ns(_pid: u32) -> Option<u64> {
     None
 }
 
+/// One pid's own CPU and its reaped children's CPU, in nanoseconds. A child
+/// still running counts nowhere until its parent waits for it.
+#[cfg(target_os = "macos")]
+pub fn cpu_split_ns(pid: u32) -> Option<(u64, u64)> {
+    let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    // Pass the struct itself, as `session_cost::footprint_mb` explains.
+    let result = unsafe {
+        libc::proc_pid_rusage(
+            pid as libc::c_int,
+            libc::RUSAGE_INFO_V4,
+            (&mut info as *mut libc::rusage_info_v4).cast(),
+        )
+    };
+    (result == 0).then(|| {
+        (
+            crate::mach_ticks_to_ns(info.ri_user_time.saturating_add(info.ri_system_time)),
+            crate::mach_ticks_to_ns(
+                info.ri_child_user_time
+                    .saturating_add(info.ri_child_system_time),
+            ),
+        )
+    })
+}
+
+/// Linux: fields 14 to 17 of /proc/<pid>/stat (utime, stime, cutime,
+/// cstime), in clock ticks over _SC_CLK_TCK.
+#[cfg(target_os = "linux")]
+pub fn cpu_split_ns(pid: u32) -> Option<(u64, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit_once(')')?.1;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    let tick = |i: usize| -> Option<u64> { fields.get(i)?.parse().ok() };
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    let ns = |t: u64| t * 1_000_000_000 / hz;
+    Some((ns(tick(11)? + tick(12)?), ns(tick(13)? + tick(14)?)))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn cpu_split_ns(_pid: u32) -> Option<(u64, u64)> {
+    None
+}
+
 /// Program basenames whose rows are the fleet's own readers; the class is
 /// the basename plus the first two non-flag argv tokens.
-const FNO_PROGRAMS: [&str; 8] = [
+const FNO_PROGRAMS: [&str; 7] = [
     "fno",
     "fno-py",
     "fno-agents",
     "fno-agents-daemon",
     "fno-agents-worker",
-    "fno-footprint-cause",
     "fno-gh-proxy",
     "macmon",
 ];

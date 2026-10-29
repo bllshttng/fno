@@ -1,7 +1,7 @@
-//! The fmail read verb's once-per-session teaching state.
+//! The fmail read command's once-per-session teaching state.
 //!
 //! A delivered mail opens with one header line whose id is the only cue the
-//! receiver gets; the header shipped without teaching the read verb, and no
+//! receiver gets; the header shipped without teaching the read command, and no
 //! hook, skill or spawn brief on main mentions it. One line teaches it, at
 //! most once per session and again after each compaction: every carrier
 //! (the session-start drain and the post-compact reinject) asks this module
@@ -28,8 +28,25 @@ use crate::paths::AgentsHome;
 /// the registry the session resolves in. A render hands its own registry's
 /// parent, so its due check never reads the ambient env - one root per
 /// store, and a test's tmp registry is its own world.
+#[cfg(test)]
 fn teach_path_at(root: &Path, session: &str) -> PathBuf {
-    root.join("mail_teach").join(format!("{session}.json"))
+    lesson_path_at(root, Lesson::Mail, session)
+}
+
+/// One stamp per lesson: the fmail read command and the using-fno preamble share
+/// the "due once, again after compaction" rule, each in its own directory.
+#[derive(Clone, Copy)]
+pub enum Lesson {
+    Mail,
+    UsingFno,
+}
+
+fn lesson_path_at(root: &Path, lesson: Lesson, session: &str) -> PathBuf {
+    let dir = match lesson {
+        Lesson::Mail => "mail_teach",
+        Lesson::UsingFno => "using_fno_teach",
+    };
+    root.join(dir).join(format!("{session}.json"))
 }
 
 fn taught_boundary(path: &Path) -> Option<i64> {
@@ -90,7 +107,19 @@ pub fn teach_if_due_at(
     registry: Option<&crate::state::Registry>,
     record: bool,
 ) -> bool {
-    let path = teach_path_at(root, session);
+    lesson_due_at(root, Lesson::Mail, session, transcript, registry, record)
+}
+
+/// [`teach_if_due_at`] for any [`Lesson`].
+pub fn lesson_due_at(
+    root: &Path,
+    lesson: Lesson,
+    session: &str,
+    transcript: Option<&Path>,
+    registry: Option<&crate::state::Registry>,
+    record: bool,
+) -> bool {
+    let path = lesson_path_at(root, lesson, session);
     let taught = taught_boundary(&path);
     let observed = resolve_transcript(root, session, transcript, registry)
         .as_deref()
@@ -121,7 +150,7 @@ pub fn teach_if_due_at(
 }
 
 // ---------------------------------------------------------------------------
-// CLI verb: `fno-agents mail-teach [--session <id> | --self]
+// CLI command: `fno-agents mail-teach [--session <id> | --self]
 //           [--transcript <path>] [--mark]`
 //
 // Prints the teaching line when the lesson is due, records the taught
@@ -296,13 +325,13 @@ mod tests {
             teach_if_due_at(home.root(), "s3", None, None, false),
             "a missing transcript leaves never-taught due"
         );
-        // The lesson names the LIVE read verb: the const the dispatch arm
+        // The lesson names the LIVE read command: the const the dispatch arm
         // itself matches on, so a rename follows in the same edit.
         let line = crate::chats::teach_line();
         assert!(
             line.contains(&format!(
                 "fno agents mail {} <id>",
-                crate::chats::MAIL_READ_VERB
+                crate::chats::MAIL_READ_COMMAND
             )),
             "{line}"
         );

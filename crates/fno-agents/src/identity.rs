@@ -185,6 +185,53 @@ pub(crate) fn harness_of_session_id(session_id: &str) -> Option<&'static str> {
     None
 }
 
+/// The person behind this machine: `fleet.owner`, else the login name.
+/// A display name the owner states, never proof; no gate reads it.
+pub(crate) fn person() -> String {
+    crate::agents_config::config_lookup_global(&["fleet", "owner"])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(login_name)
+}
+
+/// The person as a mail sender token: the user part of a `from_id` and the
+/// raw allowlist head. A display name that is no plain token (`Jason Smith`,
+/// `José`) keeps the login name, because the reply parser routes only a
+/// token there.
+pub(crate) fn person_token() -> String {
+    Some(person())
+        .filter(|p| is_sender_token(p))
+        .unwrap_or_else(login_name)
+}
+
+/// The one sender-token rule, shared by the writer and the reply parser.
+pub(crate) fn is_sender_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+fn login_name() -> String {
+    let set = |v: Result<String, std::env::VarError>| v.ok().filter(|u| !u.is_empty());
+    // A launchd-started daemon can carry LOGNAME without USER.
+    set(std::env::var("USER"))
+        .or_else(|| set(std::env::var("LOGNAME")))
+        .unwrap_or_else(|| "unknown".into())
+}
+
+/// Add `person` and `machine_id` to a record's data, keeping any value the
+/// caller already set. An unreadable machine id writes no key: readers treat
+/// a present `machine_id` as authoritative, so the hostname never stands in.
+pub(crate) fn stamp_person(data: &mut serde_json::Map<String, serde_json::Value>) {
+    if !data.contains_key("person") {
+        data.insert("person".into(), person().into());
+    }
+    let machine_id = crate::claims::machine_id();
+    if !machine_id.is_empty() && !data.contains_key("machine_id") {
+        data.insert("machine_id".into(), machine_id.into());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -275,5 +322,28 @@ mod tests {
             let actual: Vec<_> = session_ids.iter().map(|id| canonical_handle(id)).collect();
             prop_assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn person_reads_fleet_owner_then_the_login_name() {
+        use crate::claims::EnvVarGuard;
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _global = EnvVarGuard::set(
+            "FNO_GLOBAL_SETTINGS_PATH",
+            dir.path().join("settings.json").to_str().unwrap(),
+        );
+        let _user = EnvVarGuard::set("USER", "bb16");
+        let config = dir.path().join("config.toml");
+        std::fs::write(&config, "[fleet]\nowner = \"jason\"\n").unwrap();
+        assert_eq!(super::person(), "jason");
+        std::fs::write(&config, "[fleet]\nowner = \"  \"\n").unwrap();
+        assert_eq!(super::person(), "bb16", "a blank owner falls to USER");
+        // A display name stays the person, but the mail token keeps the login.
+        std::fs::write(&config, "[fleet]\nowner = \"Jason Smith\"\n").unwrap();
+        assert_eq!(super::person(), "Jason Smith");
+        assert_eq!(super::person_token(), "bb16");
     }
 }

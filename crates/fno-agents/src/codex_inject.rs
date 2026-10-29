@@ -35,7 +35,7 @@ use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message;
 
 /// Overall budget for connect + handshake + turn/start round-trip. The daemon
-/// responds promptly; this only bounds a wedged socket so the verb cannot hang.
+/// responds promptly; this only bounds a wedged socket so the command cannot hang.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Frame-skip ceiling per read: notifications and unrelated ids are skipped, but
@@ -781,10 +781,10 @@ fn review_start_audit_fields_with_origin_and_self(
         .get("payload")
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    let verb = payload
+    let command = payload
         .strip_prefix('/')
         .and_then(|_| payload.split_whitespace().next());
-    fields.insert("verb".into(), verb.map(str::to_string).into());
+    fields.insert("verb".into(), command.map(str::to_string).into());
     fields.insert("self_send".into(), self_send.into());
     if let Some(sender) = audit_sender {
         fields.insert("sender".into(), sender.into());
@@ -875,9 +875,9 @@ fn review_invocation_event_fields(
     // instead of matched loosely.
     let command = audit_payload.unwrap_or("/review");
     let parsed = crate::review_invocation::owner::parse_review_invocation(command);
-    let verb = parsed
+    let command_name = parsed
         .as_ref()
-        .map(|p| p.verb.clone())
+        .map(|p| p.command.clone())
         .unwrap_or_else(|| "/review".to_string());
     let args_raw = parsed
         .as_ref()
@@ -901,7 +901,7 @@ fn review_invocation_event_fields(
     let mut fields = serde_json::Map::new();
     fields.insert("invocation_id".into(), invocation_id.into());
     fields.insert("stage".into(), "sent".into());
-    fields.insert("verb".into(), verb.into());
+    fields.insert("verb".into(), command_name.into());
     fields.insert("args_raw".into(), args_raw.into());
     fields.insert("level".into(), level.into());
     fields.insert("level_source".into(), level_source.into());
@@ -955,7 +955,7 @@ fn emit_review_invocation_event(
     );
 }
 
-/// The `fno-agents review-start` verb entry: parse CLI, drive the round-trip,
+/// The `fno-agents review-start` command entry: parse CLI, drive the round-trip,
 /// print the outcome receipt (or a clean not-delivered reason). The socket
 /// round-trip needs the user's daemon and stays a manual verification, as
 /// `turn/start` already documents for its own path; the pure builders above are
@@ -1307,13 +1307,13 @@ pub fn classify_turn_start_response(raw: &str) -> Result<(), ReviewStartError> {
 /// daemon listening -> `Err("no-daemon")`; a wedged socket -> `Err("io-error")`
 /// after [`HANDSHAKE_TIMEOUT`].
 const CODEX_NATIVE_COMMAND_REFUSAL: &str =
-    "native-command: use fno mux command <selector> --text <verb> --proof <compact|goal-active|screen>";
+    "native-command: use fno mux command <selector> --text <command> --proof <compact|goal-active|screen>";
 
 fn codex_native_command_refusal(text: &str) -> Result<Option<&'static str>, String> {
-    let Some(verb) = text.trim().split_whitespace().next() else {
+    let Some(command) = text.trim().split_whitespace().next() else {
         return Ok(None);
     };
-    if !verb.starts_with('/') && !verb.starts_with('$') {
+    if !command.starts_with('/') && !command.starts_with('$') {
         return Ok(None);
     }
     let contract = crate::harness_capabilities::HarnessContract::packaged()
@@ -1324,11 +1324,11 @@ fn codex_native_command_refusal(text: &str) -> Result<Option<&'static str>, Stri
     let native = capabilities
         .native_verbs
         .iter()
-        .any(|candidate| candidate == verb);
+        .any(|candidate| candidate == command);
     let review = capabilities
         .review_verbs
         .iter()
-        .any(|candidate| candidate == verb);
+        .any(|candidate| candidate == command);
     Ok((native && !review).then_some(CODEX_NATIVE_COMMAND_REFUSAL))
 }
 
@@ -1449,10 +1449,10 @@ fn loaded_thread_ids_inner() -> Result<std::collections::HashSet<String>, &'stat
 }
 
 /// The `codex_loaded` payload block: what the retired hidden
-/// `codex-loaded-threads` verb printed, as a value. `Ok` -> `{"available":
+/// `codex-loaded-threads` command printed, as a value. `Ok` -> `{"available":
 /// true, "threads": [...]}`; every `Err` -> `{"available": false, "reason":
 /// <reason>}`, so "the daemon could not answer" stays distinct from "zero
-/// threads". Rides `list --json --harness codex` instead of a verb root.
+/// threads". Rides `list --json --harness codex` instead of a command root.
 pub fn loaded_threads_block(result: Result<Vec<LoadedThread>, &'static str>) -> serde_json::Value {
     match result {
         Ok(threads) => serde_json::json!({ "available": true, "threads": threads }),
@@ -1470,14 +1470,14 @@ pub fn loaded_threads_block(result: Result<Vec<LoadedThread>, &'static str>) -> 
 // Two lanes assign. The interactive thread lane puts projectId straight on
 // `thread/start`; the headless lane has no argv flag and calls
 // `thread/metadata/update` after its rollout binds, through the hidden
-// `codex-assign-project` verb below.
+// `codex-assign-project` command below.
 // ---------------------------------------------------------------------------
 
 const PROJECT_PAGE_SIZE: u32 = 100;
 const MAX_PROJECT_PAGES: usize = 64;
 
 /// The inline pre-spawn resolve must cost less than a spawn is worth: the
-/// standalone `codex-assign-project` verb may take the full
+/// standalone `codex-assign-project` command may take the full
 /// [`HANDSHAKE_TIMEOUT`], but `ensure_project_for_cwd` runs BEFORE thread/start
 /// on every interactive spawn, so a wedged app-server costs a spawn this much,
 /// not ten seconds. One list round-trip on a unix socket is milliseconds; this
@@ -1517,9 +1517,9 @@ pub fn project_create_request_json(
 }
 
 /// `project/update` carrying a whole replacement roots array (the protocol has
-/// no append verb, so the caller extends the list it listed).
+/// no append command, so the caller extends the list it listed).
 /// `project/update` carrying a whole replacement roots array (the protocol has
-/// no append verb, so the caller extends the list it listed).
+/// no append command, so the caller extends the list it listed).
 pub fn project_update_roots_request_json(id: u64, project_id: &str, roots: &[PathBuf]) -> String {
     serde_json::json!({
         "id": id,
@@ -1607,23 +1607,6 @@ pub fn parse_project_page(
     };
     let next_cursor = next_cursor.filter(|cursor| !cursor.is_empty());
     Ok((projects, next_cursor))
-}
-
-/// The project whose roots contain `repo_root`. Both sides canonicalize, so a
-/// symlinked repo or a `/var`-vs-`/private/var` spelling difference still
-/// matches.
-pub fn parse_project_id_for_root(raw: &str, repo_root: &Path) -> Option<String> {
-    let wanted = std::fs::canonicalize(repo_root).ok()?;
-    let (projects, _) = parse_project_page(raw).ok()?;
-    projects
-        .into_iter()
-        .find(|project| {
-            project
-                .roots
-                .iter()
-                .any(|root| std::fs::canonicalize(root).is_ok_and(|resolved| resolved == wanted))
-        })
-        .map(|project| project.id)
 }
 
 /// The `project.id` from a `project/create` or `project/update` response.
@@ -1798,13 +1781,13 @@ pub async fn assign_thread_to_project(thread_id: &str, project_id: &str) -> Opti
     accepted.then_some(())
 }
 
-/// The hidden `fno-agents codex-assign-project` verb: resolve or
+/// The hidden `fno-agents codex-assign-project` command: resolve or
 /// create the repo's project for `--cwd`, and when `--thread-id` is given,
 /// assign that bound thread to it. This is how the HEADLESS lane reaches the
 /// resolver - the Python codex create path captures the thread id from
 /// `thread.started` and shells this binary fire-and-forget. Same `matches!`
-/// treatment as `review-start` so it stays out of CLIENT_VERB_USAGE /
-/// RUST_CLIENT_VERBS and the routable-verb parity guard. Prints one JSON line;
+/// treatment as `review-start` so it stays out of CLIENT_COMMAND_USAGE /
+/// RUST_CLIENT_COMMANDS and the routable-command parity guard. Prints one JSON line;
 /// exits 0 on a resolved project, 1 when resolution failed.
 pub async fn run_codex_assign_project(rest: &[String]) -> i32 {
     let mut cwd: Option<PathBuf> = None;

@@ -9,9 +9,9 @@ constructs the ``target-session:<sid>`` holder and releases the node claim, or
 an exit handler that unlinks it).
 
 The target self-handoff shell must not release a ``node:<id>`` claim directly.
-It delegates archive plus exact-holder release to
-``fno.state.target_handoff.prepare_manifest_and_release`` so shell and target
-handoffs share one recoverable custody operation.
+It delegates archive plus exact-holder release to the native
+target-handoff-prepare op so shell and target handoffs share one recoverable
+custody operation.
 
 A "node-release site" is a ``claim release`` invocation whose released KEY
 resolves to a ``node:`` prefix (a literal, or a local variable / ``format!``
@@ -50,7 +50,7 @@ SCAN_DIRS = ["cli/src/fno", "scripts", "skills", "hooks", "crates"]
 # single-authority release at a sanctioned lifecycle boundary).
 ALLOWLIST = {
     # `fno backlog unclaim`/`release`/`requeue`: the sanctioned one-shot un-claim
-    # and queue-return verbs. Their lockfile release is holder-verified - it
+    # and queue-return commands. Their lockfile release is holder-verified - it
     # drops the lock ONLY when the holder is stale (PID dead / TTL expired) or
     # matches the invoking session, and REFUSES a live foreign holder (warn +
     # point at force-release). Single authority at an explicit operator
@@ -101,13 +101,23 @@ ALLOWLIST = {
     # initiative.
     "crates/fno-agents/src/backlog/update_cli.rs",
     # crates/fno-agents/src/backlog/cutover.rs run_unclaim: the unclaim
-    # verb's native release ladder (the wheel leg retired with
+    # command's native release ladder (the wheel leg retired with
     # lifecycle.py). Holder-verified on the same contract as requeue.py:
     # a stale lock releases, a live holder releases only when it matches
     # the invoking session, and a live foreign holder survives with its
     # name in the receipt. Single authority at the explicit operator
     # `unclaim` boundary.
     "crates/fno-agents/src/backlog/cutover.rs",
+    # crates/fno-agents/src/target_start.rs release_early_claim: the start
+    # orchestrator releases the EARLY claim it acquired itself, minutes
+    # earlier, before the slow allocation steps - and only when start itself
+    # fails before init runs (ensure refusal/timeout, bind refusal). The
+    # release is holder-bound (`claims::release` drops only a matching
+    # holder, silently no-ops otherwise), so it can never release the
+    # parent's or a foreign session's claim: the inverse of ab-588326a7,
+    # same shape as the init-helper acquire-then-refuse site above. Not
+    # releasing would strand a 2h claim on a node whose allocation failed.
+    "crates/fno-agents/src/target_start.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}
@@ -232,7 +242,7 @@ def _rust_node_release_lines(text: str) -> list[int]:
         if '"node:' in key or key in node_vars:
             hits.append(scrubbed.count("\n", 0, m.start()) + 1)
     # The direct form: `release(claim_key, ...)` — the same key check, so the
-    # claims::release front the session verbs call is as visible as the
+    # claims::release front the session commands call is as visible as the
     # literal-argument spelling above.
     for m in _RS_DIRECT_RELEASE.finditer(scrubbed):
         key = m.group(1).strip().lstrip("&").strip()

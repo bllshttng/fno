@@ -81,7 +81,7 @@ fn decide(payload: &Value) -> (Value, Option<String>) {
             // ONLY a genuine "not a git repository" answer means
             // launch-in-place; any other git failure (dubious ownership, a
             // corrupted .git) must HOLD, not silently fall back to the
-            // canonical checkout this verb exists to keep workers off.
+            // canonical checkout this command exists to keep workers off.
             if e.message().contains("not a git repository") {
                 return (json!({ "workdir": recorded }), None);
             }
@@ -237,7 +237,11 @@ pub(crate) fn ensure_node_workdir(
         "node": node,
         "harness": harness,
     });
-    let (answer, _receipt) = decide(&payload);
+    let (answer, receipt) = decide(&payload);
+    // The resumed-tree line the seam command prints to its own stderr.
+    if let Some(line) = receipt {
+        eprintln!("{line}");
+    }
     if let Some(hold) = answer.get("hold").and_then(Value::as_str) {
         return Err(hold.to_string());
     }
@@ -378,5 +382,17 @@ mod tests {
             recorded.get(branch_pos + 1).map(String::as_str),
             Some("feature/x")
         );
+    }
+}
+
+/// The bin client's dispatch site for this module's op: the arm body and its
+/// contract note live here so client.rs stays under the 5,000-line budget.
+/// Transport-only: registers no client action; Python's
+/// `ensure_launch_workdir` reaches it through command_call, and a `hold`
+/// answer is a valid exit-0 answer the caller renders.
+pub fn client_dispatch(args: &[String]) -> Option<i32> {
+    match args.first().map(String::as_str) {
+        Some("launch-workdir") => Some(run_launch_workdir(&args[1..])),
+        _ => None,
     }
 }

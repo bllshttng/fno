@@ -8,11 +8,7 @@ use crate::backlog::dispatch_resolve::grid_lane_for;
 use serde_json::{json, Value};
 use std::path::Path;
 
-#[allow(unused_imports)]
-use super::advance::{
-    bounded_command_env, gate_refusal_detail, slot_queue_retry_at, BoundedOutput, SpawnFailure,
-    SpawnFailureKind, EVENT_SOURCE,
-};
+use super::advance::{bounded_command_env, SpawnFailure, EVENT_SOURCE};
 
 /// The sandbox probe's exit code (byte-parity with the Python runtime).
 const EXIT_SANDBOX_UNREACHABLE: i32 = 85;
@@ -36,8 +32,8 @@ pub struct NodeSpawnArgs {
     pub permission_mode: String,
     pub agent_name: String,
     pub vendor: Option<String>,
-    pub verb: String,
-    pub verb_source: String,
+    pub command_name: String,
+    pub command_source: String,
     pub session_phase: Option<String>,
     pub grid_reason: Option<String>,
     /// The grid pick's lane NAME - the dispatcher's spelling: the spawn door
@@ -165,10 +161,13 @@ pub fn territory_stamp(node_id: &str) -> (Option<Value>, Option<Value>) {
     match bounded_command_env(&exe, &argv, 60, &[]) {
         Ok(out) if out.code == 0 => {
             let verdict: Value = serde_json::from_str(out.stdout.trim()).unwrap_or(Value::Null);
-            (
-                Some(verdict["territory"].clone()),
-                Some(verdict["kingless"].clone()),
-            )
+            // The verdict door names the flag `leadless`; rows it wrote before
+            // that spelling carried the legacy key.
+            let leadless = verdict
+                .get("leadless")
+                .or_else(|| verdict.get(crate::role_migration::LEGACY_LEADLESS_KEY))
+                .cloned();
+            (Some(verdict["territory"].clone()), leadless)
         }
         Ok(out) => {
             eprintln!(
@@ -189,36 +188,21 @@ pub fn territory_stamp(node_id: &str) -> (Option<Value>, Option<Value>) {
 /// RECORD (ccm/ccr) is a real binary but not a harness, so it answers
 /// through its registry row; an answer the resolver cannot honor is as
 /// unverifiable as no answer and degrades the same way.
-pub fn launch_harness_axis(launch: &str, node_cwd: Option<&str>) -> Option<String> {
+pub fn launch_harness_axis(launch: &str) -> Option<String> {
     if launch.trim().is_empty() {
         return None;
     }
     if crate::provider::KNOWN_PROVIDERS.contains(&launch) {
         return Some(launch.to_string());
     }
-    record_harness(launch, node_cwd)
-        .filter(|rec| crate::provider::KNOWN_PROVIDERS.contains(&rec.as_str()))
+    record_harness(launch).filter(|rec| crate::provider::KNOWN_PROVIDERS.contains(&rec.as_str()))
 }
 
-/// The harness an account record names, or None. Reads the accounts records
-/// block through the shared config lookup; a failure answers None (pins
-/// nothing).
-fn record_harness(launch: &str, _node_cwd: Option<&str>) -> Option<String> {
+/// The harness an account record names, or None (`loader.record_harness`):
+/// a missing record or a config that does not load pins nothing.
+fn record_harness(launch: &str) -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
-    let records = crate::agents_config::config_lookup(&cwd, &["accounts", "records"])?
-        .as_array()?
-        .clone();
-    for rec in records {
-        let id = rec.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        if id == launch {
-            return rec
-                .get("cli")
-                .and_then(|v| v.as_str())
-                .filter(|c| !c.is_empty())
-                .map(str::to_string);
-        }
-    }
-    None
+    crate::accounts::records::record_harness(launch, None, &cwd)
 }
 
 /// Concrete `--model` for a node at the spawn seam, or None for default.
@@ -279,40 +263,28 @@ pub fn node_model(
 
 /// The `fno agents spawn` flags for resolved args: ONE builder for every
 /// node-dispatching caller, so the claude-only gates cannot drift. The
-/// caller prepends the binary + verb; `cwd` rides before the model axis.
+/// caller prepends the binary + command; `cwd` rides before the model axis.
 pub fn node_spawn_argv(
     args: &NodeSpawnArgs,
     cwd: Option<&str>,
     extra: &[(&str, String)],
 ) -> Vec<String> {
-    // Claude lanes first: a named lane resolves its whole row at the spawn
-    // door, so the substrate drops for a named claude lane. Every other
-    // lane keeps today's spellings until wave 5 templates it.
-    let lane_pinned = args.lane.is_some() && args.resolved_harness == "claude";
+    // The lane pin IS the harness now: every lane is templated, so
+    // `--route <row>` resolves harness, substrate and model at the spawn
+    // door. An unnamed dispatch infers the invoking session's harness, and
+    // the substrate rides the door's native-lane default. The harness/
+    // substrate/vendor/model/permission fields on NodeSpawnArgs stay
+    // vestigial (the resolver fills them; nothing reads them here).
+    let lane_pinned = args.lane.is_some();
     let mut cmd: Vec<String> = Vec::new();
-    // The harness axis always emits: the door refuses --route on any other
-    // harness, and without the flag it infers the invoking session's, so a
-    // codex-originated dispatch of a claude lane would die at the door.
-    if lane_pinned {
-        cmd.extend(["--harness".to_string(), args.resolved_harness.clone()]);
-    } else {
-        cmd.extend([
-            "--harness".to_string(),
-            args.harness.clone(),
-            "--substrate".to_string(),
-            args.substrate.clone(),
-        ]);
-    }
     if lane_pinned {
         cmd.extend(["--route".to_string(), args.lane.clone().unwrap_or_default()]);
-    } else if let Some(vendor) = &args.vendor {
-        cmd.extend(["--provider".to_string(), vendor.clone()]);
     } else if let Some(route) = &args.route {
         // The row's route owns vendor AND model as one fact; an explicit
         // dispatch-time vendor pin outranks it and is never replaced.
         cmd.extend(["--route".to_string(), route.clone()]);
     } else if let (Some(route), true) = (&args.resolved_route, args.resolved_harness == "claude") {
-        // No grid pick: the stage table's verb lane route, or a routed claude
+        // No grid pick: the stage table's command lane route, or a routed claude
         // model dies on the default endpoint at first inference.
         cmd.extend(["--route".to_string(), route.clone()]);
     }
@@ -332,19 +304,6 @@ pub fn node_spawn_argv(
     } else {
         cmd.push("--fresh".to_string());
     }
-    if let Some(model) = args.model.as_ref().filter(|_| !lane_pinned) {
-        cmd.extend(["--model".to_string(), model.clone()]);
-    }
-    // CLAUDE-ONLY: gate on the RESOLVED harness, so a claude ACCOUNT record
-    // (ccm/ccr) still gets the flag - without it the account-pinned worker
-    // hangs on a prompt. A lane pin resolves the row's own effort, and the
-    // template fills from the route, so the flag drops with the rest.
-    if !args.permission_mode.is_empty() && args.resolved_harness == "claude" && !lane_pinned {
-        cmd.extend([
-            "--permission-mode".to_string(),
-            args.permission_mode.clone(),
-        ]);
-    }
     // A cutover's destination account rides argv as a RECORD ID, never env:
     // the front door applies the overlay where the harness is exec'd, and a
     // HOME-carrying overlay would move the state root where nothing looks.
@@ -361,8 +320,8 @@ pub fn node_spawn_argv(
         cmd.extend(["--slug".to_string(), slug.clone()]);
     }
     if let Some(phase) = &args.session_phase {
-        // A registry verb's declared phase. The spawn door refuses an
-        // unlabeled --node spawn, so an outside verb must carry its label.
+        // A registry command's declared phase. The spawn door refuses an
+        // unlabeled --node spawn, so an outside command must carry its label.
         cmd.extend(["--session-phase".to_string(), phase.clone()]);
     }
     cmd.push("--name".to_string());
@@ -381,7 +340,7 @@ pub fn spawn_worker(
     model: Option<&str>,
     provider: Option<&str>,
     harness: Option<&str>,
-    verb: Option<&str>,
+    command: Option<&str>,
     brief: Option<&str>,
     _dispatch_account: Option<&str>,
     dispatch_reservation: Option<(&str, &str)>,
@@ -397,14 +356,13 @@ pub fn spawn_worker(
         model,
         provider,
         harness,
-        verb,
+        command,
         brief,
         source,
     )
     .map_err(SpawnOutcome::Failed)?;
     launch_resolved(
         node_id,
-        node,
         args,
         dispatch_reservation,
         caller,
@@ -415,7 +373,6 @@ pub fn spawn_worker(
 
 pub fn launch_resolved(
     node_id: &str,
-    node: &Value,
     args: NodeSpawnArgs,
     dispatch_reservation: Option<(&str, &str)>,
     caller: &str,
@@ -434,14 +391,14 @@ pub fn launch_resolved(
         "account": "",
         "substrate": args.substrate.clone(),
         "command": args.command.clone(),
-        "verb": args.verb.clone(),
-        "verb_source": args.verb_source.clone(),
+        "verb": args.command_name.clone(),
+        "verb_source": args.command_source.clone(),
         "cwd": args.node_cwd.clone().unwrap_or_default(),
         "caller": caller,
         "grid": args.grid_reason.clone().unwrap_or_default(),
         "decision": args.decision.join("; "),
     });
-    if !args.is_reconcile && args.verb.trim_start_matches('/') == "blueprint" {
+    if !args.is_reconcile && args.command_name.trim_start_matches('/') == "blueprint" {
         match reuse_planner(node_id, &args, &mut row, dispatch_reservation, events_path) {
             Ok(Some(identity)) => return Ok((identity, row)),
             Ok(None) => {}
@@ -449,26 +406,13 @@ pub fn launch_resolved(
         }
     }
     // The stamp lands on the cold-spawn path only: a reuse dispatch runs no
-    // subprocess at all. The record, not the veto: a kingless territory drains.
-    let (territory, kingless) = territory_stamp(node_id);
+    // subprocess at all. The record, not the veto: a leadless territory drains.
+    let (territory, leadless) = territory_stamp(node_id);
     if let Some(obj) = row.as_object_mut() {
         obj.insert("territory".to_string(), territory.unwrap_or(Value::Null));
-        obj.insert("kingless".to_string(), kingless.unwrap_or(Value::Null));
+        obj.insert("leadless".to_string(), leadless.unwrap_or(Value::Null));
     }
-    // The node's effort pin rides the typed-flag path; the door validates it.
-    let pin = node
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("");
-    let mut argv = vec!["agents".to_string(), "spawn".to_string()];
-    let extra: Vec<(&str, String)> = if pin.is_empty() {
-        Vec::new()
-    } else {
-        vec![("--effort", pin.to_string())]
-    };
-    argv.extend(node_spawn_argv(&args, args.node_cwd.as_deref(), &extra));
+    let argv = node_spawn_argv(&args, args.node_cwd.as_deref(), &[]);
     // The caller's dispatch reservation and the spawn door's own family-2
     // guard collide - the door acquires the SAME key, sees a foreign holder
     // it must never clear, and refuses. Hand the reservation over: release
@@ -477,16 +421,9 @@ pub fn launch_resolved(
     if let Some((key, holder)) = dispatch_reservation {
         super::advance::safe_release(key, holder);
     }
-    let exe = crate::scrape::fno_bin();
-    let mut cmd = std::process::Command::new(&exe);
-    cmd.args(&argv);
     // The resolver's env is AUTHORITATIVE: a stale inherited TARGET_NO_MERGE
     // never survives into a successor the resolver just granted allow-merge.
-    cmd.env_clear();
-    for (k, v) in &args.env {
-        cmd.env(k, v);
-    }
-    let out = match crate::bounded_cmd::output_with_timeout_result(cmd, 600) {
+    let out = match exec_agents_spawn(&argv, &args.env, true) {
         Ok(out) => out,
         Err(e) => {
             return Err(SpawnOutcome::Failed(SpawnFailure::general(format!(
@@ -600,8 +537,6 @@ pub fn launch_resolved(
                 "worker": {
                     "name": args.agent_name,
                     "harness": args.resolved_harness,
-                    "model": args.model.clone().unwrap_or_default(),
-                    "effort": pin,
                 },
             }
         });
@@ -612,6 +547,28 @@ pub fn launch_resolved(
     }
     let short = finish_spawn(&row, events_path, None, &notes);
     Ok((short, row))
+}
+
+/// Exec `fno agents spawn <args>` under the 600-second bound: the launch
+/// the node dispatch, the think dispatch and the keep-going build arm share.
+/// With `clear_env` the given env is the child's whole environment; without
+/// it the env layers over the inherited one.
+pub(crate) fn exec_agents_spawn(
+    args: &[String],
+    env: &std::collections::BTreeMap<String, String>,
+    clear_env: bool,
+) -> std::io::Result<std::process::Output> {
+    let exe = crate::scrape::fno_bin();
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["agents", "spawn"]);
+    cmd.args(args);
+    if clear_env {
+        cmd.env_clear();
+    }
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    crate::bounded_cmd::output_with_timeout_result(cmd, 600)
 }
 
 /// The spawn-seam failure vocabulary shared with the Python owner.
@@ -636,10 +593,10 @@ fn unsafe_short_address(token: &str, harness: Option<&str>) -> bool {
         .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
-/// The lifecycle table's answer for the node row: the effective verb plus
+/// The lifecycle table's answer for the node row: the effective command plus
 /// its note, with the blueprint floor read from the node's own config (the
 /// lean default when unreadable).
-fn verb_answer_for(node: &Value, cfg_root: &str) -> Result<(Option<String>, String), String> {
+fn command_answer_for(node: &Value, cfg_root: &str) -> Result<(Option<String>, String), String> {
     let floor = crate::agents_config::config_lookup(
         std::path::Path::new(cfg_root),
         &["dispatch", "blueprint_floor"],
@@ -648,7 +605,7 @@ fn verb_answer_for(node: &Value, cfg_root: &str) -> Result<(Option<String>, Stri
     .map(|s| s.trim().to_string())
     .filter(|s| !s.is_empty())
     .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
-    crate::backlog_ready::effective_verb_with_floor(node, &floor)
+    crate::backlog_ready::effective_command_with_floor(node, &floor)
 }
 
 /// The shared project id lane ids derive from: config project.id, else the
@@ -777,12 +734,12 @@ pub fn resolve_node_spawn(
     model: Option<&str>,
     provider: Option<&str>,
     harness: Option<&str>,
-    verb: Option<&str>,
+    command: Option<&str>,
     brief: Option<&str>,
     source: Option<&str>,
 ) -> Result<NodeSpawnArgs, SpawnFailure> {
     resolve_node_spawn_inner(
-        node_id, node_cwd, node_slug, node, model, provider, harness, verb, brief, source, None,
+        node_id, node_cwd, node_slug, node, model, provider, harness, command, brief, source, None,
     )
 }
 
@@ -795,7 +752,7 @@ fn resolve_node_spawn_inner(
     model: Option<&str>,
     provider: Option<&str>,
     harness: Option<&str>,
-    verb: Option<&str>,
+    command_name: Option<&str>,
     brief: Option<&str>,
     source: Option<&str>,
     command: Option<&str>,
@@ -804,15 +761,15 @@ fn resolve_node_spawn_inner(
     let node_obj = node.as_object().ok_or_else(|| {
         general(format!(
             "refusing to dispatch {node_id}: this caller passed no node dict; \
-             the builtin path has no verb evidence."
+             the builtin path has no command evidence."
         ))
     })?;
-    // The node dict IS the verb evidence. A dict without the key is a lossy
+    // The node dict IS the command evidence. A dict without the key is a lossy
     // projection: REFUSE before anything is spent.
-    if !node_obj.contains_key("dispatch_verb") {
+    if !node_obj.contains_key("dispatch_command") {
         return Err(general(format!(
             "refusing to dispatch {node_id}: the node dict this caller passed \
-             carries no dispatch_verb key; the projection feeding this \
+             carries no dispatch_command key; the projection feeding this \
              dispatcher is lossy; fix the projection, not the node."
         )));
     }
@@ -822,12 +779,12 @@ fn resolve_node_spawn_inner(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     };
-    let node_verb = verb
+    let node_command = command_name
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let declared_verb = text_field(node_obj.get("dispatch_verb"));
-    let verb_source = if declared_verb.is_some() {
+    let declared_command = text_field(node_obj.get("dispatch_command"));
+    let command_source = if declared_command.is_some() {
         "declared"
     } else {
         "none-declared"
@@ -845,14 +802,14 @@ fn resolve_node_spawn_inner(
     let lifecycle = if command.is_some() {
         (Some("/target".into()), "reconcile".into())
     } else {
-        verb_answer_for(node, &cfg_root).map_err(general)?
+        command_answer_for(node, &cfg_root).map_err(general)?
     };
-    let effective_verb = lifecycle.0.clone();
-    let verb_code = crate::naming::verb_code_for(
-        effective_verb
+    let effective_command = lifecycle.0.clone();
+    let command_code = crate::naming::command_code_for(
+        effective_command
             .as_deref()
-            .or(node_verb.as_deref())
-            .or(declared_verb.as_deref()),
+            .or(node_command.as_deref())
+            .or(declared_command.as_deref()),
     )
     .map_err(|e| general(e.to_string()))?;
     let mut model_v = model
@@ -873,7 +830,7 @@ fn resolve_node_spawn_inner(
             Some(node),
             model_v.as_deref(),
             provider,
-            effective_verb.as_deref(),
+            effective_command.as_deref(),
         );
         grid_why = pick.decline;
         if let Some(gh) = pick.harness {
@@ -901,7 +858,7 @@ fn resolve_node_spawn_inner(
     // so it carries the model tag, riding the receipt.
     let agent_name = crate::naming::dispatch_agent_name(
         source,
-        &verb_code,
+        &command_code,
         node_id,
         node_slug,
         None,
@@ -912,31 +869,31 @@ fn resolve_node_spawn_inner(
     // Only the literal "dispatch" grant reads true.
     // One axis: `provider` is the harness under an older spelling, so it
     // must reach the resolver too, or the command follows the stage table.
-    let launch_axis = launch_harness_axis(launch.unwrap_or(""), node_cwd);
-    let mut receipt_verb = effective_verb
+    let launch_axis = launch_harness_axis(launch.unwrap_or(""));
+    let mut receipt_command = effective_command
         .clone()
-        .or_else(|| node_verb.clone())
-        .or_else(|| declared_verb.clone())
+        .or_else(|| node_command.clone())
+        .or_else(|| declared_command.clone())
         .unwrap_or_else(|| "builtin".to_string());
-    if crate::provider::parse_verb_token(&receipt_verb).is_some() {
-        receipt_verb = crate::backlog::fields::canonical_verb_key(&receipt_verb);
+    if crate::provider::parse_command_token(&receipt_command).is_some() {
+        receipt_command = crate::backlog::fields::canonical_command_key(&receipt_command);
     }
-    let stage_verb = effective_verb
+    let stage_command = effective_command
         .as_deref()
-        .or(node_verb.as_deref())
-        .or(declared_verb.as_deref())
+        .or(node_command.as_deref())
+        .or(declared_command.as_deref())
         .unwrap_or("target");
-    let cfg = super::dispatch_resolve::dispatch_cfg_for(node_cwd, stage_verb);
-    // A registry verb's declared phase rides the argv; a config read failure
+    let cfg = super::dispatch_resolve::dispatch_cfg_for(node_cwd, stage_command);
+    // A registry command's declared phase rides the argv; a config read failure
     // degrades to None - that refusal with its remedy, never a guessed label.
     let descriptor_phase = {
-        let key = crate::backlog::fields::canonical_verb_key(
-            effective_verb
+        let key = crate::backlog::fields::canonical_command_key(
+            effective_command
                 .as_deref()
-                .or(node_verb.as_deref())
+                .or(node_command.as_deref())
                 .unwrap_or(""),
         );
-        cfg.verb_registry
+        cfg.command_registry
             .get(&key)
             .map(|d| d.session_phase.trim().to_string())
             .filter(|p| !p.is_empty())
@@ -950,10 +907,10 @@ fn resolve_node_spawn_inner(
         substrate: None,
         node_id: Some(node_id),
         command,
-        verb: if command.is_some() {
+        command_name: if command.is_some() {
             None
         } else {
-            node_verb.as_deref().or(declared_verb.as_deref())
+            node_command.as_deref().or(declared_command.as_deref())
         },
         lifecycle: if command.is_some() {
             None
@@ -1024,8 +981,8 @@ fn resolve_node_spawn_inner(
         permission_mode: mode,
         agent_name,
         vendor: None,
-        verb: receipt_verb,
-        verb_source: verb_source.to_string(),
+        command_name: receipt_command,
+        command_source: command_source.to_string(),
         session_phase: descriptor_phase,
         grid_reason: grid_why,
         lane: grid_lane,
@@ -1232,7 +1189,7 @@ fn ambient_scrub_names() -> Vec<&'static str> {
 }
 
 /// fno's builtin unattended permission answer (spawn_compose's constant).
-const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
+pub(crate) const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
 
 /// Emit the one dispatch_spawned row and return the launch identity.
 /// `receipt` mirrors the launch rows into the caller's receipt dict.
@@ -1265,7 +1222,7 @@ pub fn finish_spawn(
         if let Some(obj) = receipt.as_object_mut() {
             obj.insert("short_id".to_string(), Value::from(short_id.clone()));
             obj.insert("notes".to_string(), json!(notes));
-            for key in ["agent_name", "verb", "verb_source", "substrate", "kingless"] {
+            for key in ["agent_name", "verb", "verb_source", "substrate", "leadless"] {
                 if let Some(v) = row.get(key) {
                     obj.insert(key.to_string(), v.clone());
                 }

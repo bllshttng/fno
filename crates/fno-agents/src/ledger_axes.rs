@@ -232,7 +232,7 @@ fn upsert(
 /// The ported `_utc_iso`: aware UTC with a `+00:00` suffix at seconds
 /// precision; a naive input reads as UTC; an unparseable string is stored
 /// verbatim rather than losing the row.
-fn utc_iso(value: Option<&str>) -> Option<String> {
+pub(crate) fn utc_iso(value: Option<&str>) -> Option<String> {
     let raw = value?;
     if raw.trim().is_empty() {
         return Some(raw.to_string());
@@ -263,7 +263,7 @@ fn utc_iso(value: Option<&str>) -> Option<String> {
 
 /// The ported `sessions_or_unresolved`: distinct non-empty ids in order, or
 /// the explicit unresolved marker.
-fn sessions_or_unresolved(candidates: &[String]) -> Value {
+pub(crate) fn sessions_or_unresolved(candidates: &[String]) -> Value {
     let mut out: Vec<Value> = Vec::new();
     for c in candidates {
         let s = c.trim();
@@ -729,7 +729,7 @@ fn index_receipts(registry_path: Option<&str>) -> HashMap<String, ReceiptAxes> {
 
 // ---------------------------------------------------------------------------
 // The ledger join (`fno.ledger_join`), ported. `pr-watch pr-sessions` is its
-// transport door; retro and carveout call the op through `verb_call`.
+// transport door; retro and carveout call the op through `command_call`.
 // ---------------------------------------------------------------------------
 
 /// Opening words of every reason that names an INFRA failure - something that

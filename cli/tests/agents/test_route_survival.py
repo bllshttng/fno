@@ -37,6 +37,28 @@ ROUTE_ENV = {
     "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.2",
 }
 
+# The provider registry is the binary's answer; pytest shards run without it,
+# so the refresh tests pin this canned zai row (today's haiku default).
+_ZAI_PROVIDERS_ANSWER = {
+    "providers": {
+        "zai": {
+            "protocol": "anthropic",
+            "base_url": "https://api.z.ai/api/anthropic",
+            "api_key_env": "ZAI_API_KEY",
+            "api_key_file": "~/.fno/.env",
+            "tier_models": {"haiku": "glm-4.7"},
+            "key": {"satisfying": None, "checked": ["ZAI_API_KEY", "~/.fno/.env"]},
+        }
+    }
+}
+
+
+def _pin_zai_registry(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call",
+        lambda payload: _ZAI_PROVIDERS_ANSWER,
+    )
+
 
 class _FakeRunner:
     """Mux pane runner: a pane spawn returns pane 7 with child pid 4242."""
@@ -202,9 +224,9 @@ def _routed_claude_row(
     """A registry holding one routed claude worker, plus its route file path."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.model_routing import _write_settings_env_file
-    from fno.agents.account_env import SCRUB_AUTH_VARS
+    from fno.agents.spawn_overlay_client import compose_credentials
 
-    env = {var: "" for var in SCRUB_AUTH_VARS}
+    env = {var: "" for var in compose_credentials(None, None, {})["scrub"]}
     env.update(ROUTE_ENV)
     path = _write_settings_env_file(env)
     from fno.agents.registry import AgentEntry, write_registry
@@ -232,6 +254,7 @@ def test_ac2_hp_revive_restores_the_recorded_route(tmp_path, monkeypatch) -> Non
     from fno.agents.registry import load_registry
 
     _routed_claude_row(tmp_path, monkeypatch)
+    _pin_zai_registry(monkeypatch)
     got = restore_route_for_relaunch(load_registry()[0])
     # Exactly the route's own keys. The stored file also carries the auth-scrub
     # floor as empty strings, which means "unset" only to claude reading a
@@ -240,9 +263,7 @@ def test_ac2_hp_revive_restores_the_recorded_route(tmp_path, monkeypatch) -> Non
     # The one key that does NOT replay verbatim is the provider-DEFAULT haiku
     # tier: it re-resolves against today's registry (x-5cc5), so the fixture's
     # glm-5.2 comes back as the current zai default.
-    from fno.agents.model_routing import DEFAULT_ZAI_HAIKU_MODEL
-
-    assert got == {**ROUTE_ENV, "ANTHROPIC_DEFAULT_HAIKU_MODEL": DEFAULT_ZAI_HAIKU_MODEL}
+    assert got == {**ROUTE_ENV, "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7"}
 
 
 def test_ac3_err_revive_refuses_when_the_route_file_is_gone(tmp_path, monkeypatch) -> None:
@@ -357,12 +378,11 @@ def test_an_explicit_account_composes_with_a_restored_route(
     # relaunch re-binds the provider, and that binding is what a running worker
     # reads to name its own account (x-c703). The haiku tier is the one key
     # refreshed to today's provider default rather than replayed (x-5cc5).
-    from fno.agents.model_routing import DEFAULT_ZAI_HAIKU_MODEL
-
+    _pin_zai_registry(monkeypatch)
     assert seen["route_env"] == {
         **ROUTE_ENV,
         "FNO_ROUTE_PROVIDER": "zai",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": DEFAULT_ZAI_HAIKU_MODEL,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
     }, "and the restored route rides with it"
 
 
@@ -429,13 +449,12 @@ def test_direct_resume_refuses_an_incomplete_forward_registry(
 def test_a_route_file_holding_only_the_scrub_floor_refuses(tmp_path, monkeypatch) -> None:
     """Readable but routeless is the same silent fallback as missing."""
     from fno.agents.dispatch import DispatchAskError, restore_route_for_relaunch
-    from fno.agents.account_env import SCRUB_AUTH_VARS
     from fno.agents.registry import load_registry
+    from fno.agents.spawn_overlay_client import compose_credentials
 
     path = _routed_claude_row(tmp_path, monkeypatch)
-    Path(path).write_text(
-        json.dumps({"env": {v: "" for v in SCRUB_AUTH_VARS}}), encoding="utf-8"
-    )
+    scrub = compose_credentials(None, None, {})["scrub"]
+    Path(path).write_text(json.dumps({"env": {v: "" for v in scrub}}), encoding="utf-8")
     with pytest.raises(DispatchAskError) as exc:
         restore_route_for_relaunch(load_registry()[0])
     assert exc.value.exit_code == 2
@@ -486,7 +505,7 @@ def test_the_account_picker_never_fires_on_a_revive(tmp_path, monkeypatch, capsy
 # One row per door that re-enters or re-launches a Claude session:
 #
 #   door                 owned by                      wired in
-#   attach (inline)      crates/fno-agents client_verbs run_attach (reentry.rs plan; no Python leg)
+#   attach (inline)      crates/fno-agents client_commands run_attach (reentry.rs plan; no Python leg)
 #   resume live wake     resume_cli wake arm           2.1
 #   resume dead          resume_cli --resume arm       2.1
 #   mux attach           crates/fno server AttachAgent 2.2 (cargo matrix)
@@ -578,14 +597,10 @@ def test_matrix_spawn_resume_inherits_the_recorded_account(tmp_path, monkeypatch
         "fno.agents.harnesses.claude.bg_create", _fake_bg_create
     )
 
-    class _Overlay:
-        account_id = "makers"
-        env = {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}
-        lane = "config-dir"
-
     monkeypatch.setattr(
-        "fno.agents.account_env.resolve_account_overlay",
-        lambda account_id, **kwargs: _Overlay(),
+        "fno.agents.spawn_overlay_client.account_overlay",
+        lambda account_id, **kwargs: {"account_id": "makers", "lane": "config-dir",
+                                      "env": {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}},
     )
     result = dispatch.dispatch_spawn(
         name="router",

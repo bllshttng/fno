@@ -5,8 +5,8 @@
 //! the lane moves with its body.
 
 use super::{
-    codex_thread_on_done, codex_thread_on_status, is_non_terminal, state_error_code,
-    thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
+    codex_thread_on_done, codex_thread_on_status, is_non_terminal, load_registry_offloaded,
+    state_error_code, thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
 };
 use crate::codex_thread_entry::build_codex_thread_entry;
 use crate::protocol::{ErrorCode, Request, Response};
@@ -36,23 +36,27 @@ pub(super) async fn spawn_codex_thread_lane(
         );
     }
     let model = req.params.get("model").and_then(Value::as_str);
-    // Both spellings, resolved by one reader. Reading `yolo` alone dropped
-    // `permission_mode` silently and started bounded, which downgrades the very
-    // posture the caller was naming; an unrecognized value is refused here
-    // rather than degraded, for the same reason. The posture stays TYPED from
-    // here on: both halves ride the start frame, the registry row and the
-    // resume, never a bool.
-    let posture = match crate::codex_thread::resolve_thread_posture(
-        req.params.get("yolo").and_then(Value::as_bool),
-        req.params.get("permission_mode").and_then(Value::as_str),
-    ) {
-        Ok(posture) => posture,
+    // Fenced `--` tokens the front door carried here BECAUSE this lane takes
+    // them. A token the lane does not carry is a router bug, refused by name
+    // rather than dropped: the operator typed it expecting it to land.
+    let harness_args: Vec<String> = req
+        .params
+        .get("harness_args")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let carry = match crate::codex_thread::parse_harness_args(&harness_args) {
+        Ok(carry) => carry,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
     };
-    let effort = req.params.get("effort").and_then(Value::as_str);
-    let node = req.params.get("node").and_then(Value::as_str);
-    // The role rides the request so the row is promoted AT MINT: the seed
-    // turn below enqueues inside this lane, and a role settled by the
+    // The role rides the request so the row is fully promoted AT MINT: the
+    // seed turn below enqueues inside this lane, and a role settled by the
     // Python caller only after the receipt lets the actor run its first
     // turn unpromoted. Both halves or neither; the territory and
     // succession policy stays at the Python seam.
@@ -60,6 +64,57 @@ pub(super) async fn spawn_codex_thread_lane(
         Ok(role) => role,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
     };
+    // Occupancy pre-read for the widen: a scope a live row already holds
+    // widens nothing. The atomic mint below stays the truth for the row; a
+    // scope freed between this read and the mint lands the conservative
+    // direction (a bounded lead), never an unpromoted worker with full
+    // access.
+    let widen_role: Option<(u32, String)> = match &role {
+        Some((level, scope)) => {
+            let path = ctx.home.registry_json();
+            let held = load_registry_offloaded(path)
+                .await
+                .map_or(false, |registry| {
+                    registry.entries.iter().any(|existing| {
+                        existing.role_scope.as_deref() == Some(scope.as_str())
+                            && existing.role_level.is_some()
+                            && is_non_terminal(existing.status)
+                    })
+                });
+            if held {
+                None
+            } else {
+                Some((*level, scope.clone()))
+            }
+        }
+        None => None,
+    };
+    // Both spellings, resolved by one reader. Reading `yolo` alone dropped
+    // `permission_mode` silently and started bounded, which downgrades the very
+    // posture the caller was naming; an unrecognized value is refused here
+    // rather than degraded, for the same reason. The posture stays TYPED from
+    // here on: both halves ride the start frame, the codex_posture reader
+    // and the resume, never a bool. A promoted spawn that names NO posture
+    // launches full access; an operator spelling always outranks the role
+    // default (the order the tests pin).
+    let posture = match crate::codex_thread::resolve_thread_posture(
+        req.params.get("yolo").and_then(Value::as_bool),
+        // A fenced flag is what the operator typed on this spawn, so it
+        // outranks the request's config-injected value.
+        carry
+            .permission_mode
+            .as_deref()
+            .or(req.params.get("permission_mode").and_then(Value::as_str)),
+        widen_role.as_ref().map(|(level, _)| *level),
+    ) {
+        Ok(posture) => posture,
+        Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
+    };
+    let effort = carry
+        .effort
+        .as_deref()
+        .or(req.params.get("effort").and_then(Value::as_str));
+    let node = req.params.get("node").and_then(Value::as_str);
     // Hop 2 of the state-root grant. Read the roots from the REQUEST,
     // never from this process's environment. This daemon is long-lived and
     // shared across every thread on the machine, so its own env is not the
@@ -88,31 +143,15 @@ pub(super) async fn spawn_codex_thread_lane(
                 .collect()
         })
         .unwrap_or_default();
-    // Fenced `--` tokens the front door carried here BECAUSE this lane takes
-    // them. A token the lane does not carry is a router bug, refused by name
-    // rather than dropped: the operator typed it expecting it to land.
-    let harness_args: Vec<String> = req
-        .params
-        .get("harness_args")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    let carry = match crate::codex_thread::parse_harness_args(&harness_args) {
-        Ok(carry) => carry,
-        Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
-    };
     let mut state_dirs = state_dirs;
     for dir in carry.add_dirs {
         if !state_dirs.iter().any(|existing| existing == &dir) {
             state_dirs.push(dir);
         }
     }
+    // A fenced `--model` (a grid pick with no route) names the thread's
+    // model when the request carried none; the row records the same value.
+    let model = model.or(carry.model.as_deref());
     let seed = req
         .params
         .get("message")
@@ -398,14 +437,14 @@ async fn resolve_target_cwd(cwd: &Path, node: Option<&str>, seed: &str) -> Resul
     let Some(node) = node.filter(|node| !node.is_empty()) else {
         return Ok(cwd.to_path_buf());
     };
-    let Some((verb, _)) = seed
+    let Some((command, _)) = seed
         .split_whitespace()
         .next()
-        .and_then(crate::provider::parse_verb_token)
+        .and_then(crate::provider::parse_command_token)
     else {
         return Ok(cwd.to_path_buf());
     };
-    if verb != "target" {
+    if command != "target" {
         return Ok(cwd.to_path_buf());
     }
     let requested = cwd.to_path_buf();

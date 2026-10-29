@@ -33,11 +33,42 @@ use crate::state::{load_registry, update_registry};
 /// change is this one line.
 pub(crate) const GRACE_S: i64 = 120;
 
+/// The answering-phase backstop default, in minutes: a conversation hold
+/// armed on the user's last real message ends this long after it,
+/// whichever comes first with the Stop grace (C3). Overridable through
+/// `mail.hold.answer_minutes` in the global config, or
+/// `$FNO_AGENTS_ANSWER_MINUTES`. A value below 1 minute coerces to this
+/// default; one above a day clamps to a day, so a typo can never arm a
+/// hold the reader cannot outlive.
+pub(crate) const DEFAULT_ANSWER_MINUTES: i64 = 10;
+
+/// The clamp ceiling for the answer minutes: one day.
+const MAX_ANSWER_MINUTES: i64 = 24 * 60;
+
 /// The answering-phase backstop (C2), in seconds: the answering clock is
 /// written this far out, so a crash or an interrupt (Esc fires no Stop)
-/// cannot hold mail forever. Not the C5 cap. The user may change this
-/// value; the change is this one line.
-pub(crate) const ANSWER_BACKSTOP_S: i64 = 3600;
+/// cannot hold mail forever. Not the C5 cap.
+pub(crate) fn answer_backstop_s() -> i64 {
+    answer_minutes().saturating_mul(60)
+}
+
+/// The minutes behind [`answer_backstop_s`]: `$FNO_AGENTS_ANSWER_MINUTES`
+/// wins, then the global config's `mail.hold.answer_minutes`, then the
+/// default. An unparseable or non-positive value falls through like an
+/// absence, and the result clamps to [`MAX_ANSWER_MINUTES`].
+fn answer_minutes() -> i64 {
+    let env = std::env::var("FNO_AGENTS_ANSWER_MINUTES")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok());
+    let configured = env.or_else(|| {
+        crate::agents_config::config_lookup_global(&["mail", "hold", "answer_minutes"])
+            .and_then(|v| v.as_integer())
+    });
+    configured
+        .filter(|minutes| *minutes > 0)
+        .unwrap_or(DEFAULT_ANSWER_MINUTES)
+        .min(MAX_ANSWER_MINUTES)
+}
 
 /// The `source` mark on a clock the conversation rules wrote. A manual hold
 /// carries no source, which is how the two are told apart.
@@ -107,7 +138,7 @@ pub(crate) fn hold_sidecar_path(handle: &str) -> PathBuf {
 /// The one token-to-row rule, `hold.addresses` mirrored: a token addresses a
 /// row when it names its full session id (case-normalized), the row's
 /// canonical first-eight handle, its daemon short_id, or its name. The
-/// check-in resolves by full session id, the status verb by the short
+/// check-in resolves by full session id, the status command by the short
 /// handle, senders by any of the four; one matcher so every reader of a hold
 /// answers the same question instead of the gate resolving fewer addresses
 /// than the writers stamp.
@@ -140,6 +171,33 @@ fn set_policy(session_id: &str, policy: Option<&str>) -> Option<String> {
     })
     .ok()?;
     matched
+}
+
+/// One `mail_hold_stamped` row naming who stamped `session_id` bus-only:
+/// the writer, this process's argv, and its parent's command line. Neither
+/// writer left a trace before, so a stamp nobody armed could not be traced
+/// to its caller. Best effort: an emit failure never blocks the stamp.
+pub(crate) fn record_stamp(writer: &str, session_id: &str) {
+    let clip = |s: &str| s.chars().take(300).collect::<String>();
+    let argv: Vec<String> = std::env::args().take(16).map(|a| clip(&a)).collect();
+    let ppid = std::os::unix::process::parent_id();
+    let parent = Command::new("ps")
+        .args(["-o", "command=", "-p", &ppid.to_string()])
+        .output()
+        .ok()
+        .map(|o| clip(String::from_utf8_lossy(&o.stdout).trim()))
+        .unwrap_or_default();
+    let _ = crate::events::EventEmitter::new(AgentsHome::from_env().events_jsonl(), "rust").emit(
+        "mail_hold_stamped",
+        &serde_json::json!({
+            "session_id": session_id,
+            "writer": writer,
+            "pid": std::process::id(),
+            "ppid": ppid,
+            "argv": argv,
+            "parent": parent,
+        }),
+    );
 }
 
 /// The matched row's (session id, delivery policy), read-only. The guard
@@ -342,8 +400,15 @@ pub(crate) fn tidy_lapsed(handle: &str) {
     if until > chrono::Utc::now() {
         return;
     }
-    let _ = std::fs::remove_file(hold_sidecar_path(handle));
-    let _ = set_policy(handle, None);
+    // Unstamp first: the clock is the only record the sweep can find the
+    // stamp by, so a failed registry write must leave it for the next pass.
+    // A handle no row carries has no stamp to orphan, so its clock goes.
+    let rowless = load_registry(&AgentsHome::shared_registry_json())
+        .map(|registry| row_for_session(&registry, handle).is_none())
+        .unwrap_or(false);
+    if set_policy(handle, None).is_some() || rowless {
+        let _ = std::fs::remove_file(hold_sidecar_path(handle));
+    }
 }
 
 /// The clock read's shape: the extend print's fields plus source, with null
@@ -421,10 +486,11 @@ fn ensure_clock(handle: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
     if read_clock(handle).is_some() {
         return true;
     }
+    let backstop = answer_backstop_s();
     write_clock(
         handle,
-        Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
-        ANSWER_BACKSTOP_S,
+        Some(now + chrono::Duration::seconds(backstop)),
+        backstop,
         "wall",
         None,
         Some(CONVERSATION_SOURCE),
@@ -433,7 +499,7 @@ fn ensure_clock(handle: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
 }
 
 /// A real user message (C2): the provenance classifier passes it, and it is
-/// neither a `!` shell line nor a slash/dollar verb token. Everything else
+/// neither a `!` shell line nor a slash/dollar command token. Everything else
 /// is machinery, and machinery never arms the conversation hold.
 pub(crate) fn is_real_message(prompt: &str) -> bool {
     let Ok(cleaned) = crate::provenance::classify(prompt) else {
@@ -445,7 +511,7 @@ pub(crate) fn is_real_message(prompt: &str) -> bool {
     cleaned
         .split_whitespace()
         .next()
-        .map(|tok| crate::provider::parse_verb_token(tok).is_none())
+        .map(|tok| crate::provider::parse_command_token(tok).is_none())
         .unwrap_or(false)
 }
 
@@ -464,7 +530,7 @@ pub(crate) enum ArmOutcome {
 }
 
 impl ArmOutcome {
-    /// The `mail-hold` verb's exit code for the outcome.
+    /// The `mail-hold` command's exit code for the outcome.
     pub(crate) fn code(self) -> i32 {
         match self {
             ArmOutcome::Armed | ArmOutcome::StoodAside => 0,
@@ -474,8 +540,8 @@ impl ArmOutcome {
     }
 }
 
-/// The conversation arm (C2): write the answering clock (`wall`,
-/// `ANSWER_BACKSTOP_S` out, `source: conversation`) and stamp the row
+/// The conversation arm (C2): write the answering clock (`wall`, the
+/// answer backstop out, `source: conversation`) and stamp the row
 /// `bus-only`, clock before stamp as today. A row stamped `bus-only` whose
 /// clock is absent, has `until: null`, or is live without
 /// `source: conversation` carries a hold the user set on purpose; the
@@ -510,10 +576,11 @@ fn arm_row(
         return (ArmOutcome::StoodAside, Some(handle));
     }
     let prior_live_conversation = live_conversation;
+    let backstop = answer_backstop_s();
     if write_clock(
         &handle,
-        Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
-        ANSWER_BACKSTOP_S,
+        Some(now + chrono::Duration::seconds(backstop)),
+        backstop,
         "wall",
         None,
         Some(CONVERSATION_SOURCE),
@@ -526,6 +593,9 @@ fn arm_row(
         // The row raced out between the read and the stamp; the clock on
         // disk is inert without the flag.
         return (ArmOutcome::RowRaced, Some(handle));
+    }
+    if policy.as_deref() != Some("bus-only") {
+        record_stamp("conversation_arm", session_id);
     }
     ensure_clock(&handle, now);
     if !prior_live_conversation {
@@ -542,7 +612,10 @@ fn arm_row(
 /// conversation clock is live: a follow-up the harness queues during a long
 /// answer fires UserPromptSubmit only after the turn ends, often minutes
 /// after its Enter, and without the wide look-back it would not restart the
-/// grace. Silent on every path, never panics.
+/// grace. A lapsed conversation clock widens the window to its own arm
+/// instant: the follow-up behind that clock was witnessed inside the window
+/// the clock covered, and the harness submits it only after the turn ends,
+/// which can sit well past the lapse. Silent on every path, never panics.
 pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
     if !is_real_message(prompt) {
         return;
@@ -553,11 +626,13 @@ pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
     let handle = identity_key(&matched);
     let now = chrono::Utc::now();
     let now_ms = now.timestamp_millis();
-    let live = read_clock(&handle).map(|c| c.live(now)).unwrap_or(false);
+    let clock = read_clock(&handle);
+    let live = clock.as_ref().map(|c| c.live(now)).unwrap_or(false);
     let since_ms = if live {
-        now_ms - ANSWER_BACKSTOP_S * 1000
+        now_ms - answer_backstop_s() * 1000
     } else {
-        now_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS
+        lapsed_arm_ms(&clock, now)
+            .unwrap_or(now_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS)
     };
     let journal = crate::paths::AgentsHome::from_env().events_jsonl();
     if crate::operator_witness::submitted_since(&journal, session_id, since_ms, now_ms) {
@@ -565,6 +640,26 @@ pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
         // of looking it up a second time.
         arm_row(&matched, policy, session_id);
     }
+}
+
+/// The look-back floor for a lapsed conversation clock: its arm instant
+/// (`until` minus the window it was written with), so a follow-up witnessed
+/// inside that window still re-arms after the clock lapses. None for a
+/// missing, live, or foreign-source clock, which keeps the plain 30 s
+/// submit look-back.
+fn lapsed_arm_ms(clock: &Option<Clock>, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    let clock = clock.as_ref()?;
+    if clock.live(now) || clock.source.as_deref() != Some(CONVERSATION_SOURCE) {
+        return None;
+    }
+    let until = clock.until?;
+    // Saturating, not Duration::seconds: a clock file is machine-writable
+    // state, and an extreme window_s must not panic the hook path.
+    Some(
+        until
+            .timestamp_millis()
+            .saturating_sub(clock.window_s.saturating_mul(1000)),
+    )
 }
 
 /// The Stop side (C3, C6): a live conversation clock is shortened to
@@ -688,7 +783,12 @@ pub(crate) fn body_is_control(body: &str) -> bool {
     let Some(first) = lines.next() else {
         return false;
     };
-    let rest = if first.len() >= 9 && first[..9].eq_ignore_ascii_case("<fno_mail") {
+    // `get`, not a slice: a stamp like "`@Hazel · " puts a multibyte char
+    // across byte 9, and slicing there panics every send.
+    let rest = if first
+        .get(..9)
+        .is_some_and(|p| p.eq_ignore_ascii_case("<fno_mail"))
+    {
         match first.find('>') {
             Some(gt) => &first[gt + 1..],
             None => first,
@@ -889,7 +989,7 @@ fn park_payload(session_id: &str, payload: &str) -> i32 {
 }
 
 /// The body of [`park_payload`]: park one payload and answer the receipt
-/// line, or the caller verb's exit code on failure. Shared with the
+/// line, or the caller command's exit code on failure. Shared with the
 /// `--gate --park-on-hold` arm, which answers the receipt in JSON instead.
 fn park_payload_inner(session_id: &str, payload: &str) -> Result<String, i32> {
     let Some((matched, name, _)) = lookup_gate_row(session_id) else {
@@ -1161,6 +1261,59 @@ pub(crate) fn tidy_lapsed_holds(home: &AgentsHome, now: chrono::DateTime<chrono:
     for handle in lapsed_hold_handles(&registry, now) {
         spawn_release_timer(&handle);
     }
+    for (name, sid) in orphan_stamp_rows(&registry, now) {
+        // A conversation arm may have written a clock since the pick.
+        if gate_clock_addresses(&sid, &sid)
+            .iter()
+            .any(|h| read_clock(h).is_some())
+        {
+            continue;
+        }
+        if set_policy(&sid, None).is_some() {
+            eprintln!("mail-hold: cleared orphan bus-only stamp on {name} ({sid})");
+        }
+    }
+}
+
+/// How old a row must be before a clock-less `bus-only` stamp on it counts
+/// as an orphan: the conversation backstop, so no live answering window can
+/// still own it.
+fn orphan_stamp_age_s() -> i64 {
+    answer_backstop_s()
+}
+
+/// The (name, session id) of every non-operator row stamped `bus-only` with
+/// no clock file, older than [`orphan_stamp_age_s`]. An `origin ==
+/// "operator"` row never qualifies: `fno agents register --delivery-policy
+/// bus-only` is the one door that stamps with no clock on purpose, and it
+/// writes `operator` over an adopted or unmarked origin. Spawned, adopted
+/// and unmarked rows are stamped only by a clocked arm, so a missing clock
+/// there is the lapsed-tidy orphan. A row with no readable `created_at` counts
+/// as old: every clocked arm writes its clock before its stamp, and a minted
+/// row gets a `created_at`, so an undated clockless stamp is one the old join
+/// path wrote with no clock at all. Pure so the pick is testable without a
+/// registry write.
+pub(crate) fn orphan_stamp_rows(
+    registry: &crate::state::Registry,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<(String, String)> {
+    registry
+        .entries
+        .iter()
+        .filter(|e| e.delivery_policy.as_deref() == Some("bus-only"))
+        .filter(|e| e.origin.as_deref() != Some("operator"))
+        .filter_map(|e| {
+            let sid = e.harness_session_id.as_deref()?;
+            let old = chrono::DateTime::parse_from_rfc3339(&e.created_at).map_or(true, |born| {
+                now - born.with_timezone(&chrono::Utc)
+                    > chrono::Duration::seconds(orphan_stamp_age_s())
+            });
+            let clockless = gate_clock_addresses(sid, sid)
+                .iter()
+                .all(|h| read_clock(h).is_none());
+            (old && clockless).then(|| (e.name.clone(), sid.to_string()))
+        })
+        .collect()
 }
 
 /// `fno-agents mail-hold --session <id> [--off | --gate]`
@@ -1208,6 +1361,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
     let mut describe_handles: Vec<&String> = Vec::new();
     let mut status_line_handle: Option<&String> = None;
     let mut policy_value: Option<&String> = None;
+    let mut record_stamp_session: Option<&String> = None;
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--session" => session = iter.next(),
@@ -1228,11 +1382,18 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
             "--describe" => describe_handles = iter.by_ref().collect(),
             "--status-line" => status_line_handle = iter.next(),
             "--policy" => policy_value = iter.next(),
+            "--record-stamp" => record_stamp_session = iter.next(),
             other => {
                 eprintln!("mail-hold: unknown argument {other:?}");
                 return 2;
             }
         }
+    }
+    if let Some(session_id) = record_stamp_session {
+        // The Python register door's stamp: `fno agents register
+        // --delivery-policy bus-only` writes the row, then journals here.
+        record_stamp("register_command", session_id);
+        return 0;
     }
     if let Some(handle) = arm_handle {
         // The Python arm/arm_wall bodies, ported: idle re-arms on activity
@@ -1422,7 +1583,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
     };
     if gate_mode {
         // The body is optional. A terminal stdin is never read (the gate is a
-        // caller verb, not an interactive prompt); a piped or closed stdin is
+        // caller command, not an interactive prompt); a piped or closed stdin is
         // drained, and a read failure degrades to the no-body gate.
         let mut body = String::new();
         use std::io::IsTerminal as _;
@@ -1457,7 +1618,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
         // release leg: the clock is rewritten EXPIRED, so the detached
         // timer's first wake releases at once and drains what the hold kept
         // on the bus - the same effect `fno agents mail hold --off` has
-        // inside the held session, through the timer's own verb.
+        // inside the held session, through the timer's own command.
         match set_policy(session_id, None) {
             Some(matched) => {
                 let handle = identity_key(&matched);
@@ -1509,23 +1670,38 @@ pub(crate) mod tests {
 
     /// Pin FNO_AGENTS_HOME (registry + journal), FNO_HOME (hold sidecars)
     /// and FNO_STATE_DIR (chats store) to one tempdir for `f`, under the
-    /// crate-wide env lock (claim_verbs idiom). FNO_PY points at `true` so
+    /// crate-wide env lock (claim_commands idiom). FNO_PY points at `true` so
     /// a parked-payload drain spawn is a no-op the test never waits on.
+    /// The global config read is pinned away too: FNO_GLOBAL_SETTINGS_PATH
+    /// names a file that does not exist, so `mail.hold.answer_minutes` on
+    /// the developer's machine cannot reach a hold test, and
+    /// FNO_AGENTS_ANSWER_MINUTES is cleared so the override cannot either.
     /// Prior values are restored, so an ambient FNO_HOME survives the test.
     pub(crate) fn with_hold_env(f: impl FnOnce(&std::path::Path)) {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let prior: Vec<(String, Option<std::ffi::OsString>)> =
-            ["FNO_AGENTS_HOME", "FNO_HOME", "FNO_PY", "FNO_STATE_DIR"]
-                .iter()
-                .map(|k| (k.to_string(), std::env::var_os(k)))
-                .collect();
+        let prior: Vec<(String, Option<std::ffi::OsString>)> = [
+            "FNO_AGENTS_HOME",
+            "FNO_HOME",
+            "FNO_PY",
+            "FNO_STATE_DIR",
+            "FNO_GLOBAL_SETTINGS_PATH",
+            "FNO_AGENTS_ANSWER_MINUTES",
+        ]
+        .iter()
+        .map(|k| (k.to_string(), std::env::var_os(k)))
+        .collect();
         let td = tempfile::TempDir::new().unwrap();
         std::env::set_var("FNO_AGENTS_HOME", td.path());
         std::env::set_var("FNO_HOME", td.path());
         std::env::set_var("FNO_PY", "true");
         std::env::set_var("FNO_STATE_DIR", td.path());
+        std::env::set_var(
+            "FNO_GLOBAL_SETTINGS_PATH",
+            td.path().join("no-global-settings.toml"),
+        );
+        std::env::remove_var("FNO_AGENTS_ANSWER_MINUTES");
         f(td.path());
         for (key, value) in prior {
             match value {
@@ -1627,7 +1803,7 @@ pub(crate) mod tests {
             );
             let row = clock(dir, SID);
             assert_eq!(row["clock_kind"], "wall");
-            assert_eq!(row["window_s"], ANSWER_BACKSTOP_S);
+            assert_eq!(row["window_s"], answer_backstop_s());
             assert!(row["ceiling"].is_null());
             assert_eq!(row["source"], "conversation");
             let until = row["until"].as_str().unwrap();
@@ -1636,20 +1812,33 @@ pub(crate) mod tests {
                 .with_timezone(&chrono::Utc);
             let left = (until - chrono::Utc::now()).num_seconds();
             assert!(
-                (3550..=3600).contains(&left),
-                "the answering clock sits about 60 minutes out, got {left}s"
+                (answer_backstop_s() - 50..=answer_backstop_s()).contains(&left),
+                "the answering clock sits about the answer backstop out, got {left}s"
             );
             let status = self_status(SID).unwrap();
             assert_eq!(status["clock_live"], true);
             assert_eq!(status["delivery_policy"], "bus-only");
             assert_eq!(status["conversation"], true);
+            // The stamp names its writer, so a phantom DND traces to a caller.
+            let journal =
+                crate::event_store::journal_text(&dir.join("events.jsonl"), &["mail_hold_stamped"]);
+            let stamp: serde_json::Value = journal
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .find(|v: &serde_json::Value| v["type"] == "mail_hold_stamped")
+                .expect("the arm journals a mail_hold_stamped row");
+            assert_eq!(stamp["data"]["writer"], "conversation_arm");
+            assert_eq!(stamp["data"]["session_id"], SID);
+            assert!(stamp["data"]["argv"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()));
             // The check-in label rides the same fact: the conversation leg
             // of the shared helper, at its live integration point.
             assert_eq!(
                 crate::hold_label::hold_attention(&status).unwrap(),
                 "mail held while the user talks to you (machine-armed; lifts about 2 min after your answer)"
             );
-            // The status verb addresses the same hold by the canonical
+            // The status command addresses the same hold by the canonical
             // short handle; the gate must hold on it, not deliver.
             let first8 = identity_key(SID).get(..8).unwrap().to_string();
             assert!(!gate(&first8, None, chrono::Utc::now()).deliver);
@@ -1659,6 +1848,94 @@ pub(crate) mod tests {
             assert!(status["clock_until"].is_null());
             assert_eq!(status["delivery_policy"], "bus-only");
             assert_eq!(status["conversation"], false);
+        });
+    }
+
+    /// The `$FNO_AGENTS_ANSWER_MINUTES` override moves the clock the arm
+    /// writes, and a non-positive value falls through to the default the
+    /// way an absence does.
+    #[test]
+    fn answer_backstop_honors_the_env_override() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
+            std::env::set_var("FNO_AGENTS_ANSWER_MINUTES", "2");
+            arm_conversation(SID);
+            let row = clock(dir, SID);
+            assert_eq!(row["window_s"], 120);
+
+            std::env::set_var("FNO_AGENTS_ANSWER_MINUTES", "0");
+            arm_conversation(SID);
+            let row = clock(dir, SID);
+            assert_eq!(row["window_s"], answer_backstop_s());
+            assert_eq!(row["window_s"], 600);
+        });
+    }
+
+    /// `mail.hold.answer_minutes` in the global config moves the clock too:
+    /// the arm reads it through the settings path the env override does not
+    /// shadow when unset.
+    #[test]
+    fn answer_backstop_reads_the_global_config_key() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
+            let global = dir.join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            std::fs::write(
+                global.join("config.toml"),
+                "[mail.hold]\nanswer_minutes = 3\n",
+            )
+            .unwrap();
+            std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.toml"));
+            arm_conversation(SID);
+            let row = clock(dir, SID);
+            assert_eq!(row["window_s"], 180);
+        });
+    }
+
+    /// A follow-up queued during a long answer carries a witness inside the
+    /// answering window the lapsed clock covered, so it re-arms even though
+    /// the prompt fires well past the lapse. With no clock the plain 30 s
+    /// look-back stands and the same old witness arms nothing.
+    #[test]
+    fn a_followup_submitted_after_the_clock_lapses_still_re_arms() {
+        with_hold_env(|dir| {
+            write_registry(
+                dir,
+                serde_json::json!([
+                    registry_row("worker", SID),
+                    registry_row("idle", "dddddddd-1111-2222-3333-444455556666")
+                ]),
+            );
+            let now = chrono::Utc::now();
+            // The previous answering window: armed 700 s ago, lapsed 100 s ago.
+            write_clock(
+                &identity_key(SID),
+                Some(now - chrono::Duration::seconds(100)),
+                600,
+                "wall",
+                None,
+                Some(CONVERSATION_SOURCE),
+            )
+            .unwrap();
+            let old_witness_ms = (now - chrono::Duration::seconds(690)).timestamp_millis();
+            witness_row(SID, old_witness_ms);
+            witness_row("dddddddd-1111-2222-3333-444455556666", old_witness_ms);
+            conversation_prompt(SID, "follow up");
+            let row = clock(dir, SID);
+            assert_eq!(row["source"], "conversation");
+            let until = chrono::DateTime::parse_from_rfc3339(row["until"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            assert!(
+                until > now,
+                "the lapsed clock is re-armed live for the next answer"
+            );
+            // The clock-less session keeps the 30 s look-back: no arm.
+            conversation_prompt("dddddddd-1111-2222-3333-444455556666", "follow up");
+            assert!(
+                !clock_path(dir, "dddddddd-1111-2222-3333-444455556666").exists(),
+                "an old witness with no clock never arms"
+            );
         });
     }
 
@@ -1805,7 +2082,11 @@ pub(crate) mod tests {
                 "the clock now sits at most one grace out, got {left}s"
             );
             assert_eq!(row["source"], "conversation", "the source mark stays");
-            assert_eq!(row["window_s"], ANSWER_BACKSTOP_S, "every other field kept");
+            assert_eq!(
+                row["window_s"],
+                answer_backstop_s(),
+                "every other field kept"
+            );
             // Never extends: a second Stop during the grace cannot push the
             // deadline back out.
             std::thread::sleep(std::time::Duration::from_millis(1_100));
@@ -1845,6 +2126,26 @@ pub(crate) mod tests {
                 .map(|k| (k.to_string(), std::env::var_os(k)))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn tidy_lapsed_unstamps_the_row_then_drops_the_clock() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
+            let handle = identity_key(SID);
+            let lapsed = chrono::Utc::now() - chrono::Duration::seconds(120);
+            write_clock(&handle, Some(lapsed), 60, "wall", None, None).unwrap();
+            tidy_lapsed(&handle);
+            assert!(!clock_path(dir, SID).exists());
+            let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
+            assert!(registry.entries[0].delivery_policy.is_none());
+            // A handle no row carries has no stamp to orphan: its lapsed
+            // clock still goes.
+            let stray = "eeeeeeee-1111-2222-3333-444455556666";
+            write_clock(&identity_key(stray), Some(lapsed), 60, "wall", None, None).unwrap();
+            tidy_lapsed(&identity_key(stray));
+            assert!(!clock_path(dir, stray).exists());
+        });
     }
 
     #[test]
@@ -1938,6 +2239,12 @@ pub(crate) mod tests {
             assert!(!v.deliver, "an unbacked header is not a control pass");
             let v = gate(SID, Some("`@j · msg-7 · control note`\ncontrol: stop"), now);
             assert!(!v.deliver, "a mismatched sender is not a control pass");
+            // A five-letter sender puts the middle dot across byte 9.
+            let v = gate(SID, Some("`@Hazel · msg-7 · note`\nhello"), now);
+            assert!(
+                !v.deliver,
+                "a multibyte char at byte 9 is prose, not a panic"
+            );
             // ...and never from the second body line.
             let v = gate(
                 SID,
@@ -2126,6 +2433,61 @@ pub(crate) mod tests {
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
             let picked = lapsed_hold_handles(&registry, now);
             assert_eq!(picked, vec![identity_key(sid_a)], "only a lapsed 90s");
+        });
+    }
+
+    #[test]
+    fn orphan_sweep_picks_old_clockless_non_operator_stamps() {
+        with_hold_env(|dir| {
+            let now = chrono::Utc::now();
+            let old = (now - chrono::Duration::seconds(orphan_stamp_age_s() + 60))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            let young = (now - chrono::Duration::seconds(60))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            let sid = |n: u8| format!("{n:08}-1111-2222-3333-444455556666");
+            let row = |name: &str, n: u8, origin: Option<&str>, born: &str| {
+                let mut r = stamped_row(name, &sid(n));
+                r["created_at"] = serde_json::Value::String(born.into());
+                if let Some(o) = origin {
+                    r["origin"] = serde_json::Value::String(o.into());
+                }
+                r
+            };
+            write_registry(
+                dir,
+                serde_json::json!([
+                    row("orphan", 1, Some("spawn"), &old),
+                    row("young", 2, Some("spawn"), &young),
+                    row("registered", 3, Some("operator"), &old),
+                    row("unmarked", 4, None, &old),
+                    row("clocked", 5, Some("spawn"), &old),
+                    row("adopted", 6, Some("adopted"), &old),
+                    row("young-adopted", 7, Some("adopted"), &young),
+                    row("unborn", 8, None, ""),
+                ]),
+            );
+            write_clock(
+                &identity_key(&sid(5)),
+                Some(now + chrono::Duration::seconds(600)),
+                600,
+                "wall",
+                None,
+                None,
+            )
+            .unwrap();
+            let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
+            assert_eq!(
+                orphan_stamp_rows(&registry, now),
+                vec![
+                    ("orphan".to_string(), sid(1)),
+                    ("unmarked".to_string(), sid(4)),
+                    ("adopted".to_string(), sid(6)),
+                    ("unborn".to_string(), sid(8)),
+                ],
+                "an old or undated clock-less stamp is an orphan unless an operator set it"
+            );
         });
     }
 }

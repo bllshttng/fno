@@ -1,6 +1,6 @@
 //! A team's term: the bound a lead declares at promotion so a healthy
 //! board can no longer wait forever. Pure reading logic only; the Stop-hook
-//! gate (`loopcheck::lead_decide`) and the declaration verb
+//! gate (`loopcheck::lead_decide`) and the declaration command
 //! (`lead_state::run_lead_term`) call into this module rather than
 //! duplicating the spec parse or the state comparison.
 

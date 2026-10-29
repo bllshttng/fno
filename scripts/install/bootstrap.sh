@@ -2,7 +2,7 @@
 # bootstrap.sh - the zero-binary install doctor for the fno plugin.
 #
 # The plugin tree is the only thing guaranteed present after `/plugin install`,
-# and the repair verb (`fno doctor update`) refuses to run until `fno-agents`
+# and the repair command (`fno doctor update`) refuses to run until `fno-agents`
 # exists. This script closes that gap: it needs no fno binary, no jq, no
 # python3 - only bash and the standard POSIX tools every harness host has.
 #
@@ -184,7 +184,7 @@ check_frontdoor() {
       "run this script with --repair"
     return 0
   fi
-  # `mux ls` is the discriminator: the Python CLI has no mux verb and fails
+  # `mux ls` is the discriminator: the Python CLI has no mux command and fails
   # fast, so rc 0 (answered) or 124 (our bound fired on a wedged socket - it
   # still proves the Rust front door is present, same reading as the
   # session-start hook).
@@ -252,7 +252,7 @@ check_plugin_root() {
   manifest="$PLUGIN_ROOT/.claude-plugin/plugin.json"
   if [[ ! -r "$manifest" ]]; then
     emit_check "plugin_root" "missing" 1 "$PLUGIN_ROOT" "no .claude-plugin/plugin.json above this script; run it from a plugin tree or checkout." \
-      "reinstall the plugin (/plugin install fno@footnote)"
+      "reinstall the plugin (/plugin install fno@fno)"
     return 0
   fi
   version="$(sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$manifest" 2>/dev/null | head -1)"
@@ -260,7 +260,7 @@ check_plugin_root() {
     emit_check "plugin_root" "ok" 1 "$PLUGIN_ROOT" "plugin tree at version $version." ""
   else
     emit_check "plugin_root" "broken" 1 "$PLUGIN_ROOT" "plugin.json exists but its version is unreadable." \
-      "reinstall the plugin (/plugin install fno@footnote)"
+      "reinstall the plugin (/plugin install fno@fno)"
   fi
 }
 
@@ -387,7 +387,7 @@ mode_from_source() {
   fi
   # Registering the checkout as the harness's plugin edits harness config, so
   # it is printed for the user, never run here.
-  say "from-source done. Register the plugin for your harness from $checkout yourself (Claude Code: /plugin marketplace add + /plugin install; see docs/getting-started.md)."
+  say "from-source done. Register the plugin for your harness from $checkout yourself (Claude Code: /plugin marketplace add + /plugin install; see docs/install.md)."
   EXTRA_JSON=",\"from_source\":{\"ran\":true,\"checkout\":\"$(json_escape "$checkout")\",\"actions\":[$actions]}"
   return 0
 }
@@ -422,7 +422,7 @@ main() {
   local arg="${1:-}"
   # `--yes` anywhere on the line (or FNO_YES=1): the run-once setup pass
   # takes its recommended defaults instead of trusting the TTY. Filtered
-  # out before dispatch so the mode verbs keep their own argv.
+  # out before dispatch so the mode commands keep their own argv.
   local a
   local args=()
   for a in "$@"; do
@@ -449,7 +449,7 @@ main() {
   run_all_checks
 
   # The one run-once setup, best effort and only when the CLI landed ready:
-  # after a repair the wheel carries the verb, its own done markers keep
+  # after a repair the wheel carries the command, its own done markers keep
   # reruns cheap, and FNO_YES / --yes passes through.
   if [[ "$READY" == 1 ]]; then
     run_setup_once

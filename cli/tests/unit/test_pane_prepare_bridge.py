@@ -1,4 +1,4 @@
-"""The mux verb's renderer bridge, asserted as a contract.
+"""The mux command's renderer bridge, asserted as a contract.
 
 `fno mux pane send` (Rust) shells to the paired fno-agents binary's `mail
 pane-prepare` renderer for every non-raw send, and FAILS CLOSED when that call
@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from fno.mail.cli import mail_app
@@ -53,9 +52,15 @@ def _declared_options() -> set[str]:
     return opts
 
 
-def test_the_rust_bridge_names_a_command_this_cli_has():
+def test_the_rust_bridge_names_a_command_and_flags_this_cli_has():
+    """The bridge's command and every flag it passes must be ones the command takes.
+
+    `--session-id` in particular was renamed once already, with `--session`
+    kept as a hidden deprecated alias. A second rename that forgot the Rust
+    caller would refuse every non-raw send and no test would say so.
+    """
     argv = _bridge_argv()
-    # The renderer dispatch shape: the paired binary takes `mail`, then the verb.
+    # The renderer dispatch shape: the paired binary takes `mail`, then the command.
     assert argv[:2] == ["mail", "pane-prepare"], argv
 
     result = CliRunner().invoke(mail_app, ["pane-prepare", "--help"])
@@ -64,21 +69,15 @@ def test_the_rust_bridge_names_a_command_this_cli_has():
         f"Python forward no longer accepts its own flags: {result.output}"
     )
 
-
-@pytest.mark.parametrize("flag", ["--session-id"])
-def test_the_rust_bridge_flags_still_exist(flag):
-    """Each flag the bridge passes must be one the command still takes.
-
-    `--session-id` in particular was renamed once already, with `--session`
-    kept as a hidden deprecated alias. A second rename that forgot the Rust
-    caller would refuse every non-raw send and no test would say so.
-    """
-    assert flag in _bridge_argv(), f"{flag} is no longer in the bridge argv"
+    flags = [a for a in argv if a.startswith("--")]
+    assert "--session-id" in flags, argv
     # Introspect the parameters, never the rendered help. Typer draws help in a
     # Rich box that wraps to the terminal width, so a narrower CI terminal
     # splits a long flag across lines and a substring search reports it missing.
     # The parameter list is what the command actually accepts, and it does not
     # depend on how wide the screen is.
-    assert flag in _declared_options(), (
-        f"the pane-prepare forward no longer accepts {flag}; the Rust bridge passes it"
-    )
+    declared = _declared_options()
+    for flag in flags:
+        assert flag in declared, (
+            f"the pane-prepare forward no longer accepts {flag}; the Rust bridge passes it"
+        )

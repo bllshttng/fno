@@ -24,9 +24,19 @@ step() { log "== $*"; }
 command -v jq >/dev/null 2>&1 || fail "jq is required (brew install jq)"
 command -v script >/dev/null 2>&1 || fail "script(1) is required for the viewer leg"
 
+# The sandboxed build-dir lands under TMPDIR, whose quota a full debug build
+# exceeds on runners (os error 122); pin the classic workspace target instead,
+# the same escape the smoke shards use for their journey builds.
+export CARGO_BUILD_BUILD_DIR="$REPO_ROOT/target"
+
 step "building the real binaries (cargo build)"
-cargo build --manifest-path crates/fno/Cargo.toml --bin fno -q || fail "fno build"
-cargo build --manifest-path crates/fno-agents/Cargo.toml -q || fail "runtime binaries build"
+# The smoke sandbox pins CARGO_BUILD_BUILD_DIR into its /tmp home
+# (cli/src/fno/hermetic.py), and the CI runner's /tmp quota cannot fit a cold
+# fno-agents debug build there (EDQUOT os error 122, seen 2026-10-25). Pin the
+# classic layout: it is the path this script reads below and the one
+# smoke-setup pre-builds warm, so these are fingerprint checks, not rebuilds.
+CARGO_BUILD_BUILD_DIR="$REPO_ROOT/crates/fno/target" cargo build --manifest-path crates/fno/Cargo.toml --bin fno -q || fail "fno build"
+CARGO_BUILD_BUILD_DIR="$REPO_ROOT/crates/fno-agents/target" cargo build --manifest-path crates/fno-agents/Cargo.toml -q || fail "runtime binaries build"
 [ -x "$FNO" ] || fail "the fno binary did not land at $FNO"
 
 TMP_ROOT=$(mktemp -d /tmp/fno-ws.XXXXXX 2>/dev/null || mktemp -d "${TMPDIR:-/tmp}/fno-ws.XXXXXX")
@@ -102,7 +112,7 @@ PANES0=$("$FNO" mux pane ls --json 2>/dev/null | jq 'length')
 PA=$("$FNO" mux pane run --cwd "$TMP_ROOT/work" -- /bin/bash | tr -d '[:space:]')
 case "$PA" in ''|*[!0-9]*) fail "first pane id is not numeric: '$PA'";; esac
 
-# The split is the REAL PaneSplit verb on the existing pane, not a second
+# The split is the REAL PaneSplit command on the existing pane, not a second
 # run: the journey claims to prove split, so it must drive split. The split
 # receipt prints the new pane id; the ls that follows confirms it exists.
 PB=$("$FNO" mux pane split "$PA" --direction right | tr -d '[:space:]')

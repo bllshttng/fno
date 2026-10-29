@@ -124,7 +124,7 @@ def write_settings(home: Path, settings_yaml: str) -> Path:
 
 
 # ---------------------------------------------------------------
-# create verb
+# create command
 # ---------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ def test_create_uses_worktree_base_from_settings_and_is_idempotent(tmp_repo, iso
 
 
 # ---------------------------------------------------------------
-# setup verb
+# setup command
 # ---------------------------------------------------------------
 
 
@@ -195,7 +195,7 @@ def test_setup_copies_env_files_and_skips_install_on_lockfile_match(tmp_repo, is
 
 
 # ---------------------------------------------------------------
-# cleanup verb (lighter coverage - delegates to existing lifecycle script)
+# cleanup command (lighter coverage - delegates to existing lifecycle script)
 # ---------------------------------------------------------------
 
 
@@ -224,7 +224,7 @@ def test_cleanup_skips_in_progress_target_session(tmp_repo, isolated_env):
 
 
 # ---------------------------------------------------------------
-# migrate verb
+# migrate command
 # ---------------------------------------------------------------
 
 

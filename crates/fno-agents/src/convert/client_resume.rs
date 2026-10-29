@@ -107,13 +107,17 @@ pub fn carried_flags(argv: &[String]) -> Vec<String> {
 /// the whole reason the pane must be proven gone before this runs, and the
 /// reason the id is read back afterwards rather than assumed.
 ///
-/// The carried flags come last so a pin the operator set on the live writer
-/// beats any default the resume would otherwise take.
-pub fn resume_argv(session_id: &str, carried: &[String]) -> Vec<String> {
+/// `--name` carries the row's name, never the title the transcript holds,
+/// which a retasked row has outgrown. The carried flags come last so a pin
+/// the operator set on the live writer beats any default the resume would
+/// otherwise take.
+pub fn resume_argv(session_id: &str, name: &str, carried: &[String]) -> Vec<String> {
     let mut argv = vec![
         "--bg".to_string(),
         "--resume".to_string(),
         session_id.to_string(),
+        "--name".to_string(),
+        name.to_string(),
     ];
     argv.extend_from_slice(carried);
     argv
@@ -152,7 +156,7 @@ pub fn relaunched_row<'a>(
 /// operator reaches with `claude attach <short_id>`.
 ///
 /// Unlike the codex flip this KEEPS a short id and a pid, because a claude
-/// thread is a real process claude hosts itself, and both the attach verb
+/// thread is a real process claude hosts itself, and both the attach command
 /// and the liveness ladder address it through those two fields. The row's
 /// name, node and every other birth fact are left alone.
 pub fn to_claude_thread(
@@ -200,10 +204,21 @@ mod tests {
     fn the_resume_argv_asks_for_the_background_lane_and_carries_the_pins_last() {
         let carried = ["--model".to_string(), "glm-5.3-flash[1m]".to_string()];
         assert_eq!(
-            resume_argv("sid-1", &carried),
-            vec!["--bg", "--resume", "sid-1", "--model", "glm-5.3-flash[1m]"]
+            resume_argv("sid-1", "w1", &carried),
+            vec![
+                "--bg",
+                "--resume",
+                "sid-1",
+                "--name",
+                "w1",
+                "--model",
+                "glm-5.3-flash[1m]"
+            ]
         );
-        assert_eq!(resume_argv("sid-1", &[]), vec!["--bg", "--resume", "sid-1"]);
+        assert_eq!(
+            resume_argv("sid-1", "w1", &[]),
+            vec!["--bg", "--resume", "sid-1", "--name", "w1"]
+        );
     }
 
     #[test]
@@ -231,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn the_thread_flip_keeps_the_short_id_and_pid_the_attach_verb_needs() {
+    fn the_thread_flip_keeps_the_short_id_and_pid_the_attach_command_needs() {
         let mut entry = crate::state::RegistryEntry {
             name: "worker-one".to_string(),
             cwd: "/repo".to_string(),
@@ -252,7 +267,7 @@ mod tests {
 
         assert_eq!(entry.substrate.as_deref(), Some("thread"));
         // A claude thread IS a process, unlike a codex thread: the attach
-        // verb takes the short id and the liveness ladder takes the pid.
+        // command takes the short id and the liveness ladder takes the pid.
         assert_eq!(entry.short_id, "newshort");
         assert_eq!(entry.pid, Some(5150));
         assert!(entry.mux.is_none());

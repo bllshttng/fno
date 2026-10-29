@@ -32,7 +32,7 @@ _CLI_SRC = _SKILLS_DIR.parents[1] / "cli" / "src"
 if str(_CLI_SRC) not in sys.path:
     sys.path.insert(0, str(_CLI_SRC))
 
-from fno import dispatch_flags, harness_names  # noqa: E402  (path set above)
+from fno import harness_identity, harness_names  # noqa: E402  (path set above)
 
 
 # PRODUCT.md validation thresholds (mirrors /impeccable's loader contract)
@@ -50,31 +50,6 @@ _PRODUCT_MD_SEARCH_PATHS = (
     ".agents/context/PRODUCT.md",
     "docs/PRODUCT.md",
 )
-
-
-# ---------------------------------------------------------------------------
-# Company topology projection
-# ---------------------------------------------------------------------------
-# The router projects a resolved company topology onto a work order through
-# fno.company.execution.project_execution, which carries the shape alongside the
-# work order's unchanged identity, authority ceiling, approval floor, and
-# required evidence. There is no second router: topology changes execution
-# shape only, so the same WorkOrderRef and delivery requirements pass through
-# direct, loop, squad, and pipeline unchanged. Company work is not yet flowing
-# through this router (is the first consumer); this is the seam.
-
-
-def apply_company_topology(resolution, work_order, authority_ceiling, approval_floor, required_evidence_ids):
-    """Project a resolved topology for a company work order without altering truth."""
-    from fno.company.execution import project_execution
-
-    return project_execution(
-        resolution=resolution,
-        work_order=work_order,
-        authority_ceiling=authority_ceiling,
-        approval_floor=approval_floor,
-        required_evidence_ids=required_evidence_ids,
-    )
 
 
 def find_product_md(repo_root: Path) -> Optional[Path]:
@@ -174,12 +149,12 @@ def resolve_invoking_harness(
     ``"env-marker"`` or ``"env-default"``. An explicit value wins and is
     validated against :data:`fno.harness_names.KNOWN_HARNESSES` (the L0 roster
     every other caller shares); with no explicit value the ambient identity is
-    resolved through :func:`fno.dispatch_flags.infer_invoking_harness`, which
-    maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to opencode
-    and answers None when markers disagree. ``"env-default"`` (claude) is
-    distinguishable from ``"env-marker"``, so a caller that requires a
-    positively identified harness can refuse on the difference. The value is a
-    harness, never a model vendor.
+    resolved through :func:`fno.harness_identity.resolve_harness_identity`,
+    which maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to
+    opencode and answers None when markers disagree. ``"env-default"``
+    (claude) is distinguishable from ``"env-marker"``, so a caller that
+    requires a positively identified harness can refuse on the difference.
+    The value is a harness, never a model vendor.
     """
     if explicit is not None and explicit.strip():
         h = explicit.strip().lower()
@@ -189,7 +164,7 @@ def resolve_invoking_harness(
                 f"{', '.join(harness_names.KNOWN_HARNESSES)}"
             )
         return h, "explicit"
-    inferred = dispatch_flags.infer_invoking_harness(env)
+    inferred = harness_identity.resolve_harness_identity(env).harness
     if inferred:
         return inferred, "env-marker"
     return "claude", "env-default"
@@ -1226,13 +1201,13 @@ def release_task_claim_at_boundary(node: str, task: str, outcome: str) -> bool:
     the give-back would release a finished task's claim mid-flight. Non-fatal
     by the same contract as the emit itself: one stderr note and False on any
     failure, never an exception. A give-back by a caller that is not the
-    holder is refused (exit 3) by the verb; that refusal lands here as the
+    holder is refused (exit 3) by the command; that refusal lands here as the
     same non-fatal note.
     """
     if outcome in _TERMINAL_OUTCOMES:
-        status_verb = "done"
+        status_command = "done"
     elif outcome in _GIVEBACK_OUTCOMES:
-        status_verb = "pending"
+        status_command = "pending"
     else:
         print(
             f"orchestrator: note: unknown task outcome {outcome!r}; task claim "
@@ -1240,7 +1215,7 @@ def release_task_claim_at_boundary(node: str, task: str, outcome: str) -> bool:
             file=sys.stderr,
         )
         return False
-    argv = ["fno", "backlog", "task", "update", node, task, "--status", status_verb]
+    argv = ["fno", "backlog", "task", "update", node, task, "--status", status_command]
     return _shell_fno(argv, "task claim settle")
 
 
@@ -1810,7 +1785,7 @@ if __name__ == "__main__":
             state_path = sys.argv[state_idx + 1]
             completed_tasks = get_completed_tasks_from_state(state_path)
             # --ready prints one JSON object on stdout; the informational
-            # lines stay on the human-facing verbs only.
+            # lines stay on the human-facing commands only.
             if "--ready" not in sys.argv:
                 print(f"Completed tasks from state: {completed_tasks}")
                 print()

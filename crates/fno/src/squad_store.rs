@@ -1124,27 +1124,6 @@ impl MemberEvidence {
         }
     }
 
-    /// Build evidence from a successful empty agent system. This is the one
-    /// legacy compatibility case where an unmatched attach id is known dead:
-    /// both registry stores are absent, so no worker identity can be live.
-    pub fn from_complete_live_set(live: std::collections::HashSet<String>) -> Self {
-        Self {
-            live,
-            dead: std::collections::HashSet::new(),
-            live_pairs: std::collections::HashSet::new(),
-            dead_pairs: std::collections::HashSet::new(),
-            dead_names: std::collections::HashSet::new(),
-            registry_row_names: std::collections::HashSet::new(),
-            spawned_names: std::collections::HashSet::new(),
-            held_names: std::collections::HashSet::new(),
-            retire_eligible_names: std::collections::HashSet::new(),
-            unmeasured_expiry_s: 0,
-            now_secs: 0,
-            complete_registry_names: false,
-            complete_attach_set: true,
-        }
-    }
-
     pub fn add_dead(&mut self, identity: impl Into<String>) {
         self.dead.insert(identity.into());
     }
@@ -1452,7 +1431,7 @@ pub fn prune_decision_with_evidence(
 /// non-tombstone member is unknown-liveness and the squad is kept). `live_cwds`
 /// are the cwds of live mux panes; a pane mapped to the squad protects it.
 /// `origin_exists` is injected so the matrix is unit-testable without disk; the
-/// verb passes `|p| std::path::Path::new(p).exists()` and re-runs it under the
+/// command passes `|p| std::path::Path::new(p).exists()` and re-runs it under the
 /// lock.
 pub fn prune_decision(
     squad: &StoredSquad,

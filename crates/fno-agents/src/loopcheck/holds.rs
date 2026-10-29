@@ -7,7 +7,7 @@
 //! `loop_check_question_gate` row with `gate: held_on_question`, and the
 //! second fire (the same question still open) terminates `HeldOnQuestion`
 //! with a digest naming the user-side clear. Only the user closes the
-//! question, so neither text names the decide verb. The held state is the
+//! question, so neither text names the decide command. The held state is the
 //! journal itself, never the fingerprint.
 
 use serde_json::Value;
@@ -39,7 +39,7 @@ pub(crate) struct UnrecordedDecision {
 /// Fold the question/decision family across a UNION of journals.
 ///
 /// A question can be asked and closed in one journal while the decision lands
-/// in another (the operator verbs write to the canonical root's journal; a
+/// in another (the operator commands write to the canonical root's journal; a
 /// worktree stop gate reads its own cwd's), so membership is only decidable
 /// after every journal is folded - checking per-file would hold a session
 /// whose record sits one path away.
@@ -294,7 +294,7 @@ pub(crate) enum QuestionGateStop {
 /// The stop gate's question family, in order: a decided question left
 /// without a decision record blocks (step 3b), then a node held on an open
 /// question blocks once and terminates on the second fire (step 3c). The
-/// journals fold as a UNION (operator verbs write to the canonical root's
+/// journals fold as a UNION (operator commands write to the canonical root's
 /// journal; a worktree stop gate reads its own cwd's), and the gate's own
 /// loop_check_question_gate/termination rows land through `emit`, so the
 /// held state the second fire reads is the journal itself, never the
@@ -366,14 +366,13 @@ pub(crate) fn question_gates(
             );
             return QuestionGateStop::Block {
                 reason: format!(
-                    "held on open question {qid}: '{}'. Only the user closes it: on the \
-                     question board, or at their own terminal with \
-                     `fno inbox outstanding clear {qid} --answer \"<answer>\"`. This \
-                     session cannot answer it, and a decide record does not close it. If \
-                     this session asked it and no longer needs it, withdraw it with \
-                     `fno inbox outstanding clear {qid}`. Otherwise end the turn. The next \
-                     stop on this question ends the loop.",
+                    "held on open question {qid}: '{}'. Only the user answers it. {} \
+                     This session cannot answer it on its own, and a decide record does \
+                     not close it. If this session asked it and no longer needs it, \
+                     withdraw it with `fno inbox outstanding clear {qid}`. Otherwise ask, \
+                     then end the turn. The next stop on this question ends the loop.",
                     h.question,
+                    crate::question_clear::chat_answer_line(&h.question_id),
                     qid = h.question_id
                 ),
             };
@@ -384,11 +383,10 @@ pub(crate) fn question_gates(
             format!(" options: {};", h.options.join(" | "))
         };
         let digest = format!(
-            "still held on open question {qid}: '{}'.{} The loop ends here. The user \
-             answers on the question board, or with \
-             `fno inbox outstanding clear {qid} --answer \"<answer>\"`.",
+            "still held on open question {qid}: '{}'.{} The loop ends here. {}",
             h.question,
             options_line,
+            crate::question_clear::chat_answer_line(&h.question_id),
             qid = h.question_id
         );
         emit(
@@ -445,6 +443,12 @@ mod tests {
             "{reason}"
         );
         assert!(!reason.contains("backlog decide"), "{reason}");
+        // Both relayed texts send the agent to the user's chat, never to a
+        // terminal the user may not be near.
+        assert!(
+            reason.contains("--authority chat_attested --quote"),
+            "{reason}"
+        );
 
         let QuestionGateStop::Terminate { reason, message } =
             question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &emit)
@@ -461,6 +465,12 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("backlog decide"), "{message}");
+        // Both relayed texts send the agent to the user's chat, never to a
+        // terminal the user may not be near.
+        assert!(
+            message.contains("--authority chat_attested --quote"),
+            "{message}"
+        );
 
         let count = |ty: &str| {
             crate::events::committed_journal_text(&project)
@@ -483,6 +493,54 @@ mod tests {
                 QuestionGateStop::Block { .. }
             ));
         }
+    }
+
+    /// Every source whose strings an agent relays to the user. None may send
+    /// the user to a terminal: an agent records the user's chat words instead.
+    #[test]
+    fn no_relayed_string_sends_the_user_to_a_terminal() {
+        let needles = [
+            ["their own", " terminal"].concat(),
+            ["attended", " shell"].concat(),
+            ["paste", " ! fno"].concat(),
+        ];
+        let sources = [
+            ("loopcheck/holds.rs", include_str!("holds.rs")),
+            ("question_clear.rs", include_str!("../question_clear.rs")),
+            ("outstanding.rs", include_str!("../outstanding.rs")),
+            ("law_match.rs", include_str!("../law_match.rs")),
+            ("lead_answers.rs", include_str!("../lead_answers.rs")),
+            ("pr_draft_ready.rs", include_str!("../pr_draft_ready.rs")),
+            ("merge_freeze.rs", include_str!("../merge_freeze.rs")),
+            ("lead_lifecycle.rs", include_str!("../lead_lifecycle.rs")),
+            ("territory.rs", include_str!("../territory.rs")),
+            ("lead_ops.rs", include_str!("../lead_ops.rs")),
+            ("lead_reads.rs", include_str!("../lead_reads.rs")),
+            ("team_settle.rs", include_str!("../team_settle.rs")),
+            ("team_widen.rs", include_str!("../team_widen.rs")),
+            (
+                "backlog/epic_cap.rs",
+                include_str!("../backlog/epic_cap.rs"),
+            ),
+            ("org_remote.rs", include_str!("../org_remote.rs")),
+            (
+                "lead_verdict_inputs.rs",
+                include_str!("../lead_verdict_inputs.rs"),
+            ),
+        ];
+        for needle in &needles {
+            let hits: Vec<&str> = sources
+                .iter()
+                .filter(|(_, text)| text.contains(needle.as_str()))
+                .map(|(name, _)| *name)
+                .collect();
+            assert!(hits.is_empty(), "{needle:?} is back in {hits:?}");
+        }
+        let line = crate::question_clear::chat_answer_line("q-1");
+        assert!(
+            line.contains("clear q-1") && line.contains("--authority chat_attested --quote"),
+            "{line}"
+        );
     }
 
     #[test]

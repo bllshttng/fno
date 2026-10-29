@@ -540,8 +540,15 @@ pub(crate) fn node_claims_by_id() -> Result<std::collections::HashMap<String, No
     // claims outage must not take the board read with it - the selection
     // and territory gates re-check liveness on their own and refuse closed
     // there (list_strict, never this map).
-    let mut claims = node_claims_from_db().unwrap_or_default();
-    match list_node_claims(Some("node:")) {
+    // With a primary both reads scan the same remote table, so the listing
+    // alone answers and the db read runs only when the listing failed.
+    let listed = list_node_claims(Some("node:"));
+    let mut claims = if primary && listed.is_ok() {
+        Default::default()
+    } else {
+        node_claims_from_db().unwrap_or_default()
+    };
+    match listed {
         Ok(records) => {
             let mut live: std::collections::HashMap<String, NodeClaim> = Default::default();
             for record in records {
@@ -599,6 +606,30 @@ pub(crate) fn project_claim_value(row: &mut Value, claim: NodeClaim) {
             session_id.map(Value::String).unwrap_or(Value::Null),
         );
     }
+}
+
+/// Rename one node id across the supersession rows: the row's own key and
+/// every successor reference OTHER rows hold. The update --to rename calls
+/// this
+/// under the store lock, before the row fold's cascade can reach them.
+pub fn rename_supersession_rows(
+    connection: &Connection,
+    old: &str,
+    new: &str,
+) -> Result<usize, String> {
+    let own = connection
+        .execute(
+            "UPDATE supersessions SET node_id=?1 WHERE node_id=?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    let successor = connection
+        .execute(
+            "UPDATE supersessions SET successor_id=?1 WHERE successor_id=?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(own + successor)
 }
 
 /// Upsert one node's row and its mirrors. The caller owns the transaction;
@@ -767,7 +798,7 @@ pub fn save(connection: &Connection, node: &Node) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
     let dispatch = &node.dispatch;
-    if dispatch.verb.is_some() || dispatch.brief.is_some() || dispatch.model.is_some() {
+    if dispatch.command.is_some() || dispatch.brief.is_some() || dispatch.model.is_some() {
         connection
             .execute(
                 "INSERT INTO node_dispatch (node_id, verb, brief, model)
@@ -776,7 +807,7 @@ pub fn save(connection: &Connection, node: &Node) -> Result<(), String> {
                      brief = excluded.brief, model = excluded.model
                  WHERE (node_dispatch.verb, node_dispatch.brief, node_dispatch.model)
                    IS NOT (excluded.verb, excluded.brief, excluded.model)",
-                params![node.id, dispatch.verb, dispatch.brief, dispatch.model],
+                params![node.id, dispatch.command, dispatch.brief, dispatch.model],
             )
             .map_err(|error| error.to_string())?;
     } else {
@@ -1684,7 +1715,7 @@ pub(crate) type SupersessionParts = (
 
 fn map_dispatch_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dispatch> {
     Ok(Dispatch {
-        verb: row.get(0)?,
+        command: row.get(0)?,
         brief: row.get(1)?,
         model: row.get(2)?,
     })
@@ -1835,6 +1866,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
         plan_path: Option<String>,
         reopened_at: Option<String>,
         completed_at: Option<String>,
+        joined_at: Option<String>,
         has_any_pr: bool,
     }
     let claims = node_claims_by_id()?;
@@ -1855,7 +1887,8 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                     n.ownership_defect,
                     n.plan_path,
                     n.reopened_at,
-                    n.completed_at
+                    n.completed_at,
+                    COALESCE(json_extract(n.extras, '$.parented_at'), n.created_at)
              FROM nodes n",
         )
         .map_err(|error| error.to_string())?;
@@ -1881,6 +1914,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                 plan_path: row.get(10)?,
                 reopened_at: row.get(11)?,
                 completed_at: row.get(12)?,
+                joined_at: row.get(13)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -2015,13 +2049,13 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
             .collect();
         // The same holds the whole-graph pass reads: own plan work (the
         // has_own_plan_work typed twin; any PR row is evidence, an
-        // additional-PR list included) and a deliberate reopen postdating
-        // every child close (reopen_outranks_stamps).
+        // additional-PR list included) and a deliberate reopen no child that
+        // joined before it has closed after (reopen_holds_epic).
         let holds = {
-            let kid_stamps: Vec<Option<&str>> = rows
+            let kid_stamps: Vec<(Option<&str>, Option<&str>)> = rows
                 .iter()
                 .filter(|row| row.parent.as_deref() == Some(pid.as_str()))
-                .map(|row| row.completed_at.as_deref())
+                .map(|row| (row.joined_at.as_deref(), row.completed_at.as_deref()))
                 .collect();
             matches!(rows[pidx].status.as_str(), "in_review" | "in_progress")
                 || (rows[pidx]
@@ -2029,7 +2063,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                     .as_deref()
                     .is_some_and(|p| !p.trim().is_empty())
                     && !rows[pidx].has_any_pr)
-                || crate::graph_store::reopen_outranks_stamps(
+                || crate::graph_store::reopen_holds_epic(
                     rows[pidx].reopened_at.as_deref(),
                     &kid_stamps,
                 )

@@ -360,6 +360,15 @@ impl ClaudeHome {
         }
     }
 
+    /// A live claude process holds this session, so `claude --bg --resume`
+    /// would copy it. An fno command line naming the id does not count.
+    pub fn session_held(&self, session_id: &str) -> bool {
+        match &self.live_sessions {
+            Some(sessions) => sessions.iter().any(|s| s == session_id),
+            None => crate::census::live_claude_holds_session(session_id),
+        }
+    }
+
     /// What `claude agents --json --all`, read under `config_dir`, says
     /// about one job. The listing is the only source of job state; the files
     /// under `jobs/` are Claude's own.
@@ -816,6 +825,44 @@ pub struct HarnessFlags<'a> {
     /// message. claude's row carries `["*"]`: the harness argv takes them all.
     /// `&[String]` defaults to the empty slice, so older constructors stay.
     pub passthrough: &'a [String],
+    /// A resolved `--route`: its env rides `extra_env`; this carries the
+    /// settings file the daemon-forked session reads and the row's route axes.
+    pub route: Option<RouteStamp<'a>>,
+    /// An unrouted spawn's own `--settings` file (a sandbox write policy
+    /// alone owes one). A route's file wins when both are set.
+    pub settings: Option<&'a str>,
+}
+
+/// The value a fenced passthrough gives one flag (`--flag V`, `--flag=V`, or
+/// the `short` spelling), last one winning as the harness CLI reads it.
+pub fn passthrough_value<'t>(
+    tokens: &'t [String],
+    long: &str,
+    short: Option<&str>,
+) -> Option<&'t str> {
+    let mut found = None;
+    let mut it = tokens.iter();
+    while let Some(tok) = it.next() {
+        if tok == long || short.is_some_and(|s| tok == s) {
+            found = it.next().map(String::as_str).or(found);
+        } else if let Some(value) = tok.strip_prefix(long).and_then(|r| r.strip_prefix('=')) {
+            found = Some(value);
+        }
+    }
+    found.filter(|v| !v.is_empty())
+}
+
+/// The model a fenced passthrough names (`--model M`, `--model=M`, `-m M`).
+pub fn passthrough_model(tokens: &[String]) -> Option<&str> {
+    passthrough_value(tokens, "--model", Some("-m"))
+}
+
+/// The identity of a routed thread spawn (see `spawn_route::route_seam`).
+#[derive(Clone, Copy, Debug)]
+pub struct RouteStamp<'a> {
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub settings: &'a str,
 }
 
 impl<'a> HarnessFlags<'a> {
@@ -1512,10 +1559,10 @@ pub fn bg_create(
     use std::process::{Command, Stdio};
 
     // the sigil says WHO WROTE the seed, never which harness runs it,
-    // so a codex-authored `$fno:verb` reaches claude as `/fno:verb`. Bound
+    // so a codex-authored `$fno:command` reaches claude as `/fno:command`. Bound
     // here (not in `build_argv`) so the stdin path on argv overflow carries
     // the same normalized text as the argv value.
-    let message = crate::provider::render_verb_seed(message, "claude");
+    let message = crate::provider::render_command_seed(message, "claude");
     let message = message.as_str();
     let use_stdin = use_stdin_for(message);
     let mut argv = build_argv(
@@ -1581,7 +1628,12 @@ pub fn bg_create(
             }
         }
     }
-    if !floor.is_empty() {
+    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+        // The route owns the settings slot (the floor stood down above), at
+        // the same argv position Python's bg_create puts it. A sandbox file
+        // already folds the scrub floor.
+        argv.splice(4..4, ["--settings".to_string(), settings.to_string()]);
+    } else if !floor.is_empty() {
         match crate::model_env_scrub::write_scrub_settings(&floor) {
             Ok(path) => {
                 let p = path.display().to_string();
@@ -1618,7 +1670,9 @@ pub fn bg_create(
 
     // This client can lazily birth the claude supervisor; a supervisor born
     // dirty poisons every session it forks for its whole life, so
-    // make sure a clean one is up first. The client command is never touched.
+    // make sure a clean one is up first. The client drops its route keys in
+    // case it wins a birth race anyway; the route rides --settings.
+    crate::claude_supervisor::strip_route_carriers(&mut cmd);
     crate::claude_supervisor::guard_birth(extra_env.iter().copied());
 
     let start = std::time::Instant::now();
@@ -2095,7 +2149,7 @@ pub fn stamp_daemon_receipt(
 }
 
 /// UTC `_utc_now_iso()` second-precision timestamp.
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
@@ -2105,7 +2159,7 @@ fn now_iso() -> String {
 /// ts is millisecond-precision so two distinct same-second events never build
 /// byte-identical lines (the store commits those as one logical write).
 /// Free function (not `.emit(`) so the crate's daemon-emit-kind scanner ignores
-/// these Python-side audit kinds, matching `client_verbs::append_agents_event`.
+/// these Python-side audit kinds, matching `client_commands::append_agents_event`.
 ///
 /// SCOPE NOTE (cv-022d74f9): success events here carry their explicit fields
 /// only. Python's `emit_with_context` also flattens a 13-field `EventContext`
@@ -2373,7 +2427,9 @@ pub fn dispatch_claude_ask(
 /// reused directly; only the output shape differs from `dispatch_claude_ask`.
 ///
 /// Receipt (byte-parity with Python `cmd_spawn` on the complete path):
-/// `{"name": "<name>", "short_id": "<8hex>", "harness": "claude", "status": "live"}\n`.
+/// `{"name": "<name>", "short_id": "<8hex>", "harness": "claude", "model_basis": "lane-default", "status": "live"}\n`.
+/// A named model adds `"model"` and the basis `requested`; a route adds
+/// `"provider"` and the basis `route`.
 /// A bounded identity miss reports `status: "spawning"` and carries a warning.
 /// A prompt claude never recorded in job state also reports `spawning`, plus
 /// `seed: "unverified"` and a `seed_unverified` reason.
@@ -2571,16 +2627,30 @@ pub fn dispatch_claude_spawn(
     };
     // (seventh surface) The model the worker was launched with: an
     // explicit --model reaches claude as its own flag, so it wins the receipt
-    // too - Python's `model or route_model` rule verbatim; this Rust lane is
-    // reached only without a route flag, so no route twin exists here.
+    // too - Python's `model or route_model` rule verbatim. A routed spawn
+    // names the route's vendor and model token, labelled as the request.
     // Absent when none was named: the honest absence, never a defaulted name
     // that reads as a measurement.
     // Placed before `status`, where Python's cmd_spawn puts it, and encoded
     // with the same full JSON-string encode Python's `json.dumps` applies -
     // a `"`-only escape diverges on a backslash and can emit invalid JSON.
-    let model_field = match model.filter(|m| !m.is_empty()) {
-        Some(m) => format!(", \"model\": {}", json_string_ascii(m)),
-        None => String::new(),
+    // The basis names where the model came from: the route, a model the
+    // caller typed (a fenced `--model` counts), or the lane's own default,
+    // which the receipt cannot name before the first turn lands.
+    let named = model
+        .filter(|m| !m.is_empty())
+        .or_else(|| passthrough_model(flags.passthrough));
+    let model_field = match (flags.route, named) {
+        (Some(r), _) => format!(
+            ", \"provider\": {}, \"model\": {}, \"model_basis\": \"route\"",
+            json_string_ascii(r.provider),
+            json_string_ascii(r.model)
+        ),
+        (None, Some(m)) => format!(
+            ", \"model\": {}, \"model_basis\": \"requested\"",
+            json_string_ascii(m)
+        ),
+        (None, None) => ", \"model_basis\": \"lane-default\"".to_string(),
     };
     // append the effective launch dir on the default canonical move
     // (surface_cwd, decided by the caller alongside the redirect note), so the
@@ -2606,13 +2676,30 @@ pub fn dispatch_claude_spawn(
     }
 }
 
+/// The headless argv tail for `--output-format` (row 9): the same two tokens
+/// the Python builder appends (harnesses/claude.py keeps it after effort,
+/// before passthrough), so PR-watch's json.loads reads the envelope the
+/// `claude -p` run printed.
+fn push_output_format(argv: &mut Vec<String>, output_format: Option<&str>) {
+    if let Some(v) = output_format.filter(|v| !v.is_empty()) {
+        argv.push("--output-format".into());
+        argv.push(v.into());
+    }
+}
+
+/// Set to `1` by the front door's `fno agents spawn --mux`: the headless run
+/// keeps a registry row, so it shows in the mux while it runs.
+pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
+
 /// Dispatch a `claude -p` truly-headless one-shot (`headless` substrate).
 ///
 /// Unlike [`dispatch_claude_spawn`] (the detached `--bg` thread, which returns a
 /// short-id receipt), this runs `claude -p` SYNCHRONOUSLY to completion, prints
 /// the model's reply to stdout, and exits - no registry row, no short-id, no
-/// driveable pane. `claude` never *defaults* to `-p`; this is the one lane that
-/// shells it (Locked Decision 4). `ask` and the relay claude hop keep `--bg`.
+/// driveable pane. The child's SessionStart report would mint a row from its
+/// `FNO_AGENT_SELF`, so the child carries [`crate::session_report::NO_ROW_ENV`]
+/// unless [`SHOW_ROW_ENV`] opts in. `claude` never *defaults* to `-p`; this is
+/// the one lane that shells it (Locked Decision 4). `ask` and the relay claude hop keep `--bg`.
 ///
 /// A headless run cannot answer permission prompts, so it always passes
 /// `--dangerously-skip-permissions` (mirrors the agy/codex once lanes); `yolo`
@@ -2631,7 +2718,9 @@ pub fn dispatch_claude_headless(
     model: Option<&str>,
     permission_mode: Option<&str>,
     effort: Option<&str>,
+    output_format: Option<&str>,
     flags: HarnessFlags,
+    extra_env: &[(&str, &str)],
 ) -> AskOutcome {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -2650,6 +2739,11 @@ pub fn dispatch_claude_headless(
     // --dangerously-skip-permissions for the headless lane; unset keeps the
     // skip (a headless one-shot cannot answer permission prompts).
     let mut argv: Vec<String> = vec!["claude".into(), "-p".into()];
+    // A routed one-shot carries the route's settings file, as bg_create does.
+    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+        argv.push("--settings".to_string());
+        argv.push(settings.to_string());
+    }
     match permission_mode.filter(|m| !m.is_empty()) {
         Some(m) => {
             argv.push("--permission-mode".into());
@@ -2667,6 +2761,11 @@ pub fn dispatch_claude_headless(
         argv.push("--effort".to_string());
         argv.push(value.to_string());
     }
+    // The PR-watch envelope flag (row 9): the Python builder appends it
+    // after effort and before passthrough (harnesses/claude.py keeps the
+    // same slot), and stdout stays claude's raw reply; the door validated
+    // the shape before this builder ran.
+    push_output_format(&mut argv, output_format);
     // Tier-3 passthrough, same token order as the Python headless_create.
     flags.push_onto(&mut argv);
     if !use_stdin {
@@ -2683,11 +2782,21 @@ pub fn dispatch_claude_headless(
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     cmd.current_dir(cwd);
-    // Same scrub + ordering rationale as bg_create above; no overlay env and
-    // no daemon fork on this one-shot arm, so no settings floor is needed.
-    crate::model_env_scrub::scrub_onto(&mut cmd, &[]);
+    // Same scrub + ordering rationale as bg_create above: the route env
+    // lands after the scrub, so it wins. No daemon fork on this one-shot
+    // arm, so no settings floor is needed.
+    crate::model_env_scrub::scrub_onto(&mut cmd, extra_env);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
     crate::claims::stamp_command_env(&mut cmd, Some(name), "claude", None);
     cmd.env("FNO_AGENT_FROM", from_name);
+    // No row unless the caller opted in to watch: the opt-in is this spawn's
+    // alone, so the child never passes it on to a spawn of its own.
+    if std::env::var(SHOW_ROW_ENV).ok().as_deref() != Some("1") {
+        cmd.env(crate::session_report::NO_ROW_ENV, name);
+    }
+    cmd.env_remove(SHOW_ROW_ENV);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(if use_stdin {
@@ -3174,7 +3283,16 @@ fn create(
     // markers read here name this row's true parent.
     let spawned_by = crate::spawn_lineage::ambient_lineage();
     let (launch_account, launch_account_source) = crate::state::launch_provenance_from_env();
-    let new_entry = RegistryEntry {
+    // A routed spawn stamps the route's vendor and model token where an
+    // unrouted one stamps anthropic and its model (fork_lineage.axis_overrides).
+    let route = flags.route;
+    // A grid or lane pick with no route rides the fence as `--model`; the
+    // row records it too, or it reads null while claude runs that model.
+    let model = route
+        .map(|r| r.model)
+        .or(model)
+        .or_else(|| passthrough_model(flags.passthrough));
+    let mut new_entry = RegistryEntry {
         // client-side mint - this process inherited the spawning
         // session's env, so the exported FNO_NODE names the node THIS spawn
         // is for.
@@ -3202,12 +3320,17 @@ fn create(
             .filter(|m| !m.is_empty())
             .map(|_| "requested".to_string()),
         effort: None,
-        // v23: the request beside the effect. This lane never
-        // resolves a vendor (the binary refuses --provider), so the provider
-        // request stays None; model and effort ride through verbatim.
+        // v23: the request beside the effect. Only a route names a vendor,
+        // so the provider request is the route's or None; model and effort
+        // ride through verbatim.
         requested_model: model.filter(|m| !m.is_empty()).map(str::to_string),
-        requested_provider: None,
-        requested_effort: effort.filter(|v| !v.is_empty()).map(str::to_string),
+        requested_provider: route.map(|r| r.provider.to_string()),
+        requested_effort: effort
+            .filter(|v| !v.is_empty())
+            .or_else(|| passthrough_value(flags.passthrough, "--effort", None))
+            .map(str::to_string),
+        requested_permission_mode: passthrough_value(flags.passthrough, "--permission-mode", None)
+            .map(str::to_string),
         // Canonical identity at birth: the session id rides the
         // struct-update base below. A bounded miss stays a named spawning row,
         // so the constructor's Option is exactly the observed semantics.
@@ -3253,7 +3376,10 @@ fn create(
         role_level: None,
         role_scope: None,
         role_grantor: None,
-        route_settings_path: None,
+        route_settings_path: route
+            .map(|r| r.settings)
+            .or(flags.settings)
+            .map(str::to_string),
         delivery_policy: None,
         sandbox_posture: None,
         git_grant: None,
@@ -3261,6 +3387,12 @@ fn create(
         // session by hand" is no, and saying so beats leaving an absence a
         // later reader has to guess at.
         origin: Some("spawn".to_string()),
+        // The seed as bg_create renders it for claude, so the attended guard
+        // can exempt the machine's own spawn turn by exact match: without it
+        // a fresh thread worker holds as attended until the window expires.
+        // An empty payload records nothing, as the pane mint does.
+        spawn_payload: (!message.is_empty())
+            .then(|| crate::provider::render_command_seed(message, "claude")),
         spawn_trigger: None,
         // The required identity/lineage args ride the struct-update base below.
         // The session id itself is NOT folded into it: a bounded miss is a
@@ -3268,6 +3400,10 @@ fn create(
         // the explicit field above keeps that semantics.
         ..RegistryEntry::new(session_uuid.clone(), spawned_by)
     };
+    if let Some(r) = route {
+        new_entry.provider = Some(r.provider.to_string());
+        new_entry.route_provider_id = Some(r.provider.to_string());
+    }
 
     // Re-check the name UNDER the registry lock before appending. The per-agent
     // flock serializes two Rust-client creates, but a concurrent daemon-PTY
@@ -3363,6 +3499,33 @@ fn create(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn headless_output_format_lands_after_effort_before_passthrough() {
+        // The Python builder's slot (harnesses/claude.py): after --effort,
+        // before passthrough, so claude's argv reads the same order both
+        // doors build.
+        let mut argv: Vec<String> = vec![
+            "claude".into(),
+            "-p".into(),
+            "--effort".into(),
+            "high".into(),
+        ];
+        push_output_format(&mut argv, Some("json"));
+        assert_eq!(
+            argv,
+            vec![
+                "claude",
+                "-p",
+                "--effort",
+                "high",
+                "--output-format",
+                "json"
+            ]
+        );
+        push_output_format(&mut argv, None);
+        assert_eq!(argv.len(), 6, "an absent flag appends nothing");
+    }
 
     // --- is_provably_live_report ----------------------------------
 
@@ -3701,6 +3864,8 @@ mod tests {
             allowed_tools: Some("Read,Edit"),
             disallowed_tools: Some("Bash"),
             passthrough: &[],
+            route: None,
+            settings: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),

@@ -116,6 +116,11 @@ def resolve_self_identity(
         == session_identity_key(attested_session_id)
     )
 
+    if not canonical_proven and canonical.disposition == "complete":
+        canonical_proven = _stamp_witnessed_by_markerless_harness(
+            true_harness, canonical.harness, canonical.session_id
+        )
+
     # a name_only codex stamp carries no id and codex never carries
     # CODEX_THREAD_ID in its own env, so the attester cannot complete the
     # pair. A marker value the rollout witness sees in a live fd IS this
@@ -187,6 +192,19 @@ def resolve_self_identity(
     )
 
 
+def _stamp_witnessed_by_markerless_harness(walked, stamped, session) -> bool:
+    """Prove a markerless harness's stamp from its own process env (Rust twin)."""
+    from fno.claims.session_pid import resolve_session_pid
+    from fno.harness_identity import HARNESS_SESSION_MARKERS, _read_ancestor_marker
+    walked = (walked or "").lower()
+    families = {family for _m, family in HARNESS_SESSION_MARKERS}
+    if not session or not walked or walked != (stamped or "").lower() or walked in families:
+        return False
+    pid = resolve_session_pid()
+    carried = _read_ancestor_marker(pid, "FNO_HARNESS_SESSION_ID") if pid else None
+    return carried is not None and session_identity_key(carried) == session_identity_key(session)
+
+
 def _own_cwd() -> str:
     # A pruned worktree cannot read its own cwd; identity must degrade, not
     # crash (an empty cwd makes the registry reader answer None).
@@ -215,15 +233,19 @@ def _fill_spawn_record(owned):
     marker_families = {h for _m, h, _v in owned.markers_present}
     if marker_families - {harness}:
         return owned
+    if harness == "claude" and not any(
+        h == harness and session_identity_key(v) == session_identity_key(session_id)
+        for _m, h, v in owned.markers_present
+    ):
+        return owned
     return replace(
         owned, harness=harness, session_id=session_id, disposition="spawn_record"
     )
 
 
 #: Manifest body/frontmatter fields that carry an identity every fno process
-#: in the worktree can read. Read directly rather than through
-#: ``fno.target.manifest`` - claims sits at the bottom of the stack and must
-#: not import the target layer.
+#: in the worktree can read. Read directly from the manifest text - claims
+#: sits at the bottom of the stack and must not import the target layer.
 _MANIFEST_IDENTITY_FIELDS = (
     "harness_session_id",
     "claude_session_id",

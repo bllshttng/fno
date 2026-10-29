@@ -108,7 +108,7 @@ REMOVED="$(comm -13 "$FOUND" "$BASE" || true)"
 if [[ -z "$ADDED" && -z "$REMOVED" ]]; then
   echo "check-autonomy-registry: ok ($(wc -l < "$BASE" | tr -d ' ') site(s) match the baseline)"
   # The dispatch-provenance audit: positive completeness marker for the
-  # source/verb vocabulary - every registered path must carry a code, and the
+  # source/command vocabulary - every registered path must carry a code, and the
   # marker line (not an empty grep) is the evidence. The vocabulary lives in
   # the fno-agents binary, so the audit runs it directly (no typer import); a
   # lane with no binary names the SKIP instead of failing, and provisioning
@@ -129,7 +129,8 @@ if [[ -n "$ADDED" ]]; then
   printf '  %s\n' $ADDED >&2
   echo "  Add each to scripts/ci/autonomy-registry-baseline.txt naming the" >&2
   echo "  fno agents admit autonomy status spawner it belongs to, add a status row via" >&2
-  echo "  cli/src/fno/autonomy_cli.py if it is a genuinely new spawner, or" >&2
+  echo "  crates/fno-agents/src/autonomy_status.rs (fno agents admit autonomy status)" >&2
+  echo "  if it is a genuinely new spawner, or" >&2
   echo "  record why it is not autonomous (an explicit operator command)." >&2
 fi
 if [[ -n "$REMOVED" ]]; then

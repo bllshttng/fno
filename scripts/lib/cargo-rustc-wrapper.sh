@@ -17,7 +17,7 @@ fi
 # separate worktrees took load to 508 on 12 cores. Probes never wait, and
 # admission fails open, so CI, a clone without fno, and an older fno-agents
 # that lacks build-admit all build normally. The fail-open is not silent: a
-# missing verb is named on stderr with its remedy and journaled as an event.
+# missing command is named on stderr with its remedy and journaled as an event.
 # See docs/architecture/test-run-lifecycle.md "Build admission" / "Run admission".
 admit() {
     local mode="$1"
@@ -37,7 +37,9 @@ admit() {
         # fence reads it as "a cargo-launched build" and refuses the claims
         # store, so with it set every build ran claimless. Only this call
         # drops it: the compiler and the test binary keep it.
-        env -u CARGO_MANIFEST_DIR FNO_CARGO_RUN_PROGRAM="$program" fno-agents test-run "${mode}-admit" --cargo-pid "$PPID" --worktree "$repo_root" || rc=$?
+        # The run door prints a test binary's state-root pins on stdout, one
+        # FNO_*=<temp path> line each; the run branch exports them.
+        door_pins="$(env -u CARGO_MANIFEST_DIR FNO_CARGO_RUN_PROGRAM="$program" fno-agents test-run "${mode}-admit" --cargo-pid "$PPID" --worktree "$repo_root")" || rc=$?
         if [[ "$rc" -eq 86 ]]; then
             # Slot-busy, and an agent's test binary, are policy, not
             # breakage: the door printed the answer ("commit, push, CI runs
@@ -50,8 +52,8 @@ admit() {
             # run nothing.
             exit "$rc"
         elif [[ "$rc" -ne 0 ]]; then
-            # A binary that has the verb refuses a bare call with
-            # "--cargo-pid is required". An older one that lacks the verb
+            # A binary that has the command refuses a bare call with
+            # "--cargo-pid is required". An older one that lacks the command
             # says something else: the line then names the remedy and an
             # event lands in the journal. The usage output is captured, not
             # piped: the bare call exits nonzero, and pipefail would turn a
@@ -65,7 +67,7 @@ admit() {
                     echo "cargo-rustc-wrapper: run admission unavailable (exit $rc); running unadmitted" >&2
                 fi
             else
-                reason=verb_missing
+                reason=command_missing
                 if [[ "$mode" == "build" ]]; then
                     echo "cargo-rustc-wrapper: the deployed fno-agents ($(command -v fno-agents)) has no build-admit; building unadmitted. Run: fno doctor update" >&2
                 else
@@ -98,7 +100,16 @@ if [[ "${1:-}" == "--run" ]]; then
         echo "cargo-rustc-wrapper: --run needs a program" >&2
         exit 2
     fi
+    door_pins=""
     admit run "$1"
+    # A test binary links fno-agents without cfg(test), so a bare cargo test
+    # resolved the live ~/.fno. The door hands it a temp state tree instead,
+    # and refuses (exit 86 above) a root pinned into the live one.
+    while IFS= read -r pin; do
+        case "$pin" in
+            FNO_*=*) export "$pin" ;;
+        esac
+    done <<<"$door_pins"
     exec "$@"
 fi
 

@@ -53,7 +53,12 @@ pub(crate) fn bounded_for(argv: &[&str], cap: Duration) -> Result<String, String
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        // A doctor prints its blockers on stdout and exits non-zero: an
+        // empty stderr falls back to them so the failure names its reason.
+        let mut detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if detail.is_empty() {
+            detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        }
         Err(format!(
             "`{}` exited {}: {detail}",
             argv.join(" "),
@@ -111,7 +116,7 @@ pub fn detect(root: &Path, scan: Option<&[PathBuf]>) -> Value {
 
 /// Every harness the auto-wire pass knows, and whether its binary is on
 /// PATH with a readable `--version` first line. Detection only looks;
-/// the wiring verb still owns every write.
+/// the wiring command still owns every write.
 fn detect_harnesses() -> Value {
     Value::Array(
         crate::setup_autowire::HARNESS_LIST
@@ -209,7 +214,7 @@ fn detect_gh() -> Value {
 
 /// Configured provider-account rows, counted from the global config file
 /// (an `[[accounts]]` array of tables, or `accounts.<n>` flattened rows).
-/// A count, never the records: the accounts verb owns reading those.
+/// A count, never the records: the accounts command owns reading those.
 fn detect_accounts() -> Value {
     let path = crate::config_defaults::global_config_path();
     match crate::config_defaults::read_flat(&path) {
@@ -237,7 +242,11 @@ fn detect_accounts() -> Value {
 /// The optional machine tools setup may name. `macmon` feeds the resource
 /// meter; absent is a normal state, not an error.
 fn detect_tools() -> Value {
-    json!({ "macmon": crate::setup_autowire::on_path("macmon") })
+    json!({
+        "macmon": crate::setup_autowire::on_path("macmon"),
+        "jq": crate::setup_autowire::on_path("jq"),
+        "git": crate::setup_autowire::on_path("git"),
+    })
 }
 
 const SERVICE_LABELS: [&str; 2] = [

@@ -1,0 +1,24 @@
+{"ts": "2026-06-15T09:00:00Z", "type": "human_touch", "graph_node_id": "x-1"}
+{"ts": "2026-06-15T09:30:00Z", "type": "human_touch", "graph_node_id": "x-1"}
+{"type": "human_touch"}
+{"ts": "2026-06-15T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-1"}}
+{"ts": "2026-06-14T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-2"}}
+{"ts": "2026-06-13T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "concerns", "graph_node_id": "x-3"}}
+{"ts": "2026-06-12T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-9"}}
+{"ts": "2026-06-11T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-10"}}
+{"ts": "2026-06-10T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-11"}}
+{"ts": "2026-06-09T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-12"}}
+{"ts": "2026-06-08T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-13"}}
+{"ts": "2026-06-07T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "fail", "graph_node_id": "x-14"}}
+{"ts": "2026-06-06T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "pass", "graph_node_id": "x-15"}}
+{"ts": "2026-06-05T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "concerns", "graph_node_id": "x-16"}}
+{"ts": "2026-06-04T08:00:00Z", "type": "verifier_verdict", "data": {"verdict": "error", "graph_node_id": "x-17"}}
+{"ts": "2026-06-15T07:00:00Z", "type": "loop_check", "data": {"session_id": "s-ship", "ci": "FAILURE:smoke", "reviewed": true, "fingerprint": "abc1234|rest"}}
+{"ts": "2026-06-15T07:30:00Z", "type": "loop_check", "data": {"session_id": "s-ship", "ci": "FAILURE:smoke"}}
+{"ts": "2026-06-15T08:00:00Z", "type": "loop_check", "data": {"session_id": "s-ship", "ci": "SUCCESS", "done_probes": {"fno doctor test cli": "pass"}}}
+{"ts": "2026-06-13T07:00:00Z", "type": "loop_check", "data": {"session_id": "s-wedge", "ci": "WEIRD_SHAPE"}}
+{"ts": "2026-06-15T06:00:00Z", "type": "provider_rate_limited", "data": {"provider": "zai"}}
+{"ts": "2026-06-15T06:30:00Z", "type": "session_satisfied", "data": {"session_id": "s-ship", "source": "pr_merge"}}
+{"ts": "2026-06-15T05:00:00Z", "type": "context_snapshot", "source": "test", "data": {"harness": "claude", "entry_state": "startup", "context_bytes": 10, "estimated_tokens": 3, "source_hashes": ["abc"], "context_hash": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "source_manifest": [{"source_id": "s1", "status": "observed", "bytes": 10, "content_hash": "abc"}], "measurement_complete": true, "session_id": "s-ship"}}
+{"ts": "2026-06-15T05:30:00Z", "type": "context_comparison_declared", "data": {"comparison_contract": {"declared_at": "2026-06-15T05:00:00Z", "cohorts": {"baseline": ["s-old"], "candidate": ["s-ship"]}, "window": {"start": "2026-06-01T00:00:00Z", "end": "2026-06-30T00:00:00Z"}, "exclusions": [], "budgets": {"max_candidate_latency_minutes": 90}, "claim": "context_pruning"}}}
+{not json at all

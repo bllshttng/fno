@@ -2,7 +2,7 @@
 
 Every `fno agents spawn` passes this seam before the Rust/Python routing
 fork (Locked Decision 9). Per field: explicit CLI flag > lane >
-`agents.profiles.<verb>` (per-harness overlays inside) > `agents.defaults` >
+`agents.profiles.<command>` (per-harness overlays inside) > `agents.defaults` >
 built-in. A bare scalar `model` is scoped to the config `provider`'s harness,
 never the ambient one; an explicit `-m/--model` always wins; a resolved
 `--role` lane owns the model.
@@ -15,16 +15,20 @@ import re
 import sys
 from typing import IO, Callable, List, Mapping, Optional, Sequence, Set, Tuple
 
+#: The take-over reason the Rust compose consumed from the argv, in process
+#: only: the environment never carries it (lead ruling, 2026-10-16).
+PENDING_TAKE_OVER: List[str] = []
+
 # Flags that consume the FOLLOWING token. Scanning for our three flags skips a
 # value flag's value so a value that looks like `--model` / `--effort` can never
 # masquerade as one of ours. Mirrors client.rs VALUE_FLAGS + the short aliases
-# typer exposes on the spawn verb.
+# typer exposes on the spawn command.
 _VALUE_FLAGS = frozenset(
     {
         "--provider", "-P", "--harness", "-H", "--model", "-m", "--effort",
         "--from", "--cwd", "-c",
         "--message", "--session-id", "--cc-session-id", "--channel-id", "--status",
-        "--from-name", "--timeout", "-t", "--mode", "--substrate", "--permission-mode",
+        "--from-name", "--timeout", "-t", "--mode", "--substrate", "--as", "--permission-mode",
         "--output-format", "--monitor", "--tab",
         "--node",
     }
@@ -39,7 +43,7 @@ _EFFORT_FLAGS = ("--effort",)
 
 
 def _scan(args: Sequence[str]) -> Tuple[bool, Optional[str], bool, bool]:
-    """One pass over a spawn argv (verb already stripped by the caller).
+    """One pass over a spawn argv (command already stripped by the caller).
 
     Returns ``(harness_present, harness_value, model_present, effort_present)``.
     The scanned flag is ``-H/--harness``: this pass reads the HARNESS axis and
@@ -97,7 +101,8 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
         # --route/--account/--promote were absent, so their VALUES read as positionals:
         # a nameless `spawn --route zai,glm-5.2` registered an agent named "zai,glm-5.2".
         # Kept in lockstep with cmd_spawn (test_spawn_value_flags_cover_every_value_option).
-        "--route", "--account", "--promote", "--promote", "-k", "--dispatch-account",
+        "--route", "--account", "--promote", "--dispatch-account",
+        "--take-over",
         # --at's value (current|<pane>) must not read as a positional.
         "--at",
         # --portal's index is a value, never a prompt word.
@@ -117,27 +122,6 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
 )
 
 
-def extract_existing_pane(args: Sequence[str]) -> tuple[List[str], Optional[int]]:
-    """Remove fno's control-plane pane target before Typer parses."""
-    index = 0
-    while index < len(args):
-        token = args[index]
-        if token in ("--argv", "--"):
-            return list(args), None
-        key, equals, raw = token.partition("=")
-        if key == "--pane":
-            if not equals:
-                raw = args[index + 1] if index + 1 < len(args) else ""
-            try:
-                pane = int(raw)
-            except ValueError as exc:
-                raise ValueError(f"--pane needs an integer pane id, got {raw!r}") from exc
-            out = list(args)
-            del out[index:index + (1 if equals else 2)]
-            return out, pane
-        index += 1 + (not equals and token in _SPAWN_VALUE_FLAGS)
-    return list(args), None
-
 # Tokens that pin the substrate explicitly (a positional substrate word conflicts
 # with any of these -> exit 2). `-o/--once` means headless; `--substrate
 # headless` is the long form. `-H` selects the harness and `-P` the vendor, so
@@ -145,43 +129,7 @@ def extract_existing_pane(args: Sequence[str]) -> tuple[List[str], Optional[int]
 # took the flag budget; `--substrate headless` is the spelling).
 _EXPLICIT_SUBSTRATE_BOOLS = ("-o", "--once")
 
-#: A claude thread spawned with no message starts with no prompt: claude's job
-#: state reads `needs: send a prompt to start` and the row holds a worker slot
-#: for nothing. Printed by the seam (explicit substrate, both runtimes) and by
-#: cmd_spawn (resolved substrate).
-SEEDLESS_THREAD_REFUSAL = (
-    "refusing a claude thread spawn with no message. Claude starts that session "
-    "with no prompt, it waits for one forever, and its row holds a worker slot. "
-    "Put the work in the message: fno agents spawn '/fno:target {node}' "
-    "--name {name} --node {node} --substrate thread. A resume needs no message: "
-    "pass --resume <uuid>. No worker launched."
-)
-
-
-def seedless_thread_refusal(
-    harness: Optional[str],
-    substrate: Optional[str],
-    message: Optional[str],
-    *,
-    resume: Optional[str] = None,
-    role: bool = False,
-    name: Optional[str] = None,
-    node: Optional[str] = None,
-) -> Optional[str]:
-    """The refusal text for a fresh claude thread spawn with no message, else None.
-
-    A resume continues a transcript and a role spawn gets the term verb typed
-    later in dispatch, so neither needs a message here.
-    """
-    if harness != "claude" or substrate not in ("thread", "bg"):
-        return None
-    if (message or "").strip() or resume or role:
-        return None
-    return SEEDLESS_THREAD_REFUSAL.format(name=name or "<name>", node=node or "<node>")
-
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-_SHORT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
-
 # Two-word slug lists for a nameless spawn (docker/heroku pattern). Curated
 # lowercase-ascii, unambiguous read aloud; no external dependency, no config.
 _SLUG_ADJ = (
@@ -200,58 +148,6 @@ _SLUG_NOUN = (
 )
 
 
-def placement_refusal(
-    *,
-    substrate: str,
-    once: bool,
-    squad: Optional[str],
-    split: Optional[str],
-    at: Optional[str],
-    tab: Optional[str],
-    bounded_placement: bool,
-) -> Optional[str]:
-    """The pane placement contract as one named refusal, or None when
-    the combination is legal. Portal placement is Rust-owned (the runtime that
-    runs the spawn validates its own flags); this seam no longer reads a
-    --portal value."""
-    placement_requested = (
-        bounded_placement
-        or squad is not None
-        or split is not None
-        or at is not None
-        or tab is not None
-    )
-    if squad is not None and not squad.strip():
-        return "--workspace/-s needs a nonblank workspace name"
-    if bounded_placement and substrate == "bg":
-        return "--bounded-placement selects its own tab for a pane; a thread cannot be bounded"
-    if at is not None and substrate == "bg":
-        return "--at applies only to --substrate pane (a thread has no calling pane)"
-    if placement_requested and (substrate != "pane" or once):
-        return (
-            "--workspace/-s, --split/-x, --at, and --tab apply only to --substrate pane "
-            "(bg/headless have no pane geometry)"
-        )
-    if split is not None and split not in ("left", "right", "up", "down"):
-        return f"--split/-x must be left, right, up, or down (got {split!r})"
-    if tab is not None and not tab.strip():
-        return "--tab needs a nonblank selector or pane-group name"
-    if bounded_placement and any(value is not None for value in (split, at, tab)):
-        return (
-            "--bounded-placement selects its own stable tab and cannot be combined "
-            "with --split, --at, or --tab"
-        )
-    if at is not None:
-        # `--at current` is the exact-anchor spelling (the mux CLI resolves it
-        # from FNO_PANE, strict Refuse fallback). A numeric anchor is a
-        # low-level `mux pane run` concern, never exposed here.
-        if at != "current":
-            return "--at must be `current` (the exact-anchor spelling)"
-        if split is None:
-            return "--at requires --split (the side to place on)"
-    return None
-
-
 def _has_explicit_substrate(toks: Sequence[str]) -> Optional[str]:
     """Return the substrate value if pinned by an explicit flag, else None.
 
@@ -264,9 +160,9 @@ def _has_explicit_substrate(toks: Sequence[str]) -> Optional[str]:
             break
         if t in _EXPLICIT_SUBSTRATE_BOOLS:
             return "headless"
-        if t == "--substrate":
+        if t in ("--substrate", "--as"):
             return next(it, "")
-        if t.startswith("--substrate="):
+        if t.startswith(("--substrate=", "--as=")):
             return t.split("=", 1)[1]
     return None
 
@@ -296,37 +192,54 @@ def _positional_indices(toks: Sequence[str]) -> List[int]:
     return idxs
 
 
-def _demote_thread_uncarried_passthrough(toks: List[str], err: IO[str]) -> None:
-    """Rewrite an explicit or injected thread/bg substrate to pane when the
-    harness's thread lane cannot carry the fenced `--` tokens. Runs on
-    operator argv and again after config injection, covering the Rust-routed
-    lane the Python resolver never sees; the daemon-side harness_args parser
-    stays the trust-boundary backstop. Headless keeps its tokens: the
-    one-shot lanes carry them.
-    """
-    fence = next((i for i, t in enumerate(toks) if t == "--"), None)
-    if fence is None:
-        return
-    if _has_explicit_substrate(toks) not in ("thread", "bg"):
-        return
-    from fno.agents.harness_map import thread_uncarried
 
-    harness = _flag_value(toks, "--harness", "-H") or "claude"
-    uncarried = thread_uncarried(harness, {}, toks[fence + 1 :])
-    if uncarried is None:
-        return
-    for i, t in enumerate(toks[:fence]):
-        if t == "--substrate" and i + 1 < len(toks):
-            toks[i + 1] = "pane"
-            break
-        if t.startswith("--substrate="):
-            toks[i] = "--substrate=pane"
-            break
-    print(
-        f"fno agents spawn: substrate: pane (the {harness} thread lane "
-        f"has no carrier for {uncarried})",
-        file=err,
-    )
+
+#: Harness flags a spawn accepts before the fence as shorthand for the same
+#: flag behind it. Each takes one value.
+_FENCE_SHORTHAND = {
+    "--model": "--model",
+    "-m": "--model",
+    "--effort": "--effort",
+    "--permission-mode": "--permission-mode",
+    "--add-dir": "--add-dir",
+    "--agent": "--agent",
+    "--tools": "--tools",
+}
+
+
+def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
+    """Move ``--model``/``-m``, ``--effort``, ``--permission-mode``, ``--add-dir``,
+    ``--agent`` and ``--tools`` from the head behind the ``--`` fence.
+
+    Spawn allows every harness flag, and these are the ones an operator types
+    most, so the head spelling is shorthand for the harness's own flag.
+    A prompt-less spawn keeps an explicit empty MESSAGE, or the first fenced
+    token would become the prompt.
+    """
+    cut = toks.index("--") if "--" in toks else len(toks)
+    kept: List[str] = []
+    moved: List[str] = []
+    it = iter(toks[:cut])
+    for tok in it:
+        flag, eq, value = tok.partition("=")
+        if tok in _FENCE_SHORTHAND:
+            moved += [_FENCE_SHORTHAND[tok], next(it, "")]
+        elif eq and flag.startswith("--") and flag in _FENCE_SHORTHAND:
+            moved += [_FENCE_SHORTHAND[flag], value]
+        else:
+            kept.append(tok)
+    if not moved:
+        return toks
+    if not all(moved[1::2]):
+        print(
+            f"fno agents spawn: {' / '.join(sorted(set(moved[0::2])))} needs a value; "
+            "no worker launched",
+            file=err,
+        )
+        raise SystemExit(2)
+    if not _positional_indices(kept):
+        kept.append("")
+    return [*kept, "--", *moved, *toks[cut + 1 :]]
 
 
 def _mint_slug(existing: Set[str], rng: random.Random, err: IO[str]) -> str:
@@ -371,60 +284,29 @@ def _head_flag_value(head: Sequence[str], flags: Tuple[str, ...]) -> Optional[st
     return None
 
 
-def _node_slug_from_graph(node: str) -> Tuple[Optional[str], Optional[str]]:
-    """Return ``(canonical_id, slug)`` from an exact id or slug lookup.
-
-    Native read failures fall back to the graph; the caller owns naming fallback.
-    """
-    from fno.graph.load import load_graph
-    from fno.graph.store import GRAPH_JSON, read_nodes_by_ids
-
-    fast = read_nodes_by_ids(GRAPH_JSON, [node])
-    for rec in fast["entries"] if fast is not None else load_graph():
-        if not rec.get("archived_at") and (rec.get("id") == node or rec.get("slug") == node):
-            return rec.get("id") or node, rec.get("slug") or None
-    return node, None
-
-
 def _mint_node_name(
-    node: str,
-    slug_flag: Optional[str],
-    model: Optional[str],
-    existing: Optional[Set[str]] = None,
+    node: Optional[str], seed: Optional[str], slug_flag: Optional[str], existing: Set[str]
 ) -> Optional[str]:
-    """The ``t-<hex>-<slug>-<model>`` mint for a node-driven spawn.
+    """The ``agents.naming.worker`` name of a node-driven or ``/target`` spawn.
 
-    Routes through :func:`fno.agents.naming.dispatch_agent_name` - the single
-    owner of the 64-char budget - with no source (a manual launch) and the
-    model tag as the name's final segment. The mint is
-    deterministic, so a name already taken by a live worker gets a ``-2``,
-    ``-3``... suffix (the same collision-avoidance the adjective-noun mint
-    retries for): a re-spawn on one node must not turn into a refusal. Any
-    failure (graph read, budget, contract) returns ``None`` so pass 3 falls
-    back to the adjective-noun mint: a spawn must never die on a naming lookup.
+    The binary renders it (naming.rs ``render_worker_name``). A name a live worker
+    holds gets a ``-2``..``-5`` suffix, so a re-spawn on one node is never a
+    refusal. Any failure returns ``None`` and the adjective-noun mint runs: a
+    spawn must never die on a naming lookup.
     """
-    from fno.agents.naming import AgentNameError, dispatch_agent_name
+    from fno.agents.naming import AgentNameError, BridgeUsageError, worker_name
 
+    if not (node or seed):
+        return None
     try:
-        node_id, slug = _node_slug_from_graph(node)
-    except Exception:
+        name = worker_name(node, seed=seed, slug=slug_flag)
+    except (AgentNameError, BridgeUsageError):
         return None
-    if slug_flag:
-        slug = slug_flag
-    try:
-        name = dispatch_agent_name(
-            None, "t", node_id or node, slug=slug, model=model
-        )
-    except AgentNameError:
-        return None
-    if existing and name in existing:
-        for n in range(2, 6):
-            if len(name) + len(str(n)) + 1 > 64:
-                return None
-            if f"{name}-{n}" not in existing:
-                return f"{name}-{n}"
-        return None
-    return name
+    for n in range(1, 6):
+        candidate = name if n == 1 else f"{name}-{n}"
+        if candidate not in existing:
+            return candidate
+    return None
 
 
 def _read_registry_rows() -> list[object]:
@@ -445,19 +327,12 @@ def normalize_spawn_args(
     rng: Optional[random.Random] = None,
     stderr: Optional[IO[str]] = None,
 ) -> List[str]:
-    """Canonicalize a ``spawn`` argv (verb at index 0); pure argv -> argv.
+    """Canonicalize a ``spawn`` argv (command at index 0); pure argv -> argv.
 
-    Three passes (each sees the previous pass's output):
+    The single positional is the MESSAGE; the name rides ``--name`` and is
+    minted (``adjective-noun``) when omitted. A second positional -> exit 2.
 
-    1. A trailing positional that exact-matches ``pane|bg|headless`` becomes
-       ``--substrate <token>`` (unless an explicit substrate is present -> exit 2).
-    2. ``-r`` is the short flag for ``--resume``; its value may be a full uuid or
-       an 8-hex short-id (resolved to the uuid; unresolvable/malformed -> exit 2).
-       ``--resume`` with no substrate defaults the substrate to ``thread``.
-    3. The single positional is the MESSAGE; the name rides ``--name`` and is
-       minted (``adjective-noun``) when omitted. A second positional -> exit 2.
-
-    Non-``spawn`` verbs and ``spawn --help`` pass through unchanged. Read-only
+    Non-``spawn`` commands and ``spawn --help`` pass through unchanged. Read-only
     (registry names, session resolver); writes no state.
     """
     out = list(args)
@@ -480,90 +355,9 @@ def normalize_spawn_args(
     else:
         toks, payload = body, []
 
-    # Pass 1: trailing substrate token.
-    positions = _positional_indices(toks)
-    if positions:
-        last = positions[-1]
-        tok = toks[last]
-        if tok in _SUBSTRATES:
-            explicit = _has_explicit_substrate(toks)
-            if explicit is not None:
-                print(
-                    f"fno agents spawn: substrate given twice: positional {tok!r} "
-                    f"and --substrate {explicit!r}",
-                    file=err,
-                )
-                raise SystemExit(2)
-            del toks[last]
-            toks += ["--substrate", tok]
-
-    # Pass 2: -r / --resume id widening + implied bg. The scan sees only the
-    # pre-fence head: a fenced `--resume`/`-r` is the provider's flag,
-    # and reading it here would append an implied `--substrate bg` under a
-    # passthrough fence - or exit 2 on the provider's short-flag value.
-    _fence = next((i for i, t in enumerate(toks) if t == "--"), None)
-    head_toks = toks if _fence is None else toks[:_fence]
-    resume_idxs = [
-        i for i, t in enumerate(head_toks)
-        if t in ("-r", "--resume")
-        or t.startswith("--resume=")
-        or (t.startswith("-r") and len(t) > 2)  # -r=ID and the Click -rID attached form
-    ]
-    if len(resume_idxs) > 1:
-        print("fno agents spawn: resume given twice (-r / --resume)", file=err)
-        raise SystemExit(2)
-    if resume_idxs:
-        i = resume_idxs[0]
-        flag = toks[i]
-        if "=" in flag:
-            raw_value: Optional[str] = flag.split("=", 1)[1]
-            value_at = None
-        elif flag.startswith("-r") and len(flag) > 2:
-            # Click attached short: -r<id>. Value is the rest of the token.
-            raw_value = flag[2:]
-            value_at = None
-        else:
-            value_at = i + 1
-            raw_value = toks[value_at] if value_at < len(toks) else None
-        if not raw_value or raw_value.startswith("-"):
-            print("fno agents spawn: -r/--resume needs a session uuid or 8-hex short-id", file=err)
-            raise SystemExit(2)
-        low = raw_value.lower()
-        resolved: Optional[str]
-        if _UUID_RE.match(low):
-            resolved = low
-        elif _SHORT_ID_RE.match(low):
-            resolve = resolver if resolver is not None else _default_resolver
-            resolved = resolve(low)
-            if not resolved:
-                print(f"fno agents spawn: cannot resolve short-id {raw_value!r} to a session uuid", file=err)
-                raise SystemExit(2)
-        else:
-            print(
-                f"fno agents spawn: -r/--resume value {raw_value!r} is neither a "
-                "full session uuid (8-4-4-4-12) nor an 8-hex short-id",
-                file=err,
-            )
-            raise SystemExit(2)
-        # Rewrite in place to the canonical `--resume <uuid>` form. Leave an
-        # already-canonical `--resume <lowercase-uuid>` untouched so a fully
-        # explicit argv passes through byte-identically (AC1-EDGE).
-        if value_at is None:
-            toks[i] = f"--resume={resolved}"
-        elif not (flag == "--resume" and raw_value == resolved):
-            toks[i] = "--resume"
-            toks[value_at] = resolved
-        # `--resume` implies thread; the splice lands BEFORE any `--` fence, never past it.
-        if _has_explicit_substrate(toks) is None:
-            cut = _fence if _fence is not None else len(toks)
-            toks = toks[:cut] + ["--substrate", "thread"] + toks[cut:]
-
-    # A thread lane carries only what its contract row maps: a spawn pinning
-    # thread/bg with an unmapped fenced token demotes to the pane here, on
-    # both runtimes (the Rust-routed lane never reaches the CLI's resolver).
+    if not payload:
+        toks = _fence_model_shorthand(toks, err)
     fence = next((i for i, t in enumerate(toks) if t == "--"), None)
-    if fence is not None:
-        _demote_thread_uncarried_passthrough(toks, err)
 
     # Pass 3: the NAME axis. `spawn` takes ONE positional and it is the MESSAGE;
     # the agent name is a handle the caller rarely picks, so it is minted unless
@@ -584,26 +378,15 @@ def normalize_spawn_args(
             if existing_names is not None
             else {str(getattr(e, "name", "")) for e in _read_registry_rows()}
         )
-        # a node-driven spawn carries what an operator remembers. The
-        # name is the registry row's ONLY node carrier, so a nodeless mint makes
-        # the row unfindable by node or slug. Mint ``t-<node>-<slug>-<model>``
-        # through the canonical owner when --node is present; any lookup
-        # failure falls back to the adjective-noun mint, never a refusal.
-        node = _head_flag_value(head, ("--node",))
-        minted: Optional[str] = None
-        if node:
-            slug_flag = _head_flag_value(head, ("--slug",))
-            model = _head_flag_value(head, _MODEL_FLAGS)
-            if not model:
-                route = _head_flag_value(head, ("--route",))
-                # Canonical route spelling is provider/model (comma is
-                # legacy); take the model half of either.
-                model = (
-                    route.replace(",", "/").rsplit("/", 1)[1].strip()
-                    if route and ("/" in route or "," in route)
-                    else None
-                )
-            minted = _mint_node_name(node, slug_flag, model, names)
+        # A node-driven or `/target <node>` spawn is named for its node's
+        # slug; the row's `node` and `model` fields carry the rest.
+        seeds = [toks[i] for i in _positional_indices(head)]
+        minted = _mint_node_name(
+            _head_flag_value(head, ("--node",)),
+            seeds[0] if seeds else None,
+            _head_flag_value(head, ("--slug",)),
+            names,
+        )
         name = minted or _mint_slug(names, rng if rng is not None else random.Random(), err)
         toks = ["--name", name, *toks]
     extra = _positional_indices(toks)
@@ -619,30 +402,11 @@ def normalize_spawn_args(
     return ["spawn", *toks, *payload]
 
 
-def _default_resolver(short_id: str) -> Optional[str]:
-    """Resolve an 8-hex claude short-id to its full session uuid (bg sessions).
-
-    Uses the bounded-retry lane so a short-id issued while claude is still writing
-    the session entry is not rejected on a transient miss (blueprint Concurrency).
-    """
-    try:
-        from fno.agents.harnesses.claude import resolve_session_uuid_at_spawn
-
-        return resolve_session_uuid_at_spawn(short_id)
-    except Exception:
-        return None
-
-
 # --------------------------------------------------------------------------- #
-# Per-verb profile resolution: a pure string rule over the seed's first
-# token selects `config.agents.profiles.<verb>`, layered over `agents.defaults`.
-# No content-based inference of any kind - only an explicit leading slash-verb.
+# Per-command profile resolution: a pure string rule over the seed's first
+# token selects `config.agents.profiles.<command>`, layered over `agents.defaults`.
+# No content-based inference of any kind - only an explicit leading slash-command.
 # --------------------------------------------------------------------------- #
-
-# Keep the old spelling on the canonical profile key for one release.
-_VERB_ALIASES = {"do": "execute"}
-# Lead work walks the role slot whichever verb opens its seed.
-_ROLE_VERBS = frozenset({"lead", "term", "fno-me"})
 
 # The one built-in answer to "what permission mode does an unattended worker
 # get". Formerly config.agents.spawn_permission_mode's default; a constant now,
@@ -706,20 +470,6 @@ def _role_of(toks: Sequence[str]) -> Optional[str]:
         if t.startswith("--role="):
             return t.split("=", 1)[1]
     return None
-
-
-def _role_resolves(role: str, settings: object, env: Optional[Mapping[str, str]]) -> bool:
-    """Whether ``role`` resolves to a real spawn route (a non-None env overlay).
-
-    resolve_route is fail-SAFE, so this is True only when the role is routed AND
-    its provider is configured with an anthropic endpoint AND a key is present.
-    Any resolution error degrades to False (never bricks the spawn)."""
-    from fno.agents.model_routing import resolve_route
-
-    try:
-        return resolve_route(role, settings=settings, env=env) is not None  # type: ignore[arg-type]
-    except Exception:
-        return False
 
 
 def _has_permission_mode(toks: Sequence[str]) -> bool:
@@ -793,21 +543,21 @@ def _substrate_compatible(substrate: str, provider: str) -> bool:
         substrate = "thread"
     if substrate != "thread":
         return True
-    from fno.rust_binary import VerbUnavailable, verb_call
+    from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        answer = verb_call(
+        answer = command_call(
             "spawn-overlay",
             {"kind": "compat", "harness": provider, "substrate": substrate},
-            VerbUnavailable,
+            CommandUnavailable,
         )
-    except VerbUnavailable:
+    except CommandUnavailable:
         return provider == "claude"
     return bool((answer.get("substrate") or {}).get("compatible"))
 
 
 def _overlay_payload(obj: object) -> dict:
-    """One spawn-defaults block as the verb's JSON view. ``model_dump()`` is
+    """One spawn-defaults block as the command's JSON view. ``model_dump()`` is
     the pydantic shape (extra=allow keeps smuggled keys visible); getattr is
     the test-fixture shape."""
     dump = getattr(obj, "model_dump", None)
@@ -838,7 +588,7 @@ def resolve_lane_vendor(
     harness: Optional[str] = None,
 ) -> Optional[str]:
     """The model vendor a final spawn argv bills: route > provider > harness.
-    The vocabulary and the judgment live in the spawn-overlay verb; this shim
+    The vocabulary and the judgment live in the spawn-overlay command; this shim
     resolves the harness-side inputs (explicit arg, then -H, then dispatch
     inference from env) and reads the answer."""
     from fno.agents.spawn_overlay_client import (
@@ -852,9 +602,13 @@ def resolve_lane_vendor(
         harness = _flag_value(toks, "--harness", "-H")
     if not (harness and str(harness).strip()):
         try:
-            from fno.dispatch_flags import resolve_dispatch_harness
+            from fno.rust_binary import command_call
 
-            env_harness = resolve_dispatch_harness(None, env=env)[0]
+            answer = command_call(
+                "route-slot",
+                {"mode": "resolve", "explicit": None, "env": dict(env or {})},
+            )
+            env_harness = answer.get("harness")
         except Exception:
             env_harness = "claude"
     try:
@@ -878,13 +632,13 @@ def compose_spawn_argv(
     env: Optional[Mapping[str, str]] = None,
     stderr: Optional[IO[str]] = None,
     apply_permission_builtin: bool = True,
-    node_verb: Optional[str] = None,
+    node_command: Optional[str] = None,
 ) -> List[str]:
     """Return ``args`` with config spawn-defaults injected where absent.
 
     The composition lives in Rust (crates/fno-agents/src/spawn_compose.rs);
-    this is the transport: normalize, project the argv scan, one verb call,
-    apply the answer. Raises SystemExit on the verb's refusals (exit 2, or
+    this is the transport: normalize, project the argv scan, one command call,
+    apply the answer. Raises SystemExit on the command's refusals (exit 2, or
     78 with the exhausted payload on stdout). The old seam's degrade-open
     stance survives as the unavailable-owner arm: a missing binary must not
     brick an otherwise valid spawn, so it prints one named line and returns
@@ -904,7 +658,7 @@ def compose_spawn_argv(
     err = stderr if stderr is not None else sys.stderr
     # Ergonomic normalization runs FIRST: the substrate-token / -r /
     # autogen-name rewrites consider only operator-supplied argv, so config
-    # defaults injected by the verb never fight the token form.
+    # defaults injected by the command never fight the token form.
     out = normalize_spawn_args(out, stderr=err)
     tail = out[1:]
 
@@ -922,7 +676,7 @@ def compose_spawn_argv(
     payload = {
         "kind": "compose",
         "argv": list(out),
-        "node_verb": node_verb,
+        "node_command": node_command,
         "env_node": (env or {}).get("FNO_NODE") or None,
         "permission_builtin": SPAWN_PERMISSION_BUILTIN if apply_permission_builtin else None,
         "scan": scan,
@@ -940,14 +694,6 @@ def compose_spawn_argv(
         )
         return out
 
-    # The billing gate declared it needs the role answer (config model, free
-    # axis, a role named): resolve ONCE and ask again. Common case: one verb
-    # call, zero seam resolves; cmd_spawn's own resolve is the one.
-    if answer.get("role_gate_needed"):
-        facts["role_resolves"] = _role_resolves(scan["role"], None, env)
-        payload["facts"] = facts
-        answer = spawn_overlay_call(payload, timeout=90)
-
     for line in answer.get("stderr") or []:
         print(line, file=err)
     exit_code = int(answer.get("exit") or 0)
@@ -959,27 +705,32 @@ def compose_spawn_argv(
         from fno.agents import events
 
         events.emit("model_vendor_mismatch", **event)
+    PENDING_TAKE_OVER[:] = [str(answer.get("take_over") or "")] if answer.get("take_over") else []
     answer_argv = [str(t) for t in answer.get("argv") or out]
-    # Injection can pin the substrate the operator left open, and the
-    # Rust-routed lane never reaches the Python CLI's own refusal, so the
-    # post-injection demote re-runs on the composed argv.
-    if answer.get("injected"):
-        _demote_thread_uncarried_passthrough(answer_argv, err)
     return answer_argv
 
 
 def _scan_projection(tail: Sequence[str]) -> dict:
     """The scan projection the transport sends, one scanner call each. The
-    scanners answer what the OPERATOR typed; the verb owns every config
+    scanners answer what the OPERATOR typed; the command owns every config
     decision over the result."""
     has_harness, explicit_harness, has_model, has_effort = _scan(tail)
+    # A fenced --model (the -m shorthand lands there) occupies the model axis.
+    if "--" in tail and not has_model:
+        from fno.agents.mux_spawn import passthrough_model
+
+        has_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :]) is not None
+    # The head spelling of --effort lands behind the fence too, so a fenced
+    # one is the operator's choice and a config default must not stack on it.
+    if "--" in tail and not has_effort:
+        has_effort = _flag_value(list(tail)[list(tail).index("--") + 1 :], "--effort") is not None
     explicit_vendor = _flag_value(tail, "--provider", "-P")
     explicit_route = _flag_present(tail, "--route")
     role = _role_of(tail)
     has_permission = _has_permission_mode(tail)
     permission_value = _flag_value(tail, "--permission-mode")
     if not permission_value and has_permission:
-        # --yolo/-Y are the same knob as --permission-mode; the verb must see
+        # --yolo/-Y are the same knob as --permission-mode; the command must see
         # them or it can hand a yolo spawn a harness the gate refuses.
         permission_value = "yolo"
     slot = _seed_slot(tail)
@@ -1008,62 +759,37 @@ def _scan_projection(tail: Sequence[str]) -> dict:
     }
 
 
+def substrate_lane_flags(substrate: Optional[str]) -> List[str]:
+    """The spawn argv that picks ``substrate`` now that --substrate is retired:
+    a one-shot is --once, a machine-placed pane is --bounded-placement, and a
+    thread is the door's default, so it needs no flag."""
+    lane = (substrate or "").strip()
+    if lane == "headless":
+        return ["--once"]
+    if lane == "pane":
+        return ["--bounded-placement"]
+    return []
+
+
 def spawn_seam_marker() -> str:
-    """The marker token both bridges carry, straight after the spawn verb."""
+    """The marker token both bridges carry, straight after the spawn command."""
     return f"--defaults-applied={routing_enforcement_state()}"
 
 
 def routing_enforcement_state(settings: object = None) -> str:
     """The marker verdict: the config-blind binary's only record of the
-    seam's decision. Read through the verb's policy mode; read failure
+    seam's decision. Read through the command's policy mode; read failure
     degrades open, and a strict seam refuses upstream."""
     del settings
     try:
-        from fno.route_resolve import _routing_enforced
+        from fno.rust_binary import command_call
 
-        return "enforced" if _routing_enforced() else "unenforced"
+        answer = command_call("route-slot", {"mode": "policy"})
+        return "enforced" if answer.get("enforce_inventory") else "unenforced"
     except Exception:  # noqa: BLE001 - unknown reads as legacy, never as strict
         return "unenforced"
 
 # --------------------------------------------------------------------------- #
 # The CLI's substrate posture gates, moved here from cmd_spawn (file budget):
 # the value gate + bg alias, and the monitor gate.
-
-
-def resolve_spawn_gates(substrate, monitor, *, once, harness):
-    """Validate the substrate/monitor posture; canonicalize ``thread``->``bg``.
-
-    Exit 2 on a value outside the closed set or a monitor combination without
-    support (exactly claude+zai on a pane). The deprecated ``bg`` spelling
-    warns and still works. Portal gates live on the Rust lane only: the
-    Python parser must not advertise a flag whose placement it cannot run.
-    """
-    if substrate not in ("pane", "thread", "bg", "headless"):
-        print(
-            f"--substrate must be one of: pane, thread, headless (got {substrate})",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    if substrate == "bg":
-        print("substrate 'bg' was retired; use --substrate thread", file=sys.stderr)
-        raise SystemExit(2)
-    if substrate == "thread":
-        substrate = "bg"
-    if monitor is not None and monitor != "happy":
-        print(f"--monitor must be 'happy' (got {monitor!r})", file=sys.stderr)
-        raise SystemExit(2)
-    if monitor == "happy" and (substrate != "pane" or once):
-        print(
-            "--monitor happy is pane-only; bg and headless workers do not pass "
-            "the happy launcher seam",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    if monitor == "happy" and harness != "claude":
-        print(
-            f"--monitor happy requires the claude harness; got harness {harness!r}",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    return substrate
 

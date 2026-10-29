@@ -74,7 +74,7 @@ pub struct CapMember {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapLane {
-    /// `<provider>:<account>`; the token every verb and decision names.
+    /// `<provider>:<account>`; the token every command and decision names.
     pub lane: String,
     pub provider: String,
     pub account: String,
@@ -184,14 +184,10 @@ fn account_of(row: &Value) -> String {
 // Capped-tail reading
 // ---------------------------------------------------------------------------
 
-/// The quota signals, the same ones error_taxonomy.py classifies as
-/// PROVIDER_4XX_QUOTA: the 429 status plus the body markers, case-insensitive.
+/// The quota signals the error taxonomy classes as a quota refusal: the 429
+/// status plus its body markers.
 fn is_quota_text(text: &str) -> bool {
-    let t = text.to_lowercase();
-    t.contains("429")
-        || t.contains("rate limit")
-        || t.contains("quota exceeded")
-        || t.contains("usage limit")
+    text.contains("429") || crate::accounts::error_class::matches_quota_body(text)
 }
 
 /// One transcript tail reading: the newest assistant timestamp, the quota
@@ -463,121 +459,75 @@ fn ts_epoch(ts: &str) -> Option<i64> {
         .map(|dt| dt.timestamp())
 }
 
-/// The far horizon a parsed reset may reach before it reads as a misread
-/// (mirrors error_taxonomy._MAX_RESET_HORIZON_S).
-const RESET_HORIZON_S: i64 = 14 * 24 * 3600;
-
-/// The reset epoch a capped 429 excerpt names, from its first
-/// `YYYY-MM-DD[T ]HH:MM(:SS)?` stamp. A stamp carrying its own offset
-/// (`Z` / `+HH:MM`) parses as-is; a naive stamp resolves only in the named
-/// zone, so a lane with no configured zone reads None (refuse to guess). An
-/// epoch farther than [`RESET_HORIZON_S`] past `now` is a misread, not a
-/// deadline, and reads None too.
+/// The reset epoch a capped 429 excerpt names. The error taxonomy's parse
+/// reads it first: an offset stamp, a reset-keyed epoch, or a naive stamp in
+/// the lane's zone. When the excerpt holds none of those, the codex
+/// usage-limit shape ("try again at Sep 19th, 2026 9:34 AM.") is read, a
+/// naive vendor stamp too. A naive stamp with no configured zone, and any
+/// epoch past the taxonomy's horizon, read None (refuse to guess).
 pub fn reset_epoch_from_excerpt(text: &str, tz: Option<&str>, now: i64) -> Option<i64> {
-    static STAMP_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static OFFSET_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    use crate::accounts::error_class::{self, MAX_RESET_HORIZON_S};
+    match error_class::parse_reset_stamp(text, tz, now as f64) {
+        (Some(epoch), _) => return Some(epoch as i64),
+        (None, Some(_)) => return None,
+        (None, None) => {}
+    }
     static CODEX_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let stamp_re = STAMP_RE
-        .get_or_init(|| regex::Regex::new(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?").unwrap());
-    let offset_re = OFFSET_RE.get_or_init(|| regex::Regex::new(r"^[+-]\d{2}:\d{2}").unwrap());
-    // The codex usage-limit message names its reset as a naive vendor stamp:
-    // "try again at Sep 19th, 2026 9:34 AM."
-    let codex_re = CODEX_RE.get_or_init(|| {
-        regex::Regex::new(
-            r"([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th), (\d{4}) (\d{1,2}):(\d{2}) ([AP]M)",
-        )
-        .unwrap()
-    });
-    let epoch = if let Some(m) = stamp_re.find(text) {
-        let mut stamp = m.as_str().replacen(' ', "T", 1);
-        if stamp.len() == 16 {
-            stamp.push_str(":00");
-        }
-        let rest = &text[m.end()..];
-        if rest.starts_with('Z') {
-            chrono::DateTime::parse_from_rfc3339(&format!("{stamp}Z"))
-                .ok()?
-                .timestamp()
-        } else if let Some(off) = offset_re.find(rest) {
-            chrono::DateTime::parse_from_rfc3339(&format!("{stamp}{}", off.as_str()))
-                .ok()?
-                .timestamp()
-        } else {
-            // A naive stamp means what the record's reset_timezone says; with
-            // none (or an unparseable zone name) it is refused, never guessed.
-            naive_epoch_in_zone(&stamp, "%Y-%m-%dT%H:%M:%S", tz)?
-        }
-    } else if let Some(c) = codex_re.captures(text) {
-        let stamp = format!(
-            "{} {:02}, {} {:02}:{:02} {}",
-            &c[1],
-            c[2].parse::<u32>().ok()?,
-            &c[3],
-            c[4].parse::<u32>().ok()?,
-            c[5].parse::<u32>().ok()?,
-            &c[6]
-        );
-        // The codex stamp carries no offset either: same refusal to guess.
-        naive_epoch_in_zone(&stamp, "%b %d, %Y %I:%M %p", tz)?
-    } else {
-        return None;
-    };
-    (epoch <= now + RESET_HORIZON_S).then_some(epoch)
+    let c = CODEX_RE
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th), (\d{4}) (\d{1,2}):(\d{2}) ([AP]M)",
+            )
+            .unwrap()
+        })
+        .captures(text)?;
+    let stamp = format!(
+        "{} {:02}, {} {:02}:{:02} {}",
+        &c[1],
+        c[2].parse::<u32>().ok()?,
+        &c[3],
+        c[4].parse::<u32>().ok()?,
+        c[5].parse::<u32>().ok()?,
+        &c[6]
+    );
+    let naive = chrono::NaiveDateTime::parse_from_str(&stamp, "%b %d, %Y %I:%M %p").ok()?;
+    let epoch = error_class::naive_epoch_in_zone(naive, tz?)?;
+    (epoch <= now as f64 + MAX_RESET_HORIZON_S).then_some(epoch as i64)
 }
 
-/// Parse `stamp` with `fmt` and resolve it as a naive local time in `tz`.
-fn naive_epoch_in_zone(stamp: &str, fmt: &str, tz: Option<&str>) -> Option<i64> {
-    use chrono::TimeZone as _;
-    let zone = tz?.parse::<chrono_tz::Tz>().ok()?;
-    let naive = chrono::NaiveDateTime::parse_from_str(stamp, fmt).ok()?;
-    Some(zone.from_local_datetime(&naive).single()?.timestamp())
-}
-
-/// Pure core of the runtime-state resolution so tests never race process env.
-fn runtime_state_path_from(
-    env_path: Option<&std::ffi::OsStr>,
-    state_dir: Option<PathBuf>,
-    home: Option<&std::ffi::OsStr>,
-) -> PathBuf {
-    if let Some(v) = env_path {
-        return PathBuf::from(v);
-    }
-    if let Some(dir) = state_dir {
-        if dir.is_absolute() {
-            return dir.join("provider-runtime-state.json");
-        }
-    }
-    PathBuf::from(home.unwrap_or_else(|| std::ffi::OsStr::new(".")))
-        .join(".fno")
-        .join("provider-runtime-state.json")
-}
-
-/// Where the quota lock lives. Ports Python's `paths.runtime_state_json()`
-/// (paths.py:1108): `FNO_RUNTIME_STATE_PATH` when set; else the configured
-/// `state_dir` when its RAW value is absolute (a relative one falls back to
-/// `$HOME/.fno` in Python, never the cwd); else `$HOME/.fno`. Before
-/// this defaulted to `runtime-state.json`, a file nobody writes, so every
-/// reset read as unknown. The non-override answers run through
-/// [`migrate_runtime_state_to_state_dir`], the same move ladder Python's
-/// `paths.state_runtime_file` runs, so both languages answer one file.
+/// Where the quota lock lives. Ports Python's `paths.runtime_state_json()`:
+/// `FNO_RUNTIME_STATE_PATH` when set; else `FNO_STATE_DIR`; else the
+/// configured `state_dir` when its RAW value is absolute (a relative one
+/// falls back to `$HOME/.fno` in Python, never the cwd); else `$HOME/.fno`.
+/// The non-override answers run through [`migrate_runtime_state_to_state_dir`],
+/// the same move ladder Python's `paths.state_runtime_file` runs, so both
+/// languages answer one file.
 pub fn runtime_state_path(cwd: &Path) -> PathBuf {
     // The env override names one explicit file: the ladder must never rename
     // or relocate a caller-pinned path, so it is answered verbatim.
     if let Some(v) = std::env::var_os("FNO_RUNTIME_STATE_PATH") {
         return PathBuf::from(v);
     }
-    let raw = crate::agents_config::config_lookup(cwd, &["state_dir"])
-        .and_then(|v| v.as_str().map(str::to_string));
-    let dir = raw.map(|raw| match raw.strip_prefix("~/") {
-        Some(rest) => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest)),
-        None => Some(PathBuf::from(&raw)),
-    });
-    let base = runtime_state_path_from(
-        None,
-        dir.flatten().filter(|d| d.is_absolute()),
-        std::env::var_os("HOME").as_deref(),
-    );
-    migrate_runtime_state_to_state_dir(&base)
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    let expand = |raw: &str| match raw.strip_prefix("~/") {
+        Some(rest) => home().map(|h| h.join(rest)),
+        None => Some(PathBuf::from(raw)),
+    };
+    let dir = match std::env::var("FNO_STATE_DIR")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        // Python resolves the carrier against the process cwd, so a relative
+        // one still names a root rather than falling back to ~/.fno.
+        Some(root) => expand(&root).and_then(|d| std::env::current_dir().ok().map(|c| c.join(d))),
+        None => crate::agents_config::config_lookup(cwd, &["state_dir"])
+            .and_then(|v| v.as_str().map(str::to_string))
+            .and_then(|raw| expand(&raw)),
+    };
+    let root = dir
+        .filter(|d| d.is_absolute())
+        .unwrap_or_else(|| home().unwrap_or_else(|| PathBuf::from(".")).join(".fno"));
+    migrate_runtime_state_to_state_dir(&root.join("provider-runtime-state.json"))
 }
 
 /// The `state/` spelling of a state-root runtime file: rename the legacy
@@ -628,13 +578,12 @@ fn account_reset_timezones(candidates: &[PathBuf]) -> BTreeMap<String, String> {
     out
 }
 
-/// Zones from config.toml `[[accounts.records]]` (agents_config's candidate
-/// chain, a file the settings.yaml reader never opens), keyed by record id
-/// AND by the provider prefix of its route (`zai/glm-5.3[1m]` keys `zai`),
-/// so a lane whose rows carry only the provider axis still resolves its
-/// vendor stamp.
+/// Zones from `[[accounts.records]]` across the accounts loader's layers,
+/// keyed by record id AND by the provider prefix of its route
+/// (`zai/glm-5.3[1m]` keys `zai`), so a lane whose rows carry only the
+/// provider axis still resolves its vendor stamp.
 fn record_reset_timezones(cwd: &Path) -> BTreeMap<String, String> {
-    record_reset_timezones_from_candidates(&crate::agents_config::config_candidates(cwd))
+    record_reset_timezones_from_candidates(&crate::accounts::records::candidates(None, cwd))
 }
 
 fn record_reset_timezones_from_candidates(candidates: &[PathBuf]) -> BTreeMap<String, String> {
@@ -642,20 +591,7 @@ fn record_reset_timezones_from_candidates(candidates: &[PathBuf]) -> BTreeMap<St
     // Candidates are ordered highest priority first. Walk them in reverse so
     // a higher tier replaces a lower tier for the same record or provider.
     for path in candidates.iter().rev() {
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Ok(table) = raw.parse::<toml::Table>() else {
-            continue;
-        };
-        let Some(records) = table
-            .get("accounts")
-            .and_then(|v| v.get("records"))
-            .and_then(toml::Value::as_array)
-        else {
-            continue;
-        };
-        for rec in records {
+        for rec in crate::accounts::records::layer_records(path) {
             let Some(tz) = rec.get("reset_timezone").and_then(|v| v.as_str()) else {
                 continue;
             };
@@ -696,7 +632,7 @@ pub fn settings_candidates(cwd: &Path) -> Vec<PathBuf> {
 pub type ClaudePaths = Box<dyn Fn(&[String]) -> Result<BTreeMap<String, String>, String>>;
 
 /// One scan's resolved inputs. The env-resolving wrapper builds this; tests
-/// and the verbs pass paths directly, so nothing under test reads env vars.
+/// and the commands pass paths directly, so nothing under test reads env vars.
 pub struct CapScan {
     pub registry: std::path::PathBuf,
     pub projects_dir: std::path::PathBuf,
@@ -718,7 +654,7 @@ pub struct CapScan {
     pub codex_sessions_dir: Option<std::path::PathBuf>,
 }
 
-/// The env-resolved scan, built once and shared by the status verb and the
+/// The env-resolved scan, built once and shared by the status command and the
 /// armed arm so the two cannot resolve different inputs.
 pub fn default_scan(home: &AgentsHome, cwd: &Path) -> CapScan {
     let projects_dir = crate::claude_drive::claude_projects_dir();
@@ -1344,6 +1280,7 @@ fn fallback_links(candidates: &[PathBuf], size_key: &str) -> Vec<Value> {
 /// One journal line for a lane's migration. A step that cannot prove its
 /// effect records `unknown` (trap 5).
 pub fn journal(home: &AgentsHome, lane: &str, epoch: i64, step: &Value) {
+    // events-discipline:allow: a lane migration journal, not an event journal
     let dir = lanes_dir(home);
     if std::fs::create_dir_all(&dir).is_err() {
         return;
@@ -2029,26 +1966,27 @@ fn open_question(home: &AgentsHome, lane: &CapLane, now_epoch: i64) {
         .iter()
         .map(|m| format!("{} ({})", m.name, m.provider))
         .collect();
-    let _ = append_questions_row(
-        &questions_path(home),
-        &json!({
-            "ts": epoch_to_rfc3339(now_epoch),
-            "type": "operator_question",
-            "source": "daemon",
-            "data": {
-                "question_id": question_id,
-                "question": format!(
-                    "lane {} capped, reset {}, members: {}. Answer: fno agents provider-cap decide {} --answer all|some:<id,id>|wait",
-                    lane.lane,
-                    lane.reset_epoch.map(epoch_to_rfc3339).unwrap_or_else(|| "unknown".into()),
-                    members.join(", "),
-                    lane.lane,
-                ),
-                "choices": ["all", "some:<id,id>", "wait"],
-                "node": lane.members.iter().filter_map(|m| m.node.clone()).next(),
-            },
-        }),
-    );
+    let mut row = json!({
+        "ts": epoch_to_rfc3339(now_epoch),
+        "type": "operator_question",
+        "source": "daemon",
+        "data": {
+            "question_id": question_id,
+            "question": format!(
+                "lane {} capped, reset {}, members: {}. Answer: fno agents provider-cap decide {} --answer all|some:<id,id>|wait",
+                lane.lane,
+                lane.reset_epoch.map(epoch_to_rfc3339).unwrap_or_else(|| "unknown".into()),
+                members.join(", "),
+                lane.lane,
+            ),
+            "choices": ["all", "some:<id,id>", "wait"],
+            "node": lane.members.iter().filter_map(|m| m.node.clone()).next(),
+        },
+    });
+    if let Some(data) = row.get_mut("data").and_then(Value::as_object_mut) {
+        crate::identity::stamp_person(data);
+    }
+    let _ = append_questions_row(&questions_path(home), &row);
     let marker = json!({
         "question_id": question_id,
         "opened_at": epoch_to_rfc3339(now_epoch),

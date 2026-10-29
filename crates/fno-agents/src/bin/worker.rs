@@ -20,18 +20,28 @@
 //!   Callers build this argv; humans never type it.
 //! - `--law-exec`: the one-shot law-door lane (law_match.rs). Serves ONE
 //!   law request on stdin, prints the door's own answer, and exits with the
-//!   door's code. The front's `fno inbox law` verbs spawn it, because the
+//!   door's code. The front's `fno inbox law` commands spawn it, because the
 //!   mux never links the runtime (product boundary). Callers build this
 //!   argv; humans never type it.
+//! - `--mcp-exec`: the MCP channel family's process door (mcp/mod.rs).
+//!   `send` routes one stdin envelope to a registered channel (the exit
+//!   codes the deleted Python leg answered), `status` prints the sidecar
+//!   status JSON, `serve` runs the per-session stdio channel server CC
+//!   spawns, `sidecar` runs the per-user sidecar daemon the client
+//!   lazy-starts. The front's `fno agents mcp send` route and the client's
+//!   lazy-start build this argv; humans never type it.
 //! - `--paths-exec`: the one-shot paths lane (paths_cli.rs). Serves ONE
-//!   `config paths` verb argv (emit-shell and shell-stub so far; siblings
-//!   still answer in Python) and exits with the verb's code. The front's
-//!   `fno config paths <native-verb>` spawns it. Callers build this argv;
+//!   `config paths` command argv (emit-shell and shell-stub so far; siblings
+//!   still answer in Python) and exits with the command's code. The front's
+//!   `fno config paths <native-command>` spawns it. Callers build this argv;
 //!   humans never type it.
 //! - `--footnote-host <spec> <socket> <name>`: holds one fnh session open
 //!   over ACP stdio for a `-H footnote --substrate thread` row and serves it
 //!   on a unix socket (footnote_harness/thread.rs). Callers build this argv;
 //!   humans never type it.
+//! - `--muse-host <spec> <socket> <name>`: the same for one Muse session
+//!   over MSP (`muse serve`) for a `-H muse --substrate thread` row
+//!   (muse/host.rs).
 //!
 //! The worker ignores SIGHUP so a stray hangup (e.g. the controlling
 //! terminal going away) cannot take it - and therefore the PTY child -
@@ -85,6 +95,13 @@ fn main() {
         law_exec_lane();
         return;
     }
+    // The MCP channel family's process door: send | status | serve |
+    // sidecar. The front's `fno agents mcp` route and the client's
+    // lazy-start build this argv; humans type `fno agents mcp send`.
+    // Callers build this argv; humans never type it.
+    if args.iter().any(|a| a == "--mcp-exec") {
+        std::process::exit(fno_agents::mcp::run_mcp_exec(&args));
+    }
     if let Some(idx) = args.iter().position(|a| a == "--law-exec-arg") {
         let request = args
             .get(idx + 1)
@@ -115,6 +132,15 @@ fn main() {
             &name,
         ));
     }
+    if let Some(idx) = args.iter().position(|a| a == "--muse-host") {
+        let [spec, socket, name] =
+            [1, 2, 3].map(|i| args.get(idx + i).cloned().unwrap_or_default());
+        std::process::exit(fno_agents::muse::host::run_host(
+            PathBuf::from(spec).as_path(),
+            PathBuf::from(socket).as_path(),
+            &name,
+        ));
+    }
     if let Some(idx) = args.iter().position(|a| a == "--paths-exec") {
         let rest: Vec<String> = args[idx + 1..].to_vec();
         std::process::exit(fno_agents::paths_cli::run(&rest));
@@ -125,9 +151,10 @@ fn main() {
              (claude stream-json adoption), --store-keeper (graph store), \
              --store-exec (one store request), --law-exec (one law request on \
              stdin), or --law-exec-arg <request> (one law request by argv, \
-             stdin inherited), --paths-exec <verb> [args...] (one paths \
-             verb, e.g. emit-shell), or --footnote-host <spec> <socket> <name> \
-             (one footnote thread session)"
+             stdin inherited), --paths-exec <command> [args...] (one paths \
+             command, e.g. emit-shell), --footnote-host <spec> <socket> <name> \
+             (one footnote thread session), or --muse-host <spec> <socket> <name> \
+             (one muse thread session)"
         );
         std::process::exit(2);
     }
@@ -151,7 +178,7 @@ fn store_exec_lane(args: &[String]) -> Result<(), String> {
 }
 
 /// `--law-exec` entrypoint: one law-door request on stdin, the door's own
-/// stdout and exit code out. The front's `fno inbox law` verbs spawn this
+/// stdout and exit code out. The front's `fno inbox law` commands spawn this
 /// lane; the child reads stdin to EOF and answers, so write-then-read
 /// cannot deadlock.
 fn law_exec_lane() {

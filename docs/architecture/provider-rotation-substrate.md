@@ -65,8 +65,8 @@ The substrate package is `cli/src/fno/adapters/providers/`. No code outside this
 |--------|---------------|--------------|
 | `model.py` | ProviderRecord, ProvidersConfig, four exception classes | pydantic, pathlib |
 | `loader.py` | load_providers, save_providers | model, fno.state.io |
-| `cli.py` | `fno config accounts` Typer sub-app | model, loader, staging, dispatch |
-| `staging.py` | stage, unstage, verify_staged | model, pathlib, shutil |
+| `cli.py` | `fno config accounts` Typer sub-app | model, loader, managed |
+| `staging.py` | stage, verify_staged | model, pathlib |
 | `dispatch.py` | dispatch_env, resolve_env_value | model, loader, staging, subprocess |
 
 `cli/src/fno/cli.py` registers the sub-app via a single `app.add_typer(providers_app, name="providers")` line, mirroring the existing `app.add_typer(graph_app, name="backlog")` pattern.
@@ -115,11 +115,13 @@ Coverage is split between in-package pytest (logic correctness) and out-of-packa
 
 | Test | Scope | Lines covered |
 |------|-------|---------------|
-| `cli/src/fno/adapters/providers/test_model.py` | Pydantic field validation, conditional auth, regex constraints | model.py |
+| `crates/fno-agents/tests/accounts_records_parity.rs` | Record validation, refusal headlines, layered read, combos, quota, effective active (goldens captured from the Python leg) | model.py, loader.py read side |
 | `cli/src/fno/adapters/providers/test_loader.py` | config.toml parse, project-local override, save round-trip, corrupt-file refusal | loader.py |
-| `cli/src/fno/adapters/providers/test_cli.py` | Typer CliRunner: list/show/add/test/use/remove + 5 ACs | cli.py |
+| `cli/src/fno/adapters/providers/test_cli.py` | Typer CliRunner: list/add/test/use/remove + 5 ACs | cli.py |
+| `crates/fno-agents/tests/accounts_show_parity.rs` | `show` text and `--print-binding` (goldens captured from the deleted Python command) | crates/fno-agents/src/accounts/show.rs |
 | `cli/src/fno/adapters/providers/test_staging.py` | symlink ops, idempotency, error paths | staging.py |
-| `cli/src/fno/adapters/providers/test_dispatch.py` | env resolution, concurrency (ThreadPoolExecutor), keychain mocking | dispatch.py |
+| `crates/fno-agents/tests/accounts_env_parity.rs` | Launch env per auth arm, env references, staging check, identity refusal, the `--account` overlay lanes (goldens captured from the Python leg) | dispatch.py, staging.py verify_staged; the overlay goldens are frozen |
+| `crates/fno-agents/tests/accounts_launch_parity.rs` | The credentials compose and its decision, the state-root seal, the `--dispatch-account` answer, the dead worker's account | frozen goldens; the Python leg is deleted |
 | `cli/src/fno/test_cost.py` | tagged write, untagged write, mixed-schema ledger, concurrent atomic write | cost.py |
 | `tests/test_register_task_provider_attribution.sh` | register-task.py reads target-state.md, propagates fields | register-task.py |
 | `tests/test_provider_substrate_e2e.sh` | full add → list → stage → use → dispatch → cost-write → remove cycle | end-to-end |

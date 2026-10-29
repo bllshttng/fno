@@ -115,11 +115,21 @@ fn watching_ignored_names_a_missing_claim_as_permanent() {
         "the refusal must stop the re-arm loop it caused: {}",
         d.message
     );
+    // The no-claim case has no self-service way back: the manifest is
+    // write-once, so a rerun cannot restore a pair it never recorded. The
+    // refusal names the hand-off and never promises a rerun.
     assert!(
-        d.message.contains("fno do target start <node>"),
+        d.message
+            .contains("Hand the PR to a session that holds the claim"),
         "the refusal must name the way back, not only the dead end: {}",
         d.message
     );
+    assert!(
+        !d.message.contains("Get the claim back"),
+        "the rerun remedy is a lie for a missing claim pair: {}",
+        d.message
+    );
+    assert!(d.message.contains("write-once"));
     assert!(!d.message.contains("Arm a harness-tracked watcher"));
     assert!(d.message.contains("CI still running on PR #17"));
 }
@@ -215,6 +225,15 @@ fn watching_requires_durable_registration() {
 fn watching_ignored_unaddressed_findings_are_audible() {
     let tmp = findings_cwd("sess-watching-findings");
     let cwd = tmp.path();
+    // The findings refusal is the claimed-session branch: a claimless session
+    // reads the permanent no-claim refusal now, with the findings riding the
+    // block reason beside it. Give the manifest a claim pair so this test
+    // keeps guarding the findings text itself.
+    fs::write(
+        cwd.join("target-state.md"),
+        "---\nsession_id: sess-watching-findings\ncreated_at: 2026-06-05T00:00:00Z\nattended: true\ntarget_claim_key: node:x-watching-findings\ntarget_claim_holder: target-session:sess-watching-findings\n---\n",
+    )
+    .unwrap();
     fs::write(cwd.join("transcript.jsonl"), transcript_with_watching()).unwrap();
 
     let comments = r#"[

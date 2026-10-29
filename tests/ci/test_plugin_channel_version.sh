@@ -68,7 +68,7 @@ for channel in ("fno", "fno-nightly"):
         fail.append(f"{channel} entry missing")
         continue
     src = entry.get("source") or {}
-    if src.get("source") != "github" or src.get("repo") != "bllshttng/footnote":
+    if src.get("source") != "github" or src.get("repo") != "bllshttng/fno":
         fail.append(f"{channel} source is not the github repo")
     if "version" in entry:
         fail.append(f"{channel} entry carries a version field; plugin.json is the one version")
@@ -104,9 +104,9 @@ fn_from_fno_sh() {
 NIGHTLY_RELEASE_JSON='{
   "assets": [
     {"name": "fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl",
-     "browser_download_url": "https://github.com/bllshttng/footnote/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl"},
+     "browser_download_url": "https://github.com/bllshttng/fno/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-macosx_11_0_arm64.whl"},
     {"name": "fno-0.4.1.dev20261003-py3-none-manylinux2014_x86_64.whl",
-     "browser_download_url": "https://github.com/bllshttng/footnote/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-manylinux2014_x86_64.whl"}
+     "browser_download_url": "https://github.com/bllshttng/fno/releases/download/nightly/fno-0.4.1.dev20261003-py3-none-manylinux2014_x86_64.whl"}
   ]
 }'
 
@@ -133,7 +133,7 @@ fno_sh_source_in_tree() {
     "$_us" "$_um" > "$FNO_SH_SANDBOX/bin/uname"
   chmod +x "$FNO_SH_SANDBOX/bin/uname"
   PATH="$FNO_SH_SANDBOX/bin:$PATH" FAKE_FETCH_BODY="$_fetch" FNO_SH_SANDBOX="$FNO_SH_SANDBOX" sh -c '
-    FNO_RELEASE_REPO=bllshttng/footnote
+    FNO_RELEASE_REPO=bllshttng/fno
     FNO_DECLARED_VERSION=
     FNO_CHANNEL=stable
     FNO_WHEEL_URL=

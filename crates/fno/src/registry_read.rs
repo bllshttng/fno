@@ -14,7 +14,7 @@ pub fn database_path(path: &Path) -> Option<PathBuf> {
     } else {
         home
     };
-    Some(crate::state_layout::place(root, "graph.json").with_extension("db"))
+    Some(crate::state_layout::graph_anchor(root).with_extension("db"))
 }
 
 /// Whether the registry table owns `path`: the fence directory stands there,
@@ -91,4 +91,20 @@ pub fn registry_text(path: &Path) -> std::io::Result<String> {
         .ok_or_else(|| invalid("registry metadata is not an object".into()))?
         .insert("agents".into(), Value::Array(agents));
     Ok(document.to_string())
+}
+
+/// The registry table's write revision. `None` before the table import or
+/// when the store cannot be read: no revision is not revision 0.
+pub fn revision(path: &Path) -> Option<i64> {
+    if !table_owns(path) {
+        return None;
+    }
+    let connection = crate::store_conn::open_read(&database_path(path)?).ok()?;
+    connection
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM registry_meta WHERE key='revision'",
+            [],
+            |r| r.get(0),
+        )
+        .ok()
 }

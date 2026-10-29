@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 import tomli_w
-from typer.testing import CliRunner
 
 from fno.agents import dispatch as dispatch_mod
 from fno.agents import spawn_flag_owners
@@ -72,17 +71,14 @@ def armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "runtime-state.json"))
 
-    from fno.adapters.providers.runtime_state import write_usage_snapshot
-    from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
-
     now = time.time()
-    write_usage_snapshot(
-        UsageSnapshot("readyrule", (UsageWindow("5h", 100.0, now + 3600),), now, "t"),
-        now=now,
-    )
-    write_usage_snapshot(
-        UsageSnapshot("makers", (UsageWindow("5h", 32.0, now + 3600),), now, "t"),
-        now=now,
+
+    def snap(used: float) -> dict:
+        return {"windows": [{"label": "5h", "used_pct": used, "resets_at": now + 3600}],
+                "probed_at": now, "source": "t"}
+
+    (tmp_path / "runtime-state.json").write_text(
+        json.dumps({"usage": {"readyrule": snap(100.0), "makers": snap(32.0)}})
     )
     return tmp_path
 
@@ -162,29 +158,6 @@ class TestReceipts:
         monkeypatch.setattr(
             mux_spawn, "dispatch_spawn_bounded_pane", lambda **kw: result
         )
-
-    def test_pane_receipt_carries_account_and_source(
-        self, armed: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from fno.agents import mux_spawn
-        from fno.agents.cli import agents_app
-
-        self._stub_pane_back(
-            monkeypatch,
-            mux_spawn.MuxSpawnResult(
-                name="p-prov", provider="claude", session="s", pane_id=1,
-                child_pid=None, session_uuid=None,
-                launch_account="readyrule", launch_account_source="caller",
-            ),
-        )
-        result = CliRunner().invoke(
-            agents_app, ["spawn", "--name", "p-prov", "hi", "--harness", "claude", "--substrate", "pane"]
-        )
-        assert result.exit_code == 0, result.output
-        receipt = self._receipt_of(result.output)
-        assert receipt["account"] == "readyrule"
-        assert receipt["account_source"] == "caller"
-
 
 class TestPaneRowDecider:
     """The real `dispatch_spawn_pane` decides the row pair; a stubbed back

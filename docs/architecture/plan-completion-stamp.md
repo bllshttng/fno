@@ -61,7 +61,7 @@ to `done`. Between the first and last sub-repo ships, the plan is genuinely
 
 ## The promise gate (node closure)
 
-A plan reaching `done` and a node closing are gated separately. The merge gate asks "is a PR merged" (a fact about an artifact). The promise gate asks "did the plan's declared work all ship". One verdict function, `resolve_promise_evidence`, is consulted by all three close verbs: `fno backlog done`, `fno backlog reconcile`, and the deprecated `done` spelling. A node can therefore never close through a second, ungated path.
+A plan reaching `done` and a node closing are gated separately. The merge gate asks "is a PR merged" (a fact about an artifact). The promise gate asks "did the plan's declared work all ship". One verdict function, `resolve_promise_evidence`, is consulted by all three close commands: `fno backlog done`, `fno backlog reconcile`, and the deprecated `done` spelling. A node can therefore never close through a second, ungated path.
 
 The gate fires ONLY on an explicit declaration. A plan declaring **neither `close_probes` nor `expected_url_count`** closes exactly as it does today. `## Wave N` headings are internal structure, not a promise, so a multi-wave single-PR plan closes clean. One .md == one PR == one node is the house rule. Inferring "multi-wave" from headings was rejected because it false-positives on exactly that common case, parking every such node on autonomous `/target`. A gate that only fires on an explicit promise cannot false-positive. Two conditions, first refusal wins:
 
@@ -82,6 +82,26 @@ line, not silence. The Rust loop closer maps exit 6 through its catch-all to `Pa
 
 The gate still fails open on an absent, unreadable or unparseable plan, so a stale `plan_path` never wedges a close. A plan with no declaration never reaches the ship count. The refusal and warning text state these limits.
 
+## Re-checking after close
+
+A node closes on a merged PR and green CI. That proves the fix against the inventory at merge time. A later change can bring the symptom back, and nothing at close time can see that. On 2026-09-20 three done nodes regressed in one session, and a human found each one by hand.
+
+A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. The daemon arm `symptom_recheck` runs `fno-agents probe-run recheck --apply` every 6 hours (`crates/fno-agents/src/symptom_recheck.rs`). The pass:
+
+- reads every node with status `done` whose `plan_path` declares `recheck_probes`, at most 40 per pass
+- runs the list through `fno-agents probe-run --key recheck_probes`, the same runner as the two gates above
+- counts only a FAIL verdict. BLOCKED, SKIP and an unreadable plan read `undeterminable` and file nothing
+- runs a failing list a second time. A pass on the retry reads `flaky` and files nothing
+- files one bug node for a second fail, `regression: <title>`, with `source_node_id` naming the original
+- makes the original's nearest epic, where one exists, the parent
+- files nothing while an open regression names that original, or an open node carries `caused_by` for it
+
+The idea cap (`backlog.max_open_ideas`) still applies. The cap counts per epic, so the nearest epic gives the filing that epic's room. When the cap refuses, the result row keeps the regression with a `file_error`, and the tick detail counts it as `unfiled`. The recheck does not reopen the original. `fno backlog reopen` refuses a node whose PR merged, and its refusal says to file the remaining work as a new node.
+
+Each pass writes one `control_plane_tick` row with `arm: symptom_recheck`. Run `fno-agents probe-run recheck --json` for a dry run that files nothing. If a node regressed, it exits 1.
+
+`close_probes` is not re-run. Measured 2026-10-25: 13 of 21 done nodes' close probes failed for reasons that were not regressions. Those reasons were expired event windows and retired files. A plan-less node has no probe to re-run, so the recheck does not cover it.
+
 ## Invocation Points
 
 One writer owns the stamp: `crates/fno-agents/src/plan_doc/stamp.rs` (`cmd_stamp`, `cmd_graduate`, `cmd_set_expected`). Three callers reach it:
@@ -101,7 +121,7 @@ flowchart TD
 
 ### 1. `fno-agents finalize` (primary)
 
-The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual verbs below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
+The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual commands below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
 
 ### 2. `fno backlog done`
 
@@ -138,7 +158,7 @@ The codec writes the whole file to a tempfile in the same directory. It sets the
 
 ## COMPLETION.md
 
-The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the frontmatter. The file still has one live writer: a `beastmode` run (`authority: full`) appends its Autonomous Decisions ledger there (`skills/target/references/beastmode-authority.md`). Two readers still look for it: the retro harvest (`cli/src/fno/retro/harvest.py`) and `scripts/metrics/completion-summary.py`. The file sits inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file plan.
+The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the frontmatter. The file still has one live writer: a `beastmode` run (`authority: full`) appends its Autonomous Decisions ledger there (`skills/target/references/beastmode-authority.md`). Two readers still look for it: the retro harvest (`crates/fno-agents/src/retro/postmortem.rs`) and `scripts/metrics/completion-summary.py`. The file sits inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file plan.
 
 ## Sidecar Artifacts
 

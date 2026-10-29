@@ -14,6 +14,29 @@ pub fn escape_text(text: &str) -> String {
     text.replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// A clause the page joins with ". ": its own closing period is dropped, so
+/// a template-shaped "<choice>." never renders "choice.. Next:".
+fn clause(text: &str) -> String {
+    let text = text.trim_end();
+    match text.strip_suffix('.') {
+        Some(rest) if !rest.ends_with('.') => escape_text(rest),
+        _ => escape_text(text),
+    }
+}
+
+/// The recommendation's reason without the "Option N, " lead the template
+/// asks for, which the page already prints as "Recommended: N, because".
+fn reason<'a>(why: &'a str, option: &str) -> &'a str {
+    let Some(rest) = why.strip_prefix(format!("Option {option}").as_str()) else {
+        return why;
+    };
+    if let Some(rest) = rest.strip_prefix(',') {
+        let rest = rest.trim_start();
+        return rest.strip_prefix("because ").unwrap_or(rest);
+    }
+    rest.strip_prefix(" because ").unwrap_or(why)
+}
+
 pub fn unescape_text(text: &str) -> String {
     text.replace("&lt;", "<").replace("&gt;", ">")
 }
@@ -95,6 +118,12 @@ pub struct PageFront {
     pub team: String,
     #[serde(default)]
     pub lead: String,
+    /// The arm identity that delivered this page (16 hex over the machine id
+    /// and the agents home). Only the stamping arm lost-closes the page: two
+    /// machines on one synced vault each read clean stores for the other's
+    /// pages, and an unstamped page closes as lost only once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm: Option<String>,
     /// The user's typed answer cell: a letter (a, b, c), a number, or words.
     /// An empty value is present from render so the Base shows the cell, and
     /// is never an answer (rule 8).
@@ -203,6 +232,7 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
         epic: fill_none(routing.epic.as_ref()),
         team: fill_none(routing.team.as_ref()),
         lead: fill_none(routing.lead.as_ref()),
+        arm: None,
         answer: Some(String::new()),
         answered_at: None,
         recorded_by: None,
@@ -246,22 +276,28 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
         out.push('\n');
     }
 
+    // The copies carry the question id in their names, so the bare name
+    // resolves to one file in the vault.
+    if !item.images.is_empty() {
+        out.push_str("\n## Screens\n\n");
+        for path in &item.images {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            out.push_str(&format!("![[{name}]]\n"));
+        }
+    }
+
     if !item.options.is_empty() {
         out.push_str("\n## Options\n\n");
         for option in &item.options {
-            out.push_str(&format!(
-                "- [ ] {}. {}",
-                option.n,
-                escape_text(&option.text)
-            ));
+            out.push_str(&format!("- [ ] {}. {}", option.n, clause(&option.text)));
             if let Some(next) = option.next.as_deref().filter(|n| !n.is_empty()) {
-                out.push_str(&format!(". Next: {}", escape_text(next)));
+                out.push_str(&format!(". Next: {}", clause(next)));
             }
             if !option.pros.is_empty() {
-                out.push_str(&format!(". Pro: {}", escape_text(&option.pros.join("; "))));
+                out.push_str(&format!(". Pro: {}", clause(&option.pros.join("; "))));
             }
             if !option.cons.is_empty() {
-                out.push_str(&format!(". Con: {}", escape_text(&option.cons.join("; "))));
+                out.push_str(&format!(". Con: {}", clause(&option.cons.join("; "))));
             }
             out.push('\n');
         }
@@ -279,10 +315,10 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
             let mut line = format!(
                 "Recommended: {}, because {}",
                 rec.option,
-                escape_text(&rec.why)
+                clause(reason(&rec.why, &rec.option.to_string()))
             );
             if let Some(d) = rec.downside.as_deref().filter(|d| !d.is_empty()) {
-                line.push_str(&format!(". Downside: {}", escape_text(d)));
+                line.push_str(&format!(". Downside: {}", clause(d)));
             }
             line.push('.');
             context.push(line);
@@ -392,6 +428,27 @@ fn section<'a>(body: &'a str, name: &str) -> Option<Vec<&'a str>> {
     None
 }
 
+/// One typed answer: a single letter (a, b, c) or digit maps to its option,
+/// any other text reads as words. The page cell and the chat lane both read
+/// through here, so a reply means the same thing on every surface.
+pub fn parse_answer_text(text: &str) -> FileAnswer {
+    let cell = text.trim();
+    let lowered = cell.to_ascii_lowercase();
+    if lowered.len() == 1 {
+        let c = lowered.as_bytes()[0];
+        if c.is_ascii_lowercase() {
+            return FileAnswer::Option(u32::from(c - b'a' + 1));
+        }
+        if c.is_ascii_digit() {
+            return cell
+                .parse::<u32>()
+                .map(FileAnswer::Option)
+                .unwrap_or(FileAnswer::Words(unescape_text(cell)));
+        }
+    }
+    FileAnswer::Words(unescape_text(cell))
+}
+
 /// The user's answer read out of one page. The typed `answer` cell in the
 /// frontmatter reads first: a letter (a, b, c) or a number maps to its
 /// option, any other words read as the answer, and an empty cell is never an
@@ -408,20 +465,7 @@ pub fn read_page_answer(text: &str) -> FileAnswer {
         .map(str::trim)
         .filter(|a| !a.is_empty())
     {
-        let lowered = cell.to_ascii_lowercase();
-        if lowered.len() == 1 {
-            let c = lowered.as_bytes()[0];
-            if c.is_ascii_lowercase() {
-                return FileAnswer::Option(u32::from(c - b'a' + 1));
-            }
-            if c.is_ascii_digit() {
-                return cell
-                    .parse::<u32>()
-                    .map(FileAnswer::Option)
-                    .unwrap_or(FileAnswer::Words(unescape_text(cell)));
-            }
-        }
-        return FileAnswer::Words(unescape_text(cell));
+        return parse_answer_text(cell);
     }
     let mut ticked: Vec<u32> = Vec::new();
     if let Some(lines) = section(&body, "Options") {
@@ -484,8 +528,19 @@ pub fn read_page_answer(text: &str) -> FileAnswer {
     }
 }
 
+/// Serialize the front back under `---` fences around `body`.
+fn page_with_front(front: &PageFront, body: &str) -> Option<String> {
+    let yaml = serde_yaml_ng::to_string(front).ok()?;
+    let mut out = String::from("---\n");
+    out.push_str(yaml.trim_end());
+    out.push_str("\n---\n");
+    out.push_str(body);
+    Some(out)
+}
+
 /// Set the four close keys in the frontmatter, keep every other key, and
-/// append `Recorded: <receipt>` as the last line under `## Answer`.
+/// append the receipt (`Recorded: ...`, built by the caller) as the last
+/// line under `## Answer`.
 pub fn close_page(
     text: &str,
     status: &str,
@@ -501,19 +556,25 @@ pub fn close_page(
     front.answer = (!answer.is_empty()).then(|| answer.to_string());
     front.answered_at = (!answered_at.is_empty()).then(|| answered_at.to_string());
     front.recorded_by = (!recorded_by.is_empty()).then(|| recorded_by.to_string());
-    if let Ok(yaml) = serde_yaml_ng::to_string(&front) {
-        let mut out = String::from("---\n");
-        out.push_str(yaml.trim_end());
-        out.push_str("\n---\n");
-        out.push_str(&body);
-        let out = out.trim_end().to_string();
-        let mut out = out;
-        out.push_str("\n\nRecorded: ");
-        out.push_str(receipt);
-        out.push('\n');
-        return out;
-    }
-    text.to_string()
+    let Some(out) = page_with_front(&front, &body) else {
+        return text.to_string();
+    };
+    let mut out = out.trim_end().to_string();
+    out.push_str("\n\n");
+    out.push_str(receipt);
+    out.push('\n');
+    out
+}
+
+/// Stamp the delivering arm's identity into an open page's frontmatter.
+/// Delivery is the only writer of the stamp, and the stamp later decides
+/// who may lost-close the page: only the arm that wrote it.
+pub fn stamp_arm(text: &str, arm: &str) -> String {
+    let Some((mut front, body)) = parse_page(text) else {
+        return text.to_string();
+    };
+    front.arm = Some(arm.to_string());
+    page_with_front(&front, &body).unwrap_or_else(|| text.to_string())
 }
 
 /// One open row for the index.
@@ -687,6 +748,7 @@ mod tests {
 
     fn item() -> AttentionItem {
         AttentionItem {
+            host: None,
             recovery_batch: None,
             id: "q-e5e5520b".into(),
             kind: "question".into(),
@@ -707,6 +769,7 @@ mod tests {
                 rank: None,
                 live: None,
                 reach: None,
+                person: None,
             }),
             node: Some("x-bbbb".into()),
             blocked_because: Some("the ruling decides which gate ships".into()),
@@ -747,6 +810,8 @@ mod tests {
             missing: vec![],
             state: "open".into(),
             settled: false,
+            images: vec![],
+            ..Default::default()
         }
     }
 
@@ -809,6 +874,39 @@ mod tests {
         assert!(body.contains("Reversible: yes. Cost if wrong: one wasted release"));
         assert!(body.contains("Meanwhile: proceeds on the strict reading"));
         assert!(body.contains("<!-- Tick one option above"));
+        assert!(!body.contains("## Screens"), "no images, no heading");
+        let mut shot = item();
+        shot.images = vec!["/v/questions/screens/q-e5e5520b-1-bell.png".into()];
+        let (_, body) = parse_page(&render_page(&shot, &routing())).unwrap();
+        let screens = body.find("## Screens\n\n![[q-e5e5520b-1-bell.png]]\n");
+        assert!(
+            screens.is_some_and(|i| i < body.find("## Options").unwrap()),
+            "{body}"
+        );
+
+        // The question template's own shape: each clause closes with a
+        // period and the reason leads with "Option N,". The page reads the same.
+        let mut shaped = item();
+        shaped.options[0].text = "Yes, net zero needs no grant.".into();
+        shaped.options[0].next = Some("open the gate.".into());
+        shaped.options[1].text = "Stay strict...".into();
+        if let Some(rec) = shaped.recommendation.as_mut() {
+            rec.why = "Option 2, the strict reading blocks the least.".into();
+        }
+        let (_, shaped_body) = parse_page(&render_page(&shaped, &routing())).unwrap();
+        assert!(shaped_body
+            .contains("- [ ] 1. Yes, net zero needs no grant. Next: open the gate. Pro: fast"));
+        assert!(shaped_body.contains("Recommended: 2, because the strict reading blocks the least. Downside: one release carries the shim."));
+        assert!(
+            shaped_body.contains("- [ ] 2. Stay strict...\n"),
+            "an ellipsis keeps its dots"
+        );
+        // Free prose that only starts with the option name keeps every word.
+        assert_eq!(
+            reason("Option 2 is the safest", "2"),
+            "Option 2 is the safest"
+        );
+        assert_eq!(reason("Option 2 because it is safe", "2"), "it is safe");
     }
 
     #[test]
@@ -858,7 +956,7 @@ mod tests {
             "Stay strict",
             "2026-09-23T00:00:00Z",
             "file_edit",
-            "option 2 (file)",
+            "Recorded: option 2 (file)",
         );
         let (front, _) = parse_page(&closed).unwrap();
         assert_eq!(front.status, "answered");
@@ -869,7 +967,25 @@ mod tests {
             closed.contains("updated: 2026-09-22T09:05"),
             "the plugin stamp survives: {closed}"
         );
-        assert!(closed.trim_end().ends_with("Recorded: option 2 (file)"));
+        assert!(closed.trim_end().ends_with("\n\nRecorded: option 2 (file)"));
+        assert!(!closed.contains("Recorded: Recorded:"), "{closed}");
+        // The delivery stamp is a typed key now, but it rides the same
+        // close rewrite: only the stamping arm may lost-close the page.
+        let stamped = stamp_arm(&page, "a1b2c3d4e5f60708");
+        let lost = close_page(
+            &stamped,
+            "closed",
+            "",
+            "2026-09-23T01:00:00Z",
+            "attention_lost",
+            "Recorded: lost, no question row in the stores (attention_lost)",
+        );
+        let (front, _) = parse_page(&lost).unwrap();
+        assert_eq!(
+            front.arm.as_deref(),
+            Some("a1b2c3d4e5f60708"),
+            "the arm stamp survives a close: {lost}"
+        );
     }
 
     #[test]
@@ -954,6 +1070,8 @@ mod tests {
         // A typed letter records its option.
         let b = page.replacen("answer: ''", "answer: b", 1);
         assert_eq!(read_page_answer(&b), FileAnswer::Option(2));
+        // The chat lane reads a reply through the same parser.
+        assert_eq!(parse_answer_text(" b "), FileAnswer::Option(2));
         let c = page.replacen("answer: ''", "answer: C", 1);
         assert_eq!(read_page_answer(&c), FileAnswer::Option(3));
         // A typed number too.

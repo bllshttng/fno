@@ -43,6 +43,10 @@ pub struct ClaudeAgentRow {
     /// never by `parse_all_agents` (the parse stays dir-blind).
     pub account: Option<String>,
     pub pid: Option<u32>,
+    /// What the session waits on (`waitingFor`, e.g. "permission prompt").
+    /// A native thread worker has no pane to scrape, so this field is the
+    /// only witness that a prompt is up.
+    pub waiting_for: Option<String>,
 }
 
 impl ClaudeAgentRow {
@@ -55,6 +59,7 @@ impl ClaudeAgentRow {
             cwd: None,
             account: None,
             pid: None,
+            waiting_for: None,
         }
     }
 
@@ -113,6 +118,25 @@ impl ClaudeAgentsSnapshot {
                 rows.iter().find(|row| row.short_id == short_id)
             }
         }
+    }
+
+    /// A hosted process stands behind the session `id` names. Claude takes a
+    /// resume prefix of the full id, so any live row the prefix starts is a
+    /// hit: an ambiguous prefix refuses rather than guessing which session.
+    pub fn holds_session(&self, id: &str) -> bool {
+        let carries_pids = self.carries_pids();
+        let rows = match self {
+            Self::Known { rows, .. } | Self::Unknown { rows, .. } => rows,
+        };
+        !id.is_empty()
+            && rows.iter().any(|row| {
+                let named = row.short_id == id
+                    || row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|sid| id.len() >= 8 && sid.starts_with(id));
+                named && row.has_live_process(carries_pids)
+            })
     }
 
     /// True when at least one row parsed. Known rows can carry warnings (a
@@ -257,6 +281,11 @@ fn parse_all_agents(stdout: &[u8]) -> ClaudeAgentsSnapshot {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
         row.cwd = ["cwd"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        row.waiting_for = ["waitingFor", "waiting_for"]
             .into_iter()
             .find_map(|key| object.get(key).and_then(|value| value.as_str()))
             .filter(|value| !value.is_empty())
@@ -556,13 +585,8 @@ pub fn parse_isolated_config_dirs(
     let Ok(table) = toml_body.parse::<toml::Table>() else {
         return Vec::new();
     };
-    let records = table
-        .get("accounts")
-        .or_else(|| table.get("providers"))
-        .and_then(|section| section.get("records"))
-        .and_then(|records| records.as_array());
     let mut out = Vec::new();
-    for record in records.into_iter().flatten() {
+    for record in crate::accounts::records::block_records(&table) {
         let (Some(id), Some(dir)) = (
             record.get("id").and_then(|v| v.as_str()),
             record.get("config_dir").and_then(|v| v.as_str()),
@@ -691,13 +715,6 @@ pub fn daemon_dir_in(config_dir: Option<&Path>) -> PathBuf {
 /// `<daemon_dir>/roster.json` -- the worker roster the supervisor maintains.
 pub fn default_roster_path() -> PathBuf {
     daemon_dir().join("roster.json")
-}
-
-/// `<daemon_dir>/control.key` -- the daemon control key an `op:attach` presents
-/// (32 hex, mode 600, same-uid). NOT the per-worker `ptyAuth` (that is the
-/// ptySock DATA path). [corroborated]
-pub fn control_key_path() -> PathBuf {
-    daemon_dir().join("control.key")
 }
 
 /// Read and trim the daemon control key, if present. Returns `None` when the file
@@ -958,6 +975,12 @@ mod tests {
 
     #[test]
     fn pinned_agents_reader_uses_the_plan_config_dir() {
+        // Both lanes, env first: the order codex_inject's tests already hold,
+        // so a thread can never hold PATH_TEST_MUTEX while it waits on the
+        // env lane or the reverse.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _guard = crate::path_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let bin = temp.path().join("bin");

@@ -43,7 +43,7 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     // board holds the keyboard. Org is the next view from the board.
     h.type_bytes(&[PREFIX, b'V']);
     eprintln!("STAGE leg1 org-after-V");
-    h.wait_screen(15, |s| s.contains("Tree │ Table │ Graph"));
+    h.wait_screen(15, |s| s.contains("Explorer"));
 
     h.type_bytes(&[PREFIX, b'?']);
     eprintln!("STAGE org global-keybinds");
@@ -53,20 +53,18 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
         "Org's own keys must not answer the prefix chord:\n{screen}"
     );
     h.type_bytes(&[27]);
-    h.wait_screen(15, |s| {
-        s.contains("Tree │ Table │ Graph") && !s.contains("keybindings")
-    });
+    h.wait_screen(15, |s| s.contains("Explorer") && !s.contains("keybindings"));
 
     h.type_bytes(&[PREFIX, b'V']);
     eprintln!("STAGE leg1 agents-after-second-V");
-    h.wait_screen(15, |s| s.contains("+ new workspace"));
+    h.wait_screen(15, |s| s.contains("node · PR"));
 
     h.type_bytes(&[PREFIX, b'?']);
     eprintln!("STAGE agents global-keybinds");
     h.wait_screen(15, |s| s.contains("keybindings"));
     h.type_bytes(&[27]);
     h.wait_screen(15, |s| {
-        s.contains("+ new workspace") && !s.contains("keybindings")
+        s.contains("node · PR") && !s.contains("keybindings")
     });
 
     // The cycle now runs through Messages (the new view after Agents) ...
@@ -80,7 +78,7 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     h.wait_screen(15, |s| s.contains("Search:"));
 
     // leg 2: `^B ?` opens the GLOBAL keybinds menu, not the board's
-    // own keys overlay (its `?` verb, reachable with the bare key).
+    // own keys overlay (its `?` command, reachable with the bare key).
     h.type_bytes(&[PREFIX, b'?']);
     eprintln!("STAGE leg2 keybinds-after-^B?");
     let screen = h.wait_screen(15, |s| s.contains("keybindings"));

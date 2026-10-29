@@ -14,11 +14,11 @@ fail() { echo "  FAIL: $1"; FAILS=$((FAILS + 1)); }
 
 make_repo() {
     local root="$1"
-    mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/roles" \
-        "$root/cli/src/fno/approvals" "$root/agents" "$root/skills" "$root/plugins"
+    mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/agents" \
+        "$root/cli/src/fno/plan" "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
-    printf 'from fno.company.contracts import WorkOrderRef\n' > "$root/cli/src/fno/roles/models.py"
-    printf 'from fno.roles.models import RoleLayer\n' > "$root/cli/src/fno/company/topology.py"
+    printf 'from fno.graph._reconcile import resolve_current_repo_slug\n' \
+        > "$root/cli/src/fno/agents/history.py"
 }
 
 echo "== mode help is discoverable =="
@@ -42,13 +42,13 @@ grep -Eq <<<"$out" '[0-9]+ layers, [0-9]+ modules, 0 violations' \
 
 printf 'value = 1\n' > "$CLEAN/cli/src/fno/unmapped.py"
 out="$(bash "$CHECK" --strict "$CLEAN" 2>&1)"; rc=$?
-grep -q <<<"$out" '6 layers, 3 modules, 0 violations' \
+grep -q <<<"$out" '3 layers, 2 modules, 0 violations' \
     && ok "coverage excludes unmapped modules" || fail "coverage over-counts: $out"
 
 echo "== a broken scan fails closed =="
 BROKEN="$TMP/broken"
 make_repo "$BROKEN"
-printf 'class RoleLayer:\n    pass\n' > "$BROKEN/cli/src/fno/roles/models.py"
+printf 'class SessionHistory:\n    pass\n' > "$BROKEN/cli/src/fno/agents/history.py"
 out="$(bash "$CHECK" --strict "$BROKEN" 2>&1)"; rc=$?
 [[ $rc -eq 2 ]] && ok "missing control exits two" || fail "expected exit 2, got $rc: $out"
 grep -q <<<"$out" "positive control failed" \
@@ -62,22 +62,22 @@ make_repo "$VIOLATION"
 {
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding'
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding' '# padding'
-    printf '%s\n' 'from fno.roles.models import ApprovalFloor'
+    printf '%s\n' 'from fno.agents.history import resolve_current_repo_slug'
 } > "$VIOLATION/cli/src/fno/company/contracts.py"
 out="$(bash "$CHECK" --strict "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "prohibited edge exits one" || fail "expected exit 1, got $rc: $out"
 grep -q <<<"$out" \
-    'cli/src/fno/company/contracts.py:12: L1 core -> L2 roles / from fno.roles.models import ApprovalFloor' \
+    'cli/src/fno/company/contracts.py:12: L1 core -> L5 runtime / from fno.agents.history import resolve_current_repo_slug' \
     && ok "finding carries exact evidence" || fail "exact evidence missing: $out"
-grep -q <<<"$out" 'layer cycle: L1 core -> L2 roles -> L1 core' \
+grep -q <<<"$out" 'layer cycle: L1 core -> L5 runtime -> L1 core' \
     && ok "declared-layer cycle is printed" || fail "cycle missing: $out"
 
 echo "== baseline mode holds the exact finding set and ratchets downward =="
 FIXTURE_BASELINE="$TMP/fixture-baseline.txt"
 cat > "$FIXTURE_BASELINE" <<'EOF'
 # Human-readable fixture baseline.
-cli/src/fno/company/contracts.py: L1 core -> L2 roles / from fno.roles.models import ApprovalFloor
-layer cycle: L1 core -> L2 roles -> L1 core
+cli/src/fno/company/contracts.py: L1 core -> L5 runtime / from fno.agents.history import resolve_current_repo_slug
+layer cycle: L1 core -> L5 runtime -> L1 core
 EOF
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "unchanged baseline exits zero" || fail "baseline failed: $out"
@@ -88,7 +88,7 @@ grep -q <<<"$out" 'baseline holds: 1 prohibited dependency and 1 cycle' \
 # line column, so the row survives the shift with no regeneration.
 {
     for _ in {1..12}; do echo '# padding'; done
-    echo 'from fno.roles.models import ApprovalFloor'
+    echo 'from fno.agents.history import resolve_current_repo_slug'
 } > "$VIOLATION/cli/src/fno/company/contracts.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "line move above the import keeps the baseline green" \
@@ -100,7 +100,7 @@ out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION"
 grep -q <<<"$out" 'new or changed violation' \
     && ok "new violation is diagnosed" || fail "new diagnosis missing: $out"
 
-sed 's/ApprovalFloor/ChangedApprovalFloor/' \
+sed 's/resolve_current_repo_slug/ChangedResolver/' \
     "$VIOLATION/cli/src/fno/company/contracts.py" > "$TMP/changed-contracts.py"
 sed '$d' "$TMP/changed-contracts.py" > "$VIOLATION/cli/src/fno/company/contracts.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
@@ -127,31 +127,18 @@ printf '%s\n' 'opaque-count: 9' > "$FIXTURE_BASELINE"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 2 ]] && ok "opaque baseline fails closed" || fail "opaque baseline exit $rc: $out"
 
-echo "== package-granularity company map fails on the shipped topology shape =="
-PACKAGE_MAP="$TMP/package-map"
-make_repo "$PACKAGE_MAP"
-{
-    for _ in {1..15}; do echo '# padding'; done
-    echo 'from fno.roles.models import RoleLayer'
-} > "$PACKAGE_MAP/cli/src/fno/company/topology.py"
-out="$(FNO_BOUNDARY_TEST_COMPANY_PACKAGE_CORE=1 bash "$CHECK" --strict "$PACKAGE_MAP" 2>&1)"; rc=$?
-[[ $rc -eq 1 ]] && ok "package map exits one" || fail "expected exit 1, got $rc: $out"
-grep -q <<<"$out" \
-    'cli/src/fno/company/topology.py:16: L1 core -> L2 roles / from fno.roles.models import RoleLayer' \
-    && ok "package map names topology.py:16" || fail "topology evidence missing: $out"
-
 echo "== ImportFrom aliases and package-relative imports cannot bypass the map =="
 ALIASES="$TMP/aliases"
 make_repo "$ALIASES"
-printf 'from fno import roles\n' > "$ALIASES/cli/src/fno/company/contracts.py"
-printf 'from .. import roles\n' > "$ALIASES/cli/src/fno/approvals/__init__.py"
+printf 'from fno import agents\n' > "$ALIASES/cli/src/fno/company/contracts.py"
+printf 'from .. import agents\n' > "$ALIASES/cli/src/fno/plan/__init__.py"
 out="$(bash "$CHECK" --strict "$ALIASES" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "alias forms exit one" || fail "expected exit 1, got $rc: $out"
-grep -q <<<"$out" 'cli/src/fno/company/contracts.py:1: L1 core -> L2 roles / from fno import roles' \
+grep -q <<<"$out" 'cli/src/fno/company/contracts.py:1: L1 core -> L5 runtime / from fno import agents' \
     && ok "absolute package alias caught" || fail "absolute alias missed: $out"
-[[ "$(echo "$out" | grep -c 'cli/src/fno/company/contracts.py:1: L1 core -> L2 roles')" -eq 1 ]] \
+[[ "$(echo "$out" | grep -c 'cli/src/fno/company/contracts.py:1: L1 core -> L5 runtime')" -eq 1 ]] \
     && ok "absolute alias emits one finding" || fail "absolute alias duplicated: $out"
-grep -q <<<"$out" 'cli/src/fno/approvals/__init__.py:1: L1 core -> L2 roles / from .. import roles' \
+grep -q <<<"$out" 'cli/src/fno/plan/__init__.py:1: L1 core -> L5 runtime / from .. import agents' \
     && ok "relative package alias caught" || fail "relative alias missed: $out"
 
 echo "== the public fno.company facade is part of the core layer =="

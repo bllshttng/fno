@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.rust_binary import verb_call
+from fno.rust_binary import command_call
 
 requires_rust = pytest.mark.dev_build
 
@@ -49,7 +49,7 @@ def _binding_request(tmp_path: Path, body: str = "plan bytes\n") -> dict:
 
 def _write_bound_binding(tmp_path: Path, binding_file: Path) -> dict:
     request = _binding_request(tmp_path)
-    answer = verb_call("task-context-prepare", {"binding": request})
+    answer = command_call("task-context-prepare", {"binding": request})
     assert answer["ok"] is True, answer
     bound = dict(request)
     bound["binding_digest"] = answer["binding_digest"]
@@ -61,7 +61,7 @@ def _gate(node: str, root: str, env: dict | None = None) -> dict:
     request = {"node": node, "root": root}
     if env is not None:
         request["env"] = env
-    return verb_call("task-context-gate", request)
+    return command_call("task-context-gate", request)
 
 
 @requires_rust
@@ -81,80 +81,7 @@ def test_gate_refuses_when_required_source_changed(tmp_path):
     assert verdict["ok"] is False
     assert verdict["reason"] == "context_stale_source"
 
-
-# ── receipt transport compatibility ────────────────────────────────────────
-
-
-def _minimal_receipt(**kwargs):
-    from fno.resume.receipt import build_receipt
-
-    defaults = dict(
-        node="x-59b0",
-        session="sess-worker",
-        phase="execute",
-        generation=1,
-        repo="footnote",
-        worktree="/wt/x-59b0",
-        branch="feature/x-59b0",
-        head="b48ba4b8cfff",
-        next_verb="/fno:target",
-        next_target="x-59b0",
-        written_at="2026-09-12T00:00:00Z",
-    )
-    defaults.update(kwargs)
-    return build_receipt(**defaults)
-
-
-def test_legacy_content_sha_survives_the_optional_field():
-    # A v1 receipt written before task_context existed must still validate:
-    # the canonical payload ignores the absent (None) optional field.
-    from fno.resume.receipt import _canonical_payload
-
-    receipt = _minimal_receipt()
-    legacy_dict = receipt.to_dict()
-    legacy_dict.pop("task_context")
-    legacy_dict.pop("content_sha")
-    legacy_payload = json.dumps(legacy_dict, sort_keys=True, separators=(",", ":"))
-    assert hashlib.sha256(legacy_payload.encode()).hexdigest() == receipt.content_sha
-    assert _canonical_payload(receipt.to_dict()) == legacy_payload
-
-
-def test_non_object_task_context_is_malformed():
-    from fno.resume.receipt import MalformedReceiptError, _receipt_from_dict
-
-    receipt = _minimal_receipt()
-    d = receipt.to_dict()
-    d["task_context"] = "not an object"
-    with pytest.raises(MalformedReceiptError):
-        _receipt_from_dict(d)
-
-
-def test_write_with_malformed_task_context_file_refuses_by_name(tmp_path, monkeypatch):
-    # A named refusal, never a raw JSONDecodeError traceback (review finding).
-    from typer.testing import CliRunner
-
-    from fno.resume.cli import receipt_app
-
-    bad = tmp_path / "bad.json"
-    bad.write_text("{not json", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-    runner = CliRunner()
-    result = runner.invoke(
-        receipt_app,
-        [
-            "write",
-            "--node", "x-59b0",
-            "--session", "sess-w",
-            "--phase", "do",
-            "--generation", "1",
-            "--repo", "footnote",
-            "--worktree", str(tmp_path),
-            "--branch", "feature/x-59b0",
-            "--head", "b48ba4b8cfff",
-            "--next-verb", "/fno:target",
-            "--next-target", "x-59b0",
-        ],
-        env={"FNO_TASK_CONTEXT_FILE": str(bad)},
-    )
-    assert result.exit_code == 2, result.output
-    assert "invalid_input" in result.output
+# The receipt transport compatibility tests died with the resume leg: the
+# receipt model, its integrity tag, and the door's refusals are the native
+# module's contracts now, pinned by the goldens and the characterization test
+# in crates/fno-agents/tests/resume_receipt_parity.rs.

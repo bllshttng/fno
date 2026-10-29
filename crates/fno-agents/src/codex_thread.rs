@@ -8,7 +8,7 @@
 //!
 //! It used to fork a PRIVATE `codex app-server` per worker and speak
 //! newline-delimited JSON to its stdin/stdout. That made fno the owner of the
-//! process and forfeited every vendor verb above at once, with no symptom
+//! process and forfeited every vendor command above at once, with no symptom
 //! beyond a thing the operator expected to work not working.
 //!
 //! The transport is the ONLY thing that changed. The single-owner actor below
@@ -250,23 +250,6 @@ pub fn thread_unarchive_request_json(id: u64, thread_id: &str) -> String {
     .to_string()
 }
 
-/// Build the `thread/resume` request. The full thread id and cwd are both
-/// required so recovery cannot silently move a worker onto the canonical repo.
-pub fn thread_resume_request_json(thread_id: &str, cwd: &str, approval_policy: &str) -> String {
-    json!({
-        "id": 1,
-        "method": "thread/resume",
-        "params": {
-            "threadId": thread_id,
-            "excludeTurns": true,
-            "cwd": cwd,
-            "sandbox": "workspace-write",
-            "approvalPolicy": approval_policy,
-        }
-    })
-    .to_string()
-}
-
 /// Resume one exact thread for provider control without changing its model,
 /// sandbox, approval policy, or thread config.
 pub(crate) fn thread_resume_control_request_json(id: u64, thread_id: &str, cwd: &Path) -> String {
@@ -409,12 +392,6 @@ pub fn is_lead_objective(objective: &str, scope: &str) -> bool {
     objective == lead_objective(scope) || objective == format!("$fno:lead {}", scope.trim())
 }
 
-pub fn parse_goal_response(raw: &str) -> Result<Option<NativeGoal>, ThreadDriverError> {
-    let value: Value = serde_json::from_str(raw)
-        .map_err(|_| ThreadDriverError::Protocol("invalid thread/goal response".into()))?;
-    parse_goal_value(&value)
-}
-
 pub fn parse_goal_value(value: &Value) -> Result<Option<NativeGoal>, ThreadDriverError> {
     if let Some(error) = value.get("error") {
         return Err(ThreadDriverError::Protocol(server_error(error)));
@@ -527,11 +504,6 @@ pub fn ensure_lead_goal(
         }
     }
     Ok(GoalStatus::Active)
-}
-
-/// Build a `turn/start` request for the held driver.
-pub fn turn_start_request_json_with_id(id: u64, thread_id: &str, text: &str) -> String {
-    turn_start_request_json_with_effort(id, thread_id, text, None)
 }
 
 pub fn turn_start_request_json_with_effort(
@@ -689,7 +661,7 @@ pub(crate) fn turn_policy(
 /// resolution can never break the spawn.
 fn granted_roots(cwd: &Path, state_dirs: &[String]) -> Vec<String> {
     let mut roots = state_dirs.to_vec();
-    if let Some(git_dir) = crate::provider::git_common_dir(cwd) {
+    for git_dir in crate::provider::git_write_roots(cwd) {
         if !roots.iter().any(|root| root == &git_dir) {
             roots.push(git_dir);
         }
@@ -1815,7 +1787,7 @@ impl CodexThread {
     /// Convert this driver into a single-owner actor and hand back the cheap
     /// command handle. This replaces the old `Arc<Mutex<CodexThread>>` shape,
     /// where `drive_turn` held the guard across a whole (up to `TURN_TIMEOUT`)
-    /// turn and every follow-up verb queued behind it. One task now owns the
+    /// turn and every follow-up command queued behind it. One task now owns the
     /// driver exclusively; the connection's read half moves into a dedicated
     /// read pump (a `select!` arm on a frame read is not cancel-safe:
     /// cancellation mid-frame drops buffered bytes and corrupts the stream).
@@ -2599,11 +2571,20 @@ pub struct HarnessCarry {
     pub config: serde_json::Map<String, Value>,
     /// `--add-dir` roots, appended to the state-root grant.
     pub add_dirs: Vec<String>,
+    /// `--model`/`-m`: the thread's model, the last one winning.
+    pub model: Option<String>,
+    /// `--effort`: the reasoning level, read as the typed effort axis.
+    pub effort: Option<String>,
+    /// `--permission-mode`: codex's `sandbox:approval` pair or a shortcut,
+    /// read as the typed permission axis.
+    pub permission_mode: Option<String>,
 }
 
 /// Parse the fenced `--` tokens a spawn routed to this lane. Only the
 /// spellings the codex CLI itself takes are accepted: `-c`/`--config
-/// key=value` and `--add-dir <dir>`, two-token or `=`-joined on the long
+/// key=value`, `--add-dir <dir>`, `--model`/`-m <model>`, `--effort <level>`
+/// and `--permission-mode <mode>` (the last two are the typed axes), two-token or
+/// `=`-joined on the long
 /// forms. Anything else is a front-door contract break - the spawn front
 /// door demotes a flag this lane cannot carry to the pane, so a stray token
 /// here is a router bug - and is refused by name rather than dropped
@@ -2621,15 +2602,44 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
     let mut carry = HarnessCarry {
         config: serde_json::Map::new(),
         add_dirs: Vec::new(),
+        model: None,
+        effort: None,
+        permission_mode: None,
     };
     let mut values = tokens.iter();
     while let Some(token) = values.next() {
         let (flag, inline): (&str, Option<&str>) = match token.split_once('=') {
-            Some((flag, rest)) if flag == "--config" || flag == "--add-dir" => (flag, Some(rest)),
+            Some((flag, rest))
+                if matches!(
+                    flag,
+                    "--config" | "--add-dir" | "--model" | "--effort" | "--permission-mode"
+                ) =>
+            {
+                (flag, Some(rest))
+            }
             _ => (token.as_str(), None),
         };
         match (flag, inline) {
             ("--add-dir", Some(dir)) => carry.add_dirs.push(dir.to_string()),
+            ("--model", Some(model)) => carry.model = Some(model.to_string()),
+            ("--effort" | "--permission-mode", inline) => {
+                let value = match inline {
+                    Some(v) => v.to_string(),
+                    None => values
+                        .next()
+                        .cloned()
+                        .ok_or_else(|| format!("{flag} arrives with no value"))?,
+                };
+                if flag == "--effort" {
+                    carry.effort = Some(value);
+                } else {
+                    carry.permission_mode = Some(value);
+                }
+            }
+            ("--model", None) | ("-m", None) => match values.next() {
+                Some(model) => carry.model = Some(model.clone()),
+                None => return Err(format!("{flag} arrives with no model")),
+            },
             ("--add-dir", None) => match values.next() {
                 Some(dir) => carry.add_dirs.push(dir.clone()),
                 None => return Err("--add-dir arrives with no directory".into()),
@@ -2652,7 +2662,7 @@ pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
             _ => {
                 return Err(format!(
                     "harness token {token:?} is not one the codex thread lane carries \
-                     (-c/--config key=value, --add-dir dir); the spawn front door owns \
+                     (-c/--config key=value, --add-dir dir, --model model, --effort level, --permission-mode mode); the spawn front door owns \
                      the -- fence and should have routed it to the pane"
                 ));
             }
@@ -2830,7 +2840,7 @@ mod tests {
     /// detail and the wire field is what the app-server reads.
     #[test]
     fn permission_mode_yolo_reaches_a_full_access_frame() {
-        let yolo = resolve_thread_posture(None, Some("yolo")).expect("yolo maps");
+        let yolo = resolve_thread_posture(None, Some("yolo"), None).expect("yolo maps");
         let frame: Value = serde_json::from_str(&thread_start_request_with_options(
             1,
             std::path::Path::new("/tmp/w"),
@@ -2844,8 +2854,8 @@ mod tests {
         assert_eq!(frame["params"]["approvalPolicy"], "never");
 
         // The explicit pair form resolves off its halves, not its name.
-        let paired =
-            resolve_thread_posture(None, Some("danger-full-access:never")).expect("pair maps");
+        let paired = resolve_thread_posture(None, Some("danger-full-access:never"), None)
+            .expect("pair maps");
         let frame: Value = serde_json::from_str(&thread_start_request_with_options(
             1,
             std::path::Path::new("/tmp/w"),
@@ -2900,6 +2910,8 @@ mod tests {
             "--add-dir",
             "/tmp/x",
             "--config=model_reasoning_effort=high",
+            "-m",
+            "gpt-luna",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -2916,6 +2928,11 @@ mod tests {
             "a non-TOML scalar stays a string, as the codex CLI reads it"
         );
         assert_eq!(carry.add_dirs, vec!["/tmp/x".to_string()]);
+        assert_eq!(
+            carry.model.as_deref(),
+            Some("gpt-luna"),
+            "a fenced model rides the thread"
+        );
 
         let error = parse_harness_args(&["-p".to_string(), "profile".to_string()])
             .err()
@@ -2933,6 +2950,20 @@ mod tests {
             error.contains("--add-dir"),
             "the refusal names the flag: {error}"
         );
+
+        // --effort and --permission-mode are the typed axes, not config pairs.
+        let typed = parse_harness_args(&[
+            "--effort".to_string(),
+            "xhigh".to_string(),
+            "--permission-mode=workspace-write:never".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(typed.effort.as_deref(), Some("xhigh"));
+        assert_eq!(
+            typed.permission_mode.as_deref(),
+            Some("workspace-write:never")
+        );
+        assert!(typed.config.is_empty());
     }
 
     /// The turn replaces the WHOLE policy, so a bounded thread whose server
@@ -3019,6 +3050,19 @@ mod tests {
         assert!(!wired
             .iter()
             .any(|root| root.as_str() == Some(linked_git.as_str())));
+        // codex marks the worktree's own gitdir read-only inside the common
+        // root, so the gitdir must be named on its own or `git add` fails.
+        assert!(
+            wired.iter().any(|root| root
+                .as_str()
+                .is_some_and(|r| r.ends_with(".git/worktrees/linked"))),
+            "the linked worktree's own gitdir rides the grant: {wired:?}"
+        );
+        assert_eq!(
+            crate::provider::git_write_roots(canonical.path()).len(),
+            1,
+            "a main checkout grants only the common dir"
+        );
     }
 
     /// An ungranted spawn must build TODAY's frame, byte for byte. A new

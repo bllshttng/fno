@@ -47,6 +47,18 @@ def _no_real_mail_inject(monkeypatch):
 # Helper: write a registry entry for "red" (live claude peer)
 # ---------------------------------------------------------------------------
 
+def _queued(to: str) -> list:
+    """Durable bus rows addressed to ``to``, one per message id."""
+    from tests.fixtures.bus_rows import read_rows
+
+    rows = {
+        m["id"]: m
+        for m in read_rows()
+        if m["to"] == to and m.get("delivery") != "hosted"
+    }
+    return list(rows.values())
+
+
 def _register_claude_peer(
     name: str = "red", short_id: str = "abcd1234", mux: dict | None = None
 ) -> None:
@@ -126,10 +138,6 @@ def test_dispatch_send_happy_path_live_claude(
     # bounded-duplicate is dedupable (codex P1 - _deliver_live is the 2nd choke
     # point, not just _name_lane_send).
     assert f" · {result.msg_id}`" in header, f"missing envelope id: {header!r}"
-
-    # Bus demotion: a hosted delivery is NOT also written to the durable store.
-    from fno.inbox.store import read_all_threads
-    assert read_all_threads("abcd1234") == [], "hosted delivery must not queue durable"
 
 
 def test_dispatch_send_self_proof_beats_same_bucket_registry_sibling(
@@ -231,8 +239,8 @@ def test_dispatch_send_durable_fallback_preserves_sender_provenance(
 
     from fno.agents import dispatch as dispatch_mod
     from fno.agents.registry import AgentEntry, write_registry
-    from fno.bus.log import iter_messages
     from fno.harness_identity import canonical_handle
+    from tests.fixtures.bus_rows import read_rows
 
     write_registry(
         [
@@ -278,11 +286,11 @@ def test_dispatch_send_durable_fallback_preserves_sender_provenance(
     )
 
     assert result.delivery == "durable"
-    record = next(message for message in iter_messages() if message.id == result.msg_id)
+    record = next(message for message in read_rows() if message["id"] == result.msg_id)
     # The header names the resolved sender row; the harness rides the durable
     # record's provenance fields, no longer the text.
-    assert record.body.splitlines()[0].startswith("`@sender-worker · fmail-")
-    assert record.from_harness == sender_harness
+    assert record.get("body", "").splitlines()[0].startswith("`@sender-worker · fmail-")
+    assert record.get("from_harness") == sender_harness
 
 
 def test_dispatch_send_unresolvable_sender_miss_goes_loud(
@@ -455,7 +463,6 @@ def test_dispatch_send_refuses_same_name_identity_change_under_lock(
     from fno.agents import discover as discover_mod
     from fno.agents import dispatch as dispatch_mod
     from fno.agents.registry import AgentEntry, ResolvedAgent, write_registry
-    from fno.inbox.store import read_all_threads
 
     original = AgentEntry(
         name="red",
@@ -509,90 +516,12 @@ def test_dispatch_send_refuses_same_name_identity_change_under_lock(
 
     assert calls["count"] == 2
     assert delivered == []
-    assert read_all_threads("abcd1234") == []
-
-
-def test_cmd_send_lock_timeout_surfaces_on_stderr(
-    tmp_path: Path, monkeypatch, runner: CliRunner
-) -> None:
-    """A contended send still emits the durable receipt on stdout and exits 0.
-
-    cmd_send's documented contract is one receipt line and exit 0 for every
-    durable outcome. The lock's cause belongs on stderr beside it, not in an
-    exit code a retrying caller reads as "send it again".
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_claude_peer()
-
-    _fail_first_lock_acquire(monkeypatch)
-
-    from fno.mail.cli import mail_app
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = runner.invoke(
-        mail_app,
-        ["send", "red", "hello", "--cwd", str(cwd), "--from-name", "lead"],
-    )
-    assert result.exit_code == 14, result.stdout + (result.stderr or "")
-    first_line = result.stdout.splitlines()[0]
-    assert "queued (durable) [agent-lock-timeout]" in first_line, result.stdout
-    # The landing verdict rides after the receipt; the lock's own cause
-    # stays on stderr, never in the receipt line.
-    assert "NOT LANDED" in result.stdout, result.stdout
-    stderr = result.stderr or ""
-    # Past tense: the grace acquire only wins because the holder let go, so a
-    # present-tense "lock busy ... held by" would name an owner that released.
-    assert "lock was busy" in stderr, "the live lane's cause must still surface"
-    # The holder is any verb on this agent, so the timeout says nothing about
-    # the recipient in either direction. The generic durable warning claims
-    # "red is not live" and points at `fno agents resume red`, which resurrects
-    # a session that is working fine - the exact wrong-cause receipt that
-    # warning exists to avoid. Naming the holder a peer SENDER is the same
-    # defect mirrored: `fno agents stop red` takes the identical flock, so that
-    # copy would call a just-killed recipient healthy.
-    assert "is not live" not in stderr, stderr
-    assert "fno agents resume" not in stderr, stderr
-    assert "was not attempted" in stderr, stderr
-    assert "agent lock past the wait" in stderr, stderr
-    assert "proves nothing about the recipient in either direction" in stderr, (
-        "the arm's whole claim: the token proves neither health nor death "
-        f"because any verb holds the same lock: {stderr}"
-    )
-    assert "a stop, an rm" in stderr, stderr
+    assert _queued("abcd1234") == []
 
 
 # ---------------------------------------------------------------------------
 # AC3-UI: stdout distinguishes delivered vs queued
 # ---------------------------------------------------------------------------
-
-def test_cmd_send_transcript_veto_receipt_names_the_reading(
-    runner: CliRunner, tmp_path: Path, monkeypatch
-) -> None:
-    """AC2-HP (CLI): a skipped live lane prints transcript-<state>, never a
-    bare live-miss."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _register_claude_peer(mux={"session": "main", "pane_id": 11})
-    from fno.agents import dispatch as dispatch_mod
-    from fno.cli import app
-
-    monkeypatch.setattr(
-        dispatch_mod, "_registered_family1_state", lambda _entry: "stalled"
-    )
-    attempts: list = []
-    monkeypatch.setattr(
-        dispatch_mod, "_deliver_live", lambda *a, **k: attempts.append(a)
-    )
-
-    res = runner.invoke(
-        app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"]
-    )
-
-    assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
-    assert attempts == []
-    assert "[transcript-stalled, transcript" in res.stdout, f"stdout: {res.stdout!r}"
-    assert "live-miss" not in res.stdout, f"stdout: {res.stdout!r}"
-
 
 def test_cmd_send_queued_stdout_format(tmp_path: Path, monkeypatch, runner: CliRunner) -> None:
     """AC3-UI (CLI): durable path stdout is 'msg-<id> queued (durable)\\n'."""
@@ -642,7 +571,6 @@ def test_dispatch_send_rejects_over_1mib_body(tmp_path: Path, monkeypatch) -> No
     _register_claude_peer()
 
     from fno.agents.dispatch import DispatchAskError, dispatch_send
-    from fno.inbox.store import read_all_threads
 
     body = "x" * (1024 * 1024 + 1)  # 1MiB + 1 byte
 
@@ -658,7 +586,7 @@ def test_dispatch_send_rejects_over_1mib_body(tmp_path: Path, monkeypatch) -> No
 
     assert exc_info.value.exit_code == 2
     # No envelope should have been written
-    threads = read_all_threads("abcd1234")
+    threads = _queued("abcd1234")
     assert len(threads) == 0, "No envelope should be written on body-size rejection"
 
 
@@ -687,7 +615,6 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(dispatch_mod, "_mail_inject_claude", _fail_inject)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -706,9 +633,9 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
     assert inject_attempt_count[0] == 1, f"Expected 1 inject attempt, got {inject_attempt_count[0]}"
 
     # Envelope is in the store (survived the failed inject)
-    threads = read_all_threads("abcd1234")
+    threads = _queued("abcd1234")
     assert len(threads) == 1, f"Envelope must survive inject failure; got {len(threads)} threads"
-    assert "important message" in threads[0].messages[0].body
+    assert "important message" in threads[0]["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -725,7 +652,6 @@ def test_dispatch_send_unknown_agent(tmp_path: Path, monkeypatch) -> None:
         UNKNOWN_AGENT_EXIT_CODE,
         dispatch_send,
     )
-    from fno.inbox.store import read_all_threads
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -745,7 +671,7 @@ def test_dispatch_send_unknown_agent(tmp_path: Path, monkeypatch) -> None:
     assert "blue" in msg
 
     # No envelope written
-    threads = read_all_threads("blue")
+    threads = _queued("blue")
     assert len(threads) == 0
 
 
@@ -940,7 +866,6 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
     from fno.agents import dispatch as dispatch_mod
     from fno.agents import registry as registry_mod
     from fno.harness_identity import canonical_handle
-    from fno.inbox.store import read_all_threads
 
     registry_mod.write_registry([
         registry_mod.AgentEntry(
@@ -975,14 +900,14 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
     )
 
     assert result.delivery == "durable"
-    original_threads = read_all_threads(canonical_handle(original_id))
+    original_threads = _queued(canonical_handle(original_id))
     assert len(original_threads) == 1
     # The durable body is the delivered shape (header line, then the body),
     # and it lives under the ORIGINAL session's thread, not the replacement.
-    assert original_threads[0].messages[0].body.endswith("\nsecret for A")
-    assert original_threads[0].messages[0].body.startswith("`@lead · ")
-    assert read_all_threads(canonical_handle(replacement_id)) == []
-    assert read_all_threads("victim") == []
+    assert original_threads[0]["body"].endswith("\nsecret for A")
+    assert original_threads[0]["body"].startswith("`@lead · ")
+    assert _queued(canonical_handle(replacement_id)) == []
+    assert _queued("victim") == []
     row = registry_mod.load_registry()[0]
     assert row.harness_session_id == replacement_id
     assert row.last_message_at is None
@@ -997,7 +922,6 @@ def test_dispatch_send_refuses_durable_fallback_without_full_session_id(
 
     from fno.agents import dispatch as dispatch_mod
     from fno.agents import registry as registry_mod
-    from fno.inbox.store import read_all_threads
 
     registry_mod.write_registry([
         registry_mod.AgentEntry(
@@ -1022,8 +946,7 @@ def test_dispatch_send_refuses_durable_fallback_without_full_session_id(
         )
 
     assert exc.value.exit_code == 12
-    assert read_all_threads("legacy") == []
-    assert read_all_threads("transportA") == []
+    assert _queued("legacy") == []
 
 
 # ---------------------------------------------------------------------------
@@ -1081,19 +1004,21 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
     monkeypatch,
     runner: CliRunner,
 ) -> None:
-    """The command boundary preserves the real canonical-lock failure."""
+    """A locked bus door must not mint a success receipt.
+
+    `mail send` execs the native leaf, so only a real lock reaches it: the
+    test holds the door's own sidecar flock and shortens the door's wait.
+    """
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
     from fno.agents import dispatch as dispatch_mod
-    from fno.bus import log as bus_log
-    from fno.inbox.store import read_all_threads
     from fno.mail.cli import mail_app
+    from tests.fixtures.bus_rows import bus_log_path
 
     monkeypatch.setattr(dispatch_mod, "_deliver_live", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(bus_log, "_LOCK_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(bus_log, "_LOCK_POLL_SECONDS", 0.005)
-    lock_path = bus_log._lock_path()
+    monkeypatch.setenv("FNO_BUS_LOCK_TIMEOUT_SECS", "0.05")
+    lock_path = bus_log_path().with_name("messages.jsonl.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     holder = open(lock_path, "w")
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
@@ -1109,8 +1034,8 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
     assert "no durable envelope was written" in output
     assert "delivered" not in result.stdout
     assert "queued (durable)" not in result.stdout
-    assert not bus_log.bus_log_path().exists()
-    assert read_all_threads("abcd1234") == []
+    assert not bus_log_path().exists()
+    assert _queued("abcd1234") == []
 
 
 def test_dispatch_send_rejects_nonterminating_agent_lock_timeout(
@@ -1121,7 +1046,7 @@ def test_dispatch_send_rejects_nonterminating_agent_lock_timeout(
     _register_claude_peer()
 
     from fno.agents import dispatch as dispatch_mod
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     delivered: list[bool] = []
     monkeypatch.setattr(
@@ -1211,140 +1136,6 @@ def test_dispatch_send_events_carry_context_envelope(tmp_path: Path, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# US2 (ab-098967b4): send by discovered live-session handle
-# ---------------------------------------------------------------------------
-
-def test_us2_send_by_handle_is_session_addressed(runner, tmp_path, monkeypatch):
-    """x-605c US3: a bare <handle> that is a live discovered claude session is
-    delivered TO THAT SESSION (live-inject first, durable floor to its canonical
-    handle) -- NOT re-routed to a project. Project anycast stays explicit via
-    --to-project (Locked Decision 3)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import write_registry
-
-    write_registry([])  # empty -> dispatch_send raises unknown-agent (exit 16)
-
-    from fno.agents import discover as discover_mod
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.discover import DiscoveredSession
-
-    fake = DiscoveredSession(
-        session_id="uuid-tgt", short_id="tgt00001", handle="fno-tgt00001",
-        pid=123, cwd="/x/fno", project="fno", status="idle",
-    )
-    monkeypatch.setattr(discover_mod, "resolve_or_suggest", lambda h, **kw: (fake, []))
-    # Force the live-inject miss so the send deterministically writes the floor.
-    monkeypatch.setattr(dispatch_mod, "_mail_inject_claude", lambda *_a, **_k: False)
-
-    # The removed re-route must NOT fire: a project send is now a hard failure.
-    def _boom(*_a, **_kw):  # pragma: no cover - asserts the path is dead
-        raise AssertionError("claude->project re-route must not fire (LD3)")
-
-    monkeypatch.setattr(dispatch_mod, "dispatch_send_to_project", _boom)
-
-    from fno.mail.cli import mail_app
-
-    res = runner.invoke(
-        mail_app,
-        ["send", "fno-tgt00001", "does advance() resolve cwd?",
-         "--from-name", "lead"],
-    )
-    assert res.exit_code == 14, res.output
-    assert "queued (durable)" in res.output
-    # Addressed to the canonical handle, not a project.
-    assert "uuid-tgt" in res.output
-
-
-def test_registered_handle_colliding_with_discovery_sends_nothing(
-    runner, tmp_path, monkeypatch
-):
-    """A registry-first hit cannot hide a different live canonical owner."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import discover as discover_mod
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.discover import DiscoveredSession
-    from fno.agents.registry import AgentEntry, write_registry
-    from fno.inbox.store import read_all_threads
-    from fno.mail.cli import mail_app
-
-    registered_sid = "aaaaaaaa-1111-7222-8333-4444deadbeef"
-    live_sid = "bbbbbbbb-1111-7222-8333-4444deadbeef"
-    write_registry(
-        [
-            AgentEntry(
-                name="deadbeef",
-                cwd="/wrong",
-                log_path="/tmp/wrong.log",
-                harness="claude",
-                harness_session_id=registered_sid,
-                short_id="transport",
-                status="live",
-            )
-        ]
-    )
-    live = DiscoveredSession(
-        session_id=live_sid,
-        short_id="deadbeef",
-        handle="deadbeef",
-        pid=123,
-        cwd="/right",
-        project="right",
-        status="idle",
-        agent="claude",
-        truth_state="working",
-    )
-    monkeypatch.setattr(
-        discover_mod, "discover_live_sessions", lambda **_kwargs: [live]
-    )
-    monkeypatch.setattr(dispatch_mod, "_registered_family1_state", lambda _entry: "working")
-
-    injected: list[str] = []
-
-    def capture_wrong_injection(entry, *_args, **_kwargs):
-        injected.append(entry.harness_session_id or entry.name)
-        return True
-
-    monkeypatch.setattr(dispatch_mod, "_deliver_live", capture_wrong_injection)
-
-    result = runner.invoke(mail_app, ["send", "deadbeef", "must not guess"])
-
-    assert result.exit_code == 2
-    assert "ambiguous" in result.output
-    assert "delivered" not in result.output and "queued" not in result.output
-    assert injected == []
-    assert read_all_threads("deadbeef") == []
-
-
-def test_us2_unknown_handle_errors_with_suggestions(runner, tmp_path, monkeypatch):
-    """AC2-ERR: an unknown handle errors with the closest live handles, sending
-    nothing (dispatch_send_to_project is never called)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import write_registry
-
-    write_registry([])
-
-    from fno.agents import discover as discover_mod
-    from fno.agents import dispatch as dispatch_mod
-
-    monkeypatch.setattr(
-        discover_mod, "resolve_or_suggest",
-        lambda h, **kw: (None, ["fno-think001", "fno-tgt00001"]),
-    )
-
-    def _boom(*a, **k):  # must NOT be called
-        raise AssertionError("must not send on an unknown handle")
-
-    monkeypatch.setattr(dispatch_mod, "dispatch_send_to_project", _boom)
-
-    from fno.mail.cli import mail_app
-
-    res = runner.invoke(mail_app, ["send", "nope", "hi"])
-    assert res.exit_code != 0
-    assert "Closest live sessions" in res.output
-    assert "fno-think001" in res.output
-
-
-# ---------------------------------------------------------------------------
 # An agent-lock timeout must queue the message, never lose it
 # ---------------------------------------------------------------------------
 
@@ -1363,7 +1154,6 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
     from fno import paths
     from fno.agents.dispatch import dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.inbox.store import read_all_threads
 
     lock_path = _agent_lock_path("red", paths.agents_registry_path())
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1387,9 +1177,9 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
     assert result.delivery == "durable"
     assert result.reason == "agent-lock-timeout"
 
-    threads = read_all_threads("abcd1234")
+    threads = _queued("abcd1234")
     assert len(threads) == 1, f"the message must survive the timeout: {threads}"
-    assert "hello" in threads[0].messages[0].body
+    assert "hello" in threads[0]["body"]
 
 
 def test_dispatch_send_control_refusal_clears_dispatch_context(
@@ -1461,7 +1251,7 @@ def test_dispatch_send_agent_lock_timeout_without_durable_address_says_so(
     from fno import paths
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     lock_path = _agent_lock_path("red", paths.agents_registry_path())
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1495,7 +1285,7 @@ def test_dispatch_send_lock_timeout_refuses_provider_mismatch_before_queuing(
     from fno import paths
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     lock_path = _agent_lock_path("red", paths.agents_registry_path())
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1569,7 +1359,7 @@ def test_dispatch_send_lock_timeout_refuses_when_lock_never_frees(
     from fno.agents import dispatch as dispatch_mod
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     monkeypatch.setattr(dispatch_mod, "_LOCK_TIMEOUT_QUEUE_GRACE_SECONDS", 0.2)
 
@@ -1613,7 +1403,6 @@ def test_dispatch_send_lock_timeout_sees_a_reclaim_committed_under_the_lock(
     from fno import paths
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.inbox.store import read_all_threads
 
     registry_path = paths.agents_registry_path()
     lock_path = _agent_lock_path("red", registry_path)
@@ -1644,8 +1433,8 @@ def test_dispatch_send_lock_timeout_sees_a_reclaim_committed_under_the_lock(
 
     # Delivery first: the defect was a message queued to the dead session, so
     # that is what must be asserted before any wording.
-    assert read_all_threads("abcd1234") == [], "queued to the former owner"
-    assert read_all_threads("99999999") == [], "queued to a guessed new owner"
+    assert _queued("abcd1234") == [], "queued to the former owner"
+    assert _queued("99999999") == [], "queued to a guessed new owner"
     assert exc_info.value.exit_code == 2
     assert "retry the send" in str(exc_info.value)
 

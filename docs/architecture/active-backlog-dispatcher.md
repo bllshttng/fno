@@ -21,7 +21,7 @@ Two writers arm a mission: the epic advance (`fno backlog advance --epic`) and a
 > ones (Why, circuit breaker, nudge) are unaffected.
 
 > **Worker names.** Daemon-dispatched workers are named
-> `ab-<verb>-<node>-<slug>`. The `ab` source says the active-backlog drain
+> `ab-<command>-<node>-<slug>`. The `ab` source says the active-backlog drain
 > launched them. The full vocabulary lives in
 > [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md).
 > `fno agents admit autonomy provenance` prints the ratcheted inventory.
@@ -63,7 +63,7 @@ config.active_backlog (master switch) + epics with mission_active=true
 
 - **Config schema** (`cli/src/fno/config/__init__.py`, `ActiveBacklogConfig`). `config.active_backlog`: `enabled` (bool or per-project map), `interval` (duration string, default `5m`), `failure_limit` (default 3), `max_concurrent` (default 1). v1 asserts one concurrent dispatch. The field is defined now so v2 needs no migration. `mission` is IGNORED: missions are per-epic graph state (`mission_active`), never a config value. The key stays parseable for one release. When it is set, `fno config doctor` warns. The fail-safe posture mirrors `config.auto_continue` / `config.target.blast`. A malformed block degrades to disabled. A bad scalar drops to its default. An invalid `interval` fails *closed*: the feature disables, rather than spinning a 0-sleep hot loop. Accessors `is_enabled_for`, `any_enabled`, `enabled_projects`, and `interval_seconds` centralize the fail-closed rule.
 
-- **Target resolver** (`cli/src/fno/active_backlog.py`, surfaced as
+- **Target resolver** (native: `crates/fno-agents/src/status_sinks.rs`, surfaced as
   `fno config active-backlog --json`). The daemon is a per-user global process
   with no inherent project, so it shells this on entering Serving to learn its
   drain targets. It returns **one target per active mission** (an epic with
@@ -119,7 +119,7 @@ The daemon inherits the trigger layer the retired megawalk walker used to own. T
 
 An exhausted mission tick keeps the stable `skip_reason=no_work` token. It adds `stranded=N` to its detail. The value comes from `fno backlog undispatched --json`. That command counts finalized ready leaf plans with no execution claim outside the exhausted mission. A failed or malformed observer read reports `stranded=unknown`. It never fabricates zero. The mission remains pinned, so visibility improves without releasing the drain to the general queue.
 
-To change only the node's board rank, an operator runs `fno backlog rank <id> --top`. The verb refuses a session carrying a harness stamp and names `fno backlog encounter` as the agent's vote. When the node is outside every resolved active mission scope, the receipt says `no live dispatcher will take it`. If scope cannot be read, the receipt says `dispatcher scope unavailable`. A node inside a mission keeps the normal rank receipt. Ranking never broadens mission membership.
+To change only the node's board rank, an operator runs `fno backlog rank <id> --top`. The command refuses a session carrying a harness stamp and names `fno backlog encounter` as the agent's vote. When the node is outside every resolved active mission scope, the receipt says `no live dispatcher will take it`. If scope cannot be read, the receipt says `dispatcher scope unavailable`. A node inside a mission keeps the normal rank receipt. Ranking never broadens mission membership.
 
 ## Events
 
@@ -158,8 +158,8 @@ All transitions are emitted through the loop `Journal` (project journal fatal, g
 | File | Role |
 |------|------|
 | `cli/src/fno/config/__init__.py` | `ActiveBacklogConfig` schema + fail-safe coercion |
-| `cli/src/fno/active_backlog.py` | active-mission drain-target resolver + nudge sentinel touch |
-| `cli/src/fno/config_cli.py` | `fno config active-backlog --json` |
+| `crates/fno-agents/src/status_sinks.rs` | the fanout-target resolver (the Python leg died with the fleet-family port) |
+| `crates/fno/src/config_cli/leaves.rs` | `fno config active-backlog --json` |
 | `cli/src/fno/backlog/advance.py` | `advance_epic` converge core (incl. `--continuation` daemon mode); nudge touch on dispatch |
 | `cli/src/fno/graph/store.py` | nudge touch after `locked_mutate_graph` render |
 | `crates/fno-agents/src/active_backlog.rs` | mission drain tick + loop, circuit breaker, reconcile, supervisor, wake scheduler |

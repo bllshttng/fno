@@ -35,7 +35,7 @@ impl PrRowBindResult {
         }
     }
 
-    /// The ids this bind actually bound (the Python `bound_ids` property).
+    /// The ids this bind actually bound.
     pub fn bound_ids(&self) -> Vec<String> {
         self.bindings
             .iter()
@@ -168,7 +168,7 @@ pub(crate) fn bind_pr_rows(
 
 /// Does `entry`'s own `cwd` sit inside `our_root` (or is it missing)?
 ///
-/// Full contract: docs/architecture/backlog-graph-verb-contracts.md
+/// Full contract: docs/architecture/backlog-graph-command-contracts.md
 pub(crate) fn node_cwd_in_repo(entry: &Value, our_root: &str) -> bool {
     let Some(raw_cwd) = entry.get("cwd").and_then(Value::as_str) else {
         return true;

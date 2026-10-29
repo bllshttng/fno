@@ -1,6 +1,6 @@
 //! How an adopt resolves a session's identity: the plan precedence
 //! (registry row, target manifest, harness stores) and what a reap
-//! receipt restores onto a freshly minted row. Split from client_verbs
+//! receipt restores onto a freshly minted row. Split from client_commands
 //! under the file budget: the adopt cluster is one question.
 
 use crate::lifecycle_child::heal_token;
@@ -41,7 +41,7 @@ pub(crate) fn persist_manifest_identity(
     home: &AgentsHome,
 ) -> Result<Value, AdoptError> {
     let mut entry =
-        crate::client_verbs::mint_synthesized_entry(id, &crate::daemon::now_rfc3339_like());
+        crate::client_commands::mint_synthesized_entry(id, &crate::daemon::now_rfc3339_like());
     entry.last_message_at = crate::claude_adopt::transcript_stamp(id.canonical_session_id());
     // same missing-model closure as the roster adopt - the claude
     // transcript states the model; the provider comes only from the
@@ -55,7 +55,7 @@ pub(crate) fn persist_manifest_identity(
     // row takes the identity it kept: the birth name, the node the ledger
     // resolved, and a `revived` origin naming this adoption as a comeback.
     let receipt = restore_reaped_identity(&mut entry, home);
-    crate::client_verbs::upsert_synthesized_row(&home.registry_json(), entry.clone())
+    crate::client_commands::upsert_synthesized_row(&home.registry_json(), entry.clone())
         .map_err(|error| AdoptError::Io(error.to_string()))?;
     if let Some(receipt) = receipt {
         journal_agent_revived(home, "adopt", &receipt, &entry);
@@ -94,18 +94,18 @@ fn restore_reaped_identity(
     Some(receipt)
 }
 
-/// The one `agent_revived` journal writer: names the verb that brought the
+/// The one `agent_revived` journal writer: names the command that brought the
 /// session back, the actor session that ran it, the name the row was born
 /// with, and the session id. Best-effort - a journal fault never fails an
 /// adoption that already persisted.
 fn journal_agent_revived(
     home: &AgentsHome,
-    verb: &str,
+    command: &str,
     receipt: &ReapReceipt,
     entry: &crate::state::RegistryEntry,
 ) {
     let mut fields = serde_json::Map::new();
-    fields.insert("verb".into(), serde_json::Value::String(verb.into()));
+    fields.insert("verb".into(), serde_json::Value::String(command.into()));
     fields.insert(
         "prior_name".into(),
         serde_json::Value::String(receipt.row_name.clone()),
@@ -136,19 +136,18 @@ fn journal_agent_revived(
 
 /// Resolve `session_id` to one registry row, minting one if needed, through the
 /// plan precedence: an existing registry row; a `.fno/target-state.md` whose
-/// session id matches; then the harness session stores (the heal-token shellout,
+/// session id matches; then the harness session stores (the in-process healer,
 /// which adopts best-effort). Identity only. Returns the row (as JSON), any
 /// `fno_id` carried, and the source.
 pub(crate) fn synthesize_and_adopt(
     session_id: &str,
     home: &AgentsHome,
-    cross_project: bool,
 ) -> Result<(Value, Option<String>, AdoptSource), AdoptError> {
     let registry_path = home.registry_json();
     let entries =
-        crate::client_verbs::read_registry_entries(&registry_path).map_err(AdoptError::Io)?;
+        crate::client_commands::read_registry_entries(&registry_path).map_err(AdoptError::Io)?;
     // 1. Already registered (name / full id / short resolution, no store heal yet).
-    if let Ok(e) = crate::client_verbs::find_agent_entry(&entries, session_id) {
+    if let Ok(e) = crate::client_commands::find_agent_entry(&entries, session_id) {
         let fno_id = e
             .get("fno_id")
             .and_then(Value::as_str)
@@ -165,7 +164,7 @@ pub(crate) fn synthesize_and_adopt(
         return Ok((value, None, AdoptSource::Manifest));
     }
     // 3. Harness session stores (heal-token adopts best-effort and writes the row).
-    match heal_token(session_id, &registry_path, cross_project, None) {
+    match heal_token(session_id, &registry_path) {
         Ok(Some(row)) => Ok((row, None, AdoptSource::HarnessStore)),
         Ok(None) => Err(AdoptError::NoEvidence),
         Err(msg) => Err(AdoptError::Io(msg)),
@@ -195,7 +194,7 @@ fn refresh_bg_substrate(registry_path: &std::path::Path, e: &Value) -> Option<Va
         return None;
     }
     let harness_session_id = e.get("harness_session_id").and_then(Value::as_str)?;
-    let short = crate::client_verbs::derived_short_id(harness_session_id);
+    let short = crate::client_commands::derived_short_id(harness_session_id);
     // Union, not ambient-only: same isolated-account gap as the SessionStart
     // refresh in `session_report.rs`.
     let pid = crate::claude_roster::read_all_agents_union().live_bg_pid(&short)?;
@@ -350,7 +349,7 @@ mod tests {
         let old_path = std::env::var_os("PATH");
         std::env::set_var("PATH", crate::path_with(bin_dir.path()));
 
-        let result = crate::adopt_identity::synthesize_and_adopt(sid, &home, false);
+        let result = crate::adopt_identity::synthesize_and_adopt(sid, &home);
 
         match old_path {
             Some(value) => std::env::set_var("PATH", value),

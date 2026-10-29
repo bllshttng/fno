@@ -263,6 +263,23 @@ fn run_parsed(a: LeafArgs) -> i32 {
                     let claim = binding.claim;
                     if key.starts_with("node:") {
                         stamp_do_on_acquire(&key, &claim, &a.holder);
+                        // The handover heals what an earlier init refusal
+                        // wrote: the blocked line and the init-authored
+                        // sentinel. Best-effort, after the claim is secured;
+                        // the node guard inside skips non-node keys. The
+                        // manifest ttl derives from the effective lease, so
+                        // an engine-flag ttl is not silently widened to the
+                        // reader's 2h default.
+                        super::manifest_refresh::refresh_manifest_on_handover(
+                            &key,
+                            &a.holder,
+                            if a.ttl.is_empty() {
+                                ttl_ms.map(|ms| format!("{}s", ms / 1000))
+                            } else {
+                                Some(a.ttl.clone())
+                            }
+                            .as_deref(),
+                        );
                     }
                     if a.json_output {
                         println!("{}", claim_json_string(&claim));
@@ -356,7 +373,7 @@ fn ordinary_acquire(
     // them: a pid-less thread claim is assessed through it on contention.
     let outcome = if key.starts_with("task:") || key.starts_with("node:") {
         let witness = |record: &ClaimRecord| {
-            let (witness, _drain) = crate::claim_verbs::default_session_witness();
+            let (witness, _drain) = crate::claim_commands::default_session_witness();
             witness(record)
         };
         let witness: claims::SessionWitness<'_> = &witness;
@@ -369,6 +386,22 @@ fn ordinary_acquire(
             // A launch-window claim is not work: the worker's handover opens the row.
             if key.starts_with("node:") && !a.holder.starts_with(HANDOVER_HOLDER_PREFIX) {
                 stamp_do_on_acquire(key, &claim, &a.holder);
+                // The session now owns the node through the ordinary door:
+                // fresh init, or a recovery that reaped a dead window claim.
+                // Heal what a refused earlier init may have written, the same
+                // way the handover arm below does. The ttl derives from the
+                // effective lease for the same reason the handover arm's
+                // does.
+                super::manifest_refresh::refresh_manifest_on_handover(
+                    &key,
+                    &a.holder,
+                    if a.ttl.is_empty() {
+                        ttl_ms.map(|ms| format!("{}s", ms / 1000))
+                    } else {
+                        Some(a.ttl.clone())
+                    }
+                    .as_deref(),
+                );
             }
             if a.json_output {
                 println!("{}", claim_json_string(&claim));
@@ -533,7 +566,7 @@ fn rebind_locked(
             existing.holder
         ));
     }
-    let state = crate::claim_verbs::status_verdict(&existing).0;
+    let state = crate::claim_commands::status_verdict(&existing).0;
     // ONLY a launch-window holder may be replaced: naming the prior holder is
     // the proof, and `spawn-handover:<worker>` reaches only that worker.
     let handover_allowed = !holder_flag.is_empty()

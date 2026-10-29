@@ -3,7 +3,7 @@
 The faithful replacement for `fno inbox send --to <project> --kind <kind>`:
 inbox kinds (heads-up / question / fyi) route through the durable inbox
 write path so the recipient's drain still dispatches by kind. Covers the
-data-layer core (`post_inbox_message`) and the CLI flag wiring.
+bus row it writes and the CLI flag wiring.
 """
 from __future__ import annotations
 
@@ -39,10 +39,16 @@ def _invoke(runner: CliRunner, *args: str):
     return runner.invoke(mail_app, ["send", *args])
 
 
+def _rows(to: str) -> list:
+    from tests.fixtures.bus_rows import read_rows
+
+    return [m for m in read_rows() if m["to"] == to]
+
+
 def test_ac3_kind_send_projectless_error_names_real_flags(isolated, runner) -> None:
     """AC3: a --kind send from a project-less repo (no ``project`` key) fails
     naming ``--from-name``/``--from-self``, the flags ``mail send`` actually
-    has -- never the bare ``--from`` (which lives only on the inbox verbs)."""
+    has -- never the bare ``--from`` (which lives only on the inbox commands)."""
     scratch = isolated / "no-project"
     scratch.mkdir()
     # --to-project reaches the sender-identity resolution this AC tests; a bare
@@ -61,8 +67,6 @@ def test_ac3_kind_send_projectless_error_names_real_flags(isolated, runner) -> N
 
 
 def test_cmd_send_kind_heads_up_writes_durable_thread(isolated, runner) -> None:
-    from fno.inbox.store import read_unread_threads
-
     result = _invoke(
         runner,
         "--to-project", "acme-docs",
@@ -75,15 +79,13 @@ def test_cmd_send_kind_heads_up_writes_durable_thread(isolated, runner) -> None:
     assert "queued (durable)" in result.output
     # The durable receipt names why it is durable.
     assert "param-forced: --kind heads-up" in result.output
-    threads = read_unread_threads("acme-docs")
-    assert len(threads) == 1
-    assert threads[0].kind == "heads-up"
-    assert threads[0].from_project == "acme-web"
+    rows = _rows("acme-docs")
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "heads-up"
+    assert rows[0]["from"] == "acme-web"
 
 
 def test_cmd_send_fyi_persist_memory(isolated, runner) -> None:
-    from fno.inbox.store import read_unread_threads
-
     result = _invoke(
         runner,
         "--to-project", "acme-backend",
@@ -93,8 +95,7 @@ def test_cmd_send_fyi_persist_memory(isolated, runner) -> None:
         "lesson: always quote yaml scalars",
     )
     assert result.exit_code == 0, result.output
-    threads = read_unread_threads("acme-backend")
-    assert threads[0].persist_to_memory is True
+    assert _rows("acme-backend")[0]["meta"]["persist_to_memory"] is True
 
 
 def test_cmd_send_invalid_kind_rejected(isolated, runner) -> None:
@@ -117,28 +118,24 @@ def test_cmd_send_persist_nonfyi_rejected(isolated, runner) -> None:
     assert result.exit_code == 2
 
 
-def test_cmd_send_reply_to_appends(isolated, runner) -> None:
-    from fno.inbox.store import read_unread_threads, write_new_thread
+def test_cmd_send_reply_to_carries_parent_id(isolated, runner) -> None:
+    from fno.inbox.store import write_new_thread
 
     root = write_new_thread("acme-docs", "acme-web", "fyi", "root")
     result = _invoke(
         runner,
         "--to-project", "acme-docs",
         "--kind", "fyi",
-        "--reply-to", root.thread_id,
+        "--reply-to", root,
         "--from-name", "acme-web",
         "appended reply",
     )
     assert result.exit_code == 0, result.output
-    assert "appended (durable)" in result.output
-    threads = read_unread_threads("acme-docs")
-    assert len(threads[0].messages) == 2
+    assert [m.get("in_reply_to") for m in _rows("acme-docs")][-1] == root
 
 
 def test_cmd_send_ref_flags_ride_in_thread(isolated, runner) -> None:
     """--ref-pr/--ref-node enrich the thread for recipient triage (AC8-UI)."""
-    from fno.inbox.store import read_unread_threads
-
     result = _invoke(
         runner,
         "--to-project", "acme-web",
@@ -149,9 +146,9 @@ def test_cmd_send_ref_flags_ride_in_thread(isolated, runner) -> None:
         "--body", "region column needed",
     )
     assert result.exit_code == 0, result.output
-    refs = read_unread_threads("acme-web")[0].refs
-    assert refs.get("ref_pr") == "112"
-    assert refs.get("ref_node") == "ab-1f3c9a2b"
+    meta = _rows("acme-web")[0]["meta"]
+    assert str(meta.get("ref_pr")) == "112"
+    assert meta.get("ref_node") == "ab-1f3c9a2b"
 
 
 def test_cmd_send_deprecated_kind_gives_migration_hint(isolated, runner) -> None:
@@ -179,8 +176,6 @@ def _only_marker(monkeypatch, marker: str, value: str) -> None:
 def test_cmd_send_from_self_stamps_canonical_handle(isolated, runner, monkeypatch) -> None:
     """--from-self stamps the session's canonical handle as sender, so a reply to
     a --to-project note lands in the sender's session lane, not the project inbox."""
-    from fno.inbox.store import read_unread_threads
-
     _only_marker(monkeypatch, "CLAUDE_CODE_SESSION_ID", "879d8d26-2505-4977-9b87-000000000000")
     result = _invoke(
         runner,
@@ -190,7 +185,7 @@ def test_cmd_send_from_self_stamps_canonical_handle(isolated, runner, monkeypatc
         "--body", "which auth?",
     )
     assert result.exit_code == 0, result.output
-    assert read_unread_threads("acme-docs")[0].from_project == "879d8d26"
+    assert _rows("acme-docs")[0]["from"] == "879d8d26"
 
 
 def test_cmd_send_from_self_without_identity_fails_loud(isolated, runner, monkeypatch) -> None:
@@ -212,9 +207,9 @@ def test_cmd_send_from_self_without_identity_fails_loud(isolated, runner, monkey
 
 
 def _bus_len() -> int:
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
-    return len(list(iter_messages()))
+    return len(read_rows())
 
 
 def test_ac10_kind_fyi_to_handle_refused(isolated, runner):

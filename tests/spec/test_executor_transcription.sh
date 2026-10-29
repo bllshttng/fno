@@ -7,21 +7,40 @@
 #   AC2.3-EDGE  Mixed surfaces produce per-task examples (parser emits 'mixed')
 #   AC2.4-FR    /spec tolerates Locked Decisions formatting variation
 #
-# The parser is the in-package module fno.executor._locked - it reads a
-# design-doc on stdin and emits one of: '' | 'tdd' | 'impeccable' | 'mixed'.
-# /spec's SKILL.md calls into it and transcribes the result into plan
-# frontmatter.
+# The parser is the native executor-route door
+# (crates/fno-agents/src/executor_route.rs, the SINGLE source of truth since
+# the worker-family port deleted the Python leg) - it reads a design-doc on
+# stdin and emits one of: '' | 'tdd' | 'impeccable' | 'mixed'. /spec's
+# SKILL.md calls into it and transcribes the result into plan frontmatter.
 #
 # The former template/DOC grep tail (quick-template placeholder, LOCKED_SECTION
-# variable, parser-reference and transcription-verb strings) was junk under
+# variable, parser-reference and transcription-command strings) was junk under
 # the test-audit authoring gate: exact source greps of doc prose, not behavior.
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PKG_SRC="$REPO_ROOT/cli/src"
-if [[ -f "$PKG_SRC/fno/executor/_locked.py" ]]; then
-    export PYTHONPATH="${PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
+if [[ -f "$REPO_ROOT/hooks/lib/agents-bin.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/hooks/lib/agents-bin.sh"
+else
+    fno_agents_bin() {
+        local root="${1:-.}"
+        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
+            printf '%s' "${FNO_AGENTS_BIN}"
+        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
+        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        else
+            command -v fno-agents || printf ''
+        fi
+    }
+fi
+BIN="$(fno_agents_bin "$REPO_ROOT")"
+if [[ -z "$BIN" ]]; then
+    echo "test_executor_transcription: SKIP - fno-agents binary not built (FNO_AGENTS_BIN or cargo build crates/fno-agents)"
+    exit 0
 fi
 
 PASS=0
@@ -39,20 +58,8 @@ assert() {
 }
 
 parse() {
-    printf '%s\n' "$1" | python3 -m fno.executor._locked 2>/dev/null
+    printf '%s\n' "$1" | "$BIN" executor-route locked 2>/dev/null
 }
-
-echo "Pre-flight: required artifacts exist"
-python3 -c 'import fno.executor._locked' 2>/dev/null \
-    && { echo "  PASS: fno.executor._locked importable"; PASS=$((PASS+1)); } \
-    || { echo "  FAIL: fno.executor._locked not importable"; FAIL=$((FAIL+1)); }
-
-if [[ $FAIL -gt 0 ]]; then
-    echo ""
-    echo "==="
-    echo "test_executor_transcription: ${PASS} passed, ${FAIL} failed (artifacts missing - cannot continue)"
-    exit 1
-fi
 
 echo ""
 echo "AC2.1-HP: canonical Locked Decision -> plan-level value"

@@ -1,654 +1,432 @@
-use super::backlog_style::{BLine, BRole, BSeg};
-use super::*;
-use crate::org_model::{OrgInputs, OrgSession, OrgSnapshot};
-use crate::view_store::{OrgMode, OrgSessions, SidelineView};
-use std::collections::HashSet;
+//! The org view: the fleet command center. The explorer on the left lists
+//! the fleet, its machines, the leads on each machine and the open lead's seats;
+//! the right pane shows a tab over the selection, or a seat, feed or system
+//! page. Every seat comes from the fleet map, so the other machine's seats
+//! show beside this one's.
 
-pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, super::org_detail::OrgMsg)>;
-#[derive(Clone)]
-pub(crate) enum Selected {
-    Lead(AgentRow),
-    Node(crate::backlog_model::NodeView),
-    Session(OrgSession),
+use super::backlog_style::{BLine, BRole};
+use super::org_seats::{Fleet, FleetInputs, Lead, Machine, Seat};
+use super::org_tabs::{Entry, Lb, Line};
+use super::*;
+use crate::view_store::{OrgTab, SidelineView};
+
+pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
+
+pub(crate) enum OrgMsg {
+    Gather(FleetInputs),
 }
-#[derive(Clone)]
-pub(crate) struct Row {
-    key: String,
-    text: String,
-    segs: Vec<BSeg>,
-    depth: usize,
-    pub(crate) selected: Selected,
-    pub(crate) lead: String,
-}
-fn row(key: String, depth: usize, lead: String, segs: Vec<BSeg>, selected: Selected) -> Row {
-    Row {
-        key,
-        text: segs.iter().map(|s| s.text.as_str()).collect(),
-        segs,
-        depth,
-        selected,
-        lead,
+
+pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
+    match msg {
+        OrgMsg::Gather(inputs) => apply_fold(view, gen, inputs),
     }
 }
-fn seg(text: impl Into<String>, role: BRole) -> BSeg {
-    BSeg {
-        text: text.into(),
-        role,
-    }
+
+/// The explorer's width when the right pane shows beside it.
+const LEFT: usize = 34;
+/// Below this width the explorer paints alone.
+const MIN_SPLIT: usize = 80;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Item {
+    Root,
+    Host(usize),
+    Lead(usize, usize),
+    Seat(usize, usize, usize),
+    Feed,
+    System,
 }
-fn fold_mark(collapsed: bool) -> BSeg {
-    seg(if collapsed { "▸ " } else { "▾ " }, BRole::Meta)
+
+pub(crate) fn host_key(m: &Machine) -> String {
+    format!("host/{}", m.id)
 }
-type GraphMemo = (
-    u64,
-    usize,
-    usize,
-    OrgSessions,
-    String,
-    super::org_graph::Graph,
-);
+pub(crate) fn lead_key(m: &Machine, p: &Lead) -> String {
+    format!("lead/{}/{}", m.id, p.name)
+}
+pub(crate) fn seat_key(m: &Machine, p: &Lead, s: &Seat) -> String {
+    format!("seat/{}/{}/{}", m.id, p.name, s.name)
+}
+
 pub(crate) struct OrgBoard {
-    pub(crate) snapshot: OrgSnapshot,
-    pub(crate) inputs: Option<crate::backlog_model::Inputs>,
-    pub(crate) cursor: usize,
-    pub(crate) mode: OrgMode,
-    pub(crate) filter: OrgSessions,
-    pub(crate) query: String,
+    pub(crate) fleet: Option<Fleet>,
+    /// The last failed read and when it failed; the last good fleet stays.
+    pub(crate) error: Option<(String, u64)>,
+    /// The selected explorer key: `root`, `host/..`, `lead/..`, `seat/..`,
+    /// `feed` or `system`.
+    pub(crate) key: String,
+    /// The one lead whose seats the explorer lists.
+    pub(crate) expanded: String,
+    pub(crate) tab: OrgTab,
+    /// The right pane's first body line.
+    pub(crate) scroll: usize,
     pub(crate) gen: u64,
-    pub(crate) detail: Option<super::org_detail::WorkerDetail>,
-    pub(crate) detail_request: u64,
-    pub(crate) tx: Option<OrgTx>,
     inflight: bool,
     last_read: Option<Instant>,
-    collapsed: HashSet<String>,
-    departures: HashSet<String>,
-    input: Option<String>,
-    keys_help: bool,
+    pub(crate) keys_help: bool,
     esc: Vec<u8>,
-    body_gen: u64,
-    graph: std::cell::RefCell<Option<GraphMemo>>,
 }
+
+/// One frame's lines: the explorer windowed to the body height, and the
+/// right pane's visible lines with the column it starts at.
+pub(crate) struct Frame {
+    pub(crate) explorer: Vec<Line>,
+    pub(crate) right_x: Option<usize>,
+    pub(crate) right: Vec<Line>,
+}
+
+fn window_start(len: usize, height: usize, follow: Option<usize>) -> usize {
+    match follow {
+        Some(f) if len > height && height > 0 => f.saturating_sub(height - 1).min(len - height),
+        _ => 0,
+    }
+}
+
+fn title(text: &str, width: usize) -> Line {
+    let head = format!("\u{2500} {text} ");
+    let rest = width.saturating_sub(head.chars().count());
+    Lb::default()
+        .s(head, BRole::Head)
+        .s("\u{2500}".repeat(rest), BRole::Meta)
+        .done()
+}
+
 impl OrgBoard {
     pub(crate) fn new(gen: u64) -> Self {
-        let (mode, filter) = crate::view_store::load_org_prefs();
         Self {
-            snapshot: OrgSnapshot::default(),
-            inputs: None,
-            cursor: 0,
-            mode,
-            filter,
-            query: String::new(),
+            fleet: None,
+            error: None,
+            key: "root".into(),
+            expanded: String::new(),
+            tab: crate::view_store::load_org_tab(),
+            scroll: 0,
             gen,
-            detail: None,
-            detail_request: 0,
-            tx: None,
             inflight: false,
             last_read: None,
-            collapsed: HashSet::new(),
-            departures: HashSet::new(),
-            input: None,
             keys_help: false,
             esc: Vec::new(),
-            body_gen: 0,
-            graph: std::cell::RefCell::new(None),
         }
     }
-    pub(crate) fn selected(&self) -> Option<Selected> {
-        self.mode_rows(0, 0)
-            .get(self.cursor)
-            .map(|r| r.selected.clone())
-    }
-    fn session_shown(&self, current: bool) -> bool {
-        self.filter == OrgSessions::All
-            || (current && self.filter == OrgSessions::Current)
-            || (!current && self.filter == OrgSessions::Former)
-    }
-    fn rows(&self) -> Vec<Row> {
-        let Some(tree) = &self.snapshot.tree else {
-            return Vec::new();
-        };
-        let query = self.query.to_lowercase();
-        let mut rows = Vec::new();
-        for lead in &tree.leads {
-            let lead_match = format!("{} {}", lead.holder.name, lead.scope)
-                .to_lowercase()
-                .contains(&query);
-            let mut children = Vec::new();
-            for node in &lead.nodes {
-                let node_match = lead_match
-                    || format!("{} {}", node.view.card.id, node.view.card.title)
-                        .to_lowercase()
-                        .contains(&query);
-                let mut sessions = Vec::new();
-                for (current, session) in node
-                    .current
-                    .iter()
-                    .map(|s| (true, s))
-                    .chain(node.former.iter().map(|s| (false, s)))
-                {
-                    if !self.session_shown(current) {
-                        continue;
-                    }
-                    let segs = session_segs(session, now());
-                    let label: String = segs.iter().map(|s| s.text.as_str()).collect();
-                    if node_match || label.to_lowercase().contains(&query) {
-                        sessions.push(row(
-                            format!("session:{}:{}", node.view.card.id, sessions.len()),
-                            2,
-                            lead.holder.name.clone(),
-                            segs,
-                            Selected::Session(session.clone()),
-                        ));
+
+    /// Where `key` sits in the fleet, whether or not its lead is open.
+    fn locate(&self, key: &str) -> Option<Item> {
+        match key {
+            "root" => return Some(Item::Root),
+            "feed" => return Some(Item::Feed),
+            "system" => return Some(Item::System),
+            _ => {}
+        }
+        let f = self.fleet.as_ref()?;
+        for (mi, m) in f.machines.iter().enumerate() {
+            if host_key(m) == key {
+                return Some(Item::Host(mi));
+            }
+            for (pi, p) in m.leads.iter().enumerate() {
+                if lead_key(m, p) == key {
+                    return Some(Item::Lead(mi, pi));
+                }
+                for (si, s) in p.seats.iter().enumerate() {
+                    if seat_key(m, p, s) == key {
+                        return Some(Item::Seat(mi, pi, si));
                     }
                 }
-                if !node_match && sessions.is_empty() {
-                    continue;
-                }
-                let key = format!("node:{}", node.view.card.id);
-                let mut segs = vec![
-                    fold_mark(self.collapsed.contains(&key)),
-                    seg(node.view.card.id.clone(), BRole::Label),
-                ];
-                if let Some(status) = &node.view.card.status {
-                    segs.push(seg(format!(" {status}"), BRole::Pill));
-                }
-                segs.push(seg(format!(" {}", node.view.card.title), BRole::Body));
-                if let Some(pr) = node.view.prs.first() {
-                    segs.push(seg(format!(" #{}", pr.number), BRole::Meta));
-                }
-                children.push(row(
-                    key.clone(),
-                    1,
-                    lead.holder.name.clone(),
-                    segs,
-                    Selected::Node(node.view.clone()),
-                ));
-                if self.mode != OrgMode::Tree || !self.collapsed.contains(&key) {
-                    children.extend(sessions);
-                }
             }
-            if !lead_match && children.is_empty() {
-                continue;
-            }
-            let key = format!("lead:{}", lead.holder.name);
-            let mut segs = vec![
-                fold_mark(self.collapsed.contains(&key)),
-                seg(lead.holder.name.clone(), BRole::Head),
-                seg(format!(" L{} {}", lead.level, lead.scope), BRole::Meta),
-            ];
-            let counts = counts_line(&lead.owned_counts);
-            for part in [
-                Some(counts).filter(|c| !c.is_empty()),
-                lead.stuck_line.clone(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                segs.push(seg(format!(" · {part}"), BRole::Meta));
-            }
-            rows.push(row(
-                key.clone(),
-                0,
-                lead.holder.name.clone(),
-                segs,
-                Selected::Lead(lead.holder.clone()),
-            ));
-            if self.mode != OrgMode::Tree || !self.collapsed.contains(&key) {
-                rows.extend(children);
-                if !lead.left.is_empty() {
-                    rows.push(row(
-                        format!("left-team:{}", lead.scope),
-                        1,
-                        lead.holder.name.clone(),
-                        vec![
-                            fold_mark(!self.departures.contains(&lead.scope)),
-                            seg(
-                                format!("left the team (24h): {}", lead.left.len()),
-                                BRole::Meta,
-                            ),
-                        ],
-                        Selected::Lead(lead.holder.clone()),
-                    ));
-                    for node in lead
-                        .left
-                        .iter()
-                        .filter(|_| self.departures.contains(&lead.scope))
-                    {
-                        let last = node.current.iter().chain(&node.former).max_by_key(|s| {
-                            s.view.ended_at.as_deref().or(s.view.started_at.as_deref())
-                        });
-                        let mut segs = vec![
-                            seg(node.view.card.id.clone(), BRole::Label),
-                            seg(format!(" {}", node.view.card.title), BRole::Body),
-                        ];
-                        if let Some(last) = last {
-                            segs.push(seg(" · last session: ", BRole::Meta));
-                            segs.extend(session_segs(last, now()));
+        }
+        None
+    }
+
+    /// The selection; a key the last read dropped falls back to the fleet.
+    pub(crate) fn current(&self) -> Item {
+        self.locate(&self.key).unwrap_or(Item::Root)
+    }
+
+    pub(crate) fn entries(&self) -> Vec<Entry> {
+        let entry = |key: String, item, depth| Entry { key, item, depth };
+        let mut out = vec![entry("root".into(), Item::Root, 0)];
+        if let Some(f) = &self.fleet {
+            for (mi, m) in f.machines.iter().enumerate() {
+                out.push(entry(host_key(m), Item::Host(mi), 1));
+                for (pi, p) in m.leads.iter().enumerate() {
+                    let key = lead_key(m, p);
+                    let open = key == self.expanded;
+                    out.push(entry(key, Item::Lead(mi, pi), 2));
+                    if open {
+                        for (si, s) in p.seats.iter().enumerate() {
+                            out.push(entry(seat_key(m, p, s), Item::Seat(mi, pi, si), 3));
                         }
-                        rows.push(row(
-                            format!("left:{}", node.view.card.id),
-                            2,
-                            lead.holder.name.clone(),
-                            segs,
-                            Selected::Node(node.view.clone()),
-                        ));
                     }
                 }
             }
         }
-        let mut unowned_index = 0;
-        for agent in &tree.unowned {
-            if !self.session_shown(true) {
-                continue;
-            }
-            let session = OrgSession {
-                view: crate::backlog_model::SessionView {
-                    phase: None,
-                    harness: agent.harness.clone(),
-                    session_id: agent.harness_session_id.clone(),
-                    model: agent.model.clone(),
-                    started_at: None,
-                    ended_at: None,
-                    agent: Some(agent.name.clone()),
-                    action: "none".into(),
-                    reason: None,
-                    command: None,
-                },
-                agent: Some(agent.clone()),
-            };
-            let mut segs = vec![seg("Unowned · ", BRole::Meta)];
-            segs.extend(session_segs(&session, now()));
-            let unowned = row(
-                super::org_graph::unowned_key(agent, unowned_index),
-                0,
-                "unowned".to_string(),
-                segs,
-                Selected::Session(session),
-            );
-            if unowned.text.to_lowercase().contains(&query) {
-                rows.push(unowned);
-                unowned_index += 1;
-            }
-        }
-        rows
+        out.push(entry("feed".into(), Item::Feed, 0));
+        out.push(entry("system".into(), Item::System, 0));
+        out
     }
-    /// Key hints lead so a narrow pane cuts the counts first.
-    pub(crate) fn footer_hints(&self, focused: bool) -> String {
-        format!(
-            "{}j/k move · enter act · tab mode · s sessions · / find · F full · ? keys · esc close · {}",
-            if focused { "" } else { "tap to focus · " },
-            self.footer()
-        )
-    }
-    pub(crate) fn footer(&self) -> String {
-        let error = self
-            .snapshot
-            .error
-            .as_ref()
-            .map(|e| {
-                format!(
-                    " · {e} (failed {}s ago)",
-                    now().saturating_sub(self.snapshot.error_at.unwrap_or(now()))
-                )
-            })
-            .unwrap_or_default();
-        match &self.snapshot.tree {
-            None => format!(
-                "{}{}",
-                if self.inflight {
-                    "reading org"
-                } else {
-                    "org not read"
-                },
-                error
-            ),
-            Some(tree) => {
-                let current: usize = tree
-                    .leads
-                    .iter()
-                    .flat_map(|l| &l.nodes)
-                    .map(|n| n.current.len())
-                    .sum::<usize>()
-                    + tree.unowned.len();
-                let former: usize = tree
-                    .leads
-                    .iter()
-                    .flat_map(|l| &l.nodes)
-                    .map(|n| n.former.len())
-                    .sum();
-                format!(
-                    "leads {} · current {current} · former {former} · read {}s ago{error}",
-                    tree.leads.len(),
-                    now().saturating_sub(tree.measured_at)
-                )
-            }
-        }
-    }
-    /// The memoized graph layout: rebuilt only when the tree body, the
-    /// viewport, the session filter or the query changed, so a repaint
-    /// never moves a dot. The caller reprojects for the live pan.
-    fn refresh_graph(&self, width: usize, height: usize) -> super::org_graph::Graph {
-        let Some(tree) = &self.snapshot.tree else {
-            return super::org_graph::Graph::default();
+
+    /// Select `key`. A lead opens; a seat opens its lead.
+    pub(crate) fn select(&mut self, key: &str) {
+        let Some(item) = self.locate(key) else {
+            return;
         };
-        let mut memo = self.graph.borrow_mut();
-        let changed = memo.as_ref().is_none_or(|m| {
-            m.0 != self.body_gen
-                || m.1 != width
-                || m.2 != height
-                || m.3 != self.filter
-                || m.4 != self.query
-        });
-        if changed {
-            let mut filtered = tree.clone();
-            let visible = self.rows();
-            for lead in &mut filtered.leads {
-                lead.nodes.retain(|n| {
-                    visible.iter().any(
-                        |r| matches!(&r.selected, Selected::Node(v) if v.card.id == n.view.card.id),
-                    )
-                });
-                for node in &mut lead.nodes {
-                    if !self.session_shown(true) {
-                        node.current.clear();
-                    }
-                    if !self.session_shown(false) {
-                        node.former.clear();
-                    }
-                    let matches = |s: &OrgSession| {
-                        visible.iter().any(|r| match &r.selected {
-                            Selected::Session(v) => {
-                                v.view.session_id == s.view.session_id
-                                    && v.view.agent == s.view.agent
-                            }
-                            _ => false,
-                        })
-                    };
-                    node.current.retain(matches);
-                    node.former.retain(matches);
-                }
-            }
-            filtered
-                .leads
-                .retain(|l| !l.nodes.is_empty() || self.query.is_empty());
-            filtered.unowned.retain(|a| {
-                self.session_shown(true)
-                    && visible.iter().any(|r| {
-                        matches!(&r.selected, Selected::Session(s) if s.agent.as_ref().is_some_and(|g| g == a))
-                    })
-            });
-            *memo = Some((
-                self.body_gen,
-                width,
-                height,
-                self.filter,
-                self.query.clone(),
-                super::org_graph::layout(&filtered),
-            ));
+        if let (Some(f), Item::Lead(m, p) | Item::Seat(m, p, _)) = (&self.fleet, item) {
+            self.expanded = lead_key(&f.machines[m], &f.machines[m].leads[p]);
         }
-        memo.as_ref().expect("graph memo filled").5.clone()
+        self.key = key.to_string();
+        self.scroll = 0;
     }
-    /// The board's lines plus the row index each line belongs to, built in
-    /// one pass so a frame's paint and its follow offset share the body.
-    /// Tests read the lines alone through `.0`.
-    pub(crate) fn lines_with_map(&self, width: usize, height: usize) -> (Vec<BLine>, Vec<usize>) {
-        if let Some(detail) = &self.detail {
-            return (detail.lines(width), Vec::new());
-        }
+
+    fn step(&mut self, delta: isize) {
+        let entries = self.entries();
+        let at = entries.iter().position(|e| e.key == self.key).unwrap_or(0);
+        let to = (at as isize + delta).clamp(0, entries.len() as isize - 1) as usize;
+        let key = entries[to].key.clone();
+        self.select(&key);
+    }
+
+    pub(crate) fn up(&mut self) {
+        let key = match (self.current(), &self.fleet) {
+            (Item::Seat(m, p, _), Some(f)) => lead_key(&f.machines[m], &f.machines[m].leads[p]),
+            (Item::Lead(m, _), Some(f)) => host_key(&f.machines[m]),
+            _ => "root".into(),
+        };
+        self.select(&key);
+    }
+
+    pub(crate) fn set_tab(&mut self, tab: OrgTab) {
+        self.tab = tab;
+        self.scroll = 0;
+        crate::view_store::save_org_tab(tab);
+    }
+
+    pub(crate) fn seat(&self) -> Option<(&Machine, &Lead, &Seat)> {
+        let (Item::Seat(m, p, s), Some(f)) = (self.current(), &self.fleet) else {
+            return None;
+        };
+        let machine = &f.machines[m];
+        let lead = &machine.leads[p];
+        Some((machine, lead, &lead.seats[s]))
+    }
+
+    /// The selected seat's registry row on this mux, when it has one.
+    pub(crate) fn joined(&self) -> Option<AgentRow> {
+        self.seat().and_then(|(_, _, s)| s.local.clone())
+    }
+
+    /// The right pane: fixed lines (title and tab strip), then the body
+    /// the scroll offset windows.
+    fn right(
+        &self,
+        questions: Option<&crate::needs_overlay::QuestionsFold>,
+        width: usize,
+        now: u64,
+    ) -> (Vec<Line>, Vec<Line>) {
         if self.keys_help {
+            return (vec![title("Keys", width)], super::org_pages::keys_help());
+        }
+        let item = self.current();
+        if item == Item::Feed {
             return (
-                [
-                    "Org keys",
-                    "hjkl/arrows move · h/l fold/open",
-                    "Tab tree/table/graph · s current/former/all",
-                    "F full screen · / find · esc agents",
-                    "enter or a second tap acts · space peek · x stop · P portal · d detail",
-                ]
-                .into_iter()
-                .map(BLine::plain)
-                .collect(),
-                Vec::new(),
+                vec![title("Feed", width)],
+                super::org_pages::feed(questions, width),
             );
         }
-        let mut header = Vec::new();
-        for (i, (_, mode)) in mode_tabs().into_iter().enumerate() {
-            if i > 0 {
-                header.push(seg(" │ ", BRole::Meta));
-            }
-            let role = if mode == self.mode {
-                BRole::Head
-            } else {
-                BRole::Meta
+        let Some(f) = &self.fleet else {
+            let state = match &self.error {
+                Some((e, _)) => format!("   fleet not read: {e}"),
+                None => "   reading the fleet map".into(),
             };
-            header.push(seg(format!("{mode:?}"), role));
-        }
-        header.push(seg(
-            format!(" · {}", format!("{:?}", self.filter).to_lowercase()),
-            BRole::Meta,
-        ));
-        let query = self.input.as_deref().unwrap_or(&self.query);
-        if self.input.is_some() || !query.is_empty() {
-            header.push(seg(format!(" · /{query}"), BRole::Meta));
-        }
-        if self.mode == OrgMode::Graph {
-            let graph = self.refresh_graph(width, height.saturating_sub(2));
-            let rows = self.mode_rows(width, height.saturating_sub(2));
-            if let Some(r) = rows.get(self.cursor) {
-                if let Some(d) = graph.boxes.iter().find(|d| d.key == r.key) {
-                    header.push(seg(format!(" · \u{25b6} {}", d.label), BRole::Meta));
-                }
-            }
-            return (vec![BLine::of(&header)], Vec::new());
-        }
-        let mut lines = vec![BLine::of(&header)];
-        if self.mode == OrgMode::Table {
-            let mail = self.any_unread();
-            lines.push(BLine::meta(super::org_table::header(width, mail)));
-        }
-        let (body, map) = self.body(width);
-        lines.extend(body);
-        (lines, map)
-    }
-
-    /// Whether any worker row carries unread mail: the one condition that
-    /// shows the Table's MAIL column, so a quiet roster never paints an
-    /// always-empty column.
-    fn any_unread(&self) -> bool {
-        self.rows().iter().any(
-            |r| matches!(&r.selected, Selected::Session(s) if s.agent.as_ref().is_some_and(|a| a.mail_unread.is_some_and(|n| n > 0))),
-        )
-    }
-
-    /// The body lines under the header, plus the row index each line
-    /// belongs to. A wrapped row paints on several lines, and the cursor
-    /// band, the tap map and the follow offset all read the LINE index of
-    /// the cursor ROW from this map. A row wider than the column wraps at
-    /// word boundaries onto continuation lines indented under its tree
-    /// guide plus 2. A session row's unbounded tail text stops after 2
-    /// continuation lines with an ellipsis; `d` detail shows a tail whole.
-    /// The cursor band covers every line of the cursor row.
-    fn body(&self, width: usize) -> (Vec<BLine>, Vec<usize>) {
-        let rows = if self.mode == OrgMode::Table {
-            self.mode_rows(width, 0)
-        } else {
-            self.rows()
+            return (
+                vec![title("Fleet", width)],
+                vec![super::org_tabs::meta(state)],
+            );
         };
-        let guides = tree_guides(&rows);
-        let mut lines = Vec::new();
-        let mut map = Vec::new();
-        let mail = self.any_unread();
-        for (i, r) in rows.iter().enumerate() {
-            if self.mode == OrgMode::Table {
-                map.push(i);
-                let mut line = BLine::plain(super::org_table::row(r, now(), width, mail));
-                line.band = i == self.cursor;
-                lines.push(line);
-                continue;
+        match item {
+            Item::System => (
+                vec![title("System", width)],
+                super::org_pages::system(f, width),
+            ),
+            Item::Seat(m, p, s) => {
+                let machine = &f.machines[m];
+                let lead = &machine.leads[p];
+                (
+                    vec![title(&lead.seats[s].name, width)],
+                    super::org_pages::seat(machine, lead, &lead.seats[s], width, now),
+                )
             }
-            let mut segs = vec![seg(guides[i].clone(), BRole::Meta)];
-            segs.extend(r.segs.iter().cloned());
-            let indent = " ".repeat(guides[i].chars().count() + 2);
-            let band = i == self.cursor;
-            let is_session = matches!(r.selected, Selected::Session(_));
-            let mut pieces = BLine::of(&segs).wrap_indented(width, &indent);
-            if is_session && pieces.len() > 3 {
-                pieces.truncate(3);
-                let last = pieces.len() - 1;
-                let line = &mut pieces[last];
-                if line.text.chars().count() + 1 <= width {
-                    line.text.push('\u{2026}');
-                    let role = line.default_role;
-                    line.roles.push(role);
-                } else {
-                    line.text.pop();
-                    line.text.push('\u{2026}');
-                }
-            }
-            for p in pieces {
-                map.push(i);
-                let mut line = p;
-                line.band = band;
-                lines.push(line);
+            _ => {
+                use super::org_tabs as t;
+                let name = match item {
+                    Item::Host(m) => f.machines[m].host.as_str(),
+                    Item::Lead(m, p) => f.machines[m].leads[p].name.as_str(),
+                    _ => "Fleet",
+                };
+                let rows = t::scope(f, &item);
+                let body = match self.tab {
+                    OrgTab::Table => {
+                        t::table(&rows, &self.key, width, now, matches!(item, Item::Lead(..)))
+                    }
+                    OrgTab::Recent => t::recent(&rows, width, now),
+                    OrgTab::Overview => t::overview(f, &item, &rows, width, now),
+                    OrgTab::Graph => t::graph(f, &item, &rows, &self.key, width),
+                    OrgTab::Health => t::health(f, &item, &rows, width, now),
+                };
+                (
+                    vec![
+                        title(name, width),
+                        t::header(f, &item, self.tab),
+                        t::blank(),
+                    ],
+                    body,
+                )
             }
         }
-        (lines, map)
     }
 
-    /// The rows the current mode paints, in Tree order: Tree folds by its
-    /// own state, Table narrows to worker sessions, Graph keeps the rows
-    /// a dot stands for. Tab reads the key here so the cursor keeps its
-    /// row across a mode switch when the new mode paints it.
-    pub(crate) fn mode_rows(&self, width: usize, height: usize) -> Vec<Row> {
-        let rows = self.rows();
-        match self.mode {
-            OrgMode::Tree => rows,
-            OrgMode::Table => {
-                let session_rows: Vec<Row> = rows
-                    .into_iter()
-                    .filter(|r| matches!(r.selected, Selected::Session(_)))
-                    .collect();
-                session_rows
-            }
-            OrgMode::Graph => {
-                let graph = self.refresh_graph(width, height.saturating_sub(2));
-                let dot_keys: HashSet<&str> = graph.boxes.iter().map(|d| d.key.as_str()).collect();
-                rows.into_iter()
-                    .filter(|r| dot_keys.contains(r.key.as_str()))
-                    .collect()
-            }
+    pub(crate) fn frame(
+        &self,
+        questions: Option<&crate::needs_overlay::QuestionsFold>,
+        width: usize,
+        body_h: usize,
+        now: u64,
+    ) -> Frame {
+        let split = width >= MIN_SPLIT;
+        let explorer_w = if split { LEFT } else { width };
+        let explorer = super::org_tabs::explorer(
+            self.fleet.as_ref(),
+            &self.entries(),
+            &self.key,
+            &self.expanded,
+            questions.map(|q| q.items.len()),
+            explorer_w,
+        );
+        let follow = explorer.iter().position(|l| l.line.band);
+        let start = window_start(explorer.len(), body_h, follow);
+        let explorer: Vec<Line> = explorer.into_iter().skip(start).take(body_h).collect();
+        if !split {
+            return Frame {
+                explorer,
+                right_x: None,
+                right: Vec::new(),
+            };
         }
+        let (mut right, body) = self.right(questions, width - LEFT - 1, now);
+        let avail = body_h.saturating_sub(right.len());
+        let start = self.scroll.min(body.len().saturating_sub(avail));
+        right.extend(body.into_iter().skip(start).take(avail));
+        Frame {
+            explorer,
+            right_x: Some(LEFT + 1),
+            right,
+        }
+    }
+
+    /// `fleet → bb16 → rowan → scout`.
+    fn crumb(&self) -> String {
+        let item = self.current();
+        let Some(f) = &self.fleet else {
+            return "fleet".into();
+        };
+        match item {
+            Item::Feed => "feed".into(),
+            Item::System => "system \u{b7} machines".into(),
+            Item::Root => "fleet".into(),
+            Item::Host(m) => format!("fleet \u{2192} {}", f.machines[m].host),
+            Item::Lead(m, p) => format!(
+                "fleet \u{2192} {} \u{2192} {}",
+                f.machines[m].host, f.machines[m].leads[p].name
+            ),
+            Item::Seat(m, p, s) => format!(
+                "fleet \u{2192} {} \u{2192} {} \u{2192} {}",
+                f.machines[m].host,
+                f.machines[m].leads[p].name,
+                f.machines[m].leads[p].seats[s].name
+            ),
+        }
+    }
+
+    /// The bottom bar as one string: [`Self::footer_parts`] joined.
+    #[cfg(test)]
+    pub(crate) fn footer(&self, focused: bool, width: usize, now: u64) -> String {
+        let (keys, state) = self.footer_parts(focused, width, now);
+        format!("{keys}{state}")
+    }
+
+    /// The key bar, then where the cursor is and the read state. The keys
+    /// lead and paint in body text, as every other fno view's key bar does.
+    pub(crate) fn footer_parts(&self, focused: bool, width: usize, now: u64) -> (String, String) {
+        let item = self.current();
+        let mut keys = vec!["j/k move"];
+        if width >= MIN_SPLIT {
+            keys.push("h/l tab");
+        }
+        match item {
+            Item::Seat(..) if self.joined().is_some() => {
+                keys.extend(["enter attach", "space peek", "x stop", "P portal"])
+            }
+            Item::Root | Item::Host(_) | Item::Lead(..) => keys.push("enter open"),
+            _ => {}
+        }
+        if matches!(item, Item::Host(_) | Item::Lead(..) | Item::Seat(..)) {
+            keys.push("u up");
+        }
+        keys.extend(["W web", "F full", "? keys", "esc close"]);
+        let mut keys = keys.join(" \u{b7} ");
+        if !focused {
+            keys = format!("tap to focus \u{b7} {keys}");
+        }
+        let mut out = format!("  \u{b7}  {}", self.crumb());
+        if width < MIN_SPLIT {
+            out.push_str(" \u{b7} F full screen for tabs");
+        }
+        if let Some(notice) = self.fleet.as_ref().and_then(|f| f.notice.as_deref()) {
+            out.push_str(&format!(" \u{b7} {notice}"));
+        }
+        match (&self.error, &self.fleet) {
+            (Some((e, at)), _) => out.push_str(&format!(
+                " \u{b7} fleet not read: {e} (failed {}s ago)",
+                now.saturating_sub(*at)
+            )),
+            (None, Some(f)) => out.push_str(&format!(
+                " \u{b7} read {}s ago",
+                now.saturating_sub(f.measured_at)
+            )),
+            (None, None) if self.inflight => out.push_str(" \u{b7} reading fleet"),
+            (None, None) => out.push_str(" \u{b7} fleet not read"),
+        }
+        (keys, out)
+    }
+
+    /// The key a tap at (row, col) of the board's rect selects.
+    fn tap(
+        &self,
+        questions: Option<&crate::needs_overlay::QuestionsFold>,
+        width: usize,
+        height: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<String> {
+        let body_h = height.saturating_sub(1);
+        if row >= body_h {
+            return None;
+        }
+        let frame = self.frame(questions, width, body_h, now());
+        let line = match frame.right_x {
+            Some(x) if col >= x => {
+                return frame.right.get(row)?.tap_at(col - x).map(str::to_string)
+            }
+            Some(x) if col + 1 == x => return None,
+            _ => frame.explorer.get(row)?,
+        };
+        line.tap_at(col).map(str::to_string)
     }
 }
 
 fn now() -> u64 {
     chrono::Utc::now().timestamp().max(0) as u64
 }
-/// The header's mode tabs: one list feeds both the paint and the tap target.
-fn mode_tabs() -> [(std::ops::Range<usize>, OrgMode); 3] {
-    let mut col = 0;
-    [OrgMode::Tree, OrgMode::Table, OrgMode::Graph].map(|mode| {
-        let end = col + format!("{mode:?}").len();
-        let tab = (col..end, mode);
-        col = end + " │ ".chars().count();
-        tab
-    })
-}
-/// Owned counts as words, busiest state first: `4 working · 2 in review`.
-fn counts_line(counts: &serde_json::Value) -> String {
-    const ORDER: [&str; 4] = ["in_progress", "in_review", "ready", "blocked"];
-    let Some(map) = counts.as_object() else {
-        return String::new();
-    };
-    let mut items: Vec<(&str, u64)> = map
-        .iter()
-        .filter_map(|(k, v)| v.as_u64().filter(|n| *n > 0).map(|n| (k.as_str(), n)))
-        .collect();
-    items.sort_by_key(|(k, _)| (ORDER.iter().position(|o| o == k).unwrap_or(ORDER.len()), *k));
-    items
-        .into_iter()
-        .map(|(k, n)| match k {
-            "in_progress" => format!("{n} working"),
-            k => format!("{n} {}", k.replace('_', " ")),
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-/// `├ `/`└ ` per row from depth alone, so a filtered or folded tree still
-/// closes each branch on its real last child.
-fn tree_guides(rows: &[Row]) -> Vec<String> {
-    // Walk back once: a row is last when no later sibling precedes its parent's end.
-    let mut sibling_after = [false; 3];
-    let mut last = vec![true; rows.len()];
-    for (i, r) in rows.iter().enumerate().rev() {
-        let d = r.depth.min(2);
-        last[i] = !sibling_after[d];
-        sibling_after[d] = true;
-        sibling_after[d + 1..].fill(false);
-    }
-    let mut parent_last = true;
-    rows.iter()
-        .zip(last)
-        .map(|(r, last)| {
-            let tee = if last { "└ " } else { "├ " };
-            match r.depth {
-                0 => String::new(),
-                1 => {
-                    parent_last = last;
-                    tee.into()
-                }
-                _ => format!("{}{tee}", if parent_last { "  " } else { "│ " }),
-            }
-        })
-        .collect()
-}
-fn session_segs(session: &OrgSession, now: u64) -> Vec<BSeg> {
-    let Some(a) = &session.agent else {
-        let view = &session.view;
-        let runtime = [view.harness.as_deref(), view.model.as_deref()]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("/");
-        let parts = [
-            Some("former".to_string()),
-            view.phase.clone(),
-            Some(runtime).filter(|r| !r.is_empty()),
-            view.session_id
-                .as_deref()
-                .map(|id| id.chars().take(8).collect()),
-        ];
-        return vec![seg(
-            parts.into_iter().flatten().collect::<Vec<_>>().join(" · "),
-            BRole::Meta,
-        )];
-    };
-    let glyph = crate::lattice::status_glyph(agent_lattice_state(a));
-    let mut text = format!("{glyph} {}", a.name);
-    let parts = [
-        super::card_line::harness_model(a),
-        a.context_used_pct
-            .map(|p| super::row_meter::ctx_bar(Some(p)).trim_end().to_string()),
-        a.last_activity_age_s.map(|age| {
-            format!(
-                "{} ago",
-                super::row_meter::up_cell(Some(now.saturating_sub(age)), now)
-            )
-        }),
-        a.mail_unread
-            .filter(|n| *n > 0)
-            .map(|n| format!("{n} unread")),
-        a.pr.map(|n| format!("#{n}")),
-        a.tail.clone().filter(|t| !t.is_empty()),
-    ];
-    for part in parts.into_iter().flatten() {
-        text.push_str(" · ");
-        text.push_str(&part);
-    }
-    vec![seg(text, BRole::Meta)]
-}
+
 pub(crate) fn open(view: &mut View) {
     if !view.experimental_org_board {
-        view.set_notice("fleet org board is off: sideline menu > experimental".into());
+        view.set_notice("fleet org board is off: menu > settings > experimental".into());
         return;
     }
     view.org_generation = view.org_generation.wrapping_add(1);
@@ -670,7 +448,6 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     let Some(b) = view.org_board.as_mut() else {
         return;
     };
-    b.tx = Some(tx.clone());
     if b.inflight
         || b.last_read
             .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
@@ -683,22 +460,36 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     let agents = view.layout.agents.clone();
     let tx = tx.clone();
     tokio::spawn(async move {
-        let inputs = crate::org_model::gather(&crate::backlog_view::graph_path(), agents).await;
-        let _ = tx.send((gen, super::org_detail::OrgMsg::Gather(inputs)));
+        let inputs = super::org_seats::gather(&crate::backlog_view::graph_path(), agents).await;
+        let _ = tx.send((gen, OrgMsg::Gather(inputs)));
     });
 }
-pub(crate) fn apply_fold(view: &mut View, gen: u64, inputs: OrgInputs) {
+/// A failed read, or a primary error after a good read, keeps the last good
+/// fleet and records the failure for the bottom bar. With no good read yet,
+/// fleet top's own local fallback paints.
+pub(crate) fn apply_fold(view: &mut View, gen: u64, inputs: FleetInputs) {
     let Some(b) = view.org_board.as_mut().filter(|b| b.gen == gen) else {
         return;
     };
     b.inflight = false;
-    b.snapshot.apply(&inputs, now());
-    if b.snapshot.error.is_none() {
-        b.inputs = Some(inputs.backlog);
-        b.body_gen = b.body_gen.wrapping_add(1);
-        *b.graph.borrow_mut() = None;
+    let at = inputs.measured_at;
+    match inputs.fleet {
+        Err(e) => b.error = Some((e, at)),
+        Ok(map) => {
+            let primary = map
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .map(|e| format!("primary unreadable: {e}"));
+            match primary {
+                Some(e) if b.fleet.is_some() => b.error = Some((e, at)),
+                _ => {
+                    let agents = inputs.backlog.agents.clone();
+                    b.fleet = Some(super::org_seats::fold(&map, &inputs.backlog, &agents, at));
+                    b.error = None;
+                }
+            }
+        }
     }
-    b.cursor = b.cursor.min(b.rows().len().saturating_sub(1));
 }
 pub(crate) fn paint(
     view: &View,
@@ -721,91 +512,70 @@ pub(crate) fn paint(
             cells[r * cols + c] = Cell::default();
         }
     }
-    let (lines, map) = b.lines_with_map(width, height);
-    if b.mode == OrgMode::Graph && b.detail.is_none() && !b.keys_help {
-        super::backlog_style::paint_panel(
+    let body_h = height - 1;
+    let now = now();
+    let frame = b.frame(view.questions_fold.as_ref(), width, body_h, now);
+    let explorer_w = frame.right_x.map_or(width, |x| x - 1);
+    let lines: Vec<BLine> = frame.explorer.into_iter().map(|l| l.line).collect();
+    super::backlog_style::paint_panel_at(
+        cells,
+        rows,
+        cols,
+        0,
+        0,
+        explorer_w,
+        body_h,
+        &lines,
+        None,
+        &view.theme,
+    );
+    if let Some(x) = frame.right_x {
+        let divider = vec![BLine::meta("\u{2502}"); body_h];
+        super::backlog_style::paint_panel_at(
             cells,
             rows,
             cols,
+            x - 1,
             0,
-            width,
             1,
+            body_h,
+            &divider,
+            None,
+            &view.theme,
+        );
+        let lines: Vec<BLine> = frame.right.into_iter().map(|l| l.line).collect();
+        super::backlog_style::paint_panel_at(
+            cells,
+            rows,
+            cols,
+            x,
+            0,
+            width - x,
+            body_h,
             &lines,
             None,
             &view.theme,
         );
-        paint_graph_body(view, b, cells, rows, cols, width, height);
-    } else {
-        super::backlog_style::paint_panel(
-            cells,
-            rows,
-            cols,
-            0,
-            width,
-            height.saturating_sub(1),
-            &lines,
-            if b.detail.is_some() {
-                None
-            } else {
-                let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
-                map.get(b.cursor).map(|l| l + offset)
-            },
-            &view.theme,
-        );
     }
+    let focused = matches!(view.input_owner(), super::region_focus::RegionOwner::Board);
     super::backlog_style::paint_panel(
         cells,
         rows,
         cols,
-        height - 1,
+        body_h,
         width,
         1,
-        &[BLine::meta(b.footer_hints(matches!(
-            view.input_owner(),
-            super::region_focus::RegionOwner::Board
-        )))],
+        &[{
+            let (keys, state) = b.footer_parts(focused, width, now);
+            Lb::default()
+                .s(keys, BRole::Body)
+                .s(state, BRole::Meta)
+                .done()
+                .line
+        }],
         None,
         &view.theme,
     );
-}
-/// The Graph mode's body: a degenerate tree renders its one honest line;
-/// otherwise the canvas frame blits under the header row.
-fn paint_graph_body(
-    view: &View,
-    b: &OrgBoard,
-    cells: &mut [Cell],
-    rows: usize,
-    cols: usize,
-    width: usize,
-    height: usize,
-) {
-    let body_h = height.saturating_sub(2);
-    if body_h == 0 {
-        return;
-    }
-    let graph = b.refresh_graph(width, body_h);
-    let dot_rows = b.mode_rows(width, body_h);
-    let key = dot_rows.get(b.cursor).map(|r| r.key.clone());
-    let degenerate =
-        matches!(&b.snapshot.tree, Some(t) if t.leads.is_empty() && t.unowned.is_empty());
-    if degenerate {
-        let line = BLine::meta("no leads or workers");
-        super::backlog_style::paint_panel(
-            cells,
-            rows,
-            cols,
-            1,
-            width,
-            1,
-            &[line],
-            None,
-            &view.theme,
-        );
-        return;
-    }
-    let colors = super::org_graph::GraphColors::of(&view.theme);
-    let buf = super::org_graph::frame(&graph, width, body_h, key.as_deref(), &colors);
-    crate::ratatui_blit::blit_area(&buf, 1, 0, cells, cols);
 }
 
 pub(crate) async fn route_keys(
@@ -834,37 +604,9 @@ pub(crate) async fn keys(
     bytes: &[u8],
     sock: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
-    let graph_width = if view.board_full {
-        view.term.1 as usize
-    } else {
-        view.panel_w().saturating_sub(1) as usize
-    };
-    let graph_height = (view.term.0 as usize).saturating_sub(2);
     let Some(b) = view.org_board.as_mut() else {
         return Ok(StdinFlow::Continue);
     };
-    if let Some(input) = b.input.as_mut() {
-        for byte in bytes {
-            match byte {
-                27 => {
-                    b.input = None;
-                    break;
-                }
-                b'\r' | b'\n' => {
-                    b.query = input.clone();
-                    b.input = None;
-                    b.cursor = 0;
-                    break;
-                }
-                127 | 8 => {
-                    input.pop();
-                }
-                32..=126 => input.push(*byte as char),
-                _ => {}
-            }
-        }
-        return Ok(StdinFlow::Continue);
-    }
     let tokens = if bytes == [27] && b.esc.is_empty() {
         vec![ModalKey::Esc]
     } else {
@@ -874,21 +616,6 @@ pub(crate) async fn keys(
         let Some(b) = view.org_board.as_mut() else {
             break;
         };
-        if let Some(detail) = b.detail.as_mut() {
-            match token {
-                ModalKey::Esc | ModalKey::Byte(b'q') => {
-                    b.detail = None;
-                }
-                ModalKey::Up | ModalKey::Byte(b'k') => {
-                    detail.scroll = detail.scroll.saturating_sub(1)
-                }
-                ModalKey::Down | ModalKey::Byte(b'j') => {
-                    detail.scroll = detail.scroll.saturating_add(1)
-                }
-                _ => {}
-            }
-            continue;
-        }
         match token {
             ModalKey::Esc | ModalKey::Byte(b'q') => {
                 if b.keys_help {
@@ -903,62 +630,57 @@ pub(crate) async fn keys(
                 view.board_full = !view.board_full;
                 crate::view_store::save_board_full(view.board_full);
             }
-            ModalKey::Byte(b'\t') => {
-                let key = b
-                    .mode_rows(graph_width, graph_height)
-                    .get(b.cursor)
-                    .map(|r| r.key.clone());
-                b.mode = b.mode.next();
-                let rows = b.mode_rows(graph_width, graph_height);
-                b.cursor = key
-                    .and_then(|k| rows.iter().position(|r| r.key == k))
-                    .unwrap_or(0);
-                crate::view_store::save_org_prefs(b.mode, b.filter);
+            ModalKey::Byte(b'?') => b.keys_help = !b.keys_help,
+            ModalKey::Byte(b'W') => {
+                let bridge = crate::web::live_bridge(&view.session);
+                let host = crate::agents_view::hostname();
+                let notice = match command_url(bridge, crate::link::is_remote_session(), &host) {
+                    Err(e) => e,
+                    // Off-loop: a slow browser launch must not stall input.
+                    Ok(url) => {
+                        let launched = url.clone();
+                        tokio::task::spawn_blocking(move || {
+                            crate::link::open_url_for_session(&launched)
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("opener task failed".to_string()))
+                        .map_or_else(|e| format!("open failed: {e}"), |o| o.notice(&url))
+                    }
+                };
+                view.set_notice(notice);
             }
-            ModalKey::Byte(b's') => {
-                b.filter = b.filter.next();
-                b.cursor = 0;
-                crate::view_store::save_org_prefs(b.mode, b.filter);
-            }
-            ModalKey::Byte(b'/') => {
-                b.input = Some(b.query.clone());
-            }
-            ModalKey::Byte(b'?') => {
-                b.keys_help = !b.keys_help;
-            }
-            ModalKey::Up | ModalKey::Byte(b'k') => {
-                b.cursor = b.cursor.saturating_sub(1);
-            }
-            ModalKey::Down | ModalKey::Byte(b'j') => {
-                let rows = b.mode_rows(graph_width, graph_height);
-                b.cursor = (b.cursor + 1).min(rows.len().saturating_sub(1));
-            }
-            ModalKey::Left | ModalKey::Byte(b'h') => {
-                if let Some(r) = b.rows().get(b.cursor) {
-                    if let Some(scope) = r.key.strip_prefix("left-team:") {
-                        b.departures.remove(scope);
-                    } else {
-                        b.collapsed.insert(r.key.clone());
+            ModalKey::Up | ModalKey::Byte(b'k') => b.step(-1),
+            ModalKey::Down | ModalKey::Byte(b'j') => b.step(1),
+            ModalKey::Left | ModalKey::Byte(b'h') => b.set_tab(b.tab.step(false)),
+            ModalKey::Right | ModalKey::Byte(b'l') => b.set_tab(b.tab.step(true)),
+            ModalKey::Byte(n @ b'1'..=b'5') => b.set_tab(OrgTab::ALL[(n - b'1') as usize]),
+            ModalKey::Byte(b'u' | 127 | 8) => b.up(),
+            ModalKey::PageUp => b.scroll = b.scroll.saturating_sub(12),
+            ModalKey::PageDown => b.scroll = b.scroll.saturating_add(12),
+            ModalKey::Enter => match b.current() {
+                Item::Seat(..) => {
+                    let remote = b
+                        .seat()
+                        .map(|(m, _, s)| {
+                            format!(
+                                "{} runs on {}: {}",
+                                s.name,
+                                m.host,
+                                super::org_pages::attach_command(s)
+                            )
+                        })
+                        .unwrap_or_default();
+                    match b.joined() {
+                        Some(agent) => dispatch(view, agent, b'\r', sock).await?,
+                        None => view.set_notice(remote),
                     }
                 }
-            }
-            ModalKey::Right | ModalKey::Byte(b'l') => {
-                if let Some(r) = b.rows().get(b.cursor) {
-                    if let Some(scope) = r.key.strip_prefix("left-team:") {
-                        b.departures.insert(scope.into());
-                    } else {
-                        b.collapsed.remove(&r.key);
-                    }
-                }
-            }
-            ModalKey::Enter => {
-                if let Some(selected) = b.selected() {
-                    dispatch(view, selected, b'\r', sock).await?;
-                }
-            }
-            ModalKey::Byte(key @ (b' ' | b'x' | b'P' | b'd')) => {
-                if let Some(selected) = b.selected() {
-                    dispatch(view, selected, key, sock).await?;
+                Item::Feed | Item::System => {}
+                _ => b.step(1),
+            },
+            ModalKey::Byte(key @ (b' ' | b'x' | b'P')) => {
+                if let Some(agent) = b.joined() {
+                    dispatch(view, agent, key, sock).await?;
                 }
             }
             _ => {}
@@ -966,13 +688,72 @@ pub(crate) async fn keys(
     }
     Ok(StdinFlow::Continue)
 }
-pub(crate) use super::org_detail::dispatch;
+/// The bridge's `/command` URL for `W`, or why it opens nothing. Over ssh a
+/// loopback bridge is unreachable from the user's browser, and a wide one is
+/// reached by this machine's name.
+pub(crate) fn command_url(
+    bridge: Result<crate::web::LiveBridge, String>,
+    remote: bool,
+    host: &str,
+) -> Result<String, String> {
+    let b = bridge?;
+    if remote && b.loopback {
+        return Err(format!(
+            "the web bridge listens on loopback of {host}; restart it with --bind 0.0.0.0 to reach it from here"
+        ));
+    }
+    let base = match remote {
+        true => b.base.replace("127.0.0.1", host),
+        false => b.base,
+    };
+    Ok(format!("{base}/command?t={}", b.token))
+}
+
+/// Enter attaches, space peeks, `x` stops and `P` opens the portal picker.
+/// The callers pass only a seat joined to this mux's registry by its full
+/// session id, so no key ever acts on a seat by name.
+pub(crate) async fn dispatch(
+    view: &mut View,
+    agent: AgentRow,
+    key: u8,
+    sock: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    let sid = agent.harness_session_id.clone();
+    let harness = agent.harness.clone();
+    if key == b'\r' {
+        return super::node_detail::press_session(
+            view,
+            sid.as_deref(),
+            harness.as_deref(),
+            Some(&agent),
+            sock,
+        )
+        .await;
+    }
+    let Some(agent) =
+        super::node_detail::resolve_session(view, sid.as_deref(), harness.as_deref(), Some(&agent))
+    else {
+        view.set_notice("no registry row".into());
+        return Ok(());
+    };
+    let action = match key {
+        b' ' => MenuAction::Peek,
+        b'x' => MenuAction::Stop,
+        b'P' => MenuAction::PortalPicker,
+        _ => return Ok(()),
+    };
+    super::row_menu::execute_row_menu_action(
+        view,
+        action,
+        MenuTarget::Agent(AgentIdent::of(&agent)),
+        sock,
+    )
+    .await
+}
 
 #[cfg(test)]
 #[path = "tests/org_board_fixture.rs"]
 mod fixtures;
-#[cfg(test)]
-pub(super) use fixtures::check_fixture;
 
 pub(crate) async fn mouse(
     view: &mut View,
@@ -989,64 +770,40 @@ pub(crate) async fn mouse(
     } else {
         1 + view.bottom_row_is_chrome() as usize
     });
-    if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
-        view.region_owner = super::region_focus::RegionOwner::Board;
+    if !matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+        return Ok(());
     }
+    view.region_owner = super::region_focus::RegionOwner::Board;
+    let Some(key) = view.org_board.as_ref().and_then(|b| {
+        b.tap(
+            view.questions_fold.as_ref(),
+            width,
+            height,
+            rep.row as usize,
+            rep.col as usize,
+        )
+    }) else {
+        return Ok(());
+    };
     let Some(b) = view.org_board.as_mut() else {
         return Ok(());
     };
-    if b.detail.is_some() {
+    if let Some(n) = key
+        .strip_prefix("tab/")
+        .and_then(|n| n.parse::<usize>().ok())
+    {
+        if let Some(tab) = OrgTab::ALL.get(n) {
+            b.set_tab(*tab);
+        }
         return Ok(());
     }
-    if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
-        let rows = b.rows();
-        let (lines, map) = b.body(width);
-        let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
-        let len = lines.len() + offset;
-        let start = if b.mode == OrgMode::Graph || len <= height {
-            0
-        } else {
-            (b.cursor + offset)
-                .saturating_sub(height.saturating_sub(1))
-                .min(len - height)
-        };
-        if rep.row as usize + start == 0 {
-            if let Some((_, mode)) = mode_tabs()
-                .into_iter()
-                .find(|(cols, _)| cols.contains(&(rep.col as usize)))
-            {
-                b.mode = mode;
-                crate::view_store::save_org_prefs(b.mode, b.filter);
-            }
-            return Ok(());
-        }
-        let index = if b.mode == OrgMode::Graph {
-            let body_h = height.saturating_sub(1);
-            let graph = b.refresh_graph(width, body_h);
-            let x = rep.col as usize;
-            let y = (rep.row as usize).saturating_sub(1);
-            let Some(key) = super::org_graph::hit_test(&graph, width, body_h, x, y) else {
-                return Ok(());
-            };
-            let Some(index) = rows.iter().position(|r| r.key == key) else {
-                return Ok(());
-            };
-            index
-        } else {
-            let clicked = rep.row as usize + start;
-            if clicked < offset || clicked - offset >= lines.len() {
-                return Ok(());
-            }
-            map[clicked - offset]
-        };
-        // A tap selects; a tap on the row already selected acts like Enter.
-        if index != b.cursor {
-            b.cursor = index;
-            return Ok(());
-        }
-        if let Some(selected) = b.selected() {
-            dispatch(view, selected, b'\r', sock).await?;
-        }
+    // A tap selects; a tap on the seat already selected acts like Enter.
+    if key != b.key {
+        b.select(&key);
+        return Ok(());
+    }
+    if let Some(agent) = b.joined() {
+        dispatch(view, agent, b'\r', sock).await?;
     }
     Ok(())
 }

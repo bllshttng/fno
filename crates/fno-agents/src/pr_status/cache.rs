@@ -93,7 +93,7 @@ fn write_row(dir: &Path, key: &str, row: &Value) {
 }
 
 /// Print one cached row, degraded to unknown when `stale`, and answer the
-/// verb's exit code; None when the row is not servable (empty output or a
+/// command's exit code; None when the row is not servable (empty output or a
 /// foreign schema: a miss, checked before any write).
 fn serve(row: &Value, stale: bool) -> Option<(i32, String, String)> {
     let mut out = row.get("output").cloned().unwrap_or(Value::Null);
@@ -160,7 +160,7 @@ fn serve(row: &Value, stale: bool) -> Option<(i32, String, String)> {
 // The status door
 // ---------------------------------------------------------------------------
 
-/// The status door: one op dispatch for the verb's stdin payload. Only
+/// The status door: one op dispatch for the command's stdin payload. Only
 /// `status-read` today; the wait, logs, and ci ops land with their ports.
 pub(crate) fn run_door(op: &str, payload: &Value) -> (i32, String, String) {
     match op {
@@ -187,7 +187,7 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .get("refresh")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    // The verb's readers act on `ready` and the local gates, so it composes
+    // The command's readers act on `ready` and the local gates, so it composes
     // here and never serves a peer's row.
     let (code, out, stderr_lines, calls) = cached_status_via(cwd_str, pr, refresh, None, false);
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
@@ -215,7 +215,7 @@ fn status_read(payload: &Value) -> (i32, String, String) {
 /// `head_read` is the caller's own light head read (the wait's per tick):
 /// a complete block is both the fresh-serve guard and the key material, so
 /// the tick spends the read once; a refused read (empty sha) guards with a
-/// sha no row can carry; None is the self-reading status verb.
+/// sha no row can carry; None is the self-reading status command.
 pub(crate) fn cached_status(
     cwd_str: &str,
     pr: u64,
@@ -355,8 +355,10 @@ fn cached_status_via(
     }
     // Miss: the ONE live read under the per-key lock; queued pollers re-read
     // the fresh row after.
-    let lock_path = dir.join(format!("{key}.lock"));
-    let _lock = crate::gh_budget::FileLock::acquire(&lock_path);
+    let _lock = match miss_lock(&dir, &key, &slug_key, pr, None) {
+        Ok(lock) => lock,
+        Err(answer) => return into_answer(answer, probe.calls.load(Ordering::SeqCst)),
+    };
     let prior = read_row(&dir, &key)
         .and_then(|row| row.get("output").cloned())
         .filter(|v| v.is_object());
@@ -379,6 +381,54 @@ fn cached_status_via(
         Some(&pulls),
         hold_state,
     )
+}
+
+/// The per-key miss lock, or the answer to give when it stays held past its
+/// retry bound. `tries` is None for the real bound.
+fn miss_lock(
+    dir: &Path,
+    key: &str,
+    slug_key: &str,
+    pr: u64,
+    tries: Option<u32>,
+) -> Result<crate::gh_budget::FileLock, (i32, String, String)> {
+    let path = dir.join(format!("{key}.lock"));
+    let locked = match tries {
+        Some(n) => crate::gh_budget::FileLock::try_acquire_with(&path, n, 0),
+        None => crate::gh_budget::FileLock::try_acquire(&path),
+    };
+    locked.map_err(|why| contended_serve(dir, key, slug_key, pr, &why))
+}
+
+/// The miss lock stayed held past its retry bound. The answer is a wait, never
+/// a panic: the newest row degraded to unknown, or a bare unknown when no row
+/// exists. Both read `settled: false`, so a watcher polls again next tick.
+fn contended_serve(
+    dir: &Path,
+    key: &str,
+    slug_key: &str,
+    pr: u64,
+    why: &str,
+) -> (i32, String, String) {
+    let reason = format!("the status cache lock is busy ({why}); this is no verdict, read again");
+    let served = read_row(dir, key)
+        .or_else(|| newest_row(dir, slug_key, &pr.to_string()))
+        .and_then(|row| serve(&row, true));
+    let (mut out, stderr) = match served {
+        Some((_, stdout, stderr)) => (
+            serde_json::from_str::<Value>(stdout.trim()).unwrap_or_else(|_| json!({})),
+            stderr,
+        ),
+        None => (
+            json!({"pr": pr.to_string(), "verdict": "unknown", "green": false, "settled": false, "ready": false}),
+            String::new(),
+        ),
+    };
+    out["ready_blockers"] = json!(["status_lock_busy"]);
+    out["stale_reason"] = json!(reason);
+    let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
+    let stderr = format!("{stderr}\nnote: {reason}").trim_start().to_string();
+    (3, stdout, stderr)
 }
 
 /// A peer host holds the poller lease and shared a row young enough to
@@ -492,7 +542,7 @@ fn row_head(row: &Value) -> Option<&str> {
 
 /// The head guard on the pre-key serves: a caller that names a head (the
 /// wait, from its own light read) is never answered by a row minted for a
-/// different one. None (the status verb) keeps the zero-network serve.
+/// different one. None (the status command) keeps the zero-network serve.
 fn serve_head_ok(row: &Value, require_head: Option<&str>) -> bool {
     match require_head {
         None => true,
@@ -531,6 +581,24 @@ pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
     let probe = fresh_probe();
     let block = read_head(&probe, cwd, &slug, pr).ok();
     (block, probe.calls.load(Ordering::SeqCst))
+}
+
+/// The wait's zero-network tick: the newest (slug, pr) row answers only
+/// inside the TTL and only when minted for `require_head`, so the head
+/// guard that protects the status command serves the wait too - fed a sha the
+/// caller read from local git at no cost instead of from GitHub. None sends
+/// the caller down the network path.
+pub(crate) fn fresh_tick(
+    cwd: &Path,
+    pr: u64,
+    require_head: Option<&str>,
+) -> Option<(i32, Value, Vec<String>)> {
+    let slug = git_slug(cwd)?;
+    let dir = cache_dir(cwd)?;
+    let slug_key = slug.replace('/', "--");
+    let answer = fresh_serve(&dir, &slug_key, &pr.to_string(), now_secs(), require_head)?;
+    let (code, payload, lines, _) = into_answer(answer, 0);
+    Some((code, payload, lines))
 }
 
 /// The light read that mints the key: the PR's head sha and state, one call.
@@ -750,5 +818,45 @@ mod tests {
         for d in [peer_dir, dir] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    /// A miss lock held elsewhere answers a wait, never a panic: with no row
+    /// a bare unknown, with a row that row degraded. Both are unsettled.
+    #[test]
+    fn a_held_miss_lock_answers_unsettled_instead_of_panicking() {
+        let dir = temp_cache_dir("contended");
+        let key = "Owner--Repo-42-aaaaaaaa1111";
+        let _held = crate::gh_budget::FileLock::try_acquire(&dir.join(format!("{key}.lock")))
+            .expect("the test holds the lock");
+
+        let (code, stdout, _) = miss_lock(&dir, key, "Owner--Repo", 42, Some(1))
+            .expect_err("a held lock answers instead of locking");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(stdout.contains("status_lock_busy"), "{stdout}");
+
+        seed_row(&dir, key, "aaaaaaaa1111");
+        let (code, stdout, _) = miss_lock(&dir, key, "Owner--Repo", 42, Some(1))
+            .expect_err("a held lock answers instead of locking");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(stdout.contains("\"stale_verdict\":\"green\""), "{stdout}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The zero-network tick's serve: a young row minted FOR the required
+    /// head answers; the mismatch case is pinned by the head-guard test
+    /// above. No probe is involved, so 0 gh calls is inherent.
+    #[test]
+    fn a_young_row_minted_for_the_head_serves_fresh_tick() {
+        let dir = temp_cache_dir("freshtick");
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        let (code, stdout, _) =
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
+                .expect("a young matching row serves");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"head\":\"aaaaaaaa1111\""), "{stdout}");
+        assert!(stdout.contains("\"cached\":true"), "{stdout}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -236,7 +236,7 @@ fn payload_of(payload: &str, digest: &str) -> String {
 
 /// Emit owed events, then delete their rows. A failed append leaves the debt
 /// for the next drain, the same at-least-once contract store.py documents.
-fn drain(conn: &Connection, events_path: Option<&Path>) {
+pub(crate) fn drain(conn: &Connection, events_path: Option<&Path>) {
     let Some(events_path) = events_path else {
         return;
     };
@@ -317,6 +317,19 @@ pub fn verdict(
     if classify(&effect_class) == Disposition::Deny {
         return Ok(false);
     }
+    // A spent approval refuses: the attempts journal holds the one hook fire
+    // the approval bought, so a repeat derives a fresh attempt and owes a
+    // new decision instead of riding the old one.
+    let spent: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM attempts WHERE request_digest = ? AND state = 'authorized'",
+            [digest],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if spent > 0 {
+        return Ok(false);
+    }
     Ok(authorized(cwd, &principal, &effect_class))
 }
 
@@ -346,17 +359,37 @@ pub fn authorized(cwd: &Path, principal: &str, effect_class: &str) -> bool {
     named(effect_class) || named("*")
 }
 
+/// Whether anyone at all may decide `effect_class`: the policy names a
+/// non-empty list for the class or the `*` wildcard. Unconfigured or empty,
+/// the decide door refuses every decision, so the hook refusal says so.
+fn policy_configured(cwd: &Path, effect_class: &str) -> bool {
+    let Some(entries) =
+        crate::agents_config::config_table_merged(cwd, &["approvals", "authorized_principals"])
+    else {
+        return false;
+    };
+    let named = |class: &str| {
+        entries
+            .get(class)
+            .and_then(|v| v.as_array())
+            .map(|list| !list.is_empty())
+            .unwrap_or(false)
+    };
+    named(effect_class) || named("*")
+}
+
 // -- The hook verdict --------------------------------------------------------
 
 /// The request a hook fire files for one mapped effect. The digest must be
 /// STABLE across unchanged retries, so the expiry is floored to the hour and
 /// the window rides 24 to 25 hours: a retry in the same hour re-reads the
 /// same request, and a boundary retry re-files (fail toward re-approval).
-/// ponytail: the 24h window is a constant; a config key waits for a second
-/// caller.
+/// The request binds the action, never the tool call: a retry mints a fresh
+/// tool_use_id, so an id derived from it would make every approval dead on
+/// arrival. ponytail: the 24h window is a constant; a config key waits for a
+/// second caller.
 pub fn hook_request(
     session: &str,
-    effect_id: &str,
     mapped: &MappedEffect,
     now: chrono::DateTime<chrono::Utc>,
 ) -> EffectRequest {
@@ -372,7 +405,7 @@ pub fn hook_request(
         principal_id: session.to_string(),
         work_order_id: "unclaimed".to_string(),
         attempt_id: session.to_string(),
-        effect_id: effect_id.to_string(),
+        effect_id: format!("tool-{}", &mapped.action_digest[..16]),
         effect_class: mapped.effect_class.to_string(),
         destination: mapped.destination.clone(),
         action_digest: mapped.action_digest.clone(),
@@ -404,18 +437,7 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .unwrap_or("unknown-session");
-    let effect_id = payload
-        .get("tool_use_id")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("tool-{}", &mapped.action_digest[..16]));
-    let mut request = hook_request(session, &effect_id, &mapped, now);
-    // request_id is not a bound field, so it may derive from the request
-    // digest: two sessions making the same call file different digests, and
-    // each needs its own request row rather than a UNIQUE clash on a shared
-    // action-derived id.
-    request.request_id = format!("hook-{}", &request.request_digest()[..16]);
+    let mut request = hook_request(session, &mapped, now);
     let db_path = match payload.get("db").and_then(Value::as_str) {
         Some(db) => PathBuf::from(db),
         None => default_db_path(cwd).ok()?,
@@ -438,6 +460,20 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
             ));
         }
     };
+    // attempt_id is a bound field. Pre-execution retries share the session's
+    // one request (that is the retry identity), and every fire the gate
+    // allows spends the approval, so the next identical call derives the
+    // next attempt id from the journal and owes a fresh decision: one
+    // approval, one execution.
+    let executed = executed_count(&conn, session, &mapped.action_digest);
+    if executed > 0 {
+        request.attempt_id = format!("{session}-{executed}");
+    }
+    // request_id is not a bound field, so it may derive from the request
+    // digest: two sessions making the same call file different digests, and
+    // each needs its own request row rather than a UNIQUE clash on a shared
+    // action-derived id.
+    request.request_id = format!("hook-{}", &request.request_digest()[..16]);
     let digest = match submit(&conn, Some(&events_for(cwd)), &request) {
         Ok(digest) => digest,
         Err(e) => {
@@ -448,16 +484,71 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
         }
     };
     match verdict(&conn, cwd, &digest, now) {
-        Ok(true) => None,
-        Ok(false) => refusal(&digest, ""),
+        Ok(true) => {
+            record_spent(&conn, &request, &digest);
+            None
+        }
+        Ok(false) => {
+            // A fresh install names nobody under the policy, so the approve
+            // command this refusal suggests cannot decide. Say so and name
+            // the key, the same words the decide door prints.
+            let reason = if policy_configured(cwd, &mapped.effect_class) {
+                String::new()
+            } else {
+                format!(
+                    " (no approval policy covers {}: set \
+                     config.approvals.authorized_principals before deciding)",
+                    mapped.effect_class
+                )
+            };
+            refusal(&digest, &reason)
+        }
         Err(e) => refusal(&digest, &format!(" (verdict unread: {e})")),
     }
 }
 
 /// The events file a hook fire drains to: the same resolution
 /// `emit_guard_decision` uses.
-fn events_for(cwd: &Path) -> PathBuf {
+pub(crate) fn events_for(cwd: &Path) -> PathBuf {
     crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd))
+}
+
+/// How many fires of this exact action the gate already allowed for the
+/// session. The attempts journal is the record; the count names the next
+/// attempt id, so each execution owes and consumes its own approval. The
+/// first fire rides the bare session id, its successors the numbered form.
+fn executed_count(conn: &Connection, session: &str, action_digest: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM attempts WHERE action_digest = ? \
+         AND (attempt_id = ? OR attempt_id LIKE ?)",
+        rusqlite::params![action_digest, session, format!("{session}-%")],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
+}
+
+/// Record the one execution this allow bought. The gate sees the allow, not
+/// the tool's outcome, so the row states exactly that fact; a failed effect
+/// re-approves, the gate's stated fail-toward-re-approval bias.
+fn record_spent(conn: &Connection, request: &EffectRequest, digest: &str) {
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO attempts (idempotency_key, effect_id, work_order_id, \
+         attempt_id, request_digest, action_digest, destination, effect_class, \
+         adapter_id, adapter_version, state) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        rusqlite::params![
+            format!("hook:{digest}"),
+            request.effect_id,
+            request.work_order_id,
+            request.attempt_id,
+            digest,
+            request.action_digest,
+            request.destination,
+            request.effect_class,
+            "hook",
+            "0",
+            "authorized",
+        ],
+    );
 }
 
 // -- Transports --------------------------------------------------------------
@@ -493,7 +584,7 @@ pub fn run_hook(_args: &[String]) -> i32 {
 
 /// Dispatch one `effect-` op from an `authorized-merge` payload, the same
 /// transport the hold, freeze, grant and status ops ride. Always answers with
-/// a JSON receipt; the verb's exit status answers only whether the op RAN.
+/// a JSON receipt; the command's exit status answers only whether the op RAN.
 pub fn run_op(op: &str, payload: &Value) -> String {
     match op {
         "effect-classify" => {
@@ -566,7 +657,7 @@ pub fn run_op(op: &str, payload: &Value) -> String {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown-session");
             let now = chrono::Utc::now();
-            let request = hook_request(session, "door", &mapped, now);
+            let request = hook_request(session, &mapped, now);
             let digest = request.request_digest();
             match verdict(&conn, &cwd, &digest, chrono::Utc::now()) {
                 Ok(true) => json!({"verdict": "allow"}).to_string(),

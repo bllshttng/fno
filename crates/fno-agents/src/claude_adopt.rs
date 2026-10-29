@@ -1,7 +1,7 @@
 //! Transcript reads, the manifest line reader, and the adopted-row registry
 //! write for claude workers.
 //!
-//! The live heal path in `client_verbs` mints its rows directly; this module
+//! The live heal path in `client_commands` mints its rows directly; this module
 //! carries what stays shared: the transcript readers (`transcript_stamp`,
 //! `transcript_model`, `provider_from_route_settings`), the manifest line
 //! reader (`manifest_field`), and `upsert_adopted_row`. The claim helpers
@@ -101,14 +101,14 @@ pub fn transcript_title(session_id: &str) -> Option<String> {
     transcript_title_in(&crate::claude_drive::claude_projects_dir(), session_id)
 }
 
-/// The synthesized registry row's display name: the thread title when the
-/// transcript carries one (capped, so a long title still fits the sideline
-/// cell), else the linked node id, else the derivable `t-<short>` form
-/// (`t-` is the bridge's manual form: no provenance). A bare short id reads
-/// as a phantom row, never as work.
-pub fn synthesized_entry_name(session: &str, short: &str) -> String {
-    transcript_title(session)
-        .map(|t| t.chars().take(48).collect::<String>())
+/// The synthesized registry row's display name: the linked node's
+/// `agents.naming.worker` name, else the thread title when the transcript
+/// carries one (capped, so a long title still fits the sideline cell), else
+/// the derivable `t-<short>` form (`t-` is the bridge's manual form: no
+/// provenance). A bare short id reads as a phantom row, never as work.
+pub fn synthesized_entry_name(session: &str, short: &str, node_name: Option<String>) -> String {
+    node_name
+        .or_else(|| transcript_title(session).map(|t| t.chars().take(48).collect::<String>()))
         .unwrap_or_else(|| format!("t-{short}"))
 }
 
@@ -189,29 +189,28 @@ pub fn provider_from_route_settings(model: Option<&str>) -> Option<String> {
     }
 }
 
-/// Every parseable `.json` file under the recorded route-settings dir
-/// (`FNO_ROUTE_SETTINGS_DIR`, else `$HOME/.fno/route-settings`), as
-/// (path, parsed JSON) pairs. Unreadable or malformed files drop out; a
-/// missing dir answers empty.
+/// Every parseable route-settings overlay as (path, parsed JSON) pairs.
+/// `FNO_ROUTE_SETTINGS_DIR` pins one dir; otherwise the layout table's
+/// `route-settings` row answers (`list_dir_children` keeps a straggler at
+/// the legacy spelling visible until its drain empties it). Unreadable or
+/// malformed files drop out; a missing dir answers empty.
 pub(crate) fn route_settings_files() -> Vec<(PathBuf, serde_json::Value)> {
-    let dir = std::env::var_os("FNO_ROUTE_SETTINGS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".fno")
-                .join("route-settings")
-        });
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
+    let files: Vec<PathBuf> = match std::env::var_os("FNO_ROUTE_SETTINGS_DIR") {
+        Some(dir) => match std::fs::read_dir(PathBuf::from(dir)) {
+            Ok(entries) => entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_json_path(p))
+                .collect(),
+            Err(_) => Vec::new(),
+        },
+        None => crate::state_layout::list_dir_children(&route_settings_root(), "route-settings")
+            .into_iter()
+            .filter(|p| is_json_path(p))
+            .collect(),
     };
     let mut out: Vec<(PathBuf, serde_json::Value)> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
+    for path in files {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -221,6 +220,17 @@ pub(crate) fn route_settings_files() -> Vec<(PathBuf, serde_json::Value)> {
         out.push((path, v));
     }
     out
+}
+
+fn is_json_path(p: &Path) -> bool {
+    p.extension().and_then(|e| e.to_str()) == Some("json")
+}
+
+/// The state root the no-env branch reads overlays from: the same
+/// resolution `route_settings::write` publishes into.
+fn route_settings_root() -> PathBuf {
+    let anchor = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::agents_config::state_dir(&anchor).unwrap_or_else(|| PathBuf::from(".").join(".fno"))
 }
 
 /// One frontmatter scalar from a lead manifest: `key: value`, quotes stripped,
@@ -410,23 +420,28 @@ mod tests {
     }
 
     #[test]
-    fn synthesized_entry_name_prefers_title_then_node_then_short_form() {
+    fn synthesized_entry_name_prefers_node_then_title_then_short_form() {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let uuid = "a1b2c3d4-1111-2222-3333-444455556666";
-        // The transcript title wins, capped at 48 chars.
         let long = "x".repeat(80);
         seed_transcript(
             "entry-name",
             uuid,
             &[format!(r#"{{"type":"summary","summary":"{long}"}}"#)],
         );
-        let named = synthesized_entry_name(uuid, "a1b2c3d4");
+        // The node's agents.naming.worker name beats the title.
+        assert_eq!(
+            synthesized_entry_name(uuid, "a1b2c3d4", Some("t-books-index".into())),
+            "t-books-index"
+        );
+        // No node: the transcript title, capped at 48 chars.
+        let named = synthesized_entry_name(uuid, "a1b2c3d4", None);
         assert_eq!(named.chars().count(), 48, "the title is capped");
         std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
-        // No title: the derivable t- form (the bridge's manual form).
-        assert_eq!(synthesized_entry_name(uuid, "a1b2c3d4"), "t-a1b2c3d4");
+        // Neither: the derivable t- form (the bridge's manual form).
+        assert_eq!(synthesized_entry_name(uuid, "a1b2c3d4", None), "t-a1b2c3d4");
     }
 
     /// Write a minimal transcript for `uuid` under a fresh temp projects dir

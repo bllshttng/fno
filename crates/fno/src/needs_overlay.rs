@@ -134,6 +134,9 @@ pub struct QuestionItem {
     pub settled: bool,
     #[serde(default)]
     pub options: Vec<QuestionOption>,
+    /// The screenshots the ask attached, as absolute paths.
+    #[serde(default)]
+    pub images: Vec<String>,
     #[serde(default)]
     pub blocked_because: Option<String>,
     #[serde(default)]
@@ -150,6 +153,10 @@ pub struct QuestionItem {
     pub meanwhile: Option<String>,
     #[serde(default)]
     pub class: Option<String>,
+    /// The asking machine on a copy from another machine; `None` when it
+    /// was asked here.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// One recently answered item beside the open list, from the payload's
@@ -249,7 +256,7 @@ pub async fn mine_now() -> Option<Vec<MineItem>> {
     parse_mine(&output.stdout)
 }
 
-/// Fold open questions through the Rust projection verb - bounded by
+/// Fold open questions through the Rust projection command - bounded by
 /// [`QUESTIONS_TIMEOUT`], with the store's cursor fast path (a store-sized
 /// read measured 4.99 s before it). A failure carries a reason: the bell
 /// names it over the last good fold instead of blanking the board.
@@ -318,7 +325,7 @@ pub async fn fold_both(since_epoch: &str) -> FoldOutcome {
 }
 
 /// One MINE mutation the panel can send, addressed by `MineItem::n` (the
-/// stable file index `mine_now` already carries for this purpose). The verb
+/// stable file index `mine_now` already carries for this purpose). The command
 /// is the one writer; the client never edits the file or `mine_fold` itself -
 /// it re-folds on success so the render always reflects what the file holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -377,7 +384,7 @@ pub async fn mine_mutate(mutation: MineMutation) -> Result<(), String> {
     }
 }
 
-/// Parse the verb's JSON array. Fails quiet (returns `None`) on unparseable
+/// Parse the command's JSON array. Fails quiet (returns `None`) on unparseable
 /// output so a torn stdout degrades the overlay rather than crashing it.
 fn parse(stdout: &[u8]) -> Option<Vec<FoldItem>> {
     serde_json::from_slice(stdout).ok()
@@ -554,7 +561,7 @@ mod tests {
 
     #[test]
     fn parses_required_mine_json() {
-        let json = br#"{"mine":[{"n":1,"text":"ship tonight","done":false,"node":null},{"n":2,"text":"cut verbs","done":true,"node":"x-aaaa"}]}"#;
+        let json = br#"{"mine":[{"n":1,"text":"ship tonight","done":false,"node":null},{"n":2,"text":"cut commands","done":true,"node":"x-aaaa"}]}"#;
         let items = parse_mine(json).expect("valid mine response parses");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].n, 1);

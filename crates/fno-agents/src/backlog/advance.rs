@@ -38,7 +38,6 @@ pub const EVENT_SPAWNED: &str = "dispatch_spawned";
 pub const EVENT_FAILOVER: &str = "dispatch_failover";
 pub const EVENT_CLAIM_OBSERVED: &str = "dispatch_claim_observed";
 pub const EVENT_DEAD_FAILURE_LIMIT: &str = "dispatch_dead_failure_limit";
-pub const EVENT_SELECTION_DIVERGED: &str = "dispatch_selection_diverged";
 pub const EVENT_SOURCE: &str = "backlog";
 
 /// (decision, event) pairs that are legal to construct. Guards against a
@@ -101,7 +100,7 @@ impl AdvanceResult {
         }
     }
 
-    /// The board verb's human stdout: the verdict line, then one `advance: `
+    /// The board command's human stdout: the verdict line, then one `advance: `
     /// line per spawn-seam note, so a dropped pin is named where the
     /// dispatch was reported.
     pub fn render(&self) -> Vec<String> {
@@ -120,7 +119,7 @@ impl AdvanceResult {
         lines
     }
 
-    /// The board verb's --json payload; notes ride beside the verdict.
+    /// The board command's --json payload; notes ride beside the verdict.
     pub fn json_receipt(&self) -> Value {
         json!({
             "decision": self.decision,
@@ -300,11 +299,9 @@ pub(crate) fn gate_refusal_reason(code: i32) -> Option<&'static str> {
     }
 }
 
-/// The sandbox probe's exit code lives in the Python runtime
-/// (fno.agents.sandbox_probe.EXIT_SANDBOX_UNREACHABLE = 85); the native
-/// probe shares the constant.
+/// The sandbox probe's exit code, owned by the spawn seam.
 fn sandbox_probe_exit() -> i32 {
-    85
+    crate::spawn_seam::EXIT_SANDBOX_UNREACHABLE
 }
 
 /// The refusal sentence: the LAST `spawn-gate:` or `sandbox-probe:` line
@@ -540,7 +537,7 @@ pub(crate) fn bounded_command_env(
 }
 
 /// The select-read door: one bounded exec of this binary's `select-read`
-/// verb. The door's own worst case is the select bound (120s default) plus
+/// command. The door's own worst case is the select bound (120s default) plus
 /// the enrich second exec (30s), so the caller waits a bounded 180s.
 pub fn select_read(kind: &str, args: &[String]) -> Result<Value, String> {
     let exe =
@@ -596,90 +593,6 @@ pub fn next_node(project: Option<&str>) -> Result<Option<Value>, String> {
     select_read("next", &args).map(Some)
 }
 
-/// Read the independent planned-unclaimed observer receipt.
-pub fn undispatched_nodes(project: Option<&str>, mission: Option<&str>) -> Result<Value, String> {
-    let mut args: Vec<String> = Vec::new();
-    if let Some(p) = project {
-        args.push("--project".to_string());
-        args.push(p.to_string());
-    }
-    if let Some(m) = mission {
-        args.push("--mission".to_string());
-        args.push(m.to_string());
-    }
-    let receipt = select_read("undispatched", &args)?;
-    let ok = receipt.get("status").and_then(Value::as_str) == Some("ok");
-    let scanned = receipt
-        .get("entries_scanned")
-        .and_then(Value::as_i64)
-        .is_some();
-    let rows = receipt.get("rows").and_then(Value::as_array).is_some();
-    if !(ok && scanned && rows) {
-        return Err("fno backlog undispatched returned an unreadable receipt".to_string());
-    }
-    Ok(receipt)
-}
-
-/// Reapply selector-only safety guards before lane-fill recovery.
-pub fn dispatch_safe_observer(receipt: &Value) -> Result<Value, String> {
-    let rows = match receipt.get("rows").and_then(Value::as_array) {
-        Some(rows) if !rows.is_empty() => rows.clone(),
-        _ => return Ok(receipt.clone()),
-    };
-    let graph_path = super::settings::graph_path();
-    let entries = crate::graph_store::read_rows_strict(&graph_path)
-        .map_err(|e| format!("observer safety graph unreadable: {e}"))?;
-    let by_id: BTreeMap<String, Value> = entries
-        .into_iter()
-        .filter_map(|mut e| {
-            let id = e.get("id").and_then(Value::as_str)?.to_string();
-            Some((id, std::mem::take(&mut e)))
-        })
-        .collect();
-    let now_ms = now_ms_i64();
-    let staleness_days = guard_staleness_days(None);
-    let held = held_questions();
-    let mut safe: Vec<Value> = Vec::new();
-    for row in &rows {
-        let Some(id) = row.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(entry) = by_id.get(id) else {
-            continue;
-        };
-        let facts = row.get("facts").cloned().unwrap_or(Value::Null);
-        let Some(facts) = facts.as_object() else {
-            return Err(format!("observer row {id:?} has no predicate facts"));
-        };
-        if facts
-            .get("has_pr")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            || facts
-                .get("batch_owner")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            || facts
-                .get("completed")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        {
-            continue;
-        }
-        if crate::backlog_ready::selection_guards(entry, &by_id, now_ms, staleness_days, &held)
-            .is_some()
-        {
-            continue;
-        }
-        safe.push(row.clone());
-    }
-    let mut out = receipt.clone();
-    if let Some(obj) = out.as_object_mut() {
-        obj.insert("rows".to_string(), Value::Array(safe));
-    }
-    Ok(out)
-}
-
 pub(crate) fn now_ms_i64() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -730,48 +643,33 @@ fn holder_is_ours(holder: &str, record: Option<&crate::claims::ClaimRecord>) -> 
 
 /// `(verdict, info)` for `node:<id>` from THIS session's view; verdict in
 /// {ours, foreign_live, dead_predecessor, free}. Read-only, never fails the
-/// caller: a probe failure reads as free (a re-acquire candidate).
+/// caller: a probe failure reads as free (a re-acquire candidate). It judges
+/// the one `status` read the caller already made, so a shared primary pays
+/// one round trip per observation, not one per question.
 pub fn classify_node_claim(
-    node_id: &str,
-    info: Option<crate::claims::ClaimRecord>,
+    state: crate::claims::ClaimState,
+    record: Option<crate::claims::ClaimRecord>,
 ) -> (String, Option<crate::claims::ClaimRecord>) {
-    let record = match info {
-        Some(r) => Some(r),
-        None => match crate::claims::status(&format!("node:{node_id}"), None) {
-            (crate::claims::ClaimState::Free, None) => None,
-            (state, rec @ Some(_)) => {
-                use crate::claims::ClaimState::*;
-                match state {
-                    Free | Corrupted => None,
-                    _ => rec,
-                }
-            }
-            _ => None,
-        },
-    };
-    let Some(record) = record else {
+    use crate::claims::ClaimState::*;
+    let Some(record) = record.filter(|_| !matches!(state, Free | Corrupted)) else {
         return ("free".to_string(), None);
     };
-    let state = record_state(&record);
-    if state.is_empty() || state == "free" {
-        return ("free".to_string(), Some(record));
-    }
     if holder_is_ours(&record.holder, Some(&record)) {
         return ("ours".to_string(), Some(record));
     }
-    if state == "live" || state == "suspect" {
+    if state == Live || state == Suspect {
         return ("foreign_live".to_string(), Some(record));
     }
     ("dead_predecessor".to_string(), Some(record))
 }
 
-fn record_state(record: &crate::claims::ClaimRecord) -> String {
-    match crate::claims::status(&record.key, None).0 {
-        crate::claims::ClaimState::Free => "free".to_string(),
-        crate::claims::ClaimState::Live => "live".to_string(),
-        crate::claims::ClaimState::Suspect => "suspect".to_string(),
-        crate::claims::ClaimState::Stale => "stale".to_string(),
-        crate::claims::ClaimState::Corrupted => "corrupted".to_string(),
+fn state_word(state: crate::claims::ClaimState) -> &'static str {
+    match state {
+        crate::claims::ClaimState::Free => "free",
+        crate::claims::ClaimState::Live => "live",
+        crate::claims::ClaimState::Suspect => "suspect",
+        crate::claims::ClaimState::Stale => "stale",
+        crate::claims::ClaimState::Corrupted => "corrupted",
     }
 }
 
@@ -793,17 +691,22 @@ pub fn observe_node_claim(
     node_cwd: Option<&str>,
     enforce_failure_limit: bool,
     emit_events: bool,
-    native_info: Option<crate::claims::ClaimRecord>,
+    claim_read: Option<(
+        crate::claims::ClaimState,
+        Option<crate::claims::ClaimRecord>,
+    )>,
     worked_nodes: Option<BTreeMap<String, Vec<String>>>,
     worked_error: Option<String>,
     events_path: Option<&Path>,
 ) -> DispatchClaimObservation {
-    let (verdict, info) = classify_node_claim(node_id, native_info);
-    let info_ref = info.as_ref();
+    let (state, record) =
+        claim_read.unwrap_or_else(|| crate::claims::status(&format!("node:{node_id}"), None));
     // Truth is diagnostic; the claim verdict is authority. An unreadable
     // truth read degrades to unknown, never to a false claim verdict.
-    let truth_status = resolve_truth_status_word(node_id);
-    let claim_state = info_ref.map(|r| record_state(r)).filter(|s| !s.is_empty());
+    let truth_status = truth_status_word(state, record.as_ref());
+    let (verdict, info) = classify_node_claim(state, record);
+    let info_ref = info.as_ref();
+    let claim_state = info_ref.map(|_| state_word(state).to_string());
     let holder = info_ref
         .map(|r| r.holder.clone())
         .unwrap_or_else(|| "unknown".to_string());
@@ -913,13 +816,11 @@ pub fn observe_node_claim(
 /// The truth row's state word, or "unknown" when nothing answers. The claim
 /// verdict is authority; truth is diagnostic. Native derivation over the
 /// node claim + the newest loop_check fire per session (30-minute recency).
-fn resolve_truth_status_word(node_id: &str) -> String {
-    let claim_key = format!("node:{node_id}");
-    let (state, record) = crate::claims::status(&claim_key, None);
-    let holder = record
-        .as_ref()
-        .map(|r| r.holder.clone())
-        .unwrap_or_default();
+fn truth_status_word(
+    state: crate::claims::ClaimState,
+    record: Option<&crate::claims::ClaimRecord>,
+) -> String {
+    let holder = record.map(|r| r.holder.clone()).unwrap_or_default();
     let sid = holder
         .strip_prefix("target-session:")
         .filter(|s| !s.is_empty())
@@ -938,8 +839,10 @@ fn resolve_truth_status_word(node_id: &str) -> String {
     }
 }
 
-/// Seconds since the newest loop_check fire for `sid`, from a bounded tail
-/// of the state root's events journal. None when nothing fired.
+/// Seconds since the newest loop_check fire for `sid`, from the event store
+/// behind the state root's journal address. None when nothing fired inside
+/// the 1,800 s window the caller applies anyway, or when the store cannot be
+/// read (a missing journal reads the same today).
 fn loop_check_age(sid: &str) -> Option<f64> {
     let path = std::env::var_os("FNO_EVENTS_PATH")
         .filter(|v| !v.is_empty())
@@ -948,43 +851,20 @@ fn loop_check_age(sid: &str) -> Option<f64> {
             let cwd = std::env::current_dir().ok()?;
             crate::agents_config::state_dir(&cwd).map(|root| root.join("events.jsonl"))
         })?;
-    let Ok(meta) = std::fs::metadata(&path) else {
-        return None;
-    };
-    let size = meta.len();
-    let start = size.saturating_sub(256 * 1024);
-    let mut file = std::fs::File::open(&path).ok()?;
-    use std::io::{Read, Seek, SeekFrom};
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
-    let now = now_ms_i64() as f64 / 1000.0;
-    let mut newest: Option<f64> = None;
-    for line in text.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() || !line.contains("\"loop_check\"") {
-            continue;
-        }
-        let Ok(rec) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if rec.get("type").and_then(Value::as_str) != Some("loop_check") {
-            continue;
-        }
-        let row_sid = rec
-            .get("data")
-            .and_then(|d| d.get("session_id"))
-            .and_then(Value::as_str)?;
-        if row_sid != sid {
-            continue;
-        }
-        let ts = rec.get("ts").and_then(Value::as_str)?;
-        let epoch = rfc3339_to_epoch(ts)?;
-        newest = Some(now - epoch);
-        break;
-        // newest fire per session is always near the end (append-ordered)
-    }
-    newest
+    let now_ms = now_ms_i64();
+    let rows = crate::event_store::query_events(
+        &path,
+        &crate::event_store::EventQuery {
+            types: vec!["loop_check".into()],
+            session_id: Some(sid.to_string()),
+            since_ms: Some(now_ms - 1_800_000),
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let rec: Value = serde_json::from_str(&rows.last()?.line).ok()?;
+    let ts = rec.get("ts").and_then(Value::as_str)?;
+    Some(now_ms as f64 / 1000.0 - rfc3339_to_epoch(ts)?)
 }
 
 /// RFC3339 `ts` -> epoch seconds; None when unparsable.
@@ -1345,7 +1225,7 @@ pub fn direct_dependents(
             "provider": e.get("provider"),
             "effort": e.get("effort"),
             "difficulty": e.get("difficulty"),
-            "dispatch_verb": e.get("dispatch_verb"),
+            "dispatch_command": e.get("dispatch_command"),
             "cross_project": e.get("project").and_then(Value::as_str).or(None)
                 != closed_project.or(None),
         }));
@@ -1378,7 +1258,7 @@ pub fn project_unblocked(node_ids: &[String]) {
         return;
     }
     // The projection owner is the plan projection pass; native callers reach
-    // it through the client verb so a plan-doc renderer keeps one owner.
+    // it through the client command so a plan-doc renderer keeps one owner.
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
@@ -1868,69 +1748,38 @@ pub struct AdvanceInput<'a> {
     pub source: Option<&'a str>,
 }
 
-/// The control-plane tick row: one auto-continue arm line in the loop
-/// journal the readouts fold. Best-effort; the emitter bounds one row.
+/// The control-plane tick row: one auto-continue arm line committed through
+/// the event store behind the loop journal address. Best-effort; the store
+/// is the only surface the row lands on and no file is created.
 fn control_plane_tick(arm: &str, acted: u64, skip_reason: Option<&str>, detail: Option<&str>) {
     let scheduler = std::env::var("FNO_CONTROL_PLANE_SCHEDULER")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "session".to_string());
-    let mut data = json!({
-        "arm": arm,
-        "scheduler": scheduler,
-        "acted": acted,
-        "interval_s": 1800,
-    });
-    if let Some(obj) = data.as_object_mut() {
-        match skip_reason {
-            Some(reason) => {
-                obj.insert("skip_reason".to_string(), Value::from(reason));
-            }
-            None => {
-                obj.insert("skip_reason".to_string(), Value::Null);
-            }
-        }
-        match detail {
-            Some(text) => {
-                obj.insert(
-                    "detail".to_string(),
-                    Value::from(text.chars().take(4000).collect::<String>()),
-                );
-            }
-            None => {
-                obj.insert("detail".to_string(), Value::Null);
-            }
-        }
-    }
+    let bounded = detail.map(|text| text.chars().take(4000).collect::<String>());
+    let data = crate::tick_ledger::tick_data(
+        arm,
+        &scheduler,
+        acted,
+        skip_reason,
+        bounded.as_deref(),
+        1800,
+    );
     let path = match std::env::var_os("FNO_EVENTS_PATH").filter(|v| !v.is_empty()) {
         Some(pin) => PathBuf::from(pin),
         None => {
             let Some(dir) = crate::backlog::settings::state_dir() else {
                 return;
             };
-            dir.join("events.jsonl")
+            dir.join("events.jsonl") // events-discipline:allow: the tick emitter's anchor, the write in the window is the nudge stamp
         }
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let row = json!({
-        "ts": crate::provider_cap::epoch_to_rfc3339(now_ms_i64() / 1000),
-        "type": "control_plane_tick",
-        "source": "daemon",
-        "data": data,
-    });
-    let mut line = row.to_string();
-    line.push('\n');
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        use std::io::Write as _;
-        let _ = f.write_all(line.as_bytes());
-    }
+    let emitter = crate::events::EventEmitter::new(path, "daemon");
+    let _ = emitter.emit_fields(
+        "control_plane_tick",
+        data.as_object().cloned().unwrap_or_default(),
+    );
 }
 
 /// Best-effort touch of the daemon's wake nudge sentinel: a successor may
@@ -2202,7 +2051,7 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
         model.as_deref(),
         eff_provider,
         failover_harness.as_deref(),
-        node.get("dispatch_verb").and_then(Value::as_str),
+        node.get("dispatch_command").and_then(Value::as_str),
         brief.text.as_deref(),
         failover_record.as_deref(),
         Some((dispatch_key.as_str(), holder.as_str())),
@@ -2278,7 +2127,7 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
     advance_emit(EVENT_DISPATCHED, dispatched, ev_path);
     if input.verbose {
         eprintln!(
-            "advance: dispatched {node_id} -> target worker {short_id} (verb={} source={} brief={})",
+            "advance: dispatched {node_id} -> target worker {short_id} (command={} source={} brief={})",
             spawn_receipt
                 .get("verb")
                 .and_then(Value::as_str)
@@ -2290,11 +2139,11 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
             brief.tag,
         );
     }
-    // The same word the drain readout renders: a dispatch into a kingless
+    // The same flag the drain readout renders: a dispatch into a leadless
     // territory names it on the arm line an operator reads.
     let mut tick_detail = format!("node={node_id} worker={short_id}");
-    if spawn_receipt.get("kingless").and_then(Value::as_bool) == Some(true) {
-        tick_detail.push_str(" kingless");
+    if spawn_leadless(&spawn_receipt) {
+        tick_detail.push_str(" leadless");
     }
     tick(1, None, &tick_detail);
     touch_nudge();
@@ -2320,5 +2169,39 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
                     .collect()
             })
             .unwrap_or_default(),
+    }
+}
+
+/// True when the spawn receipt marks the territory leadless: the current
+/// key, or the legacy spelling stored rows written before the rename carry.
+fn spawn_leadless(spawn_receipt: &Value) -> bool {
+    spawn_receipt
+        .get("leadless")
+        .or_else(|| spawn_receipt.get(crate::role_migration::LEGACY_LEADLESS_KEY))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spawn_leadless;
+    use serde_json::json;
+
+    #[test]
+    fn a_current_row_keyed_leadless_marks_the_render() {
+        assert!(spawn_leadless(&json!({"leadless": true})));
+        assert!(!spawn_leadless(&json!({"leadless": false})));
+    }
+
+    #[test]
+    fn an_old_row_keyed_with_the_legacy_key_still_marks_the_render() {
+        let legacy = crate::role_migration::LEGACY_LEADLESS_KEY;
+        assert!(spawn_leadless(&json!({ (legacy): true })));
+        assert!(!spawn_leadless(&json!({ (legacy): false })));
+    }
+
+    #[test]
+    fn a_receipt_with_neither_key_renders_nothing() {
+        assert!(!spawn_leadless(&json!({})));
     }
 }

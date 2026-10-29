@@ -89,6 +89,10 @@ pub enum Role {
     /// The selected row's cell - a cut-out under `terminal`, a `sel` highlight
     /// under a named theme.
     BodySel,
+    /// The focused row of the sideline selector and the settings modal: the
+    /// theme's text color becomes the ground and its base color the text,
+    /// checkbox included ([`focus_style`]).
+    BodyFocus,
     /// A plain-body popup's emphasis text (the key column, a section
     /// heading): the theme's brand accent, bold, on the plain ground - never
     /// a band. `brand` survives the `terminal` inherit branch (the field
@@ -126,6 +130,9 @@ pub enum Role {
     /// A pill: the bracketed `status · priority` token on a detail title
     /// line. The emulator's index-3 accent slot, on the terminal's own bg.
     PanelPill,
+    /// The active tab of a panel's tab strip: the terminal's own pair,
+    /// swapped (INVERSE), the same look as the active mux tab.
+    PanelTab,
     /// A thin rule under a heading or lane name: the index-8 dim slot.
     PanelRule,
     /// A literal-color span (the colors tab's swatches). The color IS the
@@ -220,6 +227,7 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // out on a disagreeing palette.
         Role::PanelHead => return (Color::Default, Color::Default, cell_flags::BOLD),
         Role::PanelLabel | Role::PanelPill => return (Color::Indexed(3), Color::Default, 0),
+        Role::PanelTab => return (Color::Default, Color::Default, cell_flags::INVERSE),
         // Index 8, not the DIM flag: the merged band evidence showed DIM
         // washing the default fg out on a light terminal, while index 8 stays
         // a readable gray under both.
@@ -227,6 +235,7 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // The focused composer chip resolves above the theme split too: the
         // terminal's own pair, swapped, is the fill - visible under every
         // theme and every emulator ground.
+        Role::BodyFocus => return focus_style(t),
         Role::ChipFocus => {
             return (
                 Color::Default,
@@ -311,6 +320,17 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // The panel slots resolved above the theme split; unreachable keeps
         // a future role from silently inheriting a body style.
         _ => unreachable!("panel roles resolve above the theme split"),
+    }
+}
+
+/// `(fg, bg, flags)` for the row the user drives, inverted from the theme's
+/// pair: text color as ground, base as text. With no base, the emulator's own.
+pub fn focus_style(t: &Theme) -> (Color, Color, u8) {
+    if t.inherit || t.base == Color::Default {
+        // No BOLD: a terminal brightens bold text, so dark letters go gray.
+        (Color::Default, Color::Default, cell_flags::INVERSE)
+    } else {
+        (t.base, t.title, 0)
     }
 }
 

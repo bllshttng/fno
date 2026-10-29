@@ -10,7 +10,7 @@
 # Exit: 0 pass, 1 fail.
 #
 # The gate reads its candidates from the fno-agents binary's
-# pr-closure-branch-ids verb, so this selftest needs that binary:
+# pr-closure-branch-ids command, so this selftest needs that binary:
 # FNO_AGENTS_BIN if set, else the repo's debug build at
 # crates/fno-agents/target/debug/fno-agents (CI builds it there and exports
 # the variable).

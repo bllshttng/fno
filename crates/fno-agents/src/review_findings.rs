@@ -13,7 +13,7 @@
 //! `str.strip()` (a Unicode superset of Rust `trim`).
 //!
 //! The door nests under `review-level` (`findings record|categories|post`)
-//! so fno-agents gains no root verb. `disposition_gate` reads the shipped
+//! so fno-agents gains no root command. `disposition_gate` reads the shipped
 //! category list from here: one copy of the blocking rule's allowlist, the
 //! producer and the gate both.
 
@@ -36,6 +36,13 @@ pub(crate) const DEFAULT_NONBLOCKING_CATEGORIES: &[&str] = &[
     "nit",
     "simplification",
     "test-coverage",
+    // The review lane's own cleanup angles (single-lane.md): advisory
+    // quality notes whose CONFIRMED verdict still blocks, so only a
+    // PLAUSIBLE one rides the allowlist.
+    "efficiency",
+    "reuse",
+    "altitude",
+    "conventions",
 ];
 
 const DISPOSITIONS: &[&str] = &["fixed", "declined", "nonblocking"];
@@ -1280,6 +1287,10 @@ mod tests {
         // A CONFIRMED verdict blocks whatever the category says; a padded
         // verdict is the same verdict.
         assert!(v(json!({"category": "typo", "verdict": " confirmed ", "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
+        // The lane's cleanup angles ride the allowlist: a PLAUSIBLE
+        // efficiency note is advisory, and a CONFIRMED one still blocks.
+        assert!(!v(json!({"category": "efficiency", "verdict": "PLAUSIBLE", "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
+        assert!(v(json!({"category": "efficiency", "verdict": "CONFIRMED", "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
 
         // The resolver: extend, never replace; trim and lower; a malformed
         // shape degrades to the shipped list.

@@ -1,6 +1,5 @@
 //! Full-text search over the backlog. The `nodes_fts` FTS5 mirror of the
-//! nodes table is owned here and no other file writes it (ruling 4); the
-//! Python `fts` seam reaches it through the keeper's `search` read op.
+//! nodes table is owned here and no other file writes it (ruling 4).
 
 use super::api::{ApiError, Store};
 use rusqlite::{params, Connection};
@@ -60,6 +59,50 @@ pub fn ensure_table(connection: &Connection) -> Result<(), String> {
 pub(crate) fn rebuild(connection: &Connection) -> Result<(), String> {
     connection
         .execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')", [])
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Take the nodes rows `filter` selects out of the index, by the values they
+/// hold now. For a writer that runs with the triggers off: it calls this
+/// before the rows go, and [`index`] once the new row lands.
+pub(crate) fn unindex(
+    connection: &Connection,
+    filter: &str,
+    args: impl rusqlite::Params,
+) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "INSERT INTO nodes_fts(nodes_fts, rowid, id, title, slug, description)
+                 SELECT 'delete', rowid, id, title, slug, description FROM nodes WHERE {filter}"
+            ),
+            args,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Put the nodes row at `rowid` into the index.
+pub(crate) fn index(connection: &Connection, rowid: i64) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO nodes_fts(rowid, id, title, slug, description)
+             SELECT rowid, id, title, slug, description FROM nodes WHERE rowid = ?1",
+            [rowid],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// FTS5's own check that the index holds exactly the nodes rows it mirrors.
+#[cfg(test)]
+pub(crate) fn check(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO nodes_fts(nodes_fts, rank) VALUES('integrity-check', 1)",
+            [],
+        )
         .map_err(|error| error.to_string())?;
     Ok(())
 }

@@ -194,6 +194,25 @@ pub const FOLD_CANDIDATES: &[&str] = &[
 /// reports pending and the next daemon-start pass retries.
 const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks", "mail-hold"];
 
+/// Fold candidates that drain instead of folding: each child's absolute
+/// path is recorded elsewhere (a route-settings file is named in an agent
+/// registry row, and a relaunch refuses a moved file rather than relaunch
+/// on the wrong account), so the mover never renames one. New writes land
+/// at the row's destination, the 14-day prune empties the legacy folder,
+/// and this pass removes the empty shell.
+const DRAIN_ONLY_FOLDERS: &[&str] = &["route-settings"];
+
+/// The anchor's file name. Frozen: the lock, its queue, the keeper socket and
+/// the note journal all derive from it, so an older binary and a newer one
+/// share them. A message a person reads names the `.db` store instead.
+const GRAPH_ANCHOR: &str = "graph.json";
+
+/// The graph store's anchor under `root`, through the layout ladder. Every
+/// production resolver calls this, so the literal lives in one place.
+pub fn graph_anchor(root: &Path) -> PathBuf {
+    place(root, GRAPH_ANCHOR)
+}
+
 /// The anchor probe: a `graph.json`-shaped path exists when its `.db`
 /// sibling does - the journal anchor is virtual, the store is the file.
 fn db_twin(p: &Path) -> PathBuf {
@@ -230,6 +249,18 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
             }
         }
     }
+}
+
+/// The home of a page named by its pre-fold spelling right under `root`
+/// (`<root>/graph.html` -> `<root>/cache/pages/graph.html`), else `None`.
+/// A render target that still names the old spelling writes the home
+/// instead, so no writer re-creates a file the migration must clear.
+pub fn page_home(root: &Path, path: &Path) -> Option<PathBuf> {
+    if path.parent()? != root {
+        return None;
+    }
+    let row = find(path.file_name()?.to_str()?)?;
+    (row.kind == Kind::Page && row.new != row.legacy).then(|| root.join(&row.new))
 }
 
 /// Where a ruled folder lives after its fold: the `dir` row's destination,
@@ -304,8 +335,9 @@ fn legacy_dir_of(root: &Path, name: &str) -> Option<PathBuf> {
 
 /// One entry's outcome. `absent` = nothing at the legacy path and the new
 /// path already in place or equally empty: no work now, none owed, and it
-/// does not count toward the pending total. `deleted` = the one lawful
-/// deletion (an emptied lock). Everything else is the plan's vocabulary.
+/// does not count toward the pending total. `deleted` = the two lawful
+/// deletions: an emptied lock, and a stale copy of a page whose home already
+/// holds a render. Everything else is the plan's vocabulary.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Status {
     Moved,
@@ -409,6 +441,14 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
     for (name, status) in crate::state_layout_sqlite::straggler_import(root, &stamp, apply) {
         receipt.entries.push(Entry {
             legacy: format!("{name} (straggler)"),
+            status,
+        });
+    }
+    // The retired root journal family: a reappeared `events.jsonl*` imports
+    // once and parks whole, and the receipt row carries `repeat: true`.
+    for (name, status) in crate::state_layout_sqlite::journal_retire(root, &stamp, apply) {
+        receipt.entries.push(Entry {
+            legacy: format!("{name} (journal)"),
             status,
         });
     }
@@ -518,7 +558,10 @@ fn migrate_entry(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     }
     match row.kind {
         // New wins; the legacy copy parks.
-        Kind::Marker | Kind::Page if legacy_exists && new_exists => park_file(root, stamp, &legacy),
+        Kind::Marker if legacy_exists && new_exists => park_file(root, stamp, &legacy),
+        // A page is a render the daemon rebuilds, so the stale copy goes.
+        // Parking it filled the backups pile with one page per pass.
+        Kind::Page if legacy_exists && new_exists => drop_page(&legacy),
         Kind::Overwrite if legacy_exists && new_exists => {
             let legacy_newer = mtime_of(&legacy) > mtime_of(&new);
             if legacy_newer {
@@ -625,17 +668,75 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
             Status::Absent
         };
     }
+    // A drain row never moves a child: a recorded absolute path a registry
+    // row still names must stay put until its prune. Only the emptied shell
+    // goes.
+    if DRAIN_ONLY_FOLDERS.contains(&row.legacy.as_str()) {
+        let emptied = std::fs::read_dir(&legacy)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if !emptied {
+            return Status::Pending("drains: recorded paths stay until pruned".to_string());
+        }
+        if !apply {
+            return Status::Pending("fold (dry run)".to_string());
+        }
+        return match std::fs::remove_dir(&legacy) {
+            Ok(()) => Status::Moved,
+            Err(e) => Status::Refused(format!("refused: {e}")),
+        };
+    }
     let mut held_locks: Vec<std::fs::File> = Vec::new();
     if LOCK_BEARING_FOLDERS.contains(&row.legacy.as_str())
         && !dir_children_lockable(&legacy, &mut held_locks)
     {
         return Status::Pending("a child lock is held".to_string());
     }
+    // A claim-aux lane dir belongs to a live waiter that polls its path, and
+    // every claim-aux child is a dir, so the lock probe never sees a ticket.
+    // The fold waits until every child dir is empty; the next daemon-start
+    // pass retries.
+    if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
+        return Status::Pending("a waiter holds a ticket".to_string());
+    }
     // The probe fds stay open through the fold: a lock another writer takes
     // between the probe and a rename cannot split a child from its holder.
     // The vec drops when the fold ends and releases them.
     if !apply {
         return Status::Pending("fold (dry run)".to_string());
+    }
+    // claim-aux and locks fold whole: a directory rename is atomic, so no
+    // waiter's ticket path (claim-aux) or held lock inode (locks) ever moves
+    // mid-write - the kernel carries every child to its new name in one
+    // step, and a taker that already opened the file keeps it. The emptiness
+    // probe re-runs right before the rename (claim-aux only; locks' guard
+    // is the flock sweep above), and any lane holding a ticket skips the
+    // row for this pass with place() still answering the legacy dir. Only
+    // the destination's parent is created first; the rename carries every
+    // child in one step.
+    if row.legacy == "claim-aux" || row.legacy == "locks" {
+        if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
+            return Status::Pending("a waiter holds a ticket".to_string());
+        }
+        if !new.exists() {
+            match new.parent() {
+                Some(parent) => {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        return Status::Refused(format!("refused: {e}"));
+                    }
+                }
+                None => return Status::Refused("refused: no destination parent".to_string()),
+            }
+            return match std::fs::rename(&legacy, &new) {
+                Ok(()) => Status::Moved,
+                Err(e) => Status::Refused(format!("refused: {e}")),
+            };
+        }
+        // Both folders exist: a straddler recreated the legacy spelling
+        // after the fold. The whole-dir rename cannot run (the destination
+        // is taken), so fall through to the per-child fold: its flock probe
+        // covers the legacy children, and its emptied-folder removal drains
+        // the residue the whole-dir rename cannot touch.
     }
     if let Err(e) = std::fs::create_dir_all(&new) {
         return Status::Refused(format!("refused: {e}"));
@@ -645,7 +746,12 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         for child in children.flatten() {
             let target = new.join(child.file_name());
             if target.exists() {
-                if matches!(park_file(root, stamp, &child.path()), Status::Parked) {
+                let status = if is_page_home(root, &target) {
+                    drop_page(&child.path())
+                } else {
+                    park_file(root, stamp, &child.path())
+                };
+                if matches!(status, Status::Parked | Status::Deleted) {
                     moved_any = true;
                 }
             } else if std::fs::rename(child.path(), &target).is_ok() {
@@ -663,6 +769,22 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         Status::Moved
     } else {
         Status::Absent
+    }
+}
+
+/// Whether `path` is the home a page row names.
+fn is_page_home(root: &Path, path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .and_then(find)
+        .is_some_and(|row| row.kind == Kind::Page && root.join(&row.new) == path)
+}
+
+/// Remove a stale page copy whose home already holds a render.
+fn drop_page(legacy: &Path) -> Status {
+    match std::fs::remove_file(legacy) {
+        Ok(()) => Status::Deleted,
+        Err(e) => Status::Refused(format!("refused: {e}")),
     }
 }
 
@@ -694,6 +816,27 @@ fn dir_children_lockable(dir: &Path, held: &mut Vec<std::fs::File>) -> bool {
                 held.push(f);
             }
             Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// Whether every child dir of `dir` is empty: the `claim-aux` fold guard.
+/// Tickets live one level down (`<lane>/<NNNNNN>/holder`), a depth the lock
+/// probe's file-only walk never reaches.
+fn lane_dirs_empty(dir: &Path) -> bool {
+    let Ok(children) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for child in children.flatten() {
+        if !child.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let empty = std::fs::read_dir(child.path())
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if !empty {
+            return false;
         }
     }
     true
@@ -770,15 +913,16 @@ fn park_entry(root: &Path, stamp: &str, name: &str) -> Status {
     park_file(root, stamp, &p)
 }
 
-/// Rename one legacy path into the run's backup folder. Never deletes: a
-/// name collision in the same stamp gains `.1`, `.2`, ...
-fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
+/// Rename one legacy path into the run's backup folder, returning the parked
+/// path. Never deletes: a name collision in the same stamp gains `.1`, `.2`,
+/// ... so a second pass over the same stamp never clobbers the first copy.
+pub(crate) fn park_file_at(root: &Path, stamp: &str, legacy: &Path) -> Result<PathBuf, String> {
     let dir = backup_dir(root, stamp);
     let Some(name) = legacy.file_name() else {
-        return Status::Refused("refused: no file name".to_string());
+        return Err("refused: no file name".to_string());
     };
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Status::Refused(format!("refused: {e}"));
+        return Err(format!("refused: {e}"));
     }
     let mut target = dir.join(name);
     let mut n = 0;
@@ -788,9 +932,20 @@ fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
         os.push(format!(".{n}"));
         target = dir.join(os);
     }
-    match std::fs::rename(legacy, &target) {
-        Ok(()) => Status::Parked,
-        Err(e) => Status::Refused(format!("refused: {e}")),
+    std::fs::rename(legacy, &target)
+        .map(|()| target)
+        .map_err(|e| {
+            // A failed park leaves no empty stamp behind.
+            std::fs::remove_dir(&dir).ok();
+            format!("refused: {e}")
+        })
+}
+
+/// [`park_file_at`] as a [`Status`], for callers that only report the fold.
+fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
+    match park_file_at(root, stamp, legacy) {
+        Ok(_) => Status::Parked,
+        Err(e) => Status::Refused(e),
     }
 }
 
@@ -852,7 +1007,7 @@ fn utc_stamp() -> String {
 /// The daemon bin calls this once at startup, BEFORE `daemon::run` opens a
 /// store: one apply pass over the state root. Best effort - a refusal only
 /// prints, and the daemon's reclaim lane retries it (law: the mover runs
-/// from the daemon, never an operator verb).
+/// from the daemon, never an operator command).
 pub fn run_at_daemon_start(home: &crate::paths::AgentsHome) {
     let root = crate::reclaim::reclaim_state_root(home);
     let receipt = migrate(&root, true);
@@ -1061,10 +1216,14 @@ mod tests {
             std::fs::read(root.join("state").join("flight").join("b.json")).unwrap(),
             b"B"
         );
-        // Readers follow the SHIPPED row: flight is still self-mapped, so
-        // place_dir answers the old spelling until the slice retargets the
-        // row. The synthetic fold above must not leak into the reader.
-        assert_eq!(place_dir(&root, "flight"), Some(root.join("flight")));
+        // Readers follow the SHIPPED row: flight now folds under state/, so
+        // place_dir answers the destination always, while the legacy dir
+        // above still holds files. The synthetic fold must not leak into the
+        // reader.
+        assert_eq!(
+            place_dir(&root, "flight"),
+            Some(root.join("state").join("flight"))
+        );
         clean(&root);
 
         // The pre-fold read: the file resolves through the legacy dir until
@@ -1112,6 +1271,8 @@ mod tests {
             root.join("locks").join("plan-abc.lock").exists(),
             "nothing moved past a held lock"
         );
+        use std::os::unix::fs::MetadataExt;
+        let before = std::fs::metadata(root.join("locks")).unwrap();
         drop(held);
         let receipt = migrate_rows(&root, &rows, true, "test");
         assert!(
@@ -1119,6 +1280,12 @@ mod tests {
             "the fold runs once the lock releases: {receipt:?}"
         );
         assert!(!root.join("locks").exists(), "the emptied folder left");
+        let moved = root.join("state").join("locks");
+        let after = std::fs::metadata(&moved).expect("state/locks exists after the fold");
+        assert!(
+            after.dev() == before.dev() && after.ino() == before.ino(),
+            "the fold is one whole-dir rename, not per-child moves: {before:?} -> {after:?}"
+        );
         assert!(
             root.join("state")
                 .join("locks")
@@ -1130,11 +1297,229 @@ mod tests {
     }
 
     #[test]
+    fn dir_row_folds_claim_aux_only_when_every_lane_dir_is_empty() {
+        let root = tmp_root("claimaux");
+        let lane = root
+            .join("claim-aux")
+            .join("build%3Acargo.lock.queue.d")
+            .join("000001");
+        std::fs::create_dir_all(&lane).unwrap();
+        std::fs::write(lane.join("holder"), b"12345").unwrap();
+        let rows = parse_table("claim-aux\tstate/claim-aux\tdir\tdaemon\n").unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt
+                .iter()
+                .any(|e| matches!(e.status, Status::Pending(_))),
+            "a lane dir holding a ticket keeps the row pending: {receipt:?}"
+        );
+        assert!(
+            root.join("claim-aux")
+                .join("build%3Acargo.lock.queue.d")
+                .join("000001")
+                .join("holder")
+                .exists(),
+            "nothing moved past a held ticket"
+        );
+        std::fs::remove_file(lane.join("holder")).unwrap();
+        std::fs::remove_dir(lane).unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        assert!(
+            receipt.iter().any(|e| matches!(e.status, Status::Moved)),
+            "an empty lane dir folds: {receipt:?}"
+        );
+        assert!(!root.join("claim-aux").exists(), "the emptied folder left");
+        assert!(
+            root.join("state").join("claim-aux").exists(),
+            "the children landed at the new path"
+        );
+        clean(&root);
+    }
+
+    #[test]
+    fn the_root_event_journal_imports_then_parks_with_a_receipt() {
+        let root = tmp_root("journal-retire");
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", root.join("agents"));
+        let root = std::fs::canonicalize(&root).unwrap();
+        let ts = chrono::Utc::now().to_rfc3339();
+        std::fs::write(
+            root.join("events.jsonl"),
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"live\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("events.jsonl.1"),
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"rotated\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("events.jsonl.lock"), b"").unwrap();
+
+        let receipt = migrate(&root, true);
+        let journal_entries: Vec<_> = receipt
+            .entries
+            .iter()
+            .filter(|e| e.legacy.contains("(journal)"))
+            .collect();
+        assert_eq!(journal_entries.len(), 2, "{receipt:?}");
+        assert!(
+            journal_entries
+                .iter()
+                .all(|e| matches!(e.status, Status::Merged)),
+            "{receipt:?}"
+        );
+        let journal = root.join("events.jsonl");
+        let rows = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["retire_probe"]),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2, "both seeded rows committed");
+        assert!(
+            !journal.exists() && !root.join("events.jsonl.1").exists(),
+            "the family left the root"
+        );
+        assert!(
+            !root.join("events.jsonl.lock").exists(),
+            "the lock parked beside the family"
+        );
+        let mut stamps = std::fs::read_dir(root.join("backups").join("state-root-migration"))
+            .unwrap()
+            .flatten();
+        let stamp_dir = stamps.next().expect("one parked stamp folder").path();
+        assert!(
+            stamp_dir.join("events.jsonl").exists() && stamp_dir.join("events.jsonl.1").exists(),
+            "the parked copies survive"
+        );
+        let receipts = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["legacy_journal_retired"]),
+        )
+        .unwrap();
+        assert_eq!(receipts.len(), 1, "one receipt row");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&receipts[0].line)
+                .unwrap()
+                .pointer("/data/repeat")
+                == Some(&serde_json::Value::Bool(false)),
+            "the first retire reads repeat false"
+        );
+
+        // A recreated file is a repeat: the new bytes ingest, the file parks
+        // again, and the receipt says so. A root with no family file reports
+        // no journal entry at all.
+        std::fs::write(
+            &journal,
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"again\"}}}}\n"
+            ),
+        )
+        .unwrap();
+        let receipt = migrate(&root, true);
+        assert!(
+            receipt
+                .entries
+                .iter()
+                .any(|e| e.legacy.contains("(journal)")),
+            "{receipt:?}"
+        );
+        let receipts = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["legacy_journal_retired"]),
+        )
+        .unwrap();
+        assert_eq!(receipts.len(), 2, "the repeat retires once more");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&receipts[1].line)
+                .unwrap()
+                .pointer("/data/repeat")
+                == Some(&serde_json::Value::Bool(true)),
+            "the recreated file retires as a repeat"
+        );
+        let quiet = migrate(&root, true);
+        assert!(
+            !quiet.entries.iter().any(|e| e.legacy.contains("(journal)")),
+            "a root with no family file reports no journal entry"
+        );
+        match prior_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        clean(&root);
+    }
+
+    #[test]
+    fn a_second_pass_over_the_same_stamp_parks_beside_the_first_copy() {
+        let root = tmp_root("journal-collision");
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", root.join("agents"));
+        let root = std::fs::canonicalize(&root).unwrap();
+        let ts = chrono::Utc::now().to_rfc3339();
+        let seed = |marker: &str| {
+            format!(
+                "{{\"ts\":\"{ts}\",\"type\":\"retire_probe\",\"source\":\"daemon\",\"data\":{{\"marker\":\"{marker}\"}}}}\n"
+            )
+        };
+        std::fs::write(root.join("events.jsonl"), seed("first")).unwrap();
+        // One stamp, two passes inside its one-second resolution: the second
+        // copy lands beside the first, never on it.
+        let first = crate::state_layout_sqlite::journal_retire(&root, "collide", true);
+        assert!(
+            first
+                .iter()
+                .any(|(n, s)| n == "events.jsonl" && matches!(s, Status::Merged)),
+            "{first:?}"
+        );
+        let parked = root
+            .join("backups")
+            .join("state-root-migration")
+            .join("collide");
+        assert_eq!(
+            std::fs::read_to_string(parked.join("events.jsonl")).unwrap(),
+            seed("first"),
+            "the first copy is in place"
+        );
+        std::fs::write(root.join("events.jsonl"), seed("second")).unwrap();
+        let second = crate::state_layout_sqlite::journal_retire(&root, "collide", true);
+        assert!(
+            second
+                .iter()
+                .any(|(n, s)| n == "events.jsonl" && matches!(s, Status::Merged)),
+            "{second:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(parked.join("events.jsonl")).unwrap(),
+            seed("first"),
+            "the collision suffix kept the first copy"
+        );
+        assert_eq!(
+            std::fs::read_to_string(parked.join("events.jsonl.1")).unwrap(),
+            seed("second"),
+            "the second copy parked beside it"
+        );
+        match prior_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        clean(&root);
+    }
+
+    #[test]
     fn dir_resolution_helpers_and_self_rows() {
         let root = tmp_root("dirhelp");
         assert_eq!(
             place_dir(&root, "flight"),
-            Some(root.join("flight")),
+            Some(root.join("state").join("flight")),
             "a shipped dir row answers at its destination"
         );
         assert_eq!(
@@ -1147,15 +1532,67 @@ mod tests {
             None,
             "a file-only name is not a dir"
         );
-        // A self-mapped row declares the folder and owes nothing.
-        let rows = parse_table("retro-pending\tretro-pending\tdir\tdaemon\n").unwrap();
-        std::fs::create_dir_all(root.join("retro-pending")).unwrap();
+        // A self-mapped row declares the folder and owes nothing: with no
+        // legacy/new split, migrate finds nothing to move.
+        let rows = parse_table("locks\tlocks\tdir\tdaemon\n").unwrap();
+        std::fs::create_dir_all(root.join("locks")).unwrap();
         let receipt = migrate_rows(&root, &rows, true, "test");
         assert!(
             receipt.iter().all(|e| matches!(e.status, Status::Absent)),
             "a self-mapped row is absent: {receipt:?}"
         );
-        assert!(root.join("retro-pending").is_dir());
+        assert!(root.join("locks").is_dir());
+        // The shipped table pins every dir row, locks included, at its
+        // folded destination: reverting any row in any table copy fails here.
+        for name in [
+            "attest",
+            "locks",
+            "push-stamps",
+            "retro-pending",
+            "review-invocations",
+            "route-settings",
+        ] {
+            assert_eq!(
+                place_dir(&root, name),
+                Some(root.join("state").join(name)),
+                "{name} must answer at its state/ destination"
+            );
+        }
+        clean(&root);
+    }
+
+    #[test]
+    fn drain_only_route_settings_never_moves_a_child() {
+        // route-settings drains instead of folding: each file's absolute
+        // path is recorded in a registry row and a relaunch refuses a moved
+        // file, so the mover waits out the prune and removes only the empty
+        // shell.
+        let root = tmp_root("drain");
+        let rows = parse_table("route-settings\tstate/route-settings\tdir\tdaemon\n").unwrap();
+        std::fs::create_dir_all(root.join("route-settings")).unwrap();
+        std::fs::write(root.join("route-settings").join("cc44.json"), b"{}").unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        let entry = receipt
+            .iter()
+            .find(|e| e.legacy == "route-settings")
+            .unwrap();
+        assert!(
+            matches!(entry.status, Status::Pending(_)),
+            "a recorded file pins the row: {entry:?}"
+        );
+        assert!(
+            root.join("route-settings").join("cc44.json").exists(),
+            "the recorded file never moves"
+        );
+        // The prune empties the legacy folder; the next pass removes it.
+        std::fs::remove_file(root.join("route-settings").join("cc44.json")).unwrap();
+        let receipt = migrate_rows(&root, &rows, true, "test");
+        let entry = receipt
+            .iter()
+            .find(|e| e.legacy == "route-settings")
+            .unwrap();
+        assert!(matches!(entry.status, Status::Moved), "{entry:?}");
+        assert!(!root.join("route-settings").exists(), "the shell is gone");
         clean(&root);
     }
 
@@ -1176,6 +1613,45 @@ mod tests {
         );
         // A table miss resolves through the root unchanged.
         assert_eq!(place(&root, "other.json"), root.join("other.json"));
+        clean(&root);
+    }
+
+    #[test]
+    fn a_stale_page_copy_is_deleted_never_parked() {
+        let root = tmp_root("page");
+        let home = root.join("cache").join("pages");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("graph.html"), b"NEW").unwrap();
+        std::fs::write(home.join("graph.md"), b"NEW").unwrap();
+        std::fs::write(root.join("graph.html"), b"OLD").unwrap();
+        std::fs::create_dir_all(root.join("pages")).unwrap();
+        std::fs::write(root.join("pages").join("graph.md"), b"OLD").unwrap();
+        let receipt = migrate(&root, true);
+        let status = |name: &str| {
+            &receipt
+                .entries
+                .iter()
+                .find(|e| e.legacy == name)
+                .unwrap()
+                .status
+        };
+        assert_eq!(status("graph.html"), &Status::Deleted);
+        assert!(!root.join("graph.html").exists());
+        assert!(
+            !root.join("pages").exists(),
+            "the pages fold empties its folder"
+        );
+        assert_eq!(std::fs::read(home.join("graph.html")).unwrap(), b"NEW");
+        assert_eq!(std::fs::read(home.join("graph.md")).unwrap(), b"NEW");
+        assert!(
+            !root.join("backups").join("state-root-migration").exists(),
+            "a page copy never parks: {receipt:?}"
+        );
+        assert_eq!(
+            page_home(&root, &root.join("graph.html")),
+            Some(home.join("graph.html"))
+        );
+        assert_eq!(page_home(&root, &home.join("graph.html")), None);
         clean(&root);
     }
 

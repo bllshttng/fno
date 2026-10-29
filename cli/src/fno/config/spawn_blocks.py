@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class HarnessOverlayBlock(BaseModel):
     """One harness's answers under a spawn-defaults block.
 
-    Precedence: explicit flag > lane > ``profiles.<verb>.harness.<h>`` >
-    ``profiles.<verb>`` > ``defaults.harness.<h>`` > ``defaults``. A
+    Precedence: explicit flag > lane > ``profiles.<command>.harness.<h>`` >
+    ``profiles.<command>`` > ``defaults.harness.<h>`` > ``defaults``. A
     permission/effort value spells the HARNESS's own flags, so the answer
     lives keyed by harness; ranking fields are refused at the spawn seam.
     ``extra="allow"`` is deliberate: a smuggled lane field must survive load
@@ -69,7 +69,7 @@ class SpawnDefaultsBlock(BaseModel):
 
 
 class DifficultyLaneBlock(BaseModel):
-    """One difficulty rung of ``profiles.<verb>.by_difficulty``.
+    """One difficulty rung of ``profiles.<command>.by_difficulty``.
 
     Mirrors exactly what the Rust route-slot reader accepts inside an entry
     (crates/fno-agents/src/route_slot.rs:903: lanes plus the three policy
@@ -86,7 +86,7 @@ class DifficultyLaneBlock(BaseModel):
 
 
 class SpawnProfileBlock(SpawnDefaultsBlock):
-    """Per-verb overlay plus its strict ordered delivery-lane vocabulary."""
+    """Per-command overlay plus its strict ordered delivery-lane vocabulary."""
 
     pane_group: str = ""
     # Kept raw so a malformed routing list cannot fail every config read; the
@@ -111,3 +111,9 @@ class SpawnProfileBlock(SpawnDefaultsBlock):
         if not isinstance(v, dict):
             return {}
         return {k: val for k, val in v.items() if isinstance(val, dict)}
+
+
+class NamingBlock(BaseModel):
+    """``config.agents.naming``; the template is rendered in Rust (naming.rs)."""
+
+    worker: str = "t-{slug}"

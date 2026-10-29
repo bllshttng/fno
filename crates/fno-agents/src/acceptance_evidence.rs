@@ -1,10 +1,10 @@
 //! Acceptance evidence: the outcome-probe substrate, and the bindings that
 //! connect a plan's compiled acceptance criteria to it.
 //!
-//! ONE runner (`run_probe`), ONE parser (`parse_probes_for`), ONE verb
+//! ONE runner (`run_probe`), ONE parser (`parse_probes_for`), ONE command
 //! (`probe-run`) serve both gates: `done_probes` (session termination, via
 //! `evaluate_done_probes`) and `close_probes` (node closure, shelled by the
-//! close verbs). The `acceptance_evidence` frontmatter binds a compiled AC id
+//! close commands). The `acceptance_evidence` frontmatter binds a compiled AC id
 //! to a probe index, so a criterion's satisfaction is MEASURED by a fresh run
 //! with its own positive marker, never witnessed.
 //!
@@ -204,7 +204,7 @@ fn parse_done_probes(content: &str) -> ProbeDecl {
 }
 
 /// Key-parameterized probe-list parser. `done_probes` (loop-check's
-/// session-termination gate) and `close_probes` (the close verbs' node-closure
+/// session-termination gate) and `close_probes` (the close commands' node-closure
 /// gate) share one parser so the two gates cannot drift on what counts as a
 /// declared probe list. Anything else declared under `key` is `Unparseable`.
 fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
@@ -252,7 +252,7 @@ fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
             // A plain scalar (`close_probes: cmd`) is ONE probe. The plan
             // schema advertises `str | list`, so refusing the scalar here made
             // a documented-legal declaration an unevaluable gate (a hard
-            // refusal at the close verbs). A YAML block scalar (`|` / `>`) puts
+            // refusal at the close commands). A YAML block scalar (`|` / `>`) puts
             // the value on the following lines and is still unreadable here.
             if !rest.is_empty() {
                 if rest.starts_with('|') || rest.starts_with('>') {
@@ -467,6 +467,19 @@ fn undeterminable_marker(cause: &str) -> Value {
     serde_json::json!({ "_undeterminable": cause })
 }
 
+/// True when the plan's frontmatter reads `domain: code`, the same test
+/// validate-plan.sh applies before it refuses a probe-less plan.
+fn plan_is_code_domain(content: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return false;
+    }
+    lines
+        .take_while(|l| l.trim() != "---")
+        .filter_map(|l| l.trim().strip_prefix("domain:"))
+        .any(|v| v.trim().trim_matches(|c| c == '"' || c == '\'') == "code")
+}
+
 /// True when any prior loop_check fire for this session recorded probe results.
 /// Used to fail closed on an unreadable plan only when probes are known to have
 /// existed - a probe-less session with a stale plan_path keeps today's behavior.
@@ -539,6 +552,17 @@ fn plan_declared_probes(
         other => other,
     };
     let probes = match parse_done_probes(&plan) {
+        // A code plan with no probe would let DonePRGreen fire on activity
+        // alone; validate-plan refuses it too, this is the runtime backstop.
+        ProbeDecl::None if plan_is_code_domain(&plan) => {
+            return Err(ProbeGate::Fail {
+                reason: format!(
+                    "done_probes missing: code plan {} declares none, so nothing checks the goal; add a probe (a docs or research plan sets domain: docs|research)",
+                    plan_path.unwrap_or("(unset)")
+                ),
+                results: undeterminable_marker("code-plan-without-probes"),
+            })
+        }
         ProbeDecl::None => return Ok((Vec::new(), decl)),
         ProbeDecl::Unparseable => {
             return Err(ProbeGate::Fail {
@@ -960,7 +984,7 @@ pub(crate) fn acceptance_coverage(
 /// `fno-agents probe-run --plan <path> --key <name> --cwd <root> --json`.
 ///
 /// Evaluates one named probe list (`done_probes` or `close_probes`) from a plan
-/// doc and exits 0 when every probe passes. The close verbs shell out to this
+/// doc and exits 0 when every probe passes. The close commands shell out to this
 /// for `close_probes`, mirroring how `active_backlog` shells out to
 /// `fno backlog done`: the node-closure gate and the session-termination gate
 /// share ONE runner. The process-group kill, the pipe-buffer drain, and
@@ -972,6 +996,9 @@ pub(crate) fn acceptance_coverage(
 pub fn run_probe_run(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("main-ci") {
         return crate::main_ci_proof::run(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("recheck") {
+        return crate::symptom_recheck::run(&args[1..]);
     }
     let (code, json) = decide_probe_run(args);
     println!("{json}");
@@ -1441,6 +1468,30 @@ mod done_probe_tests {
             _ => panic!("over-cap declaration must refuse"),
         }
         assert!(!sentinel.exists(), "an over-cap list must not execute");
+    }
+
+    #[test]
+    fn a_code_plan_without_probes_holds_done_and_a_docs_plan_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let events = tmp.path().join("events.jsonl");
+        let plan = tmp.path().join("plan.md");
+        let eval = |p: &Path| {
+            evaluate_done_probes(
+                p.to_str(),
+                None,
+                tmp.path(),
+                &events,
+                "s1",
+                Duration::from_secs(10),
+            )
+        };
+        std::fs::write(&plan, fm("domain: code\nstatus: ready")).unwrap();
+        match eval(&plan) {
+            ProbeGate::Fail { reason, .. } => assert!(reason.contains("done_probes missing")),
+            other => panic!("code plan without probes must hold done, got {other:?}"),
+        }
+        std::fs::write(&plan, fm("domain: docs\nstatus: ready")).unwrap();
+        assert!(matches!(eval(&plan), ProbeGate::Absent));
     }
 
     #[test]

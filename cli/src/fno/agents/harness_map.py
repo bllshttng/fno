@@ -34,7 +34,6 @@ Verified facts, each dated where it differs from the 2026-07-13 spike:
 """
 from __future__ import annotations
 
-import json
 import re
 import tomllib
 from copy import deepcopy
@@ -43,16 +42,16 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Mapping, Optional
 
-from fno.config._dispatch_verbs import canonical_verb_key, is_verb_seed, parse_verb_token
+from fno.config._dispatch_commands import canonical_command_key, is_command_seed, parse_command_token
 from fno.config_io import _global_settings_path
 
-# Command surface: HOW a footnote slash `/verb` is natively invoked on a harness.
+# Command surface: HOW a footnote slash `/command` is natively invoked on a harness.
 # One axis, the single source both dispatch surfaces normalize through
 # (autonomous `/target thread` + `/agent spawn`):
-#   "slash"       claude, agy, opencode -> "/[slash_prefix]verb ..." native slash
+#   "slash"       claude, agy, opencode -> "/[slash_prefix]command ..." native slash
 #                 command; per-harness `slash_prefix` ("" for claude/agy, "fno:"
 #                 for opencode's plugin-namespaced palette + `run --command`)
-#   "codex-skill" codex                 -> "$fno:verb ..." plugin skill expansion
+#   "codex-skill" codex                 -> "$fno:command ..." plugin skill expansion
 #   "refused"     gemini                -> a loud error naming agy (deprecated)
 _SLASH, _CODEX_SKILL, _REFUSED = "slash", "codex-skill", "refused"
 
@@ -93,55 +92,55 @@ _TARGET_FAMILY = _carrier_vocab()[0]
 
 
 @cache
-def _shipped_verbs() -> frozenset:
-    """One cached read of the plugin surface; `footnote_verbs` is the caller."""
+def _shipped_commands() -> frozenset:
+    """One cached read of the plugin surface; `footnote_commands` is the caller."""
     from fno.paths import resolve_plugin_script
 
-    verbs: set[str] = set()
+    command_names: set[str] = set()
     try:
         skills = resolve_plugin_script("skills")
-        verbs.update(p.name for p in skills.iterdir() if (p / "SKILL.md").is_file())
+        command_names.update(p.name for p in skills.iterdir() if (p / "SKILL.md").is_file())
     except OSError:
         pass
     try:
         commands = resolve_plugin_script("commands")
-        verbs.update(p.stem for p in commands.glob("*.md") if p.is_file())
+        command_names.update(p.stem for p in commands.glob("*.md") if p.is_file())
     except OSError:
         pass
-    return frozenset(verbs)
+    return frozenset(command_names)
 
 
-def footnote_verbs() -> frozenset:
-    """The shipped footnote verb roster: every ``skills/<name>/SKILL.md`` and
+def footnote_commands() -> frozenset:
+    """The shipped footnote command roster: every ``skills/<name>/SKILL.md`` and
     every ``commands/<name>.md`` the plugin ships.
 
     Read from the shipped plugin surface, never a retyped literal: a literal
-    copy goes stale the first time a verb ships, and the failure is silent -
-    the new verb simply stops normalizing on codex and nothing notices.
+    copy goes stale the first time a command ships, and the failure is silent -
+    the new command simply stops normalizing on codex and nothing notices.
 
     Empty on any resolution or read failure, which on the codex surface leaves
-    every bare ``/verb`` literal - pass-through is the safe direction - while
-    the plugin-qualified ``/fno:verb`` spelling keeps working, since its
-    namespace alone proves it is a footnote verb.
+    every bare ``/command`` literal - pass-through is the safe direction - while
+    the plugin-qualified ``/fno:command`` spelling keeps working, since its
+    namespace alone proves it is a footnote command.
 
     A good answer caches; an EMPTY one does not. Empty means the plugin
-    surface did not RESOLVE, never that footnote ships no verbs, and the
+    surface did not RESOLVE, never that footnote ships no commands, and the
     resolver reads an env hint first, so the next call can succeed. Caching
     the failure froze the degraded answer for the whole process, silently: a
-    codex worker gets `/target`, which codex reads as prose, not a verb."""
-    verbs = _shipped_verbs()
-    if not verbs:
-        _shipped_verbs.cache_clear()
-    return verbs
+    codex worker gets `/target`, which codex reads as prose, not a command."""
+    commands = _shipped_commands()
+    if not commands:
+        _shipped_commands.cache_clear()
+    return commands
 
 
-footnote_verbs.cache_clear = _shipped_verbs.cache_clear  # type: ignore[attr-defined]
+footnote_commands.cache_clear = _shipped_commands.cache_clear  # type: ignore[attr-defined]
 
 
 def normalize_legacy_no_merge(command: str) -> str:
     """Rewrite the legacy bare ``no-merge`` token to the flag in a
     /target-family command. Scoped to the two positions the legacy injectors
-    actually produced (round 12): the token directly after the verb
+    actually produced (round 12): the token directly after the command
     (``/target no-merge <arg>``, the documented spelling) or trailing
     (``/target <arg> no-merge``, the old normalize.sh append and keep_going
     build). A MID-STRING token is left alone on purpose: a /target argument is
@@ -175,7 +174,7 @@ def is_target_family(message: str) -> bool:
 
 def inject_no_merge_into_command(command: str) -> str:
     """Insert the ``--no-merge`` flag into a /target-family command, right
-    after the verb token. Skipped when a standalone flag is already present
+    after the command token. Skipped when a standalone flag is already present
     (word-padded, so ``--no-merge-guard`` never counts). Non-family commands
     pass through untouched: a prose brief carries its posture in prose."""
     _spellings, flag, _legacy = _carrier_vocab()
@@ -196,37 +195,6 @@ def message_carries_no_merge(message: str) -> bool:
     (round 8, angle A)."""
     _spellings, flag, _legacy = _carrier_vocab()
     return is_target_family(message) and f" {flag} " in f" {message} "
-
-
-def apply_merge_posture_env(message: str, *, note_stream=None) -> str | None:
-    """Set or clear ``TARGET_NO_MERGE`` in ``os.environ`` from the message,
-    and return the prior value (so a caller restoring the process env captured
-    it BEFORE the mutation). Flag arms; a family bare token outside flag
-    position neither arms nor clears (round 11); a family message with no token
-    clears an inherited carrier loudly (round 8); non-family clears NOTHING (a
-    leak errs toward refusing merges, the safe side). The binary's spawn lane
-    answers from the same table."""
-    import os
-    import sys
-
-    _spellings, flag, legacy = _carrier_vocab()
-    if note_stream is None:
-        note_stream = sys.stderr
-    prior = os.environ.get("TARGET_NO_MERGE")
-    if message_carries_no_merge(message):
-        os.environ["TARGET_NO_MERGE"] = "1"
-    elif is_target_family(message) and f" {legacy} " in f" {message} ":
-        pass
-    elif is_target_family(message):
-        if prior:
-            print(
-                "fno agents spawn: inherited TARGET_NO_MERGE cleared; the "
-                "/target-family message carries no --no-merge flag and the "
-                "message is authoritative",
-                file=note_stream,
-            )
-        os.environ.pop("TARGET_NO_MERGE", None)
-    return prior
 
 
 def _refused_reason(harness: str) -> str:
@@ -403,14 +371,19 @@ def _validate_row(harness: str, caps: dict) -> None:
     model_switch = caps["model_switch_strategy"]
     expected_switch_fields = {
         "kind", "tokens", "effort_labels", "status_command", "status_pattern",
+        # Optional: the status-bar fallback a truncated /status frame needs.
+        "status_bar_pattern",
     }
-    if not isinstance(model_switch, dict) or set(model_switch) != expected_switch_fields:
+    if not isinstance(model_switch, dict) or set(model_switch) - expected_switch_fields:
         raise _contract_error(harness, "model_switch_strategy", "malformed strategy")
     switch_kind = model_switch["kind"]
     switch_tokens = model_switch["tokens"]
     effort_labels = model_switch["effort_labels"]
     status_command = model_switch["status_command"]
     status_pattern = model_switch["status_pattern"]
+    status_bar_pattern = model_switch.get("status_bar_pattern")
+    if status_bar_pattern is not None and not isinstance(status_bar_pattern, str):
+        raise _contract_error(harness, "model_switch_strategy", "malformed status bar pattern")
     if switch_kind not in _MODEL_SWITCH_KINDS:
         raise _contract_error(harness, "model_switch_strategy", "unknown kind")
     if not isinstance(switch_tokens, list) or not all(
@@ -438,6 +411,10 @@ def _validate_row(harness: str, caps: dict) -> None:
         )
     if switch_kind == "unsupported":
         if switch_tokens or effort_labels or status_command or status_pattern:
+            raise _contract_error(
+                harness, "model_switch_strategy", "unsupported strategy has executable data"
+            )
+        if status_bar_pattern is not None:
             raise _contract_error(
                 harness, "model_switch_strategy", "unsupported strategy has executable data"
             )
@@ -543,23 +520,23 @@ def normalize_command(command: str, harness: str) -> str:
         (prefix ``""`` for claude/agy -> verbatim; ``"fno:"`` for opencode's
         plugin-namespaced palette + ``opencode run --command`` -> ``/fno:target``)
       - ``codex-skill`` (codex)           -> ``$fno:target --no-merge {id}`` (swap the
-        leading ``/verb`` for ``$fno:verb``; codex exec expands the plugin skill)
+        leading ``/command`` for ``$fno:command``; codex exec expands the plugin skill)
       - ``refused`` (gemini)              -> a loud :class:`DispatchResolveError`
         naming agy; the harness is deprecated and has no dispatch lane.
 
     ``command`` is expected to lead with ``/`` (a footnote slash command); a
     non-slash string is returned unchanged for the slash/codex surfaces (nothing
     to rewrite). So is a slash token with an INTERNAL slash (``/usr/bin/script
-    {id}``): an absolute path is nobody's footnote verb, and the guard lives
+    {id}``): an absolute path is nobody's footnote command, and the guard lives
     HERE rather than at one call site so every caller inherits it - it used to
     live in ``resolve_dispatch`` alone, and the direct callers bypassed it and
     captured an absolute path into a phantom ``$fno:usr/bin/script`` skill.
 
-    On the codex surface a bare ``/verb`` is rewritten only when it names a
-    shipped footnote verb (:func:`footnote_verbs`) that is not also a declared
-    native verb of the harness (``native_verbs`` in the capability table) -
-    native codex verbs (``/review``, ``/model``, ...) pass through untouched.
-    The plugin-qualified ``/fno:verb`` spelling is unambiguous by namespace and
+    On the codex surface a bare ``/command`` is rewritten only when it names a
+    shipped footnote command (:func:`footnote_commands`) that is not also a declared
+    native command of the harness (``native_verbs`` in the capability table) -
+    native codex commands (``/review``, ``/model``, ...) pass through untouched.
+    The plugin-qualified ``/fno:command`` spelling is unambiguous by namespace and
     always rewrites. Pure string transform; no config or IO."""
     caps = capabilities(harness)  # loud on an unknown harness, before anything
     surface = caps["command_surface"]
@@ -570,10 +547,10 @@ def normalize_command(command: str, harness: str) -> str:
         raise DispatchResolveError(_refused_reason(harness))
     cmd = command.strip()
     first_word = cmd.split(maxsplit=1)[0] if cmd else ""
-    seed = parse_verb_token(first_word) if first_word else None
+    seed = parse_command_token(first_word) if first_word else None
     if seed is None:
         return cmd
-    verb, namespaced = seed
+    command_name, namespaced = seed
     tail = cmd[len(first_word):]
     slash_sigil = first_word.startswith("/")
     if surface == _CODEX_SKILL:
@@ -581,111 +558,79 @@ def normalize_command(command: str, harness: str) -> str:
             return cmd
         # The namespaced spelling is unambiguous by namespace: it always
         # rewrites, native or not (``/fno:review`` names the fno lane even
-        # though bare ``/review`` is codex's native verb).
+        # though bare ``/review`` is codex's native command).
         if namespaced:
-            return "$fno:" + verb + tail
-        # A bare ``/verb`` is rewritten only when it names a shipped footnote
-        # verb that is not also a declared native verb of this harness: an
-        # unknown or native verb stays literal instead of being captured into
+            return "$fno:" + command_name + tail
+        # A bare ``/command`` is rewritten only when it names a shipped footnote
+        # command that is not also a declared native command of this harness: an
+        # unknown or native command stays literal instead of being captured into
         # a phantom ``$fno:`` skill. ``review`` is the collision case - bare
-        # ``/review`` on codex is the NATIVE verb, and the fno lane is reached
+        # ``/review`` on codex is the NATIVE command, and the fno lane is reached
         # namespaced, as ``/fno:review``.
         native = {v for v in caps.get("native_verbs") or () if isinstance(v, str)}
-        if "/" + verb in native:
+        if "/" + command_name in native:
             return cmd
-        # The dispatch verb is footnote's own: a STATIC fact. The roster read
+        # The dispatch command is footnote's own: a STATIC fact. The roster read
         # below needs a resolvable plugin root, and an unresolvable one returns
         # an empty roster indistinguishable from "not ours", which rendered
         # `/target` for a codex worker as an ordinary pass-through. Not caching
         # that empty answer stops it freezing; this bypass makes it impossible.
         if first_word in _TARGET_FAMILY:
-            return "$fno:" + verb + tail
-        if verb not in footnote_verbs():
+            return "$fno:" + command_name + tail
+        if command_name not in footnote_commands():
             return cmd
-        return "$fno:" + verb + tail
+        return "$fno:" + command_name + tail
     if surface == _SLASH:
         # Plugin-namespace prefix swap only (never re-tokenize): claude/agy inject
-        # the skill natively (""), opencode's fno plugin exposes it as `/fno:verb`.
-        # The single rule renders every verb - no per-verb allowlist (AC4-EDGE).
+        # the skill natively (""), opencode's fno plugin exposes it as `/fno:command`.
+        # The single rule renders every command - no per-command allowlist (AC4-EDGE).
         prefix = caps.get("slash_prefix", "")
-        # A native verb of the harness stays literal: `/undo` on opencode is
-        # opencode's own palette verb, and namespacing it would mint a phantom
+        # A native command of the harness stays literal: `/undo` on opencode is
+        # opencode's own palette command, and namespacing it would mint a phantom
         # `/fno:undo` plugin skill. Same `native_verbs` roster the codex-skill
         # branch reads; the claude/agy rows are inert here only because their
         # prefix is empty.
         native = {v for v in caps.get("native_verbs") or () if isinstance(v, str)}
         if not namespaced and not slash_sigil:
             return cmd
-        if not namespaced and "/" + verb in native:
+        if not namespaced and "/" + command_name in native:
             return cmd
         # Idempotent over the builtin rung: the resolve seam re-normalizes the
-        # already-namespaced `/fno:verb`, so re-applying would double it.
+        # already-namespaced `/fno:command`, so re-applying would double it.
         if namespaced and prefix and first_word.startswith("/" + prefix):
             return cmd
         # The Rust renderer's order: the row's prefix first, then agy, `fno:`.
         if namespaced and prefix:
-            return "/" + prefix + verb + tail
+            return "/" + prefix + command_name + tail
         if namespaced and harness == "agy":
-            return "/" + verb + tail
+            return "/" + command_name + tail
         if namespaced:
-            return "/fno:" + verb + tail
-        return "/" + prefix + verb + tail
+            return "/fno:" + command_name + tail
+        return "/" + prefix + command_name + tail
     return cmd
 
 
-# zsh reads the `:t` in "$fno:target" as a modifier on the empty `$fno`, so the
-# verb loses its first letter too. Measured: these letters vanish without an
-# error, `s` fails loudly, and every other letter survives as `:verb`.
-_ZSH_EATEN_LETTERS = frozenset("acelqrtu")
-
-
-def lost_verb_refusal(message: str) -> Optional[str]:
-    """The refusal for a payload whose ``$fno:`` prefix the calling shell ate,
-    or None when the payload is intact.
-
-    Inside double quotes a shell expands ``$fno`` to nothing before fno runs.
-    bash leaves ``:target``; zsh leaves ``arget``. The worker reads either as
-    prose, and the spawn still returns a live receipt, so the loss shows up
-    an hour later as a worker that did not run the verb.
-
-    The zsh shape is matched only for verbs longer than four letters: the
-    short remainders (``dd``, ``aw``) are ordinary words."""
-    verbs = set(footnote_verbs()) | {v[1:] for v in _TARGET_FAMILY_VERBS}
-    lost = {":" + v: v for v in verbs}
-    lost.update({v[1:]: v for v in verbs if len(v) > 4 and v[0] in _ZSH_EATEN_LETTERS})
-    for token in message.split():
-        verb = lost.get(token)
-        if verb is not None:
-            return (
-                f"the payload has {token!r} where '$fno:{verb}' belongs. The shell "
-                "expanded $fno to nothing inside double quotes, and zsh also drops "
-                "the first letter of the verb. Single-quote the payload: "
-                f"'$fno:{verb} ...'"
-            )
-    return None
-
-
 def cannot_fire_refusal(message: str, harness: str) -> Optional[str]:
-    """The refusal for a verb-shaped seed whose verb cannot expand, or None.
+    """The refusal for a command-shaped seed whose command cannot expand, or None.
 
-    An intact ``$fno:verb`` seed still lands as prose when the footnote plugin
+    An intact ``$fno:command`` seed still lands as prose when the footnote plugin
     is not enabled in the codex home this machine resolves. ``missing`` and
     ``wrong-channel`` are the measured-absent states and refuse; an unreadable
     state (no codex CLI on PATH) fails open, because the spawn fails on its
     own there.
     """
-    if harness != "codex" or not is_verb_seed(message):
+    if harness != "codex" or not is_command_seed(message):
         return None
-    from fno.setup.codex_plugin import CodexPluginError, inspect_freshness
+    from fno.rust_binary import call_binary_json
 
-    try:
-        status = inspect_freshness().get("status")
-    except (CodexPluginError, OSError, ValueError):
+    error, verdict = call_binary_json("plugin-install", ["--status", "--json", "codex"], timeout=300)
+    if error is not None or not isinstance(verdict, dict):
         return None
+    status = verdict.get("status")
     if status in ("missing", "wrong-channel"):
         return (
             f"the seed invokes {message.strip().split()[0]!r} but the footnote "
-            "plugin is not enabled for codex on this machine, so the verb would "
+            "plugin is not enabled for codex on this machine, so the command would "
             "not fire and the worker would read the seed as prose. Install it "
             "with 'fno config plugin install codex' and spawn again."
         )
@@ -701,7 +646,7 @@ def resolve_seed_node(message: str) -> tuple[Optional[str], Optional[str]]:
     first = message.strip().splitlines()[0].split()
     if len(first) < 2 or first[1].startswith(("-", "/", "$")) or first[1] in _TARGET_SEED_CONTROL:
         return None, None
-    if parse_verb_token(first[0]) != ("target", True):
+    if parse_command_token(first[0]) != ("target", True):
         return None, None
     from fno.graph.fuzzy import resolve_id, resolve_node, search_entries
     from fno.graph.load import load_graph
@@ -720,25 +665,12 @@ def resolve_seed_node(message: str) -> tuple[Optional[str], Optional[str]]:
                   " id, slug, bare hex, or title word that resolves." % (first[1], nearest))
 
 
-def verb_fired_marker(message: str) -> Optional[str]:
-    """The command that proves a ``/fno:target <node>`` seed actually fired.
-
-    The marker is the claim naming the spawned session as holder; a busy worker fired nothing.
-    """
-    first = message.strip().splitlines()[0].split()
-    if len(first) < 2 or first[1].startswith(("-", "/", "$")):
-        return None
-    if parse_verb_token(first[0]) != ("target", True):
-        return None
-    return f"fno agents claim status node:{resolve_seed_node(message)[0] or first[1]}"
-
-
 def render_seed(message: str, harness: str) -> str:
-    """Prose verbatim; a verb-shaped seed gate-checked then normalized by the
-    one shared fire-test predicate (``is_verb_seed``, x-bbbb)."""
-    from fno.config._dispatch_verbs import is_verb_seed
+    """Prose verbatim; a command-shaped seed gate-checked then normalized by the
+    one shared fire-test predicate (``is_command_seed``, x-bbbb)."""
+    from fno.config._dispatch_commands import is_command_seed
 
-    if not is_verb_seed(message):
+    if not is_command_seed(message):
         return message
     refusal = cannot_fire_refusal(message, harness) or resolve_seed_node(message)[1]
     if refusal:
@@ -746,72 +678,10 @@ def render_seed(message: str, harness: str) -> str:
     return normalize_command(message, harness)
 
 
-def spawn_seed_receipt_fields(effective_message: str) -> dict[str, str]:
-    """The receipt fields a delivered seed contributes; prose seeds get none.
-
-    ``verb_fired`` is ``pending`` because a busy worker fired nothing; the
-    marker names the command whose pass settles it.
-    """
-    fields = {"effective_message": effective_message, "verb_fired": "pending"}
-    marker = verb_fired_marker(effective_message)
-    if marker:
-        fields["verb_marker"] = marker
-    return fields
-
-
-def spawn_seed_receipt_fragment(effective_message: Optional[str]) -> str:
-    """The JSON fragment form of :func:`spawn_seed_receipt_fields`; "" for prose."""
-    if effective_message is None:
-        return ""
-    return "".join(
-        f", {json.dumps(key)}: {json.dumps(value)}"
-        for key, value in spawn_seed_receipt_fields(effective_message).items()
-    )
-
-
-def _loop_gate_answer(harness: str, command: str) -> dict:
-    try:
-        from fno.rust_binary import call_binary_json
-        from fno.setup.integration import _pi_extension_src
-    except ImportError:
-        return {"refusal": (
-            f"refused: the loop gate for harness {harness!r} could not be read "
-            f"(its transport failed to import), so the looping command "
-            f"{command!r} is not admitted."
-        )}
-    args = ["--target-family", "--message", command, "--harness", harness,
-            "--extension-src", str(_pi_extension_src())]
-    err, answer = call_binary_json("status", args, timeout=45)
-    if err is not None or not isinstance(answer, dict):
-        return {"refusal": (
-            f"refused: the loop gate for harness {harness!r} could not be read "
-            f"({err or 'unreadable answer'}), so the looping command {command!r} "
-            f"is not admitted. An fno-agents older than this fno answers "
-            f"'unknown argument'; run 'fno doctor update --rust'."
-        )}
-    return answer
-
-
-def check_loop_participation(harness: str, command: str) -> None:
-    """Refuse a LOOPING dispatch at a harness that cannot close a loop.
-
-    ``command`` is judged by :func:`is_target_family`, so a one-shot passes
-    untouched. The decision lives in ``capability_leaves.rs`` (the
-    ``fno-agents status --target-family --harness`` leaf), which reads the
-    same packaged table and asks the per-harness install probes; an
-    unreadable leaf refuses, never admits.
-    """
-    if not is_target_family(command):
-        return
-    refusal = _loop_gate_answer(harness, command).get("refusal")
-    if refusal:
-        raise DispatchResolveError(refusal)
-
-
 def dispatch_command(harness: str, allow_merge: bool = False) -> str:
     """Builtin autonomous dispatch command for ``harness``: the per-harness
     normalization of ``/target --no-merge {id}``, or of ``/target {id}`` when
-    ``allow_merge``. ``config.dispatch.command`` and a node ``dispatch_verb``
+    ``allow_merge``. ``config.dispatch.command`` and a node ``dispatch_command``
     override this in :func:`resolve_dispatch`, which is also where
     ``config.auto_merge.grant`` is read into ``allow_merge``.
 
@@ -888,8 +758,9 @@ def _lane_alias_normalized(override: dict) -> dict:
 
 
 def _deep_merge_row(base: dict, override: dict) -> dict:
-    """Recursive per-field merge, config winning: the ``_DEFAULT_PROVIDERS``
-    precedent, one level deeper so a dotted table header
+    """Recursive per-field merge, config winning: the per-field provider
+    merge in crates/fno-agents/src/provider_route.rs as the precedent, one
+    level deeper so a dotted table header
     (``[harness.x.resume_strategy.forms.interactive_attach]``) can correct one
     lane without rewriting the other four. A non-dict value replaces whole."""
     merged = deepcopy(base)
@@ -1117,47 +988,6 @@ def thread_seatable(harness: str) -> bool:
     return spawn_state(harness) == "native"
 
 
-def thread_uncarried(
-    harness: str,
-    axes: dict[str, object],
-    passthrough: list[str] | None,
-) -> str | None:
-    """The first launch flag this harness's thread lane cannot carry, or None.
-
-    Reads the ``[harness.<name>.thread]`` carrier row, else the ``keeper``
-    row. ``axes`` maps ``keeper_thread.LAUNCH_AXES`` axis names to set values;
-    ``passthrough`` is the fenced ``--`` token list. A non-None answer
-    demotes the spawn to the pane; it never refuses on the substrate.
-    """
-    caps = _BUNDLED_CAPS.get(harness) or {}
-    arm = caps.get("thread") or caps.get("keeper")
-    if not arm:
-        return None
-    carries = set(arm.get("carries") or [])
-    from fno.agents.keeper_thread import LAUNCH_AXES
-
-    for flag, axis in LAUNCH_AXES:
-        if axis not in carries and axes.get(axis):
-            return flag
-    covered = set(arm.get("passthrough") or [])
-    if "*" in covered:
-        return None
-    skip_value = False
-    for token in passthrough or []:
-        if skip_value:
-            skip_value = False
-            continue
-        if token in covered:
-            # A carried spelling consumes its value token too: `-c` and
-            # `model_reasoning_effort=high` arrive as two fenced tokens.
-            skip_value = True
-        elif token.split("=", 1)[0] in covered:
-            continue
-        else:
-            return token
-    return None
-
-
 def substrate_default(harness: str) -> str:
     """Per-harness default substrate: ``thread`` where the spawn claim reads
     ``native`` (a journey-proven launch seam), else ``headless``. Pane
@@ -1217,46 +1047,14 @@ def effort_values(harness: str) -> list[str]:
     return []
 
 
-#: claude's own --permission-mode vocabulary. One home: the capability
-#: table's claude row (`permission_modes`), whose authority is claude's
-#: --help. The packaged copy this module already loads is the source, so the
-#: list cannot drift between the Rust and Python lanes.
-CLAUDE_PERMISSION_MODES = frozenset(
-    tomllib.loads(_PACKAGED_CONTRACT_TEXT)["harness"]["claude"]["permission_modes"]
-)
-
-CLAUDE_PERMISSION_HELP = (
-    "claude " + "|".join(sorted(CLAUDE_PERMISSION_MODES)) + " (exact passthrough)"
-)
-
-#: The full --permission-mode help text: every harness's answer vocabulary is
-#: a harness_map question, so the whole option help lives beside the maps.
-PERMISSION_MODE_HELP = (
-    "Permission/approval mode forwarded to the provider. "
-    f"Provider-native values, fail-closed: {CLAUDE_PERMISSION_HELP}; "
-    "gemini --approval-mode "
-    "(or 'yolo'); codex a shortcut (full-auto|yolo) or <sandbox>:"
-    "<approval> (e.g. workspace-write:on-request); opencode 'auto'; agy "
-    "'skip'; cursor-agent 'force' or 'yolo'. An unmappable value errors "
-    "before spawn. Mutually exclusive "
-    "with --yolo. Honored on claude thread/headless (Rust or Python "
-    "fallback); codex/gemini thread/headless one-shots reject it (use "
-    "--substrate pane)."
-)
-
-
 _VALID_SUBSTRATES = ("thread", "headless", "pane")
-# US3: the built-in verb allowlist (config.dispatch.allowed_verbs overrides).
-_DEFAULT_ALLOWED_VERBS = ("/target", "/think", "/blueprint")
+# US3: the built-in command allowlist (config.dispatch.allowed_commands overrides).
+_DEFAULT_ALLOWED_COMMANDS = ("/target", "/think", "/blueprint")
 # The env budget a brief must fit; 8 KB, measured in UTF-8 bytes (Locked
 # Decision 9 / epic Boundaries). Oversized -> explicit error, never truncation.
 _BRIEF_MAX_BYTES = 8192
 # The default command is per-harness now (each harness's `dispatch_command` in
 # _HARNESS_CAPS), not a single template - see the resolve builtin branch.
-
-
-#: The verbs the lifecycle table owns; anything else abstains.
-_TARGET_FAMILY_VERBS = ("/target", "/blueprint")
 
 
 def resolve_dispatch(
@@ -1265,7 +1063,7 @@ def resolve_dispatch(
     substrate: Optional[str] = None,
     node_id: Optional[str] = None,
     command: Optional[str] = None,
-    verb: Optional[str] = None,
+    command_name: Optional[str] = None,
     lifecycle: Optional[tuple[Optional[str], str]] = None,
     brief: Optional[str] = None,
     merge_posture: Optional[str] = None,
@@ -1275,10 +1073,10 @@ def resolve_dispatch(
 ) -> dict:
     """Map (config + context) -> the dispatch tuple. Pure; never spawns/claims.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md. Field
+    Full contract: docs/architecture/backlog-graph-command-contracts.md. Field
     precedence (each independent): harness explicit > stage table >
     ``claude``; substrate explicit > config > per-harness default; command
-    explicit > lifecycle derivation > node ``verb`` (allowlist-checked;
+    explicit > lifecycle derivation > node ``command`` (allowlist-checked;
     a graph field is a trust boundary) > ``config.dispatch.command`` >
     per-harness builtin. ``brief`` rides ``env['TARGET_BRIEF']`` only, capped
     at 8 KB, never truncated. ``route`` is the stage table's vendor lane beside
@@ -1290,21 +1088,21 @@ def resolve_dispatch(
 
     Raises :class:`DispatchResolveError` on an unknown/refused harness, a
     missing substrate lane, an unsupported autonomous pane, an unknown trigger
-    or substrate, an out-of-allowlist verb, an oversized brief, an empty or
+    or substrate, an out-of-allowlist command, an oversized brief, an empty or
     unsubstituted command, or an unanswerable node lifecycle.
     ``dispatch_cfg`` overrides the config read (for tests)."""
     decision: list[str] = []
-    lifecycle_verb: Optional[str] = None
+    lifecycle_command: Optional[str] = None
     if command is None or not command.strip():
         if lifecycle is not None:
-            lifecycle_verb, lifecycle_note = lifecycle
+            lifecycle_command, lifecycle_note = lifecycle
             decision.append(lifecycle_note)
     cfg = (
         dict(dispatch_cfg)
         if dispatch_cfg is not None
-        else _load_dispatch_cfg(settings, verb=lifecycle_verb or verb)
+        else _load_dispatch_cfg(settings, command=lifecycle_command or command_name)
     )
-    # The verb lane vendor rides the same stage-table row the harness does:
+    # The command lane vendor rides the same stage-table row the harness does:
     # an autonomous dispatch that names the harness but not the route sends a
     # routed model to the default endpoint (: HTTP 404 model_not_found).
     route_value = str(cfg.get("route", "") or "")
@@ -1397,58 +1195,58 @@ def resolve_dispatch(
         )
 
     # 3. command template. Precedence: explicit --command > lifecycle > node
-    # verb (allowlist-checked; a graph field is a trust boundary) > config
+    # command (allowlist-checked; a graph field is a trust boundary) > config
     # template > per-harness builtin. A derived /target renders through the
-    # SAME builtin rungs (suppress the raw verb and fall through); a derived
-    # /blueprint renders its own verb: the target template is target-phase.
-    # A registry verb sets skip_normalize and, with takes_node_id=false,
-    # verb_declares_no_id (both consumed below).
+    # SAME builtin rungs (suppress the raw command and fall through); a derived
+    # /blueprint renders its own command: the target template is target-phase.
+    # A registry command sets skip_normalize and, with takes_node_id=false,
+    # command_declares_no_id (both consumed below).
     skip_normalize = False
-    verb_declares_no_id = False
-    derived_blueprint = lifecycle_verb == "/blueprint"
-    if lifecycle_verb == "/target":
-        verb = None
+    command_declares_no_id = False
+    derived_blueprint = lifecycle_command == "/blueprint"
+    if lifecycle_command == "/target":
+        command_name = None
     if command is not None and command.strip():
         template = command.strip()
         decision.append("command=explicit")
     elif derived_blueprint:
-        template = f"{lifecycle_verb} {{id}}"
-        decision.append(f"command=derived({lifecycle_verb})")
-    elif verb is not None:
-        chosen_verb = verb.strip()
-        if not chosen_verb:
-            raise DispatchResolveError("explicit dispatch verb must not be empty")
-        # A plugin-qualified verb (`/fno:target`) canonicalizes to its bare form
+        template = f"{lifecycle_command} {{id}}"
+        decision.append(f"command=derived({lifecycle_command})")
+    elif command_name is not None:
+        chosen_command = command_name.strip()
+        if not chosen_command:
+            raise DispatchResolveError("explicit dispatch command must not be empty")
+        # A plugin-qualified command (`/fno:target`) canonicalizes to its bare form
         # (`/target`) before the allowlist check. The allowlist and the stored
         # command are canonical; the per-harness command_surface re-adds the
         # `/fno:` prefix at render (opencode) or leaves it bare (claude/agy). So a
-        # team that follows the "every dispatched verb is plugin-qualified"
-        # contract can set `dispatch_verb=/fno:target` without tripping the
+        # team that follows the "every dispatched command is plugin-qualified"
+        # contract can set `dispatch_command=/fno:target` without tripping the
         # bare-only allowlist and breaking the encode-before-exit tail (US7 review).
-        if parse_verb_token(chosen_verb):
-            chosen_verb = canonical_verb_key(chosen_verb)
-        _av = cfg.get("allowed_verbs")
-        allowed = list(_av) if isinstance(_av, list) else list(_DEFAULT_ALLOWED_VERBS)
-        from fno.config import resolvable_verbs
-        from fno.rust_binary import verb_call
+        if parse_command_token(chosen_command):
+            chosen_command = canonical_command_key(chosen_command)
+        _av = cfg.get("allowed_commands")
+        allowed = list(_av) if isinstance(_av, list) else list(_DEFAULT_ALLOWED_COMMANDS)
+        from fno.config import resolvable_commands
+        from fno.rust_binary import command_call
 
-        _vr = cfg.get("verb_registry")
-        registry = resolvable_verbs(_vr if isinstance(_vr, Mapping) else None, allowed)
-        descriptor = registry.get(chosen_verb)
-        if chosen_verb not in allowed and descriptor is None:
+        _vr = cfg.get("command_registry")
+        registry = resolvable_commands(_vr if isinstance(_vr, Mapping) else None, allowed)
+        descriptor = registry.get(chosen_command)
+        if chosen_command not in allowed and descriptor is None:
             raise DispatchResolveError(
-                f"dispatch verb {chosen_verb!r} is in neither the allowlist "
-                f"({', '.join(allowed)}) nor config.dispatch.verb_registry "
+                f"dispatch command {chosen_command!r} is in neither the allowlist "
+                f"({', '.join(allowed)}) nor config.dispatch.command_registry "
                 f"({', '.join(sorted(registry)) or 'empty'}); extend one of them"
             )
         if descriptor is not None:
-            # Registry verb: descriptor carries spelling, capability, claim.
+            # Registry command: descriptor carries spelling, capability, claim.
             if descriptor.requires == "skill":
-                # First token only (the verb may carry args; same contract as
+                # First token only (the command may carry args; same contract as
                 # the reviewer probe); malformed falls back to the key.
                 head = descriptor.invocation.split()
-                skill_name = (head[0] if head else chosen_verb).lstrip("/").split(":")[-1]
-                answer = verb_call(
+                skill_name = (head[0] if head else chosen_command).lstrip("/").split(":")[-1]
+                answer = command_call(
                     [
                         "review-level",
                         "capability",
@@ -1458,7 +1256,7 @@ def resolve_dispatch(
                         "--harness",
                         chosen_harness,
                         "--context",
-                        "config.dispatch.verb_registry",
+                        "config.dispatch.command_registry",
                     ],
                     {},
                 )
@@ -1466,25 +1264,25 @@ def resolve_dispatch(
                     raise DispatchResolveError(answer["reason"])
             if descriptor.invocations and chosen_harness not in descriptor.invocations:
                 raise DispatchResolveError(
-                    f"dispatch verb {chosen_verb!r} is not declared on harness "
-                    f"{chosen_harness!r}; config.dispatch.verb_registry declares "
+                    f"dispatch command {chosen_command!r} is not declared on harness "
+                    f"{chosen_harness!r}; config.dispatch.command_registry declares "
                     f"it on: {', '.join(sorted(descriptor.invocations))}"
                 )
             template = (descriptor.invocations or {}).get(chosen_harness, descriptor.invocation)
             if descriptor.takes_node_id:
                 template = f"{template} {{id}}"
             else:
-                verb_declares_no_id = True
-            # The descriptor already spells the verb natively; normalizing
+                command_declares_no_id = True
+            # The descriptor already spells the command natively; normalizing
             # would mint a phantom `$fno:` skill from it.
             skip_normalize = True
             decision.append(
-                f"command=registry-verb({chosen_verb}, asserts={descriptor.asserts})"
+                f"command=registry-command({chosen_command}, asserts={descriptor.asserts})"
             )
         else:
             # Slash-leading; the post-ladder seam normalizes it per-harness.
-            template = f"{chosen_verb} {{id}}"
-            decision.append(f"command=verb({chosen_verb})")
+            template = f"{chosen_command} {{id}}"
+            decision.append(f"command=command({chosen_command})")
     else:
         # Per-harness builtin: the normalize of `/target --no-merge {id}` -
         # codex `$fno:target`, claude/agy `/target`, opencode `/fno:target`, gemini
@@ -1492,7 +1290,7 @@ def resolve_dispatch(
         #
         # The merge posture comes from config.auto_merge.grant (/).
         # It applies to the builtin only: an explicit `command` or a node
-        # `dispatch_verb` already spells out what to run, and silently editing
+        # `dispatch_command` already spells out what to run, and silently editing
         # a caller's own template would be the surprising read.
         _cmd = cfg.get("command")
         _allow_merge = cfg.get("auto_merge") is True or posture == "allow"
@@ -1509,7 +1307,7 @@ def resolve_dispatch(
 
     if not template:
         raise DispatchResolveError("resolved command is empty")
-    # Single normalization seam: a footnote slash command (`/verb ...`)
+    # Single normalization seam: a footnote slash command (`/command ...`)
     # is canonical claude syntax on EVERY rung - normalize it once here, per the
     # chosen harness, before `{id}` substitution. This stops the config and
     # explicit rungs handing a codex worker a raw `/target` (or opencode an
@@ -1517,7 +1315,7 @@ def resolve_dispatch(
     # (absolute paths pass through) lives INSIDE normalize_command, so this
     # call is unguarded by design and every caller shares one implementation.
     # Non-slash templates (`$fno:...`) pass through unchanged, and the call is
-    # idempotent over the builtin/verb rungs' output.
+    # idempotent over the builtin/command rungs' output.
     normalized_cmd = template if skip_normalize else normalize_command(template, chosen_harness)
     if normalized_cmd != template:
         template = normalized_cmd
@@ -1525,12 +1323,12 @@ def resolve_dispatch(
     # Resolution is read-only. The spawn door checks loop readiness after it
     # has the actual caller session context and before it launches a worker.
     # `{id}` must appear at least once; a template may reference it more than
-    # once. A registry verb declaring takes_node_id=false is exempt: ignoring
+    # once. A registry command declaring takes_node_id=false is exempt: ignoring
     # the id is declared, not a dropped substitution.
     if node_id and "{id}" in template:
         resolved_command = template.replace("{id}", node_id.strip())
         decision.append(f"command=substituted({resolved_command})")
-    elif node_id and "{id}" not in template and not verb_declares_no_id:
+    elif node_id and "{id}" not in template and not command_declares_no_id:
         raise DispatchResolveError(
             f"command template {template!r} must contain '{{id}}' at least "
             f"once for substitution"
@@ -1580,10 +1378,10 @@ def resolve_dispatch(
         "substrate": chosen_substrate,
         "route": route_value,
         "command": resolved_command,
-        # the lifecycle-derived canonical verb, or None when the table
+        # the lifecycle-derived canonical command, or None when the table
         # abstained (bare resolve, explicit command, out-of-family declared
-        # verb) - the raw source state stays in the caller's verb_source.
-        "verb": lifecycle_verb,
+        # command) - the raw source state stays in the caller's command_source.
+        "verb": lifecycle_command,
         "command_surface": caps["command_surface"],
         "permission_bypass": list(caps["permission_bypass"]),
         "resume": caps["resume"],
@@ -1604,7 +1402,9 @@ def resolve_dispatch(
     }
 
 
-def _load_dispatch_cfg(settings: object, verb: Optional[str] = None) -> dict:
+def _load_dispatch_cfg(
+    settings: object, command: Optional[str] = None, cwd: Optional[str] = None
+) -> dict:
     """Read the dispatch config rung as a plain dict: the stage-table harness
     (with the deprecated ``dispatch.harness`` folded beneath it) plus
     ``config.dispatch`` substrate/command and the ``config.auto_merge.grant``
@@ -1626,11 +1426,24 @@ def _load_dispatch_cfg(settings: object, verb: Optional[str] = None) -> dict:
             return {}
     # One home for the harness axis (the stage table) with the deprecated
     # dispatch.harness folded beneath it; the note names the losing spelling
-    # when both were set and disagreed.
-    from fno.dispatch_flags import configured_dispatch_harness, configured_dispatch_route
+    # when both were set and disagreed. The rung answers through route-slot's
+    # configured mode now; the auto_merge grant below still reads the
+    # caller's settings object, so a stub keeps resolving its grant.
+    from fno.rust_binary import CommandUnavailable, command_call
 
-    harness_value, harness_note = configured_dispatch_harness(settings, verb=verb or "target")
-    route_value = configured_dispatch_route(settings, verb=verb or "target")
+    try:
+        payload: dict = {"mode": "configured", "command": command or "target"}
+        # A caller holding a foreign repo's settings (the /think worker
+        # targeting another project) names that root, so the rung reads the
+        # node's stage table, never the parent process's.
+        if cwd:
+            payload["cwd"] = cwd
+        answer = command_call("route-slot", payload)
+    except CommandUnavailable:
+        answer = {}
+    harness_value = answer.get("harness")
+    harness_note = answer.get("note")
+    route_value = answer.get("route") or ""
     d = getattr(settings, "dispatch", None)
     # The grant lives in config.auto_merge, NOT under dispatch, so it
     # is read before the dispatch-block gate: a settings object carrying an
@@ -1657,8 +1470,8 @@ def _load_dispatch_cfg(settings: object, verb: Optional[str] = None) -> dict:
             "route": route_value,
             "substrate": _text("substrate"),
             "command": _text("command"),
-            "allowed_verbs": list(getattr(d, "allowed_verbs", None) or []),
-            "verb_registry": dict(getattr(d, "verb_registry", None) or {}),
+            "allowed_commands": list(getattr(d, "allowed_commands", None) or []),
+            "command_registry": dict(getattr(d, "command_registry", None) or {}),
             # Strict literal compare, not truthiness: only the "dispatch"
             # grant grants (a stray truthy value or a stub block never does).
             "auto_merge": grant,

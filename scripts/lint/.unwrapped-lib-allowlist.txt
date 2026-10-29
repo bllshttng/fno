@@ -1,4 +1,4 @@
-# Sourced libraries and internal helpers that should NOT get a dedicated fno <verb> wrapper.
+# Sourced libraries and internal helpers that should NOT get a dedicated fno <command> wrapper.
 # One basename per line. Blank lines and lines starting with # are ignored.
 
 # Bash sourcing libraries
@@ -167,7 +167,7 @@ eval-sweep-throttle.sh
 
 # W8 superuser-authority enforcement (cv-b36e32b1). Sourced by
 # hooks/target-stop-hook.sh; drive_authority_active() is a thin bash consumer
-# of the EXISTING `fno agents audit drive-authority` verb (which IS the wrapped entry
+# of the EXISTING `fno agents audit drive-authority` command (which IS the wrapped entry
 # point). Pure sourcing library; no standalone CLI of its own.
 drive-authority.sh
 
@@ -175,7 +175,7 @@ drive-authority.sh
 # hooks/target-stop-hook.sh; exposes _detect_operator_override_reason and
 # handle_operator_override_if_authorized. The authorization is a genuine
 # user-authored `/target override <reason>` message detected from the
-# transcript, NOT a CLI verb (the LLM must not be able to self-authorize), so
+# transcript, NOT a CLI command (the LLM must not be able to self-authorize), so
 # there is intentionally no fno wrapper. Pure sourcing library; tests source it
 # directly. No standalone CLI of its own.
 operator-override.sh
@@ -183,9 +183,9 @@ operator-override.sh
 # frontend-craft gate (frontend-craft-gate plan). infer-has-ui.sh and
 # resolve-plan-executor.sh are thin CLIs invoked via `bash <path>` from the
 # stop hook / skill bodies. Both delegate the locked surface matcher to the
-# in-package module fno.executor._surface (the SINGLE source of truth, ported
-# from the retired infer-task-executor.sh) and have no user-facing
-# `fno <verb>` surface of their own.
+# native executor-route door behind the fno-agents binary (the SINGLE source
+# of truth since the worker-family port deleted the Python leg) and have no
+# user-facing `fno <command>` surface of their own.
 infer-has-ui.sh
 resolve-plan-executor.sh
 
@@ -199,7 +199,7 @@ resolve-plan-executor.sh
 # zero needs a live control in the same tool and scope). Invoked via
 # `bash <path>` by the scripts/ci gates (check-no-internal-refs.sh,
 # check-no-stale-spec-refs.sh) and by tests/lib/test_assert_absent.sh; the
-# calling gates ARE the entry points, so an fno verb would be a third path
+# calling gates ARE the entry points, so an fno command would be a third path
 # to the same scan. Standalone tool; no CLI of its own.
 assert-absent.sh
 
@@ -222,7 +222,7 @@ worktree-unpushed.sh
 # by scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
 # exposes _wt_emit_removal_event. It shells the wrapped entry point
 # `fno doctor event emit` (cli/src/fno/events/cli.py) with repo-first
-# resolution, so a wrapper would be a second path around the one emit verb.
+# resolution, so a wrapper would be a second path around the one emit command.
 # Pure sourcing library; no CLI of its own.
 worktree-removal-event.sh
 
@@ -239,19 +239,19 @@ worktree-occupancy.sh
 # by the bridge above: `python scripts/lib/worktree_occupancy.py <wt> <pid>...`.
 # It lives here, not in cli/src/fno, because cli/src is shrink-only net
 # (check-file-budget) and this is sweep-side tooling like worktree-status.py.
-# Its caller is the bridge; no fno verb wraps it directly.
+# Its caller is the bridge; no fno command wraps it directly.
 worktree_occupancy.py
 
 # Bounded append-log rotation (.fno/ dir-hygiene). A thin
 # `bash <path> <file> <max_bytes>` helper invoked by hooks/convo-signal-capture.sh
 # to cap convo-signals.jsonl; tests run it directly. Pure utility, not a
-# user-facing fno verb.
+# user-facing fno command.
 rotate-append-log.sh
 
 # Cross-references a worktree path against ~/.fno/agents/registry.json for
 # its real session name + live/exited status. Invoked by
 # scripts/lib/worktree-lifecycle.sh's `status` case, which IS the wrapped
-# entry point (`fno workspace worktree status` -> cli/src/fno/worktree_cli/cli.py);
+# entry point (`fno workspace worktree status` -> crates/fno/src/worktree_door.rs);
 # a second wrapper here would be a third opinion on one question.
 # tests/test-worktree-status.sh runs it directly. Pure helper, no CLI of its own.
 worktree-status.py
@@ -259,7 +259,7 @@ worktree-status.py
 # Shared post-compaction carrier selection for the two reinject hooks
 # (target-postcompact-reinject.sh and lead-postcompact-reinject.sh) plus
 # precompact-canon-doc.sh. Sourced, never executed; the hooks are the entry
-# points and need no fno verb between them and the lib. Pure sourcing
+# points and need no fno command between them and the lib. Pure sourcing
 # library; no standalone CLI of its own.
 postcompact-carrier.sh
 
@@ -285,14 +285,14 @@ rooted-writers.sh
 # scripts/diagnostics/codex-skill-load-audit.py. It must run before fno may
 # even be installed (bootstrap-era, plain python3 with a pyyaml degrade), so
 # an fno wrapper would invert the dependency; the bash scripts are the entry
-# points. Pure library + standalone CLI of its own; no fno verb wraps it.
+# points. Pure library + standalone CLI of its own; no fno command wraps it.
 skill_discovery.py
 cargo-build-dir.sh
 
 # The code-index provider detector. Invoked via `bash <path>` by
 # scripts/validate-plan.sh's Code Index Audit (the validator and its bundled
 # copies are the entry points) and by tests/test-code-index-detect.sh; an fno
-# verb would be a second path around the same detection. Standalone tool; no
+# command would be a second path around the same detection. Standalone tool; no
 # CLI of its own.
 code-index-detect.sh
 
@@ -303,5 +303,12 @@ keeper-reap.sh
 
 # The load-aware hook budget. Sourced by the optional hooks in hooks/ (see
 # docs/hooks-fail-open.md) and by tests/hooks/test_hook_budget.sh; the bound
-# and the cache are pure library, no fno verb wraps them.
+# and the cache are pure library, no fno command wraps them.
 hook-budget.sh
+
+# The synthetic-process load generator behind tests/lib/test_loadgen.sh:
+# spawns the throwaway `fno-load-...` processes that orphan-sweep and
+# process-hygiene fixtures reap. Driven by `bash <path>` from its test; no
+# fno command wraps it. (Its only cli/src mention used to be a comment in
+# the deleted Python orphans module, which is what satisfied this lint.)
+loadgen.sh

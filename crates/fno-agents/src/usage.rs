@@ -1,18 +1,18 @@
-//! The `fno-agents --help` surface: one usage line per dispatchable verb.
+//! The `fno-agents --help` surface: one usage line per dispatchable command.
 //!
 //! LIVES OUTSIDE THE BIN so the file-budget guard stays honest: the bin grew
 //! past its 5,000-line budget long ago and is shrink-only; this table is the
-//! one piece a new verb still has to touch, so it moved to a module named for
+//! one piece a new command still has to touch, so it moved to a module named for
 //! the question it answers. Display order == slice order == `--help` order.
 
-/// Usage line per dispatchable verb; the leading token is the verb name and the
+/// Usage line per dispatchable command; the leading token is the command name and the
 /// slice order is the `--help` display order. This MUST cover every routable
-/// verb (the `build_request` match arms plus the directly-dispatched specials).
-/// `test_rust_client_verbs_match_client_rs` (Python) guards client.rs<->router
-/// parity; `print_help_lists_every_routable_verb` (below) guards this display
-/// list against that set, so a new verb cannot land without a `--help` entry
+/// command (the `build_request` match arms plus the directly-dispatched specials).
+/// `test_rust_client_commands_match_client_rs` (Python) guards client.rs<->router
+/// parity; `print_help_lists_every_routable_command` (below) guards this display
+/// list against that set, so a new command cannot land without a `--help` entry
 ///.
-pub const CLIENT_VERB_USAGE: &[&str] = &[
+pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "spawn <name> --provider <p> [--substrate pane|thread|headless] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
@@ -24,9 +24,9 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     "reap [--json] [--dry-run] [--release <row>] [--keep <row>] [--unkeep <row>] [--kept]",
     "rename <name> --name <new-label>   -- renames the registry label and, for a teamed session, its team name (generation restarts at 1); old label stays an alias; harness session is untouched",
     "rename --from-journal [--apply]    -- plan registry label rebuilds from the agents journal; --apply renames",
-    "stop <name> [--force] [--cross-project]   --cross-project lets the store heal resolve a session whose cwd sits outside this project (the store-scan refusal prescribes it)",
+    "stop <name> [--force]",
     // retired-ok: help names the existing Claude callee to describe actual behavior, not to teach a direct retired command.
-    "rm <name> [--force] [--cross-project]   --force drops the registry row even when the row is LIVE or harness teardown fails; a live pane worker that cannot be stopped is still refused; a claude row's harness session is removed too (claude rm <short_id>), and claude removes that session's WORKTREE under its own guards - it keeps a worktree with uncommitted changes and refuses one holding commits it cannot confirm are saved elsewhere; a non-claude bg or headless process survives, a mux-hosted pane is killed with it; --cross-project lets the store heal resolve a session whose cwd sits outside this project (the store-scan refusal prescribes it)",
+    "rm <name> [--force]   --force drops the registry row even when the row is LIVE or harness teardown fails; a live pane worker that cannot be stopped is still refused; a claude row's harness session is removed too (claude rm <short_id>), and claude removes that session's WORKTREE under its own guards - it keeps a worktree with uncommitted changes and refuses one holding commits it cannot confirm are saved elsewhere; a non-claude bg or headless process survives, a mux-hosted pane is killed with it",
     "loop-check --state <target-state.md> --transcript <transcript.jsonl> --cwd <project-root> [--events <events.jsonl>] [--global-events <global.jsonl>] [--settings <config.toml>] [--ledger <ledger.json>] [--now <rfc3339>] [--gh-bin <path>] [--git-bin <path>]",
     "finalize --state <target-state.md> --cwd <project-root> --reason <TerminationReason> [--transcript <transcript.jsonl>]",
     "reconcile",
@@ -37,8 +37,8 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     // converts a live pane into a persistent thread under the same session
     // id. The three flags that belong to it are spelled out here because
     // this line is what `resume --help` prints.
-    "resume <name> [--print-command] [--message/-m <text>] [--cross-project] [--cwd <existing-checkout>] [--account <id>] [--substrate thread] [--dry-run] [--allow-new-id]   # --substrate thread converts a live pane into a persistent thread, keeping the session id, node, claims and team; --dry-run prints the plan and moves nothing; --allow-new-id accepts a relaunch that minted a different session id (refused on a teamed row). Both need --substrate thread. A claude session that has exited relaunches itself on a thread under its original name. Exit codes: 0 done; 13 refused (stderr names why); 16 no live process and fno could not relaunch it (stderr names the cause and the hand-run relaunch)",
-    "adopt <session-id> [--cross-project]",
+    "resume <name> [--print-command] [--message/-m <text>] [--cwd <existing-checkout>] [--account <id>] [--substrate thread] [--dry-run] [--allow-new-id]   # --substrate thread converts a live pane into a persistent thread, keeping the session id, node, claims and team; --dry-run prints the plan and moves nothing; --allow-new-id accepts a relaunch that minted a different session id (refused on a teamed row). Both need --substrate thread. A claude session that has exited relaunches itself on a thread under its original name. Exit codes: 0 done; 13 refused (stderr names why); 16 no live process and fno could not relaunch it (stderr names the cause and the hand-run relaunch)",
+    "adopt <session-id>",
     "attach <name>",
     "logs <name> [--follow] [options]",
     "loop run --driver target [options]",
@@ -48,29 +48,29 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     "digest --session <s> [--since <ts> | --since-epoch <secs>] [--json]",
     "needs [--since-epoch <secs>] [--fires-floor <n>] [--json]",
     "feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json] [--otlp]",
-    // `review-coverage` deliberately has NO entry here: the per-verb --help
-    // intercept would print a one-line usage and shadow the verb's own
+    // `review-coverage` deliberately has NO entry here: the per-command --help
+    // intercept would print a one-line usage and shadow the command's own
     // --help, which states the load-bearing contract (no way to assert
     // coverage without the reads, and the strict manifest-less defaults).
     //
     // `distress-scan` deliberately has NO entry here either, same reason:
     // it intercepts its own --help (DISTRESS_SCAN_USAGE in distress.rs)
     // with the fuller best-effort-always-exits-0 contract a one-liner would
-    // shadow, and it is a hidden verb with no external callers to discover
+    // shadow, and it is a hidden command with no external callers to discover
     // it from a top-level list.
 ];
 
-/// Return the usage line for `verb` (matched on the leading token), or `None`
-/// for an unrecognized verb.
-pub fn verb_usage(verb: &str) -> Option<&'static str> {
-    CLIENT_VERB_USAGE
+/// Return the usage line for `command` (matched on the leading token), or `None`
+/// for an unrecognized command.
+pub fn command_usage(command: &str) -> Option<&'static str> {
+    CLIENT_COMMAND_USAGE
         .iter()
         .copied()
-        .find(|usage| usage.split_whitespace().next() == Some(verb))
+        .find(|usage| usage.split_whitespace().next() == Some(command))
 }
 
-/// Full per-verb help for a verb whose contract does not fit the one-line
-/// table above; checked before `verb_usage` by the per-verb `--help`
+/// Full per-command help for a command whose contract does not fit the one-line
+/// table above; checked before `command_usage` by the per-command `--help`
 /// intercept in the bin. Same reason `review-coverage` owns its `--help`
 /// inline: the load-bearing contract has to live in a string the
 /// binary prints, next to the table entry that stays one line for the
@@ -82,7 +82,7 @@ usage: fno-agents loop-check --state <manifest> --transcript <transcript.jsonl> 
        [--author-harness <h>] [--hook-input-stdin] [--gh-bin <p>] [--git-bin <p>]
        [--fno-bin <p>] [--read-timeout-ms <n>] [--harness <h>] [--harness-session <id>]
 
-The stop-hook decision verb: it decides whether a driven session may stop,
+The stop-hook decision command: it decides whether a driven session may stop,
 and every verdict comes from external truth read fresh on each fire - PR
 existence, CI, required-bot review, plan done_probes, budget. The
 session's own claim of done is not an input.
@@ -103,10 +103,10 @@ shim forward-compat. stdout is one JSON decision; exit 0 = a decision
 (verdict allow or block), 2 = bad arguments.
 ";
 
-/// The fuller help body for `verb`, when one exists above. `None` falls
-/// through to the one-line `verb_usage` entry.
-pub fn verb_help(verb: &str) -> Option<&'static str> {
-    match verb {
+/// The fuller help body for `command`, when one exists above. `None` falls
+/// through to the one-line `command_usage` entry.
+pub fn command_help(command: &str) -> Option<&'static str> {
+    match command {
         "loop-check" => Some(LOOP_CHECK_USAGE),
         _ => None,
     }
@@ -170,7 +170,7 @@ mod tests {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(verb_help("loop-check").is_some());
+        assert!(command_help("loop-check").is_some());
         assert!(one_line.contains("target (the default)"));
         assert!(one_line.contains("target manifest"));
         assert!(one_line.contains("lead manifest"));

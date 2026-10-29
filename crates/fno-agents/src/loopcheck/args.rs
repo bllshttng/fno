@@ -17,10 +17,10 @@ pub(crate) struct LoopCheckArgs {
     pub(super) global_events_path: Option<PathBuf>,
     pub(super) settings_path: Option<PathBuf>,
     pub(super) ledger_path: Option<PathBuf>,
-    /// Override for the fleet GitHub request budget ledger (default
-    /// `$HOME/.fno/locks/github-request-budget.json`). Same hermeticity door
-    /// as `--global-events`: tests pin it so a fire never reads (or seeds)
-    /// the developer's live machine budget.
+    /// Override for the fleet GitHub request budget ledger (default: the
+    /// machine locks folder's `github-request-budget.json`). Same
+    /// hermeticity door as `--global-events`: tests pin it so a fire never
+    /// reads (or seeds) the developer's live machine budget.
     pub(super) gh_budget_ledger: Option<PathBuf>,
     pub(super) now_override: Option<String>,
     pub(super) gh_bin: String,
@@ -85,7 +85,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         .ok()
         .and_then(|v| v.parse::<u64>().ok());
 
-    // Skip the "loop-check" verb itself if present
+    // Skip the "loop-check" command itself if present
     let args = if args.first().map(|s| s.as_str()) == Some("loop-check") {
         &args[1..]
     } else {

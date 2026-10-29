@@ -1,7 +1,7 @@
 """Tests for `fno backlog contain` and the containment contract it stamps.
 
 Covers:
-- the contain verb: a done-owner refusal, target refusals (live claim / open
+- the contain command: a done-owner refusal, target refusals (live claim / open
   PR) with batch atomicity
 - ``_container_ids`` treating an all-contained parent as a delivery unit
 - the named-dispatch redirect (``_redirect_if_contained``)
@@ -149,7 +149,7 @@ def _seed_owner_with_children(g: Path, n: int = 3) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# The verb: owner refusals
+# The command: owner refusals
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
 
 
 # ---------------------------------------------------------------------------
-# The verb: target refusals, batch atomicity
+# The command: target refusals, batch atomicity
 # ---------------------------------------------------------------------------
 
 
@@ -222,16 +222,10 @@ def test_container_ids_ignores_an_all_contained_brood():
 # The named-dispatch redirect
 # ---------------------------------------------------------------------------
 
-
-def test_redirect_if_contained_exits_2_naming_the_owner(tmp_graph, capsys):
-    from fno.target_cli import _redirect_if_contained
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    with pytest.raises(typer.Exit) as exc:
-        _redirect_if_contained(_by_id(tmp_graph)[kids[0]])
-    assert exc.value.exit_code == 2
-    assert f"ships inside {owner}'s PR" in capsys.readouterr().err
+# The redirect refusal (a contained child exits 2 naming the owner PR) is
+# characterized against its golden by the Rust parity suite
+# (crates/fno-agents/tests/target_family_parity.rs); the Python helper it
+# exercised died with the target-family port.
 
 
 # ---------------------------------------------------------------------------

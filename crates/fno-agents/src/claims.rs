@@ -29,11 +29,6 @@ pub use crate::claims_root::{
     claims_root_for, global_claims_dir, global_claims_root, global_claims_root_from,
 };
 
-/// Where the single-flight latch keeps the answers its claims protect. Beside
-/// the claims dir, under the same root, so one resolver owns both.
-const FLIGHT_DIRNAME: &str = ".fno/flight";
-const BUILD_WAITERS_DIRNAME: &str = ".fno/claim-aux/build-waiters";
-
 /// Classification of a key's current state (mirrors `types.ClaimState`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimState {
@@ -165,7 +160,7 @@ pub struct AcquireOpts {
     pub events_dir: Option<PathBuf>,
     /// `(session_id, harness)` the CALLER vouches for, overriding the ambient
     /// identity walk. The blueprint-session open passes the operator-supplied
-    /// `--harness`/`--session-id` so the record names the session the verb
+    /// `--harness`/`--session-id` so the record names the session the command
     /// promised, exactly as the Python writer did.
     pub identity: Option<(String, String)>,
     pub host: Option<String>,
@@ -242,9 +237,9 @@ pub(crate) fn claims_dir_for(root: Option<&Path>) -> Option<PathBuf> {
 /// The single-flight RECORD directory, beside the claims dir the latch locks
 /// in. This file is the one resolver that knows the `.fno/<store>` layout, so
 /// a path hand-built elsewhere is one no guard and no `$FNO_CLAIMS_ROOT` can
-/// reach.
+/// reach. Records fold under `state/` with everything else.
 pub(crate) fn flight_dir(root: &Path) -> PathBuf {
-    root.join(FLIGHT_DIRNAME)
+    crate::state_layout::place(&root.join(".fno"), "flight")
 }
 
 /// Where a cargo build held on `build:cargo` leaves its waiter marker, so the
@@ -255,7 +250,9 @@ pub(crate) fn build_waiters_dir() -> Option<PathBuf> {
     if cfg!(test) && !pinned && !crate::paths::test_root_declared() {
         return None;
     }
-    global_claims_root().map(|root| root.join(BUILD_WAITERS_DIRNAME))
+    global_claims_root().map(|root| {
+        crate::state_layout::place(&root.join(".fno"), "claim-aux").join("build-waiters")
+    })
 }
 
 /// Enumerate readable claims from the global store and an optional repository
@@ -807,7 +804,7 @@ pub(crate) fn emit_audit_event(
 /// its `.lock.d` mutex as a wire contract, so a pin only one side honors puts
 /// the two writers on different files and their mutex stops serialising them
 /// against each other.
-fn claim_events_path(events_dir: Option<&Path>, cwd: &Path) -> PathBuf {
+pub(crate) fn claim_events_path(events_dir: Option<&Path>, cwd: &Path) -> PathBuf {
     let pin = std::env::var("FNO_EVENTS_PATH").ok();
     claim_events_path_with(events_dir, cwd, pin.as_deref())
 }
@@ -1138,7 +1135,7 @@ pub(crate) fn common_event_data(rec: &ClaimRecord) -> Map<String, Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Verbs: acquire / release / status
+// Commands: acquire / release / status
 // ---------------------------------------------------------------------------
 
 pub(crate) fn validate_inputs(
@@ -1230,6 +1227,32 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "CODEX_COMPANION_TRANSCRIPT_PATH",
 ];
 
+/// The same names with their harness family, in the Python
+/// `AMBIENT_IDENTITY_ENV` order: the one list the identity strip remedy
+/// walks, so a name without a classified family is never suggested for
+/// deletion (Python's fail-closed `.get(name)` rule).
+pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
+    ("FNO_HARNESS_NAME", "fno"),
+    ("FNO_HARNESS_SESSION_ID", "fno"),
+    ("CODEX_THREAD_ID", "codex"),
+    ("CLAUDE_CODE_SESSION_ID", "claude"),
+    ("CODEX_SESSION_ID", "codex"),
+    ("GEMINI_SESSION_ID", "gemini"),
+    ("OPENCODE_SESSION_ID", "opencode"),
+    ("CLAUDE_SESSION_ID", "claude"),
+    ("CLAUDECODE", "claude"),
+    ("CLAUDECODE_SESSION_ID", "claude"),
+    ("HERMES_SESSION_ID", "hermes"),
+    ("TARGET_SESSION_ID", "fno"),
+    ("CODEX_CI", "codex"),
+    ("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex"),
+    ("CODEX_SHELL", "codex"),
+    ("CODEX_COMPANION_SESSION_ID", "codex"),
+    ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+    ("FNO_AGENT_SUBSTRATE", "fno"),
+    ("FNO_NODE_REASON", "fno"),
+];
+
 /// Clear inherited session identity before stamping the values owned by this
 /// launcher. Routing and authentication variables remain untouched.
 pub(crate) fn stamp_command_env(
@@ -1241,6 +1264,8 @@ pub(crate) fn stamp_command_env(
     for name in AMBIENT_IDENTITY_NAMES {
         command.env_remove(name);
     }
+    // The child is a session, not a hook (crates/fno-agents/src/join_marker.rs).
+    command.env_remove(crate::join_marker::HOOK_CONTEXT_ENV);
     if let Some(name) = agent_self {
         command.env("FNO_AGENT_SELF", name);
     }
@@ -1519,6 +1544,53 @@ pub fn ambient_parent_edge_from(
     (session, harness, cwd)
 }
 
+/// Why [`ambient_parent_edge`] named no session, as one diagnostic clause.
+/// Mirrors the Python spawn notice's `_lineage_reason`: the identity
+/// disposition plus the NAMES of every present marker (never their values,
+/// so the refusal is safe to paste into a report). A downgrade that says
+/// nothing is undiagnosable - the 2026-10-28 lead-session spawns fell to the
+/// dispatcher path three times across two builds with no way to tell which
+/// of the strict vendor rules zeroed the session.
+pub fn ambient_edge_reason() -> String {
+    ambient_edge_reason_from(|k| std::env::var(k).ok())
+}
+
+fn ambient_edge_reason_from(get: impl Fn(&str) -> Option<String>) -> String {
+    let (_, _, disposition) = canonical_identity_from(&get);
+    let disposition_word = match disposition {
+        CanonicalDisposition::Absent => "absent",
+        CanonicalDisposition::Invalid => "invalid",
+        CanonicalDisposition::NameOnly => "name-only",
+        CanonicalDisposition::Complete => "complete",
+    };
+    let (_, vendor_ambiguous) = vendor_identity_from(&get);
+    let mut markers: Vec<&str> = Vec::new();
+    for (marker, _harness) in HARNESS_SESSION_MARKERS
+        .iter()
+        .chain(LEGACY_HARNESS_SESSION_MARKERS.iter())
+    {
+        if get(marker).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+            markers.push(marker);
+        }
+    }
+    for pin in [FNO_HARNESS_NAME, FNO_HARNESS_SESSION_ID] {
+        if get(pin).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+            markers.push(pin);
+        }
+    }
+    let ambiguous = if vendor_ambiguous {
+        "+vendor-ambiguous"
+    } else {
+        ""
+    };
+    let names = if markers.is_empty() {
+        "no markers".to_string()
+    } else {
+        markers.join(",")
+    };
+    format!("identity disposition={disposition_word}{ambiguous}, markers={names}")
+}
+
 /// The measured codex thread shape behind the daemon's "spawn request carried
 /// no parent edge" mints: codex sets `CODEX_SESSION_ID` to the ROOT session
 /// and `CODEX_THREAD_ID` per thread, so an all-codex env legitimately carries
@@ -1629,7 +1701,7 @@ pub fn acquire(key: &str, holder: &str, opts: AcquireOpts) -> AcquireOutcome {
     acquire_with_session_witness(key, holder, opts, None)
 }
 
-/// The claim verb supplies a lazy session witness for task leases. It is
+/// The claim command supplies a lazy session witness for task leases. It is
 /// consulted when a pid-less thread claim is assessed, so absent sessions can
 /// release claims and live sessions can survive an expired lease.
 pub(crate) fn acquire_with_session_witness(
@@ -1683,14 +1755,25 @@ pub(crate) fn release_with_receipt(
 
 /// Inspect one row. Store failures retain the Corrupted refusal state.
 pub fn status(key: &str, root: Option<&Path>) -> (ClaimState, Option<ClaimRecord>) {
-    match crate::claim_store::read(key, root) {
-        Ok(Some(record)) => (crate::claim_verbs::status_verdict(&record).0, Some(record)),
-        Ok(None) => (ClaimState::Free, None),
-        Err(error) => {
-            eprintln!("claim status {key}: {error}");
-            (ClaimState::Corrupted, None)
-        }
-    }
+    status_checked(key, root).unwrap_or_else(|error| {
+        eprintln!("claim status {key}: {error}");
+        (ClaimState::Corrupted, None)
+    })
+}
+
+/// `status`, with the store failure kept, so a caller can tell an
+/// unreachable primary from a row that will not decode.
+pub fn status_checked(
+    key: &str,
+    root: Option<&Path>,
+) -> Result<(ClaimState, Option<ClaimRecord>), String> {
+    Ok(match crate::claim_store::read(key, root)? {
+        Some(record) => (
+            crate::claim_commands::status_verdict(&record).0,
+            Some(record),
+        ),
+        None => (ClaimState::Free, None),
+    })
 }
 
 /// Parse a human TTL string ("1h" / "30m" / "3600s" / bare digits) to
@@ -1825,7 +1908,7 @@ pub(crate) fn renewed_record(observed: &ClaimRecord, ttl_ms: i64) -> ClaimRecord
         // so anchoring to it would re-file the corpse under a fresh number and
         // fix nothing. `resolve_session_pid` walks up to the nearest harness
         // ancestor and is the single resolver `fno do target init` already uses to
-        // acquire (`hooks/helpers/init-target-state.sh` shells the same verb);
+        // acquire (`hooks/helpers/init-target-state.sh` shells the same command);
         // a second walk implemented here would be two producers of one answer.
         // ONLY when the move actually repairs the claim. acquired_at is held
         // below, and is_live refuses a pid whose create_time is AFTER it, so a
@@ -1858,7 +1941,7 @@ pub(crate) fn renewed_record(observed: &ClaimRecord, ttl_ms: i64) -> ClaimRecord
             // instead of closing the one this claim opened.
             // `_rebound_claim(keep_acquired_at=True)` is the python twin.
         }
-        // No resolvable durable pid (plain-shell ancestry, or the verb is
+        // No resolvable durable pid (plain-shell ancestry, or the command is
         // missing) means no better anchor exists, so the deadline moves alone -
         // byte-for-byte the pre-change behavior rather than a worse guess.
     }

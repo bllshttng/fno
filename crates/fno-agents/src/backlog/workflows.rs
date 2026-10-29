@@ -17,10 +17,10 @@ use super::merge_evidence::{
 use super::node_ref::has_node_id_prefix;
 use super::promise::resolve_promise_evidence;
 use super::settings;
-use super::supersession::normalize_surface;
+use super::supersession::{coverage_clause, normalize_surface};
 use crate::backlog::mutate_single_row;
 use crate::graph_store;
-use crate::graph_store::{has_own_plan_work, reopen_outranks_stamps};
+use crate::graph_store::{has_own_plan_work, reopen_holds_epic, reopen_outranks_stamps};
 
 // ---------------------------------------------------------------------------
 // argv parsing
@@ -270,21 +270,41 @@ fn parse_iso(value: Option<&Value>) -> Option<chrono::DateTime<chrono::FixedOffs
 
 /// Every child closed, and at least one really shipped (the
 /// children_all_closed twin). A child superseded BY this parent never counts
-/// closed against it.
+/// closed against it. A returnable deferral is parked work, so it holds the
+/// parent open. No deferral counts as shipped: a parent whose only child is
+/// deferred has built nothing.
 pub(crate) fn children_all_closed(parent: &Value, kids: &[&Value]) -> bool {
     let pid = text_at(parent, "id").unwrap_or("");
     if kids.is_empty() {
         return false;
     }
     for k in kids {
+        if is_returnable_deferral(k) {
+            return false;
+        }
         if !is_live(k) || text_at(k, "superseded_by") == Some(pid) {
             continue;
         }
         return false;
     }
     kids.iter().any(|k| {
-        text_at(k, "status") != Some("superseded") && text_at(k, "superseded_by").is_none()
+        !is_deferred(k)
+            && truthy_field(k, "completed_at")
+            && text_at(k, "status") != Some("superseded")
+            && text_at(k, "superseded_by").is_none()
     })
+}
+
+fn is_deferred(row: &Value) -> bool {
+    truthy_field(row, "deferred_at")
+        || text_at(row, "status") == Some("deferred")
+        || text_at(row, "completed_at").is_some_and(|c| c.starts_with("deferred:"))
+}
+
+fn is_returnable_deferral(row: &Value) -> bool {
+    is_deferred(row)
+        && !text_at(row, "deferred_kind")
+            .is_some_and(|kind| graph_store::CLOSING_DEFER_KINDS.contains(&kind))
 }
 
 /// True when a deliberate reopen postdates every child's close (the
@@ -296,6 +316,18 @@ pub(crate) fn reopen_outranks_child_closes(parent: &Value, kids: &[&Value]) -> b
         &kids
             .iter()
             .map(|k| text_at(k, "completed_at"))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The epic close paths' reopen guard: only a child that joined at or before
+/// the reopen can expire it (graph_store::reopen_holds_epic).
+pub(crate) fn reopen_holds_epic_children(parent: &Value, kids: &[&Value]) -> bool {
+    reopen_holds_epic(
+        text_at(parent, "reopened_at"),
+        &kids
+            .iter()
+            .map(|k| (graph_store::joined_parent_at(k), text_at(k, "completed_at")))
             .collect::<Vec<_>>(),
     )
 }
@@ -377,7 +409,15 @@ pub(crate) fn apply_completion_fields(node: &mut Value, merge_status: bool) {
 
 /// Undo a close (the _clear_completion_fields twin). `status` is the
 /// plan-rung ladder's answer for this row, computed by the caller.
-fn clear_completion_fields(node: &mut Value, reason: &str, status: &str) {
+/// `evidence_merge_status` is the reopen command's own gh verdict for the
+/// primary ("MERGED") when it read one; the cascade passes None because it
+/// never resolves ancestor evidence.
+fn clear_completion_fields(
+    node: &mut Value,
+    reason: &str,
+    status: &str,
+    evidence_merge_status: Option<&str>,
+) {
     let obj = node.as_object_mut().expect("row is an object");
     obj.insert("completed_at".into(), Value::Null);
     obj.insert("completion_note".into(), Value::Null);
@@ -389,11 +429,62 @@ fn clear_completion_fields(node: &mut Value, reason: &str, status: &str) {
     obj.remove("reopen_warning");
     obj.insert("closed_by".into(), Value::Null);
     obj.insert("status".into(), Value::String(status.into()));
+    // The completed PR is history the moment the node reopens: demote it
+    // into additional_prs with its recorded outcome and clear the primary
+    // scalars. Left in place, pr_number keeps the store recompute deriving
+    // in_review over the rung status this write just set, and the patch
+    // door holds every later status move on it. The history mark keeps the
+    // promise and evidence gates from counting the dead row as a promised
+    // split ship; the reopen's own MERGED verdict stamps an unstamped row.
+    let number = obj.get("pr_number").and_then(Value::as_i64);
+    if let Some(number) = number {
+        let url = obj.get("pr_url").cloned().unwrap_or(Value::Null);
+        let mut merge_status = obj.get("merge_status").cloned().unwrap_or(Value::Null);
+        if merge_status.is_null() {
+            if let Some(state) = evidence_merge_status {
+                merge_status = Value::String(state.to_string());
+            }
+        }
+        if obj
+            .get("additional_prs")
+            .map(Value::is_null)
+            .unwrap_or(false)
+        {
+            obj.insert("additional_prs".into(), Value::Array(Vec::new()));
+        }
+        let extras = obj
+            .entry("additional_prs")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(list) = extras.as_array_mut() {
+            let already = list
+                .iter()
+                .any(|extra| extra.get("number").and_then(Value::as_i64) == Some(number));
+            if !already {
+                list.push(json!({
+                    "number": number,
+                    "url": url,
+                    "merge_status": merge_status,
+                    "history": true,
+                }));
+            }
+        }
+        obj.insert("pr_number".into(), Value::Null);
+        obj.insert("pr_url".into(), Value::Null);
+        obj.insert("merge_status".into(), Value::Null);
+    }
 }
 
 /// Close ancestor epics whose children are now all complete (the
 /// _cascade_close_parents twin). Returns the closed ancestor ids.
-pub(crate) fn cascade_close_parents(entries: &mut [Value], node_id: &str) -> Vec<String> {
+/// `promise_held` carries the pre-lock rollup verdicts: a plan plus one
+/// merged PR of its own clears `has_own_plan_work`, and without the hold
+/// the cascade would close a multi-slice parent on its first child's
+/// close. Absent = held (fail closed).
+pub(crate) fn cascade_close_parents(
+    entries: &mut [Value],
+    node_id: &str,
+    promise_held: &super::promise::RollupVerdicts,
+) -> Vec<String> {
     let id_of = |e: &Value| text_at(e, "id").map(String::from);
     let mut closed: Vec<String> = Vec::new();
     let mut cur: Option<String> = entries
@@ -418,12 +509,13 @@ pub(crate) fn cascade_close_parents(entries: &mut [Value], node_id: &str) -> Vec
             .collect();
         let kid_refs: Vec<&Value> = kids.iter().collect();
         let parent_is_done = truthy_field(&entries[idx], "completed_at");
-        let outranks = reopen_outranks_child_closes(&entries[idx], &kid_refs);
+        let outranks = reopen_holds_epic_children(&entries[idx], &kid_refs);
         let all_closed = children_all_closed(&entries[idx], &kid_refs);
         // Own plan work holds the close: the parent's own deliverables are
         // unverified, and the UNVERIFIED note that used to flag this close
-        // is retired with it.
-        let holds_plan = has_own_plan_work(&entries[idx]);
+        // is retired with it. So does an unmet (or unwarmed) plan promise.
+        let holds_plan = has_own_plan_work(&entries[idx])
+            || super::promise::rollup_holds(&entries[idx], promise_held);
         if parent_is_done || outranks || holds_plan || !all_closed {
             clear_reopen_warning_if_child_matches(&mut entries[idx], Some(node_id));
             break;
@@ -570,7 +662,7 @@ fn canonical_post_close(
 }
 
 // ---------------------------------------------------------------------------
-// the close verb
+// the close command
 // ---------------------------------------------------------------------------
 
 /// `fno backlog done` — the close-flag surface. Rich completion shapes ride
@@ -758,6 +850,36 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
         }
     }
 
+    // The parent cascade runs inside the mutation, where gh I/O must not:
+    // judge the direct parent pre-lock. Its parent (if any) closes one pass
+    // later, when it is the direct parent of a just-closed child; a parent
+    // the warm never judged holds (fail closed). An ancestor whose plan
+    // promises more than has merged stays open.
+    let mut promise_held_parents = super::promise::RollupVerdicts::new();
+    if !args.force {
+        let candidates: Vec<Value> = rows
+            .iter()
+            .find(|e| text_at(e, "id") == Some(task_id))
+            .and_then(|trigger| text_at(trigger, "parent"))
+            .and_then(|pid| {
+                rows.iter()
+                    .find(|e| text_at(e, "id") == Some(pid) && super::promise::rollup_holds_plan(e))
+            })
+            .cloned()
+            .into_iter()
+            .collect();
+        let verdicts = super::promise::rollup_hold_set(&candidates, &mut |parent| {
+            resolve_promise_evidence(parent, super::promise::gate_cwd_for(parent).as_deref(), &[])
+        });
+        for (pid, verdict) in verdicts {
+            if let Some(reason) = &verdict.reason {
+                let first = reason.lines().next().unwrap_or("");
+                eprintln!("warning: parent {pid} stays open: {first}");
+            }
+            promise_held_parents.insert(pid, verdict);
+        }
+    }
+
     // Cost stamp: the ledger's per-plan cost the node never captured.
     let rollup = rollup_from_ledger(&node);
     let env_session = std::env::var("CLAUDECODE_SESSION_ID")
@@ -853,7 +975,7 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
                     .map(String::from),
             );
         }
-        let closed = cascade_close_parents(rows, &task);
+        let closed = cascade_close_parents(rows, &task, &promise_held_parents);
         cascade.replace(closed);
         Ok(true)
     });
@@ -904,12 +1026,12 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// the reopen verb
+// the reopen command
 // ---------------------------------------------------------------------------
 
 /// `fno backlog reopen` — clears a node's completion. Fully native: the
 /// Python twin and its registry row are gone.
-/// The reopen verb's done fact: a completion stamp, or a children-rollup
+/// The reopen command's done fact: a completion stamp, or a children-rollup
 /// derived done (status done with every child closed and the row's own
 /// completion cleared). A bare status-done row nothing derives is stale
 /// data, and the golden contract keeps it out of reopen's reach: the
@@ -933,7 +1055,7 @@ fn reopenable_done(rows: &[Value], node: &Value, task_id: &str) -> bool {
 pub fn run_reopen(tail: &[String]) -> i32 {
     let (id, reason, force, help, unknown) = parse_reopen_args(tail);
     if help {
-        // The verb's own help is the Python surface's rendering, retired with
+        // The command's own help is the Python surface's rendering, retired with
         // the twin; a bare usage line keeps the shape discoverable.
         println!("fno backlog reopen <id> --reason TEXT [--force]");
         return 0;
@@ -945,7 +1067,7 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     let backend = active_backend_name();
     if backend != "graph" {
         eprintln!(
-            "fno backlog reopen: this verb owns graph state; under the {backend} \
+            "fno backlog reopen: this command owns graph state; under the {backend} \
              tracker backend it is refused. Track the item in the tracker by its id."
         );
         return 1;
@@ -1081,6 +1203,7 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     let canonical: RefCell<Option<String>> = RefCell::new(None);
     let cascade: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let warned: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let restored: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let reason_text = cleaned_reason.clone();
     let applied = mutate_single_row(&graph, "backlog_reopen", |rows| {
         let Some(idx) = rows
@@ -1102,11 +1225,23 @@ pub fn run_reopen(tail: &[String]) -> i32 {
                 .get(&canonical_id)
                 .cloned()
                 .unwrap_or_else(|| "idea".into());
-            clear_completion_fields(&mut rows[idx], &reason_text, &status);
+            // Only the MERGED verdict stamps: merge_status carries terminal
+            // outcomes, so OPEN and UNKNOWN leave the row unstamped.
+            clear_completion_fields(
+                &mut rows[idx],
+                &reason_text,
+                &status,
+                if pr_state.as_deref() == Some("MERGED") {
+                    Some("merged")
+                } else {
+                    None
+                },
+            );
         }
         let (reopened, warned_ids) = cascade_reopen_parents(rows, &canonical_id, &task_id, &rungs);
         cascade.replace(reopened);
         warned.replace(warned_ids);
+        restored.replace(restore_pruned_dependents(rows, &canonical_id));
         canonical.replace(Some(canonical_id));
         Ok(true)
     });
@@ -1137,6 +1272,14 @@ pub fn run_reopen(tail: &[String]) -> i32 {
         println!(
             "Reopened {canonical_id} (cascade: {})",
             cascade_out.join(", ")
+        );
+    }
+    let restored_out = restored.into_inner();
+    if !restored_out.is_empty() {
+        println!(
+            "Restored {} blocked_by edge(s) dropped when {canonical_id} closed: {}",
+            restored_out.len(),
+            restored_out.join(", ")
         );
     }
     emit_event(
@@ -1198,9 +1341,108 @@ fn evidence_pr_number(
     refs.first().map(|(n, _)| *n)
 }
 
+/// Re-add the blocked_by edges the close pruned: the pruner
+/// (graph_store::settle_blocked_by_edges) records each pruned dependent on
+/// the blocker's `pruned_dependents` trail, and the reopen consumes it.
+/// An edge restores only onto a live dependent (a terminal row owes no
+/// edge), never onto an existing edge, and never when the edge would make
+/// the blocked_by graph cyclic: B reaching X through blocked_by edges
+/// means X -> B closes a loop. Consumed and terminal rows leave the trail,
+/// so a trail with no live dependents is cleared.
+fn restore_pruned_dependents(rows: &mut [Value], reopened_id: &str) -> Vec<String> {
+    let trail: Vec<Value> = rows
+        .iter()
+        .find(|e| text_at(e, "id") == Some(reopened_id))
+        .and_then(|e| {
+            e.get("pruned_dependents")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default();
+    if trail.is_empty() {
+        return Vec::new();
+    }
+    let mut restored: Vec<String> = Vec::new();
+    let mut remaining: Vec<Value> = Vec::new();
+    for entry in trail {
+        let Some(dependent_id) = entry.get("node").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(idx) = rows
+            .iter()
+            .position(|e| text_at(e, "id") == Some(dependent_id))
+        else {
+            // A trail row naming a gone dependent is stale: dropped.
+            continue;
+        };
+        let open_dependent = !truthy_field(&rows[idx], "completed_at")
+            && text_at(&rows[idx], "superseded_by").is_none();
+        let already_named = rows[idx]
+            .get("blocked_by")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(reopened_id)));
+        // The cycle probe: adding X -> B creates a cycle exactly when B
+        // reaches X through blocked_by edges.
+        let mut seen = std::collections::BTreeSet::new();
+        let mut stack: Vec<String> = vec![reopened_id.to_string()];
+        let mut cyclic = false;
+        while let Some(id) = stack.pop() {
+            if id == dependent_id {
+                cyclic = true;
+                break;
+            }
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Some(row) = find_node(rows, &id) {
+                for b in row
+                    .get("blocked_by")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    stack.push(b.to_string());
+                }
+            }
+        }
+        if !open_dependent {
+            // A terminal dependent owes no edge: the trail row is stale.
+            continue;
+        }
+        if already_named {
+            // The edge is back (a prior restore, or the operator): consumed.
+            continue;
+        }
+        if cyclic {
+            // Withheld for a real graph reason; keep the trail row so a
+            // later reopen after the cycle breaks can still restore.
+            remaining.push(entry);
+            continue;
+        }
+        let obj = rows[idx].as_object_mut().expect("row is an object");
+        let edge = obj
+            .entry("blocked_by".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        edge.as_array_mut()
+            .expect("blocked_by is an array")
+            .push(json!(reopened_id));
+        restored.push(dependent_id.to_string());
+    }
+    let Some(obj) = rows
+        .iter_mut()
+        .find(|e| text_at(e, "id") == Some(reopened_id))
+        .and_then(|e| e.as_object_mut())
+    else {
+        return restored;
+    };
+    obj.insert("pruned_dependents".into(), Value::Array(remaining));
+    restored
+}
+
 /// Reopen ancestor epics the cascade auto-closed (the
 /// _cascade_reopen_parents twin): auto-closed ancestors clear, done-on-own-
-/// evidence ancestors get the reopen-warning marker and stop the climb.
+/// evidence ancestors get the reopen warning marker and stop the climb.
 fn cascade_reopen_parents(
     entries: &mut [Value],
     node_id: &str,
@@ -1245,6 +1487,7 @@ fn cascade_reopen_parents(
             &mut entries[idx],
             &format!("child {node_id} reopened"),
             &status,
+            None,
         );
         reopened.push(pid.clone());
         cur = entries[idx]
@@ -1482,7 +1725,7 @@ fn normalize_plan_path(path: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// the queue verbs
+// the queue commands
 // ---------------------------------------------------------------------------
 
 /// Flatten one-or-many id args (the _expand_id_args twin): comma bundles and
@@ -1502,7 +1745,7 @@ fn expand_id_args(raw: &[String]) -> Vec<String> {
     out
 }
 
-/// The shared prologue of the batch verbs: expand, refuse an empty set and
+/// The shared prologue of the batch commands: expand, refuse an empty set and
 /// non-node ids (the _expand_valid_ids twin, message for message).
 fn expand_valid_ids(raw: &[String]) -> Result<Vec<String>, i32> {
     let ids = expand_id_args(raw);
@@ -1519,7 +1762,7 @@ fn expand_valid_ids(raw: &[String]) -> Result<Vec<String>, i32> {
     Ok(ids)
 }
 
-/// The missing-node gate for the multi-id verbs (the _require_nodes twin).
+/// The missing-node gate for the multi-id commands (the _require_nodes twin).
 fn require_nodes(rows: &[Value], ids: &[String]) -> Result<(), String> {
     let missing: Vec<&String> = ids
         .iter()
@@ -1532,15 +1775,15 @@ fn require_nodes(rows: &[Value], ids: &[String]) -> Result<(), String> {
     Err(format!("feature(s) not found: {}", names.join(", ")))
 }
 
-/// The shared non-graph backend guard (the update door's guard, per verb):
-/// these verbs own graph state; under an external backend they refuse.
-pub(crate) fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
+/// The shared non-graph backend guard (the update door's guard, per command):
+/// these commands own graph state; under an external backend they refuse.
+pub(crate) fn refuse_non_graph_backend(command: &str) -> Option<i32> {
     let backend = active_backend_name();
     if backend == "graph" {
         return None;
     }
     eprintln!(
-        "fno backlog {verb}: this verb owns graph state; under the \
+        "fno backlog {command}: this command owns graph state; under the \
          {backend} tracker backend it is refused. Track the item in the \
          tracker by its id."
     );
@@ -1832,7 +2075,7 @@ pub fn run_queued(tail: &[String]) -> i32 {
 const _: () = ();
 
 // ---------------------------------------------------------------------------
-// the contain verb
+// the contain command
 // ---------------------------------------------------------------------------
 
 /// The holder of a live/suspect `node:<id>` claim, else None (the
@@ -1913,7 +2156,7 @@ fn refuse_dead_owner(owner: &Value, context: &str) -> Option<String> {
     Some(format!(
         "{context} resolves to {id}, which {how}; {containment}, \
          so stamping containment here would leave every adoptee \
-         undispatchable with the no verb to free it. {remedy}"
+         undispatchable with the no command to free it. {remedy}"
     ))
 }
 
@@ -2316,7 +2559,7 @@ fn drop_owner_pr_refs(
     }
 }
 // ---------------------------------------------------------------------------
-// the supersede verb
+// the supersede command
 // ---------------------------------------------------------------------------
 
 /// Split `--flag=value` spellings into two tokens so the parsers accept the
@@ -2341,8 +2584,13 @@ fn split_flag_values(tail: &[String]) -> Vec<String> {
 /// transport (the defer pattern), so the receipt names what the store
 /// committed and the wheel only repaints plans.
 pub fn run_supersede(tail: &[String]) -> i32 {
-    if tail.is_empty() || tail.iter().any(|a| a == "--help" || a == "-h") {
-        return forward_to_python("supersede", tail);
+    if tail.is_empty() {
+        eprintln!("{SUPERSEDE_HELP}");
+        return 2;
+    }
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{SUPERSEDE_HELP}");
+        return 0;
     }
     let parsed = match parse_supersede_args(&split_flag_values(tail)) {
         Some(p) => p,
@@ -2360,11 +2608,40 @@ struct SupersedeArgs {
     cause: Option<String>,
     surfaces: Vec<String>,
     reason: Option<String>,
+    covers: Option<String>,
+    marker_ok: Option<String>,
+    leftover: Option<String>,
     force: bool,
 }
 
 const SUPERSEDE_EXAMPLE: &str = "fno backlog supersede <new> --replaces <old> \
-     --cause \"<what the old node was for>\" --surface <path/it/owned>";
+     --cause \"<what the old node was for>\" --surface <path/it/owned> \
+     --reason \"<why new replaces old>\" --covers \"<how new's done condition covers old's>\"";
+
+const SUPERSEDE_HELP: &str = "Usage: fno backlog supersede [OPTIONS] NEW_ID
+
+  Record that NEW_ID replaces the node named by --replaces.
+
+  The old node reads superseded from the edge alone. Its record stays
+  unverified until a merged PR covers every --surface. A successor that
+  covers only part of the old node's work is a split, not a supersede: file
+  the scope it leaves out first and name that node with --leftover. The door
+  refuses --covers alone when the successor's own text scopes work out.
+
+Options:
+  --replaces TEXT    REQUIRED. The old node id being superseded.
+  --cause TEXT       REQUIRED. What the old node was for.
+  --surface TEXT     REQUIRED, repeatable. A repo-relative path the old node
+                     owned.
+  -R, --reason TEXT  REQUIRED. Why NEW_ID replaces the old node.
+  --covers TEXT      How NEW_ID's done condition covers the old node's.
+  --leftover TEXT    A filed, live node that holds the scope NEW_ID leaves
+                     out. One of --covers or --leftover is required.
+  --marker-ok TEXT   Why NEW_ID's scope-out text does not touch the old
+                     node's work. Lets --covers stand without --leftover.
+  -F, --force        Supersede even if the old node has live children (their
+                     parent is cleared).
+  -h, --help         Show this message and exit.";
 
 fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
     let mut new_id: Option<String> = None;
@@ -2372,6 +2649,9 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
     let mut cause: Option<String> = None;
     let mut surfaces: Vec<String> = Vec::new();
     let mut reason: Option<String> = None;
+    let mut covers: Option<String> = None;
+    let mut marker_ok: Option<String> = None;
+    let mut leftover: Option<String> = None;
     let mut force = false;
     let mut iter = tail.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -2383,6 +2663,9 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
                 None => return None,
             },
             "--reason" | "-R" => reason = iter.next().cloned(),
+            "--covers" => covers = iter.next().cloned(),
+            "--marker-ok" => marker_ok = iter.next().cloned(),
+            "--leftover" => leftover = iter.next().cloned(),
             "--force" | "-F" => force = true,
             other => {
                 if other.starts_with('-') {
@@ -2405,6 +2688,9 @@ fn parse_supersede_args(tail: &[String]) -> Option<SupersedeArgs> {
         cause,
         surfaces,
         reason,
+        covers,
+        marker_ok,
+        leftover,
         force,
     })
 }
@@ -2530,6 +2816,53 @@ fn supersede_write(graph: &Path, args: &SupersedeArgs) -> i32 {
                 );
                 return Ok(false);
             }
+            // Reason and coverage refuse after the chain guards above, so a
+            // supersede that can never land names that first.
+            let Some(reason) = args
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+            else {
+                exit_code.replace(1);
+                eprintln!(
+                    "Error: --reason is required and cannot be blank. Say why {} \
+                     replaces {}; a superseded node with no reason is scope nobody \
+                     can audit.\n  {}",
+                    args.new_id, args.old_id, SUPERSEDE_EXAMPLE
+                );
+                return Ok(false);
+            };
+            let leftover = match args.leftover.as_deref() {
+                None => None,
+                Some(id) => match find_node(working, id) {
+                    Some(row) => Some(row),
+                    None => {
+                        exit_code.replace(1);
+                        eprintln!(
+                            "Error: --leftover node {id} not found. File the scope \
+                             first: fno backlog idea \"...\""
+                        );
+                        return Ok(false);
+                    }
+                },
+            };
+            let clause = match coverage_clause(
+                new_node,
+                &new_canon,
+                &old_canon,
+                args.covers.as_deref(),
+                args.marker_ok.as_deref(),
+                leftover,
+            ) {
+                Ok(clause) => clause,
+                Err(message) => {
+                    exit_code.replace(1);
+                    eprintln!("{message}");
+                    return Ok(false);
+                }
+            };
+            let stored_reason = format!("{reason}; {clause}");
             // The canonical edge: supersedes on the new row, superseded_by on
             // the old row, both by canonical id (the stored abbreviation
             // would survive unsupersede as a stale forward edge).
@@ -2564,11 +2897,7 @@ fn supersede_write(graph: &Path, args: &SupersedeArgs) -> i32 {
                     json!({
                         "successor": new_canon,
                         "cause": cleaned_cause,
-                        "reason": args
-                            .reason
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|r| !r.is_empty()),
+                        "reason": stored_reason,
                         "surfaces": normalized,
                         "verified_at": Value::Null,
                         "evidence_pr": Value::Null,
@@ -2695,6 +3024,106 @@ mod tests {
     }
 
     #[test]
+    fn reopen_demotes_the_completed_pr() {
+        let mut row = json!({
+            "id": "ab-11111111",
+            "status": "done",
+            "completed_at": "2026-10-22T14:06:46+00:00",
+            "pr_number": 3728,
+            "pr_url": "https://github.com/o/r/pull/3728",
+            "merge_status": "MERGED",
+        });
+        clear_completion_fields(&mut row, "work remains", "idea", None);
+        assert_eq!(row.get("pr_number").and_then(Value::as_i64), None);
+        assert_eq!(row.get("pr_url").and_then(Value::as_str), None);
+        assert_eq!(row.get("merge_status").and_then(Value::as_str), None);
+        assert_eq!(row.get("status").and_then(Value::as_str), Some("idea"));
+        let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
+        assert_eq!(extras.len(), 1);
+        assert_eq!(extras[0].get("number").and_then(Value::as_i64), Some(3728));
+        assert_eq!(
+            extras[0].get("merge_status").and_then(Value::as_str),
+            Some("MERGED"),
+            "the recorded outcome travels with the history row"
+        );
+        assert_eq!(
+            extras[0].get("history").and_then(Value::as_bool),
+            Some(true),
+            "the row is marked history, not a promised ship"
+        );
+
+        // A second reopen of the same node must not duplicate the row: the
+        // primary is set again (a new ship stamped it) and the history row
+        // already carries that number.
+        let history = extras[0].clone();
+        row.as_object_mut()
+            .unwrap()
+            .insert("pr_number".into(), json!(3728));
+        row.as_object_mut()
+            .unwrap()
+            .insert("additional_prs".into(), json!([history]));
+        clear_completion_fields(&mut row, "work remains", "idea", None);
+        let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
+        assert_eq!(extras.len(), 1);
+    }
+
+    #[test]
+    fn reopen_demotes_the_completed_pr_into_a_null_additional_prs() {
+        let mut row = json!({
+            "id": "ab-22222222",
+            "status": "done",
+            "completed_at": "2026-10-22T14:06:46+00:00",
+            "pr_number": 41,
+            "pr_url": "https://github.com/o/r/pull/41",
+            "additional_prs": null,
+        });
+        clear_completion_fields(&mut row, "work remains", "ready", None);
+        let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
+        assert_eq!(extras.len(), 1);
+        assert_eq!(extras[0].get("number").and_then(Value::as_i64), Some(41));
+        assert_eq!(
+            extras[0].get("merge_status").and_then(Value::as_str),
+            None,
+            "an unstamped primary demotes as unstamped"
+        );
+        assert_eq!(row.get("pr_number").and_then(Value::as_i64), None);
+    }
+
+    #[test]
+    fn reopen_stamps_the_demoted_pr_from_the_reopen_evidence() {
+        let mut row = json!({
+            "id": "ab-33333333",
+            "status": "done",
+            "completed_at": "2026-10-22T14:06:46+00:00",
+            "pr_number": 3763,
+            "pr_url": "https://github.com/o/r/pull/3763",
+        });
+        clear_completion_fields(&mut row, "work remains", "ready", Some("merged"));
+        let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
+        assert_eq!(
+            extras[0].get("merge_status").and_then(Value::as_str),
+            Some("merged"),
+            "the reopen's own gh read stamps the row terminal"
+        );
+        assert_eq!(
+            extras[0].get("history").and_then(Value::as_bool),
+            Some(true)
+        );
+        // OPEN and UNKNOWN are not terminal outcomes; the row stays
+        // unstamped for the settle passes to fill.
+        let mut row = json!({
+            "id": "ab-44444444",
+            "status": "done",
+            "completed_at": "2026-10-22T14:06:46+00:00",
+            "pr_number": 42,
+            "pr_url": "https://github.com/o/r/pull/42",
+        });
+        clear_completion_fields(&mut row, "work remains", "ready", None);
+        let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
+        assert_eq!(extras[0].get("merge_status").and_then(Value::as_str), None);
+    }
+
+    #[test]
     fn cycle_guard_walks_the_parent_chain() {
         let rows = vec![
             seed("ab-11111111", None),
@@ -2728,7 +3157,7 @@ mod tests {
         let closer = &rows[idx]["closed_by"];
         assert!(closer["session"].is_null() || closer["session"].is_string());
         assert!(closer["actor_kind"].is_string());
-        let closed = cascade_close_parents(&mut rows, "ab-bbbbbbbb");
+        let closed = cascade_close_parents(&mut rows, "ab-bbbbbbbb", &Default::default());
         assert!(closed.contains(&"ab-ffffffff".to_string()), "{closed:?}");
         let epic = rows
             .iter()
@@ -2738,6 +3167,21 @@ mod tests {
             text_at(epic, "completion_note"),
             Some("auto-closed: all children complete")
         );
+    }
+
+    #[test]
+    fn a_deferred_child_never_closes_its_parent() {
+        let parent = json!({"id": "ab-ffffffff", "status": "in_progress"});
+        let later = json!({"id": "ab-aaaaaaaa", "status": "deferred",
+            "deferred_at": "2026-10-27T00:00:00+00:00", "deferred_kind": "later"});
+        let wont = json!({"id": "ab-bbbbbbbb", "status": "deferred",
+            "deferred_at": "2026-10-27T00:00:00+00:00", "deferred_kind": "wont_do"});
+        let done = json!({"id": "ab-cccccccc", "status": "done",
+            "completed_at": "2026-10-27T00:00:00+00:00"});
+        assert!(!children_all_closed(&parent, &[&later]));
+        assert!(!children_all_closed(&parent, &[&wont]));
+        assert!(!children_all_closed(&parent, &[&later, &done]));
+        assert!(children_all_closed(&parent, &[&wont, &done]));
     }
 
     #[test]
@@ -2755,6 +3199,70 @@ mod tests {
         let older_kid = json!({"id": "ab-aaaaaaaa", "completed_at": "2026-08-01T00:00:00+00:00"});
         let refs: Vec<&Value> = vec![&older_kid];
         assert!(reopen_outranks_child_closes(&parent, &refs));
+    }
+
+    #[test]
+    fn a_held_parent_stops_the_cascade_without_closing_it() {
+        // The plan+PR parent. A warm Unmet verdict holds it, and the
+        // walk does not close THROUGH it either; the satisfied verdict lets
+        // the cascade close it exactly as before the gate existed.
+        let verdict = |outcome| crate::backlog::promise::PromiseVerdict {
+            outcome,
+            reason: None,
+            warning: None,
+        };
+        let mut rows = vec![
+            json!({
+                "id": "ab-ffffffff", "plan_path": "plans/multi.md",
+                "pr_number": 3606, "status": "in_progress",
+            }),
+            json!({"id": "ab-aaaaaaaa", "parent": "ab-ffffffff", "status": "done",
+                   "completed_at": "2026-09-01T00:00:00+00:00"}),
+        ];
+        let unmet: crate::backlog::promise::RollupVerdicts = [(
+            "ab-ffffffff".to_string(),
+            verdict(crate::backlog::promise::PromiseOutcome::Unmet),
+        )]
+        .into();
+        let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa", &unmet);
+        assert!(closed.is_empty(), "{closed:?}");
+        assert!(rows[0].get("completed_at").is_none());
+        // Warmed satisfied, the same shape closes.
+        let ok: crate::backlog::promise::RollupVerdicts = [(
+            "ab-ffffffff".to_string(),
+            verdict(crate::backlog::promise::PromiseOutcome::Ok),
+        )]
+        .into();
+        let closed = cascade_close_parents(&mut rows, "ab-aaaaaaaa", &ok);
+        assert!(closed.contains(&"ab-ffffffff".to_string()), "{closed:?}");
+    }
+
+    #[test]
+    fn the_reopen_restores_a_pruned_edge_only_onto_a_live_dependent() {
+        // The reopen consumes the trail: the edge re-adds, the trail row
+        // leaves, a terminal dependent's row is dropped untouched.
+        let mut rows = vec![
+            json!({"id": "x-open2", "status": "ready"}),
+            json!({
+                "id": "x-gone", "completed_at": "2026-10-01T00:00:00Z",
+                "status": "done",
+            }),
+            json!({
+                "id": "x-back", "status": "ready",
+                "pruned_dependents": [
+                    {"node": "x-open2", "pruned_at": "2026-10-01T00:00:00Z"},
+                    {"node": "x-gone", "pruned_at": "2026-10-01T00:00:00Z"},
+                ],
+            }),
+        ];
+        let restored = restore_pruned_dependents(&mut rows, "x-back");
+        assert_eq!(restored, vec!["x-open2".to_string()]);
+        assert_eq!(rows[0]["blocked_by"], json!(["x-back"]));
+        // Consumed and stale rows both leave: the trail is empty.
+        assert_eq!(rows[2]["pruned_dependents"], json!([]));
+        // Idempotent: a second pass restores nothing.
+        let again = restore_pruned_dependents(&mut rows, "x-back");
+        assert!(again.is_empty(), "{again:?}");
     }
 }
 

@@ -98,17 +98,6 @@ pub struct CodexPosture {
 }
 
 impl CodexPosture {
-    /// The posture a bare `yolo` bool names, for callers that predate the
-    /// pair and for tests. `yolo` is `danger-full-access` with approvals
-    /// never; absent is the bounded default.
-    pub fn from_yolo(yolo: bool) -> Self {
-        if yolo {
-            Self::full_access()
-        } else {
-            Self::bounded()
-        }
-    }
-
     /// `danger-full-access:never` - what `--yolo` always meant on this lane.
     pub fn full_access() -> Self {
         Self {
@@ -140,7 +129,7 @@ impl CodexPosture {
     /// repaired into a posture nobody asked for.
     pub fn from_record(requested: Option<&str>, posture_name: Option<&str>) -> Self {
         if let Some(mode) = requested.map(str::trim).filter(|m| !m.is_empty()) {
-            if let Ok(posture) = resolve_thread_posture(None, Some(mode)) {
+            if let Ok(posture) = resolve_thread_posture(None, Some(mode), None) {
                 return posture;
             }
         }
@@ -171,6 +160,12 @@ impl CodexPosture {
 /// step; a third spelling invented here would be a second vocabulary for one
 /// axis.
 ///
+/// A promoted spawn (`role_level` present - every level 0..=2 is a lead rank)
+/// that names NO posture launches full access: a lead must write the state
+/// root to spawn, claim and journal. An operator spelling always
+/// outranks that role default - an explicit bounded mode on a promoted spawn
+/// lands bounded, never widened behind the operator's back.
+///
 /// Fail closed on anything else, and on both keys at once - "one knob at a
 /// time" is the rule the CLIs already enforce, and guessing which of two
 /// disagreeing postures a caller meant is how a bypass gets granted by
@@ -178,10 +173,14 @@ impl CodexPosture {
 pub fn resolve_thread_posture(
     yolo: Option<bool>,
     permission_mode: Option<&str>,
+    role_level: Option<u32>,
 ) -> Result<CodexPosture, String> {
     let mode = permission_mode.map(str::trim).filter(|m| !m.is_empty());
     let Some(mode) = mode else {
-        return Ok(CodexPosture::from_yolo(yolo.unwrap_or(false)));
+        if yolo == Some(true) || role_level.is_some() {
+            return Ok(CodexPosture::full_access());
+        }
+        return Ok(CodexPosture::bounded());
     };
     if yolo == Some(true) {
         return Err(format!(
@@ -262,14 +261,14 @@ mod tests {
                 CodexApproval::Untrusted,
             ),
         ] {
-            let posture = resolve_thread_posture(None, Some(mode)).expect("pair maps");
+            let posture = resolve_thread_posture(None, Some(mode), None).expect("pair maps");
             assert_eq!(posture.sandbox, sandbox, "sandbox half of {mode}");
             assert_eq!(posture.approval, approval, "approval half of {mode}");
             assert_eq!(posture.requested, mode, "exact requested string");
         }
         // The two bounded sandbox spellings are no longer the same answer.
-        let read_only = resolve_thread_posture(None, Some("read-only:never")).unwrap();
-        let write = resolve_thread_posture(None, Some("workspace-write:never")).unwrap();
+        let read_only = resolve_thread_posture(None, Some("read-only:never"), None).unwrap();
+        let write = resolve_thread_posture(None, Some("workspace-write:never"), None).unwrap();
         assert_ne!(read_only.sandbox, write.sandbox);
     }
 
@@ -283,35 +282,101 @@ mod tests {
             "danger-full-access",
             ":never",
         ] {
-            let err = resolve_thread_posture(None, Some(mode))
+            let err = resolve_thread_posture(None, Some(mode), None)
                 .expect_err("an unmappable mode must refuse");
             assert!(
                 err.contains(mode),
                 "refusal must name the value it could not map; got: {err}"
             );
         }
-        let err = resolve_thread_posture(None, Some("full-access:never"))
+        let err = resolve_thread_posture(None, Some("full-access:never"), None)
             .expect_err("an unknown sandbox must refuse");
         assert!(err.contains("full-access"), "got: {err}");
-        let err = resolve_thread_posture(None, Some("read-only:sometimes"))
+        let err = resolve_thread_posture(None, Some("read-only:sometimes"), None)
             .expect_err("an unknown approval must refuse");
         assert!(err.contains("sometimes"), "got: {err}");
         // The sandbox half that parsed must not leak into a partial answer.
-        let err = resolve_thread_posture(None, Some("workspace-write:sometimes"))
+        let err = resolve_thread_posture(None, Some("workspace-write:sometimes"), None)
             .expect_err("an unknown approval must refuse");
         assert!(!err.contains("workspace-write:never"), "got: {err}");
-        let err = resolve_thread_posture(Some(true), Some("full-auto"))
+        let err = resolve_thread_posture(Some(true), Some("full-auto"), None)
             .expect_err("two postures at once must refuse");
         assert!(err.contains("mutually exclusive"), "got: {err}");
         // An empty mode is UNSET, not a mode: the bool still decides.
         assert_eq!(
-            resolve_thread_posture(Some(true), Some("")).unwrap(),
+            resolve_thread_posture(Some(true), Some(""), None).unwrap(),
             CodexPosture::full_access()
         );
         assert_eq!(
-            resolve_thread_posture(None, None).unwrap(),
+            resolve_thread_posture(None, None, None).unwrap(),
             CodexPosture::bounded()
         );
+    }
+
+    /// The promoted-spawn order: an operator spelling always
+    /// outranks the role default; the role default applies only to a spawn
+    /// that named no posture at all; an unpromoted spawn keeps the bounded
+    /// lane default.
+    #[test]
+    fn role_posture_order_flag_outranks_role_default() {
+        // An explicit bounded mode on a promoted spawn lands bounded.
+        let posture = resolve_thread_posture(None, Some("workspace-write:never"), Some(1))
+            .expect("explicit mode maps");
+        assert!(
+            !posture.is_full_access(),
+            "flag must outrank the role default"
+        );
+        assert_eq!(posture.requested, "workspace-write:never");
+        // An explicit weaker shortcut loses to nothing: it wins verbatim too.
+        let posture =
+            resolve_thread_posture(None, Some("full-auto"), Some(2)).expect("full-auto maps");
+        assert!(!posture.is_full_access());
+        assert_eq!(posture.approval, CodexApproval::OnFailure);
+        // An explicit yolo on a promoted spawn is the same full access it
+        // always meant.
+        let posture = resolve_thread_posture(Some(true), None, Some(1)).expect("yolo maps");
+        assert!(posture.is_full_access());
+        // Level 0 is a lead rank too (L0 Chief of a portfolio).
+        let posture =
+            resolve_thread_posture(None, Some("read-only:never"), Some(0)).expect("mode maps");
+        assert!(!posture.is_full_access());
+    }
+
+    #[test]
+    fn role_posture_order_role_default_applies_without_a_flag() {
+        // A promoted spawn with no posture spelling launches full access.
+        let posture = resolve_thread_posture(None, None, Some(1)).expect("role default");
+        assert!(posture.is_full_access());
+        assert_eq!(posture.approval, CodexApproval::Never);
+        assert!(
+            posture.requested.is_empty(),
+            "no operator spelling to record"
+        );
+        // Every lead rank widens, including the portfolio level.
+        assert!(resolve_thread_posture(None, None, Some(0))
+            .unwrap()
+            .is_full_access());
+        assert!(resolve_thread_posture(None, None, Some(2))
+            .unwrap()
+            .is_full_access());
+    }
+
+    #[test]
+    fn role_posture_order_worker_keeps_bounded_default() {
+        // No role, no flag: today's bounded lane default, unchanged.
+        let posture = resolve_thread_posture(None, None, None).expect("worker default");
+        assert_eq!(posture, CodexPosture::bounded());
+        // The pane default answers the same split: rank widens, no rank is
+        // the bounded pair.
+        let tokens = codex_pane_default_tokens(Some(1)).expect("promoted pane default");
+        assert_eq!(
+            tokens,
+            vec!["--dangerously-bypass-approvals-and-sandbox".to_string()]
+        );
+        let tokens = codex_pane_default_tokens(None).expect("worker pane default");
+        assert!(tokens.contains(&"--sandbox".to_string()));
+        assert!(tokens.contains(&"workspace-write".to_string()));
+        assert!(tokens.contains(&"never".to_string()));
     }
 }
 
@@ -442,6 +507,20 @@ pub fn permission_pane_tokens(provider: &str, mode: &str) -> Result<Vec<String>,
     }
 }
 
+/// The lane-default tokens for a codex pane: the bounded pair, or the
+/// full-access bypass when the spawn carries a lead rank (every level
+/// 0..=2 is one). The rank replaces only the lane DEFAULT - an explicit
+/// mode in the caller's hands resolves through `permission_pane_tokens`
+/// verbatim and outranks the rank, never the other way round. Both pane
+/// doors (the Rust arm and the Python bridge) consume this, so the answer
+/// stays one decision.
+pub fn codex_pane_default_tokens(role_level: Option<u32>) -> Result<Vec<String>, String> {
+    if role_level.is_some() {
+        return permission_pane_tokens("codex", "yolo");
+    }
+    permission_pane_tokens("codex", "workspace-write:never")
+}
+
 /// The mappability answer the spawn seam and both front doors read: whether
 /// the (harness, mode, substrate) triple carries the permission axis. The
 /// capability table is the declaration for the thread lanes; the pane lane is
@@ -452,9 +531,9 @@ pub fn permission_mappable(provider: &str, mode: &str, substrate: &str) -> Resul
     if mode.trim().is_empty() {
         return Err("--permission-mode requires a value".to_string());
     }
-    // footnote's mode rides the launch spec on both lanes it hosts, so the
+    // footnote and muse carry the mode on both lanes they host, so the
     // row's list is the whole vocabulary.
-    let footnote_listed = || {
+    let row_listed = || {
         crate::harness_capabilities::HarnessContract::packaged()
             .ok()
             .and_then(|contract| contract.harness.get(provider).cloned())
@@ -463,7 +542,7 @@ pub fn permission_mappable(provider: &str, mode: &str, substrate: &str) -> Resul
     };
     match substrate {
         "pane" => permission_pane_tokens(provider, mode).map(|_| true),
-        "thread" | "bg" if provider == "footnote" => Ok(footnote_listed()),
+        "thread" | "bg" if matches!(provider, "footnote" | "muse") => Ok(row_listed()),
         "thread" | "bg" => {
             let declared = crate::harness_capabilities::HarnessContract::packaged()
                 .ok()
@@ -479,7 +558,7 @@ pub fn permission_mappable(provider: &str, mode: &str, substrate: &str) -> Resul
             }
             if provider == "codex" {
                 // The thread lane resolves the codex posture natively.
-                return resolve_thread_posture(None, Some(mode)).map(|_| true);
+                return resolve_thread_posture(None, Some(mode), None).map(|_| true);
             }
             permission_pane_tokens(provider, mode).map(|_| true)
         }
@@ -488,8 +567,8 @@ pub fn permission_mappable(provider: &str, mode: &str, substrate: &str) -> Resul
                 Ok(true)
             } else if provider == "grok" {
                 permission_pane_tokens(provider, mode).map(|_| true)
-            } else if provider == "footnote" {
-                Ok(footnote_listed())
+            } else if matches!(provider, "footnote" | "muse") {
+                Ok(row_listed())
             } else {
                 Ok(false)
             }
@@ -567,12 +646,14 @@ mod mappable_tests {
     }
 }
 
-/// The hidden client verb: one JSON payload in
-/// (`{"provider", "mode", "substrate"?}`), one answer out. No `substrate`
-/// asks the pane vocabulary; a `substrate` asks the mappability answer. A
-/// mapping refusal lands as `{"refusal": "..."}` so the Python bridge can
-/// re-raise it in the caller's own error type; a transport problem exits 2
-/// with a named reason on stderr, never a silent zero.
+/// The hidden client command: one JSON payload in
+/// (`{"provider", "mode", "substrate"?, "role_level"?}`), one answer out. No
+/// `substrate` asks the pane vocabulary; a `substrate` asks the mappability
+/// answer. An empty `mode` with a codex `role_level` asks the role-aware
+/// pane default (`codex_pane_default_tokens`); a non-empty mode always wins
+/// verbatim. A mapping refusal lands as `{"refusal": "..."}` so the Python
+/// bridge can re-raise it in the caller's own error type; a transport
+/// problem exits 2 with a named reason on stderr, never a silent zero.
 pub fn run_permission_tokens(args: &[String]) -> i32 {
     use std::io::Read;
     let mut payload = String::new();
@@ -616,6 +697,29 @@ pub fn run_permission_tokens(args: &[String]) -> i32 {
                 0
             }
         };
+    }
+    // An empty mode with a lead rank asks for the pane lane's role-aware
+    // default; a non-empty mode is an operator spelling and wins verbatim.
+    // After the substrate door, so a mappability ask keeps its answer shape.
+    if mode.is_empty() {
+        if let Some(level) = parsed
+            .get("role_level")
+            .and_then(Value::as_u64)
+            .and_then(|l| u32::try_from(l).ok())
+        {
+            if provider == "codex" {
+                return match codex_pane_default_tokens(Some(level)) {
+                    Ok(tokens) => {
+                        println!("{}", serde_json::json!({"tokens": tokens, "refusal": null}));
+                        0
+                    }
+                    Err(reason) => {
+                        println!("{}", serde_json::json!({"tokens": [], "refusal": reason}));
+                        0
+                    }
+                };
+            }
+        }
     }
     match permission_pane_tokens(provider, mode) {
         Ok(tokens) => {

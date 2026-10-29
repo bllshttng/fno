@@ -11,7 +11,7 @@
 # stale-base invoking tree -> lock -> reset the worktree to the invoking HEAD
 # (caches preserved) ->
 # build a hermetic env -> changed packet (CHANGED SUBSET, fail-fast, partial) ->
-# fno-py doctor test smoke --keep-going -> rust-ci legs (pinned fmt, cargo test,
+# fno-agents test-run doctor smoke --keep-going -> rust-ci legs (pinned fmt, cargo test,
 # advisory audit) -> one summary + exit.
 #
 # The changed packet is early feedback only: its failure stops the run at the
@@ -765,7 +765,7 @@ acquire_lock() {
     # on a missing directory. Ensure the parent before queueing.
     mkdir -p "$INVOKING_ROOT/.fno" 2>/dev/null || true
     QUEUE_DIR="$LOCKDIR.queue.d"
-    # --pid stamps THIS shell, not the one-shot verb process: a verb-stamped
+    # --pid stamps THIS shell, not the one-shot command process: a command-stamped
     # ticket carries a pid that is dead by the waiter's own next scan, and
     # the queue would reap it out from under us.
     TICKET="$("$QBIN" claim queue enter --dir "$QUEUE_DIR" --pid "$$")" || {
@@ -1107,7 +1107,7 @@ if [[ -n "$CHANGED_BASE" ]]; then
     # this leg - the earliest actionable signal preflight produces - spend a
     # cold build plus twenty 35.9s trials before the real gate has started.
     # cli-ci pins its own changed-smoke step to 1 for exactly this.
-    run_hermetic env STRESS_TRIALS=1 uv run --project cli fno-py doctor test smoke --changed \
+    run_hermetic env STRESS_TRIALS=1 fno-agents test-run doctor smoke --changed \
         --base "$CHANGED_BASE" --head "$CANDIDATE_SHA"
     creq=$?
     case $creq in
@@ -1161,7 +1161,7 @@ if retry_run_leg smoke; then
     # cargo-test e2e legs below, so the full denominator here is duplication on
     # a pre-push gate. One trial proves the harness still runs; rust-ci owns the
     # 20.
-    run_hermetic env STRESS_TRIALS=1 uv run --project cli fno-py doctor test smoke "${SMOKE_ARGS[@]}"
+    run_hermetic env STRESS_TRIALS=1 fno-agents test-run doctor smoke "${SMOKE_ARGS[@]}"
     sreq=$?
     REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
     [[ $sreq -eq 0 ]] && record_leg smoke "smoke suite" pass $(( SECONDS - s0 )) || { record_leg smoke "smoke suite" fail $(( SECONDS - s0 )); FAIL=1; }
@@ -1173,7 +1173,7 @@ fi
 # tracker gates (zero-overlap partition + consumer census) -------------------
 # Static, seconds-fast, the same instruments CI runs
 # (.github/workflows/tracker-partition.yml): the sidecar/tracker partition
-# with its self-test, and the graph-consumer census (verbs + reads) with its
+# with its self-test, and the graph-consumer census (commands + reads) with its
 # self-test, on the hermetic candidate tree.
 if retry_run_leg tracker-gates:fno; then
     echo "preflight: === tracker gates (partition + consumer census) ==="

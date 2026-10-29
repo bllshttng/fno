@@ -1,6 +1,6 @@
 //! Native backlog projections: the kanban classifier every board shares,
 //! the post-publish view pass (`render-views`: graph.md plus the configured
-//! local board targets), and the read verbs `view`, `board`, `bases`,
+//! local board targets), and the read commands `view`, `board`, `bases`,
 //! `roadmap` and `album`.
 //!
 //! Every projection reads the authoritative rows from the store. The HTML
@@ -457,6 +457,14 @@ fn graph_html_path() -> PathBuf {
     crate::state_layout::place(&state_dir(), "graph.html")
 }
 
+/// A target at a page's pre-fold spelling (`~/.fno/graph.html`) renders at
+/// the page's home. Writing the old spelling re-creates a root file the
+/// state-root migration clears on its next pass, forever.
+fn fold_legacy_page(root: &Path, path: &Path) -> PathBuf {
+    let root = resolve(root);
+    crate::state_layout::page_home(&root, &resolve(path)).unwrap_or_else(|| path.to_path_buf())
+}
+
 fn expand(path: &str) -> PathBuf {
     super::settings::expand_home(path)
 }
@@ -653,14 +661,15 @@ fn configured_targets() -> Vec<RenderTarget> {
     let mut out: Vec<RenderTarget> = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     for row in &rows {
-        let target = match parse_target(row) {
+        let mut target = match parse_target(row) {
             Ok(t) => t,
             Err(message) => {
                 eprintln!("Warning: {message}");
                 continue;
             }
         };
-        let expanded = expand(&target.path);
+        let expanded = fold_legacy_page(&state_dir(), &expand(&target.path));
+        target.path = expanded.to_string_lossy().into_owned();
         let clashes = state_file_collisions(&expanded);
         if !clashes.is_empty() {
             let names: Vec<String> = clashes.iter().map(|p| p.display().to_string()).collect();
@@ -721,7 +730,7 @@ const BOARD_RENDER_TIMEOUT_SECS: u64 = 600;
 fn board_render(request: &Value) -> Result<std::process::Output, String> {
     // The front binary: the `FNO_BIN` pin, else the sibling or installed `fno`.
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
-    cmd.arg("board-render");
+    cmd.args(["backlog", "publish", "--local-snapshot"]);
     crate::bounded_cmd::output_with_timeout_stdin(
         cmd,
         BOARD_RENDER_TIMEOUT_SECS,
@@ -763,14 +772,12 @@ pub(crate) fn render_local_targets() -> usize {
     };
     let stderr = String::from_utf8_lossy(&done.stderr).trim().to_string();
     if !done.status.success() {
-        if stderr.contains("No such command 'board-render'")
-            || stderr.contains("No such command \"board-render\"")
-        {
+        if stderr.contains("unknown argument --local-snapshot") {
             // Install lag, not a failed render: the keeper's next settled
             // tick retries after the update.
             eprintln!(
                 "Warning: local board render skipped: the installed fno predates \
-                 board-render; run `fno doctor update --rust`"
+                 the local-snapshot door; run `fno doctor update --rust`"
             );
             return 0;
         }
@@ -856,8 +863,8 @@ fn wants_help(tail: &[String]) -> bool {
     tail.iter().any(|a| a == "--help" || a == "-h")
 }
 
-fn usage_error(verb: &str, arg: &str) -> i32 {
-    eprintln!("fno backlog {verb}: unexpected argument '{arg}' (see --help)");
+fn usage_error(command: &str, arg: &str) -> i32 {
+    eprintln!("fno backlog {command}: unexpected argument '{arg}' (see --help)");
     2
 }
 
@@ -1748,11 +1755,11 @@ fn album_gift(e: &Value) -> String {
     "no gift".to_string()
 }
 
-fn parse_count(verb: &str, flag: &str, value: Option<&String>) -> Result<i64, i32> {
+fn parse_count(command: &str, flag: &str, value: Option<&String>) -> Result<i64, i32> {
     match value.and_then(|v| v.parse::<i64>().ok()) {
         Some(n) => Ok(n),
         None => {
-            eprintln!("fno backlog {verb}: {flag} needs an integer");
+            eprintln!("fno backlog {command}: {flag} needs an integer");
             Err(2)
         }
     }
@@ -1994,6 +2001,20 @@ mod tests {
             md,
             "# p roadmap\n\n## Now\n\n- Ship it _(p1 · M)_\n\n## Later\n\n- Waiting\n- Visitor ask published\n"
         );
+    }
+
+    #[test]
+    fn render_target_at_a_legacy_root_page_renders_at_the_page_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = resolve(dir.path());
+        assert_eq!(
+            fold_legacy_page(&root, &root.join("graph.html")),
+            root.join("cache").join("pages").join("graph.html")
+        );
+        let elsewhere = root.join("vault").join("graph.html");
+        assert_eq!(fold_legacy_page(&root, &elsewhere), elsewhere);
+        let not_a_page = root.join("ledger.json");
+        assert_eq!(fold_legacy_page(&root, &not_a_page), not_a_page);
     }
 
     #[test]

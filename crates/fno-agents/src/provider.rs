@@ -225,7 +225,7 @@ impl Provider for ClaudeProvider {
             "--name".into(),
             ctx.name.clone(),
             "--".into(),
-            render_verb_seed(&ctx.message, "claude"),
+            render_command_seed(&ctx.message, "claude"),
         ]);
         argv
     }
@@ -243,7 +243,7 @@ impl Provider for ClaudeProvider {
             Some(&ctx.session_id),
         )
         .expect("embedded claude headless-resume capability");
-        argv.extend(["--".into(), render_verb_seed(&ctx.message, "claude")]);
+        argv.extend(["--".into(), render_command_seed(&ctx.message, "claude")]);
         argv
     }
 
@@ -434,11 +434,11 @@ impl ProviderWithPty for ClaudeInteractiveProvider {
 /// `cli/tests/agents/fixtures/codex-jsonl-sample.jsonl`.
 pub struct CodexProvider;
 
-/// The verb-token shape every reader shares: a leading `/` or `$`
+/// The command-token shape every reader shares: a leading `/` or `$`
 /// sigil, no second `/` inside the token (an absolute path never matches),
 /// an optional `fno:` namespace, and a lowercase-word remainder. Returns
-/// `(verb, namespaced)`; both sigils parse.
-pub fn parse_verb_token(tok: &str) -> Option<(&str, bool)> {
+/// `(command, namespaced)`; both sigils parse.
+pub fn parse_command_token(tok: &str) -> Option<(&str, bool)> {
     let sigil = tok.chars().next()?;
     if sigil != '/' && sigil != '$' {
         return None;
@@ -447,25 +447,25 @@ pub fn parse_verb_token(tok: &str) -> Option<(&str, bool)> {
     if body.is_empty() || body.contains('/') {
         return None;
     }
-    let (verb, namespaced) = match body.strip_prefix("fno:") {
+    let (command, namespaced) = match body.strip_prefix("fno:") {
         Some(rest) => (rest, true),
         None => (body, false),
     };
-    let mut it = verb.chars();
+    let mut it = command.chars();
     match it.next() {
         Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {}
         _ => return None,
     }
-    if !verb
+    if !command
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
     {
         return None;
     }
-    Some((verb, namespaced))
+    Some((command, namespaced))
 }
 
-/// The shipped footnote verb roster, mirroring Python's `footnote_verbs()`:
+/// The shipped footnote command roster, mirroring Python's `footnote_commands()`:
 /// every `skills/<name>/SKILL.md` and `commands/<name>.md` the plugin ships.
 /// Read from the surface, never a retyped literal. Resolved from the plugin
 /// root env hints, then the persisted `~/.fno/install/plugin-root` pointer; empty on
@@ -473,46 +473,46 @@ pub fn parse_verb_token(tok: &str) -> Option<(&str, bool)> {
 /// plugin-qualified `/fno:` spelling keeps working on namespace alone.
 /// The roster for out-of-crate callers (the parity tests), sorted so the
 /// order is deterministic.
-pub fn footnote_verbs_public() -> Vec<String> {
-    let mut verbs: Vec<String> = footnote_verbs().into_iter().collect();
-    verbs.sort();
-    verbs
+pub fn footnote_commands_public() -> Vec<String> {
+    let mut commands: Vec<String> = footnote_commands().into_iter().collect();
+    commands.sort();
+    commands
 }
 
-pub(crate) fn footnote_verbs() -> std::collections::HashSet<String> {
-    static VERBS: std::sync::OnceLock<std::collections::HashSet<String>> =
+pub(crate) fn footnote_commands() -> std::collections::HashSet<String> {
+    static COMMANDS: std::sync::OnceLock<std::collections::HashSet<String>> =
         std::sync::OnceLock::new();
-    if let Some(verbs) = VERBS.get() {
-        return verbs.clone();
+    if let Some(commands) = COMMANDS.get() {
+        return commands.clone();
     }
-    let verbs = read_footnote_verbs();
+    let commands = read_footnote_commands();
     // An EMPTY read means the surface did not RESOLVE, never that footnote
-    // ships no verbs - like Python, cache only a real answer so the next call
+    // ships no commands - like Python, cache only a real answer so the next call
     // can succeed after the environment settles.
-    if verbs.is_empty() {
-        return verbs;
+    if commands.is_empty() {
+        return commands;
     }
-    let _ = VERBS.set(verbs.clone());
-    verbs
+    let _ = COMMANDS.set(commands.clone());
+    commands
 }
 
-fn read_footnote_verbs() -> std::collections::HashSet<String> {
+fn read_footnote_commands() -> std::collections::HashSet<String> {
     let Some(root) = plugin_root() else {
         return Default::default();
     };
-    read_verbs_from(&root)
+    read_commands_from(&root)
 }
 
 /// The roster from ONE resolved root, so the installer reads the same
 /// surface as the seed renderers instead of carrying a second list.
-pub(crate) fn read_verbs_from(root: &Path) -> std::collections::HashSet<String> {
-    let mut verbs = std::collections::HashSet::new();
+pub(crate) fn read_commands_from(root: &Path) -> std::collections::HashSet<String> {
+    let mut commands = std::collections::HashSet::new();
     if let Ok(entries) = std::fs::read_dir(root.join("skills")) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.join("SKILL.md").is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    verbs.insert(name.to_string());
+                    commands.insert(name.to_string());
                 }
             }
         }
@@ -522,12 +522,12 @@ pub(crate) fn read_verbs_from(root: &Path) -> std::collections::HashSet<String> 
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("md") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    verbs.insert(stem.to_string());
+                    commands.insert(stem.to_string());
                 }
             }
         }
     }
-    verbs
+    commands
 }
 
 pub(crate) fn plugin_root() -> Option<PathBuf> {
@@ -541,7 +541,7 @@ pub(crate) fn plugin_root() -> Option<PathBuf> {
     let mut pointer = match std::env::var("FNO_HOME") {
         Ok(home) if !home.is_empty() => PathBuf::from(home),
         // The pointer anchors at the STATE ROOT (~/.fno), not $HOME: the
-        // session-start hook and the install verb write
+        // session-start hook and the install command write
         // ~/.fno/install/plugin-root, so a $HOME anchor read a file that
         // never existed (2026-10-02 gap audit 6).
         _ => crate::paths::dirs_home().join(".fno"),
@@ -558,16 +558,16 @@ pub(crate) fn plugin_root() -> Option<PathBuf> {
     }
 }
 
-/// The ONE verb-seed renderer: parse the message's FIRST token and
+/// The ONE command-seed renderer: parse the message's FIRST token and
 /// render it for `harness` from the capability row. A seed's sigil says WHO
 /// WROTE it, never which harness runs it. The rest of the message
 /// is kept byte for byte; a first token that does not parse, a harness the
-/// contract cannot answer for, or a bare `$verb` on a codex-skill surface
+/// contract cannot answer for, or a bare `$command` on a codex-skill surface
 /// returns the message unchanged.
-pub fn render_verb_seed(message: &str, harness: &str) -> String {
+pub fn render_command_seed(message: &str, harness: &str) -> String {
     let command = message.trim();
     let first = command.split_whitespace().next().unwrap_or("");
-    let Some((verb, namespaced)) = parse_verb_token(first) else {
+    let Some((command_name, namespaced)) = parse_command_token(first) else {
         return message.to_string();
     };
     let Ok(contract) = crate::harness_capabilities::HarnessContract::packaged() else {
@@ -585,49 +585,51 @@ pub fn render_verb_seed(message: &str, harness: &str) -> String {
             }
             // The namespaced spelling is unambiguous by namespace: it always
             // rewrites, native or not (`/fno:review` names the fno lane even
-            // though bare `/review` is codex's native verb).
+            // though bare `/review` is codex's native command).
             if namespaced {
-                return format!("$fno:{verb}{tail}");
+                return format!("$fno:{command_name}{tail}");
             }
-            // A bare `/verb` is rewritten only when it is nobody's native
-            // verb and IS a footnote verb (the shipped roster, with the
+            // A bare `/command` is rewritten only when it is nobody's native
+            // command and IS a footnote command (the shipped roster, with the
             // name-mint vocabulary as the always-present floor); an unknown
-            // verb stays literal instead of being captured into a phantom
+            // command stays literal instead of being captured into a phantom
             // `$fno:` skill.
-            if native(&format!("/{verb}")) {
+            if native(&format!("/{command_name}")) {
                 return message.to_string();
             }
-            if crate::naming::is_word_code_verb(verb) || footnote_verbs().contains(verb) {
-                return format!("$fno:{verb}{tail}");
+            if crate::naming::is_word_code_command(command_name)
+                || footnote_commands().contains(command_name)
+            {
+                return format!("$fno:{command_name}{tail}");
             }
             message.to_string()
         }
         "slash" => {
             if !namespaced {
-                // A bare `$verb` says nothing about this surface; a native
-                // verb stays literal (`/undo` on opencode). Both pass
-                // through, as does a bare `/verb` when the prefix is empty
+                // A bare `$command` says nothing about this surface; a native
+                // command stays literal (`/undo` on opencode). Both pass
+                // through, as does a bare `/command` when the prefix is empty
                 // (claude/agy inject the skill natively).
-                if !first.starts_with('/') || native(&format!("/{verb}")) {
+                if !first.starts_with('/') || native(&format!("/{command_name}")) {
                     return message.to_string();
                 }
                 let prefix = caps.slash_prefix.as_str();
                 if prefix.is_empty() {
                     return message.to_string();
                 }
-                return format!("/{prefix}{verb}{tail}");
+                return format!("/{prefix}{command_name}{tail}");
             }
             // A namespaced token renders through the row's own prefix when it
-            // declares one (pi's `/skill:<verb>`, opencode's `/fno:<verb>`),
+            // declares one (pi's `/skill:<command>`, opencode's `/fno:<command>`),
             // falling back to the agy and `fno:` forms. A row with no prefix
             // has no surface of its own for the namespace, so the `fno:`
             // spelling stands.
             if !caps.slash_prefix.is_empty() {
-                format!("/{}{verb}{tail}", caps.slash_prefix.as_str())
+                format!("/{}{command_name}{tail}", caps.slash_prefix.as_str())
             } else if harness == "agy" {
-                format!("/{verb}{tail}")
+                format!("/{command_name}{tail}")
             } else {
-                format!("/fno:{verb}{tail}")
+                format!("/fno:{command_name}{tail}")
             }
         }
         _ => message.to_string(),
@@ -681,21 +683,58 @@ pub(crate) fn codex_cache_writable_args() -> Vec<String> {
     args
 }
 
-/// Mirror of `codex.py::git_writable_args`: grant the git COMMON dir so a
+/// Mirror of `codex.py::git_writable_args`: grant the git write roots so a
 /// bounded codex worker can commit. workspace-write marks
 /// `<project_root>/.git` read-only, so without this every `git add` fails on
-/// index.lock - and in a linked worktree the gitdir is outside the workspace
-/// entirely. The common dir is `<repo>/.git` in both shapes and holds the
-/// per-worktree gitdir plus the shared objects/ and refs/ a commit writes.
+/// index.lock. See [`git_write_roots`] for why a linked worktree needs two.
 ///
 /// Shared by every Rust codex argv builder (headless create here, the `ask`
 /// lane in codex_ask.rs) so the grant cannot land on one path and miss another.
 /// Empty on any failure: a grant we cannot resolve must never break the spawn.
 pub(crate) fn codex_git_writable_args(cwd: &std::path::Path) -> Vec<String> {
-    match git_common_dir(cwd) {
-        Some(common) => vec!["--add-dir".into(), common],
-        None => vec![],
+    git_write_roots(cwd)
+        .into_iter()
+        .flat_map(|root| ["--add-dir".to_string(), root])
+        .collect()
+}
+
+/// The git dirs a commit from `cwd` writes: the COMMON dir (shared objects/
+/// and refs/), then, in a linked worktree, its own gitdir
+/// `<repo>/.git/worktrees/<name>` (index, HEAD).
+///
+/// The common dir contains that gitdir, yet granting it alone is not enough.
+/// codex resolves the cwd's `.git` pointer file and marks the gitdir it names
+/// read-only, inside every writable root. Only a root naming the gitdir itself
+/// lifts that. Measured on codex-cli 0.164.0 under `codex sandbox`: with the
+/// common dir granted, a linked worktree still failed `git add` on index.lock;
+/// with both granted it committed. A main checkout needs only the common dir.
+pub(crate) fn git_write_roots(cwd: &std::path::Path) -> Vec<String> {
+    let Some(common) = git_common_dir(cwd) else {
+        return vec![];
+    };
+    let mut roots = vec![common];
+    if let Some(own) = linked_git_dir(cwd) {
+        let same = std::fs::canonicalize(&own).ok() == std::fs::canonicalize(&roots[0]).ok();
+        if !same {
+            roots.push(own);
+        }
     }
+    roots
+}
+
+/// `git rev-parse --absolute-git-dir` for `cwd`; `None` on any failure.
+fn linked_git_dir(cwd: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!line.is_empty() && !line.contains('\n')).then_some(line)
 }
 
 /// Resolve the configured plan directory through the same public CLI path used
@@ -728,13 +767,11 @@ pub(crate) fn codex_sandbox_config_args_resume(cwd: &std::path::Path) -> Vec<Str
 }
 
 /// The root list the interactive resume and turn/start lanes grant: the repo's
-/// git common dir, the plan content dir, and the seam-published state dirs.
+/// git write roots, the plan content dir, and the seam-published state dirs.
 /// Empty when none resolve.
 pub(crate) fn codex_writable_roots(cwd: &std::path::Path) -> Vec<String> {
-    let mut roots: Vec<String> = [git_common_dir(cwd), plan_content_dir(cwd)]
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut roots: Vec<String> = git_write_roots(cwd);
+    roots.extend(plan_content_dir(cwd));
     // The state root rides here too, and it MUST: `writable_roots` is a
     // whole-value override, so a list that omits ~/.fno leaves a resumed bounded
     // worker unable to create its claim lockfile. It then holds no claim and the
@@ -865,7 +902,7 @@ impl Provider for CodexProvider {
         // Behind `--`: clap's own prescription ("to pass ... as a value, use
         // '-- ...'"), so a leading-flag seed is the PROMPT, not a flag.
         argv.push("--".into());
-        argv.push(render_verb_seed(&ctx.message, "codex"));
+        argv.push(render_command_seed(&ctx.message, "codex"));
         argv
     }
 
@@ -885,7 +922,7 @@ impl Provider for CodexProvider {
         // Behind `--`: clap's own prescription ("to pass ... as a value, use
         // '-- ...'"), so a leading-flag seed is the PROMPT, not a flag.
         argv.push("--".into());
-        argv.push(render_verb_seed(&ctx.message, "codex"));
+        argv.push(render_command_seed(&ctx.message, "codex"));
         argv
     }
 
@@ -1340,8 +1377,8 @@ impl ProviderWithPty for AgyProvider {
 /// `opencode run <message>` treats a leading-slash string as PROSE - it does NOT
 /// expand the plugin command (verified against v1.14.50: `run "/fno:target ..."`
 /// starts a model turn on the literal text). The fno opencode plugin registers
-/// the footnote verbs, so a rendered `/fno:verb args` must ride `opencode run
-/// --command fno:verb <args>` to actually invoke the command (/ codex P1).
+/// the footnote commands, so a rendered `/fno:command args` must ride `opencode run
+/// --command fno:command <args>` to actually invoke the command (/ codex P1).
 /// A non-slash prompt (a plain `ask`/build message) passes through unchanged.
 pub fn opencode_run_tail(message: &str) -> Vec<String> {
     if let Some(rest) = message.strip_prefix('/') {
@@ -1354,7 +1391,7 @@ pub fn opencode_run_tail(message: &str) -> Vec<String> {
         // help names `--command` "use message for args").
         //
         // The separator is scoped to a leading-dash tail (round 11): another
-        // verb's multiword free-text args (`/fno:blueprint my multi word idea`)
+        // command's multiword free-text args (`/fno:blueprint my multi word idea`)
         // keep the one-positional shape it always had, so splitting cannot
         // change what the command receives.
         if let Some(cmd) = parts.next().filter(|c| !c.is_empty()) {
@@ -1362,7 +1399,7 @@ pub fn opencode_run_tail(message: &str) -> Vec<String> {
             if let Some(args) = parts.next().filter(|a| !a.is_empty()) {
                 if args.starts_with('-') {
                     // Behind `--` (probed: yargs accepts it after --command's
-                    // value): flag-shaped verb args ride as separate argv
+                    // value): flag-shaped command args ride as separate argv
                     // words, not one joined string.
                     argv_tail.push("--".to_string());
                     argv_tail.extend(args.split_whitespace().map(str::to_string));
@@ -1522,7 +1559,7 @@ fn opencode_reachable_with(
 ///
 /// Shelling out to opencode's own binary (rather than opening the sqlite file)
 /// inherits its channel-aware database resolution (`opencode-<channel>.db`,
-/// `OPENCODE_DB`) for free, and pins to the CLI verb rather than a storage
+/// `OPENCODE_DB`) for free, and pins to the CLI command rather than a storage
 /// layout mid-migration to v2.
 ///
 /// The query is a single-row lookup, so its output cannot fill the stdout pipe
@@ -1902,7 +1939,7 @@ impl Provider for GrokProvider {
 
 /// The COMPLETE harness roster: every harness footnote supports, dispatch or
 /// not. This is the one list - Python's `fno.harness_names` proxies
-/// it through the [`crate::harness_roster`] verb instead of carrying a tuple
+/// it through the [`crate::harness_roster`] command instead of carrying a tuple
 /// copy, and `scripts/ci/check-harness-roster-parity.py` holds every evidence
 /// surface (setup docs, `for_name` arms, adapter rows) as a subset of it. A
 /// name may sit here without a [`for_name`] arm (hermes, openclaw: docs-only
@@ -1920,13 +1957,31 @@ pub const KNOWN_HARNESSES: &[&str] = &[
     "grok",
     "zcode",
     "footnote",
+    "muse",
 ];
+
+/// Infer the dispatch provider when `--provider` is absent, mirroring Python
+/// `infer_invoking_harness`: resolve when the present markers name exactly one
+/// *distinct* harness. Multiple markers for the same harness (Codex's thread id
+/// plus its legacy session id) agree; markers naming different harnesses, or
+/// none, fall through to the builtin `claude`. Never guesses. `lookup` is
+/// injectable so tests don't touch process-global env.
+pub fn infer_dispatch_provider(lookup: impl Fn(&str) -> Option<String>) -> &'static str {
+    match crate::claims::resolve_harness_from(lookup).as_deref() {
+        Some("claude") => "claude",
+        Some("codex") => "codex",
+        Some("gemini") => "gemini",
+        Some("opencode") => "opencode",
+        Some("agy") => "agy",
+        _ => "claude",
+    }
+}
 
 /// NAMING SKEW (Discretion 4 — commented, not lockstep-renamed, to keep
 /// the diff small): this 5-name list mirrors Python's `READABLE_PROVIDERS` (the
 /// spawn/pane read-tolerance roster), NOT Python's narrower 3-name
 /// `KNOWN_PROVIDERS` (its dispatch set). A cli test pins this == READABLE.
-/// It is NO LONGER a registry-LOAD gate: `client_verbs::load_registry_entries`
+/// It is NO LONGER a registry-LOAD gate: `client_commands::load_registry_entries`
 /// now shape-checks identity, so an alien harness reads without bricking; this
 /// list gates only spawn/`for_name`. Every name here MUST have a [`for_name`]
 /// arm (test-enforced).
@@ -1941,6 +1996,7 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "grok",
     "zcode",
     "footnote",
+    "muse",
 ];
 
 /// The roster joined for error messages ("claude, codex, gemini, agy, opencode, pi").
@@ -1965,6 +2021,7 @@ pub fn for_name(name: &str) -> Option<Box<dyn Provider>> {
         "grok" => Some(Box::new(GrokProvider)),
         "zcode" => Some(Box::new(crate::zcode::ZcodeProvider)),
         "footnote" => Some(Box::new(crate::footnote_harness::FootnoteProvider)),
+        "muse" => Some(Box::new(crate::muse::MuseProvider)),
         _ => None,
     }
 }
@@ -2255,7 +2312,7 @@ mod tests {
         );
 
         assert_eq!(
-            render_verb_seed("  review this\n  code  ", "codex"),
+            render_command_seed("  review this\n  code  ", "codex"),
             "  review this\n  code  "
         );
 
@@ -2281,11 +2338,11 @@ mod tests {
     }
 
     /// the sigil says WHO WROTE the seed, never which harness runs
-    /// it. A codex-authored `$fno:verb` command reaching a claude target is
-    /// rewritten to claude's native `/fno:verb`; a slash seed is already
+    /// it. A codex-authored `$fno:command` command reaching a claude target is
+    /// rewritten to claude's native `/fno:command`; a slash seed is already
     /// claude's spelling, and prose or an inline mention is never touched.
     #[test]
-    fn verb_rows() {
+    fn command_rows() {
         let mut create = create_ctx();
         create.message = "  $fno:target x-aaaa  ".into();
         assert_eq!(
@@ -2311,19 +2368,22 @@ mod tests {
             Some("/fno:blueprint x-aaaa")
         );
 
-        assert_eq!(render_verb_seed("/fno:target x", "claude"), "/fno:target x");
         assert_eq!(
-            render_verb_seed("do a $fno:blueprint", "claude"),
+            render_command_seed("/fno:target x", "claude"),
+            "/fno:target x"
+        );
+        assert_eq!(
+            render_command_seed("do a $fno:blueprint", "claude"),
             "do a $fno:blueprint"
         );
         assert_eq!(
-            render_verb_seed("build feature X", "claude"),
+            render_command_seed("build feature X", "claude"),
             "build feature X"
         );
 
         for seed in ["/fno:target x-aaaa", "/target x-aaaa", "$fno:target x-aaaa"] {
             assert_eq!(
-                render_verb_seed(seed, "codex"),
+                render_command_seed(seed, "codex"),
                 "$fno:target x-aaaa",
                 "seed: {seed}"
             );
@@ -2337,48 +2397,51 @@ mod tests {
             "see /fno:docs",
             "  review this\n  code  ",
         ] {
-            assert_eq!(render_verb_seed(seed, "codex"), seed, "seed: {seed}");
+            assert_eq!(render_command_seed(seed, "codex"), seed, "seed: {seed}");
         }
 
         assert_eq!(
-            render_verb_seed("$fno:blueprint x", "claude"),
+            render_command_seed("$fno:blueprint x", "claude"),
             "/fno:blueprint x"
         );
         assert_eq!(
-            render_verb_seed("$fno:blueprint x", "opencode"),
+            render_command_seed("$fno:blueprint x", "opencode"),
             "/fno:blueprint x"
         );
-        assert_eq!(render_verb_seed("$fno:blueprint x", "agy"), "/blueprint x");
-        assert_eq!(render_verb_seed("/undo", "opencode"), "/undo");
         assert_eq!(
-            render_verb_seed("do a $fno:blueprint", "claude"),
+            render_command_seed("$fno:blueprint x", "agy"),
+            "/blueprint x"
+        );
+        assert_eq!(render_command_seed("/undo", "opencode"), "/undo");
+        assert_eq!(
+            render_command_seed("do a $fno:blueprint", "claude"),
             "do a $fno:blueprint"
         );
 
         assert_eq!(
-            render_verb_seed("/fno:target resume", "pi"),
+            render_command_seed("/fno:target resume", "pi"),
             "/skill:target resume"
         );
-        assert_eq!(render_verb_seed("/target x", "pi"), "/skill:target x");
-        assert_eq!(render_verb_seed("/name", "pi"), "/name");
+        assert_eq!(render_command_seed("/target x", "pi"), "/skill:target x");
+        assert_eq!(render_command_seed("/name", "pi"), "/name");
         // The other slash surfaces are unchanged by the prefix arm.
         assert_eq!(
-            render_verb_seed("/fno:target resume", "opencode"),
+            render_command_seed("/fno:target resume", "opencode"),
             "/fno:target resume"
         );
         assert_eq!(
-            render_verb_seed("/fno:target resume", "claude"),
+            render_command_seed("/fno:target resume", "claude"),
             "/fno:target resume"
         );
         assert_eq!(
-            render_verb_seed("/fno:target resume", "agy"),
+            render_command_seed("/fno:target resume", "agy"),
             "/target resume"
         );
 
-        assert_eq!(parse_verb_token("/fno:target"), Some(("target", true)));
-        assert_eq!(parse_verb_token("$fno:target"), Some(("target", true)));
-        assert_eq!(parse_verb_token("/target"), Some(("target", false)));
-        assert_eq!(parse_verb_token("$target"), Some(("target", false)));
+        assert_eq!(parse_command_token("/fno:target"), Some(("target", true)));
+        assert_eq!(parse_command_token("$fno:target"), Some(("target", true)));
+        assert_eq!(parse_command_token("/target"), Some(("target", false)));
+        assert_eq!(parse_command_token("$target"), Some(("target", false)));
         for tok in [
             "/Users/bb16/plan.md",
             "$HOME/x",
@@ -2387,20 +2450,20 @@ mod tests {
             "review",
             "/fno:",
         ] {
-            assert_eq!(parse_verb_token(tok), None, "token: {tok}");
+            assert_eq!(parse_command_token(tok), None, "token: {tok}");
         }
     }
 
     /// the one renderer reads every sigil spelling and renders per
-    /// harness. Codex receives `$fno:verb` from all three seed spellings;
-    /// its native verbs and foreign prose stay literal.
+    /// harness. Codex receives `$fno:command` from all three seed spellings;
+    /// its native commands and foreign prose stay literal.
 
     /// slash surfaces render the namespaced spelling per row; agy
     /// strips the namespace it injects natively.
 
-    /// pi's skill-command form: a namespaced token AND a bare footnote verb
+    /// pi's skill-command form: a namespaced token AND a bare footnote command
     /// render through the row's nonempty `slash_prefix`, while pi's own
-    /// native verb stays literal (AC7-HP, AC7-EDGE).
+    /// native command stays literal (AC7-HP, AC7-EDGE).
 
     /// the parse owner reads both sigils with the shared shape rule.
 
@@ -2462,7 +2525,7 @@ mod tests {
             ]
         );
 
-        // A rendered footnote slash command rides `--command <verb>` (opencode
+        // A rendered footnote slash command rides `--command <command>` (opencode
         // expands the plugin command) with the rest as args - NOT a prose prompt
         // that `run` would run verbatim (/ codex P1).
         let mut ctx = create_ctx();
@@ -2481,7 +2544,7 @@ mod tests {
             ]
         );
 
-        // Prose rides behind the `--` fence; a bare verb has no args tail.
+        // Prose rides behind the `--` fence; a bare command has no args tail.
         assert_eq!(
             opencode_run_tail("build feature X"),
             vec!["--", "build feature X"]

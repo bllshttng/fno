@@ -7,21 +7,20 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
-import click
 import typer
 
 
 
-# Eight subcommands became one verb taking the check NAME as an argument, so
-# `fno doctor lint verb-ratchet` still reads and types exactly the same while costing
+# Eight subcommands became one command taking the check NAME as an argument, so
+# `fno doctor lint command-ratchet` still reads and types exactly the same while costing
 # one leaf instead of eight. Six of the eight only ever ran in CI, where a
 # distinct leaf per check bought nothing a dict key does not.
 #
-# The per-check options survive as options on the one verb, dispatched by
+# The per-check options survive as options on the one command, dispatched by
 # signature rather than by name: a check is called with only the parameters it
-# declares, so `--update` reaches `verb-ratchet` and `seam-crossings` and
+# declares, so `--update` reaches `command-ratchet` and `seam-crossings` and
 # nothing else.
 #
 # A check's option must still be DECLARED on `lint` below, and forgetting one is
@@ -34,8 +33,7 @@ CHECKS: dict[str, str] = {
     "flock-pattern": "flock_pattern",
     "provider-stderr-merge": "provider_stderr_merge",
     "shellout-drift": "shellout_drift",
-    "spawn-flag-owners": "spawn_flag_owners",
-    "verb-ratchet": "verb_ratchet",
+    "command-ratchet": "command_ratchet",
     "stale-skill-refs": "stale_skill_refs",
     "retired-commands": "retired_commands",
     "registry": "registry",
@@ -62,7 +60,6 @@ SPAWN_SHAPE_ALLOWLIST = frozenset(
         # Canonical tool-less one-shot judgment seam; consolidated the
         # former inbox/graph/review call-site shapes here.
         "cli/src/fno/llm.py",
-        "cli/src/fno/skill_diff/synthesize.py",
     }
 )
 _SPAWN_SHAPE_RE = re.compile(
@@ -564,8 +561,6 @@ def _resolve_range_base(repo_root: Path) -> Optional[str]:
     Local worktree: HEAD~1. Each fallback is used only when the one before
     it is absent or resolves to HEAD itself.
     """
-    from fno.hook_config import _git
-
     head = _git(repo_root, "rev-parse", "HEAD")
     if head is None:
         return None
@@ -594,15 +589,13 @@ def hook_tombstones(base: Optional[str] = None) -> None:
 
     The harness answers hook config from an init-time snapshot, and a
     PreToolUse hook that cannot launch fails the whole matched tool call -
-    on the Bash matcher that is every shell verb at once. So a commit that
+    on the Bash matcher that is every shell command at once. So a commit that
     deletes a referenced script bricks every session started before the
-    merge, including the verbs needed to diagnose it. Retiring a hook is
+    merge, including the commands needed to diagnose it. Retiring a hook is
     two steps across two releases: remove its config entry and leave a
     no-op stub this release, delete the stub in a later one. This gate
     fails the one-commit version of that.
     """
-    from fno.hook_config import deleted_in_range, referenced_at_revision
-
     repo_root = _repo_root()
     resolved = base or _resolve_range_base(repo_root)
     if resolved is None:
@@ -657,7 +650,7 @@ def flock_pattern(dispatch_path: Optional[Path] = None) -> None:
     script = resolve_repo_root() / "scripts" / "lint-flock-pattern.sh"
     if not script.is_file():
         typer.echo(
-            "fno doctor lint flock-pattern: this verb lints the repo's own source and "
+            "fno doctor lint flock-pattern: this command lints the repo's own source and "
             "needs the footnote checkout's lint scripts, which a bare "
             "`pip install fno` does not ship. Run it from a clone (or install "
             "the plugin).",
@@ -745,10 +738,10 @@ def provider_stderr_merge(providers_dir: Optional[Path] = None) -> None:
 def shellout_drift(no_degrade: bool = False) -> None:
     """Forbid repo-root shell-outs without a proven clone-only degrade path (US4).
 
-    Scans cli/src/fno/ for verbs that bash-exec a resolve_repo_root()/
+    Scans cli/src/fno/ for commands that bash-exec a resolve_repo_root()/
     resolve_plugin_script()-rooted script; every such script must be on the
     CLONE_ONLY_SCRIPTS allowlist (scripts/lint/.clone-only-scripts.txt) and each
-    allowlisted verb must degrade gracefully on a bare install. Fail-closed.
+    allowlisted command must degrade gracefully on a bare install. Fail-closed.
     """
     from fno import lint_shellout_drift
 
@@ -759,130 +752,33 @@ def shellout_drift(no_degrade: bool = False) -> None:
     raise typer.Exit(report.exit_code)
 
 
-def spawn_flag_owners() -> None:
-    """Every ``fno agents spawn`` flag names an owner, and the count is capped.
+def command_ratchet(update: bool = False) -> None:
+    """Ratchet the REAL command count.
 
-    ``menu-caps`` ratchets VERBS; nothing ratcheted FLAGS. Introspecting the
-    live Typer command is what makes this a gate and not a stale list: a flag
-    added to ``cmd_spawn`` and not to ``FLAG_OWNERS`` fails here, in the PR
-    that adds it.
-    """
-    from fno.agents.spawn_flag_owners import (
-        CALLER,
-        CONFIG,
-        DEFAULT,
-        ENV,
-        FLAG_OWNERS,
-        SPAWN_FLAG_CAP,
-        TRANSLATED,
-    )
-
-    try:
-        import typer.main
-
-        from fno.agents.cli import agents_app
-
-        group = cast("click.Group", typer.main.get_command(agents_app))
-        spawn_cmd = group.commands.get("spawn")
-    except Exception as exc:  # noqa: BLE001 - a lint must degrade, not crash
-        typer.echo(f"spawn-flag-owners: skipped (parser unavailable: {exc})", err=True)
-        return
-    if spawn_cmd is None:
-        typer.echo("spawn-flag-owners: FAIL\nspawn command not found on the agents app", err=True)
-        raise typer.Exit(1)
-
-    # The primary long spelling of every Option on the live command. Hidden
-    # flags are in: they occupy the parser and the reader's attention the
-    # same as visible ones.
-    live = {
-        opts[0]
-        for param in spawn_cmd.params
-        if (opts := [o for o in getattr(param, "opts", []) if o.startswith("--")])
-    }
-
-    failures: list[str] = []
-    if unclassified := sorted(live - set(FLAG_OWNERS)):
-        failures.append(
-            f"{len(unclassified)} live spawn flag(s) have no owner row: "
-            f"{', '.join(unclassified)}.\n"
-            "  Remedy: add a FLAG_OWNERS row (cli/src/fno/agents/"
-            "spawn_flag_owners.py): owner fno if fno branches on the value, "
-            "translated (with its site) if fno only maps the harness's "
-            "spelling - or forward the flag after `--` when the pane "
-            "passthrough carries it."
-        )
-    if stale := sorted(set(FLAG_OWNERS) - live):
-        failures.append(
-            f"{len(stale)} FLAG_OWNERS row(s) name flags the parser no longer "
-            f"has: {', '.join(stale)}.\n"
-            "  Remedy: delete each stale row in the same PR that removed "
-            "the flag."
-        )
-    if len(live) > SPAWN_FLAG_CAP:
-        failures.append(
-            f"spawn carries {len(live)} flags (cap {SPAWN_FLAG_CAP}).\n"
-            "  Remedy: move harness-owned flags across the `--` passthrough "
-            "instead of declaring them; FLAG_OWNERS marks which are safe to "
-            "move - or raise SPAWN_FLAG_CAP in a deliberate one-line diff."
-        )
-    if siteless := sorted(
-        f for f, row in FLAG_OWNERS.items() if row.owner == TRANSLATED and not row.site
-    ):
-        failures.append(
-            f"{len(siteless)} translated row(s) name no site: {', '.join(siteless)}.\n"
-            "  Remedy: set `site` to the file:function holding the "
-            "per-harness spelling map; it is the code a migration deletes."
-        )
-    known = {CALLER, CONFIG, DEFAULT, ENV}
-    if unknown_sources := sorted(
-        f
-        for f, row in FLAG_OWNERS.items()
-        if not row.sources or not set(row.sources) <= known
-    ):
-        failures.append(
-            f"{len(unknown_sources)} row(s) carry an unknown or empty "
-            f"provenance: {', '.join(unknown_sources)}.\n"
-            "  Remedy: use the shared vocabulary - caller, config, env, "
-            "default - and record only what the code verifiably does."
-        )
-
-    if failures:
-        for f in failures:
-            typer.echo(f"spawn-flag-owners: FAIL\n{f}", err=True)
-        raise typer.Exit(1)
-    typer.echo(
-        f"spawn-flag-owners: ok ({len(live)}/{len(FLAG_OWNERS)} flags owned; "
-        f"cap {SPAWN_FLAG_CAP})"
-    )
-
-
-def verb_ratchet(update: bool = False) -> None:
-    """Ratchet the REAL verb count.
-
-    ``menu-caps`` caps how many verbs each group holds; this pins WHICH exist.
-    Fails when the live surface and ``scripts/ci/verb-baseline.txt`` disagree,
-    naming the added or removed verbs. Covers BOTH binaries (the fno-py
+    ``menu-caps`` caps how many commands each group holds; this pins WHICH exist.
+    Fails when the live surface and ``scripts/ci/command-baseline.txt`` disagree,
+    naming the added or removed commands. Covers BOTH binaries (the fno-py
     registry and the Rust front's mux + version surface) and fails closed with
     a named error - writing no baseline - when the Rust front cannot be reached,
     so the ratchet can never pass by reporting only half the surface. ``--update``
     regenerates the baseline after an intentional change.
     """
-    from fno import lint_verb_ratchet as vr
+    from fno import lint_command_ratchet as vr
 
     if update:
         try:
             leaves = vr.enumerate_all_leaves()
-        except vr.VerbRatchetError as exc:
+        except vr.CommandRatchetError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1)
         path = vr.baseline_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(vr.generate(leaves), encoding="utf-8")
-        typer.echo(f"verb-ratchet: regenerated {path.name} ({len(leaves)} leaves)")
+        typer.echo(f"command-ratchet: regenerated {path.name} ({len(leaves)} leaves)")
         return
     try:
         report = vr.check()
-    except vr.VerbRatchetError as exc:
+    except vr.CommandRatchetError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1)
     typer.echo(report.message, err=not report.ok)
@@ -932,7 +828,7 @@ def _run_ci_gate(rel_path: str) -> None:
 def preamble_budget() -> None:
     """Report the SessionStart preamble byte budget; refuse when over it.
 
-    This verb is the local signal, not a second CI registration: the gate
+    This command is the local signal, not a second CI registration: the gate
     already runs in guards.yml on every push and pull_request.
     """
     _run_ci_gate("scripts/ci/check-preamble-budget.sh")
@@ -1392,7 +1288,7 @@ def lint(
         "--update",
         help=(
             "Regenerate a baseline after an intentional change. "
-            "verb-ratchet: scripts/ci/verb-baseline.txt. "
+            "command-ratchet: scripts/ci/command-baseline.txt. "
             "seam-crossings: scripts/ci/seam-crossings-baseline.txt."
         ),
     ),
@@ -1443,3 +1339,105 @@ def lint(
     }
     accepted = set(inspect.signature(fn).parameters)
     fn(**{k: v for k, v in supplied.items() if k in accepted})
+
+
+# ---------------------------------------------------------------------------
+# Hook-config reference helpers (moved from fno.hook_config, whose only
+# production caller was the hook-tombstones check above).
+#
+# The harness reads hook config once at session start and answers from that
+# snapshot for the session's life. A commit that deletes a script the previous
+# release's config referenced leaves every pre-merge session holding a
+# registration for a missing file; on the Bash PreToolUse matcher a hook that
+# cannot launch fails the whole tool call, so one deletion removes every shell
+# command at once for those sessions. The ``hook-tombstones`` lint gate and the
+# doctor plugin-cache signal both ask these helpers the same question against a
+# revision range: did it delete a script the base revision's config referenced?
+#
+# Failure discipline: every git-reading function returns ``None`` when the git
+# call fails, never an empty collection. An empty set means "the call succeeded
+# and found nothing"; ``None`` means the instrument never ran, so a caller that
+# trusted an empty set on failure would read a broken probe as a clean pass.
+# ---------------------------------------------------------------------------
+
+# hooks/hooks.json spells the plugin root CLAUDE_PLUGIN_ROOT, the codex config
+# PLUGIN_ROOT. The captured path runs to the next whitespace or quote, so a
+# command carrying several refs (the context-observe wrapper shape, and the
+# `uv run --project ... python3 <gate>.py` incident shape) yields every one,
+# including scripts/ paths outside hooks/.
+_PLUGIN_ROOT_RE = re.compile(
+    r"\$\{(?:CLAUDE_PLUGIN_ROOT|CODEX_PLUGIN_ROOT|PLUGIN_ROOT)\}/([^\s\"'\\]+)"
+)
+
+HOOK_CONFIG_SUFFIX = "hooks.json"
+
+
+def referenced_scripts(config_text: str) -> set[str]:
+    """Repo-relative script paths named by one hook config document."""
+    return set(_PLUGIN_ROOT_RE.findall(config_text))
+
+
+def _git(repo_root: Path, *args: str) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def hook_configs_at(repo_root: Path, rev: str) -> Optional[list[str]]:
+    """Every ``*hooks.json`` under hooks/ tracked at ``rev``, repo-relative."""
+    out = _git(repo_root, "ls-tree", "-r", "--name-only", rev, "--", "hooks/")
+    if out is None:
+        return None
+    return [line for line in out.splitlines() if line.endswith(HOOK_CONFIG_SUFFIX)]
+
+
+def referenced_at_revision(repo_root: Path, rev: str) -> Optional[set[str]]:
+    """Union of script paths referenced by all hook configs at ``rev``."""
+    configs = hook_configs_at(repo_root, rev)
+    if configs is None:
+        return None
+    refs: set[str] = set()
+    for config in configs:
+        text = _git(repo_root, "show", f"{rev}:{config}")
+        if text is not None:
+            refs |= referenced_scripts(text)
+    return refs
+
+
+def deleted_in_range(repo_root: Path, base: str, head: str) -> Optional[set[str]]:
+    """Files removed between ``base`` and ``head`` (two-dot: all of it).
+
+    ``--no-renames`` is load-bearing: a same-content move otherwise reads as
+    R, not D, and a session cached against the old path is just as bricked.
+    """
+    out = _git(
+        repo_root,
+        "diff",
+        "--no-renames",
+        "--name-only",
+        "--diff-filter=D",
+        f"{base}..{head}",
+    )
+    if out is None:
+        return None
+    return {line for line in out.splitlines() if line}
+
+
+def stubless_deletions(repo_root: Path, base: str, head: str) -> Optional[list[str]]:
+    """Scripts the base config referenced that the range deleted, sorted.
+
+    This is the violation set: deleting one of these bricks every session
+    still answering from the base revision's cached hook config.
+    """
+    refs = referenced_at_revision(repo_root, base)
+    deleted = deleted_in_range(repo_root, base, head)
+    if refs is None or deleted is None:
+        return None
+    return sorted(refs & deleted)

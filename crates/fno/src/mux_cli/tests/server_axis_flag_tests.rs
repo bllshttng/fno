@@ -22,7 +22,7 @@ fn server_axis_resolve_session_accepts_both_spellings() {
 #[test]
 fn server_axis_pane_run_parser_accepts_server_alias_pair() {
     // AC1/AC3: --server x and --session x parse to the same value, on the
-    // run parser and on a non-run pane verb.
+    // run parser and on a non-run pane command.
     let run_server =
         pane_args(&["run", "--server", "s1", "--", "echo", "hi"]).expect("--server parses on run");
     let run_alias =

@@ -108,76 +108,6 @@ def test_claude_short_id_resolves_and_auto_registers(_registry_home):
     assert resolve_agent("c655c326").matched_by != "harness_store"
 
 
-def test_batch_confinement_resolves_scope_once_and_refuses_unsafe_hits(
-    _registry_home, monkeypatch
-):
-    """AC3-ERR: batch callers cannot bypass three-valued project membership."""
-    identities = {
-        "/scope": ("footnote", "/footnote/.git"),
-        "/canonical": ("footnote", "/footnote/.git"),
-        "/worktree": ("footnote", "/footnote/.git"),
-        "/foreign": ("regready", "/regready/.git"),
-        "": (None, None),
-    }
-    calls = []
-
-    def _identity(cwd):
-        calls.append(cwd)
-        return identities[cwd]
-
-    monkeypatch.setattr(store_fallback, "_project_identity", _identity)
-    same_project = [
-        store_fallback.StoreHit("codex", "session-canonical", "/canonical"),
-        store_fallback.StoreHit("codex", "session-worktree", "/worktree"),
-    ]
-
-    confined = store_fallback.confine_store_hits(
-        "recovery", same_project, scope_cwd="/scope", cross_project=False
-    )
-
-    assert confined == same_project
-    assert calls == ["/scope", "/canonical", "/worktree"]
-
-    with pytest.raises(AgentResolutionError, match="cross-project candidate"):
-        store_fallback.confine_store_hits(
-            "recovery",
-            [store_fallback.StoreHit("codex", "session-foreign", "/foreign")],
-            scope_cwd="/scope",
-            cross_project=False,
-        )
-    with pytest.raises(AgentResolutionError, match="could not be determined"):
-        store_fallback.confine_store_hits(
-            "recovery",
-            [store_fallback.StoreHit("codex", "session-unknown", "")],
-            scope_cwd="/scope",
-            cross_project=False,
-        )
-
-    # A full id is globally unique: the waiver fires with no flag and never
-    # even asks which project the caller sits in.
-    monkeypatch.setattr(
-        store_fallback,
-        "_project_identity",
-        lambda cwd: (_ for _ in ()).throw(AssertionError("must not be consulted")),
-    )
-    foreign = [store_fallback.StoreHit("codex", "session-foreign", "/foreign")]
-    assert (
-        store_fallback.confine_store_hits(
-            "979e1acc-e240-4af5-9998-0a74ec6c0683",
-            foreign,
-            scope_cwd="/scope",
-            cross_project=False,
-        )
-        == foreign
-    )
-
-
-# --- US2/US3: other harnesses ----------------------------------------------
-
-
-# --- refusals and safety ----------------------------------------------------
-
-
 def test_ambiguous_token_refuses_with_candidates(_registry_home):
     """AC1-ERR: two stores matching one short id refuses and registers nothing."""
     _write_claude_session(_registry_home, CLAUDE_UUID)
@@ -426,7 +356,7 @@ def test_registration_identity_collision_is_never_degraded_to_a_synthesized_row(
         resolve_agent("deadbeef")
 
 
-# --- verb wiring: the heal must reach every resolution surface --------------
+# --- command wiring: the heal must reach every resolution surface --------------
 
 
 def test_resume_heals_an_unregistered_session(_registry_home):
@@ -599,20 +529,18 @@ def test_adopt_stamps_the_newest_entry_not_the_mtime(tmp_path):
 
 
 def test_raising_store_import_degrades_pid_and_resolution_survives(monkeypatch, tmp_path):
-    """A failing fno.inbox.store import degrades to pid=None; the verb completes.
+    """A failing fno.inbox.store import never crashes resolution.
 
-    The lazy import sat inside the try, so a raising import (module or dep
-    missing) made ``except ProjectIdentificationError:`` evaluate an unbound
-    local and the UnboundLocalError escaped the broad except, crashing stop.
+    The old project-membership helper lazily imported fno.inbox.store inside a
+    try whose except named ProjectIdentificationError, so a raising import
+    (module or dep missing) escaped as UnboundLocalError and crashed stop.
+    Membership is gone (healing is machine-wide), but the degrade posture
+    stays pinned: a broken import must not take the heal down with it.
     """
     monkeypatch.setitem(sys.modules, "fno.inbox.store", None)
 
-    assert store_fallback._project_identity("/tmp") == (None, None)
-
-    # Through the public path: an unresolvable scope identity skips
-    # confinement, so the store hit still heals instead of crashing.
     _write_claude_session(tmp_path, CLAUDE_UUID)
-    entry = store_fallback.heal_from_harness_store("c655c326", scope_cwd=str(tmp_path))
+    entry = store_fallback.heal_from_harness_store("c655c326")
     assert entry is not None
     assert entry.harness_session_id == CLAUDE_UUID
 

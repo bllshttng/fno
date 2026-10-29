@@ -54,12 +54,12 @@ fi
 if ! PYTHONPATH="${CLI_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_CMD[@]}" - "$PROVIDER" <<'PY'
 import sys
 
-from fno.agents.mux_spawn import PANE_HOSTABLE_PROVIDERS
+from fno.agents.harness_map import is_declared
 
 harness = sys.argv[1]
-if harness not in PANE_HOSTABLE_PROVIDERS:
+if not is_declared(harness):
     print(
-        f"capture-readiness-grid: harness '{harness}' is not pane-hostable",
+        f"capture-readiness-grid: harness '{harness}' declares no capability row",
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -94,7 +94,7 @@ from fno.agents.mux_spawn import build_pane_argv
 # Interactive composer mode (no -p / exec one-shot): we want the idle prompt.
 # The capability table and pane argv builder are the only sources of harness
 # forms; this pinner must not grow a second provider map.
-argv = build_pane_argv(provider, "", Path.cwd(), False, None)
+argv = build_pane_argv(provider, "", Path.cwd(), None)
 
 pid, fd = pty.fork()
 if pid == 0:  # child

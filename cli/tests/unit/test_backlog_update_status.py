@@ -2,7 +2,7 @@
 
 Every test drives the real CLI, which forwards to the native backlog-update
 action, which writes through the real store - never a stubbed receipt
-asserted against its own renderer. The lifecycle verbs are transports over
+asserted against its own renderer. The lifecycle commands are transports over
 the same door, so the undefer/unsupersede contracts live here too.
 
 Filter: ``fno doctor test cli/tests/unit/test_backlog_update_status.py``

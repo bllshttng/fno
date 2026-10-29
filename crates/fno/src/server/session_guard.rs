@@ -21,8 +21,8 @@ impl Drop for SocketGuard {
 
 /// RAII count of in-flight connections, read by the FNO_E2E idle reaper. A
 /// control one-shot (`pane run`, kill-server, a probe) is NOT an attached
-/// client, so without this the reaper can fire mid-verb on a young server
-/// whose test grace is shorter than a loaded machine's verb latency, killing
+/// client, so without this the reaper can fire mid-command on a young server
+/// whose test grace is shorter than a loaded machine's command latency, killing
 /// the server out from under a live peer.
 pub(crate) struct ConnAlive(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 

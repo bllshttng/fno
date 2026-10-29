@@ -1,4 +1,4 @@
-"""Status-vocabulary tests that live beside the old logs verb file.
+"""Status-vocabulary tests that live beside the old logs command file.
 
 The logs tests that shared this file became goldens in
 crates/fno-agents/tests/golden/logs and Rust follow tests in

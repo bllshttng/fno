@@ -1,0 +1,42 @@
+id: alpha
+version: 1.0.0
+footnote_compat:
+  minimum: 0.1.0
+roles:
+  - role: {id: writer, function_id: docs}
+    function: {id: docs}
+    mission: "Draft the café guide"
+    deliverable_kinds: [draft]
+    authority_ceiling: internal
+    context_selectors:
+      - {kind: artifact, identifier: style-guide}
+    review_policy: {required: true, minimum_reviewers: 1}
+    delivery_policy: {required_evidence: [review]}
+    default_topology: loop
+  - role: {id: editor, function_id: docs}
+    function: {id: docs}
+    mission: Edit drafts
+    deliverable_kinds: [edit]
+    required_capabilities: [docs.edit]
+    authority_ceiling: advisory
+    review_policy: {}
+    delivery_policy: {}
+    default_topology: direct
+skills:
+  - {id: sk, source: skills/sk/SKILL.md}
+agents:
+  - {id: alpha-writer, source: agents/writer.md, role: {id: writer, function_id: docs}}
+workflows:
+  - {id: flow, source: workflows/flow.yaml}
+adapters:
+  - id: site
+    destination: docs-site
+    conformance: {adapter_id: site, adapter_version: "1", remote_idempotency: true}
+evaluators:
+  - {id: check, command: bash evaluators/check.sh}
+assets:
+  - {id: style-guide, source: assets/style.md}
+permissions:
+  - {effect_class: publish, destination: docs-site}
+scenarios:
+  - {id: smoke, command: bash scenarios/smoke.sh, recorded_result: passed}

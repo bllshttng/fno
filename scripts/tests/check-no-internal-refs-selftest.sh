@@ -15,16 +15,17 @@ TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 FIXTURE_ROOT="$TMP_ROOT/repo"
-git clone --quiet --no-hardlinks "$REPO_ROOT" "$FIXTURE_ROOT"
-# git clone carries the COMMITTED tree; this run's cleanup lives in the working
-# tree, and renames mean some committed files must NOT exist in the fixture at
-# all. Mirror the working tree over the clone, deleting anything the working
-# tree no longer has (.git excepted).
-rsync -a --delete --exclude='.git/' "$REPO_ROOT/" "$FIXTURE_ROOT/"
+mkdir -p "$FIXTURE_ROOT/scripts/ci" "$FIXTURE_ROOT/scripts/lib"
+git -C "$FIXTURE_ROOT" init -q
+cp "$GATE" "$FIXTURE_ROOT/scripts/ci/check-no-internal-refs.sh"
+cp "$REPO_ROOT/scripts/lib/assert-absent.sh" "$FIXTURE_ROOT/scripts/lib/assert-absent.sh"
+# Keep the search control tracked without copying unrelated repository state.
+printf '# footnote\nPublic documentation.\n' > "$FIXTURE_ROOT/README.md"
+git -C "$FIXTURE_ROOT" add README.md
 run_gate() { ( cd "$FIXTURE_ROOT" && bash scripts/ci/check-no-internal-refs.sh 2>&1 ); }
 
 if run_gate >/dev/null; then
-    :  # clean tree passes (asserted on the fixture clone, which is clean)
+    :  # clean fixture passes before any violation is planted
 else
     echo "FAIL: clean fixture must pass the internal-refs gate" >&2
     run_gate >&2 || true
@@ -87,12 +88,24 @@ assert_rejected "node id in a shell comment" \
     "scripts/_selftest_probe.sh" '# planned by node x-1b88.'
 assert_rejected "ab- id in a code comment" \
     "hooks/_selftest_probe.sh" '# legacy plan ab-1b88c2d4 shaped this.'
-assert_rejected "session URL in code" \
-    "crates/fno-agents/src/_selftest_probe.rs" '// transcript: https://claude.ai/code/1a2b3c'
 assert_rejected "node id still fails in the prose scope" \
     "docs/_selftest_probe.md" "a breadcrumb (x-1b88)."
+assert_rejected "node id in a Mintlify page" \
+    "mintlify/_selftest_probe.mdx" "a breadcrumb (x-1b88)."
+assert_rejected "private path in a Mintlify page" \
+    "mintlify/_selftest_probe.mdx" "Read internal/private-notes.md."
+assert_rejected "node id in Mintlify navigation" \
+    "mintlify/_selftest_probe.json" '{"name":"x-1b88"}'
+assert_rejected "private path in Mintlify navigation" \
+    "mintlify/_selftest_probe.json" '{"pages":["internal/private-notes"]}'
 
 # --- sanctioned forms must still pass ---
+assert_accepted "clean Mintlify page" \
+    "mintlify/_selftest_probe.mdx" '# Public documentation'
+assert_accepted "clean Mintlify navigation" \
+    "mintlify/_selftest_probe.json" '{"name":"fno"}'
+assert_accepted "session URL in code is allowed" \
+    "crates/fno-agents/src/_selftest_probe.rs" '// transcript: https://claude.ai/code/1a2b3c'
 assert_accepted "allowlisted synthetic in code comment" \
     "crates/fno/src/_selftest_probe.rs" '// format example: tgt-x-aaaa-liveness.'
 assert_accepted "internal/ path literal in code" \

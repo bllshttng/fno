@@ -6,7 +6,7 @@
 # Gap 1: the REAL binary wired through the REAL shim produces the right exit
 #         codes and emits real events into the project events.jsonl.
 # Gap 2: the spellings that init-target-state.sh writes for budget fields are
-#         the spellings that fno-agents loop-check reads (init->verb coherence).
+#         the spellings that fno-agents loop-check reads (init->command coherence).
 #
 # Tests:
 #   Case A (green path): real shim + real binary + green gh stub -> exit 0 +
@@ -14,7 +14,7 @@
 #   Case B (block path): real shim + real binary + no-PR gh stub + no promise ->
 #           exit 2 + stderr mentions continue message.
 #   Case C (budget coherence): init writes unattended settings.yaml format that
-#           verb reads; session cost > cap -> Budget termination.
+#           command reads; session cost > cap -> Budget termination.
 #   Cases D/E: real approval store -> production fno mux -> evaluator -> real
 #           loop-check + each stop hook -> real finalize + durable receipt.
 #   Case F: malformed active delivery stays blocked across the production mux.
@@ -62,7 +62,7 @@ if [[ ! -x "$REAL_BIN" ]]; then
     exit 77
 fi
 
-# The event store's rows verb lives in the fno CLI binary, not fno-agents.
+# The event store's rows command lives in the fno CLI binary, not fno-agents.
 CLI_BIN="${REPO_ROOT}/crates/fno/target/debug/fno"
 if [[ ! -x "$CLI_BIN" ]]; then
     CLI_BIN="$(command -v fno || true)"
@@ -87,7 +87,7 @@ make_stub() {
 
 # ── helper: green gh stub (from MockBins::green() in loop_check.rs) ──────────
 # $2 = headRefOid the stub reports; must equal the test repo's real HEAD or
-# the verb's unpushed-head guard (codex P1 on #447) blocks DonePRGreen.
+# the command's unpushed-head guard (codex P1 on #447) blocks DonePRGreen.
 make_green_gh() {
     local path="$1"
     local head_oid="${2:-}"
@@ -185,75 +185,100 @@ setup_delivery_project() {
     PROJECT_DIR="$dir" SESSION_ID="$session_id" HARNESS_ID="$harness_id" \
         TRANSCRIPT_KIND="$transcript_kind" uv run --project "${REPO_ROOT}/cli" python - <<'PY'
 import datetime as dt
+import hashlib
+import json
 import os
+import sqlite3
 from pathlib import Path
 
 import yaml
 
-from fno.approvals import (
-    AdapterCapability,
-    ApprovalRequest,
-    DecisionKind,
-    EffectState,
-    EffectStore,
-    action_digest,
-)
+from fno import events as events_mod
 from fno.paths import project_log
-
-
-class AllowAuthority:
-    source = "e2e-policy"
-
-    def may_approve(self, *, principal_id: str, effect_class: str, destination: str) -> bool:
-        return principal_id == "principal:e2e"
-
 
 root = Path(os.environ["PROJECT_DIR"])
 session_id = os.environ["SESSION_ID"]
 harness_id = os.environ["HARNESS_ID"]
 now = dt.datetime.now(dt.timezone.utc)
-request = ApprovalRequest(
-    request_id="request-e2e",
-    principal_id="principal:e2e",
-    work_order_id="x-delivery-e2e",
-    attempt_id="attempt-e2e",
-    effect_id="effect-e2e",
-    effect_class="communication.external",
-    destination="email:customer@example.com",
-    action_digest=action_digest({"subject": "hello", "body": "e2e"}),
-    created_at=now,
-    expires_at=now + dt.timedelta(hours=1),
+
+# Seed the approved-and-acknowledged effect the way the Rust effect gate
+# leaves it: the same tables, and the same four events in the project journal.
+bound = {
+    "principal_id": "principal:e2e",
+    "work_order_id": "x-delivery-e2e",
+    "attempt_id": "attempt-e2e",
+    "effect_id": "effect-e2e",
+    "effect_class": "communication.external",
+    "destination": "email:customer@example.com",
+    "action_digest": hashlib.sha256(b'{"body":"e2e","subject":"hello"}').hexdigest(),
+    "expires_at": (now + dt.timedelta(hours=1)).isoformat(),
+}
+request_digest = hashlib.sha256(
+    json.dumps(bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+).hexdigest()
+db = root / ".fno/approvals.db"
+conn = sqlite3.connect(db)
+conn.executescript(
+    """
+    CREATE TABLE requests (request_digest TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE,
+        principal_id TEXT NOT NULL, work_order_id TEXT NOT NULL, attempt_id TEXT NOT NULL,
+        effect_id TEXT NOT NULL, effect_class TEXT NOT NULL, destination TEXT NOT NULL,
+        action_digest TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+    CREATE TABLE decisions (request_digest TEXT PRIMARY KEY, deciding_principal_id TEXT NOT NULL,
+        decision TEXT NOT NULL, decided_at TEXT NOT NULL, transport TEXT);
+    CREATE TABLE attempts (idempotency_key TEXT PRIMARY KEY, effect_id TEXT NOT NULL,
+        work_order_id TEXT NOT NULL, attempt_id TEXT NOT NULL, request_digest TEXT NOT NULL,
+        action_digest TEXT NOT NULL, destination TEXT NOT NULL, effect_class TEXT NOT NULL,
+        adapter_id TEXT NOT NULL, adapter_version TEXT NOT NULL, state TEXT NOT NULL,
+        external_ref TEXT, reconciliation_ref TEXT, dispatch_claimed INTEGER NOT NULL DEFAULT 0,
+        dispatch_token TEXT, remote_idempotency INTEGER NOT NULL DEFAULT 0);
+    """
 )
-adapter = AdapterCapability(adapter_id="smtp-e2e", adapter_version="1")
-with EffectStore(
-    root / ".fno/approvals.db",
-    authority=AllowAuthority(),
-    events_path=project_log("events.jsonl", project_root=root),
-    now=lambda: now,
-) as store:
-    store.submit(request)
-    store.decide(
-        request_digest=request.request_digest,
-        deciding_principal_id="principal:e2e",
-        decision=DecisionKind.APPROVED,
+conn.execute(
+    "INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    (request_digest, "request-e2e", bound["principal_id"], bound["work_order_id"],
+     bound["attempt_id"], bound["effect_id"], bound["effect_class"], bound["destination"],
+     bound["action_digest"], now.isoformat(), bound["expires_at"]),
+)
+conn.execute(
+    "INSERT INTO decisions VALUES (?,?,?,?,?)",
+    (request_digest, "principal:e2e", "approved", now.isoformat(), None),
+)
+conn.execute(
+    "INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ("effect-key-e2e", bound["effect_id"], bound["work_order_id"], bound["attempt_id"],
+     request_digest, bound["action_digest"], bound["destination"], bound["effect_class"],
+     "smtp-e2e", "1", "acknowledged", "message-e2e", None, 1, "e2e-token", 0),
+)
+conn.commit()
+conn.close()
+
+ids = {"work_order_id": bound["work_order_id"], "attempt_id": bound["attempt_id"],
+       "effect_id": bound["effect_id"]}
+stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+journal = project_log("events.jsonl", project_root=root)
+for n, (kind, data) in enumerate((
+    ("approval_requested", {"request_digest": request_digest, "request_id": "request-e2e",
+        "principal_id": bound["principal_id"], "effect_class": bound["effect_class"],
+        "destination": bound["destination"], "action_digest": bound["action_digest"],
+        "expires_at": bound["expires_at"], **ids}),
+    ("approval_decided", {"request_digest": request_digest, "decision": "approved",
+        "deciding_principal_id": "principal:e2e", "authority_source": "e2e-policy",
+        "transport": None, **ids}),
+    ("effect_state_changed", {"idempotency_key": "effect-key-e2e", "state": "prepared",
+        "request_digest": request_digest, **ids}),
+    ("effect_state_changed", {"idempotency_key": "effect-key-e2e", "state": "executing",
+        "previous_state": "prepared", "request_digest": request_digest, **ids}),
+    ("effect_state_changed", {"idempotency_key": "effect-key-e2e", "state": "acknowledged",
+        "previous_state": "executing", "request_digest": request_digest,
+        "external_ref": "message-e2e", "reconciliation_ref": None, **ids}),
+)):
+    events_mod.append_event(
+        {"ts": stamp, "type": kind, "source": "approvals",
+         "data": {**data, "event_id": f"e2e-event-{n}"}},
+        journal,
     )
-    token = store.prepare(
-        request_digest=request.request_digest,
-        idempotency_key="effect-key-e2e",
-        adapter=adapter,
-    ).dispatch_token
-    assert token is not None
-    store.settle(
-        dispatch_token=token,
-        idempotency_key="effect-key-e2e",
-        state=EffectState.EXECUTING,
-    )
-    store.settle(
-        dispatch_token=token,
-        idempotency_key="effect-key-e2e",
-        state=EffectState.ACKNOWLEDGED,
-        external_ref="message-e2e",
-    )
+request = type("Request", (), {"request_digest": request_digest})
 
 frontmatter = {
     "node": "x-delivery-e2e",
@@ -327,7 +352,7 @@ assert_delivery_artifacts() {
     local dir="$1" session_id="$2" events rows
     events="$(cd "$dir" && HOME="$dir/home" env -u FNO_EVENTS_PATH "$REAL_BIN" state path events)"
     # The store commit is the write boundary: grep the committed rows, never
-    # the raw file (the same contract Case A reads through). The verb returns
+    # the raw file (the same contract Case A reads through). The command returns
     # envelope lines as escaped JSON strings; jq -r unwraps them so the
     # needles below match the rows the way every other reader sees them.
     rows="$("$CLI_BIN" doctor event rows --events "$events" 2>/dev/null | jq -r '.[]' 2>/dev/null || true)"
@@ -553,7 +578,7 @@ STATE
         cb_ok=false
     fi
 
-    # Shim echoes the block message from the verb to stderr
+    # Shim echoes the block message from the command to stderr
     if [[ -z "$HOOK_STDERR" ]]; then
         fail "Case B: expected a message on stderr from the shim, got nothing"
         cb_ok=false
@@ -564,13 +589,13 @@ STATE
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Case C: init->verb budget coherence (Gap 2)
+# Case C: init->command budget coherence (Gap 2)
 # Writes config.toml in the flat budget.unattended.cost_cap_usd format that
 # init-target-state.sh resolves from config.sh and that loopcheck.rs
 # parse_settings() reads as a TOML table.
 # Session cost 0.05 > cap 0.01 -> Budget termination.
 # ─────────────────────────────────────────────────────────────────────────────
-log "Case C: budget coherence (init format -> verb reads -> Budget trip)"
+log "Case C: budget coherence (init format -> command reads -> Budget trip)"
 {
     TMP_DIR="$(mktemp -d)"
     HOME_DIR="${TMP_DIR}/home"
@@ -603,7 +628,7 @@ TOML
 {"entries":[{"session_id":"${SESSION_ID}","cost_usd":0.05,"tokens":1000}]}
 LEDGER
 
-    # Write a manifest with attended: false (so verb picks unattended cap 0.01)
+    # Write a manifest with attended: false (so command picks unattended cap 0.01)
     STATE_FILE="${TMP_DIR}/.fno/target-state.md"
     cat > "$STATE_FILE" <<STATE
 ---
@@ -700,7 +725,7 @@ log "Case D: generic delivery through production mux and Claude hook"
         cd "$TMP_DIR" || exit 1
         env HOME="$TMP_DIR/home" UV_TOOL_DIR="$TMP_DIR/uv-tools" \
             FNO_BOOTSTRAP_WHEEL="$REPO_ROOT/cli" PATH="$COMMON_PATH" \
-            "$MUX_BIN" delivery evaluate --json --plan-path plan.md --events "$D_EVENTS"
+            "$MUX_BIN" do delivery evaluate --json --plan-path plan.md --events "$D_EVENTS"
     )
     cd_ok=true
     assert_real_pending_path "$TMP_DIR" \

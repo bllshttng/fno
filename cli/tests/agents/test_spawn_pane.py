@@ -16,7 +16,6 @@ socket); these tests pin the Python contract:
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -26,8 +25,9 @@ from types import SimpleNamespace
 import pytest
 
 from fno.paths_testing import use_tmpdir
-from fno.agents.mux_spawn import MuxSpawnResult
-from tests.agents._fake_claude import stub_codex_sandbox_probe  # noqa: F401  re-exported for test_spawn_pane_codex_receipt
+
+
+from tests.agents._route_overlay_stub import claude_route_overlay_stub
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +45,7 @@ CODEX_HARNESS = "codex"
 
 
 class FakeRunner:
-    """Record `fno mux ...` invocations; script the replies per verb."""
+    """Record `fno mux ...` invocations; script the replies per command."""
 
     def __init__(
         self,
@@ -393,52 +393,41 @@ def test_ac1_fr_billing_guard_refuses_print_argv_before_pane(
 def test_build_pane_argv_provider_forms(no_state_grant: None, tmp_path: Path) -> None:
     from fno.agents.mux_spawn import build_pane_argv
 
-    claude = build_pane_argv("claude", "task", tmp_path, False, "uuid-1")
+    claude = build_pane_argv("claude", "task", tmp_path, "uuid-1")
     assert claude == ["claude", "--session-id", "uuid-1", "--", "task"]
 
-    codex = build_pane_argv("codex", "task", tmp_path, False, None)
+    codex = build_pane_argv("codex", "task", tmp_path, None)
     assert codex[:5] == ["codex", "--remote", "unix://", "-C", str(tmp_path)]
     assert "--sandbox" in codex and codex[-1] == "task"
     # The codex seed rides behind clap's own end-of-options fence.
     assert codex[-2] == "--"
-    codex_yolo = build_pane_argv("codex", "", tmp_path, True, None)
-    assert "--dangerously-bypass-approvals-and-sandbox" in codex_yolo
 
-    gemini = build_pane_argv("gemini", "task", tmp_path, False, None)
+    gemini = build_pane_argv("gemini", "task", tmp_path, None)
     assert gemini[:2] == ["gemini", "--skip-trust"]
     assert "-i" in gemini
     # Bare interactive session: no -i without a message.
-    assert "-i" not in build_pane_argv("gemini", "", tmp_path, False, None)
+    assert "-i" not in build_pane_argv("gemini", "", tmp_path, None)
 
     # agy is never-prompt and stateless. The seed is delivered after readiness.
-    agy = build_pane_argv("agy", "task", tmp_path, False, "ignored-uuid")
+    agy = build_pane_argv("agy", "task", tmp_path, "ignored-uuid")
     assert agy == ["agy", "--dangerously-skip-permissions"]
     assert "-p" not in agy and "--session-id" not in agy
-    assert build_pane_argv("agy", "", tmp_path, False, None) == [
+    assert build_pane_argv("agy", "", tmp_path, None) == [
         "agy",
         "--dangerously-skip-permissions",
     ]
 
     # x-51f6 US2: bare `opencode` is the TUI; the message rides --prompt in
     # the EQUAL form (yargs misparses the split form on a flag-shaped value;
-    # the positional is a PROJECT PATH, not a prompt), --auto only under
-    # yolo, and never the headless `run` subcommand.
+    # the positional is a PROJECT PATH, not a prompt), and never the headless `run` subcommand.
     # x-c772: opencode is always launched with a model (the valid
     # zai-coding-plan/glm-5.3 default).
-    opencode = build_pane_argv("opencode", "task", tmp_path, False, "ignored")
+    opencode = build_pane_argv("opencode", "task", tmp_path, "ignored")
     assert opencode == ["opencode", "--prompt=task", "--model", "zai-coding-plan/glm-5.3"]
-    assert build_pane_argv("opencode", "", tmp_path, False, None) == [
+    assert build_pane_argv("opencode", "", tmp_path, None) == [
         "opencode",
         "--model",
         "zai-coding-plan/glm-5.3",
-    ]
-    opencode_yolo = build_pane_argv("opencode", "task", tmp_path, True, None)
-    assert opencode_yolo == [
-        "opencode",
-        "--prompt=task",
-        "--model",
-        "zai-coding-plan/glm-5.3",
-        "--auto",
     ]
     assert "run" not in opencode and "--session-id" not in opencode
 
@@ -460,10 +449,6 @@ def test_generic_pane_arm_hosts_an_undeclared_harness(
     assert argv[0] == "nanoclaw"
     assert seed_rode_in_argv("say ready", argv) is False
     assert build_pane_argv("nanoclaw", "", tmp_path, False, None) == ["nanoclaw"]
-    # yolo/model/effort/permission carry no invented spelling on this arm: the
-    # spawn gate refuses them upstream (AC6-ERR) and the builder never guesses.
-    quiet = build_pane_argv("nanoclaw", "", tmp_path, True, None, model="m", effort="high")
-    assert quiet == ["nanoclaw"]
 
 
 def test_build_pane_argv_normalizes_direct_slash_commands(tmp_path: Path) -> None:
@@ -484,14 +469,6 @@ def test_build_pane_argv_normalizes_direct_slash_commands(tmp_path: Path) -> Non
         "claude", "/fno:target x-81ad", tmp_path, False, "uuid"
     )[-1] == "/fno:target x-81ad"
 
-
-def _pane_repo(tmp_path: Path) -> Path:
-    import subprocess
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    return repo
 
 
 @pytest.fixture
@@ -516,36 +493,30 @@ def test_build_pane_argv_codex_strip_drops_the_user_grant_too(tmp_path: Path) ->
     from fno.agents.mux_spawn import build_pane_argv
 
     repo = _pane_repo(tmp_path)
-    argv = build_pane_argv("codex", "seed text", repo, False, None, add_dir="/extra")
+    argv = build_pane_argv(
+        "codex", "seed text", repo, False, None, passthrough=["--add-dir", "/extra"]
+    )
 
     assert argv.count("--add-dir") == 0
     assert "/extra" not in argv
     assert argv[-2:] == ["--", "seed text"]
 
 
-def test_build_pane_argv_tier3_fails_closed(tmp_path: Path) -> None:
-    # x-b6e2: a no-equivalent (provider, flag) cell raises BEFORE any spawn.
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.mux_spawn import build_pane_argv
+def _happy_on_path(monkeypatch, found: Optional[str]) -> None:
+    """Answer `shutil.which("happy")` with `found`; every other lookup stays real.
 
-    closed = [
-        ("codex", {"agent": "x"}),
-        ("codex", {"tools": "Read"}),
-        ("agy", {"deny_tools": "Bash"}),
-        ("opencode", {"add_dir": "/w"}),
-        ("gemini", {"add_dir": "/w"}),
-        ("gemini", {"agent": "x"}),
-    ]
-    for provider, kw in closed:
-        with pytest.raises(DispatchAskError):
-            build_pane_argv(provider, "t", tmp_path, False, None, **kw)
+    mux_spawn.shutil is the global module, so a patch that answered for every
+    binary would also answer the spawn gate's fno-agents lookup and become
+    github_cli's import-time `_WHICH` for every later test.
+    """
+    import fno.agents.mux_spawn as mux_spawn
 
-    # AC2-ERR: an EMPTY value is unset, not a stray token - it must NOT trip the
-    # fail-closed guard even on a no-equivalent provider (gemini review finding).
-    for provider, kw in closed:
-        argv = build_pane_argv(provider, "t", tmp_path, False, None, **{k: "" for k in kw})
-        assert "" not in argv
-        assert "--agent" not in argv
+    real_which = mux_spawn.shutil.which
+    monkeypatch.setattr(
+        mux_spawn.shutil,
+        "which",
+        lambda b, *a, **k: found if b == "happy" else real_which(b, *a, **k),
+    )
 
 
 def _stub_harness_bin(monkeypatch, tmp_path: Path, name: str) -> Path:
@@ -653,29 +624,6 @@ def test_undeclared_spawn_journey_states_the_lane(
         "ask",
     ):
         assert marker in receipt, f"receipt must state {marker!r}:\n{receipt}"
-
-
-def test_routing_pane_substrate_spawn_stays_python() -> None:
-    """4a-G2 routing carve-out: a pane spawn (explicit or default) never
-    auto-routes to the Rust client; bg/headless spawns still do."""
-    from fno.agents.rust_runtime import _is_pane_substrate_spawn
-
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer", "--substrate", "pane"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "peer", "--substrate=pane"])
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--substrate", "thread"])
-    assert not _is_pane_substrate_spawn(
-        "spawn", ["spawn", "p", "--substrate=headless"]
-    )
-    # x-c772: --once is the headless shortcut -> never a pane. `-H`
-    # was reassigned to --harness (x-6de8), so `-H codex` is a default-pane spawn.
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--once"])
-    assert _is_pane_substrate_spawn("spawn", ["spawn", "p", "-H", "codex"])
-    assert not _is_pane_substrate_spawn("ask", ["ask", "peer", "hi"])
-    # The scan stops at --argv: payload tokens cannot masquerade as our flag.
-    assert _is_pane_substrate_spawn(
-        "spawn", ["spawn", "p", "--argv", "--substrate", "thread"]
-    )
 
 
 def test_mesh_env_wrapper_scrubs_inherited_session_identity() -> None:
@@ -814,39 +762,8 @@ def test_bounded_post_spawn_failure_reaps_pane_and_writes_no_row(
     assert load_registry() == []
 
 
-def test_cmd_spawn_pane_uses_global_bounded_dispatch(monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
-
-    captured = {}
-
-    def fake_bounded(**kwargs):
-        captured.update(kwargs)
-        return MuxSpawnResult(
-            name=kwargs["name"], provider=kwargs["provider"], session="main",
-            pane_id=2, child_pid=None, session_uuid="claude-session",
-        )
-
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_bounded)
-    monkeypatch.setattr(
-        mux_spawn, "dispatch_spawn_pane",
-        lambda **_kwargs: pytest.fail("default pane bypassed placement lease"),
-    )
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "ordinary", "--harness", "claude", "--substrate", "pane", "do work"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert captured["workspace"] is None
-
-
 class SquadAwareRunner(FakeRunner):
-    """A fake whose two verbs DISAGREE about which squad they answer for.
+    """A fake whose two commands DISAGREE about which squad they answer for.
 
     This is the whole point of the fixture. The old fake's ``pane ls`` payload
     carried ``pane_id``, ``squad_id`` and ``tab_id`` in one object and its
@@ -855,7 +772,7 @@ class SquadAwareRunner(FakeRunner):
 
     Here the spawned pane lands in squad 1 and an UNSCOPED ``tab ls`` answers
     with squad 5's tabs - the live shape, where the pane run resolves its squad
-    from the spawn's cwd and the tab verbs resolve theirs from the operator's
+    from the spawn's cwd and the tab commands resolve theirs from the operator's
     gaze. A resolver that reads unscoped gets squad 5's tabs for a squad-1 pane
     and places nothing where it meant to.
     """
@@ -892,7 +809,7 @@ class SquadAwareRunner(FakeRunner):
                     argv, self.tabs_returncode, "", self.tabs_stderr
                 )
             if scope == "UNSCOPED":
-                # CurrentRoute on the tab verbs = the squad being LOOKED at.
+                # CurrentRoute on the tab commands = the squad being LOOKED at.
                 rows = self.squads.get(self.gazed_at, [])
             elif scope.startswith("id:"):
                 sid = int(scope[3:])
@@ -944,10 +861,21 @@ def test_pane_group_scopes_every_tab_read_to_the_pane_own_squad(
     assert set(runner.tab_ls_scopes) == {"id:1"}
 
     # And it joined squad 1's codex tab (anchored on one of ITS panes), never
-    # squad 5's tab 77 that an unscoped read would have offered.
+    # squad 5's tab 77 that an unscoped read would have offered. The anchor
+    # pane carries the squad, so the join names no --workspace of its own.
     join = next(call for call in runner.calls if call[1:4] == ["mux", "tab", "join"])
     assert join[join.index("--at") + 1] == "1"
     assert join[join.index("--src") + 1] == "id:10"
+    assert "--workspace" not in join
+    assert not [call for call in runner.calls if call[1:4] == ["mux", "tab", "rename"]]
+
+    # Act, then place: no pre-spawn `--tab` prediction, and every tab read
+    # happens AFTER the pane exists.
+    run_call = next(call for call in runner.calls if call[1:4] == ["mux", "pane", "run"])
+    assert "--tab" not in run_call
+    run_at = runner.calls.index(run_call)
+    tab_reads = [i for i, c in enumerate(runner.calls) if c[1:4] == ["mux", "tab", "ls"]]
+    assert tab_reads and min(tab_reads) > run_at
 
 
 # -- x-1499: the visible ordinal contract -------------------------------------
@@ -1018,6 +946,7 @@ def test_mesh_env_wrapper_clears_inherited_provenance(monkeypatch):
     adhoc = mux_spawn._mesh_env_wrapper("w", "claude", None, ["claude"])
     for key in mux_spawn.PROVENANCE_KEYS:
         assert ["-u", key] == adhoc[adhoc.index(key) - 1 : adhoc.index(key) + 1]
+        assert not any(t.startswith(f"{key}=") for t in adhoc), key
 
     # A resolved key is set, not cleared; the unresolved rest are still cleared.
     bound = mux_spawn._mesh_env_wrapper(
@@ -1140,25 +1069,15 @@ def test_exact_readiness_failure_never_claims_unconfirmed_reap(
     assert load_registry() == []
 
 
-@pytest.mark.parametrize(
-    "failure_kind",
-    ["os-error"],
-)
 def test_registry_write_failure_reaps_exact_spawned_pane(
-    tmp_path: Path, monkeypatch, failure_kind: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     """A pane without its registry identity is rolled back before failure."""
     from fno.agents import mux_spawn
     from fno.agents.mux_spawn import DispatchAskError, dispatch_spawn_pane
-    from fno.agents.registry import AgentResolutionError, load_registry
+    from fno.agents.registry import load_registry
 
-    failure: Exception
-    if failure_kind == "os-error":
-        failure = OSError("disk full")
-    elif failure_kind == "value-error":
-        failure = ValueError("invalid row")
-    else:
-        failure = AgentResolutionError("identity collision", ambiguous=True)
+    failure = OSError("disk full")
 
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.delenv("FNO_SESSION", raising=False)
@@ -1307,6 +1226,7 @@ def _wrapped_happy_argv(route: dict) -> list[str]:
     return mux_spawn._mesh_env_wrapper("wk", "claude", None, inner, None, None, route)
 
 
+@pytest.mark.dev_build
 def test_happy_pane_wrapped_argv_holds_the_union_invariant(monkeypatch) -> None:
     """Every route key reaches the child, and no credential reaches ``ps``.
 
@@ -1318,15 +1238,14 @@ def test_happy_pane_wrapped_argv_holds_the_union_invariant(monkeypatch) -> None:
     secret moved to the wrapper" (correct) from "the secret was dropped"
     (a 401 in production, and silent here).
     """
-    from fno.agents.account_env import SECRET_ROUTE_VARS
-    import fno.agents.mux_spawn as mux_spawn
+    from fno.agents.spawn_overlay_client import compose_credentials
 
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     wrapped = _wrapped_happy_argv(_ROUTE)
 
     env1 = _env1_assignments(wrapped)
     claude_env = _claude_env_pairs(wrapped)
-    secrets = [k for k in _ROUTE if k in SECRET_ROUTE_VARS]
+    secrets = [k for k in _ROUTE if k in compose_credentials(None, None, {})["secret"]]
     assert secrets, "fixture must carry a credential or this proves nothing"
 
     for key, value in _ROUTE.items():
@@ -1369,12 +1288,11 @@ def test_inject_route_model_argv_pins_the_route_before_the_seed_fence() -> None:
 def test_explicit_happy_monitor_refuses_when_happy_is_absent_before_runner(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import fno.agents.mux_spawn as mux_spawn
     from fno.agents.dispatch import DispatchAskError
     from fno.agents.model_routing import resolve_explicit_route
 
     monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda binary: None)
+    _happy_on_path(monkeypatch, None)
     route = resolve_explicit_route("zai", "glm-5.2")
     assert route is not None
     runner = FakeRunner()
@@ -1442,12 +1360,8 @@ def test_explicit_happy_monitor_refuses_partial_zai_route_before_runner(
     assert runner.calls == []
 
 
-@pytest.mark.parametrize(
-    "credential",
-    ["ANTHROPIC_API_KEY"],
-)
 def test_explicit_happy_monitor_refuses_conflicting_account_credential(
-    tmp_path: Path, monkeypatch, credential: str
+    tmp_path: Path, monkeypatch
 ) -> None:
     from fno.agents.dispatch import DispatchAskError
 
@@ -1460,7 +1374,7 @@ def test_explicit_happy_monitor_refuses_conflicting_account_credential(
             monitor="happy",
             route_provider="zai",
             route_env={**_ROUTE, "ANTHROPIC_MODEL": "glm-5.2"},
-            account_env={credential: "anthropic-secret"},
+            account_env={"CLAUDE_CODE_OAUTH_TOKEN": "anthropic-secret"},
             runner=runner,
         )
 
@@ -1488,7 +1402,7 @@ def _happy_spawn(monkeypatch, tmp_path, **kwargs):
     """
     import fno.agents.mux_spawn as mux_spawn
 
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     registration = kwargs.pop("registration", ("happy-proven-sid", ""))
     monkeypatch.setattr(
         mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: registration
@@ -1511,8 +1425,11 @@ def test_happy_spawn_never_pins_a_session_id(tmp_path: Path, monkeypatch) -> Non
     provider_argv = run_call[run_call.index("--") + 1 :]
     assert "--session-id" not in provider_argv
     assert "happy" in provider_argv
-    # fno did not mint an id; the one on the receipt came from the restamp.
+    # fno did not mint an id; the one on the receipt came from the restamp,
+    # and that proven session earns a `live` receipt with a real short_id.
     assert result.session_uuid == "happy-proven-sid"
+    assert result.status == "live"
+    assert result.short_id, "a live receipt must carry a non-empty short_id"
 
 
 def test_happy_routed_panes_malformed_config_file_refuses(
@@ -1579,20 +1496,18 @@ def test_routed_claude_pane_launches_through_happy_when_enabled(
     tmp_path: Path, monkeypatch
 ) -> None:
     import fno.agents.mux_spawn as mux_spawn
-    from fno.agents.model_routing import DEFAULT_ZAI_BASE_URL, resolve_explicit_route
-    from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
 
     monkeypatch.setattr(mux_spawn, "happy_routed_panes_enabled", lambda: True)
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     monkeypatch.setattr(
         mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: ("happy-sid", "")
     )
-    settings = SettingsModel(config=ConfigBlock(model_routing=ModelRoutingBlock()))
-    route = resolve_explicit_route(
-        "zai", "glm-5.2", settings=settings, env={"ZAI_API_KEY": "zai-secret"}
-    )
-    assert route is not None
-    _, runner = _spawn(monkeypatch, tmp_path, route_env=route)
+    # The route env the Rust owner would answer for -P zai --model glm-5.2
+    # with ZAI_API_KEY: the canned stub's answer.
+    route_env = claude_route_overlay_stub(
+        {"kind": "claude-route", "env": {"ZAI_API_KEY": "zai-secret"}, "model": "glm-5.2"}
+    )["route"]
+    _, runner = _spawn(monkeypatch, tmp_path, route_env=route_env)
 
     argv = _pane_run_argv(runner)
     assert argv[0] == "env", "the mesh env wrapper must stay outermost"
@@ -1602,7 +1517,7 @@ def test_routed_claude_pane_launches_through_happy_when_enabled(
         for i, token in enumerate(happy_argv)
         if token == "--claude-env"
     ]
-    assert f"ANTHROPIC_BASE_URL={DEFAULT_ZAI_BASE_URL}" in pairs
+    assert "ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic" in pairs
     # Credential on the env(1) run only -- see the union invariant test.
     assert not any(p.startswith("ANTHROPIC_AUTH_TOKEN=") for p in pairs)
     assert "ANTHROPIC_AUTH_TOKEN=zai-secret" in argv[: argv.index("happy")]
@@ -1654,7 +1569,7 @@ def test_happy_pane_failure_reaps_and_raises_not_silent(
     from fno.agents.registry import load_registry
 
     monkeypatch.setattr(mux_spawn, "happy_routed_panes_enabled", lambda: True)
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda b: "/usr/local/bin/happy")
+    _happy_on_path(monkeypatch, "/usr/local/bin/happy")
     monkeypatch.setattr(
         mux_spawn,
         "_await_pane_registration",
@@ -1707,38 +1622,39 @@ def test_ac1_passthrough_splices_into_every_pane_arm(tmp_path: Path) -> None:
 
     tok = ["--verbose", "--setting", "x"]
     # claude/codex: before the end-of-options fence carrying the seed.
-    argv = build_pane_argv("claude", "task", tmp_path, False, "u1", passthrough=tok)
+    argv = build_pane_argv("claude", "task", tmp_path, "u1", passthrough=tok)
     fence = argv.index("--")
     assert argv[fence - 3 : fence] == tok
     assert argv[fence + 1] == "task"
-    argv = build_pane_argv("codex", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("codex", "task", tmp_path, None, passthrough=tok)
     fence = argv.index("--")
     assert argv[fence - 3 : fence] == tok
     # agy: the seed is delivered after readiness, so passthrough owns the tail.
-    argv = build_pane_argv("agy", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("agy", "task", tmp_path, None, passthrough=tok)
     assert argv[-3:] == tok and "task" not in argv
     # gemini: before the -i <message> pair.
-    argv = build_pane_argv("gemini", "task", tmp_path, False, None, passthrough=tok)
+    argv = build_pane_argv("gemini", "task", tmp_path, None, passthrough=tok)
     i = argv.index("-i")
     assert argv[i - 3 : i] == tok
-    # opencode: before the permission tail (the positional is a project path).
-    argv = build_pane_argv("opencode", "task", tmp_path, True, None, passthrough=tok)
-    assert argv[-4:-1] == tok and argv[-1] == "--auto"
+    # opencode: the tail, after the model pair (the positional is a project path).
+    argv = build_pane_argv("opencode", "task", tmp_path, None, passthrough=tok)
+    assert argv[-3:] == tok
 
 
-@pytest.mark.parametrize("tok", [["--settings", "/tmp/x"], ["--session-id", "u"]])
 def test_ac3_passthrough_hits_the_happy_refusals(
-    tmp_path: Path, monkeypatch, tok: list[str]
+    tmp_path: Path, monkeypatch
 ) -> None:
     """AC3-ERR: the happy-lane refusals get their first real callers - a
-    passthrough is the only way those tokens can enter the composed argv."""
-    import fno.agents.mux_spawn as mux_spawn
+    passthrough is the only way those tokens can enter the composed argv.
+    happy discards a pinned --session-id, so the receipt would name a session
+    that never exists; the --settings refusal is pinned on happy_pane_argv."""
+    tok = ["--session-id", "u"]
     from fno.agents.dispatch import DispatchAskError
     from fno.agents.model_routing import resolve_explicit_route
 
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    monkeypatch.setattr(mux_spawn.shutil, "which", lambda _b: "/opt/homebrew/bin/happy")
+    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     route = resolve_explicit_route("zai", "glm-5.2")
     assert route is not None
     runner = FakeRunner()
@@ -1755,38 +1671,6 @@ def test_ac3_passthrough_hits_the_happy_refusals(
     assert exc.value.exit_code == 2
     assert runner.calls == []
 
-
-@pytest.mark.parametrize(
-    ("provider", "kwargs", "tok"),
-    [
-        ("claude", {"model": "opus"}, ["--model", "glm"]),
-        # An alias spelling of an axis fno already emitted: the exact-name
-        # check alone would let both ride (--yolo is an alias of opencode's
-        # --auto).
-        ("opencode", {"yolo": True}, ["--yolo"]),
-    ],
-)
-def test_ac4_duplicated_flag_is_a_named_refusal(
-    tmp_path: Path, provider: str, kwargs: dict, tok: list[str]
-) -> None:
-    """AC4-ERR: two sources for one value is the defect; never a silent
-    last-wins that would make the receipt disagree with the process."""
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.mux_spawn import build_pane_argv
-
-    yolo = kwargs.pop("yolo", False)
-    with pytest.raises(DispatchAskError, match="on both sides") as exc:
-        build_pane_argv(
-            provider,
-            "task",
-            tmp_path,
-            yolo,
-            None,
-            passthrough=tok,
-            **kwargs,
-        )
-    assert exc.value.exit_code == 2
-    assert tok[0] in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -1812,82 +1696,9 @@ def test_ac5_headless_form_tokens_refused_on_the_composed_argv(
     assert runner.calls == []
 
 
-def test_ac1_cli_passthrough_reaches_dispatch(tmp_path: Path, monkeypatch) -> None:
-    """AC1 at the public surface: the tokens parse into the variadic positional
-    and travel to the bounded default pane dispatcher as `passthrough`."""
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
-
-    use_tmpdir(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    def fake_dispatch(**kwargs):
-        captured.update(kwargs)
-        return MuxSpawnResult(
-            name=kwargs["name"],
-            provider=kwargs["provider"],
-            session="main",
-            pane_id=1,
-            child_pid=None,
-            session_uuid="u",
-        )
-
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    monkeypatch.setenv("FNO_REPO_ROOT", os.getcwd())
-
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "peer", "--harness", "claude", "hi", "--", "--verbose"],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["message"] == "hi"
-    assert captured["passthrough"] == ["--verbose"]
-
-
-@pytest.mark.parametrize("substrate_args", [
-    ["--substrate", "thread"],
-])
-def test_ac7_claude_off_pane_forwards_fenced_tokens(
-    tmp_path: Path, monkeypatch, substrate_args: list[str]
-) -> None:
-    """The off-pane lanes forward fenced tokens; the pane lane never runs."""
-    import typer
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
-    from fno.agents import dispatch as _dispatch
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    monkeypatch.setattr(
-        mux_spawn,
-        "dispatch_spawn_pane",
-        lambda **_kwargs: pytest.fail("pane dispatch must not run"),
-    )
-    sent: dict = {}
-
-    def recorder(**kwargs):
-        sent.update(kwargs)
-        raise typer.Exit(code=0)
-
-    monkeypatch.setattr(_dispatch, "dispatch_spawn", recorder)
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "peer", *substrate_args, "hi", "--", "--verbose", "x"],
-    )
-    assert sent.get("passthrough") == ["--verbose", "x"], (
-        f"the fenced tokens must ride the off-pane dispatch: {result.output}"
-    )
-    assert "pane-only" not in result.output, result.output
-
-
 # -- an unanswered control read is reconciled, never asserted absent --
 #
-# `mux pane run` exiting `_MUX_CONTROL_UNANSWERED` means the verb reached the
+# `mux pane run` exiting `_MUX_CONTROL_UNANSWERED` means the command reached the
 # server and the reply never came back - not that no pane was created. These
 # pin the Python side of that reconciliation: adopt the one pane that proves
 # it is this spawn, refuse (writing no row) on zero/many/unknown, and never
@@ -2390,22 +2201,22 @@ def test_codex_hook_review_prompt_refuses_before_seed_and_reaps(
     assert load_registry() == []
 
 
-def test_codex_hook_review_bypass_posture_keeps_argv_seed_contract(
+def test_codex_hook_review_bypass_rides_the_bounded_pane(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """The hook-trust bypass rides every codex pane. The bounded posture keeps
+    the seed off argv, so the pane delivers it once the TUI is ready."""
     from fno.agents import mux_spawn
 
     monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: (0, 148, 0))
     runner = FakeRunner(read_stdout="Hooks need review")
 
-    result, _ = _spawn(
-        monkeypatch, tmp_path, provider="codex", runner=runner, yolo=True
-    )
+    result, _ = _spawn(monkeypatch, tmp_path, provider="codex", runner=runner)
 
     run_call = next(call for call in runner.calls if call[1:4] == ["mux", "pane", "run"])
     assert "--dangerously-bypass-hook-trust" in run_call
     assert result.seed == "submitted"
-    assert result.seed_source == "argv"
+    assert result.seed_source == "delivered"
 
 
 def test_a_timed_out_submit_keeps_the_row_and_never_retries(
@@ -2430,40 +2241,18 @@ def test_a_timed_out_submit_keeps_the_row_and_never_retries(
     assert len(rows) == 1, "a worker that may be running must keep its row"
 
 
-def test_cmd_spawn_explicit_happy_monitor_refuses_separate_model_override(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("provider", ["claude", "codex", "agy", "opencode", "pi"])
+def test_a_fenced_model_lands_on_the_row_for_every_harness(
+    tmp_path: Path, monkeypatch, provider: str
 ) -> None:
-    from typer.testing import CliRunner
+    """A grid pick with no route rides the fence as `--model`. The row records
+    it as the request, or it reads null while the harness runs that model."""
+    from fno.agents.registry import load_registry
 
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
+    _spawn(monkeypatch, tmp_path, provider=provider, passthrough=["--model", "m-low"])
 
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    monkeypatch.setattr(
-        mux_spawn,
-        "dispatch_spawn_pane",
-        lambda **kwargs: pytest.fail("pane dispatch called"),
-    )
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        [
-            "spawn",
-            "--harness",
-            "claude",
-            "--route",
-            "zai/glm-5.2",
-            "--model",
-            "claude-opus-4-1",
-            "--monitor",
-            "happy",
-            "hello",
-        ],
-    )
-
-    assert result.exit_code == 2, result.output
-    assert "separate --model" in result.output
+    (row,) = load_registry()
+    assert (row.model, row.model_basis, row.requested_model) == ("m-low", "requested", "m-low")
 
 
 def test_explicit_happy_monitor_refuses_separate_model_before_runner(
@@ -2562,23 +2351,6 @@ def test_explicit_happy_monitor_refuses_route_that_does_not_match_zai(
     assert runner.calls == []
 
 
-def test_cmd_spawn_refuses_a_monitor_other_than_happy(tmp_path: Path, monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    args = [
-        "spawn", "--name", "peer", "--harness", "claude", "--provider", "zai",
-        "--model", "glm-5.2", "--monitor", "other", "hello",
-    ]
-    result = CliRunner().invoke(agents_cli.agents_app, args)
-
-    assert result.exit_code == 2, result.output
-    assert "happy" in result.output
-
-
 def test_an_unconfirmed_send_is_never_retried(tmp_path: Path, monkeypatch) -> None:
     """`unconfirmed` means text was delivered and the submission was not
     confirmed, so the pane's buffer may already hold the seed. A retry there
@@ -2645,17 +2417,8 @@ def test_unanswered_run_with_two_matching_panes_refuses_naming_both(
     assert load_registry() == []
 
 
-@pytest.mark.parametrize(
-    "flag_kwargs",
-    [
-        {"model": "gpt-x"},
-        {"effort": "high"},
-        {"permission_mode": "acceptEdits"},
-        {"yolo": True},
-    ],
-)
 def test_undeclared_capability_flags_refused_with_dashed_advice(
-    tmp_path: Path, monkeypatch, flag_kwargs
+    tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-ERR: capability-keyed flags refuse naming the flag and the harness,
     advising the vendor's own flag after `--`. No value is inferred and no
@@ -2669,13 +2432,12 @@ def test_undeclared_capability_flags_refused_with_dashed_advice(
     with pytest.raises(DispatchAskError) as caught:
         dispatch_spawn_pane(
             name="peer", message="", provider="nanoclaw", cwd=tmp_path,
-            runner=runner, **flag_kwargs,
+            runner=runner, model="gpt-x",
         )
     msg = str(caught.value)
     assert caught.value.exit_code == 2
     assert "nanoclaw" in msg
-    expected_flag = "--" + next(iter(flag_kwargs)).replace("_", "-")
-    assert expected_flag in msg, msg
+    assert "--model" in msg, msg
     assert "capability row" in msg
     assert "'--'" in msg
     assert runner.calls == []
@@ -2696,3 +2458,12 @@ def test_stable_tab_id_refuses_ordinal_before_spawn(tmp_path: Path, monkeypatch)
     with pytest.raises(DispatchAskError, match="stable-id"):
         _spawn(monkeypatch, tmp_path, tab_id="2", runner=runner)
     assert runner.calls == []
+
+
+def _pane_repo(tmp_path: Path) -> Path:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    return repo

@@ -1,4 +1,4 @@
-//! The claude arm of the stop verb: `stop_claude`, its no-transport-id pid
+//! The claude arm of the stop command: `stop_claude`, its no-transport-id pid
 //! escalation, and the ownership proof every signal in this module rests on.
 //! Claude is shellout-managed (LD8): there is no worker PTY to signal, so the
 //! daemon shells out to the claude supervisor's `stop` on the agent's short id
@@ -92,10 +92,33 @@ fn capture_target(
     // alone, the cargo runs on under pid 1 and keeps its admission slot.
     // Deeper descendants join the set. One that exits between the table
     // read and its start-time read is skipped, not refused.
-    let deeper: Vec<u32> = crate::census::descendants(table, pid)
+    let mut deeper: Vec<u32> = crate::census::descendants(table, pid)
         .into_iter()
         .filter(|member| !members.contains(member))
         .collect();
+    // A run_in_background shell can leave the tree (reparented to pid 1)
+    // before the stop, so the tree walk misses it and it keeps polling.
+    // Claude stamps the full session id into such a shell's command line
+    // as an env assignment (`NAME=<sid>`), so those rows join too. A bare
+    // argv mention is not enough: `fno agents session stop <sid>` or a
+    // mail send to the session names it too and is not the session's.
+    if let Some(sid) = session_id.filter(|sid| sid.len() >= 32) {
+        let me = std::process::id();
+        let assigned = format!("={sid}");
+        deeper.extend(
+            table
+                .iter()
+                .filter(|row| row.command.contains(&assigned))
+                .map(|row| row.pid)
+                .filter(|p| {
+                    *p != me
+                        && roster.supervisor_pid != Some(*p)
+                        && !members.contains(p)
+                        && !deeper.contains(p)
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
     let mut proved = Vec::with_capacity(members.len() + deeper.len());
     for member in members {
         if member <= 1 {
@@ -114,7 +137,7 @@ fn capture_target(
     Ok(proved)
 }
 
-/// The pre-signal proof the stop verb and the terminal-stop sweep share: load
+/// The pre-signal proof the stop command and the terminal-stop sweep share: load
 /// the default roster and the process table (both blocking reads, offloaded
 /// from the async handlers) and name the exact process set the stop may end.
 /// `Err` means no proof; no caller signals on `Err`. A session under an
@@ -126,17 +149,35 @@ pub(super) fn prove_target(
 ) -> Result<Vec<(u32, u64)>, String> {
     let short = short.to_string();
     let session_id = session_id.map(str::to_string);
-    off_executor(move || {
-        let roster = ClaudeRoster::load_default().map_err(|e| format!("roster unreadable: {e}"))?;
-        let (table, _) = crate::census::process_table();
-        capture_target(
-            &roster,
-            &short,
-            session_id.as_deref(),
-            &table,
-            &process_start_time,
-        )
-    })
+    off_executor(move || prove_target_blocking(&short, session_id.as_deref()))
+}
+
+/// The same proof for a caller that already runs OFF the executor (rm's
+/// stop leg, whose seam executes under `off_executor`): the identical
+/// blocking reads, run directly so the leg never re-enters
+/// `off_executor` from blocking context.
+pub(super) fn prove_target_blocking(
+    short: &str,
+    session_id: Option<&str>,
+) -> Result<Vec<(u32, u64)>, String> {
+    let roster = ClaudeRoster::load_default().map_err(|e| format!("roster unreadable: {e}"))?;
+    let (table, _) = crate::census::process_table();
+    capture_target(&roster, short, session_id, &table, &process_start_time)
+}
+
+/// Does the default roster still host this session? The rm stop leg's
+/// re-probe after it ends the captured set: the supervisor's own word on
+/// whether a respawn or a late-named worker stands behind the session,
+/// matched by the same two-key lookup every roster presence reader runs.
+/// `Err` is an unreadable roster - unknown presence, never absence.
+pub(super) fn roster_still_hosts(short: &str, session_id: Option<&str>) -> Result<bool, ()> {
+    let roster = ClaudeRoster::load_default().map_err(|_| ())?;
+    let hosted = session_id
+        .filter(|sid| !sid.is_empty())
+        .and_then(|sid| roster.find(sid))
+        .or_else(|| roster.find(short))
+        .is_some();
+    Ok(hosted)
 }
 
 /// End whatever survived the ask. The grace phase runs against the whole
@@ -212,7 +253,7 @@ pub(super) async fn mark_claude_stopped(
         if let Some(e) = r.find_mut(&claude_name) {
             e.status = AgentStatus::Exited;
             e.exited_at = Some(now_rfc3339_like());
-            state::record_stop(e, "stop-verb", Some("claude".into()));
+            state::record_stop(e, "stop-command", Some("claude".into()));
             // best-effort: a failed stamp costs a later wake its name,
             // never the stop.
             crate::wake_name::stamp_from_row(&wake_home, e);
@@ -234,7 +275,7 @@ pub(super) async fn mark_claude_stopped(
 ///
 /// A row can carry a live process and no short id at all when the spawn receipt
 /// never yielded one. Refusing there left the operator with a running worker and
-/// no verb that addressed it -- the duplicate-worker half of the wave-boundary
+/// no command that addressed it -- the duplicate-worker half of the wave-boundary
 /// handoff failure, which had to be killed by hand to restore one-writer
 /// semantics. Unlike a PTY worker there is no socket to probe, so `pid_is_ours`
 /// (which rejects pid <= 1, treats an unsignalable pid as not ours, and compares
@@ -466,6 +507,45 @@ mod tests {
         Some(u64::from(pid) + 7)
     }
 
+    /// The rm leg's re-probe answers PRESENCE, not liveness: a listed worker
+    /// hosts even with no readable pid; a session the roster dropped reads
+    /// absent; a corrupt roster is Err, never absence.
+    #[test]
+    fn roster_still_hosts_answers_presence_not_liveness() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = dir.path().join("daemon");
+        std::fs::create_dir_all(&daemon).unwrap();
+        std::fs::write(
+            daemon.join("roster.json"),
+            br#"{"proto":1,"workers":{"27f5226c":{"sessionId":"27f5226c-1111-2222-3333-444444444444","cwd":""}}}"#,
+        )
+        .unwrap();
+        let previous = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
+        std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, &daemon);
+        let hosted = roster_still_hosts("27f5226c", Some("27f5226c-1111-2222-3333-444444444444"));
+        let dropped = roster_still_hosts("abcd1234", Some("abcd1234-1111-2222-3333-444444444444"));
+        std::fs::write(daemon.join("roster.json"), b"{not json").unwrap();
+        let unreadable =
+            roster_still_hosts("27f5226c", Some("27f5226c-1111-2222-3333-444444444444"));
+        match previous {
+            Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),
+            None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
+        }
+        assert_eq!(hosted, Ok(true), "a listed worker hosts, pid or no pid");
+        assert_eq!(
+            dropped,
+            Ok(false),
+            "a session the roster dropped reads absent"
+        );
+        assert!(
+            unreadable.is_err(),
+            "a corrupt roster is unknown presence, never absence"
+        );
+    }
+
     /// AC2-HP: the worker, its direct children and every deeper descendant,
     /// each with a start time. The Bash command's shell and its cargo sit
     /// below the session in their own process group; a deeper process whose
@@ -492,6 +572,31 @@ mod tests {
             got,
             vec![(5002, 5009), (5100, 5107), (5150, 5157), (5200, 5207)]
         );
+    }
+
+    /// A detached background shell that names the session id in its command
+    /// line joins the stop set, though the tree walk cannot reach it.
+    #[test]
+    fn capture_target_names_a_detached_shell_by_session_id() {
+        let sid = "ee99ff00-7777-8888-9999-aaaabbbbcccc";
+        let roster = roster_with(sid, Some(5002));
+        let table = vec![
+            crate::census::test_proc_row(5002, 1, "claude bg-pty-host"),
+            crate::census::test_proc_row(
+                6000,
+                1,
+                "zsh -c CODEX_COMPANION_SESSION_ID=ee99ff00-7777-8888-9999-aaaabbbbcccc gh run watch 1",
+            ),
+            crate::census::test_proc_row(6100, 1, "zsh -c gh run watch 2"),
+            crate::census::test_proc_row(
+                6200,
+                1,
+                "fno agents session stop ee99ff00-7777-8888-9999-aaaabbbbcccc",
+            ),
+        ];
+        let got = capture_target(&roster, "ee99ff00", Some(sid), &table, &start_of_every)
+            .expect("proved target");
+        assert_eq!(got, vec![(5002, 5009), (6000, 6007)]);
     }
 
     /// AC2-ERR: the supervisor pid and this daemon's pid are never targets.

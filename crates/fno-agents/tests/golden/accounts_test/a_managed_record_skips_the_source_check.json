@@ -1,0 +1,15 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"slot\"\nname = \"slot\"\nharness = \"codex\"\nauth = \"managed\"\n",
+ "bin": {
+  "codex": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "slot"
+ ],
+ "expect": {
+  "exit": 0,
+  "stdout": "Account 'slot' looks OK.\n",
+  "stderr": "",
+  "seen": null
+ }
+}

@@ -160,7 +160,7 @@ pub(crate) fn database_path(root: Option<&Path>) -> Result<PathBuf, String> {
     database_path_from_directory(&directory(root)?)
 }
 
-fn directory(root: Option<&Path>) -> Result<PathBuf, String> {
+pub(crate) fn directory(root: Option<&Path>) -> Result<PathBuf, String> {
     claims::claims_dir_for(root).ok_or_else(|| "claims root is unavailable".into())
 }
 
@@ -168,7 +168,7 @@ pub(crate) fn database_path_from_directory(dir: &Path) -> Result<PathBuf, String
     let state = dir
         .parent()
         .ok_or_else(|| format!("{} has no state root", dir.display()))?;
-    Ok(crate::state_layout::place(state, "graph.json").with_extension("db"))
+    Ok(crate::state_layout::graph_anchor(state).with_extension("db"))
 }
 
 fn open_for_key(key: &str, root: Option<&Path>) -> Result<Db, String> {
@@ -821,7 +821,7 @@ pub(crate) fn records_in(
     // One primed witness for the whole scan: a per-row verdict paid one cold
     // `fno agents truth` interpreter per unresolved session, in series, and a
     // loaded host stretched a lead check-in past half an hour on 11 rows.
-    let (witness, _answer) = crate::claim_verbs::session_witness_primed_for(&records);
+    let (witness, _answer) = crate::claim_commands::session_witness_primed_for(&records);
     Ok(records
         .iter()
         .filter(|record| {
@@ -836,6 +836,37 @@ pub(crate) fn records_in(
         })
         .cloned()
         .collect())
+}
+
+/// The live holder of one key, if a live or suspect row holds it. A suspect
+/// row still belongs to a session that may wake, so it refuses a rename too.
+pub(crate) fn live_holder(key: &str) -> Result<Option<String>, String> {
+    let dir = directory(None)?;
+    Ok(records_in(&dir, Some(key), false)?
+        .into_iter()
+        .next()
+        .map(|record| record.holder))
+}
+
+/// Rename one claim key in place, preserving the row. Node keys are shared,
+/// so the primary and the local store are both rewritten. Returns the rows
+/// moved.
+pub(crate) fn rename_key(old: &str, new: &str) -> Result<u64, String> {
+    let dir = directory(None)?;
+    let sql = "UPDATE claims SET key=?1 WHERE key=?2";
+    let mut moved: u64 = 0;
+    if shared(old) {
+        if let Some(remote) = primary_for(&dir)? {
+            moved += on_primary(&remote, sql, &[text(new), text(old)])?
+                .rows
+                .len() as u64;
+        }
+    }
+    if !store_absent(&dir) {
+        let local = Db::Local(open_directory(&dir)?);
+        moved += local.execute(sql, &[text(new), text(old)])?;
+    }
+    Ok(moved)
 }
 
 pub(crate) fn acquire(
@@ -1045,7 +1076,7 @@ pub(crate) fn renew(
     // reads live or suspect extends, exactly as `claim status` reports it.
     // The verdict runs only once expired, so a routine renewal skips its probes.
     if observed.expires_at.is_some_and(|at| at <= claims::now_ms())
-        && crate::claim_verbs::status_verdict(&observed).0 == ClaimState::Stale
+        && crate::claim_commands::status_verdict(&observed).0 == ClaimState::Stale
     {
         return Ok(false);
     }
@@ -1194,7 +1225,7 @@ pub fn list_db(
 ) -> Result<Value, String> {
     let records = records_db(prefix, include_stale, root)?;
     Ok(
-        json!({"rows": records.into_iter().map(|r| crate::claim_verbs::claim_status_value(&r)).collect::<Vec<_>>() }),
+        json!({"rows": records.into_iter().map(|r| crate::claim_commands::claim_status_value(&r)).collect::<Vec<_>>() }),
     )
 }
 

@@ -3,9 +3,9 @@
 //! (kinds cases frozen from fno.review.provider_resolution.available_provider_kinds)
 //!
 //! Golden parity for the review-policy native door, frozen against the live
-//! Python verb before its deletion. The case table and fixture builders
+//! Python command before its deletion. The case table and fixture builders
 //! below mirror the capture driver (hermetic per-case sandbox, whitelist
-//! env, migration sentinel pre-seeded so only the verb's own bytes freeze;
+//! env, migration sentinel pre-seeded so only the command's own bytes freeze;
 //! the record carries no paths, so no normalization applies). Keep the
 //! table and the builders in lockstep when a case is added.
 //!
@@ -16,8 +16,8 @@
 //! fail-closed shape fail_invalid_record freezes. An unparseable config
 //! layer never raises the record load (it reads as empty) but does fail the
 //! settings load, which is why the switch read is strict and fails open.
-//! Pydantic refusals on untouched metadata fields (tags, reset_timezone,
-//! window_minutes, account_id, description) are NOT mirrored.
+//! The record read is `accounts::records::load`, which holds the whole
+//! refusal surface, metadata fields and dangling agent pins included.
 
 mod common;
 
@@ -434,7 +434,7 @@ fn cases(now: f64) -> Vec<Case> {
         markers: &["CLAUDE_CODE_SESSION_ID"],
         kind: assess(Some("L"), vec!["auth".to_string()], None, false),
     });
-    // Verb shapes.
+    // Command shapes.
     v.push(Case {
         label: "refusal-bare",
         files: bare.clone(),

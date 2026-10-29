@@ -57,8 +57,7 @@ def canonical_handle(session_id: str) -> str:
     Imported per call, never bound at module import: a test monkeypatching
     ``harness_identity.canonical_handle`` poisons every module that from-imported
     the name while the patch was live, and monkeypatch's teardown only reverts
-    the attribute on ``fno.harness_identity`` -- the same regression
-    ``fno.mail.reply_resolve`` documented for ``resolve_harness_identity``.
+    the attribute on ``fno.harness_identity``.
     """
     from fno.harness_identity import canonical_handle as _impl
 
@@ -186,7 +185,7 @@ def _codex_daemon_threads_raw(*, env: Optional[dict[str, str]] = None) -> Option
     """Raw ``threads`` rows the app-server daemon reports, or None.
 
     The transport is ``fno-agents list --json --no-discovered --harness codex``:
-    the answer rides the ``codex_loaded`` block of an existing verb instead of
+    the answer rides the ``codex_loaded`` block of an existing command instead of
     its own. ``--no-discovered`` is load-bearing - without it the Rust list
     shells back into this Python discovery and recurses.
 
@@ -295,64 +294,6 @@ def _codex_meta(path: Path) -> Optional[tuple[str, str]]:
     if not isinstance(sid, str) or not sid:
         return None
     return sid, str(cwd or "")
-
-
-def _codex_started_ms(payload: dict) -> Optional[int]:
-    """Session start as epoch ms from ``session_meta.payload.timestamp``.
-
-    The payload timestamp is the only signal that separates a session this spawn
-    created from one already open in the same cwd: file mtime cannot, because an
-    older session still being typed into has a fresh mtime.
-    """
-    raw = payload.get("timestamp")
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        return int(_dt.datetime.fromisoformat(raw).timestamp() * 1000)
-    except ValueError:
-        return None
-
-
-def codex_session_ids_started_in(
-    cwd: Path, since_ms: int, *, sessions_dir: Optional[Path] = None
-) -> list[str]:
-    """Codex session ids whose rollout says they started in ``cwd`` at/after ``since_ms``.
-
-    Matched on the directory string, never a project id: several worktrees of one
-    repo would otherwise collapse into each other. ``sessions_dir`` is injectable
-    so tests never touch the developer's real ``~/.codex``.
-    """
-    root = sessions_dir if sessions_dir is not None else default_codex_sessions_dir()
-    target = str(cwd)
-    ids: list[str] = []
-    try:
-        paths = list(root.rglob("rollout-*.jsonl"))
-    except OSError:
-        return ids
-    for path in paths:
-        # Prune by mtime before opening: a rollout's last write is always >= its
-        # session start (codex appends over the session), so a file older than
-        # since_ms cannot be a session started at/after it. Bounds the per-spawn
-        # cost on hosts with a long codex history instead of parsing every
-        # historical rollout on each probe (Codex P2, #603).
-        try:
-            if int(path.stat().st_mtime * 1000) < since_ms:
-                continue
-        except OSError:
-            pass
-        payload = _codex_session_meta(path)
-        if payload is None:
-            continue
-        sid = payload.get("id")
-        if not isinstance(sid, str) or not sid or sid in ids:
-            continue
-        if str(payload.get("cwd") or "") != target:
-            continue
-        started = _codex_started_ms(payload)
-        if started is None or started < since_ms:
-            continue
-        ids.append(sid)
-    return ids
 
 
 def codex_rollout_for_session(
@@ -970,13 +911,15 @@ def _discover_from_registry(
 
     A spawned worker registered under a name (e.g. ``x-aaaa-us8-build``) also
     answers to its bare ``<short8>`` handle, because its harness session id
-    is surfaced as a discover row. The harness -> id mapping is
-    ``HARNESS_SESSION_ID_FIELDS`` (the single source of truth also read by the
-    resume path), so a new harness needs a field there, not a resolver edit. For
+    is surfaced as a discover row. The known-harness gate reads the Rust
+    roster (``known_providers()``), so a new harness needs no edit here; ids
+    resolve off ``harness_session_id`` (claude's ``short_id`` jobId exception
+    is the registry map's one entry). For
     claude the row carries the FULL session uuid when known so it dedups against
     the roster/disk rows for the same session; ``short_id`` stays the 8-hex jobId
-    the inject verb addresses."""
-    from fno.agents.registry import HARNESS_SESSION_ID_FIELDS, load_registry
+    the inject command addresses."""
+    from fno.agents.registry import load_registry
+    from fno.harness_names import known_providers
 
     exclude = {s for s in (exclude_session_ids or ()) if s}
     rows: list[dict] = []
@@ -996,7 +939,7 @@ def _discover_from_registry(
         # while remaining durably mail-routable -- the live/durable split the
         # relay peer table depends on, preserved, not widened.
         harness = getattr(e, "harness", None)
-        if harness not in HARNESS_SESSION_ID_FIELDS:
+        if harness not in known_providers():
             continue
         # Registry status is enumeration metadata, not a liveness verdict.
         # Family-1 transcript truth below decides whether callers may route.
@@ -1431,41 +1374,30 @@ def _discover_from_projects(
 def _iter_settings_projects() -> Iterator[tuple[str, str]]:
     """Yield ``(project_name, abs_path)`` from the settings work-map.
 
-    Reuses the same candidate-file walk as
-    ``graph._intake.detect_project_from_settings`` so the two cannot point at
-    different settings files. Silent on any read/parse failure.
+    Reads the settings fact set through the binary door (one walk, the same
+    candidate order the node-id knobs use), so this reader and the graph
+    readers cannot point at different settings files. Silent on any door
+    failure.
     """
-    try:
-        import yaml  # noqa: F401  availability probe: return early if PyYAML absent
+    from fno import rust_binary
 
-        from fno.graph._intake import _settings_candidate_paths
-    except ImportError:
+    receipt = rust_binary.settings_read()
+    if receipt is None:
         return
-    from fno.config import read_config_flat
+    for pair in receipt.get("projects") or []:
+        if not isinstance(pair, list) or len(pair) != 2:
+            continue
+        name, path = pair
+        if name and path:
+            yield str(name), str(path)
 
-    for path in _settings_candidate_paths():
-        if not path.exists():
-            continue
-        # config.toml (or legacy settings.yaml) -> flat dict; work is top-level.
-        work = read_config_flat(path).get("work")
-        if not isinstance(work, dict):
-            continue
-        workspaces = work.get("workspaces")
-        if isinstance(workspaces, dict):
-            for ws in workspaces.values():
-                if not isinstance(ws, dict):
-                    continue
-                for p in ws.get("projects") or []:
-                    if not isinstance(p, dict):
-                        continue
-                    name, raw_path = p.get("name"), p.get("path")
-                    if name and raw_path:
-                        yield str(name), os.path.normpath(os.path.expanduser(str(raw_path)))
-        flat = work.get("projects")
-        if isinstance(flat, dict):
-            for name, cfg in flat.items():
-                if isinstance(cfg, dict) and cfg.get("path"):
-                    yield str(name), os.path.normpath(os.path.expanduser(str(cfg["path"])))
+
+def _detect_project(cwd: str) -> Optional[str]:
+    """The door's cwd -> project detect; None on a door failure or no match."""
+    from fno import rust_binary
+
+    project = (rust_binary.settings_read(detect=cwd) or {}).get("project")
+    return str(project) if project else None
 
 
 def _project_by_repo_basename(repo: str) -> Optional[str]:
@@ -1489,14 +1421,13 @@ def resolve_project_for_cwd(cwd: str) -> Optional[str]:
     """
     if not cwd:
         return None
-    from fno.graph._intake import detect_project_from_settings
 
     p = os.path.normpath(os.path.expanduser(cwd))
 
     marker = os.sep + ".claude" + os.sep + "worktrees" + os.sep
     if marker in p:
         root = p.split(marker)[0]
-        proj = detect_project_from_settings(root)
+        proj = _detect_project(root)
         if proj:
             return proj
 
@@ -1508,7 +1439,7 @@ def resolve_project_for_cwd(cwd: str) -> Optional[str]:
             if proj:
                 return proj
 
-    return detect_project_from_settings(p)
+    return _detect_project(p)
 
 
 # --------------------------------------------------------------------------

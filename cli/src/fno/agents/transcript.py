@@ -1,4 +1,4 @@
-"""Passthrough for the native ``fno agents transcript`` transfer verbs.
+"""Passthrough for the native ``fno agents transcript`` transfer commands.
 
 The bundle transfer is Rust (the fno crate's transcript_transfer module);
 this shim resolves the native binary and execs it verbatim, the same

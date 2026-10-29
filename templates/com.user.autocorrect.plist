@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  com.user.autocorrect - monthly review of corrections.log
+  com.user.autocorrect - weekly review of corrections.log (Mondays 09:00)
   Installed to ~/Library/LaunchAgents/ by scripts/install-autocorrect-cron.sh.
   Tokens {{...}} are substituted by the installer.
 -->
@@ -13,11 +13,11 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>{{PACK_SCRIPT}} --severity S1,S2 | {{REVIEW_SCRIPT}} --severity S1,S2 --packet-source monthly-cron</string>
+        <string>{{PACK_SCRIPT}} --severity S1,S2 --dry-run | {{REVIEW_SCRIPT}} --severity S1,S2 --packet-source weekly-cron</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
-        <key>Day</key>
+        <key>Weekday</key>
         <integer>1</integer>
         <key>Hour</key>
         <integer>9</integer>
@@ -25,9 +25,9 @@
         <integer>0</integer>
     </dict>
     <key>StandardOutPath</key>
-    <string>{{LOG_DIR}}/autocorrect-monthly.log</string>
+    <string>{{LOG_DIR}}/autocorrect-review.log</string>
     <key>StandardErrorPath</key>
-    <string>{{LOG_DIR}}/autocorrect-monthly.err</string>
+    <string>{{LOG_DIR}}/autocorrect-review.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>

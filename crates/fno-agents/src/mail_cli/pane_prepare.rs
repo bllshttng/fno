@@ -170,8 +170,7 @@ fn pane_entry<'a>(registry: &'a Registry, session: &str, pane: u64) -> Option<&'
     }
 }
 
-/// The undeclared-harness note prints once per harness per process, matching
-/// the Python `_UNDECLARED_NOTED` module state.
+/// The undeclared-harness note prints once per harness per process.
 fn note_undeclared_once(harness: &str, pane: u64) {
     static NOTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let mut noted = match NOTED.lock() {
@@ -459,7 +458,7 @@ pub fn run(args: &[String]) -> i32 {
             "error: body carries a <cross-session-message> container. That tag marks a peer's attributed turn, and a body cannot supply its own. Send it as mail, or use --raw to type it as keystrokes.",
         );
     }
-    // The mail verbs' two body gates, at the one choke point every non-raw
+    // The mail commands' two body gates, at the one choke point every non-raw
     // pane send passes through: a sender refused by mail must not deliver the
     // identical prose here instead.
     if let Some(code) = enforce_body_cap(
@@ -500,10 +499,9 @@ pub fn run(args: &[String]) -> i32 {
         _ => None,
     };
     let self_harness = ident.harness.clone();
-    let sender = self_session
-        .as_deref()
-        .map(canonical_handle)
-        .unwrap_or_else(|| "fno".to_string());
+    let sender = crate::system_sender::stamp_or_unknown(None, || {
+        self_session.as_deref().map(canonical_handle)
+    });
 
     let registry_path = AgentsHome::shared_registry_json();
     let registry = load_registry(&registry_path).ok();
@@ -594,7 +592,7 @@ pub fn run(args: &[String]) -> i32 {
     };
     // The control lane's budget reservation (the Python leaf's
     // `_reserve_budget`, fed from the control-body reserve path) is the one
-    // piece of the Python verb NOT ported: it is control-lane bookkeeping,
+    // piece of the Python command NOT ported: it is control-lane bookkeeping,
     // not rendering, and it moves with the control drain port. A pane send
     // through this leaf currently charges nothing.
     print!("{rendered}");

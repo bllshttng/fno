@@ -588,16 +588,6 @@ def _resolve(
     return path.resolve()
 
 
-def resolve_configured_path(
-    raw: str,
-    *,
-    project_root: Path,
-    settings: SettingsModel,
-) -> Path:
-    """Resolve a configured path against an explicitly loaded repository."""
-    return _resolve(raw, project_root=project_root, settings=settings)
-
-
 def _guard_state_path(path: Path) -> Path:
     """Judge a resolved state path against the process root declaration.
 
@@ -686,10 +676,10 @@ STATE_FILES: tuple[StateFile, ...] = (
     ),
     StateFile(
         filename="messages.jsonl",
-        resolver="fno.bus.log.bus_log_path",
+        resolver="fno.paths.bus_dir",
         root_class="OPERATOR",
         selector="FNO_BUS_DIR, else config.paths.bus_dir, else config.state_dir",
-        owning_modules=("cli/src/fno/paths.py", "cli/src/fno/bus/log.py"),
+        owning_modules=("cli/src/fno/paths.py", "crates/fno-agents/src/intel.rs"),
     ),
     StateFile(
         filename="briefs",
@@ -728,38 +718,14 @@ def state_dir() -> Path:
     return _guard_state_path(_resolve(settings.state_dir))
 
 
-def cargo_build_dir_value() -> str:
-    """The CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``.
-
-    cargo expands the template itself and the hash is per workspace root, so
-    parallel checkouts never share the artifact lock and intermediates never
-    land in a checkout. Base: ``config.paths.cargo_targets_base``, else
-    ``<state_dir>/cargo-build``.
-    """
-    try:
-        override = _settings().paths.cargo_targets_base
-        base = (
-            _resolve(os.path.expanduser(override))
-            if override
-            else state_dir() / "cargo-build"
-        )
-    except Exception:  # noqa: BLE001 - broken settings degrade to the default base
-        base = Path(os.path.expanduser("~/.fno/cargo-build"))
-    return f"{base}/{{workspace-path-hash}}"
-
-
-def graphql_quota_lock() -> Path:
-    """Config-independent machine lock held from quota probe through command."""
-    return locks_dir() / "github-graphql-quota.lock"
-
-
 def github_cli_proxy_dir() -> Path:
     """Installed worker-only `gh` proxy directory."""
     return state_dir() / "bin" / "github-cli"
 
 
 def locks_dir() -> Path:
-    """Advisory-lock sidecar directory (``~/.fno/locks``).
+    """Advisory-lock sidecar directory: the layout table's ``locks`` row
+    (``state/locks`` once the fold ran).
 
     Deliberately config-free (``$HOME``/``FNO_STATE_DIR`` only, no settings load). The plan-doc lock is keyed by the plan's resolved path,
     so the two fno writers only need to agree on this directory; a config
@@ -767,9 +733,8 @@ def locks_dir() -> Path:
     the config-loading append side from the config-free stamp side). The
     ``FNO_STATE_DIR`` carrier may: it needs no config load, so both writers
     agree under it, and the seal pins it around a forwarded HOME."""
-    if carrier := os.environ.get("FNO_STATE_DIR"):
-        return Path(os.path.expanduser(carrier)).resolve() / "locks"
-    return Path.home() / ".fno" / "locks"
+    root = os.environ.get("FNO_STATE_DIR") or str(Path.home() / ".fno")
+    return Path(_plan_path_door(["state", "path", "dir", "locks", "--root", root]))
 
 
 def place_anchor(root: Path) -> Path:
@@ -791,12 +756,6 @@ def graph_json() -> Path:
 
 def graph_archive_json() -> Path:
     return graph_json().parent / "graph-archive.json"
-
-
-def relatedness_json() -> Path:
-    """Return the path to relatedness.json (node-to-node relatedness sidecar).
-    """
-    return graph_json().parent / "relatedness.json"
 
 
 def _pinned_root_file(name: str) -> Path:
@@ -857,8 +816,19 @@ def operator_lane() -> Path:
 
 
 def global_events_json() -> Path:
-    """Return the cross-checkout event journal at the pinned state root."""
-    return _pinned_root_file("events.jsonl")
+    """Return the cross-checkout event journal at the pinned state root.
+
+    The root journal family is retired: writers commit to the routed store,
+    so this path is the store's anchor and the stray-hunt root, never a
+    write target. It resolves without the root fence: the fence refuses new
+    root writers, and the retired name is not one.
+    """
+    if os.environ.get("FNO_STATE_DIR"):
+        pinned = _resolve(os.environ["FNO_STATE_DIR"])
+    else:
+        raw = os.path.expanduser(os.path.expandvars(_settings().state_dir))
+        pinned = _resolve(raw) if os.path.isabs(raw) else _resolve("~/.fno/")
+    return _guard_state_path(pinned / "events.jsonl")
 
 
 def _state_subfile_at(root: Path, subfolder: str, name: str, legacy_name: str) -> Path:
@@ -910,7 +880,6 @@ _ROOT_STATE_FILE_ROWS: frozenset[str] = frozenset(
         "config.toml", "config.toml.lock", "config.toml.bak",
         "settings.yaml", "settings.yaml.lock",
         "ledger.json",
-        "events.jsonl", "events.jsonl.1", "events.jsonl.ephemeral",
         "decisions.jsonl", "decisions.jsonl.compact", "decisions.jsonl.corrupt",
         "questions.jsonl",
         "my-priorities.md", "my-priorities.md.lock",
@@ -935,16 +904,6 @@ def root_state_file(name: str) -> Path:
             "state, logs_file() for logs, or an existing folder accessor."
         )
     return state_dir() / name
-
-
-def decisions_jsonl() -> Path:
-    """Return the machine-wide decision index at the pinned state root.
-
-    A separate file from :func:`global_events_json` on purpose: that journal
-    rotates, and a rotated-away ruling is a ruling the operator asked for and
-    cannot get back. This one never rotates and holds nothing else.
-    """
-    return _pinned_root_file("decisions.jsonl")
 
 
 def questions_jsonl() -> Path:
@@ -1086,9 +1045,9 @@ def repo_identity_from_remote_url(url: str) -> Optional[str]:
 
     Lives HERE, at the platform layer, because both writers of a global-log event
     need it and they sit on opposite sides of the runtime boundary:
-    ``fno.pr._reviews`` reads coverage, and ``fno.events.cli`` stamps the mirrored
-    attestation. A copy in each is two parsers to keep in parity with Rust
-    instead of one.
+    the Rust coverage reader (``crates/fno-agents/src/pr_status.rs``) and
+    ``fno.events.cli`` stamps the mirrored attestation. A copy in each is two
+    parsers to keep in parity with Rust instead of one.
 
     Mirrors ``repo_identity_from_remote_url`` in ``crates/fno-agents/src/finalize.rs``.
     The two MUST agree or the reader stops finding the writer's events; the
@@ -1168,27 +1127,6 @@ def evals_history() -> Path:
     return _guard_state_path(_resolve("~/.fno/") / "history" / "evals-history.jsonl")
 
 
-def benchmarks_json() -> Path:
-    """Return the path to the OpenRouter benchmark snapshot (``benchmarks.json``).
-
-    The snapshot is cross-project by nature (one cached routing source of truth
-    per machine), so it follows an absolute ``config.state_dir`` (the ``~/.fno``
-    default and test sandboxes both qualify) and otherwise pins to user-global
-    ``~/.fno`` rather than forking into a repo checkout. No dedicated
-    ``config.paths`` override: callers that need isolation pass an explicit path
-    to the benchmarks module (the refresh/show/load functions all accept one).
-
-    Resolves under ``cache/`` per the state-root tidiness law, renaming the
-    legacy root spelling on first resolve (the same move ladder
-    :func:`state_runtime_file` runs).
-    """
-    settings = _settings()
-    raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
-    if os.path.isabs(raw):
-        return _state_subfile_at(state_dir(), "cache", "benchmarks.json", "benchmarks.json")
-    return _state_subfile_at(_resolve("~/.fno/"), "cache", "benchmarks.json", "benchmarks.json")
-
-
 def runtime_state_json() -> Path:
     """Return the machine-wide provider runtime-state path.
 
@@ -1196,7 +1134,7 @@ def runtime_state_json() -> Path:
     rate-limited from one repo is rate-limited everywhere: the state file must
     be one per machine, not one per process cwd (the relative-path defect M5
     measured as two disjoint files). Follows an absolute ``config.state_dir``
-    exactly like :func:`benchmarks_json`, EXCEPT that a config that fails to
+    the way the other machine-wide state paths do, EXCEPT that a config that fails to
     load falls back to ``~/.fno`` instead of raising: this path sits on the
     429-lock WRITE path, and a bad config must never turn a rate-limit into a
     crash that loses the lock. Tests pin an explicit file via the
@@ -1302,9 +1240,12 @@ def _plan_path_door(args: list[str]) -> str:
             "the fno-agents binary was not found; reinstall footnote "
             "or set FNO_AGENTS_BIN"
         )
-    proc = subprocess.run([str(binary), *args], capture_output=True, text=True)
+    try:
+        proc = subprocess.run([str(binary), *args], capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"plan-path door timed out after 5s: {args}") from exc
     if proc.returncode != 0:
-        detail = (proc.stderr or "plan-path verb failed").strip()
+        detail = (proc.stderr or "plan-path command failed").strip()
         raise RuntimeError(detail)
     return proc.stdout.strip()
 
@@ -1400,38 +1341,6 @@ def briefs_dir() -> Path:
     return state_dir() / "briefs"
 
 
-def lead_faqs_dir() -> Path:
-    return briefs_dir() / "lead-faqs"
-
-
-def sidecar_dir() -> Path:
-    """Per-item footnote-owned sidecar directory (``~/.fno/sidecar/``).
-
-    Rides ``state_dir`` (so it follows the existing ``config.paths`` /
-    ``state_dir`` override) with no config knob of its own: one file per work
-    item, keyed by the url-encoded opaque id. Sibling of graph.json and
-    ledger.json so it inherits the same relocate-without-new-machinery rule.
-    """
-    return state_dir() / "sidecar"
-
-
-def sidecar_path(node_id: str) -> Path:
-    """Path to one item's sidecar file.
-
-    Reuses the claims key encoder (``urllib.parse.quote``, ``safe=""``) so an
-    id containing a path separator (``owner/repo#123``) lands as one filename
-    rather than a nested path.
-
-    Uses stdlib urllib.parse.quote directly rather than fno.claims.io.encode_key:
-    claims is a core-layer module and imports paths, so reaching into it from
-    here (platform) would create a platform -> core -> platform layer cycle.
-    The encoding mirrors claims' quote(safe="") so the two stay consistent.
-    """
-    from urllib.parse import quote
-
-    return sidecar_dir() / f"{quote(node_id, safe='')}.json"
-
-
 def fleet_dir() -> Path:
     """Return the fleet directory."""
     settings = _settings()
@@ -1448,18 +1357,6 @@ def postmortems_dir() -> Path:
     if override is not None:
         return _guard_state_path(_resolve(override))
     return state_dir() / "postmortems"
-
-
-def latches_dir() -> Path:
-    """Return the session-latch directory (default: ``~/.fno/latches/``).
-
-    Holds the short-lived per-session, per-band sentinel files hooks use to
-    fire a nudge at most once. Deliberately has no ``config.paths`` override:
-    the whole point of the directory is that it tracks ``state_dir`` instead
-    of becoming another independently-placed path. The writing hook owns
-    deletion - a latch keyed to a dead session has no reader.
-    """
-    return state_dir() / "latches"
 
 
 def worktrees_base() -> Path:
@@ -1486,12 +1383,17 @@ def retro_pending_dir() -> Path:
     ``fno backlog reconcile`` drops a per-node sentinel here naming a node
     it closed mechanically, so a later session's inbox/triage pass can pick up
     the judgment half (follow-up capture) without reconcile automating it.
+    The default answers from the Rust ``dir`` door (the layout table is the
+    path's one owner, in step with the Rust writer); only the configured
+    override stays Python-resolved.
     """
     settings = _settings()
     override = settings.paths.retro_pending_dir
     if override is not None:
         return _guard_state_path(_resolve(override))
-    return state_dir() / "retro-pending"
+    return Path(
+        _plan_path_door(["state", "path", "dir", "retro-pending", "--root", str(state_dir())])
+    )
 
 
 def hook_logs_dir() -> Path:
@@ -1537,21 +1439,6 @@ def agents_runtime_registry_path() -> Path:
     return agents_home_dir() / "registry.json"
 
 
-def inbox_dir(project_root: Optional[Path] = None) -> Path:
-    """Return the inbox directory.
-
-    Default is the space: <space>/inbox/.
-    """
-    settings = _settings()
-    override = settings.paths.inbox_dir
-    if override is not None:
-        return _resolve(override, project_root=project_root)
-    root = project_root or resolve_repo_root()
-    space = space_dir(root) / "inbox"
-    migrate_from_checkout(root / ".fno" / "inbox", space)
-    return space.resolve()
-
-
 def project_log(name: str, project_root: Optional[Path] = None) -> Path:
     """Return ``<space>/<name>`` for a project log/state file.
 
@@ -1566,14 +1453,6 @@ def project_log(name: str, project_root: Optional[Path] = None) -> Path:
     space = space_dir(root) / name
     migrate_from_checkout(root / ".fno" / name, space)
     return space.resolve()
-
-
-def status_sinks_dir(project_root: Optional[Path] = None) -> Path:
-    """Per-sink cursors + error logs for the status fanout."""
-    return project_log("status-sinks", project_root=project_root)
-
-
-_INBOX_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:
@@ -1593,83 +1472,11 @@ def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:
     return expanded if expanded.is_absolute() else Path.home() / expanded
 
 
-def inbox_agents_root() -> Path:
-    """Base directory holding per-project cross-project inbox folders.
-
-    Each project's inbox lives at ``<base>/<project>/inbox``. The base is:
-
-      1. Vault-derived ``<vault>/internal/agents`` when ``obsidian.enabled``
-         and ``obsidian.vault`` are set. For a ``myvault`` vault this resolves
-         to ``~/myvault/internal/agents`` - the path live cross-project
-         messaging has always used - so this default is behavior-preserving
-         for vault-based setups.
-      2. A neutral ``state_dir()/inbox/agents`` fallback otherwise, so a
-         fresh install with no Obsidian vault never points at a stranger's
-         ``~/myvault``.
-
-    ``config.paths.inbox_dir`` still overrides everything; callers that
-    resolve a concrete per-project path consult it first.
-    """
-    root = vault_root()
-    if root is not None:
-        return root / "internal" / "agents"
-    return state_dir() / "inbox" / "agents"
-
-
-def inbox_root_for(project_name: str) -> Path:
-    """Return the inbox directory for a SPECIFIC project (not the current one).
-
-    Unlike inbox_dir(), this explicitly substitutes the `{project}` template
-    with the given project_name rather than the sender's config.project.id.
-    Used by cross-project messaging: when sender fno writes to
-    recipient acme-web, the recipient's inbox path must use
-    "acme-web" as the project name regardless of which project the
-    sender's git repo lives in.
-
-    Strict validation: project_name must match ``[A-Za-z0-9][A-Za-z0-9._-]*``
-    and contain no path separators or ``..`` segments. paths.py is a shared
-    utility module - the validation belongs here at the entry point, not
-    only at one call site up the stack (e.g. inbox.store.inbox_dir_for).
-    This closes the path-traversal class first surfaced in PR #225
-    (feedback_project_name_path_traversal).
-
-    Resolution order:
-      1. config.paths.inbox_dir from settings.yaml (substitute {project},
-         then run the standard {vault}/$VAR/~ resolution).
-      2. Otherwise ``inbox_agents_root()/{project_name}/inbox`` - vault-derived
-         when Obsidian is enabled (``<vault>/internal/agents/...``), else a
-         neutral ``state_dir()/inbox/agents/...`` default.
-    """
-    if "/" in project_name or "\\" in project_name:
-        raise ValueError(f"project name must not contain path separators: {project_name!r}")
-    if ".." in project_name:
-        raise ValueError(f"project name must not contain '..': {project_name!r}")
-    if not _INBOX_PROJECT_NAME_RE.match(project_name):
-        raise ValueError(
-            f"project name must match {_INBOX_PROJECT_NAME_RE.pattern}: {project_name!r}"
-        )
-    settings = _settings()
-    override = settings.paths.inbox_dir
-    if override is not None:
-        # Substitute {project} explicitly with project_name BEFORE handing
-        # off to _resolve, so the standard {project}-from-config-or-cwd
-        # behavior in _resolve doesn't pick up the sender's name.
-        substituted = override.replace("{project}", project_name)
-        # Pass project_root=repo_root so any relative `paths.inbox_dir`
-        # (e.g. `.fno/inbox/{project}`) anchors at the git root
-        # instead of the caller's cwd. Without this, inbox commands run
-        # from subdirectories read/write distinct inbox locations and
-        # cross-project messages are lost (Codex review P2 on PR #267).
-        return _resolve(substituted, project_root=resolve_repo_root())
-    return (inbox_agents_root() / project_name / "inbox").resolve()
-
-
 def inbox_path(project_root: Optional[Path] = None) -> Path:
     """Return the path to the backlog *capture-tier* inbox markdown file.
 
-    Distinct from inbox_dir() above: that resolver owns the cross-project
-    messaging inbox; this one owns the markdown holding-pen of fu-* items
-    that sits below idea nodes. Do not conflate them.
+    This is the markdown holding-pen of fu-* items that sits below idea
+    nodes, not agent mail.
 
     Resolution order:
       1. ``config.paths.inbox_path`` explicit override (template-expanded).
@@ -1880,6 +1687,23 @@ def resolve_plugin_script(relpath: str) -> Path:
     if persisted is not None and (persisted / relpath).exists():
         return persisted / relpath
     return resolve_repo_root() / relpath
+
+
+def installed_plugin_script(relpath: str) -> "Path | None":
+    """The installed plugin's copy of ``relpath``, ignoring every env hint.
+
+    ``resolve_plugin_script`` honors ``FNO_REPO_ROOT`` raw, and in a foreign
+    repo that names the project, which ships none of the plugin's scripts. A
+    caller that must find the script anyway asks here after the hinted path
+    misses. None when neither the package root nor the persisted plugin
+    pointer holds the file."""
+    pkg_root = Path(__file__).resolve().parents[3]
+    if _is_plugin_root(pkg_root) and (pkg_root / relpath).is_file():
+        return pkg_root / relpath
+    persisted = _read_persisted_plugin_root()
+    if persisted is not None and (persisted / relpath).is_file():
+        return persisted / relpath
+    return None
 
 
 def resolve_plugin_script_durable(relpath: str) -> Path:

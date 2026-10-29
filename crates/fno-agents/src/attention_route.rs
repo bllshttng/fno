@@ -328,6 +328,7 @@ mod tests {
 
     fn item(blocks: Vec<String>, node: Option<&str>, project: &str) -> AttentionItem {
         AttentionItem {
+            host: None,
             recovery_batch: None,
             id: "q-test".into(),
             kind: "question".into(),
@@ -355,6 +356,8 @@ mod tests {
             missing: vec![],
             state: "open".into(),
             settled: false,
+            images: vec![],
+            ..Default::default()
         }
     }
 
@@ -405,6 +408,7 @@ mod tests {
             rank: None,
             live: None,
             reach: None,
+            person: None,
         });
         let routing = r.route(&it);
         assert_eq!(

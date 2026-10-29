@@ -9,7 +9,7 @@ A live-execution eval harness: give the pipeline a known task, run it, grade the
 - `capability` - a hill to climb: a hard task the pipeline currently fails. Failures are informational, not alarms.
 - `regression` - must stay ~100%: a task that used to pass and must keep passing (e.g. the CLI starts, a known-flaky suite is green). Any regression-tier task below 100% fires the **regression alarm**.
 
-A capability task that passes its last N consecutive full runs (default 3) becomes graduation-eligible. `fno doctor evals graduate <id>` retags its YAML to `regression`. Graduation is a reviewed edit: the verb rewrites the file, and a human ships the PR. It is never a silent runtime flip.
+A capability task that passes its last N consecutive full runs (default 3) becomes graduation-eligible. `fno doctor evals graduate <id>` retags its YAML to `regression`. Graduation is a reviewed edit: the command rewrites the file, and a human ships the PR. It is never a silent runtime flip.
 
 **pass^k reliability.** `--repeat K` runs a task K times. The report shows `pass@1` (single-run success rate) and `pass^k` (every run passed) per task, plus a flake list (tasks that passed sometimes but not always). This turns "we re-run CI and it clears" folklore into a graded flake rate - the CI-flake regression tasks (e.g. the `loop_check` suite) are the first targets.
 
@@ -18,7 +18,7 @@ A capability task that passes its last N consecutive full runs (default 3) becom
 One file per task under `evals/bank/*.yaml`:
 
 ```yaml
-id: capability-add-hello-verb
+id: capability-add-hello-command
 tier: capability            # capability | regression
 prompt: |                   # optional: omit for a grade-only task (no worker step)
   <the task the worker is asked to perform>
@@ -37,18 +37,19 @@ tags: [cli, greenfield]
 
 Success criteria must be **mechanical** (develop-tests discipline): a task with no runnable `grade` is invalid at load time, and an all-trivial grade (`command: true`) warns. A **grade-only** task (no `prompt`) skips the worker step and grades the fixture directly - the honest model for a CI-flake regression task where there is no agent work, only a flake to measure.
 
-## Verbs
+## Commands
 
 | Command | What it does |
 |---|---|
 | `fno doctor evals run [--task ID] [--tier T] [--repeat K] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). |
 | `fno doctor evals report [--since N] [--graduate] [--json] [--compare vN]` | Fold history: per-tier pass rates, pass@1, pass^k, flake list, regression alarm (exit 4 on alarm). `--graduate` lists eligible capability tasks. `--compare vN` scores a variant against baseline. |
+| `fno doctor evals report --climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L] [--prices JSON] [--json]` | The climb verdict over two cohorts against the declared split: `underpowered`, `regression`, `overfit`, `unmeasured_cost`, `propose`, `hold`. On `propose` with `--stage`/`--trial-lane` it prints a one-step accept line (`fno config set` for the lanes list plus `on_exhausted degrade`); without them the verdict alone. See the Climb round recipe in [lane-qualification](architecture/lane-qualification.md#climb-round). |
 | `fno doctor evals trend` | Score the recent window against the prior one, per task (exit 4 when a regression-tier task dropped). See Trend. |
 | `fno doctor evals macro [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json] [--events PATH]` | Fold existing event journals into a recurring failure-pattern leaderboard, or drill into one pattern. |
 | `fno doctor evals graduate <id>` | Retag a capability task's YAML to regression. |
 | `fno doctor evals grade --brief B --golden G` | Grade a research brief against a golden doc (three mechanical assertions); exit 0 green. |
 
-Each run executes the task in a disposable worktree via the headless spawn substrate (`fno agents spawn --substrate headless`, never bare `claude -p`). The spawn cap and provider rotation stay in play. The run removes the worktree after grading. A bank task never runs in your working copy. History appends to `~/.fno/history/evals-history.jsonl` (override via `config.paths.evals_history`).
+Each run executes the task in a disposable worktree via the one-shot spawn lane (`fno agents spawn --once`, never bare `claude -p`). The spawn cap and provider rotation stay in play. The run removes the worktree after grading. A bank task never runs in your working copy. History appends to `~/.fno/history/evals-history.jsonl` (override via `config.paths.evals_history`).
 
 ## Macro eval
 
@@ -118,7 +119,7 @@ Treat `unverified` as "probably ran as requested but not independently checked",
 
 ## The cohort comparison report
 
-`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort: attempts, graded, accepted (graded and passed), pass rate with a deterministic 95% bootstrap interval, `lane_status` counts, exclusions counted by reason (substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`), median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless EVERY scored row carries usage and a price line for its model; it never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
+`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort lists attempts, graded, scored (the rows the rate reads), accepted (scored and passed), the pass rate, its 95% Wilson interval, and the `lane_status` counts. Exclusions count by reason: substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`. The row also carries median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless every scored row carries usage and a complete price line (input and output rates, plus a cache rate for any cache tokens the row carries) for its model. A price line missing a rate the usage needs reads as no price line. It never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
 
 ## Legacy attribution note
 
@@ -128,9 +129,10 @@ A row missing `experiment_id` or `requested_lane` is legacy/unattributed. It fol
 
 Without a forcing function an eval harness dies. The bank sat fully built while its history went quiet. A 40-day-old 100% rendered exactly like a fresh one. The demand is built in now. When the bank ages past the schedule, the tick launches the regression tier detached. The health surfaces go red past the window.
 
-- **The tick and the arm.** The daemon's evals phase resolves paths and schedule, then invokes the native `fno-agents evals-arm`. The arm prints one JSON receipt line. It never runs the bank inside the tick, whose wall budget is 480s shared by nine phases. When the newest regression run is older than `evals.schedule_days` (default 7, `0` disables the leg), the arm fires. It also needs spawn-gate headroom. Then it launches `fno doctor evals run --tier regression -y` detached. The child leads a new process group with stdio on /dev/null. The arm holds the `evals:scheduled-run` claim across ticks. No second run starts while one is in flight. The run is bounded by its own 3600s budget, above the tier's 50-minute task-timeout sum. The group is killed on timeout. Graded fails are data: the run still journals as scheduled. Plumbing failures are could-not-fire: a refused gate, a timeout, a non-zero exit, an exit-0 run with no rows. A gate refusal means slots at `agents.max_live` or RAM under `agents.min_free_gb`.
+- **The tick and the arm.** The daemon's evals phase resolves paths and schedule, then invokes the native `fno-agents evals-arm`. The arm prints one JSON receipt line. It never runs the bank inside the tick, whose wall budget is 480s shared by nine phases. When the newest regression run is older than `evals.schedule_days` (default 7, `0` disables the leg), the arm fires. Only a fleet incident or RAM under `agents.min_free_gb` holds it. A full fleet does not: the bank has a reserved slot. Then it launches `fno doctor evals run --tier regression -y` detached. The child leads a new process group with stdio on /dev/null. The arm holds the `evals:scheduled-run` claim across ticks. No second run starts while one is in flight. The run is bounded by its own 3600s budget, above the tier's 50-minute task-timeout sum. The group is killed on timeout. Graded fails are data: the run still journals as scheduled. Plumbing failures are could-not-fire: a refused gate, a timeout, a non-zero exit, an exit-0 run with no rows.
+- **The bank's checkout.** The run reads `evals/bank` from its working directory. The launchd tick runs from `$HOME`, so the arm picks the checkout. It takes the first that has an `evals/bank` directory. The order is the plugin root, the cwd and its ancestors, then each registered project (`work.workspaces`). The plugin root counts only as a git checkout. Every task cuts a worktree from the root, so a staged copy grades every task as failed. The child runs there. With no bank anywhere, the arm skips with `no_bank` and launches nothing.
 - **The journal and the notice.** Every outcome lands in the global events journal. A pass or graded fail journals `evals_scheduled_run` with task count, passes, and duration. Rows are attributed by their own timestamps, never by a count delta. A plumbing failure journals `evals_stale` with the reason. Past twice `evals.stale_days`, it also carries one OS notice per schedule window. The journal row IS the dedup, so no state file of its own exists.
-- **The red row.** `fno backlog triage health` renders the evals line with the newest run's age (`age 9d STALE`). When the trend names regressions, it appends ` REGRESSED <n>`. When the trend drops a task, `fno doctor` adds the REGRESSING line. A stale bank prints STALE with the age and the run command. No history or no regression row prints UNKNOWN. Unknown never asserts staleness. A fresh, trending-clean bank prints nothing. A red evals row is an escalation, never a gate. Nothing refuses while the bank is stale. The row is what demands the run.
+- **The red row.** `fno backlog triage health` renders the evals line with the newest run's age (`age 9d STALE`). When the trend names regressions, it appends ` REGRESSED <n>`. When the trend drops a task, `fno doctor` adds the REGRESSING line. A stale bank prints STALE with the age and the run command. The lead check-in names why a stale or never-ran bank did not run: `STALE (scheduled run: no_bank: ...)`. No history or no regression row prints UNKNOWN. Unknown never asserts staleness. A fresh, trending-clean bank prints nothing. A red evals row is an escalation, never a gate. Nothing refuses while the bank is stale. The row is what demands the run.
 - **By hand.** Run `fno doctor evals run --tier regression` before a risky change. Run `--repeat 5` on a suspect flaky task.
 
 The report has two wired consumers from day one, so the harness is not a write-only artifact:
@@ -148,7 +150,7 @@ Agents author throwaway scripts under `~/.claude/jobs/<job>/tmp/`. The scratch-s
 - **Only a missing remedy files.** A shape at three jobs does not always have an fno remedy. The census measured `file_patch` at 26 jobs and `git_wrap` at 17 with none. Each shape's remedy row says whether it can file. A report-only shape still emits observed rows and shows in the report. Before filing, the sweep runs the row's help probe. A match means the remedy shipped, so it prints `served:<shape>` and files nothing. A probe call that fails files with the table hint, so a broken probe never hides a missing remedy.
 - **One node per run.** `MAX_FILES_PER_SWEEP` is 1. A long list of new nodes is the failure the operator named. Five shapes crossing in one day file one node today. The next files tomorrow. The filing index is the graph. Every sweep node carries `origin_evidence` `scratch-shape:<shape>` and is minted with `--separate`, so text similarity never picks the node. When a scratch file is newer than its last write, a live keyed node folds (`--wave-of`, no new id). A same-day re-run adds nothing. A keyed node done inside the window suppresses. A keyed node done before the window refiles with `--caused-by`.
 - **State words on stdout.** One per line, never silent: `ok`, `insufficient: <reason>`, `filed:<id>`, `folded:<id>`, `suppressed:<id>`, `served:<shape>`, and `would-file:<shape>` under `--dry-run`. The sweep classifies shipped fixture specimens before touching the real jobs dir. A classifier that finds nothing there prints `insufficient: control failed` and emits nothing. A broken classifier can never read as a quiet machine.
-- **Verb hint.** Details name the census rule, the file and job counts, and the three newest specimens. The hint names the missing verb or flag. A probe on a hidden leaf reads `fno help <group> --all`, because that surface lists hidden leaves and `fno <group> --help` does not.
+- **Command hint.** Details name the census rule, the file and job counts, and the three newest specimens. The hint names the missing command or flag. A probe reads the `--help` of the group the missing leaf joins, because a retired root no longer answers.
 - **Reading it.** `fno doctor scratch report` renders the ranked table from the journal: shape, files, jobs, monitors, first and last seen, filed node. `--json` serves machines. The sweep runs as stage five of the daily eval-sweep ignition. It is bounded and logged to `.fno/logs/eval-sweep.log` like every other stage.
 
 ## Context-to-outcome trace

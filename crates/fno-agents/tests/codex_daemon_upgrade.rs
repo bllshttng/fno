@@ -1,5 +1,5 @@
 //! The codex daemon upgrade transaction, against the fake daemon and a fake
-//! `codex` CLI. The fake CLI models the vendor verbs (`--version`,
+//! `codex` CLI. The fake CLI models the vendor commands (`--version`,
 //! `app-server daemon version`, `app-server daemon restart`): the restart
 //! arm writes the upgrade marker (which flips the fake daemon's reported
 //! version) and rewrites the daemon state file to name a fresh real pid,

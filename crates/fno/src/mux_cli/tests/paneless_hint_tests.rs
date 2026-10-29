@@ -1,5 +1,5 @@
 //! The paneless route-hint test, extracted from the parent's inline
-//! tests under the file-budget gate (the reseat verb lands in a sibling
+//! tests under the file-budget gate (the reseat command lands in a sibling
 //! child module and the parent stays shrink-only).
 use super::*;
 
@@ -29,7 +29,10 @@ fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
     // `view`, and `focus` share this one builder, so one assertion covers
     // all three doors.
     let drive = paneless_route_hint("fno mux where", &paneless_row("t-live", Some("deadbee1")));
-    assert!(drive.contains("fno agents peek t-live --follow"), "{drive}");
+    assert!(
+        drive.contains("fno agents session peek t-live --follow"),
+        "{drive}"
+    );
     assert!(drive.contains("fno agents attach t-live"), "{drive}");
     assert!(drive.contains("hosts no live pane"), "{drive}");
 
@@ -40,7 +43,7 @@ fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
         &paneless_row_with_harness("t-codex", None, Some("codex")),
     );
     assert!(
-        follow.contains("fno agents peek t-codex --follow"),
+        follow.contains("fno agents session peek t-codex --follow"),
         "{follow}"
     );
     assert!(!follow.contains("fno agents attach"), "{follow}");

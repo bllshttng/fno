@@ -1,6 +1,6 @@
-//! Typed argv for the migrated `fno-agents` verbs.
+//! Typed argv for the migrated `fno-agents` commands.
 //!
-//! One derive declaration per flag: for the verbs it owns, this module IS the
+//! One derive declaration per flag: for the commands it owns, this module IS the
 //! flag registry, and its help strings are the only copy. Parsers run through
 //! `try_parse_from`, so the caller keeps process ownership (clap never exits
 //! inside library code) and maps failures through [`refusal_line`] into the
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 /// The shared machine-output group (contracts build on this): one
-/// declaration of `--json`/`-J`, flattened into every verb that emits it.
+/// declaration of `--json`/`-J`, flattened into every command that emits it.
 #[derive(Args, Debug)]
 pub struct JsonOnly {
     /// Emit machine-readable JSON on stdout instead of human text
@@ -90,7 +90,7 @@ pub struct ReportArgs {
 
 /// `fno-agents review-summary`: the reviewed-at display line's inputs.
 /// Branch and head are required for the display line; the caller turns a
-/// parse failure into the verb's deliberate silence (print nothing, exit 0),
+/// parse failure into the command's deliberate silence (print nothing, exit 0),
 /// never into a claim. `--evidence` replaces them: observer items on stdin,
 /// their review evidence as JSON on stdout.
 #[derive(Parser, Debug)]
@@ -119,7 +119,7 @@ pub struct ReviewSummaryArgs {
 }
 
 /// The spawn head's axis flags, parsed once and consumed by both the client's
-/// spawn dispatch and the spawn-overlay inspection verb: route,
+/// spawn dispatch and the spawn-overlay inspection command: route,
 /// provider, harness, model, effort, account, substrate. Tokens before the
 /// provider argv fence that are not axis flags belong to the rest of the
 /// spawn grammar and are ignored here; tokens after the fence are opaque
@@ -132,66 +132,148 @@ pub struct ReviewSummaryArgs {
     disable_version_flag = true
 )]
 pub struct SpawnAxes {
-    /// Vendor/model route (vendor/model); the vendor pin outranks --provider
+    /// Vendor/model route (vendor/model)
     #[arg(long)]
     pub route: Option<String>,
-    /// Model vendor (routing is applied by the fno CLI seam)
-    #[arg(short = 'P', long)]
-    pub provider: Option<String>,
-    /// CLI binary axis
-    #[arg(short = 'H', long)]
-    pub harness: Option<String>,
-    /// Model name handed to the provider CLI's own --model
-    #[arg(short = 'm', long)]
-    pub model: Option<String>,
-    /// Reasoning effort for the spawned worker
-    #[arg(long)]
-    pub effort: Option<String>,
     /// Per-spawn account selection
     #[arg(long)]
     pub account: Option<String>,
-    /// Session substrate (pane | thread | headless)
+    /// CLI binary axis: which harness launches
+    #[arg(short = 'H', long)]
+    pub harness: Option<String>,
+    /// The retired axis fields stay declared because the spawn-overlay command's
+    /// inspection shape names them; `scan` refuses the spellings and never
+    /// fills them, so every live read answers None.
+    #[arg(short = 'P', long)]
+    pub provider: Option<String>,
+    #[arg(short = 'm', long)]
+    pub model: Option<String>,
+    #[arg(long)]
+    pub effort: Option<String>,
     #[arg(long)]
     pub substrate: Option<String>,
 }
 
 impl SpawnAxes {
-    /// The axis flag spellings this schema owns, short aliases included.
+    /// The axis flag spellings this schema owns, short aliases included. The
+    /// retired spellings stay listed so `scan` sees and refuses each one
+    /// before the loop's legacy arms could accept it.
     pub const AXIS_FLAGS: &'static [&'static str] = &[
         "--route",
+        "--account",
         "--provider",
         "-P",
         "--harness",
         "-H",
-        "--model",
-        "-m",
-        "--effort",
-        "--account",
+        "--resume",
+        "-r",
         "--substrate",
+        "--as",
     ];
+
+    /// The one refusal for a retired spawn axis at the binary door: the same
+    /// line the Python stubs print, so both doors teach one native form.
+    pub fn refused_axis(flag: &str) -> String {
+        format!(
+            "refused: {flag} is retired; the lane template owns it. \
+             Native form: docs/HARNESSES.md (launch each harness its own way)"
+        )
+    }
 
     /// Parse the axis flags out of a spawn argv, stopping at the provider
     /// argv fence (`--argv` or bare `--`). Non-axis tokens belong to the rest
     /// of the spawn grammar and are ignored here, but the axes themselves are
-    /// strict: a valueless axis flag is an error in the voice the old cursor
-    /// parser used, and a repeated axis flag is refused so the client and the
-    /// overlay can never read different values from the same argv.
+    /// strict: a valueless live axis flag is an error in the voice the old
+    /// cursor parser used, and a repeated live axis flag is refused so the
+    /// client and the overlay can never read different values from the same
+    /// argv. A retired spelling refuses by name, never parses.
     pub fn scan(toks: &[String]) -> Result<(SpawnAxes, usize), String> {
         let fence = toks.iter().position(|t| t == "--argv" || t == "--");
         let head_len = fence.unwrap_or(toks.len());
         let head = &toks[..head_len];
-        // Collect only the axis flag/value pairs, so the strict clap parse
-        // never sees the non-axis flags the rest of the grammar owns.
+        // Collect only the live axis flag/value pairs, so the strict clap
+        // parse never sees the non-axis flags the rest of the grammar owns.
         let mut pairs: Vec<String> = Vec::new();
         let mut i = 0;
         while i < head.len() {
-            if Self::AXIS_FLAGS.contains(&head[i].as_str()) {
-                if i + 1 >= head.len() || Self::looks_like_flag(&head[i + 1]) {
-                    return Err(format!("{} needs a value", head[i]));
+            let tok = head[i].as_str();
+            // An attached retired short (`-rabc`) is one token the exact
+            // AXIS_FLAGS match never sees. The Python door refused every head
+            // token a retired short starts, so the attached form refuses by
+            // its long here instead of reaching the prompt positionals.
+            let attached = if tok.starts_with("--") {
+                None
+            } else if tok.starts_with("-P") {
+                Some("--provider")
+            } else if tok.starts_with("-r") {
+                Some("--resume")
+            } else {
+                None
+            };
+            if let Some(long) = attached {
+                if tok.len() > 2 {
+                    return Err(Self::refused_axis(long));
                 }
-                pairs.push(head[i].clone());
-                pairs.push(head[i + 1].clone());
-                i += 2;
+            }
+            // Equals-form is a live spelling of the value axes (`--account=x`);
+            // split it here so the strict clap parse sees flag and value.
+            let (long, inline) = match tok.split_once('=') {
+                Some((f, v)) if f.starts_with("--") && Self::AXIS_FLAGS.contains(&f) => {
+                    (f, Some(v.to_string()))
+                }
+                _ => (tok, None),
+            };
+            if Self::AXIS_FLAGS.contains(&long) {
+                if matches!(long, "--route" | "--account" | "--harness" | "-H") {
+                    match inline {
+                        Some(v) => {
+                            pairs.push(long.to_string());
+                            pairs.push(v);
+                            i += 1;
+                        }
+                        None => {
+                            if i + 1 >= head.len() || Self::looks_like_flag(&head[i + 1]) {
+                                return Err(format!("{long} needs a value"));
+                            }
+                            pairs.push(long.to_string());
+                            pairs.push(head[i + 1].clone());
+                            i += 2;
+                        }
+                    }
+                } else if long == "--as" || long == "--substrate" {
+                    // The lanes this door selects. `--as` is the public axis:
+                    // cloud has no template lane (its original selector), and
+                    // the pane arm answers an explicit `-H <pane-arm harness>
+                    // --as pane` itself. The Python seam's harness scan
+                    // (`_RUST_PANE_HARNESSES`) only execs here for the
+                    // harnesses a pane arm owns, so accepting the public
+                    // vocabulary keeps the binary door as wide as the Python
+                    // door it replaced - a narrower refusal would strand an
+                    // argv the seam already routed. `--substrate` stays the
+                    // RETIRED spelling: cloud only, everything else refuses by
+                    // name (the retirement rows in client_tests pin it).
+                    let value = inline.or_else(|| head.get(i + 1).cloned());
+                    let accepted = match value.as_deref() {
+                        Some("cloud") => true,
+                        Some("pane") | Some("thread") | Some("headless") => long == "--as",
+                        _ => false,
+                    };
+                    if !accepted {
+                        return Err(Self::refused_axis(long));
+                    }
+                    let value = value.unwrap_or_default();
+                    pairs.push("--substrate".to_string());
+                    pairs.push(value);
+                    i += if tok.contains('=') { 1 } else { 2 };
+                } else {
+                    // A short names its long, as the Python stubs print it.
+                    let named = match long {
+                        "-P" => "--provider",
+                        "-r" => "--resume",
+                        other => other,
+                    };
+                    return Err(Self::refused_axis(named));
+                }
             } else {
                 i += 1;
             }
@@ -202,11 +284,13 @@ impl SpawnAxes {
             .map_err(|e| refusal_line("fno-agents spawn", &e))?;
         let axes = SpawnAxes {
             route: matches.get_one::<String>("route").cloned(),
-            provider: matches.get_one::<String>("provider").cloned(),
-            harness: matches.get_one::<String>("harness").cloned(),
-            model: matches.get_one::<String>("model").cloned(),
-            effort: matches.get_one::<String>("effort").cloned(),
             account: matches.get_one::<String>("account").cloned(),
+            harness: matches.get_one::<String>("harness").cloned(),
+            // The retired fields never fill: scan refused the spellings above,
+            // all but `--substrate cloud`.
+            provider: None,
+            model: None,
+            effort: None,
             substrate: matches.get_one::<String>("substrate").cloned(),
         };
         Ok((axes, head_len))
@@ -229,6 +313,11 @@ impl SpawnAxes {
             }
             if Self::AXIS_FLAGS.contains(&toks[i].as_str()) {
                 i += 2; // flag plus value; scan refused a missing value already
+                continue;
+            }
+            if matches!(toks[i].split_once('='), Some((f, _)) if f.starts_with("--") && Self::AXIS_FLAGS.contains(&f))
+            {
+                i += 1; // the equals form carries its own value
                 continue;
             }
             out.push(toks[i].clone());
@@ -293,8 +382,8 @@ mod tests {
 
     #[test]
     fn restart_parses_the_python_adapter_invocation() {
-        // this exact argv (post-verb) is what cli/src/fno/restart.py
-        // spawns; the dispatch strips the verb before the parser runs.
+        // this exact argv (post-command) is what `fno agents restart` passes
+        // on; the dispatch strips the command before the parser runs.
         let a = RestartArgs::try_parse_from(["--json"]).expect("--json parses");
         assert!(a.json.json);
         assert!(!a.force);
@@ -378,16 +467,172 @@ mod tests {
     }
 
     #[test]
+    fn review_summary_evidence_replaces_branch_and_head() {
+        let a = ReviewSummaryArgs::try_parse_from(["--evidence"]).expect("evidence alone parses");
+        assert!(a.evidence);
+        assert_eq!(a.branch, None);
+        assert_eq!(a.head, None);
+        let both =
+            ReviewSummaryArgs::try_parse_from(["--evidence", "--branch", "b", "--head", "h"])
+                .expect("evidence tolerates the display flags");
+        assert!(both.evidence && both.branch.is_some() && both.head.is_some());
+        // A bare call still refuses: neither the display triplet nor evidence.
+        assert!(ReviewSummaryArgs::try_parse_from(["--events", "e.jsonl"]).is_err());
+    }
+
+    #[test]
+    fn duplicate_scalar_flag_refuses() {
+        let err = RestartArgs::try_parse_from(["--force", "--force"])
+            .expect_err("duplicate scalar refuses");
+        assert!(refusal_line("fno-agents restart", &err).contains("--force"));
+    }
+
+    #[test]
+    fn spawn_axes_parse_the_live_spellings() {
+        let toks: Vec<String> = ["--route", "zai/glm", "--account=makers", "-H", "codex"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (axes, fence) = SpawnAxes::scan(&toks).expect("live axes parse");
+        assert_eq!(axes.route.as_deref(), Some("zai/glm"));
+        assert_eq!(axes.account.as_deref(), Some("makers"));
+        assert_eq!(axes.harness.as_deref(), Some("codex"));
+        assert_eq!(fence, toks.len());
+    }
+
+    #[test]
+    fn spawn_axes_leave_the_harness_shorthand_flags_alone() {
+        let toks: Vec<String> = [
+            "-m",
+            "sonnet",
+            "--effort",
+            "high",
+            "--permission-mode=plan",
+            "-msonnet",
+            "--route",
+            "zai/glm",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (axes, fence) = SpawnAxes::scan(&toks).expect("shorthand flags are not axes");
+        assert_eq!(axes.route.as_deref(), Some("zai/glm"));
+        let kept = SpawnAxes::strip_axes(&toks, fence);
+        assert_eq!(kept[..6], toks[..6], "the harness flags survive the strip");
+    }
+
+    #[test]
+    fn spawn_axes_retired_spellings_refuse_by_name() {
+        // Every retired spelling refuses with the same line the Python
+        // stubs print, so both doors teach one native form.
+        for flag in ["--provider", "-P", "--substrate"] {
+            let toks: Vec<String> = [flag, "x"].iter().map(|s| s.to_string()).collect();
+            let err = SpawnAxes::scan(&toks).expect_err("retired axis refuses");
+            let long = match flag {
+                "-P" => "--provider",
+                f => f,
+            };
+            assert!(
+                err.starts_with(&format!("refused: {long} is retired")),
+                "{err}"
+            );
+            assert!(err.contains("HARNESSES.md"), "{err}");
+        }
+    }
+
+    #[test]
+    fn spawn_resume_refuses_with_the_python_golden_line() {
+        // The exact line _retired_axis("--resume") prints at the Python door;
+        // the golden pins it so both doors teach one native form.
+        const GOLDEN: &str = "refused: --resume is retired; the lane template owns it. \
+Native form: docs/HARNESSES.md (launch each harness its own way)";
+        assert_eq!(SpawnAxes::refused_axis("--resume"), GOLDEN);
+        for form in [
+            vec!["--resume", "6501096a"],
+            vec!["--resume=6501096a"],
+            vec!["-r", "6501096a"],
+        ] {
+            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+            let err = SpawnAxes::scan(&toks).expect_err("a resume-bearing spawn refuses");
+            assert_eq!(err, GOLDEN, "{err}");
+        }
+        // The attached short (`-rabc`, one token) is a spelling the exact
+        // AXIS_FLAGS match never sees; it refuses by its long. The fence
+        // still keeps a post-argv `-r` provider payload opaque.
+        for (tok, long) in [
+            ("-rabc", "--resume"),
+            ("-r=x", "--resume"),
+            ("-Pzai", "--provider"),
+        ] {
+            let toks: Vec<String> = [tok].iter().map(|s| s.to_string()).collect();
+            let err = SpawnAxes::scan(&toks).expect_err("an attached retired short refuses");
+            assert!(
+                err.starts_with(&format!("refused: {long} is retired")),
+                "{err}"
+            );
+        }
+        let fenced: Vec<String> = ["--argv", "--", "claude", "-r", "x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            SpawnAxes::scan(&fenced).is_ok(),
+            "a post-fence -r stays provider argv"
+        );
+    }
+
+    #[test]
+    fn spawn_axes_as_admits_the_public_vocabulary() {
+        for form in [
+            vec!["--as", "cloud"],
+            vec!["--as=cloud"],
+            vec!["--substrate", "cloud"],
+        ] {
+            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+            let (axes, _) = SpawnAxes::scan(&toks).expect("cloud is admitted");
+            assert_eq!(axes.substrate.as_deref(), Some("cloud"));
+            assert!(SpawnAxes::strip_axes(&toks, toks.len()).is_empty());
+        }
+        // The pane seam routes `-H <member> --as pane` argvs here, so the
+        // public substrate vocabulary rides --as beside cloud; a narrower
+        // refusal would strand an argv the seam already routed.
+        for word in ["pane", "thread", "headless"] {
+            let toks: Vec<String> = vec!["--as".to_string(), word.to_string()];
+            let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
+            assert_eq!(axes.substrate.as_deref(), Some(word));
+        }
+        let joined: Vec<String> = vec!["--as=pane".to_string()];
+        let (axes, _) = SpawnAxes::scan(&joined).expect("the joined spelling is admitted");
+        assert_eq!(axes.substrate.as_deref(), Some("pane"));
+        for other in ["bg"] {
+            let toks: Vec<String> = ["--substrate", other]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let err = SpawnAxes::scan(&toks).expect_err("bg is the retired thread spelling");
+            assert!(err.contains("is retired"), "{err}");
+        }
+    }
+
+    #[test]
     fn spawn_axes_fence_keeps_provider_payload_opaque() {
         let toks: Vec<String> = [
-            "--model", "luna", "--argv", "--", "claude", "--model", "sonnet",
+            "--account",
+            "makers",
+            "--harness=claude",
+            "--argv",
+            "--",
+            "claude",
+            "--model",
+            "sonnet",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
         let (axes, fence) = SpawnAxes::scan(&toks).expect("fenced argv parses");
-        assert_eq!(axes.model.as_deref(), Some("luna"));
-        assert_eq!(fence, 2);
+        assert_eq!(axes.account.as_deref(), Some("makers"));
+        assert_eq!(axes.harness.as_deref(), Some("claude"));
+        assert_eq!(fence, 3);
         // strip_axes keeps the fence and the payload byte-exact.
         let stripped = SpawnAxes::strip_axes(&toks, fence);
         assert_eq!(
@@ -402,13 +647,26 @@ mod tests {
     #[test]
     fn spawn_axes_missing_value_refuses() {
         for bad in [
-            vec!["--model"],
-            vec!["--model", "--force"],
-            vec!["-P", "--argv", "--", "claude"],
+            vec!["--account"],
+            vec!["--account", "--force"],
+            vec!["--route", "--argv", "--", "claude"],
         ] {
             let toks: Vec<String> = bad.iter().map(|s| s.to_string()).collect();
             let err = SpawnAxes::scan(&toks).expect_err("missing value refuses");
             assert!(err.ends_with("needs a value"), "{err}");
         }
+    }
+
+    #[test]
+    fn spawn_axes_ignores_non_axis_tokens() {
+        let toks: Vec<String> = [
+            "--name", "wk", "--portal", "1", "--route", "zai/glm", "--cwd", "/x",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (axes, _) = SpawnAxes::scan(&toks).expect("non-axis tokens are ignored");
+        assert_eq!(axes.route.as_deref(), Some("zai/glm"));
+        assert_eq!(axes.account, None);
     }
 }

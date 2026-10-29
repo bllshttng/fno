@@ -38,7 +38,7 @@ fno_plans_dir() {
 # project, resolved by `fno-agents state plans-dirs` (see
 # crates/fno-agents/src/plans_dirs.rs). A missing, old, or failing binary
 # contributes nothing, so the accepted set is then exactly what it was before
-# the verb existed. Every line is physical (fno_physical_path), so the
+# the command existed. Every line is physical (fno_physical_path), so the
 # containment test compares one namespace. Returns non-zero only when the
 # session dir itself is unresolvable - the fail-open contract below.
 fno_plans_dirs_all() {

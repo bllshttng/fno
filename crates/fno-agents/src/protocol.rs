@@ -12,7 +12,7 @@
 //!
 //! ## Two namespaces, one socket
 //!
-//! Methods are namespaced by a `<namespace>.<verb>` prefix:
+//! Methods are namespaced by a `<namespace>.<command>` prefix:
 //!
 //! - `agent.*` — `fno-agents` client (spawn / ask / list / stop / rm /
 //!   reconcile / status).
@@ -55,7 +55,7 @@ pub enum ProtocolError {
 }
 
 /// A request from a client to the daemon. `id` correlates the response on a
-/// multiplexed connection; `method` is `<namespace>.<verb>`; `params` is an
+/// multiplexed connection; `method` is `<namespace>.<command>`; `params` is an
 /// opaque JSON object the handler interprets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Request {
@@ -219,7 +219,7 @@ pub struct RpcError {
 }
 
 /// Stable machine-readable error codes. Clients map these to exit codes; the
-/// design's per-verb exit codes (13/14/15/18, ...) are applied client-side from
+/// design's per-command exit codes (13/14/15/18, ...) are applied client-side from
 /// these. Serialized snake_case for cross-language parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -258,7 +258,7 @@ pub enum ErrorCode {
     ShuttingDown,
 }
 
-/// Method namespace, derived from the `<namespace>.<verb>` method prefix.
+/// Method namespace, derived from the `<namespace>.<command>` method prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Namespace {
     /// `agent.*` — the `fno-agents` client surface.
@@ -279,8 +279,8 @@ impl Namespace {
         }
     }
 
-    /// The verb portion after the namespace prefix (`agent.spawn` -> `spawn`).
-    pub fn verb(method: &str) -> Option<&str> {
+    /// The command portion after the namespace prefix (`agent.spawn` -> `spawn`).
+    pub fn command(method: &str) -> Option<&str> {
         method.split_once('.').map(|(_, v)| v)
     }
 }
@@ -367,6 +367,38 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
 ) -> Result<(), ProtocolError> {
     let body = serde_json::to_vec(resp)?;
     write_frame(writer, &body).await
+}
+
+/// One blocking request/response over a unix socket, for a caller with no
+/// runtime. Returns the `result` value; `None` on any transport failure, an
+/// error reply, or a null result. `budget` bounds the write and the read;
+/// std gives a unix socket no connect timeout.
+pub fn blocking_call(
+    sock: &std::path::Path,
+    method: &str,
+    params: Value,
+    budget: std::time::Duration,
+) -> Option<Value> {
+    use std::io::{Read, Write};
+    let mut stream = std::os::unix::net::UnixStream::connect(sock).ok()?;
+    stream.set_read_timeout(Some(budget)).ok()?;
+    stream.set_write_timeout(Some(budget)).ok()?;
+    let body = serde_json::to_vec(&Request::new(1, method, params)).ok()?;
+    stream.write_all(&(body.len() as u32).to_le_bytes()).ok()?;
+    stream.write_all(&body).ok()?;
+    let mut len = [0u8; 4];
+    stream.read_exact(&mut len).ok()?;
+    let len = u32::from_le_bytes(len);
+    if len > MAX_FRAME_BYTES {
+        return None;
+    }
+    let mut reply = vec![0u8; len as usize];
+    stream.read_exact(&mut reply).ok()?;
+    let reply: Value = serde_json::from_slice(&reply).ok()?;
+    if reply.get("error").is_some() {
+        return None;
+    }
+    reply.get("result").filter(|r| !r.is_null()).cloned()
 }
 
 #[cfg(test)]

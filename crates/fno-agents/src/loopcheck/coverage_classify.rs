@@ -313,7 +313,7 @@ pub fn classify_coverage_tiled(
     }
     if local_passes.iter().any(|lp| answered_fail(lp)) {
         let chain = in_scope_chain(events_text, head_branch, head_sha);
-        let blockers = disposition_blockers_on_chain(&chain);
+        let blockers = disposition_blockers_on_chain(&chain, &verify_invocation_ids(events_text));
         if !blockers_withhold(&blockers, rounds_exhausted) {
             for lp in local_passes.iter().filter(|lp| answered_fail(lp)) {
                 verdicts.push(local_attestation_verdict(
@@ -496,10 +496,10 @@ pub fn classify_coverage_tiled(
     // it. `config.review.max_rounds = 2` means "this PR gets two rounds, then
     // review is DONE" - a budget you spend, not a bar you clear.
     //
-    // This is the mirror of the same discharge in `_coverage_gate`, and it has
-    // to live at the coverage decision rather than at any one consumer: this
+    // The discharge lives at the coverage decision rather than at any one
+    // consumer: this
     // value feeds the published fno/review-coverage status, the stop-hook
-    // receipt, and the emitted row alike. Fixing only the merge verb left the
+    // receipt, and the emitted row alike. Fixing only the merge command left the
     // status red and the hook still asking for another round, which is what
     // kept spending rounds past the cap.
     //

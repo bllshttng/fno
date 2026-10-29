@@ -5,8 +5,7 @@
 //! parity goldens in `tests/golden/mail_withdraw` are the contract. Reader
 //! divergences from the Python leg (both follow the drain-reader idiom):
 //! malformed bus lines and corrupt cursor files are skipped silently instead
-//! of warned to stderr, and cursor filenames use the raw address, not the
-//! Python `_safe_name` spelling.
+//! of warned to stderr, and cursor filenames use the raw address.
 
 use crate::mail_control_drain::{withdrawn_ids, WITHDRAW_KIND};
 use crate::paths::AgentsHome;
@@ -18,7 +17,7 @@ use std::path::{Path, PathBuf};
 const HOSTED_DELIVERY: &str = "hosted";
 const TYPED_DELIVERY: &str = "typed";
 
-/// Python `stamp_from`: an explicit `--from-name`, even the empty string,
+/// An explicit `--from-name`, even the empty string,
 /// wins verbatim; otherwise the resolved self handle, floored to the bare
 /// fleet name. Unlike hold there is no identity refusal here: an
 /// unprovable self stamps as `fno`.
@@ -190,6 +189,11 @@ pub fn run(args: &[String]) -> i32 {
     // The cursor read above and this append are not one atomic step: a drain
     // in flight may already hold the body, so the receipt names the boundary
     // the tombstone actually guarantees.
-    println!("withdrew {msg_id} (to {to}); no drain will deliver it from now on. A drain already in flight when this ran may have delivered it: `fno agents peek {to}` to check.");
+    let refund = if super::send::release_budget_by_id(&msg_id) > 0 {
+        " Its words no longer count against the control-lane budget."
+    } else {
+        ""
+    };
+    println!("withdrew {msg_id} (to {to}); no drain will deliver it from now on. A drain already in flight when this ran may have delivered it: `fno agents peek {to}` to check.{refund}");
     0
 }

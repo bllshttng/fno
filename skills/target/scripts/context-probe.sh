@@ -22,15 +22,12 @@ if [ $# -lt 1 ] || [ -z "$1" ]; then
   exit "$_EXIT_UNREADABLE"
 fi
 
-# `context` is a Python verb, so reach it through the Python CLI (`fno-py`)
-# directly and fall back to the `fno` mux front door. The smoke gate runs
-# `uv run fno-py` off the in-tree source, which carries `context`; a bare `fno`
-# there is either absent or the mux forwarding to an older published wheel that
-# predates the verb, so `fno whoami context` dies and takes the test suite with it.
-# Preferring fno-py changes nothing where both exist (the mux forwards to it).
-if command -v fno-py >/dev/null 2>&1; then
-  _ctx_door=fno-py
-elif command -v fno >/dev/null 2>&1; then
+# `context` claims natively now: the front door owns both spellings
+# (classify_context) and execs fno-agents context-run, so reach it through
+# `fno` and exit unreadable when no binary exists. The old `fno-py` first
+# preference died with the Python leg: a wheel without the command answers
+# nothing, and a python registration would sit behind the native intercept.
+if command -v fno >/dev/null 2>&1; then
   _ctx_door=fno
 else
   exit "$_EXIT_UNREADABLE"

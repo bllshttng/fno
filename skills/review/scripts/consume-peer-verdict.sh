@@ -73,7 +73,7 @@ else
 fi
 
 # The classified record: the same rule every producer shares. A classify
-# failure (a deployment older than the verb) is a rejection, never an
+# failure (a deployment older than the command) is a rejection, never an
 # empty classification.
 if ! classified_record="$("${FNO:-fno}" do review classify --findings-file "$payload_file" --emit-record)" 2>/dev/null; then
   reject "classify refused the terminal record (a deployment without 'do review classify' is too old for this script)"

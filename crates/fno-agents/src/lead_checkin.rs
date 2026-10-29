@@ -1,4 +1,4 @@
-//! `lead-checkin`: one verb runs the lead check-in body.
+//! `lead-checkin`: one command runs the lead check-in body.
 //!
 //! Gathers the readings the lead skill names, prints them in a fixed order,
 //! diffs against the previous canonical `lead_checkin` row, and emits that
@@ -23,10 +23,10 @@
 //!
 //! rc 0 a completed beat, 3 when an asked-for row was not journalled or
 //! stdout could not be written, 2 usage failure.
+use crate::lead_checkin_beat_budget::{run_bounded, take_reading, BEAT_BUDGET, READER_CALL_BUDGET};
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
 use crate::org_fold::org_fold;
-use crate::provenance::TranscriptSource;
 use crate::scrape::fno_bin;
 use serde_json::{json, Map, Value};
 use std::io::Write;
@@ -45,9 +45,9 @@ mod posture;
 mod peer_blocked;
 
 #[path = "lead_checkin_prompt_parked.rs"]
-mod prompt_parked;
+pub(crate) mod prompt_parked;
 
-/// The numeric keys this verb owns and diffs versus the previous beat.
+/// The numeric keys this command owns and diffs versus the previous beat.
 const NUMERIC_DIFF_KEYS: [&str; 11] = [
     "open_prs",
     "free_claim_no_driver",
@@ -91,9 +91,7 @@ fn iso_now() -> String {
 // ---------------------------------------------------------------------------
 // readers
 
-/// One reading could not be taken; the beat continues without it.
-struct ReaderError(String);
-
+#[derive(Debug)]
 pub(crate) struct Reading {
     pub(crate) name: &'static str,
     pub(crate) ok: bool,
@@ -138,16 +136,67 @@ struct Ctx {
 }
 
 fn run_capture(argv: &[std::ffi::OsString]) -> Result<(i32, String, String), String> {
+    run_capture_within(argv, READER_CALL_BUDGET)
+}
+
+/// The parameterized form (`directory_bytes_within`'s shape): a test proves
+/// the deadline fires without waiting out the real budget.
+fn run_capture_within(
+    argv: &[std::ffi::OsString],
+    budget: std::time::Duration,
+) -> Result<(i32, String, String), String> {
+    use std::io::Read;
     let (prog, rest) = argv.split_first().ok_or("empty argv")?;
-    let out = Command::new(prog)
+    let mut child = Command::new(prog)
         .args(rest)
         .stdin(std::process::Stdio::null())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("{}: {e}", prog.to_string_lossy()))?;
+    // The pipes drain on threads while the deadline polls: a child whose
+    // output fills a pipe buffer must never block on write, or the deadline
+    // would kill a healthy call that only needed its reader.
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let stdout_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stdout_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stderr_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = std::time::Instant::now() + budget;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "timed out after {budget:?}: {}",
+                        prog.to_string_lossy()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("{}: {e}", prog.to_string_lossy())),
+        }
+    };
+    let stdout = stdout_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
     Ok((
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
+        status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&stdout).into_owned(),
+        String::from_utf8_lossy(&stderr).into_owned(),
     ))
 }
 
@@ -181,7 +230,7 @@ pub(crate) fn gh_error_cause(error: &str) -> String {
     )
 }
 
-pub(crate) fn fno_verb(args: &[&str]) -> Result<(i32, String, String), String> {
+pub(crate) fn fno_command(args: &[&str]) -> Result<(i32, String, String), String> {
     let mut argv = vec![fno_bin()];
     argv.extend(args.iter().map(std::ffi::OsString::from));
     run_capture(&argv)
@@ -194,7 +243,7 @@ pub(crate) fn fno_verb(args: &[&str]) -> Result<(i32, String, String), String> {
 /// stop gate's stale-doc resolver calls the same one.
 pub(crate) fn team_handoff_doc(handoffs_dir: &Path, scope: &str) -> Result<PathBuf, String> {
     // The FILENAME key keeps the role- spelling: the docs on disk and both
-    // writers (the retired Python verb, the native handoff verb) mint
+    // writers (the retired Python command, the native handoff command) mint
     // role-, so a reader keying team- would find nothing, ever.
     let key = format!("role-{}", sanitize_scope_key(scope));
     if key == "role-" {
@@ -234,7 +283,7 @@ pub(crate) fn sanitize_scope_key(scope: &str) -> String {
         } else if !in_run {
             // One dash per unsafe RUN, the Python writer's
             // re.sub(r"[^A-Za-z0-9._-]+", "-") shape, so reader keys match
-            // the docs the verb wrote.
+            // the docs the command wrote.
             out.push('-');
             in_run = true;
         }
@@ -297,8 +346,42 @@ fn is_user_placeholder(text: &str) -> bool {
     !text.is_empty() && strip(text) == strip(PLACEHOLDER)
 }
 
-fn r_user_notes(ctx: &Ctx) -> Result<Value, String> {
-    let doc = team_handoff_doc(&ctx.handoffs_dir, &ctx.scope)?;
+/// The read check. Every canon refresh ends the doc with a fresh `Recall
+/// word:` line, so a word this lead has not acknowledged means a compaction
+/// or refresh since its last read. Only `--recall <that word>` passes and
+/// records it. No doc, or a doc with no word, passes.
+fn recall_gate(handoffs_dir: &Path, scope: &str, given: Option<&str>) -> Result<(), String> {
+    let Ok(doc) = team_handoff_doc(handoffs_dir, scope) else {
+        return Ok(());
+    };
+    let Ok(text) = std::fs::read_to_string(&doc) else {
+        return Ok(());
+    };
+    let Some(word) = text
+        .lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("Recall word: ").map(str::trim))
+    else {
+        return Ok(());
+    };
+    let name = doc.file_name().and_then(|n| n.to_str()).unwrap_or("canon");
+    let ack = doc.with_file_name(format!(".{name}.recalled"));
+    let acked = std::fs::read_to_string(&ack).unwrap_or_default();
+    if acked.trim() == word {
+        return Ok(());
+    }
+    if given == Some(word) {
+        std::fs::write(&ack, word).map_err(|e| format!("{}: {e}", ack.display()))?;
+        return Ok(());
+    }
+    Err(format!(
+        "your canon doc changed since your last read. Feeling amnesia? Your memory is here. Read all of it: {}. Then rerun with --recall <the word on its last line>.",
+        doc.display()
+    ))
+}
+
+fn r_user_notes(handoffs_dir: &Path, scope: &str) -> Result<Value, String> {
+    let doc = team_handoff_doc(handoffs_dir, scope)?;
     let text =
         std::fs::read_to_string(&doc).map_err(|e| format!("{}: unreadable: {e}", doc.display()))?;
     let block = extract_user_marker(&text)
@@ -365,11 +448,16 @@ fn fetch_board(ctx: &Ctx) -> Result<Value, String> {
     Ok(read_board(&opts))
 }
 
-fn fetch_fold(ctx: &Ctx) -> Result<Value, String> {
-    let teams = vec![json!({"scope": ctx.scope, "level": ctx.level})];
+fn fetch_fold(
+    graph: &PathBuf,
+    cwd: &PathBuf,
+    scope: &str,
+    level: Option<i64>,
+) -> Result<Value, String> {
+    let teams = vec![json!({"scope": scope, "level": level})];
     let payload = org_fold(
-        &ctx.graph,
-        &ctx.cwd,
+        graph,
+        cwd,
         None,
         &crate::paths::AgentsHome::from_env().registry_json(),
         &teams,
@@ -377,7 +465,7 @@ fn fetch_fold(ctx: &Ctx) -> Result<Value, String> {
     .map_err(|e| format!("scope fold unreadable: {e}"))?;
     let mine = payload
         .get("scope_nodes")
-        .and_then(|s| s.get(&ctx.scope))
+        .and_then(|s| s.get(scope))
         .cloned()
         .unwrap_or(Value::Null);
     if mine.get("status").and_then(|s| s.as_str()) != Some("ok") {
@@ -607,13 +695,13 @@ fn epic_line(org: &Value) -> String {
 }
 
 fn r_capacity() -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["doctor", "footprint", "--json"])?;
+    let (_, out, err) = fno_command(&["doctor", "footprint", "--json"])?;
     if out.trim().is_empty() {
         return Err(format!("footprint unavailable: {}", stderr_cause(&err)));
     }
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("footprint payload did not parse: {e}"))?;
-    let (_, gate_out, gate_err) = fno_verb(&["agents", "gate-status"])?;
+    let (_, gate_out, gate_err) = fno_command(&["agents", "gate-status"])?;
     let gate: Value = serde_json::from_str(gate_out.trim())
         .map_err(|e| format!("gate payload did not parse: {e}: {}", gate_err.trim()))?;
     r_capacity_pair(&payload, &gate)
@@ -700,7 +788,7 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
 }
 
 fn r_team() -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["agents", "org", "--json"])?;
+    let (_, out, err) = fno_command(&["agents", "org", "--json"])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("org payload did not parse: {e}: {}", err.trim()))?;
     let summary = payload.get("summary").cloned().unwrap_or(json!({}));
@@ -893,47 +981,32 @@ pub(crate) fn own_transcript() -> Result<OwnTranscript, String> {
     let harness = harness
         .as_deref()
         .ok_or_else(|| "no harness resolved from the ambient environment".to_string())?;
-    match harness {
-        "claude" => {
-            let path = crate::claude_drive::find_transcript(&session_id)
-                .ok_or_else(|| format!("no transcript found for session {session_id}"))?;
+    // pi and agy renders carry no tool results, so the check-in readers keep
+    // them unmeasured even though the shared resolver can find their stores.
+    let harness: &'static str = match harness {
+        "claude" => "claude",
+        "codex" => "codex",
+        "opencode" => "opencode",
+        other => {
+            return Ok(OwnTranscript::Unmeasured {
+                reason: format!("no transcript store reader for harness {other}"),
+            })
+        }
+    };
+    match crate::session_receipt::locate(harness, &session_id)? {
+        crate::session_receipt::Store::File(path) => {
             let text = std::fs::read_to_string(&path)
                 .map_err(|e| format!("transcript unreadable: {e}"))?;
             Ok(OwnTranscript::Text {
-                harness: "claude",
+                harness,
                 text,
                 path: Some(path),
             })
         }
-        "codex" => {
-            let path = crate::lead_history::hygiene_transcript_for_holder("codex", &session_id)
-                .ok_or_else(|| format!("no codex rollout for session {session_id}"))?;
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| format!("transcript unreadable: {e}"))?;
-            Ok(OwnTranscript::Text {
-                harness: "codex",
-                text,
-                path: Some(path),
-            })
-        }
-        "opencode" => {
-            let source = crate::opencode_transcript::OpencodeSource {
-                dbs: crate::opencode_transcript::opencode_stores(),
-                roots: None,
-            };
-            let file = source
-                .sessions(30)
-                .into_iter()
-                .find(|file| file.session_id == session_id)
-                .ok_or_else(|| format!("no opencode session {session_id} in its stores"))?;
-            Ok(OwnTranscript::Text {
-                harness: "opencode",
-                text: source.read(&file),
-                path: None,
-            })
-        }
-        other => Ok(OwnTranscript::Unmeasured {
-            reason: format!("no transcript store reader for harness {other}"),
+        crate::session_receipt::Store::Rendered(text) => Ok(OwnTranscript::Text {
+            harness,
+            text,
+            path: None,
         }),
     }
 }
@@ -983,14 +1056,14 @@ fn r_wake_meter(since: Option<&str>) -> Result<Value, String> {
     }
 }
 
-fn r_drain(ctx: &Ctx) -> Result<Value, String> {
-    let (_, out, err) = fno_verb(&["agents", "org", "drain", &ctx.scope])?;
+fn r_drain(scope: &str) -> Result<Value, String> {
+    let (_, out, err) = fno_command(&["agents", "org", "drain", scope])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("drain payload did not parse: {e}: {}", err.trim()))?;
     Ok(payload.get("undelivered").cloned().unwrap_or(Value::Null))
 }
 
-/// The parked-PR board fact: open parks with the remedy verb, read
+/// The parked-PR board fact: open parks with the remedy command, read
 /// in-process from the one owner so a second reader of the store shape can
 /// never drift. An unreadable store reads empty, the same corrupt-reads-
 /// empty posture the Python watcher store has always had.
@@ -1017,7 +1090,7 @@ fn r_parked() -> Result<Value, String> {
 /// threshold, then the stuck-work findings, as the lines a page would carry.
 /// Read in process - the same journals, predicate and threshold arm_watch
 /// ticks with - so a check-in line and a page can never disagree.
-fn r_control_plane(ctx: &Ctx) -> Result<Value, String> {
+fn r_control_plane(cwd: &Path) -> Result<Value, String> {
     let home = crate::paths::AgentsHome::from_env();
     let now_unix = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1026,7 +1099,7 @@ fn r_control_plane(ctx: &Ctx) -> Result<Value, String> {
     let journals = crate::tick_ledger::journals(&home);
     let mut rows = {
         let mut rows = crate::tick_ledger::read_arms(&journals, now_unix);
-        crate::tick_ledger::fill_arm_values(&mut rows, &ctx.cwd);
+        crate::tick_ledger::fill_arm_values(&mut rows, cwd);
         rows
     };
     let trace = crate::tick_ledger::read_tick_trace_live(&journals, &rows, now_unix);
@@ -1038,9 +1111,9 @@ fn r_control_plane(ctx: &Ctx) -> Result<Value, String> {
         },
         &trace,
     );
-    let findings = crate::stuck_work::collect(&ctx.cwd)?;
+    let findings = crate::stuck_work::collect(cwd)?;
     crate::arm_repair::annotate(&mut rows, &crate::arm_repair::RepairFacts::live(&findings));
-    let threshold = crate::agents_config::notify_arm_failing_after_s(&ctx.cwd);
+    let threshold = crate::agents_config::notify_arm_failing_after_s(cwd);
     let attention = control_plane_attention(&rows, &trace, &findings, threshold);
     Ok(json!({ "attention": attention }))
 }
@@ -1067,7 +1140,7 @@ fn control_plane_attention(
         })
         .collect();
     if let (false, Some(p)) = (paused.is_empty(), trace.pause.as_ref()) {
-        let verb = match p {
+        let command = match p {
             crate::loops_pause::DispatchPause::Manual { .. } => "fno do loops status",
             _ => "fno agents incident status",
         };
@@ -1099,7 +1172,7 @@ fn control_plane_attention(
             _ => String::new(),
         };
         attention.push(format!(
-            "{} arms paused on purpose: {}{} ({verb})",
+            "{} arms paused on purpose: {}{} ({command})",
             paused.len(),
             p.detail(),
             tail
@@ -1118,9 +1191,9 @@ fn control_plane_attention(
 /// read from the same projection the spawn
 /// gate's cap enforces. An `membership: unknown` row is a failed reading, so
 /// a blind spot prints `READER FAILED territory` instead of an empty table.
-fn r_territory(ctx: &Ctx) -> Result<Value, String> {
+fn r_territory(cwd: &Path) -> Result<Value, String> {
     let registry = crate::paths::AgentsHome::from_env().registry_json();
-    let rows = crate::territory::territory_rows(&ctx.cwd, &registry);
+    let rows = crate::territory::territory_rows(cwd, &registry);
     if rows.len() == 1 && rows[0].get("membership").and_then(Value::as_str) == Some("unknown") {
         let reason = rows[0]
             .get("reason")
@@ -1144,6 +1217,23 @@ fn r_state_root_drift() -> Result<Value, String> {
     }))
 }
 
+/// The boot-revival failed rows of this boot. A receipt from an older boot
+/// reads clean: a stale failure is not this boot's news. A corrupted
+/// receipt is a failed reading, never a silent zero.
+fn r_boot_revival() -> Result<Value, String> {
+    let home = crate::paths::AgentsHome::from_env();
+    match crate::boot_revival::failed_rows_this_boot(&home) {
+        Some(rows) => Ok(json!({
+            "failed": rows.len(),
+            "rows": rows.iter().map(|r| json!({
+                "name": r.name,
+                "reason": r.reason,
+            })).collect::<Vec<_>>(),
+        })),
+        None => Err("boot-revival.json unreadable".to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // gather
 
@@ -1153,116 +1243,296 @@ struct Beat {
 }
 
 fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading> {
+    let beat_started = std::time::Instant::now();
     let mut readings: Vec<Reading> = Vec::new();
-    let mut take = |name: &'static str, result: Result<Value, String>| {
-        match result {
-            Ok(value) => readings.push(Reading::took(name, value)),
-            Err(error) => readings.push(Reading::failed(name, ReaderError(error).0)),
-        };
-    };
-    take("user_notes", r_user_notes(ctx));
-    take("board", r_board(&beat.board, &beat.folded, open_pr_count()));
-    take("blueprint", {
-        let (session_id, _harness) = crate::claims::resolve_identity();
-        let claims = crate::claims::list(Some("node:"), None, false)
-            .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
-        let slots = crate::spawn_gate_lanes::share_reading(
-            &crate::paths::AgentsHome::from_env().registry_json(),
-            crate::capacity::effective_for(&ctx.cwd).cap,
-            session_id.as_deref(),
-        )
-        .share
-        .ok_or_else(|| "lead share unreadable".to_string());
-        let floor = crate::agents_config::config_lookup(&ctx.cwd, &["dispatch", "blueprint_floor"])
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
-        let other_owned =
-            crate::lead_checkin_blueprint::other_owned_scopes(&beat.folded, &ctx.scope);
-        crate::lead_checkin_blueprint::r_blueprint(
-            &beat.board,
-            &ctx.cwd,
-            session_id,
-            claims,
-            slots,
-            &floor,
-            &other_owned,
-        )
+    // Every reader runs on a detached thread behind the beat deadline, so
+    // each closure captures owned clones: a borrowed local could dangle past
+    // the skip.
+    let board = beat.board.clone();
+    let folded = beat.folded.clone();
+    let handoffs_dir = ctx.handoffs_dir.clone();
+    let cwd = ctx.cwd.clone();
+    let scope = ctx.scope.clone();
+    let events_paths = ctx.events_paths.clone();
+    let since = since.map(str::to_string);
+    take_reading(&mut readings, beat_started, "user_notes", {
+        let handoffs_dir = handoffs_dir.clone();
+        let scope = scope.clone();
+        move || r_user_notes(&handoffs_dir, &scope)
     });
-    take(
-        "escalations",
-        std::env::current_dir()
-            .map_err(|e| format!("unreadable (process cwd: {e})"))
-            .and_then(|cwd| r_escalations(&cwd, &beat.folded)),
-    );
-    take("blocked_child", r_blocked_child(&beat.board));
-    take("org", r_org(&beat.folded));
-    take("territory", r_territory(ctx));
-    take("peer_blocked", peer_blocked::reading());
-    take("state_root_drift", r_state_root_drift());
-    take("capacity", r_capacity());
-    take("layout", r_layout());
-    take(
-        "telemetry",
-        crate::otel_read::health(
-            crate::paths::AgentsHome::from_env().root(),
-            crate::agents_config::telemetry_claude_otel(&ctx.cwd),
-        ),
-    );
-    take(
-        "machine",
-        crate::lead_checkin_machine::newest_reading(&ctx.events_paths),
-    );
-    let workers_payload = crate::lead_answers::fetch_workers_payload();
-    take(
-        "workers",
-        workers_payload
-            .as_ref()
-            .map_err(Clone::clone)
-            .and_then(crate::lead_answers::workers_summary),
-    );
-    take("watch_expiry", watch_projection::read());
-    // The scope-answer readings share one scope compile and one top call.
-    let scope_ids =
-        crate::lead_answers::scope_node_ids(&ctx.graph, &ctx.cwd, &ctx.scope, ctx.level);
-    take(
-        "answered",
-        scope_ids
-            .as_ref()
-            .map_err(Clone::clone)
-            .and_then(|ids| crate::lead_answers::answered_reading(&ctx.cwd, ids)),
-    );
-    take("quiet_workers", {
-        let top = workers_payload.as_ref().ok();
-        match (top, scope_ids.as_ref()) {
-            (Some(top), Ok(ids)) => crate::lead_answers::quiet_reading(Some(top), ids),
-            (None, _) => Err("the workers reading failed; quiet workers are unreadable".into()),
-            (_, Err(e)) => Err(e.clone()),
+    take_reading(&mut readings, beat_started, "board", {
+        let board = board.clone();
+        let folded = folded.clone();
+        move || r_board(&board, &folded, open_pr_count())
+    });
+    // The scope compile rides the beat once: the blueprint, answered, and
+    // quiet readings share it, and the idle-scope attention reads the two
+    // counts it feeds. Past the beat budget it is skipped, and every reading
+    // downstream of it inherits the skip as its own named failure. Like the
+    // readers it runs bounded, so a blocked compile cannot hold the beat.
+    let scope_ids = if beat_started.elapsed() < BEAT_BUDGET {
+        let graph = ctx.graph.clone();
+        let cwd = cwd.clone();
+        let scope = scope.clone();
+        let level = ctx.level;
+        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        match run_bounded(remaining, "scope compile", move || {
+            crate::lead_answers::scope_node_ids(&graph, &cwd, &scope, level)
+        }) {
+            Ok(Some(value)) => value,
+            Ok(None) => Err(format!(
+                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+            )),
+            Err(error) => Err(error),
+        }
+    } else {
+        Err(format!(
+            "beat budget exceeded after {BEAT_BUDGET:?} (skipped)"
+        ))
+    };
+    // One graph read feeds both surfaces: the blueprint's skip line and the
+    // scope_idea_children reading the coverage line sees. Like the readers
+    // it runs bounded: on expiry both surfaces inherit a named failure.
+    let idea_children = match scope_ids.as_ref().map_err(Clone::clone) {
+        Ok(ids) => {
+            let graph = ctx.graph.clone();
+            let ids = ids.clone();
+            let remaining = BEAT_BUDGET.saturating_sub(beat_started.elapsed());
+            match run_bounded(remaining, "idea children", move || {
+                crate::lead_answers::idea_children_reading(&graph, &ids)
+            }) {
+                Ok(Some(value)) => value,
+                Ok(None) => Err(format!(
+                    "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                )),
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    take_reading(&mut readings, beat_started, "blueprint", {
+        let board = board.clone();
+        let folded = folded.clone();
+        let cwd = cwd.clone();
+        let scope = scope.clone();
+        let idea_children = idea_children.clone();
+        move || {
+            let (session_id, _harness) = crate::claims::resolve_identity();
+            let claims = crate::claims::list(Some("node:"), None, false)
+                .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
+            let home = crate::paths::AgentsHome::from_env();
+            let slots = crate::spawn_gate_lanes::share_reading(
+                &home.registry_json(),
+                crate::capacity::effective_for(&cwd).cap,
+                session_id.as_deref(),
+                Some(&home.terminal_runs_dir()),
+            )
+            .share
+            .ok_or_else(|| "lead share unreadable".to_string());
+            let floor = crate::agents_config::config_lookup(&cwd, &["dispatch", "blueprint_floor"])
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+            let other_owned = crate::lead_checkin_blueprint::other_owned_scopes(&folded, &scope);
+            crate::lead_checkin_blueprint::r_blueprint(
+                &board,
+                &cwd,
+                session_id,
+                claims,
+                slots,
+                &floor,
+                &other_owned,
+                &idea_children.as_ref().map_err(Clone::clone).and_then(|v| {
+                    v.get("count")
+                        .and_then(Value::as_u64)
+                        .map(|c| c as usize)
+                        .ok_or_else(|| "idea children unreadable".to_string())
+                }),
+            )
         }
     });
-    take("team", r_team());
-    take("posture", posture::reading());
-    take("refusal_rate", r_refusal_rate());
-    take("pushback", crate::lead_pushback::reading());
-    take("subagents", crate::lead_answers::r_subagents());
-    take("wake_meter", r_wake_meter(since));
-    take(
-        "correction_meter",
-        crate::correction_meter::r_correction_meter(),
-    );
-    take("drain", r_drain(ctx));
-    take("held", crate::lead_answers::held_reading(&ctx.scope));
-    take("repeated_asks", crate::repeated_asks::reading());
-    take("skill_drift", crate::skill_drift::reading());
-    take("main_ci", crate::main_ci::r_main_ci());
-    take("control_plane", r_control_plane(ctx));
-    take("self_hold", {
+    take_reading(&mut readings, beat_started, "escalations", {
+        let folded = folded.clone();
+        move || {
+            std::env::current_dir()
+                .map_err(|e| format!("unreadable (process cwd: {e}"))
+                .and_then(|cwd| r_escalations(&cwd, &folded))
+        }
+    });
+    take_reading(&mut readings, beat_started, "blocked_child", {
+        let board = board.clone();
+        move || r_blocked_child(&board)
+    });
+    take_reading(&mut readings, beat_started, "org", {
+        let folded = folded.clone();
+        move || r_org(&folded)
+    });
+    take_reading(&mut readings, beat_started, "territory", {
+        let cwd = cwd.clone();
+        move || r_territory(&cwd)
+    });
+    take_reading(&mut readings, beat_started, "peer_blocked", || {
+        peer_blocked::reading()
+    });
+    take_reading(&mut readings, beat_started, "state_root_drift", || {
+        r_state_root_drift()
+    });
+    take_reading(&mut readings, beat_started, "capacity", || r_capacity());
+    take_reading(&mut readings, beat_started, "layout", || r_layout());
+    take_reading(&mut readings, beat_started, "telemetry", {
+        let cwd = cwd.clone();
+        move || {
+            crate::otel_read::health(
+                crate::paths::AgentsHome::from_env().root(),
+                crate::agents_config::telemetry_claude_otel(&cwd),
+            )
+        }
+    });
+    take_reading(&mut readings, beat_started, "machine", {
+        let events_paths = events_paths.clone();
+        move || crate::lead_checkin_machine::newest_reading(&events_paths)
+    });
+    let workers_payload = if beat_started.elapsed() < BEAT_BUDGET {
+        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        match run_bounded(
+            remaining,
+            "workers fetch",
+            crate::lead_answers::fetch_workers_payload,
+        ) {
+            Ok(Some(value)) => value,
+            Ok(None) => Err(format!(
+                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+            )),
+            Err(error) => Err(error),
+        }
+    } else {
+        Err(format!(
+            "beat budget exceeded after {BEAT_BUDGET:?} (skipped)"
+        ))
+    };
+    take_reading(&mut readings, beat_started, "workers", {
+        let workers_payload = workers_payload.clone();
+        move || {
+            workers_payload
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(crate::lead_answers::workers_summary)
+        }
+    });
+    take_reading(&mut readings, beat_started, "boot_revival", || {
+        r_boot_revival()
+    });
+    // The lineup reads the payload rows for the seated nodes' observed
+    // harness/model: memory-only, never journaled.
+    take_reading(&mut readings, beat_started, "worker_rows", {
+        let workers_payload = workers_payload.clone();
+        move || {
+            workers_payload
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|p| {
+                    crate::lead_answers::payload_workers(p).map(|rows| Value::Array(rows.to_vec()))
+                })
+        }
+    });
+    take_reading(&mut readings, beat_started, "watch_expiry", || {
+        watch_projection::read()
+    });
+    // The scope-answer readings share the scope compile hoisted beside the
+    // blueprint reading and one top call.
+    take_reading(&mut readings, beat_started, "answered", {
+        let cwd = cwd.clone();
+        let scope_ids = scope_ids.clone();
+        move || {
+            scope_ids
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|ids| crate::lead_answers::answered_reading(&cwd, ids))
+        }
+    });
+    take_reading(&mut readings, beat_started, "quiet_workers", {
+        let workers_payload = workers_payload.clone();
+        let scope_ids = scope_ids.clone();
+        move || {
+            let top = workers_payload.as_ref().ok();
+            match (top, scope_ids.as_ref()) {
+                (Some(top), Ok(ids)) => crate::lead_answers::quiet_reading(Some(top), ids),
+                (None, _) => Err("the workers reading failed; quiet workers are unreadable".into()),
+                (_, Err(e)) => Err(e.clone()),
+            }
+        }
+    });
+    take_reading(&mut readings, beat_started, "scope_live_workers", {
+        let workers_payload = workers_payload.clone();
+        let scope_ids = scope_ids.clone();
+        move || {
+            let top = workers_payload.as_ref().ok();
+            match (top, scope_ids.as_ref()) {
+                (Some(top), Ok(ids)) => crate::lead_answers::payload_workers(top)
+                    .map(|rows| json!(crate::lead_answers::scope_live_worker_count(rows, ids))),
+                (None, _) => Err("the workers reading failed; scope workers are unreadable".into()),
+                (_, Err(e)) => Err(e.clone()),
+            }
+        }
+    });
+    take_reading(&mut readings, beat_started, "scope_idea_children", {
+        let idea_children = idea_children.clone();
+        move || idea_children
+    });
+    take_reading(&mut readings, beat_started, "team", || r_team());
+    take_reading(&mut readings, beat_started, "posture", || {
+        posture::reading()
+    });
+    take_reading(&mut readings, beat_started, "refusal_rate", || {
+        r_refusal_rate()
+    });
+    take_reading(&mut readings, beat_started, "pushback", || {
+        crate::lead_pushback::reading()
+    });
+    take_reading(&mut readings, beat_started, "subagents", || {
+        crate::lead_answers::r_subagents()
+    });
+    take_reading(&mut readings, beat_started, "wake_meter", {
+        let since = since.clone();
+        move || r_wake_meter(since.as_deref())
+    });
+    take_reading(&mut readings, beat_started, "correction_meter", || {
+        crate::correction_meter::r_correction_meter()
+    });
+    take_reading(&mut readings, beat_started, "drain", {
+        let scope = scope.clone();
+        move || r_drain(&scope)
+    });
+    take_reading(&mut readings, beat_started, "held", {
+        let scope = scope.clone();
+        move || crate::lead_answers::held_reading(&scope)
+    });
+    take_reading(&mut readings, beat_started, "repeated_asks", || {
+        crate::repeated_asks::reading()
+    });
+    take_reading(&mut readings, beat_started, "skill_drift", || {
+        crate::skill_drift::reading()
+    });
+    take_reading(&mut readings, beat_started, "main_ci", || {
+        crate::main_ci::r_main_ci()
+    });
+    take_reading(&mut readings, beat_started, "evals", {
+        let events_paths = events_paths.clone();
+        move || crate::lead_checkin_evals::reading(&events_paths)
+    });
+    take_reading(&mut readings, beat_started, "control_plane", {
+        let cwd = cwd.clone();
+        move || r_control_plane(&cwd)
+    });
+    take_reading(&mut readings, beat_started, "self_hold", || {
         crate::claims::resolve_identity()
             .0
             .ok_or_else(|| "current session identity is unavailable".to_string())
             .and_then(|session| crate::mail_hold::self_status(&session))
     });
-    take("parked", r_parked());
-    take("prompt_parked", prompt_parked::reading());
+    take_reading(&mut readings, beat_started, "parked", || r_parked());
+    take_reading(&mut readings, beat_started, "prompt_parked", || {
+        prompt_parked::reading()
+    });
     readings
 }
 
@@ -1298,6 +1568,15 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
             bp.value["target_ready"].clone(),
         );
         data.insert("blueprint_skips".into(), bp.value["skips"].clone());
+        // The idle-scope attention reads these; deliberately NOT diff keys
+        // (NUMERIC_DIFF_KEYS), so every historical baseline stays measurable.
+        data.insert(
+            "scope_idea_children".into(),
+            bp.value["idea_children"].clone(),
+        );
+    }
+    if let Some(lw) = get("scope_live_workers").filter(|r| r.ok) {
+        data.insert("scope_live_workers".into(), lw.value.clone());
     }
     if let Some(esc) = get("escalations").filter(|r| r.ok) {
         if esc.value.get("unreadable").is_none() {
@@ -1606,6 +1885,36 @@ fn derive_change(
     {
         attention.push("lead posture drifted from its teamed sandbox".into());
     }
+    // An idle scope holding unplanned work is never "no change": an epic's
+    // idea children never dispatch alone, so an empty unplanned queue and a
+    // zero worker count can both read clean while the scope starves
+    // (observed 2026-10-24: 76 idea children, zero workers, free slots,
+    // beat said no change).
+    let scope_workers = data
+        .get("scope_live_workers")
+        .and_then(Value::as_u64)
+        .map(|v| v == 0);
+    let idea_children = data
+        .get("scope_idea_children")
+        .and_then(Value::as_u64)
+        .map(|v| v > 0);
+    let free_slots = data
+        .get("blueprint_slots")
+        .and_then(Value::as_u64)
+        .map(|v| v > 0);
+    if scope_workers == Some(true) && idea_children == Some(true) && free_slots == Some(true) {
+        let children = data
+            .get("scope_idea_children")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let slots = data
+            .get("blueprint_slots")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        attention.push(format!(
+            "scope idle with {children} unplanned idea children under its epics and {slots} free build slots"
+        ));
+    }
     // Attention outranks silence: a control plane failing for 30 minutes,
     // or a refusal rate climbing two beats running, is never journaled as
     // "no change", whatever the counts did.
@@ -1801,7 +2110,12 @@ fn render_lines_with(
                 .into_iter()
                 .flatten()
             {
-                lines.push(format!("  target-ready: /fno:target {}", dash(Some(id))));
+                // The spawn command to copy: with no --name, spawn names the
+                // worker t-<short slug> and the lane picks its model.
+                lines.push(format!(
+                    "  target-ready: fno agents spawn \"/fno:target {}\"",
+                    dash(Some(id))
+                ));
             }
             for skip in bp
                 .get("skips")
@@ -1873,6 +2187,7 @@ fn render_lines_with(
     lines.extend(crate::lead_answers::held_lines(readings));
     lines.extend(crate::repeated_asks::lines(readings));
     lines.extend(crate::skill_drift::lines(readings));
+    lines.extend(crate::lead_checkin_evals::lines(readings));
 
     match failed("org") {
         Some(r) => lines.push(format!("READER FAILED org: {}", r.error)),
@@ -1915,6 +2230,7 @@ fn render_lines_with(
                         lineup.queue,
                         graph_rows,
                         lineup.registry,
+                        lineup.live,
                         lineup.planned,
                     );
                     lines.extend(crate::lead_checkin_lineup::render_lineup(&built));
@@ -2260,6 +2576,23 @@ fn render_lines_with(
             ));
         }
     }
+    if ok("boot_revival", &mut lines) {
+        let failed = by_name("boot_revival")
+            .and_then(|r| r.value.get("rows"))
+            .and_then(|o| o.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if failed.is_empty() {
+            lines.push("boot_revival: none".into());
+        } else {
+            lines.push("boot_revival:".into());
+            for row in failed.iter().take(MAX_ORG_ROWS) {
+                let name = row.get("name").and_then(Value::as_str).unwrap_or("?");
+                let reason = row.get("reason").and_then(Value::as_str).unwrap_or("?");
+                lines.push(format!("  {name}: {reason}"));
+            }
+        }
+    }
     if ok("parked", &mut lines) {
         let rows = by_name("parked")
             .and_then(|r| r.value.get("rows"))
@@ -2346,8 +2679,16 @@ fn render_lines_with(
 // ---------------------------------------------------------------------------
 // faq prompt + emit
 
-fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
-    let mut entries: Vec<(SystemTime, String)> = Vec::new();
+pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
+    faq_files_for_scope(faqs_dir, scope)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// [`faq_entries_for_scope`] with each entry's file, oldest first.
+pub(crate) fn faq_files_for_scope(faqs_dir: &Path, scope: &str) -> Vec<(PathBuf, String)> {
+    let mut entries: Vec<(SystemTime, PathBuf, String)> = Vec::new();
     let Ok(it) = std::fs::read_dir(faqs_dir) else {
         return Vec::new();
     };
@@ -2367,11 +2708,11 @@ fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
                 .metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            entries.push((mtime, text.trim().to_string()));
+            entries.push((mtime, path.clone(), text.trim().to_string()));
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries.into_iter().map(|(_, t)| t).collect()
+    entries.into_iter().map(|(_, p, t)| (p, t)).collect()
 }
 
 /// The `scope:` line of a simple `---` frontmatter block, or None.
@@ -2400,7 +2741,7 @@ const FAQ_PROMPT: &str = "fno agents org faq add --question \"...\" --answer \".
 --specimen \"<node or PR>, <date>\" --exit \"<the change that retires this>\"";
 
 /// The one `lead_checkin` writer. `source` is the emitting half (`loop` for
-/// the verb's own beat, `hook` for the stop hook's missed-beat row); the
+/// the command's own beat, `hook` for the stop hook's missed-beat row); the
 /// append runs through the capped, rotation-safe `EventEmitter`, so the row
 /// never bypasses the payload cap or the ingest-before-rotate guard.
 pub(crate) fn emit_row(path: &Path, source: &str, data: &Map<String, Value>) -> bool {
@@ -2556,12 +2897,17 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let mut theme: Option<String> = None;
     let mut keep_name_from: Option<String> = None;
     let mut queue_arg: Option<String> = None;
+    let mut recall: Option<String> = None;
+    let mut user_command = false;
     let mut i = 0;
     while i < args.len() {
         let flag = |name: &str| args[i] == name && i + 1 < args.len();
         if flag("--scope") {
             ctx.scope = args[i + 1].clone();
             i += 2;
+        } else if args[i] == "--user-command" {
+            user_command = true;
+            i += 1;
         } else if flag("--change") {
             model_change = Some(args[i + 1].clone());
             i += 2;
@@ -2576,6 +2922,9 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             i += 2;
         } else if flag("--queue") {
             queue_arg = Some(args[i + 1].clone());
+            i += 2;
+        } else if flag("--recall") {
+            recall = Some(args[i + 1].clone());
             i += 2;
         } else if flag("--events-path") {
             ctx.events_paths.push(PathBuf::from(&args[i + 1]));
@@ -2614,10 +2963,35 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                  [--events-path ...] --graph PATH --handoffs-dir PATH \
                  [--faqs-dir PATH] [--board-state PATH] [--emit-path PATH] \
                  [--change TEXT] [--name NAME] [--theme THEME] \
-                 [--keep-name-from OLD-SCOPE] [--queue IDS] \
-                 [--no-emit] [--json]"
+                 [--keep-name-from OLD-SCOPE] [--queue IDS] [--recall WORD] \
+                 [--no-emit] [--json] [--user-command]"
             );
             return 2;
+        }
+    }
+    let handoffs_defaulted = ctx.handoffs_dir.as_os_str().is_empty();
+    if user_command {
+        // `fno agents org checkin`: the paths the retired Python shell passed,
+        // resolved here for any the caller left out.
+        if ctx.events_paths.is_empty() {
+            ctx.events_paths = crate::lead_history::default_journals(&ctx.cwd);
+        }
+        if ctx.graph.as_os_str().is_empty() {
+            ctx.graph = crate::paths_cli::graph_json(&ctx.cwd);
+        }
+        if ctx.handoffs_dir.as_os_str().is_empty() {
+            ctx.handoffs_dir = crate::paths_cli::handoffs_dir(&ctx.cwd);
+        }
+        if ctx.faqs_dir.is_none() {
+            ctx.faqs_dir = crate::backlog::autobrief::briefs_dir().map(|d| d.join("lead-faqs"));
+        }
+        if ctx.emit_path.is_none() {
+            ctx.emit_path = Some(
+                std::env::var_os("FNO_EVENTS_PATH")
+                    .filter(|p| !p.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| crate::paths::events_path(&ctx.cwd)),
+            );
         }
     }
     if ctx.events_paths.is_empty()
@@ -2638,6 +3012,23 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     ) {
         eprintln!("lead: {msg}");
         return 2;
+    }
+    // The canon doc lives in the scope's project, not the lead's cwd: a lead
+    // whose shell sat elsewhere read an empty dir while `config paths handoff
+    // --scope` found the doc. The cwd default stays only for an unknown scope.
+    if user_command && handoffs_defaulted {
+        // The same ambient home `config paths handoff` passes: with None the
+        // resolver falls back under <project>/.fno and misses the doc.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        if let Some(dir) = crate::paths_cli::scope_handoffs_dir(&ctx.scope, home.as_deref()) {
+            ctx.handoffs_dir = dir;
+        }
+    }
+    if user_command {
+        if let Err(msg) = recall_gate(&ctx.handoffs_dir, &ctx.scope, recall.as_deref()) {
+            eprintln!("lead: {msg}");
+            return 2;
+        }
     }
 
     // The graph read rides the beat once, before anything else needs it: the
@@ -2725,7 +3116,25 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         .and_then(Value::as_str);
     let beat = Beat {
         board: fetch_board(&ctx),
-        folded: fetch_fold(&ctx),
+        // The fold prefetch rides the reader deadline like the readers:
+        // past the ceiling it lands as a named failure instead of holding
+        // the beat, so the partial-journaling guarantee covers the leg
+        // before collect_readings.
+        folded: {
+            let graph = ctx.graph.clone();
+            let cwd = ctx.cwd.clone();
+            let scope = ctx.scope.clone();
+            let level = ctx.level;
+            match run_bounded(READER_CALL_BUDGET, "fold prefetch", move || {
+                fetch_fold(&graph, &cwd, &scope, level)
+            }) {
+                Ok(Some(value)) => value,
+                Ok(None) => Err(format!(
+                    "fold prefetch timed out after {READER_CALL_BUDGET:?}"
+                )),
+                Err(error) => Err(error),
+            }
+        },
     };
     let readings = collect_readings(&ctx, &beat, since);
     let mut data = build_data(&readings, &ctx.scope);
@@ -2790,6 +3199,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         memo.borrow_mut().insert(key, resolved.clone());
         resolved
     };
+    // The live rows ride the beat's one top payload: a seated node whose
+    // worker answers shows the worker's observed harness/model, never the
+    // dispatch default the registry row stamped.
+    let live_rows: Vec<Value> = readings
+        .iter()
+        .find(|r| r.name == "worker_rows")
+        .filter(|r| r.ok)
+        .and_then(|r| r.value.get("rows").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
     let lineup = crate::lead_checkin_lineup::LineupSources {
         queue: &manifest_queue,
         graph: match &graph_error {
@@ -2798,6 +3216,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         },
         registry: registry.as_ref(),
         registry_error: registry_error.as_deref(),
+        live: &live_rows,
         planned: &planned,
     };
     let mut lines = render_lines_with(
@@ -2963,7 +3382,7 @@ pub(crate) fn title_rename_command(
     capabilities
         .native_verbs
         .iter()
-        .any(|verb| verb == "/rename")
+        .any(|command| command == "/rename")
         .then(|| format!("/rename {label}"))
 }
 
@@ -3007,38 +3426,7 @@ fn rename_harness_title_for_team(scope: &str) -> Result<(), String> {
     let Some(command) = title_rename_command(harness, label, row.harness_title.as_deref()) else {
         return Ok(());
     };
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let mut child = std::process::Command::new(executable)
-        .args([
-            "mail-inject",
-            "--session",
-            session,
-            "--harness",
-            harness,
-            "--self-send",
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("mail-inject start failed: {error}"))?;
-    let mut stdin = child.stdin.take().ok_or("mail-inject stdin unavailable")?;
-    stdin
-        .write_all(command.as_bytes())
-        .map_err(|error| format!("mail-inject write failed: {error}"))?;
-    drop(stdin);
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("mail-inject wait failed: {error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if detail.is_empty() {
-            format!("mail-inject exited {}", output.status)
-        } else {
-            detail
-        });
-    }
-    Ok(())
+    crate::rename::deliver_command_to_session(session, harness, &command, true)
 }
 
 #[cfg(test)]
@@ -3345,6 +3733,7 @@ mod tests {
                 graph: Ok(&graph),
                 registry: Some(&registry),
                 registry_error: None,
+                live: &[],
                 planned: &planned,
             },
         );
@@ -3376,6 +3765,7 @@ mod tests {
                 graph: Err("the graph read returned 0 nodes"),
                 registry: None,
                 registry_error: None,
+                live: &[],
                 planned: &planned,
             },
         );
@@ -3397,6 +3787,7 @@ mod tests {
                 graph: Ok(&graph),
                 registry: None,
                 registry_error: Some("registry unreadable (x)"),
+                live: &[],
                 planned: &planned,
             },
         );
@@ -3491,6 +3882,7 @@ mod tests {
                 json!({"clock_live": false, "clock_until": null, "delivery_policy": null}),
             ),
             Reading::took("parked", json!({"open": 0, "rows": []})),
+            Reading::took("boot_revival", json!({"failed": 0, "rows": []})),
         ]
     }
 
@@ -3505,6 +3897,42 @@ mod tests {
     }
 
     // ---- check_account_login_with: one test per rule ----
+
+    #[test]
+    fn the_checkin_names_failed_revival_rows() {
+        let mut readings = sample_readings(board0(), org0(), cap_ok(), workers_none());
+        set_reading(
+            &mut readings,
+            Reading::took(
+                "boot_revival",
+                json!({
+                    "failed": 1,
+                    "rows": [{"name": "kestrel", "reason": "zai lane cannot ride a re-entry plan"}],
+                }),
+            ),
+        );
+        let data = build_data(&readings, "x-bbbb");
+        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
+        let header = lines
+            .iter()
+            .find(|l| l.starts_with("boot_revival:"))
+            .unwrap();
+        assert_eq!(header, "boot_revival:", "lines: {lines:?}");
+        let detail = lines
+            .iter()
+            .find(|l| l.contains("kestrel") && l.contains("zai lane"))
+            .unwrap();
+        assert!(detail.starts_with("  "), "row line: {detail}");
+
+        // Clean receipt: none.
+        let readings = sample_readings(board0(), org0(), cap_ok(), workers_none());
+        let data = build_data(&readings, "x-bbbb");
+        let line = render_lines("x-bbbb", &readings, &data, &None, "", "no change")
+            .into_iter()
+            .find(|l| l.starts_with("boot_revival:"))
+            .unwrap();
+        assert_eq!(line, "boot_revival: none");
+    }
 
     #[test]
     fn capacity_rows() {
@@ -4026,7 +4454,7 @@ mod tests {
             .any(|l| l == "READER FAILED control_plane: journals unreadable"));
         assert!(lines
             .iter()
-            .any(|l| l.starts_with("coverage: 21 of 22 readings ok")));
+            .any(|l| l.starts_with("coverage: 22 of 23 readings ok")));
 
         let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
         let data = build_data(&readings, "x-bbbb");
@@ -4271,6 +4699,49 @@ mod tests {
         assert_eq!(previous["data"]["open_prs"], 9);
     }
 
+    /// An idle scope holding unplanned work is never "no change": the
+    /// derived line names the children and the free slots, and any leg
+    /// missing keeps the ordinary derivation. The baseline carries the full
+    /// diff-key set so the legs measure only the three scope keys.
+    #[test]
+    fn an_idle_scope_with_idea_children_is_attention_not_silence() {
+        let legs: [(&str, u64, u64, u64); 4] = [
+            ("attention", 0, 76, 4),
+            ("worker alive", 2, 76, 4),
+            ("queue clean", 0, 0, 4),
+            ("no free slot", 0, 76, 0),
+        ];
+        for (name, workers, children, slots) in legs {
+            let mut data = Map::new();
+            data.insert("scope_live_workers".into(), json!(workers));
+            data.insert("scope_idea_children".into(), json!(children));
+            data.insert("blueprint_slots".into(), json!(slots));
+            let previous = json!({
+                "open_prs": 3,
+                "free_claim_no_driver": 0,
+                "blocked": 1,
+                "escalations_open": 0,
+                "escalations_overdue": 0,
+                "owned_active": 2,
+                "live_workers": 9,
+                "undelivered": 0,
+                "held_open": 0,
+                "blueprint_running": 0,
+                "blueprint_ceiling": 4,
+            });
+            let expected = if name == "attention" {
+                "attention: scope idle with 76 unplanned idea children under its epics and 4 free build slots".to_string()
+            } else {
+                "no change".to_string()
+            };
+            assert_eq!(
+                derive_change(Some(&previous), &data, ""),
+                expected,
+                "leg {name}: {data:?}"
+            );
+        }
+    }
+
     fn pause_row(arm: &str) -> crate::tick_ledger::ArmStatus {
         let mut r = crate::tick_ledger::ArmStatus {
             arm: arm.to_string(),
@@ -4427,4 +4898,62 @@ mod tests {
     // AC4-HP: the specimen line names the dead call and offers resume.
 
     // AC4-ERR: an unreadable reading appends the reason, never a clean read.
+
+    /// The read check: a fresh word refuses (naming the doc) until --recall
+    /// names it; a wrong word refuses; the right word passes and is recorded.
+    #[test]
+    fn recall_gate_refuses_until_the_doc_word_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("20261027-role-fnh-fno.md");
+        std::fs::write(&doc, "# Canon doc\n\nRecall word: 1a2b3c4d\n").unwrap();
+        let err = recall_gate(dir.path(), "fnh,fno", None).unwrap_err();
+        assert!(err.contains(&doc.display().to_string()), "{err}");
+        assert!(recall_gate(dir.path(), "fnh,fno", Some("wrong")).is_err());
+        assert!(recall_gate(dir.path(), "fnh,fno", Some("1a2b3c4d")).is_ok());
+        assert!(recall_gate(dir.path(), "fnh,fno", None).is_ok());
+        std::fs::write(&doc, "# Canon doc\n\nRecall word: 99887766\n").unwrap();
+        assert!(recall_gate(dir.path(), "fnh,fno", None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod reader_budget_tests {
+    use super::*;
+
+    /// A child past its budget is killed and named: the error carries the
+    /// timeout and the call returns inside the budget, not at the child's own
+    /// exit. Parameterized budget so the test does not wait out 120s.
+    #[test]
+    fn run_capture_bounds_a_slow_child() {
+        let started = std::time::Instant::now();
+        let argv = [
+            std::ffi::OsString::from("sleep"),
+            std::ffi::OsString::from("10"),
+        ];
+        let err = run_capture_within(&argv, std::time::Duration::from_secs(1)).unwrap_err();
+        assert!(
+            err.contains("timed out after"),
+            "the timeout must be named: {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the bound fired, not the child's own exit: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A healthy child is untouched: the bound does not clip a call that
+    /// finishes, and its output still arrives.
+    #[test]
+    fn run_capture_still_carries_a_healthy_childs_output() {
+        let argv = [
+            std::ffi::OsString::from("echo"),
+            std::ffi::OsString::from("beat-ok"),
+        ];
+        let (code, out, err) =
+            run_capture_within(&argv, std::time::Duration::from_secs(10)).unwrap();
+        assert_eq!(code, 0);
+        assert!(out.contains("beat-ok"), "stdout must survive: {out:?}");
+        assert!(err.is_empty(), "stderr must stay empty: {err:?}");
+    }
 }

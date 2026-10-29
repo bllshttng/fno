@@ -135,7 +135,7 @@ pub fn probe_config_dir(config_dir: &Path) -> Login {
 }
 
 /// The remedy the refusal receipt carries - the same words
-/// `fno/agents/account_env.py` prints for a missing credential.
+/// `accounts::env::overlay` prints for a missing credential.
 pub fn login_command(config_dir: &Path) -> String {
     format!("CLAUDE_CONFIG_DIR={} claude /login", config_dir.display())
 }
@@ -203,6 +203,31 @@ pub fn record_verdict(
     if std::fs::write(&tmp, doc.to_string()).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
+}
+
+/// The refusal detail when the last probe of `account` read logged out
+/// within 15 minutes, for `config_dir` (or any dir when the caller names
+/// none); `None` otherwise. Launch picking skips such an account.
+pub fn probe_refusal(
+    home: &crate::paths::AgentsHome,
+    account: &str,
+    config_dir: Option<&str>,
+) -> Option<String> {
+    let raw = std::fs::read_to_string(login_probes_path(home)).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let row = doc.get("probes")?.get(account)?;
+    let at = row.get("at_epoch")?.as_f64()?;
+    let dir = row.get("config_dir").and_then(serde_json::Value::as_str);
+    let refused = row.get("verdict")?.as_str() == Some("logged_out")
+        && (now_epoch() as f64) - at < 900.0
+        && (config_dir.is_none() || dir.is_none() || dir == config_dir);
+    refused.then(|| {
+        row.get("detail")
+            .and_then(serde_json::Value::as_str)
+            .filter(|d| !d.is_empty())
+            .unwrap_or("login probe refused")
+            .to_string()
+    })
 }
 
 /// The spawn gate's recorder: resolve the ambient shared home and persist
@@ -282,7 +307,12 @@ mod tests {
 
     #[test]
     fn a_sleeper_hits_the_bound_and_reads_unknown() {
-        let (_dir, cmd) = fake_claude("sleep 30");
+        // The loop, not a bare sleep: when the runner is fork-starved, a
+        // bare `sleep 30` makes bash exit at once with empty output, and
+        // that reads as a parse failure instead of the timeout verdict
+        // this test pins. The loop has no exit, so the kill at the bound
+        // always lands on a live process group.
+        let (_dir, cmd) = fake_claude("while :; do sleep 30; done");
         let started = std::time::Instant::now();
         let verdict = probe(cmd, 1);
         assert!(started.elapsed() < std::time::Duration::from_secs(3));

@@ -1,4 +1,4 @@
-//! G1 script-API end-to-end: the `fno mux pane` verbs drive a live session
+//! G1 script-API end-to-end: the `fno mux pane` commands drive a live session
 //! with no attached TUI client - the agents-spawn-agents smoke test. Every
 //! test is hermetic (its own `FNO_MUX_DIR` tempdir + session) and drives the
 //! real `fno` binary as a subprocess (the CLI surface), so it exercises
@@ -23,7 +23,7 @@ fn pane(scratch: &Scratch, args: &[&str]) -> Output {
         .expect("fno binary runs")
 }
 
-/// Run a pane verb with one explicit environment override inherited by a
+/// Run a pane command with one explicit environment override inherited by a
 /// client-autospawned server.
 fn pane_with_env(scratch: &Scratch, args: &[&str], key: &str, value: &str) -> Output {
     scratch
@@ -418,7 +418,7 @@ fn script_api_wait_command_done_markerless_times_out_flagged() {
 }
 
 #[test]
-fn script_api_dead_pane_verbs_fail_closed() {
+fn script_api_dead_pane_commands_fail_closed() {
     // AC4-ERR: read/send/wait/kill on a dead pane id fail closed (nonzero),
     // never hang. Start a real server with one live pane, then target a bogus
     // id. `pane wait` on a dead id must return promptly, not sit out a timeout.
@@ -430,7 +430,7 @@ fn script_api_dead_pane_verbs_fail_closed() {
     );
     assert!(run.status.success());
 
-    for verb in [
+    for command in [
         vec!["read", "9999"],
         // --raw keeps this on the server path the loop is about: a dead pane
         // exits 1, fast. A non-raw send refuses client-side before the server
@@ -440,16 +440,16 @@ fn script_api_dead_pane_verbs_fail_closed() {
         vec!["kill", "9999"],
     ] {
         let started = Instant::now();
-        let out = pane(&scratch, &verb);
+        let out = pane(&scratch, &command);
         assert_eq!(
             out.status.code(),
             Some(1),
-            "{verb:?} on a dead pane must exit 1; stderr={:?}",
+            "{command:?} on a dead pane must exit 1; stderr={:?}",
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(
             started.elapsed() < Duration::from_secs(3),
-            "{verb:?} on a dead pane must fail fast, took {:?}",
+            "{command:?} on a dead pane must fail fast, took {:?}",
             started.elapsed()
         );
     }
@@ -458,7 +458,7 @@ fn script_api_dead_pane_verbs_fail_closed() {
 
 #[test]
 fn script_api_version_skew_refused_loudly() {
-    // AC4-FR: a v4 control verb against a server that cannot parse it (a v3
+    // AC4-FR: a v4 control command against a server that cannot parse it (a v3
     // build) is refused loudly, naming this client's proto. A real v3 server
     // reads the Control frame it cannot deserialize and closes; the stub here
     // does exactly that (bind, accept, read, close - no reply).
@@ -655,6 +655,7 @@ fn zero_viewer_identity_join_reads_fresh_registry_and_real_claim() {
     let claim = scratch
         .command()
         .args([
+            "agents",
             "claim",
             "acquire",
             "node:x-f0c2-verify",

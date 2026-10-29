@@ -4,6 +4,8 @@ use crate::proto::{AnswerOption, AnswerablePrompt, PaneMeta, Reach, TabMeta};
 mod chrome_hit_helpers;
 #[path = "client/tests/density_button_tests.rs"]
 mod density_button_tests;
+#[path = "client/tests/sideline_footer_tests.rs"]
+mod sideline_footer_tests;
 use crate::client::{
     input_folds::MAX_ESC_CARRY,
     keys_modal::{build_keys_modal, keys_modal_keys, keys_modal_mouse},
@@ -198,7 +200,7 @@ mod agent_hit_tests;
 #[path = "client/tests/paneless_row_tests.rs"]
 mod paneless_row_tests;
 
-fn meta(id: u64, name: &str, tabs: usize, active_tab: usize) -> SquadMeta {
+pub(super) fn meta(id: u64, name: &str, tabs: usize, active_tab: usize) -> SquadMeta {
     SquadMeta {
         id,
         name: name.into(),
@@ -308,45 +310,13 @@ fn new_tab_prompt_arms_rename_on_the_materialized_tab() {
 // x-df4c US4 helper: an AgentRow in squad 1 with the given tab/badge/exit.
 fn tab_agent(tab: Option<TabId>, badge: Option<AgentBadge>, exited: bool) -> AgentRow {
     AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: "worker".into(),
         pane_id: Some(1),
         badge,
-        reason: None,
         exited,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
         tab,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
         // A badgeless LIVE row says "an idle worker" aloud; the fixture
         // keeps the explicit reading under the 2026-10-06 shell ruling.
         pane_activity: if badge.is_none() && !exited {
@@ -358,7 +328,7 @@ fn tab_agent(tab: Option<TabId>, badge: Option<AgentBadge>, exited: bool) -> Age
     }
 }
 
-fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
+pub(super) fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
     Frame {
         rows,
         cols,
@@ -371,10 +341,8 @@ fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
             };
             rows as usize * cols as usize
         ],
-        cursor_row: 0,
-        cursor_col: 0,
         cursor_visible: true,
-        scroll_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -527,46 +495,10 @@ fn focus_outline_wraps_both_seams_of_a_2x2_pane() {
 // An agent row hosting a given pane, under squad 1.
 pub(super) fn focus_agent(pane: u64) -> AgentRow {
     AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: "worker".into(),
         pane_id: Some(pane),
-        badge: None,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     }
 }
@@ -580,12 +512,11 @@ fn xf331_rows() {
     let mut agent = focus_agent(11);
     agent.exited = true;
     view.layout.agents.push(agent);
-    // (x-c5ee) The squad's only agent is exited -> it would default LiveOnly
-    // and hide the row; force Expanded so the exited focus row still paints.
-    view.set_squad_view(1, SectionView::Expanded);
+    view.set_squad_view(1, SectionView::Expanded); // an exited lone agent would hide
     let frame = view.compose();
     let cols = frame.cols as usize;
-    let cell = frame.cells[2 * cols]; // display row 1: the exited focus row
+    let row = &frame.cells[2 * cols..3 * cols]; // display row 1: the exited focus row
+    let cell = row[1]; // its status cell, past the pin gutter
     assert_eq!(
         cell.flags & cell_flags::INVERSE,
         0,
@@ -639,12 +570,12 @@ fn xf331_rows() {
 
     // A click at the pinned row is the footer's row - the same resolver
     // hover answers - so the covered row beneath it never wins.
-    let hit = view.chrome_hit(pinned_row, 2);
+    let hit = view.chrome_hit(pinned_row, 14);
     assert!(
         matches!(hit, Some(ChromeHit::OpenCreate)),
         "a click on the pinned footer opens create, got {hit:?}"
     );
-    if let Some(range) = view.footer_menu_range(view.panel_w() as usize) {
+    if let Some(range) = view.footer_buttons(view.panel_w() as usize).menu {
         let hit = view.chrome_hit(pinned_row, range.start as u16);
         assert!(
             matches!(hit, Some(ChromeHit::OpenSidelineMenu { .. })),
@@ -1938,7 +1869,7 @@ fn chrome_hit_rows() {
                                  // Agents-first display order (x-0090; no tab rows) with x-cd67 US1
                                  // + the strip row (R15, display i paints at terminal i + 1) + Blank
                                  // spacers: squad 1 (terminal 1), "worker" (2), Blank (3), squad 2 (4),
-                                 // footer spacer (5), "+ new workspace" (6), Blank (7), "~ elsewhere"
+                                 // footer spacer (5), "+ workspace" (6), Blank (7), "~ elsewhere"
                                  // (8), orphan "bg-claude" (9), orphan "bg-other" (10).
     assert_eq!(cmds(view.chrome_hit(2, 4)), vec![Command::FocusPane(10)]);
     // (x-07c2) Both watch-only rows now REACH the dedicated thread pane:
@@ -1967,8 +1898,11 @@ fn chrome_hit_rows() {
         view.chrome_hit(8, 4),
         Some(ChromeHit::CycleSection(SectionKey::Elsewhere))
     ));
-    // The "+ new workspace" footer opens the create overlay.
-    assert!(matches!(view.chrome_hit(6, 4), Some(ChromeHit::OpenCreate)));
+    // The "+ workspace" footer opens the create overlay.
+    assert!(matches!(
+        view.chrome_hit(6, 14),
+        Some(ChromeHit::OpenCreate)
+    ));
 
     // Enough agents that display_rows() reaches the last terminal row.
     // (x-c5ee) Working, not idle: attention rows are never folded by the
@@ -2139,45 +2073,11 @@ fn squad_expand_rows() {
 // (squad, exited) matter; badge/seen round out a plausible row.
 fn sv_agent(squad: u64, name: &str, badge: Option<AgentBadge>, exited: bool) -> AgentRow {
     AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(squad),
         name: name.into(),
-        pane_id: None,
         badge,
-        reason: None,
         exited,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
         // (x-d401) A badgeless LIVE row here means "an idle worker"; the
         // reading is said explicitly, because absence now renders
         // Unmeasured (`?`), never Idle.
@@ -2292,46 +2192,10 @@ fn pull_rows() {
     let _ = std::fs::remove_dir_all(&dir);
 
     let orphan = |name: &str, exited: bool| AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(99), // no such squad -> orphan
         name: name.into(),
-        pane_id: None,
-        portal: None,
-        badge: None,
-        reason: None,
         exited,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let mut view = view_with_agents(vec![
@@ -2741,46 +2605,10 @@ async fn right_arrow_toggles_a_workspace_caret() {
 // tri-state filtering tests below.
 fn view_with_dead_interleaved() -> View {
     let row = |name: &str, exited: bool| AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: name.into(),
-        pane_id: None,
-        portal: None,
-        badge: None,
-        reason: None,
         exited,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     view_with_agents(vec![
@@ -2913,46 +2741,10 @@ fn caret_rows() {
     assert!(text.contains("▸*footnote"), "collapsed active keeps *");
 
     let orphan = |name: &str, exited: bool| AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(99),
         name: name.into(),
-        pane_id: None,
-        portal: None,
-        badge: None,
-        reason: None,
         exited,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let mut view = view_with_agents(vec![orphan("a", false), orphan("b", true)]);
@@ -2991,46 +2783,9 @@ fn caret_rows() {
 #[test]
 fn section_header_is_clickable_but_never_selector_selectable() {
     let view = view_with_agents(vec![AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(99), // no such squad -> orphan -> `~ elsewhere`
         name: "stray".into(),
-        pane_id: None,
-        portal: None,
-        badge: None,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     }]);
     let hdr = view
@@ -3571,46 +3326,11 @@ fn row_menu_rows() {
     // row gets focus and NO splits (already placed); an exited row gets
     // remove and no stop.
     let mk = |name: &str, pane_id: Option<u64>, attach: Option<&str>, exited: bool| AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
-        squad: None,
         name: name.into(),
         pane_id,
-        badge: None,
-        reason: None,
         exited,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
         attach_id: attach.map(Into::into),
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let bg = super::build_row_menu(&mk("bg", None, Some("id"), false), Anchor::Center);
@@ -3723,7 +3443,7 @@ fn row_menu_rows() {
         actions.iter().any(|a| matches!(a, MenuAction::MoveDir(_))),
         "pane row offers the Move grid"
     );
-    // The paneless-only attach verbs must not appear on a pane-hosted row.
+    // The paneless-only attach commands must not appear on a pane-hosted row.
     assert!(!actions.contains(&MenuAction::OpenHere));
     assert!(!actions.contains(&MenuAction::NewTab));
 
@@ -3763,7 +3483,7 @@ fn row_menu_rows() {
     );
 
     // (x-e763) AC8: a live row's menu offers Remove as a real, enabled
-    // entry. Neither verb is gated behind the other any more.
+    // entry. Neither command is gated behind the other any more.
     let live = agent_row("w", 10, Some(AgentBadge::Working), false);
     let menu = super::build_row_menu(&live, Anchor::Center);
     let enabled =
@@ -3844,7 +3564,7 @@ fn row_menu_rows() {
             "{label} mirrors its menu-scope glyph"
         );
     }
-    // Tab menu: every tab verb mirrors its scoped glyph; the join grid
+    // Tab menu: every tab command mirrors its scoped glyph; the join grid
     // carries no hint slot at all, so nothing can hardcode a chord there
     // either.
     let tabs = squad_tabs(&view_with_agents(vec![]), 1);
@@ -4228,7 +3948,7 @@ async fn clear_dead_refolds_the_set_at_commit_not_at_open() {
 #[tokio::test]
 async fn clear_dead_routes_external_rows_by_attach_id() {
     // An external tombstone removes by its stable attach_id (x-7561), the
-    // same split the single-row `x` verb makes - clear-dead must not flatten
+    // same split the single-row `x` command makes - clear-dead must not flatten
     // every row to a by-name RemoveAgent.
     let mut ext = lifecycle_row("ext-dead", true, true);
     ext.attach_id = Some("deadbeef".into());
@@ -4419,46 +4139,10 @@ async fn row_menu_disambiguates_same_named_agents() {
     // identity (pane_id/attach_id) so Focus acts on the row it was opened on,
     // never the other same-named row.
     let mk = |name: &str, pane_id: Option<u64>| AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: name.into(),
         pane_id,
-        badge: None,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let mut v = view_with_agents(vec![mk("dup", Some(5)), mk("dup", Some(9))]);
@@ -4598,7 +4282,7 @@ fn entry_hint(v: &View, label: &str) -> Option<String> {
 }
 
 #[tokio::test]
-async fn row_menu_verbs_show_their_menu_keys() {
+async fn row_menu_commands_show_their_menu_keys() {
     // AC9-HP: Stop, Peek, Mail, Open Here and Diff each show the
     // menu-scope key that runs them - the glyph read live from
     // keys::menu_key_for, never a literal.
@@ -4611,7 +4295,7 @@ async fn row_menu_verbs_show_their_menu_keys() {
         ("Stop", "stop-row"),
         ("Diff", "diff-row"),
     ] {
-        let want = crate::keys::menu_key_for(id).expect("the verb is bound in menu scope");
+        let want = crate::keys::menu_key_for(id).expect("the command is bound in menu scope");
         assert_eq!(
             entry_hint(&v, label),
             Some(want),
@@ -4902,7 +4586,7 @@ fn menu_accel_rows() {
     // menu, no two offered actions resolve to the same byte, so the
     // offer-scoped dispatch can never be ambiguous. The exited-row menu
     // (Remove/Peek/Resume/Diff) and the live paneless menu are the two
-    // shapes that carry the new verbs.
+    // shapes that carry the new commands.
     let exited = build_row_menu(
         &{
             let mut r = paneless_bg_row("w1");
@@ -5878,7 +5562,7 @@ async fn tab_menu_reorder_names_the_clicked_tab_and_its_squad() {
 
 #[tokio::test]
 async fn tab_menu_join_and_split_target_the_viewed_tab() {
-    // Join is the drag's verb through the menu: the clicked tab joins the
+    // Join is the drag's command through the menu: the clicked tab joins the
     // viewed tab as a split of the focused pane. The clicked tab being the
     // focus's own tab is the join-into-self the wire refuses - named as a
     // notice instead of sent.
@@ -6045,46 +5729,10 @@ async fn row_menu_mail_opens_the_same_peek_composer() {
 /// A pane-hosted sideline row, the shape the move/break-out menu acts on.
 fn pane_hosted_row(name: &str, pane_id: u64) -> AgentRow {
     AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: name.into(),
         pane_id: Some(pane_id),
-        badge: None,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     }
 }
@@ -6301,31 +5949,6 @@ async fn row_menu_move_is_the_same_operation_as_the_row_drag() {
     }
 }
 
-#[test]
-fn footer_menu_region_routes_a_click_to_the_sideline_menu() {
-    // US4: a click on the footer's `☰ menu` region opens the MENU popup; the
-    // rest of the `+ new workspace` row still opens create.
-    let mut v = two_pane_view();
-    v.term = (30, 100);
-    let footer = v
-        .display_rows()
-        .iter()
-        .position(|r| matches!(r, DisplayRow::NewSquad))
-        .unwrap();
-    let panel_w = v.panel_w() as usize;
-    let range = v
-        .footer_menu_range(panel_w)
-        .expect("a wide panel shows the menu button");
-    // (x-cd67 US1; the strip row since R15) outer row == display index -
-    // offset + 1.
-    let trow = (footer - v.sideline_offset()) as u16 + 1;
-    assert!(matches!(
-        v.chrome_hit(trow, range.start as u16),
-        Some(ChromeHit::OpenSidelineMenu { .. })
-    ));
-    assert!(matches!(v.chrome_hit(trow, 2), Some(ChromeHit::OpenCreate)));
-}
-
 #[tokio::test]
 async fn sideline_menu_settings_toggle_flips_session_state_and_stays_open() {
     // MENU -> settings chains, and a toggle flips session state and keeps
@@ -6501,7 +6124,7 @@ async fn sweep_open_queues_one_counts_probe_and_apply_queues_scope() {
         "the menu closes; the modal opens on landing"
     );
 
-    // A second tap while a verb runs says so instead of queueing: the
+    // A second tap while a command runs says so instead of queueing: the
     // pending counts probe stays exactly as the first tap left it.
     v.sweep_inflight = true;
     execute_aux_action(&mut v, AuxAction::OpenSweep, &mut buf)
@@ -6573,8 +6196,7 @@ fn left_click(row: u16, col: u16) -> crate::mouse::MouseReport {
     mrep(MouseKind::Press(MouseButton::Left), row, col)
 }
 
-/// The update modal's footer words are a target, not a label: a left
-/// click on them closes the popup.
+/// A left click on the update modal's footer words closes the popup.
 #[tokio::test]
 async fn update_modal_footer_esc_close_click_closes() {
     let mut v = view_with_agents(vec![]);
@@ -6591,6 +6213,7 @@ async fn update_modal_footer_esc_close_click_closes() {
                     text: l.text.clone(),
                     roles: l.roles.clone(),
                     hits: l.hits.clone(),
+                    body: None,
                 })
                 .collect(),
             width: r.width,
@@ -6828,132 +6451,26 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
         area: (29, 72),
         agents: vec![
             AgentRow {
-                spawned_by_name: None,
-                lineage_reason: None,
-                harness: None,
-                model: None,
-                route: None,
                 reach: Reach::Locate,
-                spawned_by_session: None,
-                lineage_kind: None,
-                harness_session_id: None,
                 squad: Some(1),
                 name: "peer".into(),
                 pane_id: Some(10),
-                portal: None,
                 badge: Some(AgentBadge::Blocked),
                 reason: Some("perm prompt".into()),
-                exited: false,
-                dnd: false,
-                held_conversation: false,
-                unmeasured: false,
-                answerable: None,
-                attach_id: None,
-                external: false,
-                seen: false,
-                cwd_base: None,
-                tombstone: false,
-                subline: None,
-                tab: None,
-                account: None,
-                updated_at: None,
-                pr: None,
-                pr_session_short: None,
-                tail: None,
-                role_level: None,
-                role_scope: None,
-                role_title: None,
-                basis: None,
-                last_activity_age_s: None,
-                resumable: false,
-                no_pane_reason: None,
-                pane_activity: None,
                 ..Default::default()
             },
             AgentRow {
-                spawned_by_name: None,
-                lineage_reason: None,
-                harness: None,
-                model: None,
-                route: None,
                 reach: Reach::Locate,
-                spawned_by_session: None,
-                lineage_kind: None,
-                harness_session_id: None,
                 squad: Some(1),
                 name: "dead".into(),
                 pane_id: Some(99),
-                portal: None,
-                badge: None,
-                reason: None,
                 exited: true,
-                dnd: false,
-                held_conversation: false,
-                unmeasured: false,
-                answerable: None,
-                attach_id: None,
-                external: false,
-                seen: false,
-                cwd_base: None,
-                tombstone: false,
-                subline: None,
-                tab: None,
-                account: None,
-                updated_at: None,
-                pr: None,
-                pr_session_short: None,
-                tail: None,
-                role_level: None,
-                role_scope: None,
-                role_title: None,
-                basis: None,
-                last_activity_age_s: None,
-                resumable: false,
-                no_pane_reason: None,
-                pane_activity: None,
                 ..Default::default()
             },
             AgentRow {
-                spawned_by_name: None,
-                lineage_reason: None,
-                harness: None,
-                model: None,
-                route: None,
                 reach: Reach::Locate,
-                spawned_by_session: None,
-                lineage_kind: None,
-                harness_session_id: None,
-                squad: None,
                 name: "bg-watch".into(),
-                pane_id: None,
-                portal: None,
                 badge: Some(AgentBadge::Working),
-                reason: None,
-                exited: false,
-                dnd: false,
-                held_conversation: false,
-                unmeasured: false,
-                answerable: None,
-                attach_id: None,
-                external: false,
-                seen: false,
-                cwd_base: None,
-                tombstone: false,
-                subline: None,
-                tab: None,
-                account: None,
-                updated_at: None,
-                pr: None,
-                pr_session_short: None,
-                tail: None,
-                role_level: None,
-                role_scope: None,
-                role_title: None,
-                basis: None,
-                last_activity_age_s: None,
-                resumable: false,
-                no_pane_reason: None,
-                pane_activity: None,
                 ..Default::default()
             },
         ],
@@ -6967,7 +6484,7 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
     let lines: Vec<&str> = text.lines().collect();
     // Agents-first row order (x-0090; no tab rows): footnote (auto-expanded,
     // x-2f99), its two agent rows, a Blank spacer, notes squad, the footer
-    // spacer, the "+ new workspace" footer, a spacer, the "~ elsewhere"
+    // spacer, the "+ workspace" footer, a spacer, the "~ elsewhere"
     // header, the orphan row. (x-cd67 US1) The strip row owns frame row 0
     // (R15), so every display row shifted down one. The state glyph is the
     // status WORD now: Blocked reads `Input`, exited reads `Stop` (x-177c).
@@ -6984,7 +6501,7 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
         lines[3]
     );
     assert!(lines[5].contains("\u{25b8} notes"), "{:?}", lines[5]);
-    assert!(lines[7].contains("+ new workspace"), "{:?}", lines[7]);
+    assert!(lines[7].contains("+ workspace"), "{:?}", lines[7]);
     assert!(lines[9].contains("~ elsewhere"), "{:?}", lines[9]);
     assert!(lines[10].contains("bg-watch"), "{:?}", lines[10]);
     // The exited row is DIM (fact beats badge, visually too). "dead" is
@@ -7004,10 +6521,9 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
     // selector paints the explicit hover band, so the cursor row renders
     // DIFFERENTLY from the unselected header.
     assert_ne!(
-        sel_cell.bg, unsel_cell.bg,
+        sel_cell.flags, unsel_cell.flags,
         "selector highlight must visibly toggle the notes header"
     );
-    assert_eq!(sel_cell.bg, Color::Indexed(0), "hover band bg");
 }
 
 #[test]
@@ -7030,46 +6546,11 @@ fn band_rows() {
     // all-exited squad keeps its ✗ count so dead agents stay discoverable.
     fn ar(squad: u64, name: &str, badge: Option<AgentBadge>, exited: bool) -> AgentRow {
         AgentRow {
-            spawned_by_name: None,
-            lineage_reason: None,
-            portal: None,
-            harness: None,
-            model: None,
-            route: None,
             reach: Reach::Locate,
-            spawned_by_session: None,
-            lineage_kind: None,
-            harness_session_id: None,
             squad: Some(squad),
             name: name.into(),
-            pane_id: None,
             badge,
-            reason: None,
             exited,
-            dnd: false,
-            held_conversation: false,
-            unmeasured: false,
-            answerable: None,
-            attach_id: None,
-            external: false,
-            seen: false,
-            cwd_base: None,
-            tombstone: false,
-            subline: None,
-            tab: None,
-            account: None,
-            updated_at: None,
-            pr: None,
-            pr_session_short: None,
-            tail: None,
-            role_level: None,
-            role_scope: None,
-            role_title: None,
-            basis: None,
-            last_activity_age_s: None,
-            resumable: false,
-            no_pane_reason: None,
-            pane_activity: None,
             ..Default::default()
         }
     }
@@ -7438,178 +6919,32 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
         area: (29, 72),
         agents: vec![
             AgentRow {
-                spawned_by_name: None,
-                lineage_reason: None,
-                harness: None,
-                model: None,
-                route: None,
                 reach: Reach::Locate,
-                spawned_by_session: None,
-                lineage_kind: None,
-                harness_session_id: None,
-                squad: None,
                 name: "z-exited".into(),
-                pane_id: None,
-                portal: None,
-                badge: None,
-                reason: None,
                 exited: true,
-                dnd: false,
-                held_conversation: false,
-                unmeasured: false,
-                answerable: None,
-                attach_id: None,
-                external: false,
-                seen: false,
-                cwd_base: None,
-                tombstone: false,
-                subline: None,
-                tab: None,
-                account: None,
-                updated_at: None,
-                pr: None,
-                pr_session_short: None,
-                tail: None,
-                role_level: None,
-                role_scope: None,
-                role_title: None,
-                basis: None,
-                last_activity_age_s: None,
-                resumable: false,
-                no_pane_reason: None,
-                pane_activity: None,
                 ..Default::default()
             },
             AgentRow {
-                spawned_by_name: None,
-                lineage_reason: None,
-                harness: None,
-                model: None,
-                route: None,
                 reach: Reach::Locate,
-                spawned_by_session: None,
-                lineage_kind: None,
-                harness_session_id: None,
-                squad: None,
                 name: "z-external".into(),
-                pane_id: None,
-                portal: None,
-                badge: None,
-                reason: None,
-                exited: false,
-                dnd: false,
-                held_conversation: false,
-                unmeasured: false,
-                answerable: None,
                 attach_id: Some("ab12cd34".into()),
                 external: true,
-                seen: false,
-                cwd_base: None,
-                tombstone: false,
-                subline: None,
-                tab: None,
-                account: None,
-                updated_at: None,
-                pr: None,
-                pr_session_short: None,
-                tail: None,
-                role_level: None,
-                role_scope: None,
-                role_title: None,
-                basis: None,
-                last_activity_age_s: None,
-                resumable: false,
-                no_pane_reason: None,
-                pane_activity: None,
                 ..Default::default()
             },
             AgentRow {
-                spawned_by_name: None,
-                lineage_reason: None,
-                harness: None,
-                model: None,
-                route: None,
                 reach: Reach::Locate,
-                spawned_by_session: None,
-                lineage_kind: None,
-                harness_session_id: None,
-                squad: None,
                 name: "z-fnolive".into(),
-                pane_id: None,
-                portal: None,
-                badge: None,
-                reason: None,
-                exited: false,
-                dnd: false,
-                held_conversation: false,
-                unmeasured: false,
-                answerable: None,
-                attach_id: None,
-                external: false,
-                seen: false,
-                cwd_base: None,
-                tombstone: false,
-                subline: None,
-                tab: None,
-                account: None,
-                updated_at: None,
-                pr: None,
-                pr_session_short: None,
-                tail: None,
-                role_level: None,
-                role_scope: None,
-                role_title: None,
-                basis: None,
-                last_activity_age_s: None,
-                resumable: false,
-                no_pane_reason: None,
-                pane_activity: None,
                 ..Default::default()
             },
             // x-df4c AC1-UI: an EXTERNAL row that is also Blocked - the
             // load-bearing "attention is never dimmed" branch. The accent
             // must win over the external DIM modifier.
             AgentRow {
-                spawned_by_name: None,
-                lineage_reason: None,
-                harness: None,
-                model: None,
-                route: None,
                 reach: Reach::Locate,
-                spawned_by_session: None,
-                lineage_kind: None,
-                harness_session_id: None,
-                squad: None,
                 name: "z-extblk".into(),
-                pane_id: None,
-                portal: None,
                 badge: Some(AgentBadge::Blocked),
-                reason: None,
-                exited: false,
-                dnd: false,
-                held_conversation: false,
-                unmeasured: false,
-                answerable: None,
                 attach_id: Some("ff99ff99".into()),
                 external: true,
-                seen: false,
-                cwd_base: None,
-                tombstone: false,
-                subline: None,
-                tab: None,
-                account: None,
-                updated_at: None,
-                pr: None,
-                pr_session_short: None,
-                tail: None,
-                role_level: None,
-                role_scope: None,
-                role_title: None,
-                basis: None,
-                last_activity_age_s: None,
-                resumable: false,
-                no_pane_reason: None,
-                pane_activity: None,
                 ..Default::default()
             },
         ],
@@ -7625,13 +6960,13 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
     // is a word now) + DIM flag.
     let probe = |needle: &str| -> (String, bool) {
         let r = lines.iter().position(|l| l.contains(needle)).unwrap();
-        let status: String = frame.cells[r * cols..r * cols + 5]
+        let status: String = frame.cells[r * cols + 1..r * cols + 6]
             .iter()
             .map(|c| c.c)
             .collect();
         (
             status,
-            frame.cells[r * cols].flags & cell_flags::DIM == cell_flags::DIM,
+            frame.cells[r * cols + 1].flags & cell_flags::DIM == cell_flags::DIM,
         )
     };
     // A badgeless reading-less row paints `Idle` + DIM (the 2026-10-06
@@ -7659,7 +6994,7 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
     // BOLD, and NOT dimmed even though it is external - the accent beats the
     // external DIM.
     let eb_row = lines.iter().position(|l| l.contains("z-extblk")).unwrap();
-    let eb_status: String = frame.cells[eb_row * cols..eb_row * cols + 5]
+    let eb_status: String = frame.cells[eb_row * cols + 1..eb_row * cols + 6]
         .iter()
         .map(|c| c.c)
         .collect();
@@ -7668,17 +7003,17 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
         "external-blocked: the attention word: {eb_status:?}"
     );
     assert_eq!(
-        frame.cells[eb_row * cols].fg,
+        frame.cells[eb_row * cols + 1].fg,
         LATTICE_ACCENT,
         "external-blocked: amber accent"
     );
     assert_eq!(
-        frame.cells[eb_row * cols].flags & cell_flags::DIM,
+        frame.cells[eb_row * cols + 1].flags & cell_flags::DIM,
         0,
         "external-blocked: attention is never dimmed"
     );
     assert_eq!(
-        frame.cells[eb_row * cols].flags & cell_flags::BOLD,
+        frame.cells[eb_row * cols + 1].flags & cell_flags::BOLD,
         cell_flags::BOLD,
         "external-blocked: BOLD"
     );
@@ -7757,8 +7092,8 @@ fn client_compose_agents_first_omits_tab_rows_and_highlights_squad() {
     let cols = frame.cols as usize;
     let unsel_frame = two_pane_view().compose();
     assert_ne!(
-        frame.cells[3 * cols].bg,
-        unsel_frame.cells[3 * cols].bg,
+        frame.cells[3 * cols].flags,
+        unsel_frame.cells[3 * cols].flags,
         "selector cursor row must be visibly toggled"
     );
     // While the selector is open the terminal cursor hides.
@@ -7804,49 +7139,6 @@ fn client_compose_ignores_stale_frames_and_clips_overflow() {
         !view.frames.contains_key(&11),
         "frames for dead panes are dropped at Layout"
     );
-}
-
-#[test]
-fn client_compose_letterboxes_beyond_the_clamped_area() {
-    // AC1-UI: a 29x72 local content area showing a tab clamped to 20x50
-    // - content anchors top-left, everything beyond is dim '·' filler,
-    // and the cursor never enters the filler.
-    let mut view = View::new(
-        (30, 100),
-        "main".into(),
-        LayoutView {
-            squads: vec![meta(1, "footnote", 1, 0)],
-            active_squad: 1,
-            panes: vec![(
-                10,
-                Rect {
-                    x: 0,
-                    y: 0,
-                    rows: 20,
-                    cols: 50,
-                },
-            )],
-            focus: 10,
-            area: (20, 50),
-            agents: vec![],
-            focus_node: None,
-        },
-    );
-    view.frames.insert(10, text_frame(20, 50, 'a'));
-    let frame = view.compose();
-    let cols = frame.cols as usize;
-    // The frame's top-left corner, then the in-area content cell one cell in.
-    assert_eq!(frame.cells[cols + 28].c, '╭');
-    assert_eq!(frame.cells[2 * cols + 29].c, 'a');
-    // One column beyond the area: filler, dim.
-    let beyond_col = &frame.cells[cols + 28 + 50];
-    assert_eq!(beyond_col.c, '·', "beyond-area column must be filler");
-    assert!(beyond_col.flags & cell_flags::DIM != 0);
-    // One row beyond the area (content row 20): filler too.
-    let beyond_row = &frame.cells[(1 + 20) * cols + 28];
-    assert_eq!(beyond_row.c, '·', "beyond-area row must be filler");
-    // Cursor confined to content even against a lying frame cursor.
-    assert!(frame.cursor_row < 1 + 20 && frame.cursor_col < 28 + 50);
 }
 
 #[test]
@@ -8052,50 +7344,15 @@ async fn attach_picker_ignores_a_modified_arrow_instead_of_attaching() {
 /// Display rows (x-0090 agents-first; sq1 active/expanded, no tab rows;
 /// x-cd67 US3 adds Blank spacers between groups and before the trailing
 /// headers since there are 2 squads):
-/// 0 sq1 · 1 hosted agent · 2 Blank · 3 sq2 · 4 "+ new workspace" ·
+/// 0 sq1 · 1 hosted agent · 2 Blank · 3 sq2 · 4 "+ workspace" ·
 /// 5 Blank · 6 "~ elsewhere" · 7 bg-attach · 8 bg-plain.
 fn unified_rows_view() -> View {
     let agent = |squad: Option<u64>, name: &str, pane_id, attach_id: Option<&str>| AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad,
         name: name.into(),
         pane_id,
-        badge: None,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
         attach_id: attach_id.map(Into::into),
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let mut v = view_with_agents(vec![
@@ -8404,7 +7661,8 @@ async fn peek_j_moves_to_adjacent_agent_and_refetches() {
     let mut buf: Vec<u8> = Vec::new();
     let first = agent_row_at(&v, |a| a.name == "worker");
     v.selector = Some(first);
-    selector_keys(&mut v, b" ", &mut buf).await.unwrap();
+    let w = "worker".to_string();
+    fetch_peek(&mut v, first, w, &mut buf).await.unwrap();
     let seq0 = v.peek.as_ref().unwrap().seq;
     buf.clear();
     peek_keys(&mut v, b"j", &mut buf).await.unwrap();
@@ -8445,46 +7703,12 @@ async fn peek_esc_returns_to_selector_at_peeked_row() {
 #[test]
 fn peek_rows() {
     let row = AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
-        squad: None,
         name: "w".into(),
         pane_id: Some(3),
-        portal: None,
         badge: Some(AgentBadge::Blocked),
         reason: Some("waiting on a menu".into()),
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
         answerable: Some(answerable(&[("1", "Yes"), ("2", "No")], 7)),
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let loading = PeekView {
@@ -8905,46 +8129,12 @@ async fn selector_x_on_a_tombstone_sends_dismiss() {
     // AC4-EDGE (client half): x on a tombstone member row sends
     // DismissMember for its squad + attach_id (not a squad remove).
     let tomb = AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: "cc-deadbeef".into(),
-        pane_id: None,
-        portal: None,
-        badge: None,
-        reason: None,
         exited: true,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
         attach_id: Some("deadbeef".into()),
-        external: false,
-        seen: false,
-        cwd_base: None,
         tombstone: true,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let mut v = view_with_agents(vec![tomb]);
@@ -8969,46 +8159,11 @@ async fn selector_x_on_a_tombstone_sends_dismiss() {
 /// A plain (non-tombstone) registry agent row under squad 1, varied by state.
 pub(super) fn lifecycle_row(name: &str, exited: bool, external: bool) -> AgentRow {
     AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: name.into(),
-        pane_id: None,
-        badge: None,
-        reason: None,
         exited,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
         external,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     }
 }
@@ -9036,7 +8191,7 @@ async fn selector_x_on_live_agent_arms_remove_confirm() {
 #[tokio::test]
 async fn selector_x_on_exited_agent_arms_remove_confirm() {
     // US2 / AC2-HP (client half): x on an exited row arms a RemoveAgent
-    // confirm - the row's own state (exited) selects the verb, no timer.
+    // confirm - the row's own state (exited) selects the command, no timer.
     let mut v = view_with_agents(vec![lifecycle_row("worker-b", true, false)]);
     v.set_squad_view(1, SectionView::Expanded);
     v.selector = Some(agent_row_at(&v, |a| a.name == "worker-b"));
@@ -9570,7 +8725,7 @@ async fn selector_enter_refusal_keeps_selector_open() {
 
 #[tokio::test]
 async fn selector_enter_footer_opens_create_overlay() {
-    // AC3-HP: Enter on "+ new workspace" opens the name-input overlay.
+    // AC3-HP: Enter on "+ workspace" opens the name-input overlay.
     let mut v = unified_rows_view();
     v.selector = Some(5); // footer
     let mut buf: Vec<u8> = Vec::new();
@@ -9701,89 +8856,19 @@ fn nav_rows_agent_label_carries_tab_ordinal() {
     let mut v = two_pane_view();
     v.layout.agents = vec![
         AgentRow {
-            spawned_by_name: None,
-            lineage_reason: None,
-            harness: None,
-            model: None,
-            route: None,
             reach: Reach::Locate,
-            spawned_by_session: None,
-            lineage_kind: None,
-            harness_session_id: None,
             squad: Some(1),
             name: "build".into(),
             pane_id: Some(10),
-            portal: None,
             badge: Some(AgentBadge::Working),
-            reason: None,
-            exited: false,
-            dnd: false,
-            held_conversation: false,
-            unmeasured: false,
-            answerable: None,
-            attach_id: None,
-            external: false,
-            seen: false,
-            cwd_base: None,
-            tombstone: false,
-            subline: None,
             tab: Some(1),
-            account: None,
-            updated_at: None,
-            pr: None,
-            pr_session_short: None,
-            tail: None,
-            role_level: None,
-            role_scope: None,
-            role_title: None,
-            basis: None,
-            last_activity_age_s: None,
-            resumable: false,
-            no_pane_reason: None,
-            pane_activity: None,
             ..Default::default()
         },
         AgentRow {
-            spawned_by_name: None,
-            lineage_reason: None,
-            harness: None,
-            model: None,
-            route: None,
             reach: Reach::Locate,
-            spawned_by_session: None,
-            lineage_kind: None,
-            harness_session_id: None,
             squad: Some(1),
             name: "watcher".into(),
-            pane_id: None,
-            portal: None,
-            badge: None,
-            reason: None,
-            exited: false,
-            dnd: false,
-            held_conversation: false,
-            unmeasured: false,
-            answerable: None,
             attach_id: Some("deadbee1".into()),
-            external: false,
-            seen: false,
-            cwd_base: None,
-            tombstone: false,
-            subline: None,
-            tab: None,
-            account: None,
-            updated_at: None,
-            pr: None,
-            pr_session_short: None,
-            tail: None,
-            role_level: None,
-            role_scope: None,
-            role_title: None,
-            basis: None,
-            last_activity_age_s: None,
-            resumable: false,
-            no_pane_reason: None,
-            pane_activity: None,
             ..Default::default()
         },
     ];
@@ -9826,46 +8911,11 @@ fn squad_rollup_bare_pane_folds_to_idle() {
     // that path is covered by pane_activity_folds_*, this one pins the
     // rollup with a measured idle pane.)
     let row = |name: &str, pane, badge| AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: name.into(),
         pane_id: Some(pane),
-        portal: None,
         badge,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     };
     let bare = AgentRow {
@@ -9990,46 +9040,10 @@ async fn nav_goto_teleports_cross_squad_then_focuses() {
     // SelectSquad then FocusPane in order, and closes the navigator.
     let mut v = two_pane_view(); // active squad = 1 (footnote)
     v.layout.agents = vec![AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(2),
         name: "stuck".into(),
         pane_id: Some(9),
-        portal: None,
-        badge: None,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     }];
     let idx = v
@@ -10436,46 +9450,10 @@ fn nav_rows_lists_plain_panes_and_dedups_agent_panes() {
         },
     ];
     v.layout.agents = vec![AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: "worker".into(),
         pane_id: Some(10),
-        portal: None,
-        badge: None,
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     }];
     let labels: Vec<String> = v.nav_rows().into_iter().map(|r| r.label).collect();
@@ -10654,46 +9632,12 @@ fn a_pr_row_names_the_session_driving_it() {
 
 pub(super) fn blocked_row(name: &str, pane: u64, ans: Option<AnswerablePrompt>) -> AgentRow {
     AgentRow {
-        spawned_by_name: None,
-        lineage_reason: None,
-        portal: None,
-        harness: None,
-        model: None,
-        route: None,
         reach: Reach::Locate,
-        spawned_by_session: None,
-        lineage_kind: None,
-        harness_session_id: None,
         squad: Some(1),
         name: name.into(),
         pane_id: Some(pane),
         badge: Some(AgentBadge::Blocked),
-        reason: None,
-        exited: false,
-        dnd: false,
-        held_conversation: false,
-        unmeasured: false,
         answerable: ans,
-        attach_id: None,
-        external: false,
-        seen: false,
-        cwd_base: None,
-        tombstone: false,
-        subline: None,
-        tab: None,
-        account: None,
-        updated_at: None,
-        pr: None,
-        pr_session_short: None,
-        tail: None,
-        role_level: None,
-        role_scope: None,
-        role_title: None,
-        basis: None,
-        last_activity_age_s: None,
-        resumable: false,
-        no_pane_reason: None,
-        pane_activity: None,
         ..Default::default()
     }
 }
@@ -11131,18 +10075,10 @@ fn attention_rows() {
         .iter()
         .map(|r| {
             let row = AgentRow {
-                portal: None,
-                harness: None,
-                model: None,
-                route: None,
                 basis: r["basis"].as_str().map(str::to_string),
                 last_activity_age_s: r["last_activity_age_s"].as_u64(),
                 exited: r["exited"].as_bool().unwrap_or(false),
-                dnd: false,
-                held_conversation: false,
                 unmeasured: r["unmeasured"].as_bool().unwrap_or(false),
-                liveness_measured_at: None,
-                harness_title: None,
                 ..blocked_row(r["name"].as_str().expect("row has a name"), 0, None)
             };
             (row, need_of(r["need"].as_str()))
@@ -12708,7 +11644,7 @@ async fn xf331_pointer_over_sideline_keeps_keys_on_the_pane() {
         handle_stdin(&mut v, &mut scanner, &mut carry, b, &mut buf)
             .await
             .unwrap();
-        assert!(v.confirm.is_none(), "no verb fired off a hover");
+        assert!(v.confirm.is_none(), "no command fired off a hover");
         let mut cur = std::io::Cursor::new(buf);
         match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
             ClientMsg::Input(bytes) => {
@@ -13849,7 +12785,7 @@ fn every_rim_drop_zone_actually_lights_something() {
     let mut view = two_pane_view();
     let panel_w = view.panel_w();
     let (term_rows, term_cols) = (view.term.0, view.term.1);
-    let (a_rows, a_cols) = view.layout.area;
+    let (a_rows, a_cols) = view.visible_area();
     let mid_col = panel_w + a_cols / 2;
     let mid_row = TAB_BAR_ROWS + a_rows / 2;
 
@@ -14092,10 +13028,8 @@ fn a_long_name_wraps_so_the_whole_name_and_cursor_show() {
             rows: rows as u16,
             cols: cols as u16,
             cells: cells.to_vec(),
-            cursor_row: 0,
-            cursor_col: 0,
             cursor_visible: false,
-            scroll_offset: 0,
+            ..Default::default()
         })
     };
     let shot = screen(&cells);
@@ -14411,7 +13345,7 @@ fn probe_bottom_rim_band() {
     let mut view = two_pane_view();
     view.begin_pane_drag(10, Instant::now());
     let rect = view.pane_rect(11).unwrap();
-    let r = TAB_BAR_ROWS + rect.y + rect.rows - 1;
+    let r = TAB_BAR_ROWS + view.visible_area().0 - 1;
     let c = view.panel_w() + rect.x + 5;
     let z = view.edge_zone_at(r, c).expect("rim zone");
     eprintln!("zone={:?}", z);

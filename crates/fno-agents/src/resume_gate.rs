@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use crate::claims::{self, AcquireOutcome, ClaimState};
-use crate::client_verbs::py_repr_str;
+use crate::client_commands::py_repr_str;
 use crate::gc_sweep;
 use crate::graph_store::{entry_id, is_open_do_row, work_state_key};
 use crate::org_board::prs::{node_pr_refs, nodes_binding_pr};
@@ -393,7 +393,7 @@ fn holder_handle(holder: &str) -> &str {
 
 /// `run_resume`'s two cwd refusals live here beside the holder check: all
 /// three answer "may this resume launch?". Message text is byte-identical to
-/// the blocks they moved out of client_verbs.rs.
+/// the blocks they moved out of client_commands.rs.
 pub(crate) fn missing_cwd_refusal(name: &str, session_id: &str) -> i32 {
     if !session_id.is_empty() {
         eprintln!(

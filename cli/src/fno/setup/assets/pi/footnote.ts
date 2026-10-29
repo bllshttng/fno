@@ -5,7 +5,7 @@
 // TypeScript against node builtins only, so pi loads it with no install step.
 //
 // This extension is a TRANSPORT and nothing else. Every decision belongs to
-// Rust: the gate (`fno-agents loop-check`) decides, the store verbs answer,
+// Rust: the gate (`fno-agents loop-check`) decides, the store commands answer,
 // and this file moves bytes. Concretely it carries four abilities:
 //
 //   1. DISCOVERY: it tells pi where the Footnote skills live, so a native
@@ -39,6 +39,7 @@ type Ctx = {
     buildContextEntries?: () => unknown[]
     getBranch?: () => unknown[]
   }
+  model?: { id?: string; provider?: string }
   isIdle?: () => boolean
   hasUI?: boolean
   ui?: { notify?: (message: string, level?: string) => unknown }
@@ -64,7 +65,7 @@ function statePathTimeoutMs(): number {
 // One bounded child run. Resolves "" when the child failed for any reason
 // (spawn error, nonzero exit, timeout) - the caller records why it could not
 // read an answer rather than guessing one. An optional stdin payload rides
-// to the child (the hook verbs read a claude-shaped payload on stdin).
+// to the child (the hook commands read a claude-shaped payload on stdin).
 function runBounded(
   bin: string,
   args: string[],
@@ -79,6 +80,8 @@ function runBounded(
         {
           timeout: timeoutMs,
           killSignal: "SIGKILL",
+          // Hook context: a child's fno call never joins the session.
+          env: { ...process.env, FNO_HOOK_CONTEXT: "1" },
           maxBuffer: 10 * 1024 * 1024,
         },
         (err, stdout) => resolve(err ? "" : String(stdout)),
@@ -96,7 +99,39 @@ function runBounded(
   })
 }
 
-// The space-resolved manifest for `dir`, when one exists. The verb is the
+// Per-turn session-state push: working and done reach the daemon row through
+// `fno-agents hook session-state --harness pi <Event>`, the same entry claude
+// and codex use, so the row reads inside-leg state and a verified model
+// instead of the screen scrape. The payload is claude-shaped;
+// hook/adapter/pi.rs reads it. pi exposes no permission-prompt event, so
+// there is no blocked push. Fire-and-forget: a missing binary or a failed run
+// costs the push, never the turn.
+function pushState(
+  event: string,
+  ctx: unknown,
+  extra: Record<string, unknown> = {},
+): void {
+  try {
+    const c = ctx as Ctx
+    const sid = c?.sessionManager?.getSessionId?.() || ""
+    if (!sid) return
+    const m = c?.model
+    const model = m?.id ? (m.provider ? `${m.provider}/${m.id}` : m.id) : ""
+    const payload = JSON.stringify({
+      hook_event_name: event,
+      cwd: process.cwd(),
+      session_id: sid,
+      ...(model ? { model } : {}),
+      ...extra,
+    })
+    const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+    void runBounded(bin, ["hook", "session-state", "--harness", "pi", event], 3000, payload)
+  } catch {
+    // best-effort
+  }
+}
+
+// The space-resolved manifest for `dir`, when one exists. The command is the
 // only path authority: a directory with no `.fno` of its own still gates,
 // because the manifest lives under the session's space root.
 async function resolveManifestPath(bin: string, dir: string): Promise<string | null> {
@@ -224,7 +259,7 @@ export default function (pi: {
     if (sid) busy.delete(sid)
   })
 
-  // DISCOVERY: put the Footnote verbs in pi's own catalog as skills.
+  // DISCOVERY: put the Footnote commands in pi's own catalog as skills.
   pi.on("resources_discover", () => {
     const skills = skillsRoot()
     return skills ? { skillPaths: [skills] } : {}
@@ -249,6 +284,7 @@ export default function (pi: {
   })
 
   pi.on("before_agent_start", async (_event: unknown, ctx: unknown) => {
+    pushState("UserPromptSubmit", ctx)
     try {
       const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.() || ""
       const sessionKey = process.env.FNO_AGENT_SESSION_ID || sid || `pi:${process.cwd()}`
@@ -259,18 +295,28 @@ export default function (pi: {
       if (sid && rolePending.delete(sid)) {
         const root = pluginRoot()
         if (root) {
+          const payload = JSON.stringify({
+            hook_event_name: "SessionStart",
+            source: "compact",
+            cwd: process.cwd(),
+            session_id: sid,
+          })
           const out = await runBounded(
             "bash",
             [join(root, "hooks", "lead-postcompact-reinject.sh")],
             5000,
-            JSON.stringify({
-              hook_event_name: "SessionStart",
-              source: "compact",
-              cwd: process.cwd(),
-              session_id: sid,
-            }),
+            payload,
           )
-          const text = contextCarrierText(out)
+          // The using-fno carrier answers only for a session that joined fno.
+          const preamble = await runBounded(
+            "env",
+            ["FNO_HOOK_HARNESS=pi", "bash", join(root, "hooks", "session-start-using-fno.sh")],
+            5000,
+            payload,
+          )
+          const text = [contextCarrierText(out), contextCarrierText(preamble)]
+            .filter(Boolean)
+            .join("\n\n")
           if (text) {
             return {
               message: {
@@ -322,6 +368,9 @@ export default function (pi: {
   // nothing and the tool proceeds - the never-block contract
   // hooks/lead-delegation-guard.sh ships under.
   pi.on("tool_call", async (event: unknown, ctx: unknown) => {
+    pushState("PreToolUse", ctx, {
+      tool_name: (event as { toolName?: string })?.toolName || "",
+    })
     try {
       const ev = event as { toolName?: string; input?: Record<string, unknown> }
       const input = ev?.input || {}
@@ -365,12 +414,13 @@ export default function (pi: {
   })
 
   pi.on("agent_settled", async (_event: unknown, ctx: unknown) => {
+    pushState("Stop", ctx)
     const dir = process.cwd()
     const sm = (ctx as Ctx)?.sessionManager
     const sid = sm?.getSessionId?.() || ""
     const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
 
-    // MANIFEST: the verb is the presence guard and the gate's --state.
+    // MANIFEST: the command is the presence guard and the gate's --state.
     const manifestPath = await resolveManifestPath(bin, dir)
     if (!manifestPath) {
       // No footnote session here. A worker that dies before `target init`

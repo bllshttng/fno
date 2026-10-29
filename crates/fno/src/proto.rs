@@ -46,16 +46,16 @@ fn default_true() -> bool {
 /// pre-Attach `ClientMsg::{Query, KillServer}` + `ServerMsg::Info` added
 /// (wire-shape FROZEN - see the variants).
 ///
-/// v4 (Phase 4a script API): the one-shot control-verb family -
-/// `ClientMsg::Control { proto, build, verb }` carrying [`ControlVerb`], and
+/// v4 (Phase 4a script API): the one-shot control-command family -
+/// `ClientMsg::Control { proto, build, command }` carrying [`ControlCommand`], and
 /// the replies `ServerMsg::{PaneList, PaneText, PaneSpawned, Ok, WaitDone,
 /// Err}`. Control connections handshake exactly like `Attach` (versioned, NOT
 /// pre-Attach-frozen); the frozen `Query`/`KillServer` pair is untouched.
 ///
 /// v5 (Phase 4a agent edge, G2+G3 shapes in one bump): `Layout` gains
 /// `agents` (sideline [`AgentRow`]s with the fact-badge lattice);
-/// `ControlVerb::PaneRun` gains `claim` (the per-pane writer-claim opt-in set
-/// at agent spawn); `ControlVerb::{PaneClaim, PaneRelease}` added (the relay
+/// `ControlCommand::PaneRun` gains `claim` (the per-pane writer-claim opt-in set
+/// at agent spawn); `ControlCommand::{PaneClaim, PaneRelease}` added (the relay
 /// acquires around an injection burst).
 ///
 /// v6 (Phase 4b block model): `PaneRead` gains `block` ([`BlockSel`]) and its
@@ -90,7 +90,7 @@ fn default_true() -> bool {
 /// argv, so the client status row shows `⚑ <node>` config-free. `None` for an
 /// ad-hoc pane.
 ///
-/// v11 (work-queue dispatch, x-dddd): a new `DispatchNext` client verb (prefix+g
+/// v11 (work-queue dispatch, x-dddd): a new `DispatchNext` client command (prefix+g
 /// "grab work") AND `Layout` gains `backlog: Vec<BacklogCard>` (the sideline
 /// work-queue lane) - both wire-shape changes, so the shared counter bumps once.
 ///
@@ -117,7 +117,7 @@ fn default_true() -> bool {
 /// so an in-flight work-queue card focuses/attaches/locates its live session
 /// instead of dead-ending.
 /// v19: `Command::{RenameSquad, RemoveSquad, MoveSquad, MoveTab}` - squad
-/// management verbs: rename/clear a workspace label, close a whole
+/// management commands: rename/clear a workspace label, close a whole
 /// workspace, reorder the sideline, re-home a tab into another workspace.
 /// Parallel-branch hazard: two in-flight mux branches both take "next", so the
 /// one that merges second must re-bump (v17/v18 were re-numbered once already).
@@ -148,7 +148,7 @@ fn default_true() -> bool {
 /// the second-to-merge rule the v17/v18/v20 churn established.)
 ///
 /// v26: `Command::StopAgent { name }` / `Command::RemoveAgent { name }`
-/// give the sideline a per-row lifecycle verb, server-shelled to `fno-agents
+/// give the sideline a per-row lifecycle command, server-shelled to `fno-agents
 /// stop|rm <name>` and refused on an `external: true` roster row.
 /// v27: `Command::ReorderTab { squad, tab, delta }` moves a tab within
 /// its client-captured squad while preserving the active tab by stable id.
@@ -156,7 +156,7 @@ fn default_true() -> bool {
 /// plus optional directional split placement.
 ///
 /// v29: `Command::PeekAgent { name, seq }` asks the server for a
-/// sideline row's recent transcript (shelled `fno agents peek <name>`, read-only)
+/// sideline row's recent transcript (shelled `fno agents session peek <name>`, read-only)
 /// and `ServerMsg::PeekBody { seq, name, lines }` returns it to the requesting
 /// client only; the client drops any body whose `seq` is not the current request.
 ///
@@ -176,7 +176,7 @@ fn default_true() -> bool {
 /// (`<branch> · <cwd-tail>`) for the sideline. `#[serde(default)]` keeps a v31
 /// reader parsing it as `None` (the pre-feature one-line row).
 ///
-/// v33: the account-scoped dispatch verbs carry the client's
+/// v33: the account-scoped dispatch commands carry the client's
 /// session-local active account. `ClientMsg::DispatchNext { account }` and
 /// `Command::DispatchNode { node, account }` append `--account <id>` to the
 /// server's `fno agents spawn` shell so a mux-initiated spawn bills the chosen
@@ -184,7 +184,7 @@ fn default_true() -> bool {
 /// carries the birth/roster account for the sideline glyph.
 ///
 /// v34: peek-overlay follow-ups. `Command::MailAgent { name, text }`
-/// and `Command::RespawnAgent { name }` are the two new off-loop server verbs;
+/// and `Command::RespawnAgent { name }` are the two new off-loop server commands;
 /// `AgentRow { updated_at, pr }` carry the peek header's `changed Ns ago` stamp
 /// and `PR #N` label.
 ///
@@ -192,8 +192,8 @@ fn default_true() -> bool {
 /// the sideline's `project · lane` attribution subline and the explicit on-deck
 /// head-of-queue marker; `Layout::backlog_lanes` carries UNCAPPED per-lane counts, feeding both
 /// the section's exact `+N more` and the mini-kanban's lane headers;
-/// `Layout::backlog_stale` marks the section as last-known rather than current; `Command::BacklogVerb { node, verb }`
-/// ([`BacklogVerb`]) shells the existing `fno backlog rank --top` / `defer`
+/// `Layout::backlog_stale` marks the section as last-known rather than current; `Command::BacklogCommand { node, command }`
+/// ([`BacklogCommand`]) shells the existing `fno backlog rank --top` / `defer`
 /// porcelain server-side - the mux never writes `graph.json` itself. All new reads
 /// are `#[serde(default)]`, keeping a v35 reader wire-tolerant.
 ///
@@ -201,21 +201,21 @@ fn default_true() -> bool {
 /// line for the extended sideline table's message column. Additive and
 /// `#[serde(default)]`, so a v36 reader parses it as `None` (no tail cell).
 ///
-/// v38: `Command::ToggleDiffPane` (the git diff side pane). A new verb, not an
+/// v38: `Command::ToggleDiffPane` (the git diff side pane). A new command, not an
 /// additive field, so it needs the bump: a v37 server cannot deserialize it,
 /// and without a version difference the handshake would accept an upgraded
 /// client and then drop it on the first decode error instead of telling the
 /// operator to restart the server.
 ///
 /// v39: `Command::ResizeSeam` (dragging a pane divider). Same case as
-/// v38 - a new verb rather than an additive field, so a v38 server cannot
+/// v38 - a new command rather than an additive field, so a v38 server cannot
 /// deserialize it. Mux servers deliberately outlive client upgrades, so without
 /// the bump an upgraded client would attach cleanly to a v38 server and then
 /// have the connection dropped on its first divider drag, instead of being told
 /// at handshake to restart the server.
 ///
 /// v40: `Command::MovePane` (drag-to-relocate and keyboard move-pane).
-/// Same case again - a new verb, not an additive field, so a v39 server cannot
+/// Same case again - a new command, not an additive field, so a v39 server cannot
 /// deserialize it and an unbumped upgraded client would lose its connection on
 /// the first relocation rather than at handshake.
 ///
@@ -225,15 +225,15 @@ fn default_true() -> bool {
 ///
 /// v41 (layout-api): the mux layout script API - `PaneInfo.fno_id`,
 /// `PanePlacement.{tab, at}` + `TabSel`, the `PaneSplit`/`Tab*`/`LayoutGet`/
-/// `PaneWhere`/`PaneBreak`/`TabJoin` control verbs (+ `TabList`/`LayoutTree`/
+/// `PaneWhere`/`PaneBreak`/`TabJoin` control commands (+ `TabList`/`LayoutTree`/
 /// `PaneLocation`/`TabSpawned` replies). The added FIELDS are all
-/// `#[serde(default)]`-tolerant, but the new VERBS are not - a v40 server cannot
+/// `#[serde(default)]`-tolerant, but the new COMMANDS are not - a v40 server cannot
 /// deserialize a `PaneSplit`, so one bump covers the whole node's wire delta
 /// (Locked Decision 7).
 ///
 /// v43 (US9 drag faces): `Command::BreakPane`/`JoinTab` - the interactive
-/// drag counterparts of the `PaneBreak`/`TabJoin` control verbs, dispatching into
-/// the same `CoreMsg`s. New verbs, not additive fields, so a v42 server cannot
+/// drag counterparts of the `PaneBreak`/`TabJoin` control commands, dispatching into
+/// the same `CoreMsg`s. New commands, not additive fields, so a v42 server cannot
 /// deserialize a `BreakPane`; the handshake, not the first drag, names the skew.
 ///
 /// v45 (clickable links): `ServerMsg::OpenLink { url }` - the server
@@ -241,7 +241,7 @@ fn default_true() -> bool {
 /// [`crate::link`]) and the CLIENT opens it, the process at the human's desk.
 /// New variant, not additive; handshake stops the skew.
 ///
-/// v46 (pane focus): `ControlVerb::PaneFocus` + `ServerMsg::PaneFocused`
+/// v46 (pane focus): `ControlCommand::PaneFocus` + `ServerMsg::PaneFocused`
 /// - the CLI door onto the focus trunk the TUI already owns. New variants.
 ///
 /// v50: `AgentRow.{spawned_by_session, harness_session_id}`, the
@@ -251,14 +251,14 @@ fn default_true() -> bool {
 /// the registry identity used to address it. Fields stay additive-defaulted,
 /// but the send identity is a safety contract: reject an older peer at handshake.
 ///
-/// v51 (tab dictionary): `ControlVerb::TabWhere` +
+/// v51 (tab dictionary): `ControlCommand::TabWhere` +
 /// `ServerMsg::TabLocation`/`TabPaneOccupant` - the reverse location lookup
 /// (what lives at the tab the operator is looking at). `TabSel::Index`
 /// becomes the 1-based ordinal the UI shows, where it was a 0-based vector
 /// index, so a captured `--tab <n>` selector changes meaning across the
 /// bump; the handshake is what tells an old client to restart. New variants
 /// are not additive-tolerant either.
-/// v55 (guarded tab close): `ControlVerb::TabClose` and the target-specific
+/// v55 (guarded tab close): `ControlCommand::TabClose` and the target-specific
 /// `ServerMsg::TabClosed` receipt.
 ///
 /// v56 (hover affordance): `ClientMsg::LinkHover` + `ServerMsg::LinkHover` -
@@ -271,7 +271,7 @@ fn default_true() -> bool {
 /// rides the same bump (additive-tolerant on its own, but it is the shape
 /// change the variant belongs to).
 ///
-/// v58 (dedicated thread pane): `ControlVerb::ThreadPane` - a NEW
+/// v58 (dedicated thread pane): `ControlCommand::ThreadPane` - a NEW
 /// enum variant, so a v57 peer cannot decode it and closes the connection
 /// instead of running the reach. `AgentRow.reach` rides the same bump.
 ///
@@ -279,7 +279,7 @@ fn default_true() -> bool {
 /// `predecessor_session_ids`, and `forked_from_session_id`, each
 /// `#[serde(default)]`; the handshake, not serde tolerance, is the skew guard.
 ///
-/// v60 (workspace restore): `ControlVerb::WorkspaceRestore` +
+/// v60 (workspace restore): `ControlCommand::WorkspaceRestore` +
 /// `ServerMsg::WorkspaceRestored` ([`RestoreRow`]s). New variants: a v59 peer
 /// cannot decode them, so the handshake stops the skew.
 ///
@@ -292,32 +292,32 @@ fn default_true() -> bool {
 /// `AgentRow.portal` make the one thread pane an addressable set.
 /// `thread_pane` stays as a compatibility alias meaning portal 0.
 ///
-/// v65 (tab organization): `ControlVerb::TabReorder { squad, tab, to }` and
+/// v65 (tab organization): `ControlCommand::TabReorder { squad, tab, to }` and
 /// `PaneInfo.shell_idle`, the "idle now" reading the used-shell prune sweep
-/// needs. A new verb is not additive-tolerant; the field rides the generation.
-/// v66 (sideline rename): `Command::RenameAgent`, a new verb; also
+/// needs. A new command is not additive-tolerant; the field rides the generation.
+/// v66 (sideline rename): `Command::RenameAgent`, a new command; also
 /// `ThreadPane`'s `#[serde(default)]` `placement` (the geometry a FRESH
 /// portal open honors; a repoint keeps owning its geometry and says so).
 /// v68: `LayoutSlot.cwd`, `#[serde(default)]`; floor stays 58.
 /// v69: `Command::RedrawPane`, `#[serde(default)]`; floor stays 58.
-/// v71 (prune sync): `ControlVerb::SquadReload` + `ServerMsg::SquadReloaded`
+/// v71 (prune sync): `ControlCommand::SquadReload` + `ServerMsg::SquadReloaded`
 /// (handshake stops the skew) and the additive `PaneInfo.orphaned_worker`.
-/// v72: `ControlVerb::ThreadReseat` - the re-seat move (a live
+/// v72: `ControlCommand::ThreadReseat` - the re-seat move (a live
 /// pane-hosted worker becomes a portal seat, keeping its PTY); floor stays 58.
 /// v73: `LayoutSlot.portal` serde(default), the persisted portal seat; floor stays 58.
 /// v74: `Command::RemoveAgent.measure` - measure-and-remove skips
 /// the stop leg on an Unmeasured row; floor stays 58.
-/// v75: `ControlVerb::RetireSession` + `ServerMsg::SessionRetired`,
+/// v75: `ControlCommand::RetireSession` + `ServerMsg::SessionRetired`,
 /// the exact-session retirement op; floor stays 58.
-/// v76: `ControlVerb::AgentRowsGet` + `ServerMsg::AgentRowsReceipt`
+/// v76: `ControlCommand::AgentRowsGet` + `ServerMsg::AgentRowsReceipt`
 /// + `AgentRowReceipt`, the row-set receipt behind `fno mux rows`; floor 58.
 /// v77: `liveness_age_s` replaced by `liveness_measured_at`, the instant;
 /// the client derives the age at render. Same decode both ways; floor 58.
-/// v78: `ControlVerb::ServerStats` + `ServerMsg::ServerStats`, the
+/// v78: `ControlCommand::ServerStats` + `ServerMsg::ServerStats`, the
 /// scoreboard's read-only emission-failure counter read; floor stays 58.
 /// v87: `Layout.missions` removed (the band is gone); floor stays 58.
 /// v80: `PanePlacement.fit` serde(default), the server picks the tab; floor 58.
-/// v81: `RestoreRow.portal` (serde default), the verb fills held seats; floor 58.
+/// v81: `RestoreRow.portal` (serde default), the command fills held seats; floor 58.
 /// v82: `AgentRow.lineage_kind` (serde default), the served CHILD/PEER word;
 /// the sideline nests only CHILD rows; `BackendNotLive` also removed here.
 /// v84: `AgentRow.spawned_by_name` + `AgentRow.lineage_reason` (serde
@@ -344,7 +344,7 @@ fn default_true() -> bool {
 /// transient machine view (`fno mux command`: a screen that is never a
 /// portal) and the named anchor cell (`--from portal N|worker|current`)
 /// a split halves; floor stays 58.
-/// v94: `ControlVerb::PaneSend.hold_pass` (serde default): a send the Rust
+/// v94: `ControlCommand::PaneSend.hold_pass` (serde default): a send the Rust
 /// hold gate already passed (`own`, `control:` or parked-mail lane) skips
 /// the pane's DND refusal; floor stays 58.
 /// v95: `AgentLaunchRequest.worktree` + `branch` (serde default), the
@@ -357,7 +357,7 @@ fn default_true() -> bool {
 /// can refuse commands an older server cannot parse instead of tripping
 /// the unknown-variant read failure. Floor stays 58.
 /// v98: optional worker context, start time, unread mail and node; floor stays 58.
-/// v99: `ControlVerb::PaneRun.human` (serde default), the composer's
+/// v99: `ControlCommand::PaneRun.human` (serde default), the composer's
 /// user-typed `!` line taking the human admission exemption; floor stays 58.
 /// v100: `AgentLaunchRequest.force` (serde default), the per-request
 /// composer override the server journals and rides as the door's `--force`;
@@ -374,14 +374,14 @@ fn default_true() -> bool {
 /// v107 adds `BacklogCard.link` (serde default), the node's stored GitHub-or-Linear
 /// URL the node tap opens when no plan lives in the vault; floor stays 58.
 /// v109: `WorkspaceRestore.member_session` targets one exact native session.
-/// v110: `ControlVerb::Notify` + `ServerMsg::{DesktopNotice, NoticeSent}` -
+/// v110: `ControlCommand::Notify` + `ServerMsg::{DesktopNotice, NoticeSent}` -
 /// desktop notifications ride to attached clients as OSC 777; floor stays 58.
 /// v111: `AgentRow.bindings`, the node bindings a row drives, strongest
 /// first; missing on a pre-v111 row, off the wire when empty; floor stays 58.
 /// v112: `MouseEvent.alt` (serde default) - the client forwards the SGR alt bit
 /// so the server can claim a modifier-click pair on a mouse-reporting pane and
 /// open the link under it; floor stays 58.
-/// v113: `ControlVerb::WorkspaceOrigin`, the folder edit behind
+/// v113: `ControlCommand::WorkspaceOrigin`, the folder edit behind
 /// `fno mux workspace origin`; floor stays 58.
 /// v114: `Command::PinThread` (move a session into a workspace by hand),
 /// `Command::AddWorkspaceFolder`, and `AgentRow.project_root`; floor stays 58.
@@ -389,9 +389,17 @@ fn default_true() -> bool {
 /// the squad-root `cwd` in `pane ls`; floor stays 58.
 /// v116: `ClientMsg::Observe` and `Layout.observers`, who watches which pane;
 /// floor stays 58.
-pub const PROTO_VERSION: u32 = 116;
+/// v117: `ControlCommand::PaneRun.fno_id` (serde default), the caller's
+/// preassigned session id recorded as the pane's resume birthright so a
+/// spawned pane is addressable before its registry row exists; floor stays 58.
+/// v118: `ClientMsg::PaneScroll`/`PaneScrollEdge` (keyboard scroll mode,
+/// prefix+PgUp) and `Frame.history_lines` (serde default), the scroll-mode
+/// readout's denominator; floor stays 58.
+/// v119: `AgentRow.pinned` (serde default), the user's keep mark behind the
+/// sideline's pin star and pin-first order; floor stays 58.
+pub const PROTO_VERSION: u32 = 119;
 
-/// The oldest wire version this build can speak. Bumps that only add verbs or
+/// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
 /// shape must move this floor too.
 pub const MIN_COMPAT_PROTO: u32 = 58;
@@ -473,7 +481,7 @@ pub struct MouseEvent {
 }
 
 /// The mouse gesture. Wheel carries its own intent (there is no separate scroll
-/// verb - brief Locked 12); press/drag/release drive focus and selection when
+/// command - brief Locked 12); press/drag/release drive focus and selection when
 /// the mux interprets, and SGR button codes when it forwards.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MouseKind {
@@ -525,13 +533,13 @@ pub struct RestoreRow {
     pub notice: Option<String>,
 }
 
-/// The script-API verbs (`fno mux pane ls|read|run|send|wait|kill`), each a
+/// The script-API commands (`fno mux pane ls|read|run|send|wait|kill`), each a
 /// one-shot request answered by exactly one [`ServerMsg`] reply. Versioned as
-/// part of `Control` (v4); a new verb or a shape change bumps `PROTO_VERSION`.
+/// part of `Control` (v4); a new command or a shape change bumps `PROTO_VERSION`.
 /// `Eq` is intentionally NOT derived: `LayoutGraft` carries an
 /// [`AnchoredLayoutSpec`] whose split weights are `f32` (never `Eq`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ControlVerb {
+pub enum ControlCommand {
     /// Every pane across every squad -> [`ServerMsg::PaneList`].
     PaneLs,
     /// (v78) Server-instance telemetry -> [`ServerMsg::ServerStats`].
@@ -569,6 +577,13 @@ pub enum ControlVerb {
         /// a plain `pane run` stays byte-identical.
         #[serde(default)]
         worker: Option<String>,
+        /// (v117) The caller's preassigned session id for a harness whose
+        /// binding strategy is `preassigned`: the id rode into the child at
+        /// exec time, so the pane is addressable before its registry row is
+        /// written. Recorded as the resume birthright, the same join the
+        /// resume path fills; `None` records nothing.
+        #[serde(default)]
+        fno_id: Option<String>,
     },
     /// Write raw bytes to a pane's PTY (no focus change) -> [`ServerMsg::Ok`].
     /// `guarded` (v21) makes the send atomic against the target going busy:
@@ -639,7 +654,7 @@ pub enum ControlVerb {
     /// releases unconditionally).
     PaneRelease { pane: u64 },
 
-    // -- v41 (layout-api) script layout verbs; every reply carries created ids,
+    // -- v41 (layout-api) script layout commands; every reply carries created ids,
     //    and NONE moves any viewer's focus unless it opts in. --
     /// Split an ARBITRARY pane (not just the focused one) -> [`ServerMsg::PaneSpawned`]
     /// (a split mints a fresh shell pane). Lifts `tree::split_node`'s
@@ -670,7 +685,7 @@ pub enum ControlVerb {
     },
     /// (v65) Move a tab within its squad so it lands at the `to`
     /// position -> [`ServerMsg::Ok`]. Both selectors resolve through the same
-    /// 1-based-ordinal grammar as every other `Tab*` verb; the server computes
+    /// 1-based-ordinal grammar as every other `Tab*` command; the server computes
     /// the delta and runs the exact trunk the interactive
     /// `Command::ReorderTab` runs, so a move over the wire cannot hold the
     /// active tab differently than a move from the tab bar.
@@ -707,7 +722,7 @@ pub enum ControlVerb {
     /// `fno mux rows`: a row present here but absent on screen is a client
     /// display suppressor (fold/collapse); a row absent here is a server
     /// join bug. Presence and suppression were indistinguishable from
-    /// outside before this verb.
+    /// outside before this command.
     AgentRowsGet,
     /// Resolve an `fno_id` to its live location -> [`ServerMsg::PaneLocation`],
     /// or one of three DISTINCT error codes ([`err_code::REGISTRY_UNAVAILABLE`] /
@@ -718,7 +733,7 @@ pub enum ControlVerb {
     /// -> [`ServerMsg::TabSpawned`] (the created tab's id).
     PaneBreak { pane: u64, name: Option<String> },
     /// Point every attached (non-passive) viewer AT `pane`, wherever it lives ->
-    /// [`ServerMsg::PaneFocused`]. The inverse of every other `Pane*` verb: those
+    /// [`ServerMsg::PaneFocused`]. The inverse of every other `Pane*` command: those
     /// act ON a pane for an agent, this moves the OPERATOR to one.
     ///
     /// Routes to the same [`Command::FocusPane`] trunk the right-click `-> Focus`
@@ -789,7 +804,7 @@ pub enum ControlVerb {
         spec: LayoutSpec,
         /// Opt-in focus move to slot 0's pane; default never steals a viewer's
         /// focus (Locked Decision 2). `#[serde(default)]` keeps a v41 reader
-        /// (which never sends this verb) irrelevant and a hand-authored spec terse.
+        /// (which never sends this command) irrelevant and a hand-authored spec terse.
         #[serde(default)]
         focus: bool,
     },
@@ -798,7 +813,7 @@ pub enum ControlVerb {
     /// bindings, spawns Shell slots, and replaces the anchor leaf with the
     /// subtree in one atomic turn, preserving the enclosing tab and every live
     /// bound PTY. Session-local; never persisted. `--at current` resolves the
-    /// anchor client-side before this verb, so `anchor` is a real pane id.
+    /// anchor client-side before this command, so `anchor` is a real pane id.
     LayoutGraft {
         #[serde(default)]
         squad: PaneTarget,
@@ -822,7 +837,7 @@ pub enum ControlVerb {
     /// (v60) Bulk-restore every live, non-tombstoned worker member of
     /// the stored workspaces: each resumes through its own harness's declared
     /// `interactive_resume` argv, in a pane at its stored tab and cwd. The
-    /// operator's explicit verb - startup restore never sends this (AC4-EDGE:
+    /// operator's explicit command - startup restore never sends this (AC4-EDGE:
     /// the hold-workers policy stays the default). `harness` restores one
     /// harness's members only; `dry_run` classifies every member and spawns
     /// nothing. -> [`ServerMsg::WorkspaceRestored`].
@@ -866,7 +881,7 @@ pub enum ControlVerb {
     Notify { title: String, body: String },
 }
 
-/// What a [`ControlVerb::LayoutGet`] dumps (v41, layout-api).
+/// What a [`ControlCommand::LayoutGet`] dumps (v41, layout-api).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LayoutScope {
     /// Every squad's every tab.
@@ -1103,6 +1118,10 @@ pub struct AgentRow {
     /// which degrades to the old label, never a wrong one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub held_conversation: bool,
+    /// (v119) The user pinned this session: a keep mark on its session id or
+    /// lineage, so no reaper removes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
     /// (v47) True only when `exited` is a terminal registry status
     /// with NO positive corroboration (no confirmed-dead pid, no confirmed-
     /// gone pane) -- `agents_view::Liveness::Unmeasured`. `exited` keeps its
@@ -1388,7 +1407,7 @@ pub struct AgentRow {
 /// `None` means "would paint; any non-paint on screen is a client-side fold",
 /// never "unknown". A row present in this receipt but absent on screen is a
 /// display suppressor; a row absent from the receipt is a server join bug.
-/// That split is the verb's whole point.
+/// That split is the command's whole point.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRowReceipt {
     pub name: String,
@@ -1412,6 +1431,17 @@ pub struct AgentRowReceipt {
     /// What the row's gesture opens (carried verbatim; render-only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumable: Option<bool>,
+}
+
+impl AgentRow {
+    /// The key a picked row sends to reach its portal: attach id, else
+    /// harness session id, else the name. Two live rows can share a name,
+    /// so a name is the last resort, never the first choice.
+    pub fn reach_key(&self) -> String {
+        (self.attach_id.clone())
+            .or_else(|| self.harness_session_id.clone())
+            .unwrap_or_else(|| self.name.clone())
+    }
 }
 
 /// (v11, x-dddd) One work-queue card for the sideline backlog lane, derived
@@ -1597,7 +1627,7 @@ pub enum Command {
     /// direction" notice and goes nowhere; such a caller must name a `target`.
     /// The sideline row menu picks between the two forms on exactly that test.
     ///
-    /// One verb rather than two: both forms end in the same relocation, and
+    /// One command rather than two: both forms end in the same relocation, and
     /// only the addressing differs.
     MovePane {
         mover: Option<u64>,
@@ -1606,7 +1636,7 @@ pub enum Command {
     },
     /// (v43) Break `pane` into its OWN new tab, the drop of a pane grip
     /// onto the tab strip. Dispatches into the SAME [`CoreMsg::PaneBreak`] the
-    /// [`ControlVerb::PaneBreak`] script path sends (one tree-mutation site); the
+    /// [`ControlCommand::PaneBreak`] script path sends (one tree-mutation site); the
     /// interactive path additionally repoints the acting client's focus to the
     /// new tab, which the script path never does (Locked Decision 3). `pane` is
     /// named by the sender and resolved session-wide, so it need NOT live in the
@@ -1626,7 +1656,7 @@ pub enum Command {
     /// (v43) Join the whole `src_tab` into `anchor_pane`'s tab as a split
     /// on `dir`, removing the now-empty source tab - the drop of a tab cell onto a
     /// content edge. Dispatches into the SAME [`CoreMsg::TabJoin`] the
-    /// [`ControlVerb::TabJoin`] script path sends. `src_tab` is a concrete stable
+    /// [`ControlCommand::TabJoin`] script path sends. `src_tab` is a concrete stable
     /// [`TabId`] the drag picked up (not the script path's `TabSel`: a gesture
     /// grabs one specific rendered cell, never "the active tab"). A join-into-self
     /// is refused `BAD_REQUEST` server-side, and suppressed client-side.
@@ -1779,7 +1809,7 @@ pub enum Command {
     /// the session (`Bye`), identical to closing its tabs one at a time
     /// (Locked Decision 8). Destructiveness is gated CLIENT-side by a confirm,
     /// not refused server-side (every live squad always has an occupied tab, so
-    /// "refuse while occupied" would be a dead verb). A stale/unknown id is
+    /// "refuse while occupied" would be a dead command). A stale/unknown id is
     /// refused with a notice.
     RemoveSquad(u64),
     /// (v19) Reorder the sideline: move the squad `delta` positions in
@@ -1869,7 +1899,7 @@ pub enum Command {
     /// (v29) Ask the server for a sideline row's recent transcript so the
     /// operator can peek BEFORE attaching (peek reads disk; only attach spawns a
     /// pane). `name` is an `AgentRow.name` from the last `Layout` (the same union
-    /// resolver `fno agents peek` accepts); the server shells `fno agents peek
+    /// resolver `fno agents session peek` accepts); the server shells `fno agents session peek
     /// <name>` OFF the core loop and replies with a [`ServerMsg::PeekBody`] to the
     /// requesting client only. `seq` is a client-local monotonic counter echoed
     /// back on the body so the client can drop a stale reply (A->B->A cycling
@@ -1883,8 +1913,8 @@ pub enum Command {
     /// (v30) Bulk-reap every EXITED fno-agent registry row: the server
     /// shells `fno-agents reap` once, off-loop, and reports the bounded count
     /// (`reaped N`; zero candidates is a visible successful `reaped 0`). No
-    /// payload - the reap verb owns the candidate set. Refused for a passive
-    /// (observer) client; external rows are never touched (the reap verb only
+    /// payload - the reap command owns the candidate set. Refused for a passive
+    /// (observer) client; external rows are never touched (the reap command only
     /// knows the fno registry). The uppercase-`X` sibling of per-row `x`.
     ReapAgents,
     /// Sweep positively dead stored squad members and the empty sideline rows
@@ -1929,29 +1959,33 @@ pub enum Command {
     RespawnAgent {
         name: String,
     },
-    /// (v36) Run one reorder verb against a Backlog card. The server
+    /// (v36) Run one reorder command against a Backlog card. The server
     /// validates `node` against its own card set (fail-closed: a card that raced
     /// out between menu-open and dispatch launches no subprocess), then shells the
-    /// fixed [`BacklogVerb`] OFF-loop and surfaces the verdict as a notice.
-    /// `verb` is an enum, never operator text, so the wire can never widen the
-    /// write. Since the store port the verbs drive the ported store keeper
+    /// fixed [`BacklogCommand`] OFF-loop and surfaces the verdict as a notice.
+    /// `command` is an enum, never operator text, so the wire can never widen the
+    /// write. Since the store port the commands drive the ported store keeper
     /// directly ([`crate::store_client`]) instead of shelling the `fno`
     /// porcelain; the mux still composes no argv from the wire, the write
     /// rides the store's bounded-lock pipeline, and there is no optimistic
     /// reorder - the order changes when the graph reader republishes.
-    BacklogVerb {
+    // Wire names kept: a client and a running server of different builds
+    // still agree, so the rename needs no PROTO_VERSION bump.
+    #[serde(rename = "BacklogVerb")] // verb-wording: allow (wire name)
+    BacklogCommand {
         node: String,
-        verb: BacklogVerb,
+        #[serde(rename = "verb")] // verb-wording: allow (wire name)
+        command: BacklogCommand,
     },
 }
 
-/// (v36) The v1 reorder verb set on a Backlog card, each a fixed
+/// (v36) The v1 reorder command set on a Backlog card, each a fixed
 /// store operation. An enum (not a string) so the wire can never widen the
-/// write. Each variant's doc names the CLI verb whose effect it mirrors -
+/// write. Each variant's doc names the CLI command whose effect it mirrors -
 /// the effects, not a subprocess: since the store port the server drives
 /// the ported store keeper directly ([`crate::store_client`]).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum BacklogVerb {
+pub enum BacklogCommand {
     /// `backlog rank <node> --top` - float the card to the head of its column.
     /// Never changes the column (`_kanban_column` is the sole column authority).
     RankTop,
@@ -1961,7 +1995,7 @@ pub enum BacklogVerb {
     Defer,
     /// `backlog advance --epic <node> --stop` - end a mission (LD6: missions
     /// are epics; "end" clears `mission_active` and dispatches nothing, never
-    /// a new `fno mission` verb).
+    /// a new `fno mission` command).
     EndMission,
 }
 
@@ -1970,33 +2004,33 @@ pub enum BacklogVerb {
 /// reads these, so "who deferred this and from where" is the useful fact.
 pub const DEFER_REASON: &str = "deferred from the mux backlog sideline";
 
-impl BacklogVerb {
-    /// The space-joined leaf path this verb invokes (e.g. `backlog rank`). It is
+impl BacklogCommand {
+    /// The space-joined leaf path this command invokes (e.g. `backlog rank`). It is
     /// both the argv head and the token the baseline-membership test checks
-    /// against `scripts/ci/verb-baseline.txt`, so a leaf rename edits one place
+    /// against `scripts/ci/command-baseline.txt`, so a leaf rename edits one place
     /// and a removed leaf fails CI in the same PR.
     pub fn leaf(self) -> &'static str {
         match self {
-            BacklogVerb::RankTop => "backlog rank",
-            BacklogVerb::Defer => "backlog defer",
-            BacklogVerb::EndMission => "backlog advance",
+            BacklogCommand::RankTop => "backlog rank",
+            BacklogCommand::Defer => "backlog defer",
+            BacklogCommand::EndMission => "backlog advance",
         }
     }
 
-    /// The argv tail after the leaf tokens, with `node` where the verb takes it.
+    /// The argv tail after the leaf tokens, with `node` where the command takes it.
     fn tail(self, node: &str) -> Vec<String> {
         match self {
-            BacklogVerb::RankTop => vec![node.into(), "--top".into()],
-            BacklogVerb::Defer => vec![node.into(), "--reason".into(), DEFER_REASON.into()],
+            BacklogCommand::RankTop => vec![node.into(), "--top".into()],
+            BacklogCommand::Defer => vec![node.into(), "--reason".into(), DEFER_REASON.into()],
             // `--epic` names the mission to deactivate; `--stop` clears
             // mission_active and dispatches nothing. Both are on `backlog
             // advance --help`.
-            BacklogVerb::EndMission => vec!["--epic".into(), node.into(), "--stop".into()],
+            BacklogCommand::EndMission => vec!["--epic".into(), node.into(), "--stop".into()],
         }
     }
 
-    /// The full `fno` argv for this verb on `node`: the leaf tokens plus the
-    /// per-verb tail. Built from `leaf()` so the argv head and the baseline token
+    /// The full `fno` argv for this command on `node`: the leaf tokens plus the
+    /// per-command tail. Built from `leaf()` so the argv head and the baseline token
     /// cannot drift apart.
     pub fn args(self, node: &str) -> Vec<String> {
         let mut v: Vec<String> = self.leaf().split(' ').map(str::to_owned).collect();
@@ -2004,35 +2038,35 @@ impl BacklogVerb {
         v
     }
 
-    /// The verb's human label, for the menu entry and the outcome notice.
+    /// The command's human label, for the menu entry and the outcome notice.
     pub fn label(self) -> &'static str {
         match self {
-            BacklogVerb::RankTop => "float to top",
-            BacklogVerb::Defer => "defer",
-            BacklogVerb::EndMission => "end mission",
+            BacklogCommand::RankTop => "float to top",
+            BacklogCommand::Defer => "defer",
+            BacklogCommand::EndMission => "end mission",
         }
     }
 }
 
 /// Every variant, so the baseline-membership test is exhaustive. The
-/// `all_backlog_verbs_const_covers_every_variant` test fails to compile when a
+/// `all_backlog_commands_const_covers_every_variant` test fails to compile when a
 /// variant is added without being listed here, which is the prompt to give it a
 /// leaf the baseline then checks.
 #[cfg(test)]
-const ALL_BACKLOG_VERBS: &[BacklogVerb] = &[
-    BacklogVerb::RankTop,
-    BacklogVerb::Defer,
-    BacklogVerb::EndMission,
+const ALL_BACKLOG_COMMANDS: &[BacklogCommand] = &[
+    BacklogCommand::RankTop,
+    BacklogCommand::Defer,
+    BacklogCommand::EndMission,
 ];
 
 #[cfg(test)]
-mod verb_baseline_tests {
+mod command_baseline_tests {
     use super::*;
 
-    /// The checked-in verb baseline, embedded at compile time. Each non-comment
+    /// The checked-in command baseline, embedded at compile time. Each non-comment
     /// line is a leaf path optionally carrying trailing `!--flag` tokens; strip
     /// those so the set holds the bare leaf paths the ratchet names.
-    const BASELINE: &str = include_str!("../../../scripts/ci/verb-baseline.txt");
+    const BASELINE: &str = include_str!("../../../scripts/ci/command-baseline.txt");
 
     fn baseline_leaves() -> std::collections::HashSet<String> {
         BASELINE
@@ -2049,13 +2083,13 @@ mod verb_baseline_tests {
     }
 
     /// The checked-in collapse map, embedded at compile time. Its `current-leaf`
-    /// column is the true registry of tracked CLI verbs - a T1 verb collapses to
-    /// its group's bare command in `verb-baseline.txt` (a `backlog defer` row
+    /// column is the true registry of tracked CLI commands - a T1 command collapses to
+    /// its group's bare command in `command-baseline.txt` (a `backlog defer` row
     /// never appears there on its own), so `baseline_leaves()` cannot tell a
     /// genuinely tracked T1 leaf from a made-up one that merely shares the
-    /// group word. This is the source of truth `every_backlog_verb_leaf_is_in_
+    /// group word. This is the source of truth `every_backlog_command_leaf_is_in_
     /// the_baseline` checks against instead.
-    const COLLAPSE_MAP: &str = include_str!("../../../scripts/ci/verb-collapse-map.tsv");
+    const COLLAPSE_MAP: &str = include_str!("../../../scripts/ci/command-collapse-map.tsv");
 
     fn collapse_map_leaves() -> std::collections::HashSet<String> {
         COLLAPSE_MAP
@@ -2068,7 +2102,7 @@ mod verb_baseline_tests {
     }
 
     #[test]
-    fn backlog_verb_rows() {
+    fn backlog_command_rows() {
         let leaves = baseline_leaves();
         // Positive control: the baseline parsed and carries a known leaf, so a
         // miss below is a real missing leaf, not an unread baseline.
@@ -2081,11 +2115,11 @@ mod verb_baseline_tests {
             tracked.contains("backlog advance"),
             "collapse map parsed; tracked: {tracked:?}"
         );
-        for v in ALL_BACKLOG_VERBS {
+        for v in ALL_BACKLOG_COMMANDS {
             let leaf = v.leaf();
             // A T1-tier leaf (e.g. "backlog rank") collapses to its group's
-            // bare command in verb-baseline.txt, so its full string never
-            // appears there as its own line - only `verb-collapse-map.tsv`'s
+            // bare command in command-baseline.txt, so its full string never
+            // appears there as its own line - only `command-collapse-map.tsv`'s
             // `current-leaf` column names every tracked leaf individually,
             // T1 and KEEP alike. Checking the baseline directly would pass
             // for any made-up "backlog whatever" leaf too, since the group's
@@ -2093,36 +2127,36 @@ mod verb_baseline_tests {
             // the only source that can tell a tracked leaf from an invented one.
             assert!(
                 tracked.contains(leaf),
-                "BacklogVerb leaf {leaf:?} has no row in \
-                 scripts/ci/verb-collapse-map.tsv; \
+                "BacklogCommand leaf {leaf:?} has no row in \
+                 scripts/ci/command-collapse-map.tsv; \
                  a menu item binds it, so the ratchet must list it"
             );
         }
 
         // Exhaustive match: a new variant fails this to compile until it is in
-        // the OR-pattern, and the body then requires it in ALL_BACKLOG_VERBS.
-        fn listed(v: BacklogVerb) -> bool {
+        // the OR-pattern, and the body then requires it in ALL_BACKLOG_COMMANDS.
+        fn listed(v: BacklogCommand) -> bool {
             match v {
-                BacklogVerb::RankTop | BacklogVerb::Defer | BacklogVerb::EndMission => {
-                    ALL_BACKLOG_VERBS.contains(&v)
+                BacklogCommand::RankTop | BacklogCommand::Defer | BacklogCommand::EndMission => {
+                    ALL_BACKLOG_COMMANDS.contains(&v)
                 }
             }
         }
-        for v in ALL_BACKLOG_VERBS {
+        for v in ALL_BACKLOG_COMMANDS {
             assert!(
                 listed(*v),
-                "ALL_BACKLOG_VERBS lists {v:?} but the sync match does not"
+                "ALL_BACKLOG_COMMANDS lists {v:?} but the sync match does not"
             );
         }
 
         // The argv head is always leaf().split(' '), so the baseline token and
         // the argv cannot disagree.
         assert_eq!(
-            BacklogVerb::RankTop.args("x-1"),
+            BacklogCommand::RankTop.args("x-1"),
             vec!["backlog", "rank", "x-1", "--top"]
         );
         assert_eq!(
-            BacklogVerb::EndMission.args("x-9"),
+            BacklogCommand::EndMission.args("x-9"),
             vec!["backlog", "advance", "--epic", "x-9", "--stop"]
         );
     }
@@ -2210,14 +2244,14 @@ pub struct TabLayout {
     pub root: Node,
     pub panes: Vec<(u64, Rect)>,
     /// (v51) Per-pane worker identities joined from the registry,
-    /// parallel to `panes`, filled on the control-verb path so the human
+    /// parallel to `panes`, filled on the control-command path so the human
     /// layout rendering can name occupants. `None` keeps the machine JSON
     /// byte-shape unchanged for every existing consumer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers: Option<Vec<TabPaneOccupant>>,
 }
 
-/// Why a [`ControlVerb::PaneWait`] returned. The CLI maps each to a distinct
+/// Why a [`ControlCommand::PaneWait`] returned. The CLI maps each to a distinct
 /// exit code (AC4-EDGE: timeout is tellable apart from a match and a settle).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WaitOutcome {
@@ -2234,7 +2268,7 @@ pub enum WaitOutcome {
     CommandDone { exit: Option<i32> },
 }
 
-/// Which OSC 133 command block a [`ControlVerb::PaneRead`] selects (v6). Defined
+/// Which OSC 133 command block a [`ControlCommand::PaneRead`] selects (v6). Defined
 /// here (not in [`crate::vt`]) so the wire and the VT store share one type.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum BlockSel {
@@ -2313,7 +2347,7 @@ pub struct SquadMeta {
 /// A complete rendered screen: `rows * cols` cells in row-major order plus the
 /// cursor. Self-contained by construction - drawing a `Frame` never requires
 /// any earlier message.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Frame {
     pub rows: u16,
     pub cols: u16,
@@ -2326,6 +2360,12 @@ pub struct Frame {
     /// broadcast in the frame so every co-viewer shows the same indicator.
     #[serde(default)]
     pub scroll_offset: u16,
+    /// (v118) Total grid lines the pane can show, history plus viewport. With
+    /// `rows` and `scroll_offset` this is the scroll-mode readout's denominator:
+    /// the viewport's top line is `history_lines - rows - offset + 1` of
+    /// `history_lines`. `default` keeps an older server's frames decoding.
+    #[serde(default)]
+    pub history_lines: u32,
 }
 
 impl Frame {
@@ -2920,7 +2960,7 @@ pub(crate) fn legacy_global_yaml_state_dir_hint() -> Option<std::path::PathBuf> 
     // the global one. The one nested shape that IS canonical is the legacy
     // `config:` wrapper Python unwraps, so a state_dir directly under a
     // top-level `config:` key counts. Any other misread would warn on every
-    // verb forever over no divergence.
+    // command forever over no divergence.
     let mut under_config = false;
     let value = body.lines().find_map(|l| {
         let indented = l.starts_with([' ', '\t']);
@@ -3007,14 +3047,15 @@ pub fn legacy_fallback_allowed() -> bool {
 /// `FNO_CONFIG` with no usable state_dir, a state_dir value this mirror had
 /// to decline, or a state_dir that lives only where this reader cannot look.
 /// Carries its own remedy so `mux doctor` never names the wrong fix. Emitted
-/// to stderr by the non-TUI verbs (`mux ls`) and as a `mux doctor` row; the
+/// to stderr by the non-TUI commands (`mux ls`) and as a `mux doctor` row; the
 /// TUI client appends it to its client log instead. proto itself never
 /// writes stderr: resolution runs before the client enters the alternate
 /// screen, and any pre-TUI stderr byte lands in the PTY the harness reads
 /// (client.rs, NEVER-stderr rule).
 static CONFIG_WARNING: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
-#[allow(dead_code)]
+// Every caller sits behind cfg(not(test)), so the test leg sees no call.
+#[cfg_attr(test, allow(dead_code))]
 fn record_config_warning(msg: String, remedy: String) {
     let _ = CONFIG_WARNING.set((msg, remedy));
 }
@@ -3583,6 +3624,7 @@ mod tests {
             cursor_col: 2,
             cursor_visible: true,
             scroll_offset: 4,
+            history_lines: 0,
         }
     }
 
@@ -3698,14 +3740,14 @@ mod tests {
             assert_eq!(decoded, msg);
         }
 
-        // US9: the two interactive drag verbs are additive Command
+        // US9: the two interactive drag commands are additive Command
         // variants that ride the 43 bump. Externally-tagged, so a v42 server
         // cannot decode them at all - the PROTO_VERSION handshake is what stops
         // the skew (a mismatched client is told to restart the server), NOT a
         // serde default. The anchored-layout node bumped 43 -> 44;
         // what we assert here is (a) the canonical version and (b) the new
         // variants survive the codec losslessly, exactly the discipline every
-        // prior new-verb bump followed. (The version literal is pinned once, in
+        // prior new-command bump followed. (The version literal is pinned once, in
         // the team-fields test; asserting it again here caught nothing.)
         for msg in [
             ClientMsg::Command(Command::BreakPane { pane: 7 }),
@@ -3794,6 +3836,7 @@ mod tests {
                         exited: false,
                         dnd: false,
                         held_conversation: false,
+                        pinned: false,
                         unmeasured: false,
                         answerable: Some(AnswerablePrompt {
                             prompt: "Do you want to proceed?".into(),
@@ -3853,6 +3896,7 @@ mod tests {
                         exited: true,
                         dnd: false,
                         held_conversation: false,
+                        pinned: false,
                         unmeasured: false,
                         answerable: None,
                         attach_id: None,
@@ -3961,7 +4005,7 @@ mod tests {
             ClientMsg::Control {
                 proto: PROTO_VERSION,
                 build: BUILD_VERSION.into(),
-                verb: ControlVerb::PaneRun {
+                command: ControlCommand::PaneRun {
                     cwd: "/code/footnote".into(),
                     argv: vec!["claude".into()],
                     cols: None,
@@ -3969,6 +4013,7 @@ mod tests {
                     claim: false,
                     placement: placement.clone(),
                     worker: None,
+                    fno_id: None,
                 },
             },
             ClientMsg::Command(Command::AttachAgent {
@@ -4087,7 +4132,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 116);
+        assert_eq!(PROTO_VERSION, 119);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
@@ -4371,8 +4416,8 @@ mod tests {
         // A raw v41 client that omits no_focus must get the advertised no-steal
         // behavior (Locked Decision 3), NOT serde's bool default of false.
         let json = r#"{"PaneSplit":{"pane":4,"direction":"Right"}}"#;
-        match serde_json::from_str::<ControlVerb>(json).unwrap() {
-            ControlVerb::PaneSplit { no_focus, .. } => {
+        match serde_json::from_str::<ControlCommand>(json).unwrap() {
+            ControlCommand::PaneSplit { no_focus, .. } => {
                 assert!(no_focus, "omitted no_focus must default true")
             }
             other => panic!("expected PaneSplit, got {other:?}"),
@@ -4383,7 +4428,7 @@ mod tests {
     // shrink-only line, and test motion is the sanctioned shrink.
     #[path = "reader_and_wire_tests.rs"]
     mod reader_and_wire_tests;
-    // (v75) The control-verb + control-reply round-trip lists moved out under
+    // (v75) The control-command + control-reply round-trip lists moved out under
     // the same rule; the RetireSession entries ride the moved lists.
     #[path = "control_roundtrip_tests.rs"]
     mod control_roundtrip_tests;
@@ -4622,41 +4667,41 @@ mod tests {
     // ---- v41 wire compatibility -------------------------------
 
     #[test]
-    fn v41_control_verbs_and_replies_round_trip() {
+    fn v41_control_commands_and_replies_round_trip() {
         use crate::tree::{Dir, Node};
-        let verbs = vec![
-            ControlVerb::PaneSplit {
+        let commands = vec![
+            ControlCommand::PaneSplit {
                 pane: 4,
                 direction: Dir::Right,
                 no_focus: true,
             },
-            ControlVerb::TabJoin {
+            ControlCommand::TabJoin {
                 src_tab: TabSel::Name("bee".into()),
                 anchor_pane: 7,
                 direction: Dir::Down,
             },
-            ControlVerb::PaneWhere {
+            ControlCommand::PaneWhere {
                 fno_id: "abcd1234".into(),
             },
             // (v46) A new externally-tagged variant, so a v45 server
             // cannot decode it at all - the handshake is what stops the skew.
-            ControlVerb::PaneFocus { pane: 31 },
-            ControlVerb::LayoutGet {
+            ControlCommand::PaneFocus { pane: 31 },
+            ControlCommand::LayoutGet {
                 scope: LayoutScope::Tab {
                     squad: PaneTarget::SquadId(1),
                     tab: TabSel::Index(2),
                 },
                 workers: false,
             },
-            ControlVerb::TabClose {
+            ControlCommand::TabClose {
                 squad: PaneTarget::SquadId(1),
                 tab: TabSel::Id(27),
                 force: true,
             },
         ];
-        for v in verbs {
+        for v in commands {
             let bytes = serde_json::to_vec(&v).unwrap();
-            let back: ControlVerb = serde_json::from_slice(&bytes).unwrap();
+            let back: ControlCommand = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(v, back);
         }
 

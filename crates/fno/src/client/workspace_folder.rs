@@ -5,13 +5,107 @@
 
 use super::*;
 
-/// Which folder the create overlay will send. While `picked` is false the
-/// folder follows the typed name; the arrow keys set it, and `index` then
-/// holds (`None` is the viewed workspace's folder, today's default).
+/// What the create overlay's folder field holds. `Viewed` is the default: the
+/// workspace being viewed now. `NoFolder` makes a workspace no row joins by
+/// cwd, only by an explicit move. `Live` indexes the live-row folder list.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FolderChoice {
+    #[default]
+    Viewed,
+    NoFolder,
+    Live(usize),
+}
+
+/// Which folder the create overlay will send. While `picked` is false the
+/// folder follows the typed name; the arrow keys set it. `path` is the folder
+/// field while the operator types a path, and it wins over the pick.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct FolderPick {
     pub(super) picked: bool,
-    pub(super) index: Option<usize>,
+    pub(super) choice: FolderChoice,
+    pub(super) path: Option<String>,
+}
+
+/// The `origin` a create sends. `Viewed` is an absent origin, `NoFolder` is
+/// the wire's empty-string marker, and `Folder` carries an absolute path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CreateOrigin {
+    Viewed,
+    NoFolder,
+    Folder(String),
+}
+
+impl CreateOrigin {
+    pub(super) fn wire(self) -> Option<String> {
+        match self {
+            CreateOrigin::Viewed => None,
+            CreateOrigin::NoFolder => Some(String::new()),
+            CreateOrigin::Folder(p) => Some(p),
+        }
+    }
+}
+
+/// `~` and `~/x` to the home directory; every other path unchanged.
+fn expand_tilde(raw: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    match raw.strip_prefix('~') {
+        Some("") if !home.is_empty() => home,
+        Some(rest) if rest.starts_with('/') && !home.is_empty() => format!("{home}{rest}"),
+        _ => raw.to_string(),
+    }
+}
+
+/// A typed folder as an absolute directory path, or the reason it is not one.
+pub(super) fn resolve_typed_folder(raw: &str) -> Result<String, String> {
+    let expanded = expand_tilde(raw.trim());
+    if !expanded.starts_with('/') {
+        return Err(format!(
+            "folder must be an absolute path or start with ~: {raw}"
+        ));
+    }
+    let trimmed = expanded.trim_end_matches('/');
+    let path = if trimmed.is_empty() { "/" } else { trimmed };
+    if std::path::Path::new(path).is_dir() {
+        Ok(path.to_string())
+    } else {
+        Err(format!("no such folder: {raw}"))
+    }
+}
+
+/// Tab-complete the last segment of `typed` against the directories on disk:
+/// a unique match completes with a trailing `/`, several extend to their common
+/// prefix, none leaves the text alone. A leading `~` stays as typed.
+pub(super) fn complete_dir(typed: &str) -> String {
+    let (dir_part, stem) = match typed.rfind('/') {
+        Some(i) => (&typed[..=i], &typed[i + 1..]),
+        None => return typed.to_string(),
+    };
+    let Ok(entries) = std::fs::read_dir(expand_tilde(dir_part)) else {
+        return typed.to_string();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(stem) && (stem.starts_with('.') || !n.starts_with('.')))
+        .collect();
+    names.sort();
+    let Some(first) = names.first() else {
+        return typed.to_string();
+    };
+    if names.len() == 1 {
+        return format!("{dir_part}{first}/");
+    }
+    let mut common = first.clone();
+    for n in &names[1..] {
+        let keep = common
+            .chars()
+            .zip(n.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        common = common.chars().take(keep).collect();
+    }
+    format!("{dir_part}{common}")
 }
 
 /// The entry whose last path segment equals `name`, case-insensitively.
@@ -63,42 +157,99 @@ impl View {
             .collect()
     }
 
-    /// The folder the create overlay sends for the typed `name`: a live-row
-    /// folder, or `None` for the viewed workspace's folder.
-    pub(super) fn create_folder(&self, name: &str) -> Option<String> {
-        let folders = self.live_row_folders();
-        let index = if self.folder_pick.picked {
-            self.folder_pick.index
+    /// The viewed workspace's name and folder, for the default slot's label.
+    fn viewed_workspace(&self) -> (String, String) {
+        self.layout
+            .squads
+            .iter()
+            .find(|s| s.id == self.layout.active_squad)
+            .map(|s| (s.name.clone(), s.canonical_cwd.clone()))
+            .unwrap_or_default()
+    }
+
+    fn create_choice(&self, name: &str, folders: &[String]) -> FolderChoice {
+        if self.folder_pick.picked {
+            self.folder_pick.choice
         } else {
-            folder_for_name(&folders, name)
-        };
-        index.and_then(|i| folders.get(i).cloned())
+            folder_for_name(folders, name).map_or(FolderChoice::Viewed, FolderChoice::Live)
+        }
+    }
+
+    /// The folder the create overlay sends for the typed `name`. A typed path
+    /// wins over the arrow pick; a path that is not a directory is an `Err`
+    /// the Enter handler shows as a notice.
+    pub(super) fn create_folder(&self, name: &str) -> Result<CreateOrigin, String> {
+        if let Some(path) = &self.folder_pick.path {
+            return resolve_typed_folder(path).map(CreateOrigin::Folder);
+        }
+        let folders = self.live_row_folders();
+        Ok(match self.create_choice(name, &folders) {
+            FolderChoice::Viewed => CreateOrigin::Viewed,
+            FolderChoice::NoFolder => CreateOrigin::NoFolder,
+            FolderChoice::Live(i) => folders
+                .get(i)
+                .cloned()
+                .map_or(CreateOrigin::Viewed, CreateOrigin::Folder),
+        })
     }
 
     /// Up (`forward` false) or Down in the create overlay: step through the
-    /// viewed-workspace default and each folder, and stop following the name.
+    /// viewed default, no folder, and each live-row folder, and stop following
+    /// the name.
     pub(super) fn cycle_create_folder(&mut self, name: &str, forward: bool) {
         let folders = self.live_row_folders();
-        let slots = folders.len() + 1;
-        let current = if self.folder_pick.picked {
-            self.folder_pick.index
-        } else {
-            folder_for_name(&folders, name)
+        let slots = folders.len() + 2;
+        let slot = match self.create_choice(name, &folders) {
+            FolderChoice::Viewed => 0,
+            FolderChoice::NoFolder => 1,
+            FolderChoice::Live(i) => i + 2,
         };
-        let slot = current.map_or(0, |i| i + 1);
         let next = (slot + if forward { 1 } else { slots - 1 }) % slots;
         self.folder_pick = FolderPick {
             picked: true,
-            index: next.checked_sub(1),
+            choice: match next {
+                0 => FolderChoice::Viewed,
+                1 => FolderChoice::NoFolder,
+                i => FolderChoice::Live(i - 2),
+            },
+            path: None,
         };
+    }
+
+    /// Tab in the create overlay: start typing a folder, seeded with the
+    /// current pick (or `~/`). A second Tab completes the typed path.
+    pub(super) fn tab_create_folder(&mut self, name: &str) {
+        match self.folder_pick.path.take() {
+            Some(path) => self.folder_pick.path = Some(complete_dir(&path)),
+            None => {
+                let seed = match self.create_folder(name) {
+                    Ok(CreateOrigin::Folder(p)) => abbrev_home(&p),
+                    _ => "~/".to_string(),
+                };
+                self.folder_pick.path = Some(seed);
+            }
+        }
     }
 
     /// The create overlay's footer: the folder it will send.
     pub(super) fn create_hint(&self, name: &str) -> String {
-        let shown = self
-            .create_folder(name)
-            .map_or_else(|| "viewed".to_string(), |p| abbrev_home(&p));
-        format!("folder: {shown} ↑↓")
+        if let Some(path) = &self.folder_pick.path {
+            return format!("folder: {path}▏ tab completes, esc back");
+        }
+        let shown = match self.create_folder(name) {
+            Ok(CreateOrigin::Folder(p)) => abbrev_home(&p),
+            Ok(CreateOrigin::NoFolder) => "none (rows join by a move only)".to_string(),
+            _ => {
+                let (ws, folder) = self.viewed_workspace();
+                let folder = if folder.is_empty() {
+                    "no folder".to_string()
+                } else {
+                    abbrev_home(&folder)
+                };
+                format!("same as {ws} ({folder})")
+            }
+        };
+        format!("folder: {shown} ↑↓ tab to type")
     }
 
     /// A workspace section's Add folder: the picker of live-row folders.
@@ -135,25 +286,55 @@ mod tests {
             v.live_row_folders(),
             vec!["/code/fno-books".to_string(), "/code/fnh".to_string()]
         );
-        assert_eq!(
-            v.create_folder("fno-books").as_deref(),
-            Some("/code/fno-books")
-        );
-        assert_eq!(
-            v.create_folder("other"),
-            None,
-            "no match: the viewed folder"
-        );
-        // Down from "viewed" lands on the first entry, and the pick sticks
-        // even when the typed name points elsewhere.
+        let folder = |p: &str| Ok(CreateOrigin::Folder(p.to_string()));
+        assert_eq!(v.create_folder("fno-books"), folder("/code/fno-books"));
+        assert_eq!(v.create_folder("other"), Ok(CreateOrigin::Viewed));
+        // Down from the viewed default lands on no folder, then the first
+        // live folder, and the pick sticks even when the typed name differs.
         v.cycle_create_folder("other", true);
-        assert_eq!(v.create_folder("fnh").as_deref(), Some("/code/fno-books"));
+        assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::NoFolder));
+        assert_eq!(CreateOrigin::NoFolder.wire(), Some(String::new()));
+        v.cycle_create_folder("fnh", true);
+        assert_eq!(v.create_folder("fnh"), folder("/code/fno-books"));
         v.cycle_create_folder("fnh", true);
         v.cycle_create_folder("fnh", true);
-        assert_eq!(v.create_folder("fnh"), None, "past the last entry: viewed");
+        assert_eq!(v.create_folder("fnh"), Ok(CreateOrigin::Viewed));
         v.cycle_create_folder("fnh", false);
-        assert_eq!(v.create_folder("fnh").as_deref(), Some("/code/fnh"));
+        assert_eq!(v.create_folder("fnh"), folder("/code/fnh"));
         assert!(v.create_hint("fnh").starts_with("folder: "));
+    }
+
+    #[test]
+    fn a_typed_path_must_be_a_folder_and_tab_completes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap().to_string();
+        std::fs::create_dir_all(dir.path().join("alpha-one")).unwrap();
+        std::fs::create_dir_all(dir.path().join("alpha-two")).unwrap();
+        std::fs::create_dir_all(dir.path().join("beta")).unwrap();
+        std::fs::write(dir.path().join("betamax"), "").unwrap();
+
+        assert_eq!(complete_dir(&format!("{root}/be")), format!("{root}/beta/"));
+        assert_eq!(
+            complete_dir(&format!("{root}/al")),
+            format!("{root}/alpha-")
+        );
+        assert_eq!(complete_dir(&format!("{root}/zz")), format!("{root}/zz"));
+
+        assert_eq!(
+            resolve_typed_folder(&format!("{root}/beta/")),
+            Ok(format!("{root}/beta"))
+        );
+        assert!(resolve_typed_folder(&format!("{root}/betamax")).is_err());
+        assert!(resolve_typed_folder("relative/path").is_err());
+
+        let mut v = test_view_with_roots(&[]);
+        v.folder_pick.path = Some(format!("{root}/beta"));
+        assert_eq!(
+            v.create_folder("x"),
+            Ok(CreateOrigin::Folder(format!("{root}/beta")))
+        );
+        v.folder_pick.path = Some(format!("{root}/missing"));
+        assert!(v.create_folder("x").is_err());
     }
 
     fn test_view_with_roots(roots: &[&str]) -> View {

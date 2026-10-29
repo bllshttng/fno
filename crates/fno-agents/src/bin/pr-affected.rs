@@ -2,21 +2,32 @@ use std::process::Command;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Selection {
-    cargo: bool,
+    cargo_agents: bool,
+    cargo_mux: bool,
     python_full: bool,
+    python_seam: bool,
     skill_bundles: bool,
 }
 
-fn select_jobs(event: &str, paths: Option<&[String]>, bundles: Option<&[String]>) -> Selection {
-    // A PR runs every lane main runs: a lane a PR skips is a test main can
-    // fail on the merge. Only the bundle freshness job selects; on main it
-    // rides the full lanes, so it stays off there.
-    if event != "pull_request" {
-        return Selection {
-            cargo: true,
-            python_full: true,
+impl Selection {
+    fn lanes(cargo_agents: bool, cargo_mux: bool, python_full: bool, python_seam: bool) -> Self {
+        Selection {
+            cargo_agents,
+            cargo_mux,
+            python_full,
+            python_seam,
             skill_bundles: false,
-        };
+        }
+    }
+}
+
+fn select_jobs(event: &str, paths: Option<&[String]>, bundles: Option<&[String]>) -> Selection {
+    // Main runs every lane on every push, and the nightly builds only a green
+    // main sha, so a break a narrowed PR misses is caught within the hour and
+    // never ships. Only the bundle freshness job selects on main: it rides
+    // the full lanes there.
+    if event != "pull_request" {
+        return Selection::lanes(true, true, true, false);
     }
     // An unreadable diff or manifest fails closed: run the check rather than
     // trust a selection we could not compute.
@@ -24,11 +35,82 @@ fn select_jobs(event: &str, paths: Option<&[String]>, bundles: Option<&[String]>
         (Some(paths), Some(watched)) => paths.iter().any(|path| names_a_bundle_path(path, watched)),
         _ => true,
     };
+    let selection = match paths.filter(|paths| !paths.is_empty()) {
+        None => Selection::lanes(true, true, true, false),
+        Some(paths) => select_lanes(paths.iter().map(String::as_str).filter(|p| !is_light(p))),
+    };
     Selection {
-        cargo: true,
-        python_full: true,
         skill_bundles,
+        ..selection
     }
+}
+
+/// Lanes for the non-light paths of a readable pull_request diff. A PR that
+/// touches only prose, skills, hooks or images runs no full lane. A diff
+/// confined to crates/ runs its cargo lanes and the Python seam leg; any
+/// other code runs every lane.
+fn select_lanes<'a>(heavy: impl Iterator<Item = &'a str>) -> Selection {
+    let mut sel = Selection::lanes(false, false, false, false);
+    for path in heavy {
+        if !path.starts_with("crates/") || PYTHON_REACH.contains(&path) {
+            return Selection::lanes(true, true, true, false);
+        }
+        sel.cargo_agents = true;
+        sel.python_seam = true;
+        // fno-agents depends on fno, never the reverse, so only a change
+        // outside the fno-agents crate reaches the mux lanes. Its manifests
+        // still do: the mux tests spawn the worker that fno-agents builds.
+        let agents_only =
+            path.starts_with("crates/fno-agents/") && !AGENTS_MANIFESTS.contains(&path);
+        sel.cargo_mux |= !agents_only;
+    }
+    sel
+}
+
+/// Crate files whose change reaches the whole Python suite, not just the
+/// seam. A moved state root passed its narrowed lane and broke main on the
+/// tests that read the moved file, so path changes run the full lanes.
+const PYTHON_REACH: &[&str] = &[
+    "crates/fno-agents/src/paths.rs",
+    "crates/fno/src/state-root-layout.tsv",
+    "crates/fno/src/state_layout.rs",
+];
+
+const AGENTS_MANIFESTS: &[&str] = &[
+    "crates/fno-agents/Cargo.toml",
+    "crates/fno-agents/Cargo.lock",
+];
+
+/// Files a full lane reads at build or test time although they sit under a
+/// light tree. Keep in step with the include_str! sites under crates/ and
+/// the docs paths cli-ci.yml's push filter names.
+const LANE_INPUTS: &[&str] = &[
+    "docs/architecture/activity-feed.md",
+    "docs/architecture/help-routing.md",
+    "docs/architecture/product-boundaries.md",
+    "docs/env-vars.md",
+    "docs/harnesses/capability-matrix.md",
+    "docs/reaping-faq.md",
+    "docs/state-root-layout.tsv",
+];
+
+const LIGHT_TREES: &[&str] = &["docs/", "skills/", "hooks/"];
+
+const LIGHT_EXTENSIONS: &[&str] = &[".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"];
+
+fn is_light(path: &str) -> bool {
+    if LANE_INPUTS.contains(&path) {
+        return false;
+    }
+    if LIGHT_TREES.iter().any(|tree| path.starts_with(tree)) {
+        return true;
+    }
+    // Prose and images outside the code and test trees; a .md there can be a
+    // compiled prompt or a test fixture.
+    !["crates/", "cli/", "tests/", "evals/"]
+        .iter()
+        .any(|tree| path.starts_with(tree))
+        && LIGHT_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
 /// Exact file match, or a change anywhere beneath a directory-valued
@@ -112,8 +194,10 @@ fn main() {
     } else {
         select_jobs(event, None, None)
     };
-    println!("cargo={}", selection.cargo);
+    println!("cargo_agents={}", selection.cargo_agents);
+    println!("cargo_mux={}", selection.cargo_mux);
     println!("python_full={}", selection.python_full);
+    println!("python_seam={}", selection.python_seam);
     println!("skill_bundles={}", selection.skill_bundles);
 }
 
@@ -125,28 +209,70 @@ mod tests {
         items.iter().map(|item| (*item).to_owned()).collect()
     }
 
+    fn full(skill_bundles: bool) -> Selection {
+        Selection {
+            skill_bundles,
+            ..Selection::lanes(true, true, true, false)
+        }
+    }
+
     #[test]
-    fn every_pr_diff_runs_the_lanes_main_runs() {
-        // Main went red on a test a PR lane had skipped; a PR now runs every
-        // lane main runs, whatever it changed.
+    fn a_light_only_diff_skips_the_full_lanes() {
+        for changed in [
+            paths(&["docs/usage.md", "README.md", "docs/img/flow.png"]),
+            paths(&["skills/target/SKILL.md", "skills/target/scripts/x.sh"]),
+            paths(&["hooks/context-nudge.sh"]),
+        ] {
+            let sel = select_jobs("pull_request", Some(&changed), Some(&[]));
+            assert_eq!(
+                sel,
+                Selection::lanes(false, false, false, false),
+                "{changed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_crates_only_diff_runs_its_cargo_lanes_and_the_seam_leg() {
+        for (changed, mux) in [
+            (paths(&["crates/fno-agents/src/lib.rs"]), false),
+            (
+                paths(&[
+                    "crates/fno-agents/src/pr_steward_prompt.md",
+                    "docs/usage.md",
+                ]),
+                false,
+            ),
+            (paths(&["crates/fno/src/main.rs"]), true),
+            (
+                paths(&["crates/fno-agents/src/lib.rs", "crates/fno/src/main.rs"]),
+                true,
+            ),
+            (paths(&["crates/fno-agents/Cargo.lock"]), true),
+        ] {
+            let sel = select_jobs("pull_request", Some(&changed), Some(&[]));
+            assert_eq!(sel, Selection::lanes(true, mux, false, true), "{changed:?}");
+        }
+    }
+
+    #[test]
+    fn any_other_code_or_lane_input_runs_every_lane() {
         for changed in [
             paths(&["docs/usage.md", "cli/tests/unit/test_example.py"]),
-            paths(&["skills/target/SKILL.md"]),
-            paths(&["crates/fno-agents/src/lib.rs"]),
+            paths(&["crates/fno-agents/src/lib.rs", "cli/src/fno/paths.py"]),
+            paths(&["crates/fno-agents/src/paths.rs"]),
+            paths(&["tests/fixtures/report.md"]),
+            paths(&["docs/env-vars.md"]),
+            paths(&["skills/x/SKILL.md", "scripts/ci/check.sh"]),
             paths(&[]),
         ] {
             let sel = select_jobs("pull_request", Some(&changed), Some(&[]));
-            assert!(sel.cargo && sel.python_full, "{changed:?}: {sel:?}");
-            assert_eq!(sel.skill_bundles, changed.is_empty(), "{changed:?}");
+            assert_eq!(sel, full(changed.is_empty()), "{changed:?}");
         }
-        assert_eq!(
-            select_jobs("pull_request", None, Some(&[])),
-            Selection {
-                cargo: true,
-                python_full: true,
-                skill_bundles: true,
-            }
-        );
+        for event in ["push", "schedule", "workflow_dispatch"] {
+            assert_eq!(select_jobs(event, None, None), full(false), "{event}");
+        }
+        assert_eq!(select_jobs("pull_request", None, Some(&[])), full(true));
     }
 
     #[test]
@@ -183,14 +309,7 @@ mod tests {
     #[test]
     fn bad_git_revision_fails_closed() {
         let Some(paths) = super::changed_paths("missing-pr-base", "missing-pr-head") else {
-            assert_eq!(
-                select_jobs("pull_request", None, Some(&[])),
-                Selection {
-                    cargo: true,
-                    python_full: true,
-                    skill_bundles: true,
-                }
-            );
+            assert_eq!(select_jobs("pull_request", None, Some(&[])), full(true));
             return;
         };
         assert!(!paths.is_empty());

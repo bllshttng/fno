@@ -1,0 +1,10 @@
+Usage: fno config build-dir [OPTIONS]
+
+  Print the CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``.
+
+  The shell surface over the build-dir resolver; the target stop hook
+  exports it for done_probes that run cargo. Hidden: consumed by the hook, not
+  by operators.
+
+Options:
+  --help  Show this message and exit.

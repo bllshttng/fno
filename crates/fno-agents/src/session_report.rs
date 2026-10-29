@@ -43,6 +43,21 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const SPOOL_CAP_FRAMES: usize = 128;
 /// Raw hook payloads are small; refuse to read more off stdin.
 const MAX_PAYLOAD_BYTES: u64 = 64 * 1024;
+/// The daemon's command for this report. The daemon arm matches this const and
+/// the client builds its method from it: the two spellings once drifted
+/// (`session_report` vs `session-report`), and every SessionStart report fell
+/// to the unknown-command arm, so no adopt row was ever minted.
+pub const SESSION_REPORT_COMMAND: &str = "session-report";
+/// Set by a headless one-shot launcher to the child's own `FNO_AGENT_SELF`:
+/// the session reports (so it joins) but mints no row. A `claude -p` run has
+/// no thread to resume, so a row for it is a sidebar entry nothing can open.
+/// Keyed on the name, like `FNO_AGENT_ROW_PENDING`, so a grandchild that
+/// inherits it under a new name still mints.
+pub const NO_ROW_ENV: &str = "FNO_AGENT_NO_ROW";
+
+fn session_report_request(params: Value) -> Request {
+    Request::new(1, format!("agent.{SESSION_REPORT_COMMAND}"), params)
+}
 
 // ---------------------------------------------------------------------------
 // daemon side: agent.session_report
@@ -222,6 +237,18 @@ pub(crate) fn handle_session_report(
         );
     }
 
+    // A spawned session is joined at birth, so its preamble carriers fire.
+    if launch_record.is_some() || agent_self.is_some() {
+        let _ = crate::join_marker::write_marker(home.root(), &harness, &session_id);
+    }
+
+    // A headless one-shot touches no row: not a mint, and not a stamp on an
+    // older row that shares its name (a verifier name repeats per session),
+    // which would read that row live again.
+    if p.get("no_row").and_then(Value::as_bool) == Some(true) {
+        return Response::ok(req.id, json!({"stored": false, "dropped": "no_row"}));
+    }
+
     // The mint prediction runs BEFORE the locked write: building the row does
     // transcript IO (title, model), which must not hold the registry lock.
     // The write closure re-decides absence under the lock.
@@ -237,6 +264,12 @@ pub(crate) fn handle_session_report(
         report_cwd.as_deref(),
     );
 
+    // A claude session no row holds may fork one a row holds. The argv read
+    // runs here, outside the lock, and only for a mint.
+    let fork_parent = (harness == "claude" && pending_mint.is_some())
+        .then(|| crate::native_adopt::claude_fork_parent(&session_id, None))
+        .flatten();
+
     // A claude session reporting against an id a row ALREADY holds
     // (`pending_mint` is `None` exactly in that case, per
     // `native_adopt::prepare_mint`) may now run as a live `claude --bg` job
@@ -246,7 +279,7 @@ pub(crate) fn handle_session_report(
     // `prepare_mint`'s own transcript IO above), so it runs here, gated to
     // the one case that needs it: an existing claude row.
     let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
-        let short = crate::client_verbs::derived_short_id(&session_id);
+        let short = crate::client_commands::derived_short_id(&session_id);
         // The union reader, not the ambient-only one: a row launched under an
         // isolated `--account` never shows up in `~/.claude`'s own roster, so
         // the ambient read alone would leave such a row's stale substrate/pid
@@ -269,8 +302,39 @@ pub(crate) fn handle_session_report(
     let mut manifest_arm: Option<(String, String, Option<String>)> = None;
     if let Err(e) = state::update_registry(&home.registry_json(), |r| {
         let Some(find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref()) else {
+            if let Some(i) = fork_parent.as_ref().and_then(|(parent, pid)| {
+                crate::native_adopt::bind_fork_child(
+                    &mut r.entries,
+                    parent,
+                    &session_id,
+                    Some(*pid),
+                )
+            }) {
+                let entry = &mut r.entries[i];
+                entry.last_report_at = Some(now_stamp.clone());
+                if let Some(tp) = &transcript_path {
+                    entry.transcript_path = Some(tp.clone());
+                }
+                if let Some(src) = &source {
+                    entry.start_source = Some(src.clone());
+                }
+                row_name = Some(entry.name.clone());
+                outcome = Outcome::Stored {
+                    related_filled: false,
+                };
+                return;
+            }
             match &pending_mint {
-                Some(mint) => {
+                // A retirement that landed after the pre-read still wins.
+                Some(mint)
+                    if !mint.native
+                        || !crate::native_adopt::retired_session(
+                            home,
+                            &harness,
+                            &session_id,
+                            launch_record.as_ref(),
+                        ) =>
+                {
                     let mut entry = mint.entry.clone();
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
                     // The report that mints the row is its first report.
@@ -285,7 +349,7 @@ pub(crate) fn handle_session_report(
                         native: mint.native,
                     };
                 }
-                None => {
+                _ => {
                     outcome = Outcome::Unknown;
                 }
             }
@@ -355,11 +419,23 @@ pub(crate) fn handle_session_report(
                     // the primary - the bg-refresh stamp must not run.
                     session_is_primary = false;
                 } else if related.is_empty() {
-                    r.entries[i].related_session_id = Some(session_id.clone());
-                    outcome = Outcome::Stored {
-                        related_filled: true,
-                    };
-                    session_is_primary = false;
+                    // A callee-minted harness (agy) spawns on fno's provisional
+                    // uuid: the report's id is the harness's own and promotes
+                    // to primary instead of holding both.
+                    let callee_minted = crate::harness_capabilities::HarnessContract::packaged()
+                        .ok()
+                        .and_then(|c| c.harness.get(entry.harness_name()).cloned())
+                        .map(|arm| arm.session_binding.strategy == "callee-minted-read-back")
+                        .unwrap_or(false);
+                    if callee_minted {
+                        r.entries[i].harness_session_id = Some(session_id.clone());
+                    } else {
+                        r.entries[i].related_session_id = Some(session_id.clone());
+                        outcome = Outcome::Stored {
+                            related_filled: true,
+                        };
+                        session_is_primary = false;
+                    }
                 } else {
                     // A third distinct id: nothing written, both ids named -
                     // the same cap record_session_observation enforces.
@@ -422,7 +498,7 @@ pub(crate) fn handle_session_report(
 
     // The successor's first report is the manifest arm point (Python's
     // `_arm_role_after_identification`): spawn-time succession has no successor
-    // id at settle, so the transfer leaves the manifest naming the stepping_down
+    // id at settle, so the transfer leaves the manifest naming the outgoing
     // session and the successor holds with no levers until this rewrite names it.
     if let Some((scope, cwd, row_harness)) = manifest_arm {
         arm_role_manifest(
@@ -512,6 +588,20 @@ pub(crate) fn handle_session_report(
             )
         }
         Outcome::Unknown => {
+            // Ruling d-1538e896: a reaped worker whose mint was refused still
+            // reports, so its harness session goes too. Other rowless
+            // sessions are left alone.
+            if harness == "claude"
+                && (launch_record.is_some() || agent_self.is_some())
+                && crate::native_adopt::retired_session(
+                    home,
+                    &harness,
+                    &session_id,
+                    launch_record.as_ref(),
+                )
+            {
+                remove_retired_claude_session(&session_id);
+            }
             let _ = emitter.emit(
                 "session_report_dropped",
                 &json!({"harness": harness, "session_id": session_id, "reason": "unknown_session"}),
@@ -667,10 +757,11 @@ fn arm_role_manifest(
 // ---------------------------------------------------------------------------
 // client side: fno-agents session-report
 
-/// `--harness` (required), `--agent-self`, `--session-id`, `--wait-row`.
+/// `--harness` (required), `--agent-self`, `--launch-name`, `--session-id`,
+/// `--wait-row`.
 fn build_session_report_params(rest: &[String]) -> Result<Value, String> {
     let mut params = Map::new();
-    let mut it = crate::client_verbs::expand_eq(rest).into_iter();
+    let mut it = crate::client_commands::expand_eq(rest).into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--harness" => {
@@ -683,6 +774,12 @@ fn build_session_report_params(rest: &[String]) -> Result<Value, String> {
                 params.insert(
                     "agent_self".into(),
                     Value::String(it.next().ok_or("--agent-self needs a value")?),
+                );
+            }
+            "--launch-name" => {
+                params.insert(
+                    "launch_name".into(),
+                    Value::String(it.next().ok_or("--launch-name needs a value")?),
                 );
             }
             "--session-id" => {
@@ -919,7 +1016,16 @@ fn claim_launch(
                 .map(|d| d.to_string_lossy().into_owned())
         })
         .unwrap_or_default();
-    let child_name = crate::launch_record::child_name_from_env();
+    // The child's name: the env identity, else the claim-only name a reporter
+    // with no env passes (the shared-serve title). It matches a NAMED record
+    // or nothing; it never flavors a mint - agent_self keeps that monopoly.
+    let child_name = crate::launch_record::child_name_from_env().or_else(|| {
+        params
+            .get("launch_name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+    });
     let child = crate::launch_record::Child {
         harness: field("harness"),
         session_id,
@@ -935,12 +1041,12 @@ fn claim_launch(
     (record, child_name)
 }
 
-/// The `report` verb's dispatcher. `--kind session` selects the SessionStart
+/// The `report` command's dispatcher. `--kind session` selects the SessionStart
 /// transport; every other invocation is the inside-leg report, unchanged. The
 /// SessionStart form rides the EXISTING action because the client action list
-/// is shrink-only: no new verb, only an argument on `report`.
+/// is shrink-only: no new command, only an argument on `report`.
 pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
-    let args = crate::client_verbs::expand_eq(rest);
+    let args = crate::client_commands::expand_eq(rest);
     let mut is_session = false;
     let mut stripped: Vec<String> = Vec::with_capacity(args.len());
     let mut it = args.into_iter();
@@ -950,6 +1056,13 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
                 Some(v) if v == "session" => {
                     is_session = true;
                     continue;
+                }
+                // The session join rides the same action: no command is added.
+                Some(v) if v == "join" => {
+                    let rest: Vec<String> = it.collect();
+                    let mut join_args = stripped;
+                    join_args.extend(rest);
+                    return crate::join_marker::run_join(&join_args, home);
                 }
                 other => {
                     stripped.push(a);
@@ -963,13 +1076,14 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
         stripped.push(a);
     }
     if !is_session {
-        return crate::client_verbs::run_report(rest, home).await;
+        return crate::client_commands::run_report(rest, home).await;
     }
     run_session_report(&stripped, home).await
 }
 
 /// `fno-agents report --kind session --harness <name> [--agent-self <row>]
-/// [--session-id <id>] [--wait-row]` - the thin SessionStart transport. The
+/// [--launch-name <record>] [--session-id <id>] [--wait-row]` - the thin
+/// SessionStart transport. The
 /// raw hook payload rides on stdin. Never lazy-starts a daemon; spools to a
 /// capped file when it is down. Always exits 0 on a delivered-or-spooled
 /// report, so a session start never blocks and never reds.
@@ -984,6 +1098,11 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     let mut params = params;
     if let Some(payload) = read_stdin_payload() {
         params["payload"] = payload;
+    }
+    let agent_self = params.get("agent_self").and_then(Value::as_str);
+    let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
+    if no_row {
+        params["no_row"] = Value::Bool(true);
     }
     let (record, child_name) = claim_launch(&params, home);
     record_origin(&params);
@@ -1011,7 +1130,7 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if params.get("origin_only").and_then(Value::as_bool) == Some(true) && record.is_none() {
         return 0;
     }
-    let req = Request::new(1, "agent.session_report", params);
+    let req = session_report_request(params);
     // FIFO: spooled frames go first, so a replayed startup report can never
     // regress the row behind the newer report this invocation carries. The
     // drain no-ops on an empty spool and keeps its frames when the daemon is
@@ -1021,7 +1140,15 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
         .await
     {
         Err(_) => false,
-        Ok(Ok(_)) => true,
+        Ok(Ok(resp)) => {
+            // A refusal is an answer, not a delivery failure: spooling it
+            // would replay the same refusal forever. Say it where the hook
+            // log keeps it.
+            if let crate::protocol::ResponsePayload::Err(e) = &resp.payload {
+                eprintln!("fno-agents: session-report refused: {}", e.message);
+            }
+            true
+        }
         Ok(Err(crate::client::ClientError::DaemonNotRunning)) => false,
         Ok(Err(crate::client::ClientError::DaemonUnresponsive { .. })) => false,
         Ok(Err(e)) => {
@@ -1033,6 +1160,22 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
         spool_request(home, &req);
     }
     0
+}
+
+/// `claude rm` for a reaped session that reported after its retirement,
+/// off the report path: the removal shells out and must not hold the RPC.
+fn remove_retired_claude_session(session_id: &str) {
+    if cfg!(test) {
+        return;
+    }
+    let mut entry = RegistryEntry::default();
+    entry.harness = Some("claude".to_string());
+    entry.harness_session_id = Some(session_id.to_string());
+    entry.claude_session_uuid = Some(session_id.to_string());
+    entry.short_id = crate::client_commands::derived_short_id(session_id);
+    let _ = std::thread::spawn(move || {
+        let _ = crate::gc_native::apply_active_surface_removal(&entry);
+    });
 }
 
 #[cfg(test)]
@@ -1056,7 +1199,7 @@ mod tests {
     }
 
     fn req(params: Value) -> Request {
-        Request::new(1, "agent.session_report", params)
+        session_report_request(params)
     }
 
     fn report_params(harness: &str, sid: &str, extra: Value) -> Value {
@@ -1083,6 +1226,27 @@ mod tests {
 
     fn response_json(resp: &Response) -> Value {
         serde_json::to_value(resp).expect("response json")
+    }
+
+    #[test]
+    fn a_claim_only_name_never_flavors_a_mint() {
+        // --launch-name with NO matching record: the session is the user's
+        // own. The row mints operator under the draw name, never the title.
+        let (_dir, home) = temp_home("claim_name_operator");
+        crate::join_marker::write_marker(home.root(), "opencode", "ses_strayown1").unwrap();
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params(
+                "opencode",
+                "ses_strayown1",
+                json!({"launch_name": "wk-stray"}),
+            )),
+        );
+        let rows = read_rows(&home);
+        assert_eq!(rows.len(), 1, "one row mints: {}", response_json(&resp));
+        assert_eq!(rows[0].origin.as_deref(), Some("operator"));
+        assert_ne!(rows[0].name, "wk-stray");
     }
 
     fn claude_row() -> Value {
@@ -1330,11 +1494,55 @@ mod tests {
         assert_eq!(row.transcript_path, None);
     }
 
-    /// Decision D3 revised: a session no row holds mints an operator row - the
-    /// user's own session. Occupant toward the cap, never managed.
+    /// A hand session that never joined fno gets no row, so it holds no
+    /// spawn-gate slot.
+    #[test]
+    fn an_unjoined_session_mints_no_row() {
+        let (_d, home) = temp_home("unjoined");
+        let params = report_params("codex", "0197eeee-1234-7abc-9def-0123456789ab", json!({}));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert!(response_json(&resp)["result"]["minted"].is_null());
+        assert!(read_rows(&home).is_empty());
+    }
+
+    /// A headless one-shot child reports with `no_row`: it joins, but no row
+    /// mints, and an older row under the same name (a verifier name repeats
+    /// per session) is left as it was, so it never reads live again.
+    #[test]
+    fn a_no_row_child_joins_but_mints_no_row() {
+        let (_d, home) = temp_home("no_row");
+        let sid = "0197ffff-1234-7abc-9def-0123456789ab";
+        seed_registry(
+            &home,
+            json!({"name": "verifier-advise-1", "cwd": "/repo",
+            "status": "exited", "created_at": "2026-10-22T00:00:00Z", "harness": "claude"}),
+        );
+        let params = report_params(
+            "claude",
+            sid,
+            json!({"agent_self": "verifier-advise-1", "no_row": true}),
+        );
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["dropped"], "no_row");
+        assert!(crate::join_marker::is_joined(home.root(), "claude", sid));
+        let rows = read_rows(&home);
+        assert_eq!(rows.len(), 1, "no row minted");
+        assert_eq!(rows[0].harness_session_id, None);
+        assert_eq!(rows[0].last_report_at, None);
+    }
+
+    /// A joined session no row holds mints an operator row - the user's own
+    /// session. Occupant toward the cap, never managed. The same arm re-mints
+    /// a joined row that went missing.
     #[test]
     fn an_unknown_session_mints_an_operator_row() {
         let (_d, home) = temp_home("unknown");
+        crate::join_marker::write_marker(
+            home.root(),
+            "codex",
+            "0197dddd-1234-7abc-9def-0123456789ab",
+        )
+        .unwrap();
         let params = report_params("codex", "0197dddd-1234-7abc-9def-0123456789ab", json!({}));
         let resp = handle_session_report(&home, &emitter(&home), &req(params));
         let body = response_json(&resp);
@@ -1362,6 +1570,73 @@ mod tests {
         assert_eq!(read_rows(&home).len(), 1);
     }
 
+    /// A retired session stays retired: a reap receipt or an rm tombstone
+    /// naming the session refuses the report's mint, across repeat reports.
+    /// A launch record newer than the retirement is a relaunch and mints.
+    #[test]
+    fn a_reaped_or_removed_session_mints_no_row_until_relaunched() {
+        let (_d, home) = temp_home("reaped");
+        let reaped = "13ff289d-0000-4000-8000-000000000001";
+        std::fs::create_dir_all(home.root().join("reap-receipts")).unwrap();
+        std::fs::write(
+            crate::receipt::reap_receipt_path_for(&home, "claude", reaped),
+            json!({"row_name": "ev-th-evals-1", "short_id": "13ff289d", "harness": "claude",
+                   "harness_session_id": reaped, "cwd": "/repo", "log_path": null,
+                   "created_at": "2026-10-22T04:00:00Z", "reaped_at": "2026-10-22T04:44:46Z",
+                   "resume": "claude --resume x", "removed_by": "gc-sweep"})
+            .to_string(),
+        )
+        .unwrap();
+        let removed = "0197cccc-1234-7abc-9def-0123456789ab";
+        crate::rm_tombstone::record(&home, "codex", removed, "0197cccc", "w2", "/repo", "thread")
+            .unwrap();
+        for _sweep in 0..2 {
+            for (harness, sid) in [("claude", reaped), ("codex", removed)] {
+                let params = report_params(harness, sid, json!({"agent_self": "ev-th-evals-1"}));
+                let resp = handle_session_report(&home, &emitter(&home), &req(params));
+                assert!(response_json(&resp)["result"]["minted"].is_null(), "{sid}");
+            }
+            assert!(read_rows(&home).is_empty(), "a retired session re-minted");
+        }
+        // A hand resume carries no agent_self: the user's own row mints.
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params("codex", removed, json!({}))),
+        );
+        assert_eq!(response_json(&resp)["result"]["minted"], "operator");
+        let mut record = crate::launch_record::Record {
+            launch: crate::launch_record::Launch {
+                harness: "claude".into(),
+                resume: None,
+                name: Some("w1".into()),
+                node: None,
+                slot: None,
+                provider: None,
+                cwd: "/repo".into(),
+            },
+            launcher_session: "lead-7".into(),
+            launcher_harness: Some("claude".into()),
+            launcher_cwd: Some("/repo".into()),
+            launched_at_ms: 1_000,
+            command: String::new(),
+            child_session: Some(reaped.into()),
+            claimed_at_ms: None,
+        };
+        let report = |record: &crate::launch_record::Record| {
+            let params = json!({"harness": "claude", "session_id": reaped,
+                                "launch_record": serde_json::to_value(record).unwrap()});
+            response_json(&handle_session_report(&home, &emitter(&home), &req(params)))
+        };
+        assert!(
+            report(&record)["result"]["minted"].is_null(),
+            "an old record is no relaunch"
+        );
+        record.launched_at_ms =
+            crate::event_store::parse_rfc3339_ms("2026-10-22T05:00:00Z").unwrap();
+        assert_eq!(report(&record)["result"]["minted"], "native");
+    }
+
     /// The native adopt: a report whose launch record rides the request mints
     /// the launcher's row - the launcher triple as the parent edge, the
     /// record's node on the row, the record's name winning the name
@@ -1372,6 +1647,7 @@ mod tests {
         let record = crate::launch_record::Record {
             launch: crate::launch_record::Launch {
                 harness: "claude".into(),
+                resume: None,
                 name: Some("w1".into()),
                 node: Some("x-aaaa".into()),
                 slot: None,
@@ -1461,7 +1737,7 @@ mod tests {
     }
 
     /// A `spawn --promote --succeed` transfer leaves the manifest
-    /// naming the stepping_down session, and the successor's levers (shape, term)
+    /// naming the session stepping down, and the successor's levers (shape, term)
     /// read that manifest, so the successor holds with no levers. The successor's
     /// first session report is the arm point: the fill rebinds the manifest
     /// to the successor, including the harness when the row carries one (a claude

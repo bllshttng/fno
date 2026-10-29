@@ -6,7 +6,7 @@ a first user walks once the advertised ``fno`` command exists: setup answers,
 a fixture node the test mints itself is initialized, and the manifest, claim,
 and node readbacks all agree. No paid worker, no production node, no remote.
 
-The verbs run as fresh subprocesses against an isolated HOME, so every artifact
+The commands run as fresh subprocesses against an isolated HOME, so every artifact
 (graph, claims, spaces manifest) lands under ``tmp`` and nothing reads the
 developer's real state. Backlog idea and mux use the front door compiled in
 THIS checkout when present; the install smoke proves those legs against a real
@@ -71,7 +71,7 @@ def _front_door() -> Path | None:
 
 
 def _run_fno(repo: Path, home: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """One fresh CLI process: the journey must exercise the real verb surface."""
+    """One fresh CLI process: the journey must exercise the real command surface."""
     env = {k: v for k, v in os.environ.items() if k not in _DEV_ENV_KEYS}
     # Only a real session marker proves harness ownership. Without one, init
     # must exercise the transient operator-claim path instead of treating a
@@ -130,7 +130,7 @@ def _run_native_backlog(
 def _run_front_door(
     front: Path, repo: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
-    """Run a verb owned by this checkout's compiled Rust front."""
+    """Run a command owned by this checkout's compiled Rust front."""
     env = {k: v for k, v in os.environ.items() if k not in _DEV_ENV_KEYS}
     env.setdefault("CLAUDE_CODE_SESSION_ID", _HARNESS_SESSION_ID or "journey-fixture")
     env["FNO_STATE_DIR"] = str(repo / ".fno")
@@ -182,7 +182,7 @@ def clean_machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
     )
     launcher.chmod(0o755)
     # The init flow calls the bare `fno-agents` from PATH (the mint and the
-    # readback verbs); the shim dir answers it with the same dev build the
+    # readback commands); the shim dir answers it with the same dev build the
     # front door is pinned to.
     agents_link = shim / "fno-agents"
     agents_link.symlink_to(native)
@@ -222,15 +222,31 @@ def test_authorized_target_init_journey(clean_machine):
     assert proc.returncode == 0, proc.stderr
     node = json.loads(proc.stdout)["id"]
 
-    # 2. Setup answers through the same CLI before init: `config setup plan`
-    #    (the wizard's scriptable twin) returns a schema-derived question plan.
-    plan = _run_fno(repo, home, "config", "setup", "plan")
+    # 2. Setup answers before init: `config setup plan` (the wizard's
+    #    scriptable twin, native in the front) returns the question plan.
+    plan = _run_front_door(front, repo, "config", "setup", "plan")
     assert plan.returncode == 0, plan.stderr
-    # The banner line precedes the JSON; parse from the first "{".
-    assert json.loads(plan.stdout[plan.stdout.index("{"):])["fields"], plan.stdout
+    assert json.loads(plan.stdout)["fields"], plan.stdout
 
     # 3. Authorized target init: a declared denominator, no plan, no remote.
-    init = _run_fno(repo, home, "do", "target", "init", "--input", node, "--deliverables", "1")
+    #    The command is native now: the compiled front claims `do target` and
+    #    execs the fno-agents door, so the journey drives the front directly,
+    #    keeping _run_fno's env semantics (no fabricated session marker).
+    env = {k: v for k, v in os.environ.items() if k not in _DEV_ENV_KEYS}
+    if _HARNESS_SESSION_ID:
+        env["CLAUDE_CODE_SESSION_ID"] = _HARNESS_SESSION_ID
+    else:
+        env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env["FNO_STATE_DIR"] = str(repo / ".fno")
+    env["FNO_TRACKER_BACKEND"] = "graph"
+    init = subprocess.run(
+        [str(front), "do", "target", "init", "--input", node, "--deliverables", "1"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     assert init.returncode == 0, f"init rc={init.returncode}\n{init.stdout}\n{init.stderr}"
 
     # 4. The manifest readback: written under the ISOLATED state root and

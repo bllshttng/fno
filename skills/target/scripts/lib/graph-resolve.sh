@@ -6,9 +6,9 @@
 #   - Full ab-XXXXXXXX  -> exact match via `fno backlog get`; echoes plan_path
 #       or soft-fails.
 #   - Partial ab-XXXX..XXXXXXX (4-7 hex chars) -> prefix match through the
-#       same verb; echoes plan_path on a unique resolution, soft-fails (with
+#       same command; echoes plan_path on a unique resolution, soft-fails (with
 #       stderr) on ambiguity / no match.
-#   - RESOLVE_FUZZY=1 + non-ab input -> title fuzzy match through the verb.
+#   - RESOLVE_FUZZY=1 + non-ab input -> title fuzzy match through the command.
 #       Off by default because /target etc. pass raw feature descriptions
 #       that must NOT be collapsed onto an existing graph node.
 #   - Anything else -> echoes arg unchanged.
@@ -78,7 +78,7 @@ graph = os.environ.get("GRAPH_JSON") or ""
 if not graph:
     try:
         from fno.paths import graph_json as configured_graph
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             sys.exit(6)

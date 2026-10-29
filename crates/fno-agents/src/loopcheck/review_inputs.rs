@@ -5,7 +5,7 @@ use super::*;
 /// The manifest-independent inputs every coverage/review evaluation needs:
 /// event-log paths, repo identity, the merged settings, and the reviewer sets
 /// derived from them. Extracted from `decide()` so the standalone
-/// `review-coverage` verb resolves EXACTLY what the stop hook resolves - one
+/// `review-coverage` command resolves EXACTLY what the stop hook resolves - one
 /// resolver, no second precedence implementation (the N-implementations trap).
 pub(crate) struct ReviewInputs {
     pub(crate) project_events: PathBuf,
@@ -29,11 +29,11 @@ pub(crate) struct ReviewInputs {
     pub(crate) optional_lane_configured: bool,
     pub(crate) nudge_configs: Vec<NudgeConfig>,
     /// The reviewer names that mark a review author as optional (the
-    /// `fno.pr._reviews.optional_reviewer_names` set): resolved optional
+    /// `DEFAULT_OPTIONAL_APPS` set): resolved optional
     /// logins plus every peer posting identity.
     pub(crate) optional_reviewer_names: Vec<String>,
     /// The config half of the merge gate's lane predicate
-    /// (`_review_lane_configured` before the payload floor): any configured
+    /// (the lane predicate, before the payload floor): any configured
     /// login/reviewer lane, or identity-free peers. `peer_identity` alone
     /// answers False (a shared identity posts under an existing login, not a
     /// distinct local lane).

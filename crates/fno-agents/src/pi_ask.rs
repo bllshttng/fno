@@ -18,13 +18,15 @@ use serde_json::Value;
 
 use crate::opencode_ask::{AskOutcome, DEFAULT_ONE_SHOT_TIMEOUT};
 
-/// A footnote verb seed (`/fno:verb`, either sigil) is a command, so it rides
+/// A footnote command seed (`/fno:command`, either sigil) is a command, so it rides
 /// bare; a prose message keeps the `[from:]` envelope.
 fn pi_prompt(message: &str, from_name: &str) -> String {
-    let seed =
-        crate::provider::render_verb_seed(if message.is_empty() { "hello" } else { message }, "pi");
+    let seed = crate::provider::render_command_seed(
+        if message.is_empty() { "hello" } else { message },
+        "pi",
+    );
     let first = seed.split_whitespace().next().unwrap_or("");
-    if crate::provider::parse_verb_token(first).is_some() {
+    if crate::provider::parse_command_token(first).is_some() {
         seed
     } else {
         format!("[from: {from_name}]\n\n{seed}")
@@ -49,7 +51,7 @@ fn build_pi_argv(
     // version, so `--` is not an end-of-options marker and a fence would be
     // decoration (see `pi_run_tail` in provider.rs). `--print` is a boolean
     // flag, so there is no equal-form either. The prompt is never
-    // flag-shaped: `pi_prompt` makes it start with `[from:` or a verb sigil.
+    // flag-shaped: `pi_prompt` makes it start with `[from:` or a command sigil.
     argv.push(prompt.to_string());
     argv
 }

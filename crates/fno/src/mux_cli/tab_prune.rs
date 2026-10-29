@@ -40,11 +40,10 @@ pub(super) struct LiveTab {
 /// newer than the other. Returns `(tabs, cwds, answered, unreachable)`:
 /// `answered` names the sessions whose `PaneLs` returned a `PaneList` (the
 /// count is its length) and `unreachable` holds the sorted names of the rest.
-/// A dead server leaves its socket behind by design (`kill-server` owns
-/// removal, see [`session_names`]), so an unreachable session is a steady
-/// state, not an anomaly - folding the per-session fact into one boolean
-/// disabled the sweep for every healthy session and reported a clean exit 0
-///.
+/// [`session_names`] already healed every proven-dead session away, so an
+/// unreachable session here is one that proof refused (a timeout, a wire
+/// error, a live pid). Folding that per-session fact into one boolean
+/// disabled the sweep for every healthy session and reported a clean exit 0.
 pub(super) fn live_tabs() -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String>) {
     let Ok(names) = session_names() else {
         // The session list itself is unreadable: nothing was probed, so no
@@ -74,7 +73,7 @@ pub(super) fn live_tabs() -> (Vec<LiveTab>, Vec<String>, Vec<String>, Vec<String
             unreachable.push(name);
             continue;
         };
-        match control_roundtrip(&sock, &name, ControlVerb::PaneLs) {
+        match control_roundtrip(&sock, &name, ControlCommand::PaneLs) {
             Ok(ServerMsg::PaneList { panes }) => {
                 answered.push(name.clone());
                 for pane in panes {
@@ -339,7 +338,7 @@ pub(super) fn close_live_tab(tab: &LiveTab) -> bool {
         control_roundtrip(
             &sock,
             &tab.session,
-            ControlVerb::TabClose {
+            ControlCommand::TabClose {
                 squad: PaneTarget::SquadId(tab.squad_id),
                 tab: TabSel::Id(tab.tab_id),
                 force: false,

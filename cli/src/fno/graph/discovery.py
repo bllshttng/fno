@@ -120,7 +120,7 @@ def candidates(
     floor is the threshold, and a cap is a second one that re-hides exactly
     the low-score family the fts lane exists to recover.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     if limit is not None and limit < 1:
         return CandidateResults()
@@ -277,7 +277,7 @@ def assess(
 ) -> Assessment:
     """Assess one node without changing it or making an external mutation.
 
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     candidates_list = list(cands)
     pr_number = node.get("pr_number")
@@ -352,13 +352,33 @@ def expired_worklist(
     def _pr_merged(number: int) -> bool:
         """gh-verified merge state; deferral clears every node-side completion field."""
         if number not in pr_merged_cache:
-            from fno.pr._proc import run
+            import json
+            import os
 
-            res = run(
-                ["gh", "api", "repos/{owner}/{repo}/pulls/" + str(number), "--jq", ".merged"],
-                cwd=".",
+            from fno.graph._reconcile import resolve_current_repo_slug
+            from fno.rust_binary import call_binary_json
+
+            slug = resolve_current_repo_slug(".") or ""
+            error, row = call_binary_json(
+                "authorized-merge",
+                [
+                    json.dumps(
+                        {
+                            "op": "status-rest-get",
+                            "cwd": os.getcwd(),
+                            "path": f"repos/{slug}/pulls/{number}",
+                        }
+                    )
+                ],
+                timeout=60,
             )
-            pr_merged_cache[number] = res.ok and res.stdout.strip() == "true"
+            ok = False
+            if error is None and isinstance(row, dict) and row.get("ok"):
+                try:
+                    ok = bool(json.loads(row.get("stdout") or "").get("merged"))
+                except ValueError:
+                    ok = False
+            pr_merged_cache[number] = ok
         return pr_merged_cache[number]
 
     for entry in expired:

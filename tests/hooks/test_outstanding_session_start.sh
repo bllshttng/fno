@@ -36,6 +36,19 @@ MANIFEST_SESSION="s-manifest"
 } > "$STUB/fno"
 chmod +x "$STUB/fno"
 
+# The stub `fno-agents`: answers the manifest session-id read the helper makes
+# since the target-family port (the python `do state` door is gone). The bare
+# value only: the helper jq-matches it against asker.session_id verbatim.
+{
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [[ "$1 $2" == "state-cli show" ]]; then\n'
+    printf '  echo "%s"\n' "$MANIFEST_SESSION"
+    printf '  exit 0\n'
+    printf 'fi\n'
+    printf 'exit 0\n'
+} > "$STUB/fno-agents"
+chmod +x "$STUB/fno-agents"
+
 set_fold() {
     local body="$1" rc="$2"
     printf '%s' "$body" > "$TMP/fold-body"
@@ -56,7 +69,7 @@ check() {
 }
 
 run_hook() {
-    FNO_HOME="$TMP/home" PATH="$STUB:$PATH" bash "$HOOK" 2>"$TMP/hook-err"
+    FNO_HOME="$TMP/home" FNO_AGENTS_BIN="$STUB/fno-agents" PATH="$STUB:$PATH" bash "$HOOK" 2>"$TMP/hook-err"
     local rc=$?
     if [[ -s "$TMP/hook-err" ]]; then
         printf '[hook stderr rc=%s] %s\n' "$rc" "$(cat "$TMP/hook-err")" >&2
@@ -97,7 +110,7 @@ check "a fresh cache shows this session's own ready question" \
 
 - question: Which reading?
 3 open across the fleet.
-Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead." \
+Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease." \
     "$out"
 
 # A missing cache: the full fold answers.
@@ -127,13 +140,13 @@ check "an unreadable store says so, loudly" \
     "## Outstanding for you
 
 could not be read (fno inbox outstanding exit 1). Run it directly.
-Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead." \
+Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease." \
     "$out"
 
 rm_cache
 set_fold "" 2
 out="$(run_hook)"
-check "an old deployed verb stays silent" "" "$out"
+check "an old deployed command stays silent" "" "$out"
 
 echo
 echo "Results: $pass passed, $fail failed"

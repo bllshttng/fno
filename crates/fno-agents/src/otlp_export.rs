@@ -701,7 +701,7 @@ mod tests {
     /// names what it read; every kill switch outranks the config file.
     #[test]
     fn resolve_gates() {
-        let _env = ENV_LOCK.lock().unwrap();
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = hermetic_env();
         std::env::set_var("FNO_NO_CANONICAL_CONFIG", "1");
         std::env::remove_var("FNO_CONFIG");

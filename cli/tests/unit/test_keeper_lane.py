@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from fno.agents import keeper_lane as kl
-from fno.agents.orphans import REAP_MIN_AGE_S
+from fno.agents.keeper_lane import REAP_MIN_AGE_S
 
 
 # --- fixtures for the pure table --------------------------------------------
@@ -373,7 +373,7 @@ def test_control_registry_claimed_keeper_survives_both(tmp_path, monkeypatch) ->
         shutil.rmtree(sock_parent, ignore_errors=True)
 
 
-# --- the verb's flag contract ----------------------------------------------
+# --- the command's flag contract ----------------------------------------------
 
 
 def test_apply_all_kills_through_the_real_command(tmp_path, monkeypatch) -> None:

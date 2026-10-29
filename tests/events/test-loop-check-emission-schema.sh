@@ -122,7 +122,7 @@ validate_events_file() {
     local label="$1" events_file="$2"
 
     # The store commit is the write boundary: validate the committed rows the
-    # rows verb answers (raw journal bytes ride the verb's own fallback), so
+    # rows command answers (raw journal bytes ride the command's own fallback), so
     # a store-only journal cannot read as "not created".
     local rows
     rows="$("$CLI_BIN" doctor event rows --events "$events_file" 2>/dev/null || true)"

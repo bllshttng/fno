@@ -74,7 +74,7 @@ impl super::Core {
     ) {
         // The off-loop registry reader ticks independently and may never have
         // run in a session nobody has watched (a headless reboot-restore).
-        // This verb's classification IS a registry read, so it reads the file
+        // This command's classification IS a registry read, so it reads the file
         // itself rather than refuse members whose rows exist on disk.
         if let Some(rows) = restore_registry_rows() {
             self.agents = rows;
@@ -354,7 +354,7 @@ impl super::Core {
             return;
         }
         // Off-loop rebind: each job shells `fno-agents pane-rebind`
-        // bounded, and the reply waits for every receipt so the verb's own
+        // bounded, and the reply waits for every receipt so the command's own
         // report carries it. The pane is running either way, so a failed
         // rebind degrades to its named notice on the row, never a refusal.
         tokio::spawn(async move {
@@ -386,7 +386,7 @@ impl super::Core {
                 if let Some(n) = notices.get(&row.member) {
                     // The codex resume form can land on its paused-goal
                     // prompt instead of a live turn; the receipt names it
-                    // because the verb cannot answer it from here.
+                    // because the command cannot answer it from here.
                     let dialog = match row.harness.as_deref() {
                         Some("codex") => {
                             "; codex may show its resume prompt in the pane - answer it there"

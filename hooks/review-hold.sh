@@ -74,13 +74,13 @@ skill_args="$(printf '%s' "$input" \
   2>/dev/null || true)"
 skill_raw="$skill_name${skill_args:+ $skill_args}"
 # Drop the ARGS before the namespace. `##*:` is greedy, so one colon anywhere in
-# the args - a PR URL is the ordinary case - eats the verb with it, the case
+# the args - a PR URL is the ordinary case - eats the command with it, the case
 # below matches nothing, and the hold this hook exists to take never registers.
 skill="${skill_raw#/}"
 skill="${skill%% *}"
 skill="${skill##*:}"
 
-# The harness-native review verbs (claude, codex, opencode) plus footnote's own
+# The harness-native review commands (claude, codex, opencode) plus footnote's own
 # review skill. Named explicitly rather than pattern-matched: a substring rule
 # on "review" would fire on `code-review-attest`, `pr-review-fixes` and any
 # future skill that merely mentions one, and a hold nobody meant to take is a
@@ -94,7 +94,7 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
 
 # The parse and the join ride the CLI's rust seam directly, the way the
-# deleted python leg did: FNO is the test-stub surface for the verbs this
+# deleted python leg did: FNO is the test-stub surface for the commands this
 # hook DRIVES (acquire, event emit), not for its own plumbing.
 parsed="$(python3 -c 'import json, sys; from fno import rust_binary
 err, row = rust_binary.call_binary_json("review-level", ["invocations", "parse", "--raw", sys.argv[1]])
@@ -124,7 +124,7 @@ target="$(printf '%s' "$parsed" | jq -r '.target // empty' 2>/dev/null || true)"
 # the hold keys the review's NAMED target, never the branch this
 # checkout happens to stand on - the observed wedge held PR 1709's branch for
 # a review of PR 1713 and left 1713 unprotected. A PR number resolves to
-# nothing here: the acquire verb reads the PR's head ref from GitHub, so a PR
+# nothing here: the acquire command reads the PR's head ref from GitHub, so a PR
 # review from a checkout on main still holds its PR. A branch target is
 # verified against local then origin refs. Only an invocation with no target
 # reads the cwd.
@@ -151,7 +151,7 @@ if [[ -z "$pr_number" ]]; then
   esac
 fi
 
-# The session is the holder: a second review verb fired inside the same session
+# The session is the holder: a second review command fired inside the same session
 # on the same branch re-takes its OWN hold rather than colliding with a
 # stranger's, and the release below clears the one it took.
 session="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
@@ -176,12 +176,16 @@ case "$invocation_id" in
   ri-*) ;;
   *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
 esac
-model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json"
+# The attest sidecar answers from the state layout table via the `dir`
+# door; on a door refusal (no binary, or an fno-agents predating the door)
+# the legacy spelling answers, the path every pre-door binary wrote.
+model_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
+[[ -n "$model_sidecar" ]] || model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json" # state-root: legacy fallback
 model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev/null || true)"
 data="$(jq -cn \
   --arg invocation_id "$invocation_id" \
   --arg stage started \
-  --arg verb "/$skill" \
+  --arg cmd "/$skill" \
   --arg args_raw "$args_raw" \
   --arg level "$level" \
   --arg level_source "$level_source" \
@@ -192,7 +196,8 @@ data="$(jq -cn \
   --arg head_sha "$head" \
   --arg branch "$branch" \
   --arg model_family "$model_family" \
-  '{invocation_id:$invocation_id,stage:$stage,verb:$verb,args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch}
+  '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+     args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch}
    | if $head_sha == "" then del(.head_sha) else . end
    | if $branch == "" then del(.branch) else . end
    | if $model_family == "" then . else .model_family=$model_family end' \
@@ -218,7 +223,7 @@ fi
 # budget and the law's remedy - becomes a denial decision here. Every other
 # outcome still exits 0 with nothing said.
 if [[ -n "$pr_number" ]]; then
-  # The PR's head ref and head resolve inside the verb, from GitHub. No
+  # The PR's head ref and head resolve inside the command, from GitHub. No
   # resolution here, no guessed --branch: an unresolvable PR takes no hold.
   cap_out="$("$FNO_BIN" do pr review-hold acquire "$pr_number" \
     --holder "$holder" --verb "/$skill" \

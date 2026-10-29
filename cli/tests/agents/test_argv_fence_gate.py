@@ -348,9 +348,10 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     assert counts.get("fenced", 0) >= 20, counts
     assert counts.get("value-form", 0) >= 4, counts
     # A floor AND a ceiling on exemptions: each new exempt marker must be a
-    # visible test edit, never a silent gate bypass. Twelve standing
-    # exemptions: the deprecated-gemini arms, the hermes -q value form, and
-    # the notify-send body (a toast, not a worker seed). The agy arm dropped
+    # visible test edit, never a silent gate bypass. Eleven standing
+    # exemptions: the deprecated-gemini arms and the notify-send body (a
+    # toast, not a worker seed). The hermes -q value form dropped out with
+    # the hermes adapter. The agy arm dropped
     # out when the seed moved off the argv seam onto the shared readiness
     # gate's submit path. pi added two, its pane arm and its headless
     # argv tail, on a PROBED reason rather than an assumed one: `pi --
@@ -362,15 +363,24 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     # `--` is reserved for the passthrough lane (pane substrate only), so no
     # fence or equal-form exists; the prompt is template-rendered in
     # spawn_verifier, never user input, and message-last is the positional's
-    # legal spot in a click parser. Fourteen: the mail raw shim forwards
-    # ["send", name, message, "--raw"] to the bundled fno-agents parser, which
-    # has no end-of-options fence, so a `--` element would die there as an
-    # unknown argument; a flag-shaped payload also cannot deliver, because the
-    # raw lane refuses any payload that does not start with / or $ and an
-    # unknown leading-dash argument exits 2 before the raw lane runs. Fifteen:
+    # legal spot in a click parser. The mail raw shim dropped out when the
+    # raw lane moved into the fno-agents leaf: the python forward fences the
+    # message with `--` and the leaf's parser accepts the fence. Fourteen:
     # the pi headless one-shot's argv tail in pi_ask.rs, on the same probed
     # reason as pi_run_tail, and its prompt always starts with `[from:` or a
-    # verb sigil.
+    # command sigil. Fifteen: the post-merge judgment spawn in ritual.rs, whose
+    # model rides the fenced tail as claude's own flag, so its prompt (the
+    # ritual's own text) must precede the fence. Sixteen: the pi pane arm's
+    # builder in pane_spawn/simple.rs, on the same probed pi reason as
+    # pi_run_tail - the seed is a trailing positional after the flag block
+    # and the row-8 golden pins the unfenced form. Seventeen: the
+    # you-threads splitter's open_new call in you_threads.rs, a plain Rust
+    # closure argument the scanner's bracket walk misreads as an argv
+    # element; no launcher parser exists on that path. The notify-send body
+    # exemption left with the notify family port: the toast body moved into
+    # the Rust dispatch (crates/fno/src/notify_dispatch.rs keeps the marker
+    # above its body push; the Rust call shape is outside the scanner's
+    # seed-push patterns). Fifteen in all, after the hermes adapter left.
     assert counts.get("exempt", 0) == 15, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

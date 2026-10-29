@@ -28,15 +28,12 @@ enum Sec {
 const GRAPH_REASON: &str =
     "graph.json is retired; do not recreate it. Mutate the graph.db store via `fno backlog` commands.";
 const DB_REASON: &str = "graph.db is the authoritative store; direct writes to it or its WAL files are blocked. Mutate via `fno backlog` commands.";
-const MANIFEST_REASON: &str = "target-state.md is an immutable session manifest; direct Edit/Write is blocked. The only legal post-init write is first-fill of an empty plan_path via `fno do state set --field plan_path`. Use `fno do state` / `fno do target` verbs, not a hand edit.";
+const MANIFEST_REASON: &str = "target-state.md is an immutable session manifest; direct Edit/Write is blocked. The only legal post-init write is first-fill of an empty plan_path via `fno do state set --field plan_path`. Use `fno do state` / `fno do target` commands, not a hand edit.";
 const CONFIG_REASON: &str = "Do not edit an fno config.toml by hand. Run `fno config set <key> <value>` (add `--local` for a repo file). It checks the key against the schema. A hand-added key that is not in the schema prints a warning on every fno call. If `fno config set` refuses the key, the key is not modeled yet: file a node with `fno backlog idea`.";
 const BASH_BLOCK_SUFFIX: &str =
     " (this Bash write to a protected state file is blocked; use `fno backlog` / `fno do state`).";
 const FAILCLOSED_MALFORMED: &str =
     "graph-write-protect: payload references a protected state file but could not be parsed; blocking fail-closed.";
-/// Only the sh shim emits this one: it is the no-binary fallback, the same
-/// posture the shell guard took when no parser existed.
-pub const FAILCLOSED_NO_PARSER: &str = "graph-write-protect: neither jq nor python3 available to parse a payload referencing a protected state file; blocking fail-closed. Install jq or python3.";
 
 /// Payload fields the three sections read, extracted once.
 struct Payload {
@@ -386,7 +383,7 @@ fn bash_writes(cmd: &str, path: &str, clause_path: &str) -> bool {
     // In-place editors bind the editor to the protected path WITHIN its own
     // command clause: `echo see .fno/graph.json; sed -i x notes.md` mentions
     // the path in a different clause and must NOT match. `[^;|&]*` keeps the
-    // flag and the path in the same clause as the sed/perl/jq/ex/ed verb:
+    // flag and the path in the same clause as the sed/perl/jq/ex/ed command:
     // -i, combined short flags (-Ei, -ri), and the --in-place long form.
     arms.push(format!(
         r#"{lead}(sed|perl)[[:space:]]{nosep}(-[a-zA-Z]*i|--in-place){nosep}{path_in_clause}"#
@@ -421,7 +418,7 @@ pub(crate) fn drive_authority_active() -> bool {
     let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
         return false;
     };
-    let sessions = crate::client_verbs::active_drive_sessions(home.root());
+    let sessions = crate::client_commands::active_drive_sessions(home.root());
     let active = sessions.iter().any(|s| s.short_id == self_id);
     if std::env::var_os("FNO_GUARD_TRACE").is_some() {
         eprintln!(
@@ -1052,14 +1049,21 @@ fn generated_target(t: &str, payload_cwd: &str) -> Option<String> {
             "{abs_str} is the installed plugin copy. `fno doctor update` restages it from the footnote source checkout and discards this edit. Edit {inner} in a feature worktree of the source checkout, then run `fno doctor update`."
         )
     };
-    if let Some(i) = abs_str.find("/plugin-stage/fno/") {
-        return Some(plugin_msg(
-            abs_str[i + "/plugin-stage/fno/".len()..].to_string(),
-        ));
+    for prefix in ["/plugin-stage/fno/", "/plugin-stage/fno-pack/"] {
+        if let Some(i) = abs_str.find(prefix) {
+            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
+        }
     }
-    if let Some(i) = abs_str.find("/plugins/cache/footnote") {
-        if let Some(j) = abs_str[i..].find("/fno/") {
-            return Some(plugin_msg(abs_str[i + j + "/fno/".len()..].to_string()));
+    // The marketplace dir is "fno", or a "footnote" name on an install made
+    // before the rename.
+    for prefix in [
+        "/plugins/cache/fno/fno/",
+        "/plugins/cache/footnote/fno/",
+        "/plugins/cache/footnote-dev/fno/",
+        "/plugins/cache/footnote-local/fno/",
+    ] {
+        if let Some(i) = abs_str.find(prefix) {
+            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
         }
     }
 
@@ -1119,11 +1123,11 @@ fn generated_target(t: &str, payload_cwd: &str) -> Option<String> {
                     let mut message = format!(
                         "{rel} is generated from {source}. The next `{regen}` run overwrites an edit here. Edit {source}, then run `{regen}`."
                     );
-                    // The plain-copy .rs twins and the verbatim .toml
-                    // mirrors also rebuild without a compile, so a session
-                    // under a build freeze can still regen-and-commit a
-                    // drifted copy.
-                    if (rel.ends_with(".rs") || rel.ends_with(".toml"))
+                    // The plain-copy .rs twins, the verbatim .toml mirrors
+                    // and the events_schema.json projection also rebuild
+                    // without a compile, so a session under a build freeze
+                    // can still regen-and-commit a drifted copy.
+                    if (rel.ends_with(".rs") || rel.ends_with(".toml") || rel.ends_with(".json"))
                         && regen.contains("cargo build --manifest-path crates/fno-agents")
                     {
                         message.push_str(
@@ -1276,7 +1280,7 @@ mod tests {
             cmd_norm: norm(command),
         };
         // (tool, file_path, command, refused). Fixtures, reads, other config
-        // files and the verb itself stay allowed.
+        // files and the command itself stay allowed.
         let cases = [
             ("Edit", "/Users/x/.fno/config.toml", "", true),
             ("Write", "/repo/.fno//config.toml", "", true),

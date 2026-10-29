@@ -97,7 +97,7 @@ EOF
 # at the create step, since they matter only for a real PR.
 printf '%s\n' "$BODY" > .fno/pr-body.md
 if ! TEST_DELTA=$(fno-agents test-delta --base "$BASE"); then
-  echo "test-delta refused: the delta read failed or net test declarations exceed the repo's configured cap ([test] max_net_new in .fno/config.toml; unset = no cap); see the verb's table above, then rerun" >&2
+  echo "test-delta refused: the delta read failed or net test declarations exceed the repo's configured cap ([test] max_net_new in .fno/config.toml; unset = no cap); see the command's table above, then rerun" >&2
   cat .fno/pr-title.txt .fno/pr-body.md
   echo "RESULT: BLOCKED step=test-delta reason=test cap exceeded or delta read failed draft=.fno/pr-body.md"
   exit 0
@@ -219,7 +219,7 @@ Proceed to push.
 fno do pr push
 ```
 
-Handle the verb's refusals like any other refusal here. **Every push refusal keeps the draft.** Report it instead of stopping empty. Exit 3 names the fix: a protected branch, a dirty tree, or a conflict. A conflict leaves the rebase in progress: resolve it, run `fno do pr rebase --continue`, then re-run the push. A branch that already merges origin/main uses merge, not rebase. If that merge conflicts, abort it. Merge origin/main by hand, commit, then re-run the push. Exit 2 means a CI run is in flight: wait with `fno do pr wait <n> --until settled`, then re-run. Exit 1 means preflight is red. A failed fetch (exit 4) names the missing remote. The reply then names `git remote add origin <url>` and ends `RESULT: BLOCKED step=push reason=<verb refusal> draft=.fno/pr-body.md`. Do not open the PR yet.
+Handle the command's refusals like any other refusal here. **Every push refusal keeps the draft.** Report it instead of stopping empty. Exit 3 names the fix: a protected branch, a dirty tree, or a conflict. A conflict leaves the rebase in progress: resolve it, run `fno do pr rebase --continue`, then re-run the push. A branch that already merges origin/main uses merge, not rebase. If that merge conflicts, abort it. Merge origin/main by hand, commit, then re-run the push. Exit 2 means a CI run is in flight: wait with `fno do pr wait <n> --until settled`, then re-run. Exit 1 means preflight is red. A failed fetch (exit 4) names the missing remote. The reply then names `git remote add origin <url>` and ends `RESULT: BLOCKED step=push reason=<command refusal> draft=.fno/pr-body.md`. Do not open the PR yet.
 
 If `git rev-parse --abbrev-ref HEAD` printed `HEAD` (detached), the draft already exists. Name one `git switch -c <name>` from the first commit subject and end `RESULT: BLOCKED step=branch reason=detached HEAD draft=.fno/pr-body.md`. Never create the branch yourself.
 
@@ -286,7 +286,7 @@ elif [[ $RC -ne 0 ]]; then
 fi
 ```
 
-When `$NODE_ID` is empty or unresolvable, the bare verb resolves the node from the current branch instead. It demands exactly one real node, the same carrier the CI gate reads. An empty `$CLOSURE_TRAILER` now means exactly one thing: a readable graph that carries no matching node. That is why the empty case stays safe to append unconditionally. Exit 4 is different: the graph read itself failed. A dead reader once answered exactly like a missing node and three PRs shipped red on the closure gate with no named cause (measured 2026-09-16). On exit 4 STOP: do not create the PR. The draft exists, so end `RESULT: BLOCKED step=closure-trailer reason=graph reader dead (exit 4) draft=.fno/pr-body.md`. Any other nonzero prints the `warn:` and continues. The verb is a moved spelling: expect one `is now` deprecation notice on stderr and treat it as expected output, never as a failure signal. Most genuine extra deliveries ARE `contained_in` already. On the rare case where the commits or plan show a real extra one, add it explicitly: `fno do pr closure-trailer "$NODE_ID" --extra <other-id>`.
+When `$NODE_ID` is empty or unresolvable, the bare command resolves the node from the current branch instead. It demands exactly one real node, the same carrier the CI gate reads. An empty `$CLOSURE_TRAILER` now means exactly one thing: a readable graph that carries no matching node. That is why the empty case stays safe to append unconditionally. Exit 4 is different: the graph read itself failed. A dead reader once answered exactly like a missing node and three PRs shipped red on the closure gate with no named cause (measured 2026-09-16). On exit 4 STOP: do not create the PR. The draft exists, so end `RESULT: BLOCKED step=closure-trailer reason=graph reader dead (exit 4) draft=.fno/pr-body.md`. Any other nonzero prints the `warn:` and continues. The command is a moved spelling: expect one `is now` deprecation notice on stderr and treat it as expected output, never as a failure signal. Most genuine extra deliveries ARE `contained_in` already. On the rare case where the commits or plan show a real extra one, add it explicitly: `fno do pr closure-trailer "$NODE_ID" --extra <other-id>`.
 
 Append the non-empty `$CLOSURE_TRAILER` as its own paragraph at the end of `.fno/pr-body.md`, before calling `gh pr create`. Never hand-write the trailer. Never add an id this command did not produce: a wrong id silently binds the wrong node at merge.
 
@@ -294,7 +294,7 @@ Append the non-empty `$CLOSURE_TRAILER` as its own paragraph at the end of `.fno
 
 When review learns the PR delivers a different node than the branch names, use this recipe. Never rename the branch: a rename closes the PR for good and the replacement starts a fresh CI cycle. Never name the old node on the Fixes line either: that closes the wrong node at merge. Four steps:
 
-1. Get the approval first. Use a mail id (`msg-...`) from your lead. Or file the ruling with `fno inbox decide <to> "..."` and use its `d-...` id.
+1. Get the approval first. Use a mail id (`fmail-...`, or the older `msg-...`) from your lead. Or file the ruling with `fno inbox decide <to> "..."` and use its `d-...` id.
 2. Move the graph binding: `fno backlog update <from> pr_number=null pr_url=null`, then `fno backlog update <to> pr_number=<n> pr_url=<url>`. When `<to>` already carries another PR, stop and ask instead.
 3. Edit the body. `fno do pr closure-trailer <to>` prints the Fixes line. Put `Retarget <from> <to> <approval>` on the line after it. Apply with `gh pr edit <n> --body-file <file>`.
 4. `fno backlog note <from>` and `fno backlog note <to>` naming the PR, the approval, and the reason.
@@ -309,7 +309,7 @@ TITLE="$(cat .fno/pr-title.txt)"
 BODY="$(cat .fno/pr-body.md)"
 
 # The reviewed-at line: the one claim a worker appends to the body, and only
-# this verb authors it. It prints the line only when the attestation journal
+# this command authors it. It prints the line only when the attestation journal
 # holds a clean `pass` attestation pinned to exactly this branch and HEAD, so
 # a PR that arrives unreviewed opens with no Review section at all - the merge
 # gate reads the journal, never this line. Idempotent like the trailer: a
@@ -369,11 +369,11 @@ elif [[ $RC -ne 0 ]]; then
 fi
 ```
 
-On body-check exit 1, follow the guard's own fix text and rerun the check. If the guard still refuses, end `RESULT: BLOCKED step=body-check reason=<the guard's fix text> draft=.fno/pr-body.md`. Never open the PR: the CI guards read the PR body field, so no commit can fix a body failure. The session-URL guard also scans commit messages, so a commit hit needs a reword, not a body edit.
+On body-check exit 1, follow the guard's own fix text and rerun the check. If the guard still refuses, end `RESULT: BLOCKED step=body-check reason=<the guard's fix text> draft=.fno/pr-body.md`. Never open the PR: the CI guards read the PR body field, so no commit can fix a body failure.
 
-On `fno do pr create` exit 3, the PR is NOT created: end `RESULT: BLOCKED step=create reason=duplicate of PR #<n> (<branch> by <author>) draft=.fno/pr-body.md`. Rerun with `--not-duplicate <n>` only after reading the twin and judging it not a duplicate. The verb then proceeds past that PR. Exit 5 is the audited-owners gate: run the prune pass the refusal names and rerun. Exit 6 is the unknowns gate: the bound plan still has a `- [ ]` line under `## Unknowns`. Measure each one the refusal names, write `- [x] ... - settled: <finding>`, and rerun. Never delete a line to pass. A session that cannot audit ends `RESULT: BLOCKED step=create reason=audited-owners gate refused an unaudited code PR draft=.fno/pr-body.md`. On exit 127 the deployed binary predates the guard, which is a repair, not a fallback: end `RESULT: BLOCKED step=create reason=binary predates pr create, run fno doctor update --rust draft=.fno/pr-body.md`. On any other nonzero, gh failed before a PR opened. End `RESULT: BLOCKED step=create reason=<verb's message> draft=.fno/pr-body.md`.
+On `fno do pr create` exit 3, the PR is NOT created: end `RESULT: BLOCKED step=create reason=duplicate of PR #<n> (<branch> by <author>) draft=.fno/pr-body.md`. Rerun with `--not-duplicate <n>` only after reading the twin and judging it not a duplicate. The command then proceeds past that PR. Exit 5 is the audited-owners gate: run the prune pass the refusal names and rerun. Exit 6 is the unknowns gate: the bound plan still has a `- [ ]` line under `## Unknowns`. Measure each one the refusal names, write `- [x] ... - settled: <finding>`, and rerun. Never delete a line to pass. Exit 7 is the sibling gate: another node of the same epic is on an open PR. A sibling PR merged in the last two hours also refuses. Add this work to that PR's branch. When the split is deliberate, write `Separate PR: <reason>` in the body and rerun. A session that cannot audit ends `RESULT: BLOCKED step=create reason=audited-owners gate refused an unaudited code PR draft=.fno/pr-body.md`. On exit 127 the deployed binary predates the guard, which is a repair, not a fallback: end `RESULT: BLOCKED step=create reason=binary predates pr create, run fno doctor update --rust draft=.fno/pr-body.md`. On any other nonzero, gh failed before a PR opened. End `RESULT: BLOCKED step=create reason=<command's message> draft=.fno/pr-body.md`.
 
-**Capture PR number** from the verb's output URL (e.g., `/pull/105` → `105`).
+**Capture PR number** from the command's output URL (e.g., `/pull/105` → `105`).
 
 **Verify the trailer round-tripped.** Best-effort, non-fatal, same posture as the OOS step. A mismatch here means the body `gh pr create` actually wrote differs from what was composed. Merge-time binding then misses a claim silently.
 

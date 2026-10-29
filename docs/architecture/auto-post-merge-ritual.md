@@ -1,12 +1,12 @@
 # Automatic post-merge ritual
 
-After self-merging a PR, the same 3-step ritual used to get hand-pasted into a session, with only the per-project path/name/cwd swapped: (1) close + stamp the backlog node, (2) write prose follow-up todos to that project's vault `inbox.md`, (3) triage anything worth doing now into the backlog. The `/fno:post-merge` skill collapses that paste into one verb whose paths resolve from settings, never from the invocation.
+After self-merging a PR, the same 3-step ritual used to get hand-pasted into a session, with only the per-project path/name/cwd swapped: (1) close + stamp the backlog node, (2) write prose follow-up todos to that project's vault `inbox.md`, (3) triage anything worth doing now into the backlog. The `/fno:post-merge` skill collapses that paste into one command whose paths resolve from settings, never from the invocation.
 
 ## Is this page for you?
 
 You merged a PR and ask what closes the node, files the prose follow-ups, and triages the rest. This page owns the automatic ritual and the two gaps it closes. Misreading it leaves a merged PR with an open node and follow-ups nobody wrote down.
 
-Not for: the merge itself and its gates. That is [control-plane-loop.md](control-plane-loop.md). The node lifecycle verbs are in [../backlog-usage.md](../backlog-usage.md).
+Not for: the merge itself and its gates. That is [control-plane-loop.md](control-plane-loop.md). The node lifecycle commands are in [../backlog-usage.md](../backlog-usage.md).
 
 Extends the retro / auto-triage feature ([retro-auto-triage.md](retro-auto-triage.md)), which filed graph nodes mechanically but never wrote the per-project prose `inbox.md` (the LLM-judgment step).
 
@@ -17,11 +17,11 @@ The existing machinery covered ~70% of the ritual but left two gaps:
 1. **Prose todos were 100% manual.** `fno backlog reconcile` *explicitly* never writes inbox lines. `fno backlog retro run` files graph nodes, not the per-project vault markdown at `internal/<area>/backlog/inbox.md`. Writing those prose next-steps requires reading the merged diff and applying judgment, so it stayed a re-pasted prompt.
 2. **No trigger fires at merge.** `reconcile` runs on the *next* footnote session in the repo or in the post-merge ritual. A GitHub web-button self-merge produces no local event at all. (Phase 2 below. Deferred.)
 
-> **Two different "inbox"es.** This skill writes the per-project **vault markdown** `internal/<area>/backlog/inbox.md` (a human reading queue). That is NOT the cross-project message bus `fno agents mail` (`config.paths.inbox_dir`, thread-per-file). The vault-area name does not equal the project name (`example-pipeline -> internal/etl`, `acme-web -> internal/web`), which is exactly why the path must be explicit config and is never derived.
+> **Two different "inbox"es.** This skill writes the per-project **vault markdown** `internal/<area>/backlog/inbox.md` (a human reading queue). That is NOT the cross-project message bus `fno agents mail`. The vault-area name does not equal the project name (`example-pipeline -> internal/etl`, `acme-web -> internal/web`), which is exactly why the path must be explicit config and is never derived.
 
 ## Phase 1 - the skill (shipped)
 
-`/fno:post-merge [pr]` is an LLM skill (not a pure CLI verb, because steps 2-3 are judgment over the diff). Sequence:
+`/fno:post-merge [pr]` is an LLM skill (not a pure CLI command, because steps 2-3 are judgment over the diff). Sequence:
 
 ```
 Step 0  resolve PR        explicit arg, else most-recently-merged for the repo (gh)
@@ -33,7 +33,7 @@ Step 3  mechanical triage  fno backlog retro run                          (senti
 Step 4  idempotency        inbox-has-pr.sh <inbox> <pr>  -> exit 0 = already done, skip
 Step 5  judgment           read gh pr diff; (a) append dated prose section to parking-lot.md
                           keyed by a PR-number marker; (b) fno backlog idea per item
-Step 6  report             one block; a Failures line if any verb exited non-zero
+Step 6  report             one block; a Failures line if any command exited non-zero
 ```
 
 ### Config (per repo `.fno/config.toml`)
@@ -59,7 +59,7 @@ The skill reuses `fno backlog reconcile`, `fno backlog retro run`, and `fno back
 
 The trigger shipped as **one global launchd daemon**, not the per-repo watcher sketched below: the [PR-state watcher](pr-state-watcher.md) polls the backlog graph (not per-repo `gh pr list`) on an interval and is the **sole** post-merge detector. `fno backlog reconcile` no longer dispatches a ritual.
 
-The ritual itself is no longer fired as a headless `/fno:ship pr merged` (or `/fno:post-merge`) LLM session. Its mechanical core is the `fno do pr ritual <pr> --autonomous` verb (`crates/fno-agents/src/post_merge/ritual.rs`, reached through `pr-watch ritual`). pr-watch runs it directly as a bounded subprocess from the merged PR's canonical root, or warm-injects the identical command into the live origin session. The verb owns its own conditional headless judgment leg. No post-merge path wraps the ritual in a second model layer or spawns a `--substrate bg` thread. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) for attribution. It is observability only and is never a dedup input (the marker + TTL claim remain the idempotency layer).
+The ritual itself is no longer fired as a headless `/fno:ship pr merged` (or `/fno:post-merge`) LLM session. Its mechanical core is the `fno do pr ritual <pr> --autonomous` command (`crates/fno-agents/src/post_merge/ritual.rs`, reached through `pr-watch ritual`). pr-watch runs it directly as a bounded subprocess from the merged PR's canonical root, or warm-injects the identical command into the live origin session. The command owns its own conditional headless judgment leg. No post-merge path wraps the ritual in a second model layer or spawns a `--substrate bg` thread. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) for attribution. It is observability only and is never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 A GitHub Action cannot host this: the ritual needs local state (`~/.fno/graph.json`, the Obsidian vault, the repo working copy), and `/schedule` cloud agents lack the local creds. Polling locally is required.
 

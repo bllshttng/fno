@@ -16,7 +16,18 @@ CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
 
 
 def _command(command: str) -> str:
-    return " ".join(shlex.split(command.removeprefix("PYTHONDONTWRITEBYTECODE=1 ")))
+    command = command.removeprefix("PYTHONDONTWRITEBYTECODE=1 ").removeprefix("FNO_HOOK_CONTEXT=1 ")
+    return " ".join(shlex.split(command))
+
+
+def test_every_hook_command_runs_in_hook_context() -> None:
+    # A hook's fno call must never join its session (crates/fno/src/join_marker.rs).
+    for manifest in (HOOKS_JSON, CODEX_HOOKS_JSON):
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        for registrations in data["hooks"].values():
+            for registration in registrations:
+                for hook in registration.get("hooks", []):
+                    assert "FNO_HOOK_CONTEXT=1 " in hook.get("command", ""), (manifest.name, hook)
 
 
 def test_codex_hooks_use_supported_event_names_and_existing_commands() -> None:
@@ -153,100 +164,41 @@ def test_plan_location_guard_wired_into_claude_and_codex_pretooluse() -> None:
         )
 
 
-def test_every_manifest_hook_is_wired_and_pretooluse_launches() -> None:
-    """Every manifest command must be wired (script exists), and the read-only
-    PreToolUse gates must start under the real ``$SHELL -lc`` launch path.
+def test_every_manifest_hook_references_an_existing_script() -> None:
+    """Every manifest command must reference a script that exists in the repo.
 
     A hook whose command cannot resolve (PLUGIN_ROOT empty/unset, or a script
     removed) fails OPEN in Codex: it exits 127/2 and the guard was silently
-    absent. Verifying the hand-expanded absolute path always passes, because that
-    path cannot reproduce a placeholder-expansion failure; only the configured
-    string through the shell Codex actually invokes (codex-rs/hooks engine
-    command_runner.rs) can.
+    absent. The launch-path half (PreToolUse-only launching, the fail-open on
+    an unresolved root, the wrong-placeholder refusal) is native now: the
+    doctor family's Rust probe owns it (see
+    crates/fno/src/doctor/report/hooks_probe.rs); the manifest-existence half
+    stays here because it needs only the checked-in manifests."""
+    import json as _json
+    import re as _re
 
-    Only PreToolUse gates are LAUNCHED: SessionStart/Stop and other stateful
-    hooks mutate ~/.fno when executed (inject-mail-drain advances the real mail
-    cursor), so running them from a test would damage live state. Stateful
-    events still get an existence check. This is the CI-catchable half; the
-    live-install half is `fno doctor`. Reuses the doctor launcher so the
-    isolated-temp-cwd and event-scope invariants live in one place.
-    """
-    shell = os.environ.get("SHELL")
-    if not shell:
-        pytest.skip("$SHELL unset; cannot reproduce the real launch path")
-
-    from fno.doctor import (
-        _PROBE_LAUNCH_EVENTS,
-        _PROBE_MANIFESTS,
-        _is_hook_launch_failure,
-        _launch_plugin_hook,
-        _manifest_event_commands,
-        _referenced_hook_scripts,
-    )
-
-    # The probe must only execute read-only gate events. Pin the scope here so a
-    # future change that adds SessionStart (stateful, mutates ~/.fno) to the
-    # launch set fails this test instead of silently running it.
-    assert _PROBE_LAUNCH_EVENTS == ("PreToolUse",), (
-        "probe may only launch read-only PreToolUse gates; adding a stateful "
-        "event here would execute it against the probe env"
-    )
-
-    failures: list[str] = []
-    samples: dict[str, tuple[str, str]] = {}  # manifest name -> (command, root_var)
-    for name, rel, root_var in _PROBE_MANIFESTS:
-        data = json.loads((REPO_ROOT / rel).read_text(encoding="utf-8"))
-        for event, command in _manifest_event_commands(data, source=name):
-            for script in _referenced_hook_scripts(command, REPO_ROOT):
-                if not script.is_file():
-                    failures.append(f"{name}/{event}: missing script {script}")
-            if event in _PROBE_LAUNCH_EVENTS:
-                samples.setdefault(name, (command, root_var))
-                result = _launch_plugin_hook(
-                    command, root_value=str(REPO_ROOT), shell=shell, root_var=root_var
-                )
-                if _is_hook_launch_failure(result):
-                    failures.append(
-                        f"{name}/{event}: rc={result['rc']} cmd={result['resolved'][:70]}"
-                    )
+    failures = []
+    for rel in ("hooks/hooks.json", "hooks/codex-hooks.json"):
+        data = _json.loads((REPO_ROOT / rel).read_text(encoding="utf-8"))
+        for _event, groups in (data.get("hooks") or {}).items():
+            if not isinstance(groups, list):
+                continue
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                for hook in group.get("hooks") or []:
+                    command = hook.get("command", "") if isinstance(hook, dict) else ""
+                    for tail in _re.findall(
+                        r"\$\{(?:CLAUDE_)?PLUGIN_ROOT\}(\S+)", command
+                    ):
+                        # The command string quotes its path, and the
+                        # placeholder replacement is root-anchored.
+                        script = tail.rstrip("\"';").lstrip("/")
+                        if not (REPO_ROOT / script).is_file():
+                            failures.append(f"{rel}: missing script {script}")
     assert not failures, (
-        "manifest hooks missing or failing to launch through $SHELL -lc:\n  "
-        + "\n  ".join(failures)
+        "manifest hooks reference missing scripts:\n  " + "\n  ".join(failures)
     )
-
-    # The advertised fail-open itself: an UNRESOLVED root must make every
-    # manifest's PreToolUse launch fail. Asserted per manifest so a broken root
-    # on one harness cannot be masked by another; requiring every manifest to
-    # contribute a sample means dropping PreToolUse from one manifest fails here
-    # instead of being hidden by the other.
-    expected = {name for name, _rel, _root in _PROBE_MANIFESTS}
-    assert set(samples) == expected, (
-        f"every manifest must carry a PreToolUse gate to probe; got {sorted(samples)}"
-    )
-    for name, (command, root_var) in samples.items():
-        empty_root = _launch_plugin_hook(
-            command, root_value="", shell=shell, root_var=root_var
-        )
-        assert _is_hook_launch_failure(empty_root), (
-            f"{name}: empty plugin root must fail the launch (the fail-open), "
-            f"got rc={empty_root['rc']}"
-        )
-
-    # Placeholder fidelity: a command using the OTHER harness's root variable
-    # must fail when only this manifest's var is set, because the real harness
-    # does not set the other var. Pins that the probe is not masking a
-    # wrong-placeholder manifest into a false green.
-    wrong = _launch_plugin_hook(
-        "bash ${CLAUDE_PLUGIN_ROOT}/hooks/write-gate.sh",
-        root_value=str(REPO_ROOT),
-        shell=shell,
-        root_var="PLUGIN_ROOT",
-    )
-    assert _is_hook_launch_failure(wrong), (
-        "a command using ${CLAUDE_PLUGIN_ROOT} must fail when only PLUGIN_ROOT "
-        f"is set (real Codex sets no CLAUDE_PLUGIN_ROOT); got rc={wrong['rc']}"
-    )
-
 
 def test_bg_process_guard_wired_beside_git_protection_on_both_harnesses() -> None:
     """One shared dispatcher must own the complete Bash guard chain on BOTH lanes.

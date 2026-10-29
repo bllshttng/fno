@@ -1,4 +1,4 @@
-//! The `sent` front verb: the outbound half of `mail unread`.
+//! The `sent` front command: the outbound half of `mail unread`.
 //!
 //! Port of the Python `mail sent` front. Lists mail this session sent, with
 //! the claim state the recipient's cursor implies and the landed tri-state
@@ -7,7 +7,7 @@
 //! what that line is counting, never a differently-scoped set.
 
 use crate::claude_drive::claude_projects_dir;
-use crate::mail_control_drain::withdrawn_ids;
+use crate::mail_control_drain::{landed_ids, withdrawn_ids};
 use crate::mail_header::ids_in_text;
 use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;
@@ -89,7 +89,7 @@ pub fn run_sent(args: &[String]) -> i32 {
         // TTL of -1, not 0: the age test is strict `>` and bus timestamps are
         // whole seconds, so a message sent this second has age 0.0 and a TTL
         // of 0 would classify it CLAIMED - reporting a just-sent, unread
-        // message as picked up, the opposite of the truth this verb exists
+        // message as picked up, the opposite of the truth this command exists
         // to tell.
         let unclaimed_ids: HashSet<String> = sent_unclaimed(&all, &handle, -1, now, &bus)
             .iter()
@@ -140,6 +140,9 @@ pub fn run_sent(args: &[String]) -> i32 {
                     // and the recipient cannot drain it.
                     "claimable": delivery_of(m) != TYPED_DELIVERY,
                     "landed": landed_flag.get(&id).cloned().flatten().map(Value::from).unwrap_or(Value::Null),
+                    // The stored envelope, wrapper included: a sender judges a
+                    // stale message by its words before withdrawing it.
+                    "body": str_field(m, "body", ""),
                 })
             })
             .collect();
@@ -441,36 +444,6 @@ fn codex_sessions_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     home.join(".codex").join("sessions")
-}
-
-/// Ids proven landed by a same-sender/recipient `landed` record. The control
-/// row's own id is never added: the acknowledged message stays visible to its
-/// recipient and the acknowledging row is control traffic.
-fn landed_ids(msgs: &[Value]) -> HashSet<String> {
-    let by_id: HashMap<&str, &Value> = msgs
-        .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
-        .collect();
-    let mut out = HashSet::new();
-    for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(LANDED_KIND) {
-            continue;
-        }
-        let target = m
-            .get("meta")
-            .and_then(|meta| meta.get("landed"))
-            .and_then(Value::as_str)
-            .and_then(|t| by_id.get(t));
-        let Some(target) = target else { continue };
-        if target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-            && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-        {
-            if let Some(t) = target.get("id").and_then(Value::as_str) {
-                out.insert(t.to_string());
-            }
-        }
-    }
-    out
 }
 
 /// Persist a landing so later scans skip the transcript read. Uses the

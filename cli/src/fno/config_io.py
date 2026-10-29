@@ -1,12 +1,12 @@
-"""Pure config file-reader leaf, shared by ``fno.config`` and ``fno.graph``.
+"""Pure config file-reader leaf for the ``fno.config`` package's internals.
 
 This module exists to break the ``fno.config`` <-> ``fno.graph`` import cycle.
-``graph/_intake.py`` (and its siblings) needs the low-level config *readers* but
-not the ``fno.config`` god module; importing ``fno.config`` at top level closed a
+The config package needs the low-level config *readers* one hop away from its
+own god module; importing ``fno.config`` from a graph module at top level closed a
 load-time loop (config's ``id_prefix`` validator imports ``graph._constants``),
-so graph pushed the import into function bodies. Giving graph a dependency-free
-*leaf* to import instead removes the back-edge and lets both sides import at top
-level.
+so graph pushed the import into function bodies. The graph leftovers retired
+their config reads onto the binary door (2026-10), and the leaf now serves the
+config package and the agents/codemap/setup readers.
 
 It MUST live outside the ``config/`` package: a module at ``config/_io.py`` would
 re-run ``config/__init__.py`` on import and reintroduce the half-init cycle. This
@@ -54,42 +54,6 @@ def _deep_merge(
     return result
 
 
-def _apply_search_ceiling(candidates: list[Path]) -> list[Path]:
-    """Drop candidates that resolve outside $FNO_CONFIG_SEARCH_ROOT.
-
-    No-op when unset (all real usage). Tests set it to their tmpdir roots so the
-    git-derived canonical candidate can never reach the developer's real checkout
-    (repo_root/canonical climb via ``git worktree list``, which no HOME redirect
-    can bound). Value is an os.pathsep-separated list because two legitimate test
-    roots exist: the pytest basetemp and the redirected HOME.
-    """
-    raw = os.environ.get("FNO_CONFIG_SEARCH_ROOT")
-    if not raw:
-        return candidates
-    roots: list[Path] = []
-    for r in raw.split(os.pathsep):
-        if not r:
-            continue
-        try:
-            roots.append(Path(r).resolve())
-        except OSError:
-            pass
-    if not roots:
-        return candidates
-    # resolve() is filesystem I/O (symlink walk) and can raise OSError on a
-    # symlink loop / permission wall; config load is on every command's startup
-    # path, so resolve each candidate once and degrade (drop) rather than crash.
-    kept: list[Path] = []
-    for c in candidates:
-        try:
-            resolved = c.resolve()
-        except OSError:
-            continue
-        if any(resolved.is_relative_to(r) for r in roots):
-            kept.append(c)
-    return kept
-
-
 def _prefer_toml(paths: list[Path]) -> list[Path]:
     """For each ``settings.yaml`` candidate, try its ``config.toml`` sibling first.
 
@@ -106,11 +70,7 @@ def _prefer_toml(paths: list[Path]) -> list[Path]:
                 out.append(toml)
         if p not in out:
             out.append(p)
-    # Bound the final list too: direct-file readers (e.g. _intake's
-    # project<->path map) reach this via config_read_candidates without going
-    # through _settings_yaml_locations, and a cwd-relative candidate resolves
-    # through a worktree symlink to the canonical checkout (the leak this fixes).
-    return _apply_search_ceiling(out)
+    return out
 
 
 def _read_settings_doc(path: Path) -> tuple[object, str | None]:

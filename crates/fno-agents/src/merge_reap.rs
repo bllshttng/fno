@@ -227,7 +227,7 @@ pub(crate) fn merge_cleanup_requested(home: &AgentsHome, repo: &str) -> bool {
 
 // ---------------------------------------------------------------------------
 // The mint side (fno.agents.events' five helpers, ported). `pr-watch
-// merge-cleanup-mint` is its transport door; the merge verb and the ritual
+// merge-cleanup-mint` is its transport door; the merge command and the ritual
 // are the two callers, one fold key for both.
 // ---------------------------------------------------------------------------
 
@@ -671,6 +671,7 @@ fn run_request(
             // reads the stop gate from the stop itself.
             crate::gc_sweep::StopObservation::Unproven,
             false,
+            false,
             &stop,
             &crate::pane_stop::run_mux_pane_kill,
             seams.surface_removal,
@@ -683,6 +684,7 @@ fn run_request(
                     crate::gc_sweep::RetireOrder {
                         id: entry.name.clone(),
                         released: false,
+                        idle_hour_past: false,
                         via_release: false,
                         pr_settled_live: false,
                         basis: format!(

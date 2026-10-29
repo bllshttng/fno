@@ -2,7 +2,7 @@
 # fno hook: PreToolUse - SendMessage guard
 # Peer messages between fno sessions ride `fno agents mail send`, not the
 # native SendMessage. Never exec a candidate blindly: an old build answers
-# "unknown verb: hook", and a nonzero PreToolUse refuses every tool in the
+# "unknown command: hook", and a nonzero PreToolUse refuses every tool in the
 # session. Run each, deployed binary first; relay only exit 0.
 stdin=$(cat)
 errfile=$(mktemp -t smg-stderr.XXXXXX) || errfile=/dev/null
@@ -16,5 +16,5 @@ for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
         exit 0
     fi
 done
-echo "send-message-guard: no fno-agents could answer the hook verb; allowing" >&2
+echo "send-message-guard: no fno-agents could answer the hook command; allowing" >&2
 printf '%s\n' '{}'

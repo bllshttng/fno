@@ -1,0 +1,16 @@
+[
+  {
+    "turn_id": "u-1",
+    "ts_epoch": null,
+    "text": "Perhaps our lead has overstayed its welcome",
+    "excerpt": "Perhaps our lead has overstayed its welcome",
+    "stand_down": true
+  },
+  {
+    "turn_id": "u-2",
+    "ts_epoch": null,
+    "text": "widen the review gate",
+    "excerpt": "widen the review gate",
+    "stand_down": false
+  }
+]

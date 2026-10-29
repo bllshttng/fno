@@ -2,7 +2,7 @@
 //! fields, status included. Status is never a stored input - the derivation
 //! ladder rewrites it from facts on every write - so `--status X` changes the
 //! facts that derive X, recomputes, and refuses unless the readback agrees.
-//! Every carried lifecycle verb (CLI defer/retract/undefer/unsupersede, the
+//! Every carried lifecycle command (CLI defer/retract/undefer/unsupersede, the
 //! typed `node_update` status arm) is a transport over this planner.
 //!
 //! The cycle: resolve -> read rows + version -> patch a working copy -> build
@@ -130,7 +130,7 @@ enum Policy {
     StatusFact(Kind),
     /// Read-only; the string is the reason a caller sees in the refusal.
     Derived(&'static str),
-    /// Another verb or flag owns the write; the refusal names it.
+    /// Another command or flag owns the write; the refusal names it.
     Owned(&'static str),
 }
 
@@ -156,7 +156,7 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("roadmap_id", Policy::Settable(Kind::Text)),
     ("vision_path", Policy::Settable(Kind::Text)),
     ("artifact_url", Policy::Settable(Kind::Text)),
-    ("dispatch_verb", Policy::Settable(Kind::Text)),
+    ("dispatch_command", Policy::Settable(Kind::Text)),
     ("dispatch_brief", Policy::Settable(Kind::Text)),
     ("model", Policy::Settable(Kind::Text)),
     ("deferred_reason", Policy::StatusFact(Kind::Text)),
@@ -307,7 +307,7 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
 /// itself is runtime code, so the list stays test-only.
 #[cfg(test)]
 const MODEL_EXTRA_KEYS: &[&str] = &[
-    "dispatch_verb",
+    "dispatch_command",
     "dispatch_brief",
     "model",
     "think_session_id",
@@ -433,7 +433,9 @@ fn normalize_status_word(word: &str) -> Option<&'static str> {
 /// derived on read.
 fn target_owner(word: &str, id: &str) -> Option<String> {
     let owned = match word {
-        "superseded" => format!("fno backlog supersede <new-id> --replaces {id} --cause --surface"),
+        "superseded" => format!(
+            "fno backlog supersede <new-id> --replaces {id} --cause --surface --reason --covers"
+        ),
         "done" => format!("fno backlog done {id}"),
         "in_review" => format!("fno backlog update {id} pr_number=<n>"),
         "in_progress" => format!("fno do target start {id}"),
@@ -444,7 +446,7 @@ fn target_owner(word: &str, id: &str) -> Option<String> {
 }
 
 /// The first fact that would still hold a node out of a rung target, with the
-/// flag or verb that clears it.
+/// flag or command that clears it.
 fn holding_fact(entry: &Value, id: &str) -> Option<String> {
     let truthy = |key: &str| entry.get(key).map(|v| !v.is_null()).unwrap_or(false);
     if truthy("completed_at") {
@@ -578,6 +580,11 @@ pub(crate) fn clear_supersession_facts(rows: &mut [Value], idx: usize, changes: 
     let obj = rows[idx].as_object_mut().unwrap();
     put_key(obj, changes, &id, "superseded_by", Value::Null);
     put_key(obj, changes, &id, "supersession", Value::Null);
+    // The archive sweep takes a superseded node at any age, so a revived
+    // one leaves archive residency too, or no default read would show it.
+    if replacer.is_some() {
+        put_key(obj, changes, &id, "archived_at", Value::Null);
+    }
     if let Some(replacer) = replacer {
         if let Some(row) = rows.iter_mut().find(|r| field_eq(r, "id", &replacer)) {
             let rid = entry_id(row).unwrap_or_default().to_string();
@@ -620,6 +627,12 @@ fn apply_sets(
     changes: &mut Vec<Change>,
 ) -> Result<(), PatchRefusal> {
     for (field, raw) in sets {
+        // The pre-rename spelling still writes dispatch_command, for one release.
+        let field: &str = if field == super::model::LEGACY_DISPATCH_COMMAND_KEY {
+            "dispatch_command"
+        } else {
+            field
+        };
         let policy = policy_for(field).ok_or_else(|| {
             PatchRefusal::refused(format!(
                 "refused: {id} unknown field '{field}'. Settable fields: {}",
@@ -859,7 +872,7 @@ fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
 }
 
 /// Why the derived status is not the requested word: name the holding fact
-/// and the flag or verb that supplies it (AC1-ERR, AC2-HP).
+/// and the flag or command that supplies it (AC1-ERR, AC2-HP).
 fn status_mismatch(
     rows: &[Value],
     idx: usize,
@@ -1542,6 +1555,7 @@ mod tests {
                 "supersession": {"cause": "c"},
                 "deferred_at": "2026-01-01T00:00:00+00:00",
                 "deferred_reason": "waiting",
+                "archived_at": "2026-01-02T00:00:00Z",
             }),
         );
         let replacer = node("x-r", json!({ "supersedes": ["x-5"] }));
@@ -1549,6 +1563,11 @@ mod tests {
         let receipt = apply(&graph, &leave_req("x-5", "superseded")).expect("applied");
         // The unsupersede contract: the pre-supersession park survives.
         assert_eq!(receipt.status.to, "deferred");
+        // The sweep took it the moment it was superseded; reviving it must
+        // bring it back to the board.
+        let rows = graph_store::read_rows(&graph).unwrap();
+        let revived = rows.iter().find(|r| r["id"] == "x-5").unwrap();
+        assert!(revived.get("archived_at").is_none_or(Value::is_null));
     }
 
     fn leave_req(node: &str, direction: &str) -> PatchRequest {

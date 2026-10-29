@@ -7,6 +7,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 
 /// One `operator_question_closed` fold row: the last close per question id.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +60,42 @@ pub fn closes(journals_raw: &str) -> HashMap<String, Closed> {
     out
 }
 
+/// Every question id an `operator_question` row names across the question
+/// stores. A page whose id is absent here and has no close row is a question
+/// the stores no longer hold: no beat can ever name its close. A store that
+/// holds no ask row at all may be a lost store, so the set is empty then and
+/// no page closes as lost until every store reads asks again.
+pub fn asked_ids(stores: &[String]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for store in stores {
+        if !collect_asks(store, &mut out) {
+            return std::collections::HashSet::new();
+        }
+    }
+    out
+}
+
+/// Adds the store's ask ids to `out`; false when it holds no ask row.
+fn collect_asks(journal: &str, out: &mut std::collections::HashSet<String>) -> bool {
+    let mut any = false;
+    for line in journal.lines() {
+        if !line.contains("operator_question") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("operator_question") {
+            continue;
+        }
+        if let Some(qid) = str_field(&v, "question_id") {
+            out.insert(qid.to_string());
+            any = true;
+        }
+    }
+    any
+}
+
 /// Who asked, and how to reach them. `live` is `None` when unmeasured, never
 /// `false` by inference. `reach` is the exact command that opens the asking
 /// session (from the agents registry), `None` when no live row joins.
@@ -75,6 +112,9 @@ pub struct Asker {
     pub live: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reach: Option<String>,
+    /// The person behind the asking machine: a display name, never proof.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -100,7 +140,7 @@ pub struct Recommendation {
 /// One item. Field names are the OpenAPI contract (`docs/architecture/
 /// attention-items.md`); they are the wire shape the sinks and the endpoint
 /// share, so they do not follow this repo's rust naming beyond serde defaults.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct AttentionItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_batch: Option<String>,
@@ -164,6 +204,30 @@ pub struct AttentionItem {
     /// an unreadable graph marks nothing, so a sink never invents it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub settled: bool,
+    /// The machine that asked, on a copy pulled from another machine of the
+    /// store; `None` for a question asked here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Absolute paths of the screenshots the ask copied into the vault.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub images: Vec<String>,
+    /// Who asked: handle, session id, registry name, harness and host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Value>,
+    /// The ladder rung the row sits at, and every rung it climbed from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rung: Option<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub via: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tried: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    /// The node's title and graph status, joined at read time by `needs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_stage: Option<String>,
 }
 
 /// Every defect, so the asker fixes the row instead of a sink dropping it
@@ -240,6 +304,20 @@ pub fn problems(item: &AttentionItem) -> Vec<String> {
         if item.meanwhile.as_ref().is_none_or(|m| m.trim().is_empty()) {
             out.push("missing meanwhile".to_string());
         }
+        // A ladder row on the user's board carries what every rung checked
+        // and what silence means; a row from before the ladder does not.
+        if item.rung.is_some() {
+            for (name, value) in [
+                ("class", &item.class),
+                ("tried", &item.tried),
+                ("on_silence", &item.on_silence),
+                ("deadline", &item.deadline),
+            ] {
+                if value.as_ref().is_none_or(|v| v.trim().is_empty()) {
+                    out.push(format!("missing {name}"));
+                }
+            }
+        }
     }
     out
 }
@@ -271,6 +349,23 @@ fn arr_field<'a>(v: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
 
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The asker's project: the canonical checkout's name while the cwd still
+/// exists, so a worker in `<base>/<repo>/<node>` routes to `<repo>`, not to
+/// its node id. A cwd that is gone keeps the basename.
+fn project_of(cwd: &str) -> String {
+    let path = std::path::Path::new(cwd);
+    if path.is_dir() {
+        if let Some(name) = crate::paths::canonical_repo_root(path)
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .and_then(|n| n.to_str())
+        {
+            return name.to_string();
+        }
+    }
+    basename(cwd).to_string()
 }
 
 /// Build one item from an `operator_question` row (`data` fields read
@@ -366,6 +461,7 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
             .and_then(|c| c.get("reach"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        person: str_field(row, "person").map(str::to_string),
     });
     let recommendation = ctx.and_then(|c| c.get("recommendation")).and_then(|r| {
         Some(Recommendation {
@@ -381,7 +477,31 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
                 .map(str::to_string),
         })
     });
+    // A question asked on another machine names that machine's vault; a
+    // path missing here re-roots onto this machine's synced copy.
+    let images: Vec<String> = arr_field(row, "images")
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(|p| {
+                    if Path::new(p).exists() {
+                        return p.to_string();
+                    }
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    crate::escalation::rebase_vault_path(p, &cwd)
+                        .filter(|local| local.exists())
+                        .map_or_else(|| p.to_string(), |l| l.to_string_lossy().into_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let mut item = AttentionItem {
+        images,
+        host: crate::question_bus::peer_origin(row).map(|_| {
+            str_field(row, "host")
+                .unwrap_or("another machine")
+                .to_string()
+        }),
         recovery_batch: row
             .get("_recovery_batch")
             .and_then(Value::as_str)
@@ -390,15 +510,19 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         kind: kind.to_string(),
         title,
         body: Some(question.to_string()).filter(|b| !b.is_empty()),
-        project: str_field(row, "cwd")
-            .map(basename)
-            .unwrap_or("")
-            .to_string(),
+        project: str_field(row, "cwd").map(project_of).unwrap_or_default(),
         priority: String::new(),
         created_at: ts.to_string(),
         deadline: ctx_str("deadline"),
         on_silence: ctx_str("on_silence"),
-        class: ctx_str("class"),
+        class: ctx_str("class").or_else(|| str_field(row, "class").map(str::to_string)),
+        origin: row.get("data").and_then(|d| d.get("origin")).cloned(),
+        rung: row.get("data").and_then(|d| d.get("rung")).cloned(),
+        via: arr_field(row, "via").cloned().unwrap_or_default(),
+        tried: ctx_str("tried"),
+        evidence: ctx_str("evidence"),
+        node_title: None,
+        node_stage: None,
         blocks,
         subject: str_field(row, "subject").map(str::to_string),
         asker,
@@ -444,7 +568,15 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
             cons: vec![],
         })
         .collect();
+    // Notes written before the Blocked because section existed keep their
+    // why-now reading; the newer section wins when present.
+    let blocked = if esc.blocked_because.is_empty() {
+        esc.why_now.clone()
+    } else {
+        esc.blocked_because.clone()
+    };
     let mut item = AttentionItem {
+        host: None,
         recovery_batch: None,
         id: format!("note-{slug}"),
         kind: "question".to_string(),
@@ -465,24 +597,28 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
             rank: None,
             live: None,
             reach: None,
+            person: None,
         }),
         node: esc.node.clone(),
-        blocked_because: (!esc.why_now.is_empty()).then(|| esc.why_now.clone()),
-        options_rationale: None,
+        blocked_because: (!blocked.is_empty()).then_some(blocked),
+        options_rationale: (!esc.options_rationale.is_empty())
+            .then(|| esc.options_rationale.clone()),
         recommendation: esc.recommend.map(|n| Recommendation {
             option: n as u32,
             why: esc.recommendation.clone(),
-            downside: None,
+            downside: (!esc.downside.is_empty()).then(|| esc.downside.clone()),
         }),
         options,
-        unknowns: None,
-        reversible: None,
-        cost_if_wrong: None,
-        meanwhile: None,
+        unknowns: (!esc.unknowns.is_empty()).then(|| esc.unknowns.clone()),
+        reversible: (!esc.reversible.is_empty()).then(|| esc.reversible.clone()),
+        cost_if_wrong: (!esc.cost_if_wrong.is_empty()).then(|| esc.cost_if_wrong.clone()),
+        meanwhile: (!esc.meanwhile.is_empty()).then(|| esc.meanwhile.clone()),
         ready: false,
         missing: vec![],
         state: "open".to_string(),
         settled: false,
+        images: vec![],
+        ..Default::default()
     };
     item.seal_readiness();
     Some(item)
@@ -511,6 +647,7 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
             continue;
         }
         out.push(AttentionItem {
+            host: None,
             recovery_batch: None,
             id: format!("mine-{:016x}", fnv1a(rest)),
             kind: "mine".to_string(),
@@ -538,6 +675,8 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
             missing: vec![],
             state: "open".to_string(),
             settled: false,
+            images: vec![],
+            ..Default::default()
         });
     }
     out
@@ -573,7 +712,11 @@ pub fn project(
         match kind {
             "operator_question" => {
                 if let Some(qid) = str_field(&v, "question_id") {
-                    asked.insert(qid.to_string(), v);
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asked.insert(qid.to_string(), v);
+                    } else {
+                        asked.remove(qid);
+                    }
                 }
             }
             "operator_question_closed" => {
@@ -691,7 +834,11 @@ pub fn answered(journals_raw: &str, now: u64) -> Vec<Answered> {
         match v.get("type").and_then(Value::as_str).unwrap_or("") {
             "operator_question" => {
                 if let Some(qid) = str_field(&v, "question_id") {
-                    asks.insert(qid.to_string(), v.clone());
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asks.insert(qid.to_string(), v.clone());
+                    } else {
+                        asks.remove(qid);
+                    }
                 }
             }
             "attention_answer" => {
@@ -824,6 +971,43 @@ mod tests {
     }
 
     #[test]
+    fn a_worktree_asker_routes_to_its_repo_and_asked_ids_names_each_ask() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("footnote");
+        let gitdir = main.join(".git/worktrees/x-aaaa");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let wt = tmp.path().join("worktrees/footnote/x-aaaa");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+        let gone = tmp.path().join("worktrees/footnote/x-gone");
+        let journals = format!(
+            "{}\n{}\n",
+            row(
+                "q-wt",
+                "ship?",
+                json!({"ask": "a", "cwd": wt.to_str().unwrap()})
+            ),
+            row(
+                "q-gone",
+                "ship?",
+                json!({"ask": "a", "cwd": gone.to_str().unwrap()})
+            ),
+        );
+        let items = project(&journals, &[], "", 0);
+        let of = |id: &str| items.iter().find(|i| i.id == id).unwrap().project.clone();
+        assert_eq!(of("q-wt"), "footnote", "a linked worktree names its repo");
+        assert_eq!(of("q-gone"), "x-gone", "a removed cwd keeps its basename");
+        let closed =
+            r#"{"type":"operator_question_closed","data":{"question_id":"q-only-closed"}}"#;
+        let asked = asked_ids(&[format!("{journals}{closed}\n")]);
+        assert_eq!(asked, ["q-wt".to_string(), "q-gone".to_string()].into());
+        // One store with no ask row while another holds asks: a partial
+        // store loss proves nothing lost, so no id is named.
+        assert!(asked_ids(&[journals.clone(), format!("{closed}\n")]).is_empty());
+    }
+
+    #[test]
     fn ac1_hp_open_question_projects_with_missing_fields_named() {
         let journals = format!(
             "{}\n{}\n",
@@ -858,6 +1042,25 @@ mod tests {
         assert!(missing.contains("recommendation"), "missing: {missing}");
         assert!(missing.contains("reversible"), "missing: {missing}");
         assert!(missing.contains("meanwhile"), "missing: {missing}");
+        assert!(!missing.contains("tried"), "a pre-ladder row: {missing}");
+
+        // A climbed ladder row carries its provenance and needs the card
+        // fields the ladder adds.
+        let climbed = row(
+            "q-ladder",
+            "Rule on the law",
+            json!({"options": ["yes", "no"], "rung": {"level": "user"},
+                "origin": {"name": "t-worker", "harness": "claude"},
+                "via": [{"holder_name": "tomas", "evidence": "read PR 12"}]}),
+        );
+        let items = project(&format!("{climbed}\n"), &[], "", 0);
+        let item = &items[0];
+        assert_eq!(item.origin.as_ref().unwrap()["name"], json!("t-worker"));
+        assert_eq!(item.via[0]["holder_name"], json!("tomas"));
+        let missing = item.missing.join(",");
+        for field in ["tried", "on_silence", "deadline", "class"] {
+            assert!(missing.contains(field), "missing: {missing}");
+        }
     }
 
     #[test]
@@ -952,5 +1155,46 @@ mod tests {
         // Past the TTL: gone from the panel's answered rows.
         let late = now + crate::attention::ANSWERED_TTL_S + 10;
         assert!(answered(&raw, late).is_empty());
+    }
+
+    #[test]
+    fn a_note_carrying_every_section_reads_ready() {
+        let note = concat!(
+            "---\nclass: irreversible\nstatus: open\nnode: x-aaaa\n",
+            "raised_by: lead-a792\nraised_at: 2026-10-20T09:00:00Z\n",
+            "deadline: 2026-10-21T09:00:00Z\nrecommend: 2\non_silence: wait\n---\n",
+            "# Ship under the freeze?\n\n",
+            "## What is being decided\nWhether to deploy while the build freeze holds.\n\n",
+            "## Why it matters now\nThe window closes tonight.\n\n",
+            "## Options\n1. Deploy now. What happens next: CI keeps running.\n",
+            "2. Wait for the freeze. What happens next: the window closes.\n\n",
+            "## Recommendation\nOption 2. The window is not worth a red main.\n\n",
+            "## If no answer by the deadline\nThe lead waits.\n\n",
+            "## Blocked because\nOnly the user can lift a freeze.\n\n",
+            "## Why these options\nBoth keep the release train moving.\n\n",
+            "## Downside\nWaiting may miss the window.\n\n",
+            "## Not thought through\nWhether the freeze lifts tonight.\n\n",
+            "## Reversible\ncostly\n\n",
+            "## Cost if wrong\nA red main costs a full rollback.\n\n",
+            "## Meanwhile\nThe lead keeps the release branch green.\n"
+        );
+        let notes = vec![("20261020-ship-under-freeze".to_string(), note.to_string())];
+        let items = project("", &notes, "", 0);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id, "note-20261020-ship-under-freeze");
+        assert!(item.ready, "missing: {:?}", item.missing);
+        assert!(item.missing.is_empty());
+        assert_eq!(
+            item.blocked_because.as_deref(),
+            Some("Only the user can lift a freeze."),
+            "the Blocked because section wins over why-now"
+        );
+        assert_eq!(item.reversible.as_deref(), Some("costly"));
+        assert!(item.cost_if_wrong.is_some(), "costly needs its cost");
+        assert_eq!(
+            item.recommendation.as_ref().unwrap().downside.as_deref(),
+            Some("Waiting may miss the window.")
+        );
     }
 }

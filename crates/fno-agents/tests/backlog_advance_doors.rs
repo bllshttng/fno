@@ -131,7 +131,7 @@ fn plan(tasks: &str, waves: &str) -> String {
     format!("---\ndifficulty: high\nstatus: ready\n---\n## Execution Strategy\n```yaml\ntasks:\n{tasks}\nwaves:\n{waves}\n```\n")
 }
 fn row(id: &str, extra: Value) -> Value {
-    let mut r = json!({"id":id,"title":id,"slug":id,"type":"task","project":"fixture","priority":"p2","status":"ready","dispatch_verb":"/target","difficulty":"high","created_at":chrono::Utc::now().to_rfc3339()});
+    let mut r = json!({"id":id,"title":id,"slug":id,"type":"task","project":"fixture","priority":"p2","status":"ready","dispatch_command":"/target","difficulty":"high","created_at":chrono::Utc::now().to_rfc3339()});
     r.as_object_mut()
         .unwrap()
         .extend(extra.as_object().unwrap().clone());
@@ -368,7 +368,12 @@ fn join_persists_brief_and_enforced_policies_before_each_launch() {
             launches.matches("--sandbox-write-policy").count(),
             if sandbox { 2 } else { 0 }
         );
-        assert!(launches.contains("--model glm-5.3-flash[1m]"));
+        // The joiners seat threads on the lane template: the retired model and
+        // substrate axes never ride the spawn.
+        assert!(
+            !launches.contains("--model") && !launches.contains("--substrate"),
+            "{launches}"
+        );
         let brief = std::fs::read_to_string(w.root.join(".fno/join-briefs/x-aaaa.md")).unwrap();
         assert!(brief.contains(receipt["lead"].as_str().unwrap()));
         assert!(brief.contains("claim ONE ready task"));
@@ -604,8 +609,13 @@ fn advance_reads_real_selection_and_preserves_launch_pins() {
     assert_eq!(receipt["node_id"], "x-aaaa");
     let calls = std::fs::read_to_string(&log).unwrap();
     assert_eq!(calls.lines().count(), 1);
-    assert!(calls.contains("--effort high"), "{calls}");
-    assert!(calls.contains("--model glm-5.3-flash[1m]"));
+    // The node's model and effort pins resolve at the spawn door through
+    // the lane template; the retired axes never ride the launch argv.
+    assert!(
+        !calls.contains("--effort") && !calls.contains("--model"),
+        "{calls}"
+    );
+    assert!(calls.contains("--node x-aaaa"), "{calls}");
     w.claim("x-aaaa", &seed.root);
     let _ = decode(&invoke());
     assert_eq!(
@@ -658,4 +668,92 @@ fn closed_project_drives_dependents_even_when_next_selection_has_another_scope()
         .events()
         .iter()
         .any(|r| r["type"] == "advance_dispatched" && r["data"]["node_id"] == "x-bbbb"));
+}
+
+#[test]
+fn an_auto_continue_tick_commits_to_the_store_and_creates_no_root_file() {
+    let w = World::new(json!([]));
+    let out = w.run(&["backlog", "advance"], None);
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "skipped reason=disabled\n"
+    );
+    let events = w.events();
+    let ticks: Vec<&Value> = events
+        .iter()
+        .filter(|r| r["type"] == "control_plane_tick")
+        .collect();
+    assert_eq!(ticks.len(), 1, "ticks: {ticks:?}");
+    assert_eq!(ticks[0]["data"]["arm"], "auto_continue");
+    assert!(
+        !w.root.join("events.jsonl").exists(),
+        "the tick must not create the root journal file"
+    );
+}
+
+#[test]
+fn a_live_claim_with_a_recent_loop_check_reads_working() {
+    let w = World::new(json!([row("x-aaaa", json!({}))]));
+    let pid = std::process::id().to_string();
+    let acquired = w.run(
+        &[
+            "claim",
+            "acquire",
+            "node:x-aaaa",
+            "--holder",
+            "target-session:tok-1",
+            "--pid",
+            &pid,
+            "--ttl-ms",
+            "180000",
+        ],
+        None,
+    );
+    assert!(
+        acquired.status.success(),
+        "{}",
+        String::from_utf8_lossy(&acquired.stderr)
+    );
+    // The op runs as the holding session: its own pid is the child's, not the
+    // acquiring test's, so the session id is what makes the claim ours.
+    let claim_op = || {
+        let mut c = w.command();
+        c.args(["backlog", "advance", "--stdin"])
+            .env("TARGET_SESSION_ID", "tok-1");
+        decode(&w.output(
+            c,
+            Some(&json!({"op":"claim","node_id":"x-aaaa","emit_events":false})),
+        ))
+    };
+    // With no loop_check row the live claim reads waiting.
+    let none = claim_op();
+    assert_eq!(none["verdict"], "ours");
+    assert_eq!(none["truth_status"], "waiting");
+    // One committed loop_check row for the session flips it to working. The
+    // envelope carries every field the schema judge requires.
+    let envelope = json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "type": "loop_check",
+        "source": "hook",
+        "data": {
+            "session_id": "tok-1",
+            "fingerprint": "fp-1",
+            "fires": 1,
+            "consecutive_unchanged": 0,
+            "decision": "allow",
+            "intent": "none",
+            "pr_state": "clean",
+            "ci": "green",
+            "reviewed": true,
+        },
+    });
+    fno_agents::event_store::append_envelope(
+        &w.root.join("events.jsonl"),
+        &envelope.to_string(),
+        None,
+    )
+    .expect("the store beside the journal opened");
+    let working = claim_op();
+    assert_eq!(working["truth_status"], "working");
 }

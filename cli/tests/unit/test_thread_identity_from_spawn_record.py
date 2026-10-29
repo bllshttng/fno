@@ -67,6 +67,28 @@ def test_duplicate_cwd_refuses_rather_than_picks(tmp_path, monkeypatch):
     assert live_thread_row_for_cwd(str(cwd_a)) is None
 
 
+def test_markerless_claude_process_never_adopts_a_neighbour_row(tmp_path, monkeypatch):
+    from fno.claims.self_identity import _fill_spawn_record
+    from fno.harness_identity import OwnedHarnessIdentity
+
+    cwd_a = tmp_path / "worker-a"
+    cwd_a.mkdir()
+    row = _thread_row("worker-a", str(cwd_a), "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4")
+    row["harness"] = "claude"
+    _write_registry(tmp_path, monkeypatch, [row])
+    monkeypatch.chdir(cwd_a)
+    bare = OwnedHarnessIdentity(session_id=None, harness=None)
+    assert _fill_spawn_record(bare).session_id is None
+    named = OwnedHarnessIdentity(
+        session_id=None,
+        harness=None,
+        markers_present=(
+            ("CLAUDE_CODE_SESSION_ID", "claude", "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"),
+        ),
+    )
+    assert _fill_spawn_record(named).session_id == "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
+
+
 def test_exited_rows_own_no_identity(tmp_path, monkeypatch):
     cwd_a = tmp_path / "worker-a"
     cwd_a.mkdir()
@@ -104,26 +126,6 @@ def _scrub_env(monkeypatch):
         "FNO_SESSION_PID",
     ):
         monkeypatch.delenv(name, raising=False)
-
-
-def test_two_thread_workers_resolve_two_different_ids(tmp_path, monkeypatch):
-    """The node's discriminating case, pinned: one shared app-server pid, two
-    live thread workers, two different session ids. Each cwd resolves to its
-    OWN row's identity with the spawn_record disposition."""
-    rows, cwd_a, cwd_b, sid_a, sid_b = _two_worker_rows(tmp_path)
-    _write_registry(tmp_path, monkeypatch, rows)
-    _scrub_env(monkeypatch)
-
-    monkeypatch.chdir(cwd_a)
-    ident_a = resolve_self_identity()
-    monkeypatch.chdir(cwd_b)
-    ident_b = resolve_self_identity()
-
-    assert ident_a.harness == "codex" and ident_b.harness == "codex"
-    assert ident_a.session_id == sid_a
-    assert ident_b.session_id == sid_b
-    assert ident_a.session_id != ident_b.session_id
-    assert ident_a.disposition == ident_b.disposition == "spawn_record"
 
 
 def test_proven_ambient_identity_wins_and_the_registry_is_not_consulted(
@@ -241,28 +243,26 @@ def test_foreign_legacy_marker_blocks_adoption(tmp_path, monkeypatch):
     assert ident.disposition != "spawn_record"
 
 
-def test_resolve_owned_identity_verb_stamps_the_spawn_record(tmp_path, monkeypatch):
-    """The production path end to end: init's manifest stamper verb answers
+def test_resolve_owned_identity_command_stamps_the_spawn_record(tmp_path, monkeypatch):
+    """The production path end to end: init's manifest stamper command answers
     HARNESS=codex SESSION_ID=<row id> for a thread worker standing in its own
     worktree - the answer whose absence stamped harness=unknown and refused
-    the worker's node claim."""
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    rows, cwd_a, _cwd_b, sid_a, _sid_b = _two_worker_rows(tmp_path)
+    the worker's node claim. The command itself is native now (the front door
+    execs it through the same resolver this file tests), so the command-level
+    contract rides the resolver here and the door parity goldens elsewhere."""
+    rows, cwd_a, cwd_b, sid_a, sid_b = _two_worker_rows(tmp_path)
     _write_registry(tmp_path, monkeypatch, rows)
     _scrub_env(monkeypatch)
 
     monkeypatch.chdir(cwd_a)
-    result = CliRunner().invoke(app, ["do", "target", "resolve-owned-identity"])
-    assert result.exit_code == 0, result.output
-    fields = {
-        line.split("=", 1)[0]: line.split("=", 1)[1]
-        for line in result.stdout.splitlines()
-        if "=" in line
-    }
-    assert fields["HARNESS"] == "codex"
-    assert fields["SESSION_ID"] == sid_a
-    assert fields["DISPOSITION"] == "spawn_record"
-    assert fields["COLLISION"] == ""
+    ident_a = resolve_self_identity()
+    assert ident_a.harness == "codex"
+    assert ident_a.session_id == sid_a
+    assert ident_a.disposition == "spawn_record"
+
+    # One shared app-server pid, two thread workers: each cwd resolves to its
+    # OWN row, never the first match.
+    monkeypatch.chdir(cwd_b)
+    ident_b = resolve_self_identity()
+    assert ident_b.session_id == sid_b != sid_a
+    assert ident_b.disposition == "spawn_record"

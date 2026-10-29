@@ -1,0 +1,1826 @@
+//! The hidden `fno-agents claim` debug front over the native claims module.
+//!
+//! Extracted from client_commands.rs, which it had outgrown: the Python claims
+//! client (`fno.claims.core`) runs every lockfile operation through these
+//! commands, and the claim-sweep JSON assembly (the serializer the Python claim classifier golden
+//! is byte-checked against) lives here too. Dispatch stays in `bin/client.rs`
+//! via the `mail-inject` `matches!` pattern, so the command remains hidden from
+//! `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agents claim` is still the
+//! only operator CLI for claims.
+
+use serde_json::Value;
+#[cfg(test)]
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
+
+/// `fno-agents claim <acquire|release|status|list> <key> [flags]` — a thin front
+/// over [`crate::claims`], the native lockfile-protocol implementation.
+///
+/// Purpose: (a) the Python claims client (`fno.claims.core`) runs every
+/// lockfile operation through it, and (b) an ops escape hatch when the Python
+/// CLI is unavailable. It is deliberately HIDDEN — dispatched via `matches!`
+/// in `bin/client.rs` (the `mail-inject` pattern) so it stays out of
+/// `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agents claim` remains the only
+/// operator CLI for claims.
+///
+/// Output is one JSON object on stdout. Exit codes: 0 success, 1 held by
+/// another live writer, 2 usage/validation/io error.
+pub fn run_claim(args: &[String]) -> i32 {
+    let Some(op) = args.first().map(String::as_str) else {
+        eprintln!(
+            "fno-agents: claim requires an operation: acquire|release|status|list|sweep|queue|session-pid|root|export|flight-acquire|flight-release|long-holds|release-stopped"
+        );
+        return 2;
+    };
+    if op == "review-hold" {
+        // The ported review-hold command family: a leading sub-token,
+        // the same shape as `birth` in client.rs. With no argv the stdin
+        // JSON door answers command_call payloads.
+        return crate::review_hold::run(&args[1..]);
+    }
+    if op == "read-path" {
+        let Some(path) = args.get(1) else {
+            return 2;
+        };
+        match crate::claim_store::read_at_path(std::path::Path::new(path)) {
+            // The raw record, not the status view: callers hand it back as
+            // --expected-claim, and the observed-row delete compares every
+            // column, so a derived session_id or metadata key never matches.
+            Ok(Some(record)) => {
+                println!("{}", serde_json::to_value(&record).unwrap_or_default());
+                return 0;
+            }
+            Ok(None) => {
+                println!("{}", serde_json::json!({"state":"free"}));
+                return 0;
+            }
+            Err(error) => {
+                eprintln!("claim read-path: {error}");
+                return 2;
+            }
+        }
+    }
+    if op == "export" {
+        return crate::store_export::run_store_export(&args[1..]);
+    }
+    if op == "backlog" {
+        return crate::backlog_share::run(&args[1..]);
+    }
+    if op == "root" {
+        return run_claim_root(&args[1..]);
+    }
+    if op == "sweep" {
+        return run_claim_sweep(&args[1..]);
+    }
+    if op == "acquire" {
+        // Wave 1 of the leaf port: the operator surface (and the rebind its
+        // --handover-from drives) lives in claim_cli; goldens are the
+        // contract.
+        return crate::claim_cli::acquire::run(&args[1..]);
+    }
+    if op == "release" {
+        // Wave 2 of the leaf port: the operator surface (plain, --lane,
+        // --force, and the do-row close/rollback) lives in claim_cli; goldens
+        // are the contract.
+        return crate::claim_cli::release::run(&args[1..]);
+    }
+    if op == "refresh" {
+        // Wave 3 of the leaf port: the operator surface lives in claim_cli;
+        // goldens are the contract. Both core shapes (legacy for global-id
+        // keys, native pre-read for repo-local) route here.
+        return crate::claim_cli::refresh::run(&args[1..]);
+    }
+    if op == "status" {
+        // Wave 4 of the leaf port: the operator surface (payload, refusal,
+        // roster crosscheck and overlay, verdict line) lives in claim_cli;
+        // goldens are the contract.
+        return crate::claim_cli::status::run(&args[1..]);
+    }
+    if op == "lane-acquire" {
+        return crate::claim_lanes_cli::run_lane_acquire(&args[1..]);
+    }
+    if op == "lane-release" {
+        return crate::claim_lanes_cli::run_lane_release(&args[1..]);
+    }
+    if op == "lane-count" {
+        return crate::claim_lanes_cli::run_lane_count(&args[1..]);
+    }
+    if op == "lane-reconcile" {
+        return crate::claim_lanes_cli::run_lane_reconcile(&args[1..]);
+    }
+    if op == "queue" {
+        // One dispatch line: argument parsing and the arm body live in
+        // claim_queue.rs, so this 2,000-line file stays flat.
+        return crate::claim_queue::run_queue(&args[1..]);
+    }
+    if op == "session-pid" {
+        // Wave 7 of the leaf port: the operator surface lives in claim_cli;
+        // goldens are the contract.
+        return crate::claim_cli::session_pid::run(&args[1..]);
+    }
+    if op == "list" {
+        // One dispatch line: argument parsing and the arm body live in
+        // claim_cli/list.rs, like every ported claim leaf.
+        return crate::claim_cli::list::run(&args[1..]);
+    }
+    if op == "release-stopped" {
+        return run_release_stopped(&args[1..]);
+    }
+    if op == "reap" {
+        return crate::claim_cli::reap::run(&args[1..]);
+    }
+    if op == "long-holds" {
+        return crate::claims::run_claim_long_holds(&args[1..]);
+    }
+    // The backlog one-in-flight gate's lock operations: arguments of
+    // this command, never new leaves. The lock is held in the name of the
+    // CALLING process (--pid), never this short-lived binary, and a dead
+    // holder is reclaimed on the pid probe - for a one-shot subprocess the
+    // transcript-liveness basis is the wrong policy.
+    if op == "flight-acquire" {
+        return crate::flight_gate::run_flight_acquire(&args[1..]);
+    }
+    if op == "flight-release" {
+        return crate::flight_gate::run_flight_release(&args[1..]);
+    }
+    let Some(key) = args.get(1).filter(|k| !k.starts_with("--")).cloned() else {
+        eprintln!("fno-agents: claim {op} requires a key argument");
+        return 2;
+    };
+
+    let mut holder: Option<String> = None;
+    let mut opts = crate::claims::AcquireOpts::default();
+    let mut holding_recovery_lock = false;
+    let mut expected_claim = None;
+    let mut claims_directory: Option<PathBuf> = None;
+    let mut it = args[2..].iter();
+    while let Some(a) = it.next() {
+        let mut take = |name: &str| -> Option<String> {
+            let v = it.next().cloned();
+            if v.is_none() {
+                eprintln!("fno-agents: claim: {name} requires a value");
+            }
+            v
+        };
+        match a.as_str() {
+            "--claims-dir" => claims_directory = take("--claims-dir").map(PathBuf::from),
+            "--holder" => holder = take("--holder"),
+            "--pid" => match take("--pid").and_then(|v| v.parse::<u32>().ok()) {
+                Some(p) => opts.pid = Some(p),
+                None => return 2,
+            },
+            "--pid-unavailable" => opts.pid_unavailable = true,
+            "--ttl-ms" => match take("--ttl-ms").and_then(|v| v.parse::<i64>().ok()) {
+                Some(t) => opts.ttl_ms = Some(t),
+                None => return 2,
+            },
+            "--reason" => match take("--reason") {
+                Some(r) => opts.reason = Some(r),
+                None => return 2,
+            },
+            "--metadata" => {
+                let Some(raw) = take("--metadata") else {
+                    return 2;
+                };
+                match serde_json::from_str::<Value>(&raw) {
+                    Ok(Value::Object(m)) => opts.metadata = Some(m),
+                    _ => {
+                        eprintln!("fno-agents: claim: --metadata must be a JSON object");
+                        return 2;
+                    }
+                }
+            }
+            "--root" => match take("--root") {
+                Some(r) => opts.root = Some(PathBuf::from(r)),
+                None => return 2,
+            },
+            "--expected-claim" => {
+                let Some(raw) = take("--expected-claim") else {
+                    return 2;
+                };
+                match serde_json::from_str::<crate::claims::ClaimRecord>(&raw) {
+                    Ok(record) => expected_claim = Some(record),
+                    Err(e) => {
+                        eprintln!("claim expected record: {e}");
+                        return 2;
+                    }
+                }
+            }
+            "--holding-recovery-lock" => holding_recovery_lock = true,
+            "--json" | "-J" => {} // output is always JSON; accepted for symmetry
+            other => {
+                eprintln!("fno-agents: claim: unknown flag {other}");
+                return 2;
+            }
+        }
+    }
+
+    match op {
+        // "acquire" and "release" dispatch to claim_cli above; the operator
+        // leaf owns the surface since the wave-1/2 ports ("release" keeps
+        // its engine receipt under --with-claim).
+        "renew" => {
+            let Some(holder) = holder else {
+                eprintln!("fno-agents: claim renew requires --holder");
+                return 2;
+            };
+            let Some(ttl_ms) = opts.ttl_ms else {
+                eprintln!("fno-agents: claim renew requires --ttl-ms");
+                return 2;
+            };
+            match crate::claims::renew(&key, &holder, ttl_ms, opts.root.as_deref()) {
+                Ok(true) => {
+                    let (_, record) = crate::claims::status(&key, opts.root.as_deref());
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "outcome": "renewed", "refreshed": true, "claim": record,
+                        })
+                    );
+                    0
+                }
+                Ok(false) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "outcome": "unchanged", "refreshed": false, "key": key,
+                        })
+                    );
+                    0
+                }
+                Err(error) => {
+                    eprintln!("fno-agents: claim renew failed: {error}");
+                    2
+                }
+            }
+        }
+        "force-release" => {
+            let Some(reason) = opts.reason.as_deref() else {
+                eprintln!("fno-agents: claim force-release requires --reason");
+                return 2;
+            };
+            let result = if let Some(expected) = expected_claim.as_ref() {
+                match claims_directory.as_deref() {
+                    Some(dir) => crate::claim_store::force_release_observed_in_directory(
+                        dir, &key, reason, expected,
+                    ),
+                    None => crate::claim_store::force_release_observed(
+                        &key,
+                        reason,
+                        opts.root.as_deref(),
+                        expected,
+                    ),
+                }
+            } else {
+                crate::claim_store::force_release(
+                    &key,
+                    reason,
+                    opts.root.as_deref(),
+                    holding_recovery_lock,
+                )
+            };
+            match result {
+                Ok(payload) => {
+                    println!("{payload}");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("fno-agents: claim force-release failed: {error}");
+                    2
+                }
+            }
+        }
+        "status" => {
+            let (state, record) = crate::claims::status(&key, opts.root.as_deref());
+            let payload = record
+                .map(|record| claim_status_value(&record))
+                .unwrap_or_else(|| serde_json::json!({"key": key, "state": state.as_str()}));
+            println!("{payload}");
+            if state == crate::claims::ClaimState::Corrupted {
+                2
+            } else {
+                0
+            }
+        }
+        other => {
+            eprintln!(
+                "fno-agents: unknown claim operation: {other} (use acquire|release|renew|status|list|sweep|reap)"
+            );
+            2
+        }
+    }
+}
+
+/// `claim root <key>` — the one claims-root resolver: `{"key","root","dir"}`
+/// for the store `key` resolves against (`root` null for a repo-local key).
+/// The Python callers that need the PATH read this op (`_native_claim("root",
+/// key, [])`); the lockfile operations themselves never needed it, they route
+/// inside `claims::acquire`/`claims_dir`.
+fn run_claim_root(args: &[String]) -> i32 {
+    let Some(key) = args.iter().find(|a| !a.starts_with("--")) else {
+        eprintln!("fno-agents: claim root requires a key argument");
+        return 2;
+    };
+    let root = crate::claims_root::claims_root_for(key);
+    let dir = match crate::claims_root::claims_dir(key, root.as_deref()) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("fno-agents: claim root: {e}");
+            return 2;
+        }
+    };
+    println!(
+        "{}",
+        serde_json::json!({ "key": key, "root": root, "dir": dir })
+    );
+    0
+}
+
+/// Free the build and run-slot claims a dead cargo left behind. A worker's
+/// cargo holds a compile slot (`build:cargo`, `build:cargo:1`,
+/// `build:cargo:2`) and a `test:cargo-run:<i>` slot under its own pid
+/// with no TTL, so a reaped worker whose cargo died leaves both held until a
+/// sweep reads the pid. The pid alone decides these keys and no session probe
+/// runs, so every worker reap can afford this pass. Returns the count freed.
+pub(crate) fn reap_dead_cargo_claims() -> u64 {
+    // The same test fence as `claims::build_waiters_dir`: a daemon test with
+    // no declared claims root must not resolve the machine's own.
+    let pinned = std::env::var_os("FNO_CLAIMS_ROOT").is_some_and(|v| !v.is_empty());
+    if cfg!(test) && !pinned && !crate::paths::test_root_declared() {
+        return 0;
+    }
+    let Ok(dir) = crate::claims_root::claims_dir("build:cargo", None) else {
+        return 0;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut keys: Vec<String> = crate::test_run::BUILD_SLOT_KEYS
+        .iter()
+        .map(|key| key.to_string())
+        .collect();
+    keys.extend(
+        crate::claim_store::records_in(&dir, Some("test:cargo-run:"), true)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|record| record.key),
+    );
+    keys.iter()
+        .filter_map(|key| {
+            crate::claim_store::reap_in_directory(
+                &dir,
+                true,
+                |_: &[crate::claims::ClaimRecord]| None,
+                |_: &[crate::claims::ClaimRecord]| None,
+                Some(key),
+                Some(deadline),
+            )
+            .ok()
+        })
+        .map(|result| result["reaped"].as_u64().unwrap_or(0))
+        .sum()
+}
+
+/// The witness basis for a session the reap's deadline left unread.
+const REAP_DEADLINE_KEPT: &str = "reap-deadline-kept";
+
+/// Reap every claims root in `dirs` (the global and repo-local roots when it
+/// is empty) under one shared deadline. A root that cannot be read is named
+/// in `root_errors`, and the other roots still reap.
+pub(crate) fn reap_roots(
+    mut dirs: Vec<PathBuf>,
+    apply: bool,
+    key: Option<&str>,
+    budget: std::time::Duration,
+) -> Value {
+    if dirs.is_empty() {
+        if let Some(dir) = crate::claims::global_claims_dir() {
+            dirs.push(dir);
+        }
+        if let Ok(dir) = crate::claims_root::claims_dir("local-probe", None) {
+            dirs.push(dir);
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    // The roots share one deadline, so a clock-chosen first root keeps an
+    // expensive root from starving the one after it on every pass.
+    if !dirs.is_empty() {
+        let start = (crate::claims::now_ms().max(0) / 1000) as usize % dirs.len();
+        dirs.rotate_left(start);
+    }
+    let deadline = std::time::Instant::now() + budget;
+    let mut summary = serde_json::json!({"apply":apply,"scanned":0,"would_reap":0,"reaped":0,"deferred":0,"reap_failed":[],"root_errors":[],"roots":dirs});
+    for dir in &dirs {
+        // One batch answers a chunk's sessions, and a fresh batch over the
+        // chunk's candidates is the look before a delete: the compare-and-swap
+        // on the row cannot see a session that resumed during the scan. A lazy
+        // witness spawned one truth probe per session, which made a 400-row
+        // pass run for minutes. A session no batch answered before the
+        // deadline reads live, so its claim is kept and counted as deferred,
+        // never reaped.
+        let kept_by_deadline = std::rc::Rc::new(std::cell::Cell::new(0u64));
+        let scan = |records: &[crate::claims::ClaimRecord]| {
+            let records: Vec<&crate::claims::ClaimRecord> = records.iter().collect();
+            let (witness, _) = session_witness_primed_within(&records, Some(deadline));
+            let kept = kept_by_deadline.clone();
+            Some(Box::new(move |record: &crate::claims::ClaimRecord| {
+                let answer = witness(record);
+                if matches!(
+                    answer,
+                    crate::claims::SessionLiveness::Live(REAP_DEADLINE_KEPT)
+                ) {
+                    kept.set(kept.get() + 1);
+                }
+                answer
+            }) as crate::claim_store::BoxedWitness<'static>)
+        };
+        let reaped =
+            crate::claim_store::reap_in_directory(dir, apply, scan, scan, key, Some(deadline)).map(
+                |mut result| {
+                    let deferred =
+                        result["deferred"].as_u64().unwrap_or(0) + kept_by_deadline.get();
+                    result["deferred"] = serde_json::json!(deferred);
+                    result
+                },
+            );
+        match reaped {
+            Ok(result) => {
+                for field in ["scanned", "would_reap", "reaped", "deferred"] {
+                    summary[field] = serde_json::json!(
+                        summary[field].as_u64().unwrap_or(0) + result[field].as_u64().unwrap_or(0)
+                    );
+                }
+                if let Some(errors) = result["reap_failed"].as_array() {
+                    summary["reap_failed"]
+                        .as_array_mut()
+                        .unwrap()
+                        .extend(errors.iter().cloned());
+                }
+            }
+            Err(error) => summary["root_errors"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!(format!("{}: {error}", dir.display()))),
+        }
+    }
+    summary
+}
+
+pub(crate) fn claim_status_value(rec: &crate::claims::ClaimRecord) -> Value {
+    let (witness, witness_answer) = default_session_witness();
+    let witness: crate::claims::SessionWitness = &witness;
+    claim_status_value_with_witness(
+        rec,
+        Some(witness),
+        &witness_answer,
+        &std::cell::RefCell::new(None),
+    )
+}
+
+/// `fno-agents claim release-stopped --name <n> [--session <sid>] --claims-dir <dir>`
+/// (`--claims-dir` repeatable, `--events-dir <dir>` optional) — release every
+/// claim a stopped worker holds. Prints the receipt as one JSON line and
+/// exits 0; exit 3 on a claims-root read error, as the flight commands do.
+fn run_release_stopped(args: &[String]) -> i32 {
+    let mut name: Option<String> = None;
+    let mut session: Option<String> = None;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut events_dir: Option<PathBuf> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--name" => match it.next() {
+                Some(v) => name = Some(v.clone()),
+                None => {
+                    eprintln!("fno-agents: claim release-stopped: --name requires a value");
+                    return 2;
+                }
+            },
+            "--session" => match it.next() {
+                Some(v) => session = Some(v.clone()),
+                None => {
+                    eprintln!("fno-agents: claim release-stopped: --session requires a value");
+                    return 2;
+                }
+            },
+            "--claims-dir" => match it.next() {
+                Some(v) => dirs.push(PathBuf::from(v)),
+                None => {
+                    eprintln!("fno-agents: claim release-stopped: --claims-dir requires a value");
+                    return 2;
+                }
+            },
+            "--events-dir" => match it.next() {
+                Some(v) => events_dir = Some(PathBuf::from(v)),
+                None => {
+                    eprintln!("fno-agents: claim release-stopped: --events-dir requires a value");
+                    return 2;
+                }
+            },
+            other => {
+                eprintln!("fno-agents: claim release-stopped: unknown flag {other}");
+                return 2;
+            }
+        }
+    }
+    let Some(name) = name else {
+        eprintln!("fno-agents: claim release-stopped requires --name");
+        return 2;
+    };
+    if dirs.is_empty() {
+        eprintln!("fno-agents: claim release-stopped requires at least one --claims-dir");
+        return 2;
+    }
+    match crate::claims::release_for_stopped_session(
+        &crate::claims::StoppedHolder {
+            name,
+            harness_session_id: session,
+        },
+        &dirs,
+        events_dir.as_deref(),
+    ) {
+        Ok(receipt) => {
+            println!(
+                "{}",
+                serde_json::to_value(&receipt).unwrap_or(Value::Object(Default::default()))
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("fno-agents: claim release-stopped failed: {error}");
+            3
+        }
+    }
+}
+
+fn claim_status_value_with_witness(
+    rec: &crate::claims::ClaimRecord,
+    witness: Option<crate::claims::SessionWitness<'_>>,
+    witness_answer: &std::cell::RefCell<Option<&'static str>>,
+    session_index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+) -> Value {
+    let (holder_session, dispatched_by) = holder_session_fields(rec, session_index);
+    let (state, basis) = match witness {
+        Some(witness) => crate::claims::classify_with_basis_and_exclusivity(
+            rec,
+            None,
+            &|pid| crate::claims::probe_pid(pid),
+            None,
+            Some(witness),
+        ),
+        None => crate::claims::classify_with_basis(rec, None, &|pid| crate::claims::probe_pid(pid)),
+    };
+    let mut out = serde_json::Map::new();
+    out.insert("key".into(), Value::String(rec.key.clone()));
+    out.insert("state".into(), Value::String(state.as_str().into()));
+    out.insert("basis".into(), Value::String(basis.into()));
+    out.insert("holder".into(), Value::String(rec.holder.clone()));
+    out.insert(
+        "schema_version".into(),
+        Value::Number(rec.schema_version.into()),
+    );
+    out.insert(
+        "pid".into(),
+        rec.pid.map(Value::from).unwrap_or(Value::Null),
+    );
+    out.insert("pid_unavailable".into(), Value::Bool(rec.pid_unavailable));
+    out.insert("host".into(), Value::String(rec.host.clone()));
+    out.insert(
+        "machine_id".into(),
+        rec.machine_id
+            .clone()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    out.insert("acquired_at".into(), Value::Number(rec.acquired_at.into()));
+    out.insert(
+        "expires_at".into(),
+        rec.expires_at.map(Value::from).unwrap_or(Value::Null),
+    );
+    out.insert(
+        "expired".into(),
+        Value::Bool(
+            rec.expires_at
+                .is_some_and(|expires_at| crate::claims::now_ms() >= expires_at),
+        ),
+    );
+    if let Some(reason) = &rec.reason {
+        out.insert("reason".into(), Value::String(reason.clone()));
+    }
+    if let Some(harness) = &rec.harness {
+        out.insert("harness".into(), Value::String(harness.clone()));
+    }
+    if let Some(session) = holder_session {
+        out.insert("session_id".into(), Value::String(session));
+    }
+    if let Some(answered) = witness_answer.borrow_mut().take() {
+        out.insert("session_basis".into(), Value::String(answered.into()));
+    }
+    let mut metadata = rec.metadata.clone();
+    if let Some(dispatcher) = dispatched_by {
+        metadata
+            .entry("dispatched_by_session".to_string())
+            .or_insert_with(|| Value::String(dispatcher));
+    }
+    if !metadata.is_empty() {
+        out.insert("metadata".into(), Value::Object(metadata));
+    }
+    let (caller, harness) = crate::claims::resolve_identity();
+    if crate::first_check::lead_can_delegate(rec, caller.as_deref(), harness.as_deref()) {
+        out.insert("dispatch_occupied".into(), Value::Bool(false));
+    }
+    Value::Object(out)
+}
+
+/// The verdict `fno agents claim status` prints for one record, computed with
+/// the production session witness. `renew` and the
+/// watch-lease cause mapping read this same verdict, so a refused renewal
+/// names the answer the operator would see from `claim status`, never a
+/// second liveness opinion.
+pub(crate) fn status_verdict(
+    rec: &crate::claims::ClaimRecord,
+) -> (crate::claims::ClaimState, &'static str) {
+    let (witness, _answer) = default_session_witness();
+    crate::claims::classify_with_basis_and_exclusivity(
+        rec,
+        None,
+        &|pid| crate::claims::probe_pid(pid),
+        None,
+        Some(&witness),
+    )
+}
+
+/// `fno-agents claim sweep [--json] [--root <dir>]` — read matching claim
+/// lockfiles, classify each with the canonical [`crate::claims`] decision, and
+/// print ONE JSON object. The bare form keeps its historical `node:` /
+/// `dispatch:` filter; `--prefix`, repeated `--key`, and `--all` widen it.
+///
+/// The mux shells this (bounded, fail-open) to overlay in-flight state onto
+/// work-queue cards — the verdict shape above is a pinned contract (additive
+/// fields allowed, renames are not; `state` uses `ClaimState::as_str`
+/// vocabulary and consumers treat only `"live"` as in-flight).
+///
+/// A missing/unreadable claims dir is an EMPTY sweep (exit 0), not an error:
+/// no claims means no overlay. Unparseable/newer-schema lockfiles are
+/// excluded from the payload and logged to stderr (never fatal).
+fn run_claim_sweep(args: &[String]) -> i32 {
+    let mut root: Option<PathBuf> = None;
+    let mut claims_dir: Option<PathBuf> = None;
+    let mut prefix: Option<String> = None;
+    let mut keys: Vec<String> = Vec::new();
+    let mut all = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--root" => match it.next() {
+                Some(r) => root = Some(PathBuf::from(r)),
+                None => {
+                    eprintln!("fno-agents: claim sweep: --root requires a value");
+                    return 2;
+                }
+            },
+            "--claims-dir" => match it.next() {
+                Some(d) => claims_dir = Some(PathBuf::from(d)),
+                None => {
+                    eprintln!("fno-agents: claim sweep: --claims-dir requires a value");
+                    return 2;
+                }
+            },
+            "--prefix" => match it.next() {
+                Some(value) => prefix = Some(value.clone()),
+                None => {
+                    eprintln!("fno-agents: claim sweep: --prefix requires a value");
+                    return 2;
+                }
+            },
+            "--key" => match it.next() {
+                Some(value) => keys.push(value.clone()),
+                None => {
+                    eprintln!("fno-agents: claim sweep: --key requires a value");
+                    return 2;
+                }
+            },
+            "--all" => all = true,
+            "--json" | "-J" => {} // output is always JSON; accepted for symmetry
+            other => {
+                eprintln!("fno-agents: claim sweep: unknown flag {other}");
+                return 2;
+            }
+        }
+    }
+    if claims_dir.is_some() && root.is_some() {
+        eprintln!("fno-agents: claim sweep: --claims-dir and --root are mutually exclusive");
+        return 2;
+    }
+    let records = if let Some(dir) = claims_dir {
+        crate::claims::list_in(std::slice::from_ref(&dir), None, true)
+    } else {
+        let local_root = root.clone().or_else(|| std::env::current_dir().ok());
+        crate::claims::list(None, local_root.as_deref(), true)
+    };
+    let records = match records {
+        Ok(records) => records,
+        Err(e) => {
+            eprintln!("fno-agents: claim sweep: {e}");
+            return 1;
+        }
+    };
+    println!(
+        "{}",
+        claim_sweep_payload_from_records(&records, prefix.as_deref(), &keys, all)
+    );
+    0
+}
+
+/// Every claim row in one claims directory's table. The caller applies the
+/// prefix filter after reading the record.
+#[cfg(test)]
+fn claim_records_from_dir(dir: &Path) -> Vec<crate::claims::ClaimRecord> {
+    crate::claim_store::records_in(dir, None, true).unwrap_or_default()
+}
+
+/// The dispatcher-minted handover holder (mirrors `HANDOVER_HOLDER_PREFIX` in
+/// `fno.claims.cli`): the suffix is the launched WORKER's name, and the
+/// record's own `session_id` is the dispatcher's, not the worker's.
+pub(crate) const HANDOVER_HOLDER_PREFIX: &str = "spawn-handover:";
+
+/// The spawn gate's lane-reservation holder (`spawn_gate.rs` mints it
+/// `spawn-gate:<pid>:<name>`): the pid segment is the GATE process, the
+/// suffix is the worker the lane is reserved for. Like the handover holder,
+/// the record carries the DISPATCHER's ambient identity, because
+/// `claims::acquire` fills the fields the minter left blank.
+const SPAWN_GATE_HOLDER_PREFIX: &str = "spawn-gate:";
+
+/// Witness basis for a session the registry's served `liveness` word answers
+/// alive. Lives here, not in `claims.rs`'s basis module: that file is
+/// shrink-only (4996 lines).
+const REGISTRY_SERVED_LIVE: &str = "registry-served-live";
+
+/// The production session witness. Resolution order for the record's
+/// resolved subject session (the worker a handover holder names, else the
+/// record's own session id): (a) the fleet registry row keyed by `harness_session_id`, whose
+/// pid + start time is probed - the row's session binding is the identity
+/// proof, so no create-time arithmetic is applied; (b) the transcript
+/// reachability probe, the witness that answered every dated specimen (it
+/// reads the newest timestamped entry, never the mtime, which overstates by
+/// up to 939 minutes); (c) Unresolved. The registry loads ONCE per invocation
+/// and is shared across every record the sweep classifies, the same shape as
+/// the pid-exclusivity index.
+///
+/// The returned cell carries the LAST answer the witness gave (None while it
+/// was never consulted, e.g. a pid-decided verdict or a record with no
+/// session id). The caller reads and drains it after each classification to
+/// fill the payload's `session_basis`.
+pub(crate) fn default_session_witness() -> (
+    impl Fn(&crate::claims::ClaimRecord) -> crate::claims::SessionLiveness,
+    std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
+) {
+    memoized_session_witness(
+        std::cell::RefCell::new(None),
+        std::cell::RefCell::new(std::collections::HashMap::new()),
+        None,
+    )
+}
+
+/// The lazy witness's engine: the registry index and the per-session memo the
+/// caller hands in, plus one answer per RESOLVED subject session per
+/// invocation (a sweep consults the witness for the same record twice -
+/// classify, then classify_for_sweep - and several records can share one
+/// session, so the memo bounds the witness traffic to one resolution per
+/// session per invocation). The last answer is left where the caller's
+/// per-record drain reads it.
+fn memoized_session_witness(
+    index: std::cell::RefCell<Option<SessionRegistryIndex>>,
+    memo: std::cell::RefCell<std::collections::HashMap<String, crate::claims::SessionLiveness>>,
+    lazy_until: Option<std::time::Instant>,
+) -> (
+    impl Fn(&crate::claims::ClaimRecord) -> crate::claims::SessionLiveness,
+    std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
+) {
+    let last_answer: std::rc::Rc<std::cell::RefCell<Option<&'static str>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let cell = last_answer.clone();
+    let witness = move |rec: &crate::claims::ClaimRecord| -> crate::claims::SessionLiveness {
+        let answer = session_liveness_answer(rec, &index, &memo, lazy_until);
+        *last_answer.borrow_mut() = Some(match &answer {
+            crate::claims::SessionLiveness::Live(basis) => *basis,
+            crate::claims::SessionLiveness::Absent => crate::claims::basis::SESSION_ABSENT,
+            crate::claims::SessionLiveness::Unresolved => "unresolved",
+        });
+        answer
+    };
+    (witness, cell)
+}
+
+/// [`default_session_witness`] with the transcript leg batched before the
+/// first record is classified. The lazy witness pays one `fno agents truth`
+/// interpreter per distinct session that misses the registry; the claim sweep
+/// resolved 17 sessions that way for 21.45s while the batch wire answered the
+/// same handles in one interpreter for 3.22s (measured 2026-09-12). Seeding
+/// the memo ahead of the loop buys that difference for every multi-record
+/// reader, and the seeded answers come from the same
+/// registry-first-then-transcript reading, so the primed path and the lazy
+/// path cannot disagree about one session.
+///
+/// Only sessions the lazy path would actually probe go on the wire: a
+/// registry-live session never reaches the transcript today, so priming it
+/// would add work the reader never paid. Three fall-throughs stay lazy on
+/// purpose, each landing on the unchanged per-record path: a timed-out batch
+/// seeds NOTHING (a timeout is not a verdict, and seeding `Unresolved` from
+/// one would render live holders dead), a handle absent from an answered map
+/// seeds nothing, and a comma-carrying handle already rides its own single
+/// probe inside the batch helper.
+pub(crate) fn session_witness_primed_for<'a>(
+    records: impl IntoIterator<Item = &'a crate::claims::ClaimRecord>,
+) -> (
+    impl Fn(&crate::claims::ClaimRecord) -> crate::claims::SessionLiveness,
+    std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
+) {
+    let records: Vec<&crate::claims::ClaimRecord> = records.into_iter().collect();
+    session_witness_primed_within(&records, None)
+}
+
+/// [`session_witness_primed_for`] with the batch bounded by `deadline`. A
+/// page the deadline cuts off seeds nothing, so its sessions fall to the lazy
+/// path exactly as a timed-out batch does.
+pub(crate) fn session_witness_primed_within(
+    records: &[&crate::claims::ClaimRecord],
+    deadline: Option<std::time::Instant>,
+) -> (
+    impl Fn(&crate::claims::ClaimRecord) -> crate::claims::SessionLiveness,
+    std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
+) {
+    let records = records.to_vec();
+    if records.is_empty() {
+        // Nothing to classify: the lazy witness costs nothing, and skipping
+        // the registry read keeps an empty claims dir at its measured 0s.
+        // (This constructor, not default_session_witness: each fn's
+        // `impl Trait` is its own opaque type.)
+        return memoized_session_witness(
+            std::cell::RefCell::new(None),
+            std::cell::RefCell::new(std::collections::HashMap::new()),
+            deadline,
+        );
+    }
+    let index: std::cell::RefCell<Option<SessionRegistryIndex>> = std::cell::RefCell::new(None);
+    load_session_registry_index(&index);
+    let mut subjects: std::collections::BTreeMap<String, Vec<&crate::claims::ClaimRecord>> =
+        std::collections::BTreeMap::new();
+    for rec in &records {
+        if let Some(session) = resolve_subject_session(rec, &index) {
+            subjects.entry(session).or_default().push(rec);
+        }
+    }
+    let wire: Vec<String> = {
+        let borrowed = index.borrow();
+        let registry = borrowed
+            .as_ref()
+            .expect("session registry index initialized");
+        subjects
+            .into_iter()
+            .filter(|(session, group)| {
+                registry_session_live(registry, session).is_none()
+                    && !row_verdict_live(registry, session)
+                    && group.iter().any(|rec| may_consult_transcript(rec))
+            })
+            .map(|(session, _)| session)
+            .collect()
+    };
+    let memo = std::cell::RefCell::new(std::collections::HashMap::new());
+    let (map, _) = crate::truth_probe::family1_truth_probe_many_measured_within(&wire, deadline);
+    {
+        let registry_known = index.borrow().as_ref().is_some_and(|r| r.known);
+        for (session, probe) in &map {
+            let answer = session_liveness_from_observations(
+                registry_known,
+                None,
+                probe.reachability.as_deref(),
+            );
+            memo.borrow_mut().insert(session.clone(), answer);
+        }
+    }
+    memoized_session_witness(index, memo, deadline)
+}
+
+/// The worker name a dispatcher-minted holder names, or `None` when the
+/// holder is not dispatcher-minted. Two mint shapes exist: the handover
+/// (`spawn-handover:<worker>`) and the spawn gate's lane reservation
+/// (`spawn-gate:<pid>:<worker>`, where the pid segment is the gate process,
+/// never the worker). A record whose holder names a worker must never answer
+/// liveness about the session that WROTE it: `claims::acquire` fills the
+/// writer's ambient identity into the fields the minter left blank, so a
+/// gate record's `session_id` is the DISPATCHER's, and asking it about the
+/// dispatcher keeps a long-lived lead reading live forever.
+fn holder_worker_name(holder: &str) -> Option<&str> {
+    if let Some(worker) = holder.strip_prefix(HANDOVER_HOLDER_PREFIX) {
+        return Some(worker);
+    }
+    holder
+        .strip_prefix(SPAWN_GATE_HOLDER_PREFIX)
+        .and_then(|rest| rest.split(':').nth(1))
+}
+
+/// The subject a liveness answer is keyed on: the holder the record NAMES,
+/// not the session that wrote it. A dispatcher-minted `spawn-handover:<worker>`
+/// record carries the MINTER's session_id, so answering from that field asks
+/// the dispatcher whether the worker is alive - a long-lived lead then keeps
+/// every claim it ever launched reading live after the worker died. A
+/// `spawn-gate:<pid>:<worker>` lane reservation is the same shape: the
+/// record's session id is the gate's caller, not the worker the lane is
+/// reserved for.
+/// Join the worker name to its registry row's session; no row means None (the
+/// caller answers Unresolved, bounded grace), never a fallback to the
+/// minter's session. The primed witness asks the SAME question when it picks
+/// sessions for the batch wire - a prime that resolved subjects differently
+/// from the lazy path would seed the wrong key and buy nothing.
+fn resolve_subject_session(
+    rec: &crate::claims::ClaimRecord,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+) -> Option<String> {
+    match holder_worker_name(&rec.holder) {
+        Some(worker) => {
+            load_session_registry_index(index);
+            index.borrow().as_ref().and_then(|i| {
+                i.by_name
+                    .get(worker)
+                    .cloned()
+                    .flatten()
+                    .or_else(|| i.by_fno_id.get(worker).cloned())
+            })
+        }
+        None => rec.session_id.clone().filter(|s| !s.is_empty()),
+    }
+}
+
+/// (holder session, dispatcher session) for a claim payload. A
+/// dispatcher-minted record (handover or spawn gate) stores the MINTER's
+/// session in `session_id`; the holder is the worker it names, joined through
+/// the registry. The minter is published as `metadata.dispatched_by_session`
+/// - the shape `compare_and_rebind` writes at target-init rebind - so the
+/// payload reads the same before and after the rebind.
+fn holder_session_fields(
+    rec: &crate::claims::ClaimRecord,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+) -> (Option<String>, Option<String>) {
+    if holder_worker_name(&rec.holder).is_none() {
+        return (rec.session_id.clone().filter(|s| !s.is_empty()), None);
+    }
+    let worker = resolve_subject_session(rec, index);
+    let dispatcher = rec
+        .session_id
+        .clone()
+        .filter(|s| !s.is_empty() && Some(s) != worker.as_ref());
+    (worker, dispatcher)
+}
+
+/// Whether this record's classification can still reach the transcript leg: a
+/// same-machine record whose pid is provably alive classifies live off the
+/// pid alone, so its witness answer would be seeded into the memo and never
+/// read. Conservative by construction: a session dropped here that the
+/// classifier does consult still probes lazily on its first witness call, so
+/// a policy change in the classifier costs perf, never a verdict.
+fn may_consult_transcript(rec: &crate::claims::ClaimRecord) -> bool {
+    !(crate::claims::is_same_machine(&rec.host, rec.machine_id.as_deref())
+        && rec.pid.is_some_and(|pid| {
+            matches!(
+                crate::claims::probe_pid(pid),
+                crate::claims::PidProbe::Created(_)
+            )
+        }))
+}
+
+/// The witness's answer for one record: registry row first, then transcript.
+/// Memoized per resolved subject session for the invoking process's lifetime.
+fn session_liveness_answer(
+    rec: &crate::claims::ClaimRecord,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    memo: &std::cell::RefCell<std::collections::HashMap<String, crate::claims::SessionLiveness>>,
+    lazy_until: Option<std::time::Instant>,
+) -> crate::claims::SessionLiveness {
+    let Some(session) = resolve_subject_session(rec, index) else {
+        return crate::claims::SessionLiveness::Unresolved;
+    };
+    if let Some(answer) = memo.borrow().get(&session) {
+        return answer.clone();
+    }
+    let answer = session_liveness_answer_uncached(&session, index, lazy_until);
+    memo.borrow_mut().insert(session, answer.clone());
+    answer
+}
+
+/// The registry-backed resolution inputs, built once per invocation and shared
+/// across every record the sweep classifies. `by_session` carries (pid, start)
+/// for the registry-row liveness proof, so it requires session id, pid and
+/// start time. `by_name` is the spawn-handover join and requires only
+/// name + session id: a thread worker has no pid (39 of 39 rows measured
+/// 2026-09-07), so a pid requirement here would make every handover claim
+/// unresolvable and hand its verdict back to the dispatcher.
+struct SessionRegistryIndex {
+    known: bool,
+    by_session: std::collections::HashMap<String, (u32, u64)>,
+    /// The spawn-handover join, name/alias to session id. `None` marks a name
+    /// two live rows claim: the caller answers Unresolved, never a guessed
+    /// session. Terminal rows never join.
+    by_name: std::collections::HashMap<String, Option<String>>,
+    /// The id tier of the same join: fno_id to session id, for a holder
+    /// minted after the id change. A legacy name holder resolves through
+    /// `by_name` first, exactly as before; fno_id is unique per row, so
+    /// the first row wins.
+    by_fno_id: std::collections::HashMap<String, String>,
+    /// The row's served `liveness` word and its measurement stamp, keyed by
+    /// session id. No pid requirement: 33 of 33 thread rows carry pid None,
+    /// and the served pair is the only liveness evidence they carry.
+    served: std::collections::HashMap<String, (Option<String>, Option<String>)>,
+    /// The full row per session id, so the liveness readers can ask the
+    /// row_verdict door (`row_verdict::fno_verdict`) whose inside-leg and
+    /// terminal-status rungs read evidence the served word misses.
+    rows: std::collections::HashMap<String, crate::state::RegistryEntry>,
+}
+
+/// One by-name join entry: the unique sid, or `None` once a second live row
+/// claims the name, or the claimer itself carries no sid. First write wins; a
+/// disagreeing or idless second claim poisons the key.
+fn note_name(
+    map: &mut std::collections::HashMap<String, Option<String>>,
+    key: String,
+    sid: Option<String>,
+) {
+    match map.entry(key) {
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert(sid);
+        }
+        std::collections::hash_map::Entry::Occupied(mut slot) => {
+            let poison = match (slot.get(), &sid) {
+                (None, _) => false,
+                (Some(_), None) => true,
+                (Some(held), Some(new)) => held != new,
+            };
+            if poison {
+                *slot.get_mut() = None;
+            }
+        }
+    }
+}
+
+fn load_session_registry_index(index: &std::cell::RefCell<Option<SessionRegistryIndex>>) {
+    let mut cache = index.borrow_mut();
+    if cache.is_some() {
+        return;
+    }
+    let mut by_session = std::collections::HashMap::new();
+    let mut by_name = std::collections::HashMap::new();
+    let mut by_fno_id = std::collections::HashMap::new();
+    let mut served = std::collections::HashMap::new();
+    let mut rows = std::collections::HashMap::new();
+    let path = crate::paths::AgentsHome::from_env().registry_json();
+    let registry = crate::state::load_registry(&path);
+    let known = registry.is_ok();
+    if let Ok(registry) = registry {
+        for e in &registry.entries {
+            let sid = e.harness_session_id.as_deref().filter(|s| !s.is_empty());
+            if let Some(sid) = sid {
+                if let (Some(pid), Some(start)) = (e.pid, e.pid_start_time) {
+                    by_session.insert(sid.to_string(), (pid, start));
+                }
+                served.insert(
+                    sid.to_string(),
+                    (e.liveness.clone(), e.liveness_measured_at.clone()),
+                );
+                rows.insert(sid.to_string(), e.clone());
+            }
+            // The registry's own name contract (state.rs row_for_token): a
+            // name OR any prior alias resolves the row. A handover holder
+            // carries the name from mint time, so a worker renamed inside its
+            // window must still resolve through the alias. The mail_envelope
+            // join shape: terminal rows never join, a name two rows claim
+            // maps to None rather than a last-write-wins sid, and an idless
+            // live row still claims its name - session-capture races leave
+            // rows briefly idless, so a claim without a unique sid behind it
+            // is its own ambiguity.
+            if !crate::lead_state::is_terminal(e) {
+                let claim = sid.map(str::to_string);
+                if !e.name.is_empty() {
+                    note_name(&mut by_name, e.name.clone(), claim.clone());
+                }
+                for alias in &e.aliases {
+                    if !alias.is_empty() {
+                        note_name(&mut by_name, alias.clone(), claim.clone());
+                    }
+                }
+                if let (Some(fno), Some(sid)) = (e.fno_id.as_deref().filter(|v| !v.is_empty()), sid)
+                {
+                    by_fno_id
+                        .entry(fno.to_string())
+                        .or_insert_with(|| sid.to_string());
+                }
+            }
+        }
+    }
+    *cache = Some(SessionRegistryIndex {
+        known,
+        by_session,
+        by_name,
+        by_fno_id,
+        served,
+        rows,
+    });
+}
+
+/// Registry evidence that `session` is alive, or None. The row's own pid
+/// proof wins; a pid-less thread row answers from the served `liveness`
+/// word, fresh only. A dead or stale word answers None, never Absent: the
+/// cached word can predate a resume, and Absent reaps a same-machine claim.
+fn registry_session_live(registry: &SessionRegistryIndex, session: &str) -> Option<&'static str> {
+    if registry
+        .by_session
+        .get(session)
+        .is_some_and(|&(pid, start)| {
+            registry
+                .rows
+                .get(session)
+                .is_some_and(|row| crate::claims::pid_dies_with_session(row.harness.as_deref()))
+                && crate::daemon::pid_is_ours(pid, Some(start))
+        })
+    {
+        return Some(crate::claims::basis::REGISTRY_SESSION_LIVE);
+    }
+    registry
+        .served
+        .get(session)
+        .and_then(|(word, at)| {
+            crate::row_truth::served_fresh_liveness(word.as_deref(), at.as_deref())
+        })
+        .filter(|word| *word == "alive")
+        .map(|_| REGISTRY_SERVED_LIVE)
+}
+
+/// Witness basis for a session the row_verdict door answers live.
+const ROW_VERDICT_LIVE: &str = "row-verdict-live";
+
+/// The row_verdict door's live answer for one session: the inside-leg rung
+/// and the terminal-status rung read evidence the served word misses - the
+/// specimen is a pidless claude bg holder whose fresh working report
+/// kept arriving while its lapsed claim was reaped for want of a pid.
+/// Absent and Unknown answer false: the door decides liveness, never death.
+fn row_verdict_live(registry: &SessionRegistryIndex, session: &str) -> bool {
+    registry.rows.get(session).is_some_and(|entry| {
+        crate::claims::pid_dies_with_session(entry.harness.as_deref())
+            && matches!(
+                crate::row_verdict::fno_verdict(entry),
+                crate::row_verdict::RowVerdict::Live(_)
+            )
+    })
+}
+
+/// Whether `id` names a session that is gone. A target worktree stores its
+/// manifest `fno_id`, not the harness session id, so the registry resolves
+/// it first: a terminal row is gone, a live row probes its harness session.
+/// Unresolved reads as not gone.
+pub(crate) fn session_is_absent(id: &str) -> bool {
+    let row = crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
+        .ok()
+        .and_then(|registry| {
+            registry.entries.into_iter().find(|e| {
+                e.harness_session_id.as_deref() != Some(id) && e.fno_id.as_deref() == Some(id)
+            })
+        });
+    let session = match &row {
+        Some(e) if crate::lead_state::is_terminal(e) => return true,
+        Some(e) => match e.harness_session_id.as_deref().filter(|s| !s.is_empty()) {
+            Some(sid) => sid.to_string(),
+            None => return false,
+        },
+        None => id.to_string(),
+    };
+    let index = std::cell::RefCell::new(None);
+    matches!(
+        session_liveness_answer_uncached(&session, &index, None),
+        crate::claims::SessionLiveness::Absent
+    )
+}
+
+/// The uncached resolution: registry row first, then transcript.
+fn session_liveness_answer_uncached(
+    session: &str,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    lazy_until: Option<std::time::Instant>,
+) -> crate::claims::SessionLiveness {
+    load_session_registry_index(index);
+    let (registry_known, registry_live) = {
+        let borrowed = index.borrow();
+        let registry = borrowed
+            .as_ref()
+            .expect("session registry index initialized");
+        (registry.known, registry_session_live(registry, session))
+    };
+    if let Some(basis) = registry_live {
+        return crate::claims::SessionLiveness::Live(basis);
+    }
+    // The row verdict door before the transcript walk: a fresh inside-leg
+    // report or a live pid on the row holds the claim where the served word
+    // went stale (the reap this closes). Unknown and Finished fall through - the
+    // door decides liveness, never death, and the transcript still answers.
+    {
+        let borrowed = index.borrow();
+        let registry = borrowed
+            .as_ref()
+            .expect("session registry index initialized");
+        if row_verdict_live(registry, session) {
+            return crate::claims::SessionLiveness::Live(ROW_VERDICT_LIVE);
+        }
+    }
+    // Past a caller's deadline no transcript probe runs: the session reads
+    // live, so the claim is kept, never reaped on evidence nobody read.
+    if lazy_until.is_some_and(|d| std::time::Instant::now() >= d) {
+        return crate::claims::SessionLiveness::Live(REAP_DEADLINE_KEPT);
+    }
+    // The row is missing or its pid is stale (a resume leaves rows behind) -
+    // the transcript still answers. Reachability is the liveness reading;
+    // "waiting" or "stalled" names a wedged session, never a dead one.
+    let probe = crate::truth_probe::family1_truth_probe(session);
+    session_liveness_from_observations(
+        registry_known,
+        None,
+        probe
+            .as_ref()
+            .and_then(|probe| probe.reachability.as_deref()),
+    )
+}
+
+fn session_liveness_from_observations(
+    registry_known: bool,
+    registry_live: Option<&'static str>,
+    reachability: Option<&str>,
+) -> crate::claims::SessionLiveness {
+    if let Some(basis) = registry_live {
+        return crate::claims::SessionLiveness::Live(basis);
+    }
+    match reachability {
+        Some("reachable") => {
+            crate::claims::SessionLiveness::Live(crate::claims::basis::TRANSCRIPT_LIVE)
+        }
+        Some("unreachable") if registry_known => crate::claims::SessionLiveness::Absent,
+        _ => crate::claims::SessionLiveness::Unresolved,
+    }
+}
+
+/// Pure(ish) core of `claim sweep`: build the pinned verdict object from a
+/// complete record set. `claim_sweep_payload` keeps the old single-directory
+/// test seam; the command path supplies the both-root set from `claims::list`.
+pub(crate) fn claim_sweep_payload_from_records(
+    records: &[crate::claims::ClaimRecord],
+    prefix: Option<&str>,
+    keys: &[String],
+    all: bool,
+) -> Value {
+    let key_set: std::collections::BTreeSet<&str> = keys.iter().map(String::as_str).collect();
+    let full_scan = key_set.is_empty();
+    let exclusivity = full_scan
+        .then(|| crate::claims::pid_exclusivity(records))
+        .unwrap_or_default();
+    let now = crate::claims::now_ms();
+    let selected: Vec<&crate::claims::ClaimRecord> = records
+        .iter()
+        .filter(|rec| {
+            if !key_set.is_empty() {
+                key_set.contains(rec.key.as_str())
+            } else if let Some(prefix) = prefix {
+                rec.key.starts_with(prefix)
+            } else if all {
+                true
+            } else {
+                rec.key.starts_with("node:") || rec.key.starts_with("dispatch:")
+            }
+        })
+        .collect();
+    // Prime on the SELECTED set only: batching the sessions of records the
+    // sweep never classifies would re-add the per-session cost this exists to
+    // delete.
+    let (witness, witness_answer) = session_witness_primed_for(selected.iter().copied());
+    // No eager registry read: a handover-free record set (e.g. the empty
+    // claims dir the sweep fast-paths) keeps its zero-registry-read cost,
+    // and resolve_subject_session lazy-loads the index on the first
+    // handover holder that needs it.
+    let session_index = std::cell::RefCell::new(None);
+    let mut claims: Vec<Value> = Vec::new();
+    for rec in &selected {
+        let (holder_session, dispatched_by) = holder_session_fields(rec, &session_index);
+        let identity = rec.machine_id.clone().unwrap_or_else(|| rec.host.clone());
+        let pid_exclusive = full_scan
+            .then(|| {
+                rec.pid
+                    .and_then(|pid| exclusivity.get(&(identity, pid)).copied())
+            })
+            .flatten();
+        let probe = &|pid| crate::claims::probe_pid(pid);
+        let (state, basis) = crate::claims::classify_with_basis_and_exclusivity(
+            rec,
+            Some(now),
+            probe,
+            pid_exclusive,
+            Some(&witness),
+        );
+        let (provably_dead, bucket) =
+            crate::claims::classify_for_sweep(rec, Some(now), probe, pid_exclusive, Some(&witness));
+        let expired = rec.expires_at.is_some_and(|expires_at| now >= expires_at);
+        // Which witness answered for THIS record, or None when the pid
+        // evidence decided and the witness was never consulted.
+        let session_basis = witness_answer.borrow_mut().take();
+        let mut row = serde_json::json!({
+            "key": rec.key,
+            "state": state.as_str(),
+            "holder": rec.holder,
+            "schema_version": rec.schema_version,
+            "host": rec.host,
+            "pid": rec.pid,
+            "basis": basis,
+            "expired": expired,
+            "provably_dead": provably_dead,
+            "bucket": bucket,
+            "machine_id": rec.machine_id,
+            "pid_unavailable": rec.pid_unavailable,
+            "pid_provenance": rec.pid_provenance,
+            "acquired_at": rec.acquired_at,
+            "expires_at": rec.expires_at,
+        });
+        if let Value::Object(fields) = &mut row {
+            if let Some(reason) = &rec.reason {
+                fields.insert("reason".into(), Value::String(reason.clone()));
+            }
+            if let Some(harness) = &rec.harness {
+                fields.insert("harness".into(), Value::String(harness.clone()));
+            }
+            if let Some(session) = holder_session {
+                fields.insert("session_id".into(), Value::String(session));
+            }
+            if let Some(answered) = session_basis {
+                fields.insert("session_basis".into(), Value::String(answered.into()));
+            }
+            // Only the bounded unresolved grace has a clock exit: a live claim
+            // and a pid-suspect claim have no reclaimable time, so the field's
+            // absence is the honest value there.
+            if state == crate::claims::ClaimState::Suspect
+                && basis == crate::claims::basis::TTL_EXPIRED_UNRESOLVED
+            {
+                if let Some(expires_at) = rec.expires_at {
+                    fields.insert(
+                        "reclaimable_at".into(),
+                        Value::from(expires_at + crate::claims::UNRESOLVED_GRACE_MS),
+                    );
+                }
+            }
+            let mut metadata = rec.metadata.clone();
+            if let Some(dispatcher) = dispatched_by {
+                metadata
+                    .entry("dispatched_by_session".to_string())
+                    .or_insert_with(|| Value::String(dispatcher));
+            }
+            if !metadata.is_empty() {
+                fields.insert("metadata".into(), Value::Object(metadata));
+            }
+        }
+        claims.push(row);
+    }
+    claims.sort_by(|a, b| a["key"].as_str().cmp(&b["key"].as_str()));
+    serde_json::json!({ "claims": claims })
+}
+
+#[cfg(test)]
+fn claim_sweep_payload(dir: &Path) -> Value {
+    let records = claim_records_from_dir(dir);
+    claim_sweep_payload_from_records(&records, None, &[], false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct ClaimsRootRestore(Option<std::ffi::OsString>);
+
+    impl Drop for ClaimsRootRestore {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("FNO_CLAIMS_ROOT", value),
+                None => std::env::remove_var("FNO_CLAIMS_ROOT"),
+            }
+        }
+    }
+
+    fn with_claims_root<T>(root: &Path, f: impl FnOnce() -> T) -> T {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let restore = ClaimsRootRestore(std::env::var_os("FNO_CLAIMS_ROOT"));
+        std::env::set_var("FNO_CLAIMS_ROOT", root);
+        let result = f();
+        drop(restore);
+        result
+    }
+
+    #[test]
+    fn native_claim_doors_answer_over_the_claim_table() {
+        // Both doors ride the same harness: acquire over the claims root,
+        // run the command, and prove the answer came from the table.
+        let rows: Vec<(
+            &str,
+            &str,
+            Option<u32>,
+            Box<dyn Fn(&str, &str, &std::path::Path)>,
+        )> = vec![
+            (
+                "node:native-status-test",
+                "target-session:test-session",
+                Some(std::process::id()),
+                Box::new(|key: &str, _holder: &str, _temp: &std::path::Path| {
+                    assert_eq!(
+                        run_claim(&["status".into(), key.into(), "--json".into()]),
+                        0
+                    );
+                }),
+            ),
+            (
+                "node:stopped-lockfile-test",
+                "target-session:stopped-session",
+                Some(dead_pid()),
+                Box::new(|key: &str, holder: &str, temp: &std::path::Path| {
+                    let claims_dir = crate::claims::claims_dir_for(Some(temp)).unwrap();
+                    let path = crate::claims::claim_path(key, Some(temp)).unwrap();
+                    assert!(crate::claim_store::read_at_path(&path).unwrap().is_some());
+                    let holder_session = holder.rsplit(':').next().unwrap();
+                    assert_eq!(
+                        run_claim(&[
+                            "release-stopped".into(),
+                            "--name".into(),
+                            "worker".into(),
+                            "--session".into(),
+                            holder_session.into(),
+                            "--claims-dir".into(),
+                            claims_dir.display().to_string(),
+                        ]),
+                        0
+                    );
+                    assert!(
+                        crate::claim_store::read_at_path(&path).unwrap().is_none(),
+                        "the stopped session's claim is released"
+                    );
+                }),
+            ),
+        ];
+        for (key, holder, pid, run) in rows {
+            let temp = tempfile::TempDir::new().unwrap();
+            with_claims_root(temp.path(), || {
+                assert!(matches!(
+                    crate::claims::acquire(
+                        key,
+                        holder,
+                        crate::claims::AcquireOpts {
+                            pid,
+                            ..Default::default()
+                        }
+                    ),
+                    crate::claims::AcquireOutcome::Acquired(_)
+                ));
+                run(key, holder, temp.path());
+            });
+        }
+    }
+
+    fn dead_pid() -> u32 {
+        let mut candidate = 999_999u32;
+        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+            candidate += 1;
+        }
+        candidate
+    }
+
+    #[test]
+    fn claim_session_absent_requires_a_readable_registry() {
+        assert!(matches!(
+            session_liveness_from_observations(false, None, Some("unreachable")),
+            crate::claims::SessionLiveness::Unresolved
+        ));
+    }
+
+    // ---- claim sweep --------------------------------------------
+
+    fn sweep_acquire(root: &std::path::Path, key: &str) {
+        let opts = crate::claims::AcquireOpts {
+            root: Some(root.to_path_buf()),
+            events_dir: Some(root.to_path_buf()),
+            ..Default::default()
+        };
+        match crate::claims::acquire(key, "test-holder", opts) {
+            crate::claims::AcquireOutcome::Acquired(_) => {}
+            other => panic!("acquire {key} failed: {other:?}"),
+        }
+    }
+
+    fn sweep_dir(root: &std::path::Path) -> PathBuf {
+        crate::claims::claims_dir_for(Some(root)).unwrap()
+    }
+
+    #[test]
+    fn claim_sweep_reports_live_node_and_dispatch_claims() {
+        // The primed witness reads the session registry on every sweep, so a
+        // test reaching the sweep payload declares a hermetic home (the
+        // paths guard refuses an undeclared $HOME read under test).
+        with_registry(serde_json::json!([]), || {
+            let td = tempfile::TempDir::new().unwrap();
+            sweep_acquire(td.path(), "node:x-aaaa");
+            sweep_acquire(td.path(), "dispatch:x-aaaa");
+            sweep_acquire(td.path(), "session:not-swept"); // out-of-scope prefix
+            let payload = claim_sweep_payload(&sweep_dir(td.path()));
+            let claims = payload["claims"].as_array().unwrap();
+            assert_eq!(claims.len(), 2, "session: claim must be excluded");
+            // Sorted by key: dispatch: before node:.
+            assert_eq!(claims[0]["key"], "dispatch:x-aaaa");
+            assert_eq!(claims[1]["key"], "node:x-aaaa");
+            for c in claims {
+                // Acquired by THIS live process => live.
+                assert_eq!(c["state"], "live");
+                assert_eq!(c["holder"], "test-holder");
+                assert_eq!(c["pid"], std::process::id());
+                assert!(c["host"].as_str().is_some_and(|h| !h.is_empty()));
+            }
+        });
+    }
+
+    // ---- the handover witness subject ---------------------------
+
+    fn own_pid_start() -> u64 {
+        // Registry units: daemon::process_start_time's native value, the same
+        // pair pid_is_ours compares. The claims epoch-ms twin would never
+        // compare equal here.
+        crate::daemon::process_start_time(std::process::id())
+            .expect("this test process has a start time")
+    }
+
+    /// Pin FNO_AGENTS_HOME to a temp registry for `f`. test_env_lock
+    /// serializes the process-global env against every other env-touching
+    /// test in the crate (the paths.rs from_env_honors_override idiom).
+    fn with_registry(entries: serde_json::Value, f: impl FnOnce()) {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            td.path().join("registry.json"),
+            serde_json::json!({"schema_version": 1, "entries": entries}).to_string(),
+        )
+        .unwrap();
+        std::env::set_var("FNO_AGENTS_HOME", td.path());
+        crate::paths::pin_test_claims_root(td.path());
+        f();
+        std::env::remove_var("FNO_AGENTS_HOME");
+    }
+
+    fn witness_rec(holder: &str, session: &str) -> crate::claims::ClaimRecord {
+        crate::claims::ClaimRecord {
+            schema_version: 1,
+            key: "node:x-t".into(),
+            holder: holder.into(),
+            acquired_at: crate::claims::now_ms(),
+            pid: None,
+            host: "test-host".into(),
+            pid_unavailable: false,
+            expires_at: None,
+            reason: None,
+            harness: Some("claude".into()),
+            session_id: Some(session.into()),
+            pid_provenance: Some("ambient".into()),
+            machine_id: None,
+            metadata: serde_json::Map::new(),
+        }
+    }
+
+    #[test]
+    fn handover_witness_never_answers_from_the_minter_session() {
+        // The minter (a long-lived lead) is PROVABLY live: its session's
+        // registry row names this very test process. The handover names a
+        // worker with no row. The witness must answer Unresolved anyway -
+        // answering from the minter kept every claim a dead worker left
+        // behind reading live for the rest of the lead's lead.
+        let me = std::process::id();
+        with_registry(
+            serde_json::json!([{
+                "name": "lead-row",
+                "status": "live",
+                "cwd": "/w",
+                "created_at": "2026-09-07T00:00:00Z",
+                "harness_session_id": "s-lead",
+                "pid": me,
+                "pid_start_time": own_pid_start(),
+            }]),
+            || {
+                let (witness, _drain) = default_session_witness();
+                let handover = witness_rec("spawn-handover:ghost", "s-lead");
+                assert!(matches!(
+                    witness(&handover),
+                    crate::claims::SessionLiveness::Unresolved
+                ));
+                // Control: the SAME session answers Live for a non-handover
+                // record, so the Unresolved above is the subject switch, not
+                // a dead fixture.
+                let plain = witness_rec("plain-holder", "s-lead");
+                assert!(matches!(
+                    witness(&plain),
+                    crate::claims::SessionLiveness::Live(_)
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn expired_handover_claim_reads_stale_while_minter_is_live() {
+        // AC1 end to end: the dispatching session stays live the whole time,
+        // the worker is gone, the claim is past TTL and past the unresolved
+        // grace - so the bucket is non-live. The control record, same shape
+        // but self-held, keeps reading live off the same session.
+        let me = std::process::id();
+        with_registry(
+            serde_json::json!([{
+                "name": "lead-row",
+                "status": "live",
+                "cwd": "/w",
+                "created_at": "2026-09-07T00:00:00Z",
+                "harness_session_id": "s-lead",
+                "pid": me,
+                "pid_start_time": own_pid_start(),
+            }]),
+            || {
+                let (witness, _drain) = default_session_witness();
+                let now = crate::claims::now_ms();
+                let past = now - (crate::claims::UNRESOLVED_GRACE_MS + 60_000);
+                let verdict = |holder: &str| {
+                    let mut rec = witness_rec(holder, "s-lead");
+                    rec.acquired_at = past;
+                    rec.expires_at = Some(past);
+                    // A dead pid: nothing but the witness could hold it live.
+                    rec.pid = Some(999_999);
+                    crate::claims::classify_with_basis_and_exclusivity(
+                        &rec,
+                        Some(now),
+                        &crate::claims::probe_pid,
+                        None,
+                        Some(&witness),
+                    )
+                };
+                assert_eq!(
+                    verdict("spawn-handover:ghost").0,
+                    crate::claims::ClaimState::Stale
+                );
+                assert_eq!(verdict("plain-holder").0, crate::claims::ClaimState::Live);
+            },
+        );
+    }
+
+    // ---- the primed witness ------------------------------------------------
+
+    // ---- the served-liveness tier ------------------------------------------
+
+    /// The 20-byte Z stamp `rfc3339_like_to_secs` accepts, generated at test
+    /// runtime: a hardcoded stamp ages past the 120-second window and the
+    /// suite turns red on a clock, not on a defect.
+    fn z_stamp(age_secs: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::seconds(age_secs))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    }
+
+    #[test]
+    fn served_dead_word_never_reads_absent() {
+        // AC1-EDGE: a served `dead` only lowers the witness to the transcript
+        // leg - the cached word can predate a resume, and Absent reaps a
+        // same-machine claim. No transcript answer is Unresolved, not Absent.
+        with_registry(
+            serde_json::json!([{
+                "name": "w-dead",
+                "status": "live",
+                "cwd": "/w",
+                "created_at": "2026-09-15T00:00:00Z",
+                "harness_session_id": "s-worker",
+                "liveness": "dead",
+                "liveness_measured_at": z_stamp(10),
+            }]),
+            || {
+                let (witness, _drain) = default_session_witness();
+                let rec = witness_rec("spawn-handover:w-dead", "s-lead-elsewhere");
+                let answer = witness(&rec);
+                assert!(matches!(answer, crate::claims::SessionLiveness::Unresolved));
+            },
+        );
+    }
+
+    #[test]
+    fn handover_payload_names_the_worker_and_keeps_the_dispatcher() {
+        // AC2-HP: the record stores the MINTER's session; the payload's
+        // session_id must name the WORKER and move the minter to
+        // dispatched_by_session - the shape compare_and_rebind writes at
+        // rebind - in both the status and the sweep payload.
+        with_registry(
+            serde_json::json!([{
+                "name": "w-worker",
+                "status": "live",
+                "cwd": "/w",
+                "created_at": "2026-09-15T00:00:00Z",
+                "harness_session_id": "s-worker",
+            }]),
+            || {
+                let cell = std::cell::RefCell::new(None);
+                let index_cell = std::cell::RefCell::new(None);
+                let rec = witness_rec("spawn-handover:w-worker", "s-lead");
+                let out = claim_status_value_with_witness(&rec, None, &cell, &index_cell);
+                assert_eq!(out["session_id"], "s-worker");
+                assert_eq!(out["metadata"]["dispatched_by_session"], "s-lead");
+
+                let sweep = claim_sweep_payload_from_records(
+                    std::slice::from_ref(&rec),
+                    Some("node:"),
+                    &[],
+                    false,
+                );
+                let row = &sweep["claims"][0];
+                assert_eq!(row["session_id"], "s-worker");
+                assert_eq!(row["metadata"]["dispatched_by_session"], "s-lead");
+            },
+        );
+    }
+
+    #[test]
+    fn gate_holder_without_a_worker_row_is_bounded_grace() {
+        // No registry row names the worker: Unresolved, never a fallback to
+        // the dispatcher's own live session. Control: the same live session
+        // answers Live for a plain holder, so the Unresolved is the subject
+        // switch.
+        with_registry(
+            serde_json::json!([{
+                "name": "lead-row",
+                "status": "live",
+                "cwd": "/w",
+                "created_at": "2026-09-17T00:00:00Z",
+                "harness_session_id": "s-lead",
+                "pid": std::process::id(),
+                "pid_start_time": own_pid_start(),
+            }]),
+            || {
+                let (witness, _drain) = default_session_witness();
+                let gate = witness_rec("spawn-gate:36244:ghost", "s-lead");
+                assert!(matches!(
+                    witness(&gate),
+                    crate::claims::SessionLiveness::Unresolved
+                ));
+                let plain = witness_rec("plain-holder", "s-lead");
+                assert!(matches!(
+                    witness(&plain),
+                    crate::claims::SessionLiveness::Live(_)
+                ));
+            },
+        );
+        // Two live rows claiming one name, one of them idless (a
+        // session-capture race): the handover resolves to neither row.
+        with_registry(
+            serde_json::json!([
+                {
+                    "name": "twin", "status": "live", "cwd": "/w",
+                    "created_at": "2026-09-17T00:00:00Z",
+                    "harness_session_id": "s-t1",
+                },
+                {
+                    "name": "twin", "status": "live", "cwd": "/w",
+                    "created_at": "2026-09-17T00:00:00Z",
+                },
+            ]),
+            || {
+                let index: std::cell::RefCell<Option<SessionRegistryIndex>> =
+                    std::cell::RefCell::new(None);
+                load_session_registry_index(&index);
+                let rec = witness_rec("spawn-gate:1:twin", "s-lead");
+                assert!(resolve_subject_session(&rec, &index).is_none());
+            },
+        );
+    }
+
+    /// Past the reap's deadline an unread session reads live, so its claim is
+    /// kept: the transcript probe never runs, and nothing is reaped on
+    /// evidence nobody read.
+    #[test]
+    fn a_session_past_the_reap_deadline_reads_live_without_a_probe() {
+        let index = std::cell::RefCell::new(Some(SessionRegistryIndex {
+            known: true,
+            by_session: std::collections::HashMap::new(),
+            by_name: std::collections::HashMap::new(),
+            by_fno_id: std::collections::HashMap::new(),
+            served: std::collections::HashMap::new(),
+            rows: std::collections::HashMap::new(),
+        }));
+        let answer =
+            session_liveness_answer_uncached("s-gone", &index, Some(std::time::Instant::now()));
+        assert!(
+            matches!(
+                answer,
+                crate::claims::SessionLiveness::Live(REAP_DEADLINE_KEPT)
+            ),
+            "{answer:?}"
+        );
+    }
+}

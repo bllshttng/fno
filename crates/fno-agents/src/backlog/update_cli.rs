@@ -26,7 +26,7 @@ use crate::graph_store::{
 /// The lock deadline every update write rides.
 const LOCK_TIMEOUT: Duration = DEFAULT_LOCK_TIMEOUT;
 
-/// The parse outcome: usable args, or a usage refusal this verb owns.
+/// The parse outcome: usable args, or a usage refusal this command owns.
 enum ParsedUpdate {
     Args(UpdateArgs),
     Refusal { message: String, exit: i32 },
@@ -61,7 +61,7 @@ struct UpdateArgs {
     difficulty: Option<String>,
     tag: Vec<String>,
     untag: Vec<String>,
-    dispatch_verb: Option<String>,
+    dispatch_command: Option<String>,
     dispatch_brief: Option<String>,
     locked_by: Option<String>,
     plan_path: Option<String>,
@@ -83,6 +83,9 @@ struct UpdateArgs {
     add_pr_url: Option<String>,
     add_pr_note: Option<String>,
     remove_pr: Option<String>,
+    /// `--to <new-id>`: the in-place node-id rename through
+    /// `reid_cli::reid_write`. One operation per call.
+    reid_to: Option<String>,
     door: Vec<String>,
     /// Lowered operator tokens (`field=value`, `field+=value`,
     /// `field-=value`), in argument order; the relay refusal quotes them as
@@ -131,7 +134,7 @@ impl UpdateArgs {
             difficulty: None,
             tag: Vec::new(),
             untag: Vec::new(),
-            dispatch_verb: None,
+            dispatch_command: None,
             dispatch_brief: None,
             locked_by: None,
             plan_path: None,
@@ -150,6 +153,7 @@ impl UpdateArgs {
             add_pr_url: None,
             add_pr_note: None,
             remove_pr: None,
+            reid_to: None,
             door: Vec::new(),
             ops: Vec::new(),
             details_append: Vec::new(),
@@ -251,6 +255,7 @@ impl UpdateArgs {
                 "--repo" => take_value!(a.repo),
                 "--add-pr-url" => take_value!(a.add_pr_url),
                 "--add-pr-note" => take_value!(a.add_pr_note),
+                "--to" => take_value!(a.reid_to),
                 other => {
                     if let Some(op) = update_ops::parse_op_token(raw) {
                         match update_ops::check(&op) {
@@ -391,7 +396,7 @@ fn lower_op(
         ("project", update_ops::Op::Set) => a.project = Some(value),
         ("cwd", update_ops::Op::Set) => a.cwd = Some(value),
         ("difficulty", update_ops::Op::Set) => a.difficulty = Some(value),
-        ("dispatch_verb", update_ops::Op::Set) => a.dispatch_verb = Some(value),
+        ("dispatch_command", update_ops::Op::Set) => a.dispatch_command = Some(value),
         ("locked_by", update_ops::Op::Set) => a.locked_by = Some(value),
         ("plan_path", update_ops::Op::Set) => a.plan_path = Some(value),
         ("parent", update_ops::Op::Set) => a.parent = Some(value),
@@ -472,17 +477,15 @@ pub fn run(tail: &[String]) -> i32 {
         print!("{}", UPDATE_HELP);
         return 0;
     }
-    // The tracker-owned refusal the python leg carried at its callback:
-    // update owns graph state, so under any external tracker backend it
-    // refuses before any read or write.
+    // Under an external tracker backend update owns only the sidecar: the
+    // footnote-side bindings write through the sidecar store, and every
+    // tracker-owned field refuses before any read or write.
     let backend = crate::tracker::backend_name(None);
     if backend != "graph" {
-        eprintln!(
-            "fno backlog update: this verb owns graph state; under the \
-             {backend} tracker backend it is refused. Track the item in the \
-             tracker by its id."
-        );
-        return 1;
+        return run_external_bind(&args, &backend);
+    }
+    if let Some(new_id) = &args.reid_to {
+        return run_reid(&args, new_id);
     }
     if !args.door.is_empty() {
         return run_door_relay(&args);
@@ -494,6 +497,119 @@ pub fn run(tail: &[String]) -> i32 {
             r.exit
         }
     }
+}
+
+/// The keys `update` binds on an external id: the checkout, the plan and
+/// the PR. They live in the sidecar, never in the tracker.
+const BINDABLE_KEYS: &[&str] = &["cwd", "plan_path", "pr_number", "pr_url"];
+
+fn run_external_bind(args: &UpdateArgs, backend: &str) -> i32 {
+    let tracker = match crate::tracker::backend(backend) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("fno backlog update: {e}");
+            return 1;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    run_external_bind_with(
+        args,
+        backend,
+        tracker.as_ref(),
+        &crate::tracker::sidecar::root(&cwd),
+    )
+}
+
+fn run_external_bind_with(
+    args: &UpdateArgs,
+    backend: &str,
+    tracker: &dyn crate::tracker::Tracker,
+    sidecar_root: &Path,
+) -> i32 {
+    let only_bindable = !args.ops.is_empty()
+        && args.door.is_empty()
+        && args.reid_to.is_none()
+        && args.details_file.is_none()
+        && !args.blocks_everything
+        && args.repo.is_none()
+        && args.add_pr_url.is_none()
+        && args.add_pr_note.is_none()
+        && args
+            .ops
+            .iter()
+            .all(|op| op.op == update_ops::Op::Set && BINDABLE_KEYS.contains(&op.field.as_str()));
+    if !only_bindable {
+        eprintln!(
+            "fno backlog update: under the {backend} tracker backend the tracker \
+             owns this item; update binds only {}. Edit every other field in \
+             the tracker.",
+            BINDABLE_KEYS.join(", ")
+        );
+        return 1;
+    }
+    let id = args.task_id.as_str();
+    if let Err(e) = tracker.read(id) {
+        eprintln!("fno backlog update: {e}");
+        return 1;
+    }
+    let mut fields = serde_json::Map::new();
+    for op in &args.ops {
+        let value = match op.field.as_str() {
+            "cwd" | "plan_path" => Value::String(abs_expand(&op.value)),
+            "pr_number" => match op.value.parse::<i64>() {
+                Ok(n) => Value::from(n),
+                Err(_) => {
+                    eprintln!(
+                        "Error: Invalid value for 'pr_number=': '{}' is not a valid integer.",
+                        op.value
+                    );
+                    return 2;
+                }
+            },
+            _ => Value::String(op.value.clone()),
+        };
+        fields.insert(op.field.clone(), value);
+    }
+    match crate::tracker::sidecar::save(sidecar_root, id, &fields) {
+        Ok(_) => {
+            let keys: Vec<&str> = fields.keys().map(String::as_str).collect();
+            println!("bound {id}: {}", keys.join(", "));
+            0
+        }
+        Err(e) => {
+            eprintln!("fno backlog update: {e}");
+            1
+        }
+    }
+}
+
+/// The rename door: `--to` renames the node id through reid_cli's locked
+/// publish. One operation per call: a rename next to a field write would
+/// leave the receipt ambiguous about which write landed.
+fn run_reid(args: &UpdateArgs, new_id: &str) -> i32 {
+    let mut mixed: Vec<String> = args.ops.iter().map(|op| op.token.clone()).collect();
+    for (set, flag) in [
+        (args.details_file.is_some(), "--details-file"),
+        (args.blocks_everything, "--blocks-everything"),
+        (args.force, "--force"),
+        (args.repo.is_some(), "--repo"),
+        (args.add_pr_url.is_some(), "--add-pr-url"),
+        (args.add_pr_note.is_some(), "--add-pr-note"),
+        (!args.door.is_empty(), "--status/--leave/--set"),
+    ] {
+        if set {
+            mixed.push(flag.to_string());
+        }
+    }
+    if !mixed.is_empty() {
+        eprintln!(
+            "Error: --to renames the node id and cannot be combined with \
+             ({}) in one call. Run two calls.",
+            mixed.join(", ")
+        );
+        return 2;
+    }
+    super::reid_cli::reid_write(&settings::graph_path(), &args.task_id, new_id)
 }
 
 /// The door relay: refuse the mixed legacy+door call, then hand the door
@@ -893,7 +1009,7 @@ fn resolve_or_refuse(
             return Err(refused(
                 format!(
                     "Error: --repo '{repo}' is not an owner/name slug \
-                     (expected <owner>/<repo>, e.g. bllshttng/footnote)"
+                     (expected <owner>/<repo>, e.g. bllshttng/fno)"
                 ),
                 2,
             ));
@@ -951,26 +1067,13 @@ fn model_token_ok(model: &str) -> bool {
 /// unreadable file. A file's content is data - the `null` clear-sentinel is
 /// CLI-only, tracked by the second return value.
 fn read_details(args: &UpdateArgs) -> Result<(Option<String>, bool), Refusal> {
-    match (&args.details, &args.details_file) {
-        (Some(_), Some(_)) => Err(refused(
-            "error: provide the details once - inline or as a file, not both",
-            1,
-        )),
-        (inline, None) => Ok((inline.clone(), false)),
-        (None, Some(path)) => {
-            if path == "-" {
-                let mut buf = String::new();
-                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-                    .map_err(|e| refused(format!("error: cannot read -: {e}"), 1))?;
-                Ok((Some(buf), true))
-            } else {
-                match std::fs::read_to_string(path) {
-                    Ok(body) => Ok((Some(body), true)),
-                    Err(e) => Err(refused(format!("error: cannot read {path}: {e}"), 1)),
-                }
-            }
-        }
-    }
+    let text = crate::text_or_file::read_text_arg(
+        args.details.as_deref(),
+        args.details_file.as_deref(),
+        "the details",
+    )
+    .map_err(|e| refused(e, 1))?;
+    Ok((text, args.details_file.is_some()))
 }
 
 /// The write cycle: read, recompute, mutate, publish with retry. Returns the
@@ -1203,7 +1306,7 @@ fn hold_text_names_id(haystack: &str, id: &str) -> bool {
 /// Removing a blocker a held hold still names strands the hold: the worker
 /// it parks keeps parking after the blocker row is gone, and the hold's
 /// release condition names a blocker no longer on the row. Refuse and name
-/// the release verb; lift the hold, then rerun the removal. An INVALID hold
+/// the release command; lift the hold, then rerun the removal. An INVALID hold
 /// (unreadable, not active) never refuses: there is nothing to strand.
 fn hold_names_blockers(
     node: &Value,
@@ -1401,7 +1504,7 @@ fn apply_mutators(
                 // The claim store is the lock's single writer: `locked_by=`
                 // acquires `node:<id>` for the holder and the projection
                 // reads it back; the row carries no mirror copy. A foreign
-                // live claim refuses naming the claim verb.
+                // live claim refuses naming the claim command.
                 let key = format!("node:{node_id}");
                 let pid = crate::claims::durable_session_pid().map(|p| p as u32);
                 let (pid_unavailable, ttl_ms) = match pid {
@@ -1446,7 +1549,7 @@ fn apply_mutators(
             None => {
                 // Clearing drops the row mirror and releases the invoking
                 // holder's own claim. A foreign live holder stays put and the
-                // refusal names the claim verb (the unclaim/requeue
+                // refusal names the claim command (the unclaim/requeue
                 // contract); an override there is `claim release --force`.
                 let key = format!("node:{node_id}");
                 let (state, record) = crate::claims::status(&key, None);
@@ -1599,7 +1702,7 @@ fn apply_mutators(
         }
         let dispatch_warnings: Vec<String> = super::fields::apply_dispatch_overrides(
             obj,
-            args.dispatch_verb.as_deref(),
+            args.dispatch_command.as_deref(),
             brief.as_deref(),
         )
         .map_err(|refusal| refused(refusal, 2))?;
@@ -2009,7 +2112,7 @@ fn apply_mutators(
         }
     }
     // A reparent leaves the OLD parent's stale rollup on its doc: the
-    // python verb repainted it alongside the node, so name it for the
+    // python command repainted it alongside the node, so name it for the
     // projector's target list.
     let old_parent = node
         .get("parent")
@@ -2215,7 +2318,7 @@ fn verify_lock_stamp(graph: &Path, node_id: &str, locked_by: &str) -> Result<(),
 /// The plan repaint: graph-authoritative fields flow onto the linked plan
 /// when a mirrored or status-affecting field changed - ownership, blockers,
 /// plan binding, parentage and tags included, the trigger set the python
-/// verb ran. Best-effort.
+/// command ran. Best-effort.
 fn repaint(graph: &Path, args: &UpdateArgs, node_id: &str, old_parent: Option<&str>) {
     let difficulty_clear = args
         .difficulty
@@ -2437,7 +2540,7 @@ mod tests {
     #[test]
     fn removing_a_blocker_a_held_hold_names_refuses() {
         // The held plan names the blocker in its reason; the removal refuses and
-        // names the release verb. An INVALID hold never
+        // names the release command. An INVALID hold never
         // refuses, and a removal the hold does not name passes.
         let dir = tempfile::tempdir().unwrap();
         let plan = dir.path().join("plan.md");
@@ -2499,5 +2602,39 @@ mod tests {
             .is_ok(),
             "an INVALID hold never refuses"
         );
+    }
+
+    #[test]
+    fn an_external_id_binds_sidecar_keys_and_refuses_tracker_fields() {
+        const FAKE: crate::tracker::FakeTracker = crate::tracker::FakeTracker(&["o/r#1"]);
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |tokens: &[&str]| match UpdateArgs::parse(
+            &tokens.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        ) {
+            ParsedUpdate::Args(a) => a,
+            ParsedUpdate::Refusal { message, .. } => panic!("parse: {message}"),
+        };
+        let bind = parse(&["o/r#1", "cwd=/tmp/x", "plan_path=/tmp/p.md"]);
+        assert_eq!(
+            run_external_bind_with(&bind, "github", &FAKE, dir.path()),
+            0
+        );
+        let got = crate::tracker::sidecar::load(dir.path(), "o/r#1").unwrap();
+        assert_eq!(got["cwd"], json!("/tmp/x"));
+        assert_eq!(got["plan_path"], json!("/tmp/p.md"));
+
+        let title = parse(&["o/r#1", "title=x"]);
+        assert_eq!(
+            run_external_bind_with(&title, "github", &FAKE, dir.path()),
+            1
+        );
+        let missing = parse(&["o/r#2", "cwd=/tmp/x"]);
+        assert_eq!(
+            run_external_bind_with(&missing, "github", &FAKE, dir.path()),
+            1
+        );
+        assert!(crate::tracker::sidecar::load(dir.path(), "o/r#2")
+            .unwrap()
+            .is_empty());
     }
 }

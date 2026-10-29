@@ -321,11 +321,31 @@ fn process_table_libproc() -> (Vec<ProcRow>, usize) {
 /// list reading argv only, so a click path pays no per-thread census. This
 /// process is skipped: its own argv carries the needle when the caller was
 /// handed it on the command line.
-#[cfg(target_os = "macos")]
 pub fn live_argv_contains(needle: &str) -> bool {
-    if needle.is_empty() {
-        return false;
-    }
+    !needle.is_empty() && any_live_argv(|argv| argv.iter().any(|a| a.contains(needle)))
+}
+
+/// True when a live claude process holds `session_id`: its argv names the
+/// session as the value of `--resume`, `-r` or `--session-id`. Narrower than
+/// [`live_argv_contains`], which also matches an fno command that only
+/// mentions the id (`fno agents resume <id>`) and holds nothing.
+pub fn live_claude_holds_session(session_id: &str) -> bool {
+    !session_id.is_empty() && any_live_argv(|argv| claude_argv_holds(argv, session_id))
+}
+
+fn claude_argv_holds(argv: &[String], session_id: &str) -> bool {
+    let is_claude = argv
+        .first()
+        .is_some_and(|program| program.contains("claude"));
+    is_claude
+        && argv.windows(2).any(|pair| {
+            matches!(pair[0].as_str(), "--resume" | "-r" | "--session-id") && pair[1] == session_id
+        })
+}
+
+/// One pass over the pid list reading argv only, this process skipped.
+#[cfg(target_os = "macos")]
+fn any_live_argv(matches: impl Fn(&[String]) -> bool) -> bool {
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if count <= 0 {
         return false;
@@ -344,17 +364,17 @@ pub fn live_argv_contains(needle: &str) -> bool {
     pids[..filled as usize]
         .iter()
         .filter(|pid| **pid > 0 && **pid != me)
-        .any(|&pid| argv_of(pid).is_some_and(|argv| argv.iter().any(|a| a.contains(needle))))
+        .any(|&pid| argv_of(pid).is_some_and(|argv| matches(&argv)))
 }
 
+/// The `ps` leg splits each command on whitespace, as `process_argv` does.
 #[cfg(not(target_os = "macos"))]
-pub fn live_argv_contains(needle: &str) -> bool {
+fn any_live_argv(matches: impl Fn(&[String]) -> bool) -> bool {
     let me = std::process::id();
-    !needle.is_empty()
-        && process_table_ps()
-            .0
-            .iter()
-            .any(|r| r.pid != me && r.command.contains(needle))
+    process_table_ps().0.iter().any(|r| {
+        let argv: Vec<String> = r.command.split_whitespace().map(str::to_string).collect();
+        r.pid != me && matches(&argv)
+    })
 }
 
 /// The live argv of one pid, for the caller outside the census that needs
@@ -420,7 +440,7 @@ pub(crate) fn process_argv(pid: u32) -> Option<Vec<String>> {
 /// Mirrors `fno::pane_argv::process_argv`; that crate is a dev-only link
 /// here, so the read lives beside its only production caller.
 #[cfg(target_os = "macos")]
-fn argv_of(pid: u32) -> Option<Vec<String>> {
+pub(crate) fn argv_of(pid: u32) -> Option<Vec<String>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
     let mut size: libc::size_t = 0;
     if unsafe {
@@ -489,7 +509,7 @@ fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
 }
 
 #[cfg(target_os = "macos")]
-fn comm_string(comm: &[libc::c_char]) -> String {
+pub(crate) fn comm_string(comm: &[libc::c_char]) -> String {
     let bytes: Vec<u8> = comm
         .iter()
         .take_while(|&&c| c != 0)
@@ -804,6 +824,52 @@ fn keeper_rows_from(table: &[ProcRow]) -> Vec<Value> {
     rows
 }
 
+/// The running daemon's pid from agent.status, `None` with no daemon.
+async fn daemon_pid() -> Option<u32> {
+    let resp = crate::client::call_if_running(
+        &crate::paths::AgentsHome::from_env(),
+        &crate::protocol::Request::new(1, "agent.status", json!({})),
+    )
+    .await
+    .ok()?;
+    let pid = resp.result()?.pointer("/daemon/pid")?.as_u64()?;
+    Some(pid as u32)
+}
+
+/// The daemon's own and reaped-child CPU share over `window`, in cores: two
+/// reads `window` apart. No daemon or an unreadable pid answers `null` with
+/// a reason, never zeros.
+async fn daemon_cpu(pid: Option<u32>, window: Duration) -> (Value, Value) {
+    let Some(pid) = pid else {
+        return (Value::Null, json!("no daemon answered agent.status"));
+    };
+    let start = std::time::Instant::now();
+    let Some((own0, kids0)) = crate::reader_cost::cpu_split_ns(pid) else {
+        return (
+            Value::Null,
+            json!(format!("pid {pid}: cpu time unreadable")),
+        );
+    };
+    tokio::time::sleep(window).await;
+    let Some((own1, kids1)) = crate::reader_cost::cpu_split_ns(pid) else {
+        return (
+            Value::Null,
+            json!(format!("pid {pid}: exited during the window")),
+        );
+    };
+    let secs = start.elapsed().as_secs_f64();
+    let cores = |a: u64, b: u64| b.saturating_sub(a) as f64 / 1e9 / secs;
+    let capacity = std::thread::available_parallelism().map_or(0, |n| n.get());
+    let cpu = json!({
+        "pid": pid,
+        "own_cores": cores(own0, own1),
+        "children_cores": cores(kids0, kids1),
+        "window_s": secs,
+        "capacity_cores": capacity,
+    });
+    (cpu, Value::Null)
+}
+
 /// The daemon's row, read in-process: one agent.status call feeds both the
 /// pid and the drift verdict. A failed call reads unknown, never current.
 async fn daemon_row() -> Value {
@@ -997,12 +1063,52 @@ pub async fn census() -> Vec<Value> {
 
 /// Run the daemon-free census subcommand.  The process walk stays in Rust so
 /// Python callers and the machine sample share one table implementation.
-pub async fn run_verb(args: &[String]) -> i32 {
+pub async fn run_command(args: &[String]) -> i32 {
+    // The yard fold nests here as an argv op (crate::yard), so it adds no
+    // fno-agents root action (shrink law d-fe66560a): `census yard` is the
+    // roster command's identity dimension.
+    if args.first().map(String::as_str) == Some("yard") {
+        return crate::yard::run(&args[1..]);
+    }
+    // `fno agents orphans`: the sweep rides the census action as an argument
+    // (law d-fe66560a allows no new client action); the sweep body lives in
+    // orphans.rs.
+    if args.iter().any(|arg| arg == "--orphans") {
+        let rest: Vec<String> = args
+            .iter()
+            .filter(|arg| *arg != "--orphans")
+            .cloned()
+            .collect();
+        return crate::orphans::run(&rest);
+    }
     // `fno agents top`: the worker table, the census of live runs.
     if args.first().map(String::as_str) == Some("--workers") {
         return crate::agents_top::run(&args[1..]);
     }
+    // The diag family's reading, riding the census op (shrink law d-fe66560a:
+    // no new client action). `--cause` is the gate's bounded payload; the
+    // full `fno doctor footprint` command behavior rides `--footprint`.
+    if args
+        .iter()
+        .any(|arg| arg == "--cause" || arg == "--footprint")
+    {
+        let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
+        let cause_only = args.iter().any(|arg| arg == "--cause");
+        return crate::footprint_cause::footprint_command(json_flag, cause_only);
+    }
+    // The lanes reading rides the same census op: how many more lanes fit.
+    if args.iter().any(|arg| arg == "--lanes") {
+        let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
+        return crate::fleet_lanes::lanes_command(json_flag);
+    }
     if args.iter().any(|arg| arg == "--ps") {
+        // The 1 s window is opt-in: the spawn gate reads this table on
+        // every admission and must not wait on it.
+        let (cpu, cpu_reason) = if args.iter().any(|arg| arg == "--daemon-cpu") {
+            daemon_cpu(daemon_pid().await, Duration::from_secs(1)).await
+        } else {
+            (Value::Null, json!("not read: pass --daemon-cpu"))
+        };
         let (rows, unreadable) = process_table();
         println!(
             "{}",
@@ -1011,6 +1117,15 @@ pub async fn run_verb(args: &[String]) -> i32 {
                 "unreadable": unreadable,
                 "sccache_server_pid": crate::cargo_build_dirs::sccache_row_pid(&rows),
                 "sccache_restarts_1h": crate::machine_watch::sccache_restarts_1h(),
+                "daemon_cpu": cpu,
+                "daemon_cpu_reason": cpu_reason,
+                // Opt-in like the CPU window: the spawn gate's probe never
+                // reads memory and must not pay the registry walk for it.
+                "memory": if args.iter().any(|arg| arg == "--memory") {
+                    crate::memory_groups::reading(&crate::paths::AgentsHome::from_env(), &rows)
+                } else {
+                    Value::Null
+                },
             })
         );
         return 0;
@@ -1045,7 +1160,7 @@ pub fn census_blocking() -> Vec<Value> {
     rows
 }
 
-/// One store keeper the restart verb cycled (or spared).
+/// One store keeper the restart command cycled (or spared).
 pub struct CycledKeeper {
     pub graph: Option<String>,
     pub old_pid: Option<u32>,
@@ -1109,6 +1224,21 @@ fn shutdown_reply(sock: &Path) -> Option<Value> {
 
 #[cfg(test)]
 mod process_table_tests {
+    /// AC1: a live pid reads a window of own and child cores; no daemon
+    /// reads null with a reason, never zeros.
+    #[tokio::test]
+    async fn daemon_cpu_reads_a_window_or_names_why_not() {
+        let window = std::time::Duration::from_millis(50);
+        let (cpu, reason) = super::daemon_cpu(Some(std::process::id()), window).await;
+        assert!(reason.is_null(), "{reason}");
+        assert!(cpu["window_s"].as_f64().unwrap() > 0.0);
+        assert!(cpu["own_cores"].as_f64().unwrap() >= 0.0);
+        assert!(cpu["children_cores"].as_f64().unwrap() >= 0.0);
+        let (cpu, reason) = super::daemon_cpu(None, window).await;
+        assert!(cpu.is_null());
+        assert!(reason.as_str().unwrap().contains("no daemon"));
+    }
+
     use super::{pid_is_zombie, process_table, ps_text};
 
     #[test]
@@ -1220,5 +1350,14 @@ mod process_table_tests {
         assert!(found, "a live argv naming the needle is a witness");
         assert!(!absent, "a needle no process names is no witness");
         assert!(!empty, "an empty needle names nothing");
+        // Only a claude argv's session flags hold, never an fno command line.
+        let holds = |line: &str| {
+            let argv: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            super::claude_argv_holds(&argv, "s-1")
+        };
+        assert!(holds(
+            "/u/.local/share/claude/versions/2.1.309 --session-id s-1"
+        ));
+        assert!(!holds("fno agents spawn --resume s-1"));
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::server::portal_reach::portal_replay_placement;
+use crate::server::portal_reach::{portal_replay_placement, row_answers_key};
 
 // ---- (x-8f9d) portals: the one thread pane becomes an addressable set --
 
@@ -805,7 +805,7 @@ fn thread_pane_ctl_rows() {
 
     // A row pane-hosted in ANOTHER session is that server's to view: the
     // reply names where it lives. "no such agent" would lie about a row
-    // the registry knows (and the inline attach this verb replaced
+    // the registry knows (and the inline attach this command replaced
     // attached it regardless of hosting session).
     let (mut core, _client_id, _p1, _rx) = thread_core();
     let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
@@ -824,7 +824,7 @@ fn thread_pane_ctl_rows() {
     }
     assert!(core.portals.is_empty(), "no thread pane minted");
 
-    // AC8-HP (server half): the control verb drives the SAME reach a TUI
+    // AC8-HP (server half): the control command drives the SAME reach a TUI
     // gesture drives, records the slot, persists nothing, and replies
     // with the landing.
     set_attach_program(&["/bin/cat"]);
@@ -870,7 +870,7 @@ fn thread_pane_ctl_rows() {
     assert!(core.panes.len() == 1, "nothing spawned");
 
     // A row already pane-hosted in this session has its viewport: the
-    // verb answers with the pane instead of opening a second one.
+    // command answers with the pane instead of opening a second one.
     let (mut core, _client_id, p1, _rx) = thread_core();
     let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
     let mut hosted = bg_row("hosted-row", "/tmp/seen", None);
@@ -893,6 +893,58 @@ fn thread_pane_ctl_rows() {
 }
 
 #[test]
+fn sideline_reach_by_session_id_lands_on_the_picked_namesake() {
+    // Two live paneless rows share a name; the sideline sends the picked
+    // row's session id, so the reach lands on it instead of refusing.
+    set_peek_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    let mut first = bg_row("fnh", "/tmp/seen", None);
+    first.harness = Some("codex".into());
+    first.harness_session_id = Some("sess-aaaa".into());
+    let mut second = bg_row("fnh", "/tmp/seen", None);
+    second.harness = Some("codex".into());
+    second.harness_session_id = Some("sess-bbbb".into());
+    core.agents = vec![first, second];
+
+    core.command(client_id, thread_reach_cmd("sess-bbbb"));
+    let notices = drain_notices(&mut rx);
+    assert!(
+        !notices.iter().any(|t| t.contains("more than one row")),
+        "a unique key never refuses: {notices:?}"
+    );
+    assert_eq!(core.portals.len(), 1, "the reach opened the picked row");
+    assert_eq!(core.portals[&0].row_key, "sess-bbbb");
+
+    core.command(client_id, thread_reach_cmd("fnh"));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("more than one row")),
+        "a typed bare name still refuses"
+    );
+}
+
+#[test]
+fn reach_treats_two_rows_of_one_session_as_one() {
+    set_peek_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    let mut a = bg_row("fnh", "/tmp/seen", None);
+    a.harness = Some("codex".into());
+    a.harness_session_id = Some("sess-twin".into());
+    let b = a.clone();
+    core.agents = vec![a, b];
+
+    core.command(client_id, thread_reach_cmd("sess-twin"));
+    assert!(
+        !drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("more than one row")),
+        "twins of one session never refuse"
+    );
+    assert_eq!(core.portals.len(), 1, "the tap opened the row");
+}
+
+#[test]
 fn thread_pane_tier_rows() {
     // A paneless codex row (Follow) tails its transcript; a gemini row
     // (Locate) renders the self-teaching screen. Both reach by NAME -
@@ -900,7 +952,7 @@ fn thread_pane_tier_rows() {
     // The peek program is overridden to a stand-in so the spawn path runs
     // without booting the deployed CLI (whose load-time boot can outlive
     // any sane test budget under the full suite); the real argv shape is
-    // asserted in `peek_argv_is_the_peek_verb_with_follow`.
+    // asserted in `peek_argv_is_the_peek_command_with_follow`.
     set_peek_program(&["/bin/cat"]);
     let (mut core, client_id, _p1, _rx) = thread_core();
     let mut codex = bg_row("codex-row", "/tmp/seen", None);
@@ -944,6 +996,7 @@ fn thread_pane_tier_rows() {
         vec![
             "fno".to_string(),
             "agents".into(),
+            "session".into(),
             "peek".into(),
             "codex-row".into(),
             "--follow".into()
@@ -1847,6 +1900,11 @@ async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
     row.claude_session_uuid = Some(uuid.into());
     core.agents = vec![row];
 
+    // A loaded runner can list the child before its argv reads back.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while core.live_attach_argv("deadbee1").is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     assert!(
         core.live_attach_argv("deadbee1").is_some(),
         "the live argv witnesses the row"
@@ -2993,7 +3051,7 @@ fn a_vanishing_portal_says_so_and_names_its_row() {
     core.close_pane_reasoned(b_seat, "closed by operator");
     let loss = collect_until_portal_closed(&mut rx, "portal 1").expect("the loss notice arrived");
     assert!(
-        loss.contains("deadbee2") && loss.contains("closed by operator"),
+        loss.contains("target-b") && loss.contains("closed by operator"),
         "the notice names the row and the reason: {loss:?}"
     );
 
@@ -3676,6 +3734,48 @@ fn title_claim_rows() {
     assert!(
         !core.agent_rows().iter().any(|r| r.portal == Some(0)),
         "no row carries the marker, the row named vellum? least of all"
+    );
+    core.reap_pane(seat);
+}
+
+// A portal reached by a title saves the row's id, never the title. After a
+// restart the unnamed thread wears a new title and a resumed session id;
+// the saved key still finds it through the resume lineage, with no
+// register, and the generic title does not unclaim the seat.
+#[test]
+fn portal_saves_the_row_id_and_finds_it_after_a_restart() {
+    set_attach_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    let mut row = bg_row("Claude Code", "/tmp/seen", Some("deadbee1"));
+    row.harness_session_id = Some("sess-a".into());
+    core.agents = vec![row];
+    core.command(client_id, portal_reach_cmd("Claude Code", 0));
+    let seat = core.portals.get(&0).expect("portal 0 open").seat;
+    assert_eq!(
+        core.portals[&0].row_key, "sess-a",
+        "the id is saved, not the title"
+    );
+    drain_notices(&mut rx);
+
+    let mut resumed = bg_row("tidy-otter", "/tmp/seen", Some("deadbee7"));
+    resumed.harness_session_id = Some("sess-b".into());
+    resumed.predecessor_session_ids = vec!["sess-a".into()];
+    core.agents = vec![resumed];
+    assert_eq!(
+        core.portal_marker(Some(seat)),
+        Some(0),
+        "the lineage answers the saved id"
+    );
+    assert!(
+        !row_answers_key(&core.agents[0], "tidy-otter"),
+        "a name never answers a stored key on a row with an id"
+    );
+
+    feed_seat_title(&mut core, seat, "✳ Claude Code");
+    core.follow_portal_viewer_titles();
+    assert_eq!(
+        core.portals[&0].row_key, "sess-a",
+        "a title no row goes by keeps the id"
     );
     core.reap_pane(seat);
 }

@@ -27,7 +27,11 @@ pub(super) struct Refusal {
 
 pub(super) enum Gate {
     Owner,
-    Team,
+    /// A teamed row with no node of its own: the lead path answers on its own
+    /// evidence. Carries the registry this gate already loaded, so the lead's
+    /// board read reuses it instead of paying a second store read inside its
+    /// budgeted slice.
+    Team(crate::state::Registry),
     Refuse(Refusal),
 }
 
@@ -41,7 +45,7 @@ pub(super) fn gate_output(parsed: &LoopCheckArgs) -> Option<(i32, String)> {
     }
     match gate(parsed) {
         Gate::Refuse(r) => Some(refusal_output(parsed, r)),
-        Gate::Team => Some(super::lead_decide::lead_decide(parsed)),
+        Gate::Team(registry) => Some(super::lead_decide::lead_decide(parsed, Some(registry))),
         Gate::Owner => None,
     }
 }
@@ -133,7 +137,7 @@ pub(super) fn gate(parsed: &LoopCheckArgs) -> Gate {
         // The asking session IS the owner; the team disposition still gives
         // a teamed owner a path that does not depend on a target manifest.
         if owner.role_level.is_some() && owner.node.is_none() {
-            return Gate::Team;
+            return Gate::Team(registry);
         }
         return Gate::Owner;
     }
@@ -175,7 +179,7 @@ pub(super) fn gate(parsed: &LoopCheckArgs) -> Gate {
     // the lead path evaluates its own evidence. When the row carries BOTH a
     // team and a node, the node binding is the tighter contract and wins.
     if row.role_level.is_some() && row.node.is_none() {
-        return Gate::Team;
+        return Gate::Team(registry);
     }
     Gate::Owner
 }
@@ -203,7 +207,7 @@ pub(super) fn render_continuation_for_harness(
     };
     if value.get("continuation").and_then(Value::as_str) == Some("/target --resume") {
         value["continuation"] =
-            serde_json::Value::String(crate::provider::render_verb_seed("/target resume", "pi"));
+            serde_json::Value::String(crate::provider::render_command_seed("/target resume", "pi"));
         return (code, value.to_string());
     }
     (code, out)

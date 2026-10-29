@@ -9,18 +9,11 @@ from typing import Any
 
 import pytest
 
-from fno.company.contracts import FunctionRef, RoleRef
 from fno.config import ModelRoutingBlock
 from fno.paths_testing import use_tmpdir
-from fno.roles import (
-    AuthorityCeiling,
-    DeliveryPolicy,
-    ReviewPolicy,
-    RoleDefinitionSource,
-    RoleLayer,
-    RoleManifest,
-    RoutingHint,
-)
+
+# Role discovery runs in fno-agents (spawn-overlay kind roles-discover).
+pytestmark = pytest.mark.dev_build
 
 
 OPENAI_PROVIDER = {
@@ -33,27 +26,40 @@ OPENAI_PROVIDER = {
 
 
 def _write_role(root: Path, *, provider: str, model: str) -> None:
-    role = RoleRef(id="publisher", function_id="communications")
-    source = RoleDefinitionSource(
-        layer=RoleLayer.COMPANY,
-        source_id="company/publisher.json",
-        snapshot_revision="snapshot-1",
-        role=role,
-        manifest=RoleManifest(
-            role=role,
-            function=FunctionRef(id=role.function_id),
-            mission="Publish one bounded artifact.",
-            deliverable_kinds=("brief",),
-            authority_ceiling=AuthorityCeiling.INTERNAL,
-            review_policy=ReviewPolicy(required=True, minimum_reviewers=1),
-            delivery_policy=DeliveryPolicy(required_evidence=("artifact",)),
-            default_topology="direct",
-            routing_hint=RoutingHint(provider=provider, model=model),
-        ),
-    )
+    """Write one valid definition document, the literal the retired pydantic
+    model dumped (the native schema in crates/fno-agents/src/roles validates
+    the same bytes)."""
+    role = {"id": "publisher", "function_id": "communications"}
+    source = {
+        "layer": "company",
+        "source_id": "company/publisher.json",
+        "snapshot_revision": "snapshot-1",
+        "role": role,
+        "manifest": {
+            "role": role,
+            "function": {"id": "communications"},
+            "mission": "Publish one bounded artifact.",
+            "deliverable_kinds": ["brief"],
+            "delegation_targets": [],
+            "required_capabilities": [],
+            "authority_ceiling": "internal",
+            "context_selectors": [],
+            "review_policy": {
+                "required": True, "minimum_reviewers": 1, "required_review_kinds": [],
+            },
+            "delivery_policy": {
+                "required_evidence": ["artifact"], "require_all_deliverables": True,
+            },
+            "default_topology": "direct",
+            "approval_floor": "none",
+            "routing_hint": {"provider": provider, "model": model},
+        },
+        "status": "valid",
+        "error": None,
+    }
     path = root / "company" / "publisher.json"
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps(source.model_dump(mode="json")), encoding="utf-8")
+    path.write_text(json.dumps(source), encoding="utf-8")
 
 
 def _write_invalid_role(root: Path) -> None:
@@ -116,7 +122,7 @@ def _configure_codex(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     # x-3954: the provider half of the route resolves in Rust through the
-    # spawn-overlay verb. These journeys test the ROLE-to-argv plumbing, not
+    # spawn-overlay command. These journeys test the ROLE-to-argv plumbing, not
     # the builder (the marked tests in test_model_routing.py pin the real
     # binary), so answer the codex-route kind with exactly the tokens Rust
     # builds; every other kind rides the real transport.

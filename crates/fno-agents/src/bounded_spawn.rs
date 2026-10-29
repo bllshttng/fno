@@ -14,7 +14,7 @@
 
 use std::ffi::OsStr;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Attempts per spawn, and the pause between them: the same shape as the gh
 /// probe's loop, which exists for the same reason (ETXTBSY clears in
@@ -48,7 +48,7 @@ pub(crate) fn spawn_bounded(
 
     let mut attempt = 0;
     loop {
-        let spawned = Command::new(bin)
+        let spawned = crate::pr_status::quota::helper_command(bin)
             .args(args)
             .current_dir(cwd)
             .stdin(Stdio::null())

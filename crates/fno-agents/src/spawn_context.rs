@@ -56,6 +56,39 @@ pub fn parse_canonical_stamp(
     canonical_identity_from(get)
 }
 
+/// The vendor fold (Python `_vendor_identity`): first family wins; two ids
+/// of one family that disagree conflict; multiple families resolve to
+/// nothing. Shared by the canonical resolution and route-slot's dispatch
+/// infer, so the absent-stamp answer spells once.
+pub fn vendor_identity(markers: &[(String, String, String)]) -> (Option<String>, Option<String>) {
+    let mut family: Option<String> = None;
+    let mut vendor_session: Option<String> = None;
+    let mut conflicted = false;
+    for (_marker, mharness, value) in markers {
+        match &family {
+            None => {
+                family = Some(mharness.clone());
+                vendor_session = Some(value.clone());
+            }
+            Some(prev) if prev != mharness => {
+                family = None;
+                vendor_session = None;
+                conflicted = true;
+            }
+            Some(_) => {
+                if !same_session_id(vendor_session.as_deref().unwrap_or_default(), value) {
+                    conflicted = true;
+                }
+            }
+        }
+    }
+    if conflicted {
+        family = None;
+        vendor_session = None;
+    }
+    (family, vendor_session)
+}
+
 /// Canonical-vs-vendor resolution with its disposition class. Mirror of
 /// Python `_resolve_canonical_identity`, which names invalid/contradiction
 /// where the claims-side resolver only returns empty pairs.
@@ -81,34 +114,7 @@ pub enum CanonicalClass {
 pub fn resolve_canonical_resolution(get: &impl Fn(&str) -> Option<String>) -> CanonicalResolution {
     let (session, harness, disposition) = parse_canonical_stamp(get);
     let markers = present_markers(get);
-    // The vendor fold, inlined (Python `_vendor_identity`): first family
-    // wins; two ids of one family that disagree conflict; multiple families
-    // resolve to nothing.
-    let mut family: Option<String> = None;
-    let mut vendor_session: Option<String> = None;
-    let mut conflicted = false;
-    for (_marker, mharness, value) in &markers {
-        match &family {
-            None => {
-                family = Some(mharness.clone());
-                vendor_session = Some(value.clone());
-            }
-            Some(prev) if prev != mharness => {
-                family = None;
-                vendor_session = None;
-                conflicted = true;
-            }
-            Some(_) => {
-                if !same_session_id(vendor_session.as_deref().unwrap_or_default(), value) {
-                    conflicted = true;
-                }
-            }
-        }
-    }
-    if conflicted {
-        family = None;
-        vendor_session = None;
-    }
+    let (family, vendor_session) = vendor_identity(&markers);
     let class = match disposition {
         CanonicalDisposition::Absent => CanonicalClass::Absent,
         CanonicalDisposition::Invalid => CanonicalClass::Invalid,
@@ -441,6 +447,12 @@ pub fn harness_name_of_command(command: &str) -> Option<&'static str> {
     if exe.contains("claude") {
         return Some("claude");
     }
+    // footnote is a compiled binary, never run through an interpreter, so it
+    // matches on argv[0] alone: `nvim footnote` (the repo's own name) is not
+    // a footnote session.
+    if exe.rsplit('/').next() == Some("footnote") {
+        return Some("footnote");
+    }
     for cand in argv.iter().take(2) {
         let low = cand.to_lowercase();
         let basename = low.rsplit('/').next().unwrap_or("");
@@ -685,19 +697,20 @@ fn harness_static(stamp: &str) -> Option<&'static str> {
         "opencode" => Some("opencode"),
         "agy" => Some("agy"),
         "cursor-agent" => Some("cursor-agent"),
+        "footnote" => Some("footnote"),
         _ => None,
     }
 }
 
-/// The value of `marker` in `pid`'s environment, or `None` when the env is
-/// unreadable or the marker absent. macOS reads the process args buffer
+/// The value of `marker` in `pid`'s environment: `Err` when the env cannot
+/// be read, `Ok(None)` when the marker is absent. macOS reads the process args buffer
 /// natively (`KERN_PROCARGS2`, the same source `census::argv_of` uses, whose
 /// tail after argv is the environment); Linux reads `/proc/<pid>/environ`.
 /// Readability is PARTIAL by measurement (Python's `ps eww` carrier had the
-/// same property); `None` covers both "not carried" and "unreadable" because
-/// neither changes a caller decision.
+/// same property). The managed-store pin scan needs the two apart: an
+/// unreadable env pins the slot, an absent marker means the default dir.
 #[cfg(target_os = "macos")]
-pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
+pub(crate) fn process_env_value(pid: u32, marker: &str) -> Result<Option<String>, ()> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
     let mut size: libc::size_t = 0;
     if unsafe {
@@ -712,7 +725,7 @@ pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
     } != 0
         || size < 4
     {
-        return None;
+        return Err(());
     }
     let mut buf = vec![0u8; size];
     if unsafe {
@@ -726,12 +739,12 @@ pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
         )
     } != 0
     {
-        return None;
+        return Err(());
     }
     let buf = &buf[..size];
-    let argc = i32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
+    let argc = i32::from_ne_bytes(buf[0..4].try_into().map_err(|_| ())?) as usize;
     if argc == 0 {
-        return None;
+        return Err(());
     }
     let mut i = 4;
     while i < buf.len() && buf[i] != 0 {
@@ -754,26 +767,32 @@ pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
         }
         if let Ok(text) = std::str::from_utf8(&buf[start..i]) {
             if let Some(v) = text.strip_prefix(prefix.as_str()) {
-                return Some(v.to_string());
+                return Ok(Some(v.to_string()));
             }
         }
         i += 1;
     }
-    None
+    Ok(None)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
-    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+pub(crate) fn process_env_value(pid: u32, marker: &str) -> Result<Option<String>, ()> {
+    let raw = std::fs::read(format!("/proc/{pid}/environ")).map_err(|_| ())?;
     let prefix = format!("{marker}=");
     for entry in raw.split(|b| *b == 0) {
         if let Ok(text) = std::str::from_utf8(entry) {
             if let Some(v) = text.strip_prefix(prefix.as_str()) {
-                return Some(v.to_string());
+                return Ok(Some(v.to_string()));
             }
         }
     }
-    None
+    Ok(None)
+}
+
+/// The value of `marker` in `pid`'s environment, or `None` when the env is
+/// unreadable or the marker absent; neither changes an attester decision.
+pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
+    process_env_value(pid, marker).ok().flatten()
 }
 
 /// One ancestor in the attester walk: its argv0 basename (lowercased, the
@@ -910,7 +929,6 @@ pub fn resolve_attester_identity(
 }
 
 /// The row statuses under which a session still owns its identity. Mirror of
-/// Python `OWNERSHIP_LIVE_STATUSES`.
 const OWNERSHIP_LIVE_STATUSES: [&str; 6] =
     ["spawning", "ready", "idle", "busy", "live", "restarting"];
 
@@ -959,6 +977,23 @@ pub fn live_thread_row_for_cwd(cwd: &str, home: &AgentsHome) -> Option<(String, 
     }
 }
 
+/// Whether the cwd-keyed spawn row may name this process. A claude session
+/// carries its own markers, so a markerless claude process (a hand-launched
+/// `claude --bg`) shares its cwd with a bystander's row and adopting it signs
+/// mail as a neighbour. A claude row is adopted only when a claude marker
+/// names that same session. The row's family must match the walk's, and no
+/// other family's marker may be present.
+fn spawn_row_adoptable(
+    row_harness: &str,
+    owned_harness: Option<&str>,
+    marker_families: &std::collections::BTreeSet<&str>,
+    marker_names_row: bool,
+) -> bool {
+    (row_harness != "claude" || marker_names_row)
+        && owned_harness.is_none_or(|h| h == row_harness)
+        && marker_families.iter().all(|h| *h == row_harness)
+}
+
 /// Fill a session id the ancestry walk could not supply from the cwd-keyed
 /// spawn record. Guards, in order: a resolved session id
 /// short-circuits before the read, a fail-closed disposition is never
@@ -976,15 +1011,21 @@ fn fill_spawn_record(owned: OwnedIdentity, cwd: &str, home: &AgentsHome) -> Owne
     let Some((harness, session_id)) = live_thread_row_for_cwd(cwd, home) else {
         return owned;
     };
-    if owned.harness.as_deref().is_some_and(|h| h != harness) {
-        return owned;
-    }
     let marker_families: std::collections::BTreeSet<&str> = owned
         .markers_present
         .iter()
         .map(|(_, h, _)| h.as_str())
         .collect();
-    if marker_families.iter().any(|h| h != &harness.as_str()) {
+    let marker_names_row = owned
+        .markers_present
+        .iter()
+        .any(|(_, h, value)| h == &harness && crate::claims::same_session_id(value, &session_id));
+    if !spawn_row_adoptable(
+        &harness,
+        owned.harness.as_deref(),
+        &marker_families,
+        marker_names_row,
+    ) {
         return owned;
     }
     OwnedIdentity {
@@ -1078,6 +1119,14 @@ pub fn resolve_self_identity(
             attested_session_id.as_deref().unwrap_or_default(),
         );
 
+    if !canonical_proven && stamp_disposition == CanonicalDisposition::Complete {
+        canonical_proven = stamp_witnessed_by_markerless_harness(
+            true_harness,
+            stamp_harness.as_deref(),
+            stamp_session.as_deref(),
+        );
+    }
+
     // a name_only codex stamp carries no id; a rollout witness value
     // seen in a live fd IS this process's id (the thread id wins). The
     // witness keys on the STAMP family: a silent walk (a thread worker whose
@@ -1142,6 +1191,39 @@ pub fn resolve_self_identity(
     let owned = resolve_owned_identity_from(get, Some(prove), collide_wrapped);
     let cwd = ambient_cwd();
     fill_spawn_record(owned, &cwd, home)
+}
+
+/// The proof for a COMPLETE stamp whose harness mints no vendor session
+/// marker (footnote): the attester has no marker to corroborate, so it can
+/// never answer `Process`. The harness process itself is the witness
+/// instead. The walk must name the stamp's harness, and that ancestor's own
+/// environment must carry the same `FNO_HARNESS_SESSION_ID`. The spawn sets
+/// the stamp on the harness process, so a stamp exported in a shell below
+/// it does not pass.
+fn stamp_witnessed_by_markerless_harness(
+    true_harness: Option<&str>,
+    stamp_harness: Option<&str>,
+    stamp_session: Option<&str>,
+) -> bool {
+    let (Some(walked), Some(stamped), Some(session)) = (true_harness, stamp_harness, stamp_session)
+    else {
+        return false;
+    };
+    if !walked.eq_ignore_ascii_case(stamped)
+        || crate::claims::HARNESS_SESSION_MARKERS
+            .iter()
+            .chain(crate::claims::LEGACY_HARNESS_SESSION_MARKERS.iter())
+            .any(|(_, family)| family.eq_ignore_ascii_case(walked))
+    {
+        return false;
+    }
+    let ppid = unsafe { libc::getppid() } as u32;
+    let Some((pid, harness)) = session_identity_from_table(&ancestry_table(), ppid) else {
+        return false;
+    };
+    harness == walked
+        && ancestor_env_marker(pid, "FNO_HARNESS_SESSION_ID")
+            .is_some_and(|v| same_session_id(v.trim(), session))
 }
 
 fn ambient_cwd() -> String {
@@ -1281,7 +1363,7 @@ pub fn stamp_spawn_lineage(params: &mut serde_json::Map<String, Value>) -> Resul
         .unwrap_or(Value::Null),
     );
     // Dispatch credit: a --node spawn whose no producer named an owner
-    // answers to the live role covering the node (native path). A kingless
+    // answers to the live role covering the node (native path). A leadless
     // node keeps the session owner.
     let owner_value = match params
         .get("node")
@@ -1307,69 +1389,6 @@ pub fn stamp_spawn_lineage(params: &mut serde_json::Map<String, Value>) -> Resul
     };
     params.insert("owner".into(), owner_value);
     Ok(())
-}
-
-/// The tier-remap refusal, native: a claude
-/// spawn naming a tier alias the ambient env redefines to a FOREIGN vendor's
-/// model id refuses before launch. Endpoint and credential resolve separately
-/// from the alias, so the worker would report live and die on its first turn.
-/// The Python seam (`rust_runtime.inherited_tier_remap`) enforces the same
-/// rule for Python-routed spawns; this closes the direct-native entry, which
-/// previously had no guard.
-pub fn refuse_inherited_tier_remap(params: &serde_json::Map<String, Value>) -> Result<(), String> {
-    refuse_inherited_tier_remap_with(params, |k| std::env::var(k).ok())
-}
-
-pub fn refuse_inherited_tier_remap_with(
-    params: &serde_json::Map<String, Value>,
-    env_get: impl Fn(&str) -> Option<String>,
-) -> Result<(), String> {
-    const TIER_ALIASES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
-    let harness = params
-        .get("provider")
-        .and_then(Value::as_str)
-        .unwrap_or("claude")
-        .trim()
-        .to_lowercase();
-    if harness != "claude" {
-        return Ok(());
-    }
-    // A composed route (route named, or an account pinned) chooses endpoint,
-    // auth and model as one unit and is exempt, same as the Python seam.
-    if params.contains_key("route") || params.contains_key("account") {
-        return Ok(());
-    }
-    let model = params
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-    if !TIER_ALIASES.contains(&model.as_str()) {
-        return Ok(());
-    }
-    let var = format!("ANTHROPIC_DEFAULT_{}_MODEL", model.to_uppercase());
-    let remapped = env_get(&var).unwrap_or_default().trim().to_string();
-    if remapped.is_empty() {
-        return Ok(());
-    }
-    // Pinning the tier to a specific Anthropic model is a supported
-    // customization, not a conflict.
-    let name = remapped.to_lowercase();
-    let anthropic = name.starts_with("claude-") || TIER_ALIASES.contains(&name.as_str());
-    if anthropic {
-        return Ok(());
-    }
-    Err(format!(
-        "--model {model} is ambiguous here. This session exports {var}={remapped}, so '{model}' \
-         resolves to that vendor's model id, while the worker's endpoint and credential are \
-         resolved separately and would not match it. The spawn would report \"live\" and then \
-         fail on its first turn. No worker launched.\n\
-         Name the route instead, so endpoint, auth, and model are chosen as one unit:\n\
-           --account <id> --model {model}      # Anthropic's {model} (ids from `fno config accounts list`)\n\
-           -P <vendor> --model {remapped}   # stay on the routed vendor (vendors from `fno config route ls`)\n\
-         Or unset {var} for this command."
-    ))
 }
 
 #[cfg(test)]
@@ -1638,5 +1657,70 @@ mod tests {
             resolve_session_harness_from_table(&table, 100),
             Some("claude")
         );
+    }
+
+    #[test]
+    fn a_footnote_pane_walks_to_footnote_and_only_a_markerless_stamp_takes_its_witness() {
+        // A footnote pane's tool shell sits under the footnote binary, and a
+        // claude ancestor further up (the mux's launcher) must not answer.
+        let table = table_of(&[
+            proc_row(100, 90, "bash -c fno whoami"),
+            proc_row(90, 80, "/Users/x/.cargo/bin/footnote /tmp/spec.json"),
+            proc_row(
+                80,
+                1,
+                "/Users/x/.local/share/claude/versions/2.1.0 --resume s",
+            ),
+        ]);
+        assert_eq!(
+            resolve_session_harness_from_table(&table, 100),
+            Some("footnote")
+        );
+        assert_eq!(
+            session_identity_from_table(&table, 100),
+            Some((90, "footnote"))
+        );
+        assert_eq!(harness_name_of_command("nvim footnote"), None);
+        // The process witness is for a harness that mints no vendor marker,
+        // and only when the walk and the stamp name the same harness.
+        assert!(!stamp_witnessed_by_markerless_harness(
+            Some("claude"),
+            Some("claude"),
+            Some("s")
+        ));
+        assert!(!stamp_witnessed_by_markerless_harness(
+            Some("claude"),
+            Some("footnote"),
+            Some("s")
+        ));
+        assert!(!stamp_witnessed_by_markerless_harness(
+            None,
+            Some("footnote"),
+            Some("s")
+        ));
+    }
+
+    #[test]
+    fn specimen_d1aec0d9_never_resolves_neighbour_ed2495bd() {
+        use std::collections::BTreeSet;
+        let none = BTreeSet::new();
+        // A markerless claude process shares its cwd with the neighbour's
+        // claude row; the row never names it.
+        assert!(!spawn_row_adoptable("claude", None, &none, false));
+        assert!(!spawn_row_adoptable("claude", Some("claude"), &none, false));
+        // A redispatched worker's own marker names its row, so it still adopts.
+        let claude_marker = BTreeSet::from(["claude"]);
+        assert!(spawn_row_adoptable(
+            "claude",
+            Some("claude"),
+            &claude_marker,
+            true
+        ));
+        // A codex worker's walk lands on the shared daemon, so its own row still names it.
+        assert!(spawn_row_adoptable("codex", None, &none, false));
+        assert!(spawn_row_adoptable("codex", Some("codex"), &none, false));
+        // A walk or marker from another family still refuses the row.
+        assert!(!spawn_row_adoptable("codex", Some("claude"), &none, false));
+        assert!(!spawn_row_adoptable("codex", None, &claude_marker, false));
     }
 }

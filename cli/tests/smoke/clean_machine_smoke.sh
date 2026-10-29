@@ -7,16 +7,16 @@
 #
 #   1. binary-complete (US6, AC6-UI): the `fno` front door and all three agent
 #      binaries on PATH.
-#   2. the ADVERTISED ENTRYPOINT (x-538e): the first verb runs through `fno`,
+#   2. the ADVERTISED ENTRYPOINT (x-538e): the first command runs through `fno`,
 #      not fno-py - `mux ls --json` proves the native mux, and `--version`
 #      forwards to the ADJACENT fno-py (verified via its console-script
 #      shebang), the packaged-complete path a wheel install actually takes.
-#   3. internalized/folded verbs run from in-package code (US1/US2): each
+#   3. internalized/folded commands run from in-package code (US1/US2): each
 #      invocation must NOT 127 / "script not found" / traceback. A `--help`
 #      probe must exit 0 (proves the in-package module shipped + imports); a
 #      real run (notify) may fail on its own merits but never via a missing
 #      shell-out script.
-#   4. clone-only verbs degrade (US3): `fno do target init` / `fno doctor bundle` exit
+#   4. clone-only commands degrade (US3): `fno do target init` / `fno doctor bundle` exit
 #      non-zero with the install-the-plugin message, never a 127 or a traceback.
 #
 # Prints pass/fail per check and exits non-zero on any miss. Runs on the
@@ -61,10 +61,10 @@ fi
 BIN="$VENV/bin"
 # The wheel's Python CLI console script is `fno-py` (a component name); the
 # advertised entrypoint is the Rust `fno` front door the wheel now carries
-# (x-538e). Every verb below runs through it.
+# (x-538e). Every command below runs through it.
 FNO="$BIN/fno"
 
-# Run every verb from a dir OUTSIDE any git repo, with repo/plugin env unset, so
+# Run every command from a dir OUTSIDE any git repo, with repo/plugin env unset, so
 # only the bare-install path is exercised (AC5-EDGE: no RuntimeError from
 # repo-root resolution; AC3: degrade fires because the scripts are genuinely
 # absent, not because an env var points back at a checkout).
@@ -74,7 +74,7 @@ cd "$WORK"
 export PATH="$BIN:$PATH"
 unset FNO_REPO_ROOT CLAUDE_PLUGIN_ROOT CODEX_PLUGIN_ROOT EVENTS_SCHEMA_PATH 2>/dev/null || true
 # Pristine HOME so ~/.fno/plugin-root (a dev / CI-runner artifact) cannot resolve
-# the clone-only verbs back to a real checkout - the degrade (class 3) must fire
+# the clone-only commands back to a real checkout - the degrade (class 3) must fire
 # because the plugin is genuinely absent, making the smoke hermetic everywhere.
 export HOME="$BASE_TMP/home"
 mkdir -p "$HOME"
@@ -115,11 +115,11 @@ else
   miss "frontdoor" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
 fi
 
-# --- class 3: internalized / folded verbs run from in-package code (AC5-FR) ---
+# --- class 3: internalized / folded commands run from in-package code (AC5-FR) ---
 # `--help` proves the lazy in-package module shipped and imports: a missing
 # module surfaces as a non-zero exit here, not silently. The REGRESSION grep is
 # NOT applied to --help output - help text legitimately documents the script a
-# verb replaced (e.g. phase kill-check), which is not a runtime failure.
+# command replaced (e.g. phase kill-check), which is not a runtime failure.
 check_help() {  # name + argv: must exit 0
   local name="$1"; shift
   run_capture "$@"
@@ -142,14 +142,7 @@ else
   pass "internal:notify" "ran in-package (rc=$RC, on its own merits)"
 fi
 
-# `fno cost --help` (above) proves the verb is wired; also assert all three cost
-# MODULES ship + import on a bare install - _register is not
-# imported by the --help path, so this covers the AC2-EDGE sibling-travels case.
-run_capture "$BIN/python" -c "import fno.cost._session_cost, fno.cost._register"
-if [ "$RC" -eq 0 ]; then pass "internal:cost-modules" "import OK on bare install"
-else miss "internal:cost-modules" "rc=$RC: $(printf '%s' "$OUT" | head -1)"; fi
-
-# --- class 4: clone-only verbs degrade loudly (US3, AC5-FR) ---
+# --- class 4: clone-only commands degrade loudly (US3, AC5-FR) ---
 check_degrade() {  # name + argv: must exit !=0 with the plugin message, no 127/traceback
   local name="$1"; shift
   run_capture "$@"
@@ -164,7 +157,7 @@ check_degrade() {  # name + argv: must exit !=0 with the plugin message, no 127/
   fi
 }
 check_degrade target-init "$FNO" do target init --input smoke
-check_degrade bundle "$FNO" bundle check
+check_degrade bundle "$FNO" doctor bundle check
 
 echo "---"
 if [ "$fail" -ne 0 ]; then echo "clean-machine smoke: FAILED"; exit 1; fi

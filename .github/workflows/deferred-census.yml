@@ -1,6 +1,6 @@
 name: deferred-census
 
-# Puts a clock on _DISCOVERY_DEFERRED (cli/src/fno/test_cmd.py).
+# Puts a clock on DISCOVERY_DEFERRED (crates/fno-agents/src/test_smoke_registry.rs).
 #
 # The quarantine list has no expiry of its own: a line goes in during a hurry
 # and nothing makes it come out. `fno doctor test --census-deferred` is the mechanism
@@ -30,12 +30,13 @@ on:
     # this is the one case where per-PR cost is justified, because the list is
     # exactly what changed.
     paths:
-      - cli/src/fno/test_cmd.py
+      - crates/fno-agents/src/test_census.rs
+      - crates/fno-agents/src/test_smoke_registry.rs
       - .github/workflows/deferred-census.yml
 
 jobs:
   census:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -67,13 +68,19 @@ jobs:
           }
           yq --version
 
+      - name: Provision the native test command
+        # The census calls the native command directly; without this step the job
+        # reds with "fno-agents: command not found" before it measures
+        # anything.
+        uses: ./.github/actions/smoke-setup
+
       - name: Census the deferred set
         # Exits non-zero when a held entry passes. That is the whole signal:
         # a green entry is coverage that is quietly off, and the fix is to
         # delete its line from _DISCOVERY_DEFERRED (discovery then covers it
         # by shebang). Three entries are known macOS-green / Linux-red and are
         # expected to stay red HERE - see the comment above the set.
-        run: uv run --project cli fno-py doctor test --census-deferred
+        run: $FNO_AGENTS_FRONT test-run doctor --census-deferred
 
       - name: Explain a red census
         if: failure()

@@ -88,6 +88,33 @@ class TickResult:
 # from schema.yaml), leaving envelope headroom, so the two budgets move together.
 _INLINE_RECEIPT_MAX_BYTES = _EVENT_MAX_DATA_BYTES - _EVENT_MAX_DATA_BYTES // 4
 
+# The durable-grant merge queue's receipt surface, ported with the residue
+# when the pr/_merge module died (pr port 7): the terminal-exemption reason
+# prefix, the last receipt the queue printed, and the reason renderer that
+# strips a leading "<outcome>: " so bare-prefix matchers keep matching.
+_OUTCOME_EMIT = {
+    "merged": ("merged", 0, False),
+    "armed": ("skipped", 2, False),
+    "authorized": ("skipped", 2, False),
+    "held": ("held", 2, False),
+    "refused": ("skipped", 2, False),
+    "head_changed": ("held", 2, False),
+    "unknown": ("held", 2, False),
+    "failed": ("failed", 1, True),
+}
+
+ALREADY_TERMINAL = "PR already "
+LAST_RECEIPT: dict = {}
+
+
+def reason_after_outcome(reason: str) -> str:
+    """The reason past a leading "<outcome>: " prefix: the authorized-merge
+    renderer writes "<outcome>: <detail>", so readers matching bare prefixes
+    ("checks are red", ALREADY_TERMINAL) must match past the word.
+    """
+    word, sep, rest = reason.partition(": ")
+    return rest if sep and word in _OUTCOME_EMIT else reason
+
 
 def _compact_keys(keys: list[str] | set[str]) -> dict[str, list[Any]]:
     """Name many PRs compactly as ``repo -> [numbers]`` for event receipts."""
@@ -156,7 +183,7 @@ def _finish_queue_merge(repo_dir: Path, pr: int, emit: Callable) -> None:
     This tick is the detector that sees the confirmed merge, so it pays the step
     here rather than growing a second watcher or a second cleanup store.
 
-    The owner is the merge verb's own ``_post_merge_remote_delete``: idempotent
+    The owner is the merge command's own ``_post_merge_remote_delete``: idempotent
     (an already-gone ref is the requested end state), fork-safe (it deletes only
     from the PR's verified BASE repo, and only when the head repo is that same
     repo), and gated on ``auto_merge.delete_branch_on_merge``. Local branches
@@ -167,10 +194,19 @@ def _finish_queue_merge(repo_dir: Path, pr: int, emit: Callable) -> None:
     """
     try:
         from fno.config import load_settings_for_repo
-        from fno.pr._merge import _post_merge_remote_delete
+        from fno.rust_binary import CommandUnavailable, command_call
 
         auto_merge = load_settings_for_repo(Path(repo_dir)).auto_merge
-        cleanup = _post_merge_remote_delete(pr, str(repo_dir), auto_merge)
+        if not getattr(auto_merge, "delete_branch_on_merge", False):
+            return
+        cleanup = command_call(
+            "authorized-merge",
+            {"op": "merge-remote-delete", "pr": pr, "cwd": str(repo_dir)},
+            timeout=120,
+        ).get("cleanup", "")
+    except CommandUnavailable as exc:
+        log.warning("pr-watch: queue-merge cleanup for PR #%d unavailable: %s", pr, exc)
+        return
     except Exception as exc:  # noqa: BLE001 - cleanup never blocks the ritual
         log.warning("pr-watch: queue-merge cleanup for PR #%d failed: %s", pr, exc)
         return
@@ -279,12 +315,12 @@ def _delivery_state_path(store_path: Optional[Path]) -> Path:
 _ENV_SEAM = "PR_WATCH_FIRE_CMD"
 _DEFAULT_MODEL = "claude-haiku-4-5"
 
-# Per-verb wall-clock ceiling for the headless review fire. A launchd tick never
+# Per-command wall-clock ceiling for the headless review fire. A launchd tick never
 # overlaps, so an unbounded child call wedges every future tick forever;
 # this bound turns a hung fire into a normal failed dispatch the retry/park
 # machinery already handles. The post-merge ritual no longer fires here: pr-watch
-# runs ``fno do pr ritual`` directly, and that verb owns its own judgment leg.
-_TIMEOUT_FOR_VERB: dict[str, float] = {"check": 180.0}
+# runs ``fno do pr ritual`` directly, and that command owns its own judgment leg.
+_TIMEOUT_FOR_COMMAND: dict[str, float] = {"check": 180.0}
 _DEFAULT_FIRE_TIMEOUT = 300.0
 _SPAWN_TIMEOUT_GRACE = 30.0
 # The dispatch loop's two costs are different orders: a rich read (gh pr view,
@@ -310,7 +346,7 @@ def _admission_refused_rcs() -> tuple[int, ...]:
 
 
 def fire_skill(
-    verb: Literal["check"],
+    command: Literal["check"],
     pr_number: int,
     repo_dir: Path,
     *,
@@ -335,13 +371,13 @@ def fire_skill(
 
     This is the review (``check``) fire only. The post-merge ritual no longer
     fires here: pr-watch runs ``fno do pr ritual <n> --autonomous`` directly, and
-    that verb owns its own conditional headless judgment leg - so fire_skill
+    that command owns its own conditional headless judgment leg - so fire_skill
     carries no merged branch, no post-merge model role, and no whole-ritual
     prompt (AC1-HP, AC10-EDGE).
 
     ``timeout_s`` bounds the spawned worker so a hung claude cannot wedge the
     launchd tick forever ; when None it defaults via
-    ``_TIMEOUT_FOR_VERB``. The wrapper deadline includes grace so the canonical
+    ``_TIMEOUT_FOR_COMMAND``. The wrapper deadline includes grace so the canonical
     spawn can reap its child before this process reports failure. A timeout
     surfaces as a normal failed dispatch.
 
@@ -351,11 +387,11 @@ def fire_skill(
     if not node_id:
         log.warning(
             "pr-watch: PR #%d binds no graph node; refusing the %s fire ",
-            pr_number, verb,
+            pr_number, command,
         )
         return DispatchResult(ok=False, rc=-1, is_error=False, raw="")
     worker_timeout = (
-        timeout_s if timeout_s is not None else _TIMEOUT_FOR_VERB.get(verb, _DEFAULT_FIRE_TIMEOUT)
+        timeout_s if timeout_s is not None else _TIMEOUT_FOR_COMMAND.get(command, _DEFAULT_FIRE_TIMEOUT)
     )
     wrapper_timeout = worker_timeout + _SPAWN_TIMEOUT_GRACE
     seam_cmd = os.environ.get(env_seam)
@@ -367,8 +403,7 @@ def fire_skill(
             *_subprocess_util.fno_py_cmd(),
             "agents",
             "spawn",
-            "--substrate",
-            "headless",
+            "--once",
             "--harness",
             "claude",
             "--timeout",
@@ -380,9 +415,7 @@ def fire_skill(
             "--output-format",
             "json",
         ]
-        if model:
-            cmd += ["--model", model]
-        cmd.append(f"/fno:ship pr {verb} {pr_number}")
+        cmd.append(f"/fno:ship pr {command} {pr_number}")
 
     try:
         result = runner(
@@ -394,10 +427,10 @@ def fire_skill(
             timeout=wrapper_timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        log.warning("fire_skill %s #%d timed out: %s", verb, pr_number, exc)
+        log.warning("fire_skill %s #%d timed out: %s", command, pr_number, exc)
         return DispatchResult(ok=False, rc=-1, is_error=True, raw="")
     except OSError as exc:
-        log.warning("fire_skill %s #%d OSError: %s", verb, pr_number, exc)
+        log.warning("fire_skill %s #%d OSError: %s", command, pr_number, exc)
         return DispatchResult(ok=False, rc=-1, is_error=True, raw="")
 
     raw = result.stdout or ""
@@ -410,7 +443,7 @@ def fire_skill(
     if result.returncode != 0:
         log.warning(
             "fire_skill %s #%d rc=%d stderr=%s",
-            verb,
+            command,
             pr_number,
             result.returncode,
             (result.stderr or "").strip()[:200],
@@ -423,13 +456,13 @@ def fire_skill(
         if not isinstance(envelope, dict):
             envelope = {"is_error": True}
     except json.JSONDecodeError as exc:
-        log.warning("fire_skill %s #%d stdout not JSON: %s", verb, pr_number, exc)
+        log.warning("fire_skill %s #%d stdout not JSON: %s", command, pr_number, exc)
         return DispatchResult(ok=False, rc=result.returncode, is_error=True, raw=raw)
 
     is_error = bool(envelope.get("is_error", False))
     if is_error:
         log.warning(
-            "fire_skill %s #%d rc=0 but is_error=true (skill-level failure)", verb, pr_number
+            "fire_skill %s #%d rc=0 but is_error=true (skill-level failure)", command, pr_number
         )
     return DispatchResult(
         ok=not is_error,
@@ -494,7 +527,7 @@ def current_tick_phase() -> str:
 # The wall-clock deadline of the phase alarm the CLI's runner armed, as a
 # time.monotonic() stamp. Same shape as _tick_phase above: a module global a
 # record sets and deep legs read, so budget checks inside a phase (the
-# watchdog floors, the ritual verb timeout) see THEIR phase's remaining time
+# watchdog floors, the ritual command timeout) see THEIR phase's remaining time
 # instead of re-deriving the tick ceiling. None when no phase alarm is armed.
 _phase_deadline: Optional[float] = None
 
@@ -522,8 +555,8 @@ def _ritual_timeout() -> float:
 def _gh_budget_backoff_left() -> float:
     """Seconds left on the fleet gh budget's backoff; 0.0 when free or unreadable."""
     try:
-        from fno.rust_binary import verb_call
-        answer = verb_call("fleet-incident", {"op": "status"}, timeout=5)
+        from fno.rust_binary import command_call
+        answer = command_call("fleet-incident", {"op": "status"}, timeout=5)
         return max(0.0, float((answer or {}).get("backoff_remaining_s") or 0))
     except Exception:  # noqa: BLE001 - the budget protects the fleet, not the tick
         return 0.0
@@ -722,8 +755,8 @@ def _run_tick(
     # backend has no equivalent yet, so this tick degrades to "nothing to
     # sweep" rather than reading the wrong store (mirrors _catchup_roots'
     # existing no-graph degrade for the same daemon). graph_entries is the
-    # tick's one ident-keyed memo: sweep discovery and lead_wake share a
-    # single real read of the 15 MB store instead of queueing on it twice.
+    # tick's one ident-keyed memo: a single real read of the 15 MB store
+    # per unchanged graph.
     entries = graph_entries(gpath)
     candidates = discover_fn(entries)
 
@@ -975,8 +1008,8 @@ def _run_tick(
                 if obs.state == "OPEN" and obs.is_draft:
                     try:
                         from fno.paths import state_dir
-                        from fno.rust_binary import verb_call
-                        verb_call("graph-get", {"pr_draft_ready": {"flip": {
+                        from fno.rust_binary import command_call
+                        command_call("graph-get", {"pr_draft_ready": {"flip": {
                             "pr": cand.pr_number, "repo": cand.repo_slug, "node": cand.node_id,
                             "cwd": str(cand.repo_dir) if cand.repo_dir else None,
                             "journal": str(state_dir() / "events.jsonl")}}}, timeout=60)
@@ -1307,9 +1340,14 @@ def run_execute_queue(
     claim: Any,
 ) -> dict[str, int]:
     """Drain granted rows; executed, held, failed, skipped and budget sum to len(queue)."""
-    from fno.pr import _merge
-    from fno.pr._review_hold import WORKTREE_DIRTY, WORKTREE_HEAD_MISMATCH
     from fno.pr_watch._state import WatermarkStore
+
+    # The worktree blocker vocabulary, spelled here once the review-hold
+    # port retired its Python module: callers map these onto their own
+    # surface and never invent a second spelling (the Rust owner lives in
+    # crates/fno-agents/src/pr_status/reviews.rs).
+    WORKTREE_DIRTY = "worktree_dirty"
+    WORKTREE_HEAD_MISMATCH = "worktree_head_mismatch"
 
     holder = f"pr-watch-merge:{os.getpid()}"
     counts = {"executed": 0, "held": 0, "failed": 0, "skipped": 0, "budget": 0}
@@ -1369,26 +1407,26 @@ def run_execute_queue(
             store.set(key, entry)
             set_tick_phase("merge:execute")
             started = time.monotonic()
-            _merge.LAST_RECEIPT.clear()
+            LAST_RECEIPT.clear()
             try:
                 # The operand door answers exit 0 with the flow receipt even
                 # when the merge held or failed; the flow's own exit rides the
                 # payload, and observed_head rides it for head-bound parking.
-                from fno.rust_binary import verb_call
+                from fno.rust_binary import command_call
 
-                receipt = verb_call(
+                receipt = command_call(
                     "authorized-merge",
                     {"op": "merge", "argv": [str(pr)],
                      "authority": "durable_grant", "cwd": str(cand.repo_dir)},
                     timeout=900,
                 )
-                _merge.LAST_RECEIPT.update(receipt)
+                LAST_RECEIPT.update(receipt)
                 rc = int(receipt.get("exit") or 0)
             except Exception as exc:  # noqa: BLE001 - a crash is a failed attempt
                 log.warning("pr-watch: durable-grant merge for PR #%d crashed: %s", pr, exc)
-                rc, _merge.LAST_RECEIPT["reason"] = 1, f"crashed: {exc}"
+                rc, LAST_RECEIPT["reason"] = 1, f"crashed: {exc}"
             slowest = max(slowest, time.monotonic() - started)
-            reason = str(_merge.LAST_RECEIPT.get("reason") or "no reason printed")[:300]
+            reason = str(LAST_RECEIPT.get("reason") or "no reason printed")[:300]
             if rc == 0:
                 counts["executed"] += 1
                 entry["merge_dispatched"] = True
@@ -1399,16 +1437,16 @@ def run_execute_queue(
                 # Retryable, no failure budget; an already-terminal PR never retries.
                 counts["held"] += 1
                 entry["retries"] = prior_retries
-                bare = _merge.reason_after_outcome(reason)
+                bare = reason_after_outcome(reason)
                 # Terminal answers: decide's wording and the retired pre-gate's.
-                if (bare.startswith(_merge.ALREADY_TERMINAL)
+                if (bare.startswith(ALREADY_TERMINAL)
                         or "already merged" in bare or "already closed" in bare):
                     entry["last_seen_state"] = "NOT_OPEN"
                 store.set(key, entry)
                 _grant("held", pr, cand, grant_fields, reason=reason)
                 if bare.startswith(("checks are red", WORKTREE_HEAD_MISMATCH, WORKTREE_DIRTY)):
                     entry["parked"] = park = "checks-red" if bare.startswith("checks are red") else bare.split(":", 1)[0]
-                    entry["parked_head"] = _merge.LAST_RECEIPT.get("observed_head")
+                    entry["parked_head"] = LAST_RECEIPT.get("observed_head")
                     store.set(key, entry)
                     emit("pr_watch_parked", {"pr": pr, "reason": park})
                     _notify_parked_pr(
@@ -1468,9 +1506,22 @@ def _default_read_tracked_states(keys: set[str]):  # pragma: no cover
 
 
 def _default_graphql_remaining() -> tuple[Optional[int], Optional[str]]:  # pragma: no cover
-    from fno.pr._rest import graphql_remaining
+    import subprocess
 
-    return graphql_remaining()
+    from fno.rust_binary import CommandUnavailable, command_call
+
+    try:
+        answer = command_call(
+            "authorized-merge",
+            {"op": "status-quota-graphql", "cwd": os.getcwd()},
+            timeout=60,
+        )
+    except (CommandUnavailable, OSError, subprocess.TimeoutExpired):
+        # The unreadable instrument proceeds: the preflight treats None as
+        # no evidence of a low budget, and the retired _rest read answered
+        # (None, None) on the same degraded path instead of raising.
+        return None, None
+    return answer.get("remaining"), answer.get("reset_iso")
 
 
 def _tracked_states_from_reader(keys: set[str], reader: Callable) -> tuple[dict[str, str], int]:
@@ -1504,18 +1555,18 @@ def _default_dispatch_ritual(cand: Any, obs: Any, fire_skill_fn: Callable) -> An
     post-merge-dispatch).
 
     The dispatcher decides warm/cold in one place, reserves an attributable
-    receipt, then either live-injects the ritual verb or self-execs it (no bg
+    receipt, then either live-injects the ritual command or self-execs it (no bg
     thread), deduped on the same per-merge-SHA marker reconcile uses. It reads
     ``post_merge.auto_run`` itself, fail closed. ``fire_skill_fn`` stays on the
     signature so the tick's ``dispatch_ritual_fn`` protocol is uniform.
-    VerbUnavailable raises: the tick logs one warning and the merge stays
+    CommandUnavailable raises: the tick logs one warning and the merge stays
     retryable, exactly like a failed dispatch.
     """
     from types import SimpleNamespace
 
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import command_call
 
-    out = verb_call(
+    out = command_call(
         ["pr-watch", "post-merge-dispatch"],
         {
             "pr_number": cand.pr_number,
@@ -1541,10 +1592,13 @@ def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
         if obs_state != "MERGED" or getattr(cand, "repo_dir", None) is None \
                 or not Path(str(cand.repo_dir), ".git").exists():
             return
-        from fno.agents.events import daemon_lifecycle_log
-        from fno.pr._merge import _emit_merge_cleanup_request, _manifest_file, \
-            _merge_request_repo_and_project
-        repo, _ = _merge_request_repo_and_project(str(cand.repo_dir))
+        import subprocess as _subprocess
+
+        from fno.agents.events import daemon_lifecycle_log, emit_merge_cleanup_skipped
+        from fno.claims.self_identity import resolve_self_identity
+        from fno.rust_binary import command_call
+
+        repo, project = _cleanup_request_repo_and_project(str(cand.repo_dir))
         for line in daemon_lifecycle_log().read_text(errors="replace").splitlines():
             if '"merge_cleanup_requested"' not in line:
                 continue
@@ -1556,10 +1610,97 @@ def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
             if isinstance(data, dict) and record.get("type") == "merge_cleanup_requested" \
                     and data.get("repo") == repo and data.get("pr") == cand.pr_number:
                 return
-        _emit_merge_cleanup_request(cand.pr_number, str(cand.repo_dir),
-            _manifest_file(str(cand.repo_dir)), [cand.node_id] if cand.node_id else [])
+        # The mint's own read: state and branch straight from gh, the same
+        # gate the deleted pr/_merge emitter held. Refusals emit the skip row
+        # the journal contract requires (a request or a skip, never silence).
+        meta_read = _subprocess.run(
+            ["gh", "pr", "view", str(cand.pr_number), "--json",
+             "state,headRefName,url,mergedAt"],
+            cwd=str(cand.repo_dir), capture_output=True, text=True, timeout=30,
+        )
+        if meta_read.returncode != 0:
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number, reason="gh-unavailable",
+                detail=(meta_read.stderr or "").strip()[:200],
+            )
+            return
+        try:
+            meta = json.loads(meta_read.stdout or "{}")
+            if not isinstance(meta, dict):
+                raise ValueError("pr json is not an object")
+        except ValueError as exc:
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number,
+                reason="unparseable-pr-json", detail=type(exc).__name__,
+            )
+            return
+        if meta.get("state") != "MERGED":
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number, reason="not-merged",
+                detail=f"state={meta.get('state')}",
+                branch=meta.get("headRefName") or None,
+            )
+            return
+        branch = meta.get("headRefName")
+        if not branch:
+            emit_merge_cleanup_skipped(
+                repo=repo, project=project, pr=cand.pr_number, reason="no-branch",
+            )
+            return
+        ident = resolve_self_identity()
+        command_call(
+            ["pr-watch", "merge-cleanup-mint"],
+            {
+                "pr": cand.pr_number,
+                "branch": branch,
+                "repo": repo,
+                "project": project,
+                "node_ids": [cand.node_id] if cand.node_id else [],
+                "session_id": ident.session_id or None,
+                "harness": ident.harness or None,
+            },
+            timeout=120,
+        )
     except Exception as exc:  # noqa: BLE001 - a mint never fails the tick
         log.warning("pr-watch: merge-cleanup mint for PR #%d failed: %s", cand.pr_number, exc)
+
+
+def _cleanup_request_repo_and_project(cwd: str) -> tuple[str, str]:
+    """``(repo, project)`` resolved the ritual's way, so both mints share one
+    fold key. Local port of the deleted pr/_merge helper."""
+    import subprocess
+
+    from fno.config import load_settings_for_repo
+
+    repo = ""
+    try:
+        gcd = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=cwd, capture_output=True, text=True, timeout=10,
+        )
+        raw = gcd.stdout.strip() if gcd.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        raw = ""
+    if raw:
+        p = Path(raw)
+        p = p if p.is_absolute() else Path(cwd) / p
+        if p.exists():
+            repo = str(p.parent)
+    if not repo:
+        try:
+            top = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=cwd, capture_output=True, text=True, timeout=10,
+            )
+            repo = top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else cwd
+        except (OSError, subprocess.TimeoutExpired):
+            repo = cwd
+    try:
+        settings = load_settings_for_repo(Path(repo))
+        project = getattr(getattr(settings, "project", None), "id", "") or ""
+    except Exception:  # noqa: BLE001 - an unreadable config degrades to empty
+        project = ""
+    return repo, project
 
 
 def _default_read_pr_state(

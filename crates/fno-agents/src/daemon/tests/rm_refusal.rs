@@ -25,7 +25,7 @@ async fn rm_unknown_roster_refusal_names_the_reads_own_reason() {
             warnings: vec!["claude agents --json --all timed out after 15s".into()],
         },
         &|_| Ok(()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -59,7 +59,7 @@ async fn rm_absence_is_not_proof_on_a_warning_carrying_list() {
             warnings: vec!["one malformed row".into()],
         },
         &|_| Ok(()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -79,7 +79,7 @@ async fn rm_absence_is_not_proof_on_a_warning_carrying_list() {
 
 /// Roster `blocked` is claude's "Needs input", not a model outage. rm runs
 /// its own `claude stop` first (AC4-ERR); when the roster still lists the
-/// row, the refusal says the stop ran and never advises a separate verb.
+/// row, the refusal says the stop ran and never advises a separate command.
 #[tokio::test]
 async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
     let home = short_home("rmblocked");
@@ -102,9 +102,9 @@ async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
             ])
         },
         &|_| panic!("the refusal returns before the harness cascade"),
-        &|_| {
+        &|_, _| {
             stops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            true
+            crate::daemon::rm_teardown::StopLeg::Asked
         },
         &|_, _| panic!("the refusal returns before the pane arms"),
         &|_, _| PaneProbe::Unknown,
@@ -116,7 +116,7 @@ async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
     assert!(message.contains("rm ran `claude stop`"), "{message}");
     assert!(
         !message.contains("fno agents stop"),
-        "must not advise a separate stop verb: {message}"
+        "must not advise a separate stop command: {message}"
     );
     assert!(!message.contains("rotate"), "{message}");
     assert!(!message.contains("model outage"), "{message}");
@@ -132,7 +132,7 @@ async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
 
 /// A live row with a mux ref is ended by rm's own mux pane kill. When the
 /// kill fails, the row stays and the refusal quotes the kill's reason -
-/// never a stop verb (AC3-ERR's mux-arm shape).
+/// never a stop command (AC3-ERR's mux-arm shape).
 #[tokio::test]
 async fn rm_keeps_the_row_when_the_mux_pane_kill_fails() {
     let home = short_home("rmpanekill");
@@ -151,7 +151,7 @@ async fn rm_keeps_the_row_when_the_mux_pane_kill_fails() {
         &request,
         &|| panic!("a non-claude row must not read the claude roster"),
         &|_| panic!("rm must not reach claude rm"),
-        &|_| panic!("no claude stop may run for a non-claude row"),
+        &|_, _| panic!("no claude stop may run for a non-claude row"),
         &|session, pane_id| {
             assert_eq!((session, pane_id), ("main", 33));
             Err("pane server unreachable".into())
@@ -197,7 +197,7 @@ async fn rm_keeps_the_row_when_the_pane_stop_cannot_be_proven() {
         &request,
         &|| crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
         &|_| panic!("rm must not reach claude rm"),
-        &|_| panic!("no claude stop may run for a pane-substrate row"),
+        &|_, _| panic!("no claude stop may run for a pane-substrate row"),
         &|_, _| panic!("a pane-substrate row takes the pane arm, not the mux kill"),
         &|_, _| PaneProbe::Unknown,
     )
@@ -254,9 +254,9 @@ async fn rm_refuses_a_row_the_roster_still_carries_and_names_no_force() {
             ])
         },
         &|_| panic!("a genuinely live row must not reach claude rm"),
-        &|_| {
+        &|_, _| {
             stops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            true
+            crate::daemon::rm_teardown::StopLeg::Asked
         },
         &|_, _| panic!("a genuinely live row must not reach mux kill"),
         &|_, _| PaneProbe::Unknown,
@@ -302,7 +302,7 @@ async fn rm_refuses_a_row_the_roster_still_carries_and_names_no_force() {
 async fn rm_refusal_on_a_claude_row_without_a_row_id_names_no_stop_and_no_force() {
     // x-d19e + law d-81c6da7e: with no resolvable row id, rm cannot run
     // its claude stop either, so the refusal names that and the cost of
-    // forcing through - never the override flag, never a stop verb.
+    // forcing through - never the override flag, never a stop command.
     let home = short_home("rmnorowid");
     // short_id empty AND session id empty (a pid carries the handle
     // invariant instead): claude_row_id answers None, which is the arm
@@ -326,9 +326,9 @@ async fn rm_refusal_on_a_claude_row_without_a_row_id_names_no_stop_and_no_force(
         &request,
         &|| crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
         &|_| panic!("an unresolvable row must not reach claude rm"),
-        &|_| {
+        &|_, _| {
             stops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            true
+            crate::daemon::rm_teardown::StopLeg::Asked
         },
         &|_, _| panic!("an unresolvable row must not reach mux kill"),
         &|_, _| PaneProbe::Unknown,
@@ -345,6 +345,53 @@ async fn rm_refusal_on_a_claude_row_without_a_row_id_names_no_stop_and_no_force(
     assert!(!message.contains("fno agents stop"), "{}", message);
     assert!(message.contains("resume handle"), "{}", message);
     assert!(!message.contains("--force"), "{}", message);
+    assert_eq!(
+        state::load_registry(&home.registry_json())
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+}
+
+/// The user's pin outranks every machine rm, `--force` included: a named
+/// reason meets the keep mark and holds before any stop or teardown arm runs.
+#[tokio::test]
+async fn a_machine_rm_holds_on_a_pinned_row_even_forced() {
+    let home = short_home("rmpinned");
+    let row = claude_rm_row(
+        "pinned-worker",
+        "eeee5555",
+        "eeee5555-1111-2222-3333-444444444444",
+    );
+    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
+    crate::keep_mark::set(
+        &home,
+        "eeee5555-1111-2222-3333-444444444444",
+        "pinned-worker",
+    )
+    .unwrap();
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+    let request = Request::new(
+        1,
+        "agent.rm",
+        json!({"name": "pinned-worker", "force": true, "audit_reason": "codex-sandbox-blocked"}),
+    );
+    let response = handle_rm_with(
+        &ctx,
+        &request,
+        &|| panic!("the hold returns before the roster read"),
+        &|_| panic!("the hold returns before the harness cascade"),
+        &|_, _| panic!("the hold returns before the stop leg"),
+        &|_, _| panic!("the hold returns before the pane arms"),
+        &|_, _| PaneProbe::Unknown,
+    )
+    .await;
+
+    let message = &response.error().unwrap().message;
+    assert!(message.contains("held: keep mark: set "), "{message}");
+    assert!(message.contains("--unkeep pinned-worker"), "{message}");
     assert_eq!(
         state::load_registry(&home.registry_json())
             .unwrap()

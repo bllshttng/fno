@@ -7,7 +7,7 @@ it is where a cross-checkout reader looks.
 These tests drive the REAL path resolution through ``FNO_CONFIG``. An earlier
 version monkeypatched ``fno.paths.state_dir`` and passed against either
 implementation, which pinned nothing: the whole defect it was written for is
-that the writer used ``state_dir()`` while the reader in ``fno/pr/_reviews.py``
+that the writer used ``state_dir()`` while the Rust reader (``pr_status.rs``)
 uses ``global_events_json()``, and those two diverge on exactly the configs a
 monkeypatch erases. ``test_relative_state_dir_still_mirrors_where_the_reader_looks``
 is the one that fails against the old code.
@@ -159,15 +159,14 @@ def test_attestation_emit_fires_the_bot_review_mirror(tmp_path, monkeypatch):
     global_log = _configure(tmp_path, monkeypatch, str(tmp_path / "state"))
     project = tmp_path / "project" / ".fno" / "events.jsonl"
 
-    from fno.pr import _publish_review as pub
-
     calls = []
 
-    def spy(payload):
+    def spy(command, payload, *args, **kwargs):
+        assert command == "publish-review"
         calls.append(payload)
         return {"status": "skipped", "reason": "spy", "receipt": "bot-review: skipped (spy)"}
 
-    monkeypatch.setattr(pub, "publish_review_call", spy)
+    monkeypatch.setattr("fno.rust_binary.command_call", spy)
     result = _emit(project, "review_attestation", ATTESTATION)
     assert result.exit_code == 0, result.output
     assert len(calls) == 1, "the mirror must fire exactly once per attestation"

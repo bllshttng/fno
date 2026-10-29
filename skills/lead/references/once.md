@@ -3,7 +3,7 @@
 
 You have been titled over one scope, and the role expires when you exit. That is the whole shape: real authority, no tenure. Tenure instead - a lead that stays active over a territory for days, checking in on a schedule - is `/fno:lead <scope>` without `--once`. This page is the one-wave pass and org.
 
-One fresh-context session reads a track, decides the next wave or two, writes that decision into the graph, kicks it off, and steps_down. The daemon's reflexes are unchanged and the tail dispatches from graph state alone, so nothing takes over the lead.
+One fresh-context session reads a track, decides the next wave or two, writes that decision into the graph, kicks it off, and steps down. The daemon's reflexes are unchanged and the tail dispatches from graph state alone, so nothing takes over the lead.
 
 Pending work once let the session exit immediately. Setting `config.lead.enabled` now makes `fno agents org promote` or `fno agents spawn --promote` arm the scope manifest.
 
@@ -44,7 +44,7 @@ Two rules keep the org from growing:
 State your level, altitude, and scope in your own opening line, so the transcript records what you believed you were authorized to do.
 
 **The role is stamped by a grantor, never self-declared.**
-Grant it at spawn: `fno agents spawn ... --promote <scope>` (short form `-k`), repeating the flag for a portfolio or a set of epics.
+Grant it at spawn: `fno agents spawn ... --promote <scope>`, repeating the flag for a portfolio or a set of epics.
 
 When a human promotes an already-running session, the target first runs `fno agents registry register`. The human then runs `fno agents org promote <printed-handle> --scope <scope>` from another attended terminal. When its own role strictly contains the scope, a live lead can run this path too, to re-scope a subordinate. The registry records the actual grantor, either the attended `human` or the granting lead. It preserves the target's transcript and placement and never performs succession.
 You never pass a level.
@@ -74,7 +74,7 @@ fno agents spawn --name lead-<epic> "<brief>" --effort high --model <your fronti
   --promote <epic> --substrate pane --workspace <epic>
 ```
 
-`--substrate pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
+`--as pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
 
 What `pane` buys here is the ORG, not the role.
 
@@ -82,27 +82,28 @@ The role itself rides `--substrate thread` for Claude: a Claude thread worker is
 What a thread lead loses is placement.
 The placement flags are mux geometry and refuse outside a pane, and the exact anchor resolves from `FNO_PANE`, which a thread session does not have.
 So a thread lead seats teammates in fresh tabs instead of beside itself, and the org stops cohering around one screen.
-Promote a thread lead for a pass, which steps_down before layout matters; promote a pane lead for a lead that runs an org.
 
-**Place the lead in the mission workspace too, and for an org that is not optional.** Org teammates anchor to the lead's own pane, so wherever the lead sits IS the org. Pass `--workspace <epic>` at promotion and again when you anoint a sub-lead, and the naming stays legible; skip it and the org still coheres around you, just under a cwd-routed name. A pass does not need it at all, having stepped_down before layout matters.
+Promote a thread lead for a pass, which steps down before layout matters. Promote a pane lead for a lead that runs an org.
+
+**Place the lead in the mission workspace too.** For an org this is not optional. Org teammates anchor to the lead's own pane, so wherever the lead sits IS the org. Pass `--workspace <epic>` at promotion. If you anoint a sub-lead, pass it again. Then the naming stays legible. If you skip it, the org still coheres around you, under a cwd-routed name. A pass does not need it at all, having stepped down before layout matters.
 
 **Anoint with the skill invocation as the prompt, never prose wrapping it.**
 
 A wrapped prompt ("run $fno:target ... and here is why") does not reliably load this file. One night's codex spawns, audited by `scripts/diagnostics/codex-skill-load-audit.py`, tell the shape. The harness injected the skill in 4 of 15 wrapped prompts. The worker's own first read carried 9 more. Three sessions never loaded it at all.
 
-The spawn shape is the skill invocation itself: claude `/fno:target`, codex `$fno:target`. Single-quote the codex payload: in double quotes the shell eats `$fno` and the verb with it. When the harness cannot expand an invocation, the prompt names the skill path to Read. A hand-rolled prose prompt for a role is the defect this rule exists to prevent.
+The spawn shape is the skill invocation itself: claude `/fno:target`, codex `$fno:target`. Single-quote the codex payload: in double quotes the shell eats `$fno` and the command with it. When the harness cannot expand an invocation, the prompt names the skill path to Read. A hand-rolled prose prompt for a role is the defect this rule exists to prevent.
 
 **A role said in prose is not a role.** Telling a session it is lead does not stamp anything. Authority lives in three registry fields (`role_level`, `role_scope`, `role_grantor`) that only `fno agents org promote` and spawn-time `--promote` write, and `fno agents org init` deliberately never writes them: a session enabled to stamp its own role could role itself. So the handshake is two steps and both are required. The target runs `fno agents registry register` and prints a handle. An attended shell, or a lead whose own role strictly contains the scope, runs `fno agents org promote <handle> --scope <scope>`.
 
-**What an unstamped row costs, so nobody mistakes the silence for success.** Three readers key on those fields and every one of them fails CLOSED and QUIETLY. `fno agents org done` refuses, so the lead cannot step_down and its manifest is orphaned on disk. `fno agents org chart manifest-path` exits non-zero and prints no path, so the stop hook leaves `LEAD_STATE_FILE` unset. `hooks/lead-postcompact-reinject.sh` exits 0 before injecting, so the post-compact brief - the one that tells you to reuse a live session with `fno agents registry retask` before spawning a cold one - never arrives. A lead with an armed manifest and an unstamped row looks exactly like a working lead until it tries to put the role down. `lead init` now warns when it sees that state, and warns the same way when the row's role names OTHER territory, because these three readers key on `role_scope` and a role over somewhere else is as absent to them as no role at all. Heed the warning rather than proceeding.
+**What an unstamped row costs.** Nobody must mistake the silence for success. Three readers key on those fields and every one of them fails CLOSED and QUIETLY. `fno agents org done` refuses, so the lead cannot step down and its manifest is orphaned on disk. `fno agents org chart manifest-path` exits non-zero and prints no path, so the stop hook leaves `LEAD_STATE_FILE` unset. `hooks/lead-postcompact-reinject.sh` exits 0 before injecting, so the post-compact brief never arrives. That brief tells you to reuse a live session with `fno agents registry retask` before you spawn a cold one. A lead with an armed manifest and an unstamped row looks exactly like a working lead until it tries to put the role down. If `lead init` sees that state, it warns. If the row's role names OTHER territory, it warns the same way. These three readers key on `role_scope`, so a role over somewhere else is as absent to them as no role at all. Heed the warning rather than proceeding.
 
-**That same silence has more than one cause, and the unstamped row is not the only one.** `manifest-path` also exits 1 with empty streams when the `--state-root` it was handed holds no `leads/<scope>.md`, which is what a repo-local `.fno` does - manifests live under the space dir, and both hooks used to pass the wrong root. Tell the causes apart: silent with `--state-root` and correct without it is the flag, silent both ways is the row. Since 2026-09-12 the verb prints the reason on stderr, so one run answers it.
+**That same silence has more than one cause, and the unstamped row is not the only one.** `manifest-path` also exits 1 with empty streams when the `--state-root` it was handed holds no `leads/<scope>.md`, which is what a repo-local `.fno` does - manifests live under the space dir, and both hooks used to pass the wrong root. Tell the causes apart: silent with `--state-root` and correct without it is the flag, silent both ways is the row. Since 2026-09-12 the command prints the reason on stderr, so one run answers it.
 
-**If you promote a peer, run the verb or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents org promote` yourself, or tell them plainly that the grant needs an attended shell, and name the command they should ask for.
+**If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents org promote` yourself, or tell them plainly that the grant needs an attended shell, and name the command they should ask for.
 
 **In-place promotion keeps the session where it is.** `fno agents org promote <handle> --scope <scope>` changes only the role fields on an existing live registered row. Its transcript, process, and pane stay in place. Run it from an attended terminal, or from a live lead whose own role strictly contains the scope. A session cannot role itself, with one exception. A lead over a set of epics can add an epic its own session created. It names every epic it holds plus the new one. Same-scope succession is refused here. When creating a lead, placing an org, or handing your own scope to a successor, use spawn-time `--promote`.
 
-**Succession happens at spawn too, but it is explicit.** An stepping_down lead that spawns a successor over its OWN scope must pass `--hand-off`; without it, the spawn is refused and the caller keeps its role. With it, the vacate and stamp land in one registry write, so the scope is never doubly ruled and never briefly unruled. It has to happen while you still lead - a session that has already exited spawns nothing. A transferred successor can return the role with `fno agents org promote --reclaim`, which uses the recorded grantor and creates no session. An attended shell can also move a role between two LIVE sessions without spawning anyone. Re-scope the incumbent first with `fno agents org promote <incumbent> --scope <other territory>`, which frees the old scope in the same write. Then promote the newcomer over it. The order is the non-obvious half. Promoting the newcomer first is refused with the incumbent named and the same three remedies spelled out.
+**Succession happens at spawn too, but it is explicit.** A lead stepping down that spawns a successor over its OWN scope must pass `--hand-off`. Without it, the spawn is refused and the caller keeps its role. With it, the vacate and stamp land in one registry write, so the scope is never doubly ruled and never briefly unruled. It has to happen while you still lead - a session that has already exited spawns nothing. A transferred successor can return the role with `fno agents org promote --reclaim`, which uses the recorded grantor and creates no session. An attended shell can also move a role between two LIVE sessions without spawning anyone. Re-scope the incumbent first with `fno agents org promote <incumbent> --scope <other territory>`, which frees the old scope in the same write. Then promote the newcomer over it. The order is the non-obvious half. Promoting the newcomer first is refused with the incumbent named and the same three remedies spelled out.
 
 Relocation is possible but is not a one-flag move: `fno mux layout apply` rebinds a bound live pane into a target tab with its PTY intact, and it requires a full template or spec plus that template's whole slot set, not a lone `--slot`. If you genuinely must join a mission workspace a superior already opened, read [mux-layout-templates](../../../docs/architecture/mux-layout-templates.md) and apply a real shape. Do it once at promotion before teammates exist, never mid-wave with an org arranged around you.
 
@@ -121,22 +122,22 @@ The band is an intrinsic property of the work (expected time, edge cases, unknow
 **Authority for the worker you role.**
 `--yolo` means "full auto, no gates", and the *skill* surface translates it per provider: through `/fno:agent spawn` it maps to `--permission-mode bypassPermissions` on claude, while codex gets its literal bypass flag.
 An explicit `--permission-mode` you pass always wins over the mapping.
-The trap is that this translation lives in the skill's normalize step, so `fno agents spawn --yolo` called directly on claude is a genuine no-op with only a stderr note.
+The trap was that this translation lived in the skill's normalize step; the axis is retired now and the lane default owns the bypass.
 Prefer the skill surface, or pass your provider's own posture flag when you go straight to the CLI.
 
 ## Two lead shapes: pass and org
 
 The role model above is unchanged. What changes is *tenure*: the role has two shapes, and you resolve which one you hold before you do anything else.
 
-- **Pass** (the default): read the track, encode the wave into the graph, kick off, step_down. Nothing supervises afterward; the daemon's reflexes carry the tail. This is the whole of [Run it in this order](#run-it-in-this-order), and an org lead runs that same spine to kick off before it settles in to watch.
-- **Org**: you lead for the duration of one wave as a working orchestrator. You spawn your teammates into the panes around yourself, monitor them, answer their questions, reconcile each finished unit, route the next phase, and step_down when the wave completes - running the same encode-before-exit ritual on the way out. The duties are in [Org mode: lead over the wave](#org mode-lead-over-the-wave).
+- **Pass** (the default): read the track, encode the wave into the graph, kick off, step down. Nothing supervises afterward. The daemon's reflexes carry the tail. This is the whole of [Run it in this order](#run-it-in-this-order). An org lead runs that same spine to kick off, then settles in to watch.
+- **Org**: you lead for the duration of one wave as a working orchestrator. You spawn your teammates into the panes around yourself and monitor them. You answer their questions, reconcile each finished unit, and route the next phase. After the wave completes, run the same encode-before-exit ritual and step down. The duties are in [Org mode: lead over the wave](#org mode-lead-over-the-wave).
 
 **Resolve the shape, first match wins:**
 
 1. The titling brief names monitoring, answering questions, or running a team -> **org**.
 2. The role is granted autonomously (daemon, cron, another lead) with no monitoring language -> **pass**.
 3. Ambiguous human titling -> ask in your first reply; if unattended, default to **pass** - the shape that completes with nobody awake to carry it.
-4. Workers who need live decisions or monitoring -> **not pass**. A pure pass steps_down at kickoff. Workers review their diffs inline, but blocked workers still need a live lead for in-scope rulings. Pick org, or hand off before exit by spawning your successor.
+4. Workers who need live decisions or monitoring -> **not pass**. A pure pass steps down at kickoff. Workers review their diffs inline, but blocked workers still need a live lead for in-scope rulings. Pick org, or hand off before exit by spawning your successor.
 
 **What org actually costs.**
 Not idle tokens.
@@ -150,11 +151,11 @@ Org composes down the ladder: a portfolio lead runs an org over its project lead
 
 ## Your hands
 
-You are not limited to the backlog verbs.
+You are not limited to the backlog commands.
 Reach for these by need, not by reflex; most passes touch only the first group.
 
 **Encode (the graph is the deliverable).**
-`fno backlog epic status <epic>` · `get` · `update blocked_by+=<id> plan_path=<path> dispatch_verb=<verb> dispatch_brief+=<brief>` · `rank` · `defer -R` / `undefer` · `advance --epic`
+`fno backlog epic status <epic>` · `get` · `update blocked_by+=<id> plan_path=<path> dispatch_command=<command> dispatch_brief+=<brief>` · `rank` · `defer -R` / `undefer` · `advance --epic`
 
 **Rule.** Every ruling channel is in [Recording a ruling](../SKILL.md#recording-a-ruling).
 
@@ -166,9 +167,9 @@ Make capture part of each tick. Run `fno inbox operator status`. Disposition eve
 
 A captured law uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 
-**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --substrate pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
+**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --as pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
-The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/verb` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.
+The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/command` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.
 `fno backlog advance --epic <id>` is the graph-driven fan-out and needs `config.auto_continue.enabled`.
 `fno backlog join <node>` hands a held node's remaining waves to joiners in its worktree.
 It refuses with a named exit code when it cannot, and [step 4](#4-kick-off) reads those codes.
@@ -181,7 +182,7 @@ A pass dispatching on `thread` or `headless` carries its mission in the graph an
 Which placement flag depends on whether you are already in the target workspace, and the two cases split by shape.
 A **org** teammate anchors to your own pane with `--at current --split <dir>`, never `--workspace --split` - see [the org spawn contract](#spawn-each-teammate-into-your-mission-workspace) for why aiming at a workspace races on focus.
 The **ad-hoc pane a pass launches mid-kickoff** has no lead pane to anchor to, so it takes explicit `--workspace <mission-workspace> --split <dir>` and accepts that race, which is harmless for a one-off it never has to sit beside.
-You never create the workspace first: the first placement into a name creates it, and there is no create verb to run.
+You never create the workspace first: the first placement into a name creates it, and there is no create command to run.
 A blank name is a CLI error, not an implicit default, and an ambiguous one is refused rather than silently picked.
 
 To reach a worker that is already running, mail it (below).
@@ -223,7 +224,7 @@ Prefer `peek` first: attaching is a drive action, and a lead that starts driving
 
 `fno whoami` (project, fleet, walker, session, your mail handle) · `fno whoami status` (gate satisfaction + events tail). `fno agents org` answers whether the promotions worked - every live role, and whether the registry and the graph agree.
 Run these instead of grepping state files.
-`fno whoami` also prints your own context line - `context: NN% used (X of Y tokens)` - and your role, so after a compaction you read both your window pressure and your authority from the one verb you are already told to run.
+`fno whoami` also prints your own context line - `context: NN% used (X of Y tokens)` - and your role, so after a compaction you read both your window pressure and your authority from the one command you are already told to run.
 Check it at boundaries (after a compaction, after reconciling a report, before arming a wait), never on a timer; the lead Stop hook nudges you past your trigger regardless, so a hand-rolled poll only burns cache.
 
 ## Run it in this order
@@ -277,7 +278,7 @@ A pass that only mutates the graph leaves no trace of its reasoning, and the nex
 
 ### 3. Encode
 
-Every write is an `fno backlog` verb.
+Every write is an `fno backlog` command.
 They take the graph lock, so a pass and a grooming run can race harmlessly.
 Never edit `~/.fno/graph.json`.
 
@@ -311,7 +312,7 @@ Check what a link will actually do before you make it (`fno backlog get <id>` fo
 **3c. Route the nodes that need thinking rather than building.**
 
 ```bash
-fno backlog update <id> dispatch_verb=/think
+fno backlog update <id> dispatch_command=/think
 fno backlog update <id> 'dispatch_brief=<what to decide>'
 ```
 
@@ -334,16 +335,16 @@ A blueprint can also run as a subagent of the org session: `/fno:blueprint subag
 
 Group the wave by shape before you count dispatches. When one plan can name the same files or fix the same defect from two sides, the two nodes are the same shape. Title words do not decide this. The file and the defect decide it, the same identity test the Consolidation Gate uses (`skills/blueprint/SKILL.md` step 2d).
 
-A shape group becomes ONE node before it becomes one plan. Run `fno backlog supersede <keeper> --replaces <other> --reason "<why>"`, then dispatch the keeper. `plan == PR == node` stays untouched. The waves live in the plan's `## Execution Strategy` block. Reverse with `fno backlog unsupersede <other>`.
+A shape group becomes ONE node before it becomes one plan. Run `fno backlog supersede <keeper> --replaces <other> --cause "..." --surface <path> --reason "<why>" --covers "<how the keeper covers it>"`, then dispatch the keeper. `plan == PR == node` stays untouched. The waves live in the plan's `## Execution Strategy` block. Reverse with `fno backlog unsupersede <other>`.
 
 Fifteen one-node spawns re-read the repo fifteen times. Each spawn is a process. That volume cost an account.
 
-Note what these two verbs do and do not do.
+Note what these two commands do and do not do.
 They change *how* a dispatcher launches a node it has already selected; they do not make it selectable.
 The lead board's `unplanned` queue selects an otherwise dispatchable plan-less idea for `/fno:blueprint`.
-Setting `dispatch_verb=<verb>` still governs how a dispatcher launches a node it has already selected; it does not select the node or replace the board's blueprint verb.
+Setting `dispatch_command=<command>` still governs how a dispatcher launches a node it has already selected; it does not select the node or replace the board's blueprint command.
 Autonomous selection is not the only route: naming a node is itself the consent, so a plan-less node gets its think pass from an attended `/think <id>` or an explicit `fno agents spawn --name <n> "/think <id>"`.
-Set the dispatch verb anyway when you file the node, so the routing is already correct on the day it does become selectable.
+Set the dispatch command anyway when you file the node, so the routing is already correct on the day it does become selectable.
 
 ### 4. Kick off
 
@@ -365,7 +366,7 @@ Confirm with `fno config get auto_continue.enabled` and arm it if the track is m
 A role over an epic arms the mission by itself: the grant sets `mission_active` and emits `mission_activated` with `source: role`.
 So `fno backlog advance --epic` is the dispatch lever, not the activation step - the epic it names is already a mission.
 
-The verb is idempotent and respects `config.parallel.max_lanes` per project, but it dispatches real workers.
+The command is idempotent and respects `config.parallel.max_lanes` per project, but it dispatches real workers.
 Cap it when the wave is wider than you meant to fund.
 
 **Hand out a held node's remaining waves.**
@@ -413,7 +414,7 @@ A refusal is an answer, so record it and move on. Do not re-run join against the
 
 ### 5. Exit
 
-Before you step_down, record every ruling that changes what a worker does, through the channels in [Recording a ruling](../SKILL.md#recording-a-ruling). Your context is the only place these rulings live, and it is about to end.
+Before you step down, record every ruling that changes what a worker does, through the channels in [Recording a ruling](../SKILL.md#recording-a-ruling). Your context is the only place these rulings live, and it is about to end.
 
 Expire your role as the last act of the lead: `fno agents org done`. It vacates your row and clears the scope manifest, so the next lead's role arms without `--force`. It also writes one `agent_role_vacated` event to `~/.fno/events.jsonl`; a reader that finds a role missing should look there before reading the absence as a loss. A lead that skips it relies on the crash path: the leftover manifest is inert (the registry row is authority), but the successor init pays a `--force`.
 
@@ -423,17 +424,17 @@ Re-planning is a *new* pass with fresh context reading the map, which is the poi
 
 ## Org mode: lead over the wave
 
-Everything above ships a pass. Org adds the duties below and runs them until the wave completes. The mechanics of every verb here - placement, injection, lifecycle, reads - are in [org-operations.md](org-operations.md); this section is the *contract*, that reference is the *operations manual*.
+Everything above ships a pass. Org adds the duties below and runs them until the wave completes. The mechanics of every command here - placement, injection, lifecycle, reads - are in [org-operations.md](org-operations.md); this section is the *contract*, that reference is the *operations manual*.
 
-Before you reach for any CLI verb, load [cli-commands.md](cli-commands.md).
+Before you reach for any CLI command, load [cli-commands.md](cli-commands.md).
 
-The whole of org is three-quarters contract, because the hard plumbing already shipped: `fno agents spawn --substrate pane` accepts `--workspace` and `--split left|right|up|down` end to end, with a min-size fallback to a tab in the same workspace. What follows is the contract that makes you use it.
+The whole of org is three-quarters contract, because the hard plumbing already shipped: `fno agents spawn` (the pane lane) accepts `--workspace` and `--split left|right|up|down` end to end, with a min-size fallback to a tab in the same workspace. What follows is the contract that makes you use it.
 
 ### Spawn each teammate into your mission workspace
 
 ```bash
 read -r -d '' payload <<'CLAUSE' || true   # read -d '' exits 1 at EOF; absorb it so set -e does not abort
-Take node <id> through <phase verb: /fno:think, /fno:blueprint, or /fno:target>.
+Take node <id> through <phase command: /fno:think, /fno:blueprint, or /fno:target>.
 <minion clause - paste verbatim from references/minion-clause.md>
 CLAUSE
 fno agents spawn --name <node-name> "$payload" --substrate pane --at current --split <dir> --effort <e>
@@ -441,7 +442,7 @@ fno agents spawn --name <node-name> "$payload" --substrate pane --at current --s
 
 - **Anchor to your own pane, do not aim at the workspace.** `--workspace <name> --split <dir>` splits that workspace's *focused* pane, and focus is shared mutable state: another client can move it between the moment you build the command and the moment the server runs it, landing your teammate in a different tab from you. `--at current` pins the new pane to the calling pane - yours - by resolving `FNO_PANE`, so the org accretes around the lead by construction rather than by hoping focus held. It is strict: if the anchor is gone or the split cannot fit, it refuses rather than minting a tab somewhere else, and the `--json` receipt reports the server-committed anchor and tab so you read where it actually landed. It requires `--split` and `--substrate pane`, and it only works from inside a mux pane.
 - **The workspace comes from where you are.** Because the teammate anchors to your pane, it inherits your workspace - which is the mission workspace, provided you were promoted with `--workspace <epic>` as above. That is why the lead's own placement is load-bearing and not cosmetic. Use explicit `--workspace <name> --split <dir>` only when you must place into a workspace you are not in, and accept the focus race when you do. An older deprecated alias for that flag still resolves, so a stale command runs clean and teaches the wrong spelling anyway - see the migration note in [the spawn guide](../../../docs/guides/fno-agents-spawn.md#place-a-pane-in-a-mux-workspace).
-- **Creation is implicit.** The first placement into a workspace name creates it. There is no create verb, and nothing to set up before the first spawn. A blank name is refused at the CLI boundary rather than falling back to a default.
+- **Creation is implicit.** The first placement into a workspace name creates it. There is no create command, and nothing to set up before the first spawn. A blank name is refused at the CLI boundary rather than falling back to a default.
 - **Split.** First teammate `--split right`, subsequent teammates `--split down`, accreting quarters in your active tab so your viewport shows the whole org. Exact sequencing is yours; the invariant is only that every teammate lands in the one mission workspace. Treat a split direction as a placement *intent* at spawn time: several teammates launching at once are laid out concurrently, so the direction says where each one goes in, not what the final tab arrangement will be.
 - **Overflow refuses rather than degrades, and later moves are layout operations.** On a placement refusal, re-spawn with explicit `--workspace <mission-workspace> --split <dir>` (min-size fallback to a tab in that workspace); read the receipt, a fallback is a tab not a split. Relocating a live pane afterwards is `fno mux layout apply` (a whole-shape operation) or nothing - decoded refusals and the layout doctrine: [workflow-routes.md](workflow-routes.md).
 
@@ -451,7 +452,7 @@ The coordination contract is two-sided: your duties are worthless if the teammat
 
 1. **Report.** On finishing a unit of work or blocking, mail the lead a `RESULT: ...` line with `--from-self`, and treat any receipt that is not `delivered (hosted)` or `delivered (woken)` as undelivered - peek; only if it did not already land, re-resolve and re-send; never re-queue. The verbatim report line and the full delivery doctrine live in the template.
 2. **Ask for help.** A question the minion cannot answer from its own scope goes to its lead by mail (with `<help reason>` in-session for the loop machinery). Guessing an executive call is a contract violation; answering it is the lead's job.
-3. **Review inline.** Run `$fno:review <level> --comment` in Codex or `/fno:review <level> --comment` in Claude before you report a completed diff. Use `medium` below 300 lines, `high` at 300 or more, and `xhigh` for risky state or protocol changes. Fix valid findings. Run round two with `--verify-fixes`. Never mail the lead to fire a review verb or spawn a reviewer.
+3. **Review inline.** Run `$fno:review <level> --comment` in Codex or `/fno:review <level> --comment` in Claude before you report a completed diff. Use `medium` below 300 lines, `high` at 300 or more, and `xhigh` for risky state or protocol changes. Fix valid findings. Run round two with `--verify-fixes`. Never mail the lead to fire a review command or spawn a reviewer.
 
 **Rebase first, review once.** A rebase moves the head. Every attestation reads pinned to the head it reviewed, so a rebase after a review re-buys it. `CarriedBaseSync` exists but fires rarely, so it rarely helps in practice. Measured one night: about ten rebases ordered with a review after each one bought ten reviews for one PR's worth of code. When a PR needs both, order the rebases first, all of them, not one at a time. Wait for green, then request the review once on the final head. A rebase ordered after a review is a bug in the ordering, not a cost of doing business.
 
@@ -462,14 +463,14 @@ Reporting is push-based - the completion mail live-injects into your pane and wa
 
 ### Route the next phase, qualified and target-first
 
-- **Every dispatched verb is plugin-qualified** (`/fno:think`, `/fno:blueprint`, `/fno:target`) in spawn payloads, routing mail, and `dispatch_verb=` values. The old bare `/do` spelling once resolved to a *different* plugin's `do` in a live lead and ran a foreign pipeline silently; qualification costs five characters and removes the whole failure class.
+- **Every dispatched command is plugin-qualified** (`/fno:think`, `/fno:blueprint`, `/fno:target`) in spawn payloads, routing mail, and `dispatch_command=` values. The old bare `/do` spelling once resolved to a *different* plugin's `do` in a live lead and ran a foreign pipeline silently; qualification costs five characters and removes the whole failure class.
 - **The execution phase routes through `/fno:target <node>`, at every size.** Raw `/execute` executes a plan with no node claim, no review gates, no ship phase, and no finalize record; `/fno:target` is the loop with external done-proof. A small PR earns no exemption - the gates are cheapest when the diff is small.
 - **The routing mail is your fan-in moment.** You are the only participant who sees every session, so sibling facts that bear on this node (a locked interface, a file another teammate owns, a merge-order constraint, a superseded decision) get stated explicitly rather than left implied. Write them into the node's `--dispatch-brief` and have the mail point there (see *One session per node* below); state `Cross-node: none` in the mail when there are none.
-- **Every authored payload always carries the `<fno_mail>` envelope** - `fno agents mail send` wraps it, so a mailed ruling is marked. The one exception is `fno agents mail send --raw`. A verb invocation is not authored text. It is injected unwrapped at the recipient's prompt line. That is the only way to fire a verb the model is barred from invoking. It is recorded in the event ledger (`agent_raw_inject`) rather than the transcript. This keeps the eval corpus exactly as clean. If the titling brief routes you through a pane-layer prompt verb, wrap the text yourself. Template: ``<fno_mail from="<your-handle>" to="<teammate>">...ruling...\n</fno_mail>``. An injected prompt lands in the teammate's transcript as *user-role* text. The envelope is the only marker distinguishing you from the human at the keyboard. An unwrapped ruling impersonates the maintainer. This holds for teammate-to-teammate messages too - agent-to-agent, always wrapped.
+- **Every authored payload always carries the `<fno_mail>` envelope** - `fno agents mail send` wraps it, so a mailed ruling is marked. The one exception is `fno agents mail send --raw`. A command invocation is not authored text. It is injected unwrapped at the recipient's prompt line. That is the only way to fire a command the model is barred from invoking. It is recorded in the event ledger (`agent_raw_inject`) rather than the transcript. This keeps the eval corpus exactly as clean. If the titling brief routes you through a pane-layer prompt command, wrap the text yourself. Template: ``<fno_mail from="<your-handle>" to="<teammate>">...ruling...\n</fno_mail>``. An injected prompt lands in the teammate's transcript as *user-role* text. The envelope is the only marker distinguishing you from the human at the keyboard. An unwrapped ruling impersonates the maintainer. This holds for teammate-to-teammate messages too - agent-to-agent, always wrapped.
 
 ### One session per node, across phases
 
-The unit of continuity is the **node**, not the phase: one teammate session carries a node from think through blueprint through do. Mailing the next verb into the live pane IS the dispatch - no stop, no respawn, no re-explaining context the session already holds. A finished blueprint closes its provenance before the pane is cleared, then the lead calls one read-and-verified retask transaction:
+The unit of continuity is the **node**, not the phase: one teammate session carries a node from think through blueprint through do. Mailing the next command into the live pane IS the dispatch - no stop, no respawn, no re-explaining context the session already holds. A finished blueprint closes its provenance before the pane is cleared, then the lead calls one read-and-verified retask transaction:
 
 ```bash
 read -r WORKER_HARNESS WORKER_SESSION < <(fno agents session list --json | jq -r '.agents[] | select(.name == "<blueprint-worker>") | "\(.harness) \(.harness_session_id)"')
@@ -477,7 +478,7 @@ fno backlog session close <node> --harness "$WORKER_HARNESS" --session-id "$WORK
 fno agents registry retask <blueprint-worker> --node <node>
 ```
 
-`session close` refuses unresolved identity and records the blueprint session with its honest end. It closes under the worker's identity, never yours: the row belongs to the session that planned, and that session's claim dates its start. `retask` proves the positive idle marker and clears the pane. It waits for the changed session id, renames the registry label and verifies the model tier. It submits the no-merge target only after the switch is verified. A `spawn_required` or other refusal preserves the pane and routes through the existing fresh-spawn path. At or above the context threshold, use a fresh successor instead of clearing. Do not drive the picker or target verb by hand.
+`session close` refuses unresolved identity and records the blueprint session with its honest end. It closes under the worker's identity, never yours: the row belongs to the session that planned, and that session's claim dates its start. `retask` proves the positive idle marker and clears the pane. It waits for the changed session id, renames the registry label and verifies the model tier. It submits the no-merge target only after the switch is verified. A `spawn_required` or other refusal preserves the pane and routes through the existing fresh-spawn path. At or above the context threshold, use a fresh successor instead of clearing. Do not drive the picker or target command by hand.
 
 The order is close-blueprint, retask, target - never target-then-switch. A retask refusal (`pane_not_idle`, `worker_not_live`) is not a verdict about the pane; read the pane before you believe it. Decoded refusals and the model-ladder note: [workflow-routes.md](workflow-routes.md).
 
@@ -508,26 +509,26 @@ Context pressure is not a handoff trigger. A harness compacts its current sessio
 1. **Read the artifact** (design doc, plan, PR), not just the status line.
 2. **Rule:** approve, revise (mail the revision back into the same session), or escalate when the call is one of the four superuser classes (public-surface, irreversible, money-security, law-change): as one escalation note with a deadline. Rule once per (node, phase, artifact) - a duplicate report is acked, not re-ruled.
 3. **Route** the next phase per the session-reuse policy above.
-4. **Encode:** update the graph (`dispatch_verb=`, `dispatch_brief+=`, blockers, rank) so the ruling survives you. A ruling delivered only by mail dies with the transcript.
+4. **Encode:** update the graph (`dispatch_command=`, `dispatch_brief+=`, blockers, rank) so the ruling survives you. A ruling delivered only by mail dies with the transcript.
 
 ### Post-epic: interview the org
 
-When the epic's **last** wave has merged - not merely this wave - run the retro interview as a standard org step before you step_down. This is the ceremony the synthesis marked `ADD`: the best-performing ritual of that epic, which until now was prose in a human's head (the maintainer hand-asked the Director to interview each builder and prodded the thin answers with the dogfooding lens). You hold the cross-session view every builder lacks, so you are the one who runs it.
+When the epic's **last** wave has merged, not merely this wave, run the retro interview as an org step before you step down. This is the ceremony the synthesis marked `ADD`, the best-performing ritual of that epic. Until now it was prose in a human's head. The maintainer asked the Director to interview each builder, and prodded the thin answers with the dogfooding lens. You hold the cross-session view every builder lacks, so you are the one who runs it.
 
 Interview each builder session that carried a node in this epic - mail it the prompt, collect its first-person account, write the account to your project's retros directory (the template names how to resolve it; do not assume the gitignored `internal/` vault path exists). The dogfooding-lens questions and the dig-deeper follow-up are baked into the template so it fires without prodding. The full prompt, delivery mechanics, landing path, and retro epistemics (how much to trust what comes back) are in [retro-interview.md](retro-interview.md) - load it when the epic completes.
 
-This is one pass, one interview per builder, then exit; it is not a synthesis (that is a separate pass under a two-plus-sessions bar). A wave-scoped org over a single wave of a larger epic skips this step and leaves it for whoever steps_down the epic's final wave.
+This is one pass, one interview per builder, then exit. It is not a synthesis, which is a separate pass under a two-plus-sessions bar. A wave-scoped org over one wave of a larger epic skips this step. The lead of the epic's final wave runs it.
 
 ### StepDown at the wave boundary
 
-The role expires when the wave completes - every teammate unit reconciled, the wave gate satisfied or explicitly parked - not at kickoff. Run the encode-before-exit ritual and exit. A org lead that outlives its wave is the same permanent-monarch drift the pass shape guards against. An empty wave (no ready teammate work in scope) is reported and stepped_down immediately, never idled on.
+The role expires at wave completion, not at kickoff. At completion every teammate unit is reconciled, and the wave gate is satisfied or explicitly parked. Run the encode-before-exit ritual and exit. An org lead that outlives its wave is the same permanent-monarch drift the pass shape guards against. An empty wave (no ready teammate work in scope) is reported, and the lead steps down at once, never idled on.
 
 ## What a pass is not
 
-These bound the **pass** shape - the step_down-at-kickoff lead. Org explicitly lifts the first and fourth for the duration of one wave (it monitors, and it answers), but never the rest, and never the *driver* line.
+These bound the **pass** shape - the lead that steps down at kickoff. Org lifts the first and fourth for one wave, because it monitors and it answers. It never lifts the rest, and never the *driver* line.
 
-- **Not a supervisor (pass only).** A pass narrows what the daemon may select and steps_down; it never stays to watch. Org monitors by contract, but only its own wave, and it still adds no second dispatch path - it encodes and lets the hands run.
-- **Not a shape for active org.** A pure pass steps_down at kickoff. It cannot answer in-scope questions or monitor the wave. Workers review their diffs inline. They do not need a lead to fire a review verb. If active monitoring or questions are part of the grant, pick org or hand off to the successor before exit.
+- **Not a supervisor (pass only).** A pass narrows what the daemon can select, then steps down. It never stays to watch. Org monitors its own wave by contract. It adds no second dispatch path. It encodes and lets the hands run.
+- **Not a shape for active org.** A pure pass steps down at kickoff. It cannot answer in-scope questions or monitor the wave. Workers review their diffs inline. They do not need a lead to fire a review command. If active monitoring or questions are part of the grant, pick org or hand off to the successor before exit.
 - **Not self-appointed.** Being handed an epic to work on is not a tag. If nobody granted you orchestrator authority with a level and a scope, you are a worker on that epic, and spawning subordinates is out of bounds.
 - **Not a groomer.** Grooming is the daily reversible pass (defer + reason, rank, report). A lead promotes and wires. A lead's one supersession is the consolidation gate above, receipted with `--replaces` and a reason and reversible via `unsupersede`; outside it, quarantine means defer, and supersede stays with the groom pass or a human.
 - **Not a driver (both shapes).** You may `peek` at anything, and an org lead mails rulings - but neither shape attaches and steers a worker's pane. Driving means burning frontier tokens on work a builder already owns, and a human at the wheel of a session outranks the role: peek before you send, and never inject a ruling into a session a human is actively driving.

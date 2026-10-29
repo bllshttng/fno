@@ -1,0 +1,26 @@
+{
+  "args": [],
+  "files": [
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "config.toml",
+      "text": "[accounts]\nactive = \"readyrule\"\nrecords = [\n    { id = \"readyrule\", name = \"readyrule\", harness = \"claude\", auth = \"managed\" },\n    { id = \"makers\", name = \"makers\", harness = \"claude\", auth = \"managed\" },\n]\n"
+    },
+    {
+      "rel": "state/providers/.active-claude",
+      "text": "readyrule"
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "  readyrule: not a picker candidate: managed, rides the shared ~/.claude slot\n  makers: not launchable: account 'makers' is managed and not the active ~/.claude account (active: readyrule). Per-spawn selection for a non-active account needs its own config dir: register it with a config_dir (e.g. --config-dir ~/.claude-makers, a full second login) so the worker gets CLAUDE_CONFIG_DIR. The setup-token env lane bills the wrong account and is deliberately not used.\npick: no launchable candidate among readyrule, makers: only an account with its own config dir can be pinned to a worker. Register one with `fno config accounts register <id> --config-dir <path>` (a full second login in its own dir)\n",
+    "exit": 4
+  }
+}

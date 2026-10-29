@@ -57,29 +57,11 @@ def test_autogen_exhaustion_exits_2():
     assert "free auto-name" in err.getvalue()
 
 
-# --- AC2-HP / AC3-HP / AC3-EDGE: -r widening ---------------------------------
-
-def test_ac2_hp_short_form_revival_normalizes_fully():
-    out = _norm(["spawn", "--name", "foo", "-r", SHORT, "thread"])
-    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "thread"]
-
-
-# --- AC1-ERR / AC2-ERR / refusals --------------------------------------------
-
-def test_ac1_err_unresolvable_short_id_exits_2():
-    with pytest.raises(SystemExit) as e:
-        _norm(["spawn", "--name", "foo", "-r", "deadbeef"], resolver=lambda s: None)
-    assert e.value.code == 2
-
-
-# --- non-substrate trailing positional stays a message ------------------------
-
-
 # --- --argv payload boundary (codex finding) ---------------------------------
 
 def test_argv_payload_resume_flag_is_not_scanned():
     # A --resume inside the provider payload must pass through untouched: it is
-    # the child command's flag, not an fno do resume request (no --substrate bg added).
+    # the child command's flag, never an fno spawn flag.
     argv = ["spawn", "--name", "w", "--argv", "--", "tool", "--resume", "deadbeef"]
     assert _norm(argv) == argv
 
@@ -99,58 +81,6 @@ def test_two_positionals_are_refused_not_guessed():
     assert "--name" in err.getvalue()
 
 
-def test_trailing_substrate_word_still_leaves_one_positional():
-    # `spawn "<prompt>" bg` is the canonical shape: pass 1 lifts the substrate
-    # word off the tail, so the prompt is the only positional left.
-    out = _norm(["spawn", "review this diff", "bg"])
-    assert out[1] == "--name" and "-" in out[2]
-    assert out[3] == "review this diff"
-    assert out[4:] == ["--substrate", "bg"]
-
-
-def test_spawn_value_flags_cover_every_cmd_spawn_value_option():
-    """The normalizer's value-flag table is a hand-maintained mirror of
-    cmd_spawn's option list; a missing entry silently turns that flag's value
-    into a positional. Pin the two together so adding an option to cmd_spawn
-    without teaching the scanner fails here instead of in the field."""
-    import ast
-    import inspect
-
-    from fno.agents import cli as agents_cli
-    from fno.agents.spawn_defaults import _SPAWN_VALUE_FLAGS
-
-    tree = ast.parse(inspect.getsource(agents_cli.cmd_spawn.__wrapped__
-                                       if hasattr(agents_cli.cmd_spawn, "__wrapped__")
-                                       else agents_cli.cmd_spawn))
-    fn = tree.body[0]
-    missing = []
-    defaults = fn.args.defaults
-    for arg, default in zip(fn.args.args[len(fn.args.args) - len(defaults):], defaults):
-        if not isinstance(default, ast.Call) or getattr(default.func, "attr", "") != "Option":
-            continue
-        annotation = ast.unparse(arg.annotation) if arg.annotation else ""
-        if annotation.strip() == "bool":
-            continue  # boolean flags consume no value
-        for spelling in (e.value for e in default.args[1:] if isinstance(e, ast.Constant)):
-            if spelling not in _SPAWN_VALUE_FLAGS:
-                missing.append(f"{arg.arg} ({spelling})")
-    assert not missing, (
-        "cmd_spawn value options absent from _SPAWN_VALUE_FLAGS (their values "
-        f"would be read as positionals): {', '.join(missing)}"
-    )
-
-
-def test_existing_pane_is_removed_only_from_the_fno_spawn_head():
-    from fno.agents.spawn_defaults import extract_existing_pane
-
-    args, pane = extract_existing_pane(
-        ["spawn", "--name", "worker", "--pane=19", "work", "--", "--pane", "7"]
-    )
-
-    assert pane == 19
-    assert args == ["spawn", "--name", "worker", "work", "--", "--pane", "7"]
-
-
 # --- x-1caa: the `--` passthrough boundary at the seam ------------------------
 
 def test_passthrough_fence_tokens_are_not_prompt_positionals():
@@ -163,95 +93,65 @@ def test_passthrough_fence_tokens_are_not_prompt_positionals():
     assert out[4:] == ["--", "--name", "reviewer"]
 
 
-def test_off_pane_substrate_with_uncarried_tokens_demotes_to_pane():
-    # A thread lane carries only the spellings its contract row maps, so an
-    # unmapped fenced token demotes the spawn to the pane at the seam - the
-    # one front door both runtimes share - instead of refusing on the
-    # substrate or silently dropping the token on the Rust lane.
-    err = io.StringIO()
-    out = _norm(
-        [
-            "spawn", "--name", "w", "-H", "codex",
-            "--substrate", "bg", "hi", "--", "--verbose", "x",
-        ],
-        stderr=err,
-    )
-    assert out[out.index("--substrate") + 1] == "pane"
-    assert "no carrier for --verbose" in err.getvalue()
+# --- a node-driven or /target spawn mints t-<short slug> --------------------
+
+def _stub_worker_name(monkeypatch, answer):
+    import fno.agents.naming as naming
+
+    calls = []
+
+    def fake(node=None, *, seed=None, slug=None):
+        calls.append((node, seed, slug))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(naming, "worker_name", fake)
+    return calls
 
 
-def test_claude_bg_carries_fenced_tokens():
-    # claude's bg lane takes the whole harness argv, so its row carries ["*"]:
-    # fenced tokens pass through untouched, on any substrate.
-    err = io.StringIO()
-    out = _norm(
-        ["spawn", "--name", "w", "--substrate", "bg", "hi", "--", "--verbose", "x"],
-        stderr=err,
-    )
-    assert out[out.index("--substrate") + 1] == "bg"
-    assert "--verbose" in out
-    assert "no carrier" not in err.getvalue()
+def test_target_seed_spawn_is_named_for_its_node_and_suffixes_a_taken_name(monkeypatch):
+    # The seed names the node; no model token rides the name, and a name a
+    # live worker holds gets a numeric suffix instead of a refusal.
+    calls = _stub_worker_name(monkeypatch, "t-visual-approval-gate")
+    argv = ["spawn", "/fno:target x-f850"]
+    assert _norm(argv)[1:3] == ["--name", "t-visual-approval-gate"]
+    assert calls[0] == (None, "/fno:target x-f850", None)
+    taken = {"t-visual-approval-gate", "t-visual-approval-gate-2"}
+    assert _norm(argv, existing_names=taken)[2] == "t-visual-approval-gate-3"
 
 
-def test_implied_thread_substrate_splices_before_the_fence():
-    # --resume plus a fenced seed: the implied `--substrate thread` lands in
-    # the fno head, never past the fence where click would read it as
-    # passthrough positionals and lose the lane.
-    out = _norm(["spawn", "-r", UUID, "--", "--flag seed"])
-    assert out.index("--substrate") < out.index("--")
-    assert out[out.index("--substrate") + 1] == "thread"
+def test_node_flag_and_slug_reach_the_mint(monkeypatch):
+    calls = _stub_worker_name(monkeypatch, "t-sentinel-arms")
+    out = _norm(["spawn", "--node", "x919", "--slug", "sentinel-arms", "go"])
+    assert out[1:3] == ["--name", "t-sentinel-arms"]
+    assert calls == [("x919", "go", "sentinel-arms")]
 
 
-# --- x-b80d: a node-driven spawn mints t-<node>-<slug>-<model> ----------------
-
-def test_node_spawn_mints_provenance_name():
-    # The registry row's NAME is the only node carrier, so the mint must put
-    # the node and slug there: t-x919-sentinel-glm.
-    out = _norm(
-        ["spawn", "--node", "x919", "--slug", "sentinel-arms", "--model", "glm-5.2", "go"]
-    )
-    assert out[1:3] == ["--name", "t-x919-sentinel-glm"]
-    assert out[3:] == ["--node", "x919", "--slug", "sentinel-arms", "--model", "glm-5.2", "go"]
-
-
-def test_node_spawn_re_spawn_suffixes_the_taken_name():
-    # The mint is deterministic; a name already held by a live worker gets a
-    # numeric suffix instead of a dispatcher refusal (a re-spawn on one node
-    # is the two-worker implement+review shape).
-    argv = ["spawn", "--node", "x919", "--slug", "arms", "--model", "glm-5.2", "go"]
-    first = _norm(argv, existing_names=set())
-    assert first[2] == "t-x919-arms-glm"
-    second = _norm(argv, existing_names={"t-x919-arms-glm"})
-    assert second[2] == "t-x919-arms-glm-2"
-    third = _norm(argv, existing_names={"t-x919-arms-glm", "t-x919-arms-glm-2"})
-    assert third[2] == "t-x919-arms-glm-3"
-
-
-def test_graph_read_failure_falls_back_to_adjective_noun(monkeypatch):
-    # A spawn must never die on a naming lookup: the graph read raising falls
-    # back to the plain adjective-noun mint, not a refusal, not a t-<node>
-    # name built on an unresolved identity.
-    import fno.graph.store as gl
-
-    def _raise(*args):
-        raise RuntimeError("graph unreadable")
-
-    monkeypatch.setattr(gl, "read_nodes_by_ids", _raise)
-    out = _norm(["spawn", "--node", "x919", "--slug", "arms", "go"])
+def test_mint_failure_falls_back_to_adjective_noun(monkeypatch):
+    # A spawn must never die on a naming lookup.
     from fno.agents import spawn_defaults as sd
+    from fno.agents.naming import AgentNameError
 
+    _stub_worker_name(monkeypatch, AgentNameError("no node slug"))
+    out = _norm(["spawn", "--node", "x919", "go"])
     assert out[2] in {f"{a}-{n}" for a in sd._SLUG_ADJ for n in sd._SLUG_NOUN}
 
 
-def test_graph_read_supplies_the_slug_when_flag_absent(monkeypatch):
-    # --slug omitted: the best-effort graph read fills id + slug, and a slug
-    # input normalizes to the canonical id.
-    import fno.graph.store as gl
+def test_head_model_flag_is_shorthand_for_the_fenced_harness_flag():
+    # Spawn allows every harness flag: `-m` before the fence moves behind it,
+    # where the harness reads it, and a prompt-less spawn keeps MESSAGE empty.
+    out = _norm(["spawn", "--name", "w", "-m", "sonnet", "go", "--", "--verbose"])
+    assert out == ["spawn", "--name", "w", "go", "--", "--model", "sonnet", "--verbose"]
+    bare = _norm(["spawn", "--name", "w", "--model=haiku"])
+    assert bare == ["spawn", "--name", "w", "", "--", "--model", "haiku"]
 
-    monkeypatch.setattr(
-        gl,
-        "read_nodes_by_ids",
-        lambda path, tokens: {"entries": [{"id": "x-919abcd", "slug": "sentinel-arms", "plan_path": None}], "missing": []},
+
+def test_head_effort_and_permission_mode_ride_the_fence_with_the_model():
+    out = _norm(
+        ["spawn", "--name", "w", "--effort", "high", "--permission-mode=bypassPermissions", "go"]
     )
-    out = _norm(["spawn", "--node", "x-919abcd", "--model", "glm-5.2", "go"])
-    assert out[2] == "t-919abcd-sentinel-glm"
+    assert out == [
+        "spawn", "--name", "w", "go", "--",
+        "--effort", "high", "--permission-mode", "bypassPermissions",
+    ]

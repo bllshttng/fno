@@ -3,7 +3,8 @@
 //! With a shared primary set, the daemon pulls the pending `fno_mail_bus`
 //! rows addressed to this host in seq order and hands each payload to the
 //! receiver's own local send, so lane selection, holds, and receipts stay
-//! the local verb's. Two maintenance legs ride the same beat: the flush
+//! the local command's. The question bus (`question_bus.rs`) rides the same
+//! beat. Two maintenance legs ride it too: the flush
 //! that drains the sender's local outbox once the primary answers again
 //! (edge 7), and the expire that flips rows past their TTL (edge 2). With
 //! no primary set, the beat returns at once and opens no socket.
@@ -121,6 +122,8 @@ pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
         Ok(n) => outcome.expired = n,
         Err(e) => eprintln!("mail-arm: expire: {e}"),
     }
+    // Open questions ride the same beat to the other machines of the store.
+    crate::question_bus::tick(remote);
     Ok(outcome)
 }
 
@@ -515,8 +518,14 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
 
 /// The raw allowlist: `agents.remote.raw_senders`, a list of `user@host`
 /// sender heads. Empty is the default and refuses every cross-host raw row.
+/// The label writes `user:host`; the head reads back as `user@host`, so the
+/// config spelling holds for both label forms.
 fn raw_sender_allowed(from_id: &str) -> bool {
-    let head = from_id.split('/').next().unwrap_or("");
+    let head = from_id
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .replacen(':', "@", 1);
     crate::agents_config::config_lookup_global(&["agents", "remote", "raw_senders"])
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()

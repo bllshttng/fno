@@ -2,9 +2,9 @@
 //! list over REST through the conditional door; review threads stay on
 //! GraphQL because REST carries no resolved or outdated state), the
 //! review-coverage row (journal reads plus at one recompute through the
-//! producer verb), the review-lane predicate, and review activity (the
-//! claims hold plus the worktree probe). The `fno.pr._reviews` optional-review
-//! twin is deleted; the module still serves the merge and review verbs that
+//! producer command), the review-lane predicate, and review activity (the
+//! claims hold plus the worktree probe). The optional-review aggregation
+//! lives here now, and the module serves the merge and review commands that
 //! import its survivors.
 
 use crate::loopcheck::{resolve_review_inputs, ReviewInputs};
@@ -500,6 +500,16 @@ fn latest_coverage_row(_cwd: &Path, inputs: &ReviewInputs, pr: u64) -> (Option<V
     (best, best_ts)
 }
 
+/// The overtaken read on timestamps: parse both sides, and when either
+/// fails to parse, fall back to the raw strings - a malformed line fails
+/// quiet, never panics, and the lexical order still decides.
+fn ts_after(ts: &str, row_ts: &str, row_at: Option<i64>) -> bool {
+    match (row_at, crate::event_store::parse_rfc3339_ms(ts)) {
+        (Some(base), Some(other)) => other > base,
+        _ => ts > row_ts,
+    }
+}
+
 /// Whether a head-matching stored NO row was overtaken by a later in-scope
 /// attestation at the same head. Any verdict overtakes: a later fail moved
 /// the round and the count the row reports.
@@ -536,10 +546,7 @@ fn uncovered_row_overtaken(data: &Value, row_ts: &str, inputs: &ReviewInputs, he
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let after = match (row_at, crate::event_store::parse_rfc3339_ms(&ts)) {
-                (Some(base), Some(other)) => other > base,
-                _ => ts.as_str() > row_ts,
-            };
+            let after = ts_after(&ts, row_ts, row_at);
             if after {
                 return true;
             }
@@ -592,7 +599,7 @@ fn split_pin_note(note: &str) -> (String, String) {
 }
 
 /// The `review_coverage` verdict for a PR: the latest event row, shaped
-/// against the head, recomputed at most ONCE through the producer verb when
+/// against the head, recomputed at most ONCE through the producer command when
 /// `recompute` is set and the row is absent, head-mismatched, unknown, or
 /// overtaken. Event-read failures degrade to the unknown sentinel.
 pub(crate) fn read_review_coverage(
@@ -735,6 +742,11 @@ fn finish(data: Option<Value>, note: &str, pin: &str) -> Value {
     if let Some(verdicts) = latest.get("verdicts") {
         obj.insert("verdicts".into(), verdicts.clone());
     }
+    // The coverage gate's posture ladder reads the producer's verdict off
+    // this row; dropping it here would read every stored row as legacy.
+    if let Some(posture) = latest.get("review_posture").filter(|p| !p.is_null()) {
+        obj.insert("review_posture".into(), posture.clone());
+    }
     let joined = format!("{note}; {pin}");
     let (recompute_note, pin_note) = split_pin_note(&joined);
     let recompute_note = recompute_note.trim();
@@ -754,7 +766,8 @@ fn finish(data: Option<Value>, note: &str, pin: &str) -> Value {
 
 /// Whether review is required for this PR: a configured lane, OR the
 /// self-review floor for a code payload on a stock install. Fail-closed.
-pub(crate) fn review_lane(cwd: &Path, pr: u64) -> bool {
+/// `head` keys the payload memo. None accepts a memo kept for any head.
+pub(crate) fn review_lane(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
     if inputs.lane_configured || inputs.code_review_configured {
         return true;
@@ -763,21 +776,60 @@ pub(crate) fn review_lane(cwd: &Path, pr: u64) -> bool {
         inputs.author_harness.as_deref(),
         inputs.author_harness_pinned_none,
     );
-    inputs.self_review_floor_on && floor_applies && payload_is_code(cwd, pr)
+    inputs.self_review_floor_on && floor_applies && payload_is_code(cwd, pr, head)
+}
+
+/// The lane answer for the `lane` op. With `code_payload` set it answers for
+/// a HYPOTHETICAL code payload and probes no PR: the config half and the
+/// floor engagement only, which is what a caller that has no PR to classify
+/// (the doctor pair check) needs.
+pub(crate) fn lane_answer(cwd: &Path, code_payload: bool) -> bool {
+    if !code_payload {
+        return review_lane(cwd, 0, None);
+    }
+    let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
+    if inputs.lane_configured || inputs.code_review_configured {
+        return true;
+    }
+    let floor_applies = crate::loopcheck::self_review_floor_applies(
+        inputs.author_harness.as_deref(),
+        inputs.author_harness_pinned_none,
+    );
+    inputs.self_review_floor_on && floor_applies
 }
 
 /// Whether the PR's diff carries a code payload: CODE iff any changed file
 /// is not documentation. Fails closed: a failed read classifies as code, so
 /// a degraded probe cannot bypass the floor. An empty surfaced diff is not
 /// code: nothing to review, no gate.
-fn payload_is_code(cwd: &Path, pr: u64) -> bool {
+///
+/// The read stops at the first page that names a code file. With `head`
+/// set, a CODE answer is kept per head, so the next refresh at that head
+/// spends nothing. A docs answer is never kept: a push between the head read
+/// and the file read could file docs under a code head and lift the floor.
+pub(crate) fn payload_is_code(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let Some(url) = git_origin_url(cwd) else {
         return true;
     };
     let Some(slug) = crate::merge_gates::repo_slug_from_origin(&url) else {
         return true;
     };
-    let mut names: Vec<String> = Vec::new();
+    // `@` cannot occur in a GitHub owner or repo name, so PR 7 of `o/r`
+    // never shares a prefix with PR 1 of `o/r-7`.
+    let prefix = format!("{}@{pr}@", slug.replace('/', "--"));
+    let memo = head
+        .filter(|h| !h.is_empty())
+        .map(|h| format!("{prefix}{h}"));
+    // With no head, a code answer kept for any head of this PR serves. It can
+    // only err toward code (a push that removed every code file), which
+    // fails closed, the same way a failed read does.
+    let kept = match &memo {
+        Some(name) => super::memo::read(cwd, PAYLOAD_MEMO, name) == Some(Value::Bool(true)),
+        None => super::memo::any_true(cwd, PAYLOAD_MEMO, &prefix),
+    };
+    if kept {
+        return true;
+    }
     for page in 1..=10 {
         let mut cmd = std::process::Command::new("gh");
         cmd.args([
@@ -798,22 +850,26 @@ fn payload_is_code(cwd: &Path, pr: u64) -> bool {
         let Some(list) = rows.as_array() else {
             return true;
         };
-        names.extend(
-            list.iter()
-                .filter_map(|r| r.get("filename").and_then(Value::as_str))
-                .map(str::to_string),
-        );
+        let code = list
+            .iter()
+            .filter_map(|r| r.get("filename").and_then(Value::as_str))
+            .any(|p| !crate::loopcheck::is_documentation_path(p));
+        if code {
+            if let Some(name) = &memo {
+                super::memo::write(cwd, PAYLOAD_MEMO, name, &Value::Bool(true), Some(&prefix));
+            }
+            return true;
+        }
         if list.len() < 100 {
             break;
         }
     }
-    names.is_empty()
-        || names
-            .iter()
-            .any(|p| !crate::loopcheck::is_documentation_path(p))
+    false
 }
 
-fn git_origin_url(cwd: &Path) -> Option<String> {
+const PAYLOAD_MEMO: &str = super::memo::PAYLOAD_CODE;
+
+pub(crate) fn git_origin_url(cwd: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(cwd)
@@ -864,7 +920,18 @@ pub(crate) fn review_activity(cwd: &Path, branch: &str, pr_head: &str) -> Value 
         );
     }
     let key = format!("review:branch:{branch}");
-    let (state, record) = crate::claims::status(&key, None);
+    // A direct store read, not `claims::status`: the wrapper eprints the
+    // claim-status command's diagnostic on a failed read, and this probe stays
+    // silent, the way the Python claim_status never printed on the way to
+    // Corrupted (the review_hold check_corrupted_hold golden is one line).
+    let (state, record) = match crate::claim_store::read(&key, None) {
+        Ok(Some(record)) => (
+            crate::claim_commands::status_verdict(&record).0,
+            Some(record),
+        ),
+        Ok(None) => (crate::claims::ClaimState::Free, None),
+        Err(_) => (crate::claims::ClaimState::Corrupted, None),
+    };
     let hold_json = || -> Value {
         record
             .as_ref()
@@ -875,7 +942,13 @@ pub(crate) fn review_activity(cwd: &Path, branch: &str, pr_head: &str) -> Value 
         crate::claims::ClaimState::Corrupted => {
             return activity(
                 REVIEW_HOLD_UNREADABLE,
-                &format!("review hold on {branch} could not be parsed; refusing to assume unheld"),
+                // Python read `status.get('error', 'unknown error')`; the
+                // corrupted status never carried the key, so the fallback is
+                // the constant the parity golden pins.
+                &format!(
+                    "review hold on {branch} could not be parsed (unknown error); \
+                     refusing to assume unheld"
+                ),
                 hold_json(),
                 not_reached("not reached"),
             );
@@ -908,8 +981,33 @@ now ships the code the review is still fixing. Clear it with `fno do pr review-h
                 .map(|r| r.holder.clone())
                 .unwrap_or_else(|| "unknown".into());
             eprintln!(
-                "note: review hold on {branch} expired (holder {holder}); it no longer blocks. \
-A review hold is a lease: it lapses on its TTL whether or not the holder session still runs."
+                "note: review hold on {branch} expired (holder {holder}, expires_at {}); it no longer blocks. \
+A review hold is a lease: it lapses on its TTL whether or not the holder session still runs.",
+                record.as_ref().and_then(|r| r.expires_at).map(|v| v.to_string()).unwrap_or_else(|| "null".into())
+            );
+            // Ages out, but never silently: a lane that clears with no
+            // receipt is indistinguishable from one that was never held.
+            // Same envelope the Python `_emit_expired` writes, through the
+            // claims audit writer (Branch-A parity, claims.rs:782).
+            crate::claims::emit_audit_event(
+                None,
+                "review_hold_expired",
+                serde_json::Map::from_iter([
+                    ("key".to_string(), json!(key)),
+                    ("holder".to_string(), json!(holder)),
+                    (
+                        "head_sha".to_string(),
+                        json!(record
+                            .as_ref()
+                            .and_then(|r| r.metadata.get("head_sha"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")),
+                    ),
+                    (
+                        "expires_at".to_string(),
+                        json!(record.as_ref().and_then(|r| r.expires_at)),
+                    ),
+                ]),
             );
             let _ = crate::claims::release(
                 &key,
@@ -1077,4 +1175,150 @@ fn bound_manifest_reading(matched_path: &str) -> Value {
         }
     }
     reading
+}
+
+#[cfg(test)]
+mod shape_review_coverage_tests {
+    use super::*;
+
+    /// The row shape the producer writes: one reviewed verdict whose
+    /// freshness and chain membership the shaper re-derives from.
+    fn row(
+        freshness: &str,
+        reviewed_sha: &str,
+        tiling: Option<(bool, Vec<&str>)>,
+        spent: Option<bool>,
+    ) -> Value {
+        let mut data = json!({
+            "pr": 1,
+            "coverage": "covered",
+            "reviewed_count": 1,
+            "head_sha": reviewed_sha,
+            "verdicts": [{
+                "producer": "local_attestation",
+                "name": "code-review",
+                "verdict": "reviewed",
+                "reviewed_sha": reviewed_sha,
+                "freshness": freshness,
+                "scope": "attested_branch",
+            }],
+        });
+        if let Some((tiled, chain)) = tiling {
+            data["range_tiling"] = json!({
+                "tiled": tiled,
+                "gaps": if tiled { json!([]) } else { json!(["c1..c3"]) },
+                "dropped": [],
+                "chain_heads": chain,
+            });
+        }
+        if let Some(spent) = spent {
+            data["rounds_exhausted"] = json!(spent);
+        }
+        data
+    }
+
+    #[test]
+    fn stale_verdict_inside_the_tiled_chain_stays_covered() {
+        let shaped = shape_review_coverage(
+            &row("stale", "c3", Some((true, vec!["c3"])), None),
+            None,
+            false,
+        );
+        assert_eq!(shaped["coverage"], "covered");
+        assert_eq!(shaped["review_state"], "reviewed");
+        assert_eq!(shaped["reviewed_count"], 1);
+    }
+
+    #[test]
+    fn stale_verdict_without_tiling_reads_uncovered() {
+        let shaped = shape_review_coverage(&row("stale", "c3", None, None), None, false);
+        assert_eq!(shaped["coverage"], "uncovered");
+        assert_eq!(shaped["review_state"], "unreviewed");
+    }
+
+    #[test]
+    fn verdict_outside_the_chain_is_not_rescued() {
+        let shaped = shape_review_coverage(
+            &row("stale", "c3", Some((true, vec!["c9"])), None),
+            None,
+            false,
+        );
+        assert_eq!(shaped["coverage"], "uncovered");
+    }
+
+    #[test]
+    fn spent_row_keeps_the_producers_covered_word_and_names_it_reviewed() {
+        let shaped = shape_review_coverage(&row("stale", "c3", None, Some(true)), None, false);
+        assert_eq!(shaped["coverage"], "covered");
+        assert_eq!(shaped["review_state"], "reviewed");
+    }
+
+    #[test]
+    fn the_same_row_unspent_reads_uncovered() {
+        let shaped = shape_review_coverage(&row("stale", "c3", None, Some(false)), None, false);
+        assert_eq!(shaped["coverage"], "uncovered");
+        assert_eq!(shaped["review_state"], "unreviewed");
+        assert_eq!(shaped["reviewed_count"], 1);
+    }
+
+    #[test]
+    fn malformed_verdict_names_no_state() {
+        let mut data = row("stale", "c3", None, Some(true));
+        data["verdicts"] = json!([{"producer": "local_attestation", "verdict": "junk"}]);
+        let shaped = shape_review_coverage(&data, None, false);
+        assert!(shaped.get("review_state").is_none());
+    }
+
+    #[test]
+    fn fresh_verdict_counts_without_any_chain() {
+        let shaped = shape_review_coverage(&row("fresh", "head", None, None), None, false);
+        assert_eq!(shaped["coverage"], "covered");
+    }
+
+    #[test]
+    fn malformed_tiling_reads_an_empty_chain() {
+        assert!(tiling_chain(&json!({"range_tiling": {"tiled": "yes"}})).is_empty());
+        assert!(tiling_chain(&json!({"range_tiling": null})).is_empty());
+        assert!(
+            tiling_chain(&json!({"range_tiling": {"tiled": true, "chain_heads": "c1"}})).is_empty()
+        );
+        assert_eq!(
+            tiling_chain(&json!({
+                "range_tiling": {"tiled": true, "chain_heads": ["c1", 7, null, ""]}
+            })),
+            vec!["c1".to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod overtaken_ts_tests {
+    use super::*;
+
+    #[test]
+    fn an_unparseable_timestamp_still_overtakes_by_string_compare() {
+        // The Python pin this port carried: a malformed line fails quiet
+        // and the lexical order decides, so "zzz" is after "aaa" whatever
+        // the parse says - and a lexically earlier garbage ts does not
+        // overtake.
+        assert!(ts_after("zzz", "aaa", None));
+        assert!(!ts_after("aaa", "zzz", None));
+    }
+
+    #[test]
+    fn parsed_timestamps_compare_by_instant_not_string() {
+        // Both sides parseable: the instant wins, so 09:00 on the 2nd
+        // sorts after 23:00 on the 1st even though the string sorts first.
+        let base = crate::event_store::parse_rfc3339_ms("2026-10-01T23:00:00Z");
+        assert!(ts_after(
+            "2026-10-02T09:00:00Z",
+            "2026-10-01T23:00:00Z",
+            base
+        ));
+        assert!(!ts_after(
+            "2026-10-01T10:00:00Z",
+            "2026-10-01T23:00:00Z",
+            base
+        ));
+    }
 }

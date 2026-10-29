@@ -1,22 +1,18 @@
 """Every front argv from the native check-in emitters resolves.
 
-The emitters use the organization door; the renamed lead group remains a
-valid front for an attended drain.
+The emitters use the organization door. The Rust front owns the dispatch of
+both role forms (crates/fno/src/lead_route.rs).
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from typer.testing import CliRunner
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EMITTERS = [
     REPO_ROOT / "crates/fno-agents/src/lead_checkin.rs",
     REPO_ROOT / "crates/fno-agents/src/loop_lead.rs",
 ]
-
-runner = CliRunner()
 
 
 def _front_argvs() -> list[list[str]]:
@@ -43,17 +39,3 @@ def test_every_emitted_argv_is_an_org_spelling():
     ]
     assert not stale, f"dead lead spellings remain: {stale}"
 
-
-def test_the_drain_argv_dispatches_under_both_role_forms():
-    from fno.agents.cli import agents_app
-
-    # The door execs the binary; drain is a count read, so the dispatch is
-    # safe against any graph it finds. Only "No such command" is the failure
-    # the rename shipped; a graph error still proves the spelling resolved.
-    result = runner.invoke(agents_app, ["org", "drain"])
-    combined = (result.output or "") + (result.stderr or "")
-    assert "No such command" not in combined, combined
-
-    lead = runner.invoke(agents_app, ["lead", "drain", "example-scope"])
-    combined = (lead.output or "") + (lead.stderr or "")
-    assert "No such command" not in combined, combined

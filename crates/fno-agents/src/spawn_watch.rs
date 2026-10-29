@@ -30,7 +30,7 @@ const SENDER: &str = "fno-spawn-watch";
 
 /// A launch the caller waits on in its own Bash call (`codex exec`,
 /// `pi -p`) already answers it, so only detached launches are watched: a
-/// `claude --bg` (the only claude line the hook records), a spawn verb, a
+/// `claude --bg` (the only claude line the hook records), a spawn command, a
 /// pane run, or a dispatcher's record, which carries no command.
 fn detached(r: &Record) -> bool {
     r.launch.harness == "claude"
@@ -63,6 +63,19 @@ struct Watch {
 
 fn watch_dir(home: &AgentsHome) -> PathBuf {
     home.root().join("spawn-watch")
+}
+
+/// The caller of the launch whose child is `sid`, from the watch files.
+/// A watch outlives the launch record, so this finds a spawner the registry
+/// never recorded.
+pub(crate) fn caller_of(home: &AgentsHome, sid: &str) -> Option<String> {
+    std::fs::read_dir(watch_dir(home))
+        .ok()?
+        .flatten()
+        .filter_map(|e| read(&e.path()).ok().flatten())
+        .filter(|w| w.child_session.as_deref() == Some(sid) && !w.caller.is_empty())
+        .max_by_key(|w| w.called_at_ms)
+        .map(|w| w.caller)
 }
 
 /// The pending and the claimed copy of one launch share this key.

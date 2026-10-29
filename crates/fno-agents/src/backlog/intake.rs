@@ -2,7 +2,7 @@
 //!
 //! Ported from cli/src/fno/graph/cli.py (cmd_intake + _intake_impl) and
 //! graph/_intake.py, with the depends machinery from graph/depends.py. A plan
-//! is one delivery unit: plan == PR == node. The verb refuses a plan already
+//! is one delivery unit: plan == PR == node. The command refuses a plan already
 //! intaked (same roadmap or any), resolves claims (CLI flag strict,
 //! frontmatter lenient), validates the difficulty gate, and mints or updates
 //! through the shared graph write pipeline.
@@ -1576,7 +1576,7 @@ fn prepare_intake(
                     "plan_path already intaked as {existing_id}, but --claims names \
                      {claim_id}. Remove or supersede {existing_id} before claiming, \
                      e.g.:\n  fno backlog supersede {claim_id} --replaces {existing_id} \
-                     --reason \"...\""
+                     --cause \"...\" --surface <path> --reason \"...\" --covers \"...\""
                 ));
             }
         }
@@ -1635,7 +1635,7 @@ fn prepare_intake(
 // ---------------------------------------------------------------------------
 
 /// The ONE canonical band write: drain the retired `model_tier` spelling on
-/// the same write (a leftover manufactures a both-spellings row no verb can
+/// the same write (a leftover manufactures a both-spellings row no command can
 /// clean), keep a bandless row's key absent, and attribute every write.
 fn write_canonical_difficulty(
     row: &mut Map<String, Value>,
@@ -2276,7 +2276,7 @@ fn intake_single(args: &IntakeArgs, plan_path: &str) -> i32 {
     }
 
     if args.dry_run {
-        let (verb, title, deps, claim_id) = match &prep {
+        let (command, title, deps, claim_id) = match &prep {
             IntakeOutcome::Claim {
                 id, title, spec, ..
             } => ("claim", title.clone(), spec.deps.clone(), Some(id.clone())),
@@ -2285,11 +2285,11 @@ fn intake_single(args: &IntakeArgs, plan_path: &str) -> i32 {
             }
             IntakeOutcome::Already { .. } => unreachable!("handled above"),
         };
-        println!("{verb} preview (dry-run, no changes):");
+        println!("{command} preview (dry-run, no changes):");
         let target = claim_id
             .map(|id| format!(" (claims {id})"))
             .unwrap_or_default();
-        println!("  would {verb}: \"{title}\"  (plan: {plan_path}){target}");
+        println!("  would {command}: \"{title}\"  (plan: {plan_path}){target}");
         if !deps.is_empty() {
             println!("  blocked_by: {}", deps.join(", "));
         }

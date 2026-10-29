@@ -104,7 +104,6 @@ def _settings_key() -> _SettingsKey:
     return (
         env("FNO_CONFIG"),
         env("FNO_GLOBAL_SETTINGS_PATH"),
-        env("FNO_CONFIG_SEARCH_ROOT"),
         env("FNO_NO_CANONICAL_CONFIG"),
         env("HOME"),
         str(repo_root),
@@ -113,7 +112,7 @@ def _settings_key() -> _SettingsKey:
 
 
 _SettingsKey = tuple[
-    Optional[str], Optional[str], Optional[str], Optional[str], Optional[str],
+    Optional[str], Optional[str], Optional[str], Optional[str],
     str, tuple[tuple[str, int, int], ...],
 ]
 
@@ -142,6 +141,8 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
     # resolve_source replays the same layers, so the chain, its order, and the
     # alias pass (whose deprecation warnings fire once per process per chain,
     # not once per consumer) live in exactly one place.
+    # Retired dispatch keys leave disk through the native loader, the one
+    # dropper; a key left here only draws the unknown-key warning.
     candidates = _candidate_paths()
     layers = list(_aliased_layers(tuple(candidates)))
 
@@ -188,7 +189,7 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
     import importlib
 
     if not _json_surface():
-        problems = importlib.import_module("fno.config_readback").unknown_key_problems(layers)
+        problems = importlib.import_module("fno.config._readback").unknown_key_problems(layers)
         for line in problems[:_UNKNOWN_WARN_CAP]:
             print(f"fno config: {line}", file=sys.stderr)
         if len(problems) > _UNKNOWN_WARN_CAP:
@@ -203,5 +204,5 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
         return SettingsModel.model_validate(raw)
     except ValidationError as exc:
         # importlib hop, same mypy-SCC reason as warn_unknown_keys above.
-        describe = importlib.import_module("fno.config_readback").describe_config_failure
+        describe = importlib.import_module("fno.config._readback").describe_config_failure
         raise SettingsRefused(describe(exc, layers)) from exc

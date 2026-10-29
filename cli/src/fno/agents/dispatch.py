@@ -2,16 +2,11 @@
 
 Phase 1 surface:
 
-- ``KNOWN_PROVIDERS`` — frozen tuple of supported provider names.
+- ``KNOWN_PROVIDERS`` - roster-backed tuple of supported provider names.
 - ``is_provider_available(name)`` — wraps ``shutil.which`` for a single CLI.
 - ``select_provider(name, requested_provider)`` — registry-aware selection
   that catches the "wrong provider on follow-up" mistake before any
   subprocess fires.
-
-The ask follow-up orchestration that used to live here
-(``dispatch_ask``) was ported to the Rust runtime and deleted; its
-parity harnesses frozen against goldens are the surviving contract
-(``crates/fno-agents/tests/{claude_ask,codex_ask}_parity.rs``).
 
 The spawn subprocess invocation per provider lives in
 ``fno.agents.harnesses.{claude,codex}``. Gemini is a legacy readable identity,
@@ -35,18 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fno.agents.dispatch_errors import DispatchAskError, RouteRestoreRefused
 from fno.agents.rust_spawn import _codex_thread_spawn, _opencode_serve_spawn
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-)
-
-if TYPE_CHECKING:
-    from fno.agents.account_env import AccountOverlay
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 from fno import paths
 from fno.agents import events
@@ -59,11 +43,10 @@ from fno.agents.sender_provenance import (
 from fno.agents import launch_provenance
 from fno.agents.context import EventContext, build_context
 from fno.agents.harness_map import DispatchResolveError, render_seed
-from fno.config._dispatch_verbs import is_verb_seed
+from fno.config._dispatch_commands import is_command_seed
 from fno.agents.lane_heal import lane_heal as _lane_heal
 from fno.agents.lock import AgentLockTimeout, hold_agent_lock
-from fno.agents.harnesses import KNOWN_PROVIDERS, SPAWN_HARNESSES
-from fno.agents.keeper_thread import _mint_thread_session_id, complete_launch_argv
+from fno.agents.keeper_thread import _mint_thread_session_id
 from fno.harness_names import unknown_thread_harness_message
 from fno.agents.harnesses.base import ProviderResult, ReachabilityProbeError
 from fno.agents.reachability import mux_ref_names_a_pane
@@ -276,6 +259,8 @@ class ProviderMismatchError(RuntimeError):
 
 
 def _check_known_provider(name: str) -> None:
+    from fno.agents.harnesses import KNOWN_PROVIDERS  # call-time read (import-time crashes stale binaries)
+
     if name not in KNOWN_PROVIDERS:
         raise ValueError(f"unknown provider {name!r}; supported: {', '.join(KNOWN_PROVIDERS)}")
 
@@ -324,6 +309,8 @@ def select_provider(name: str, requested_provider: Optional[str]) -> str:
         )
 
     if requested_provider is None:
+        from fno.agents.harnesses import KNOWN_PROVIDERS  # call-time read (import-time crashes stale binaries)
+
         raise ValueError(
             f"provider is required for new agent {name!r}; "
             f"pass --provider one of: {', '.join(KNOWN_PROVIDERS)}"
@@ -415,6 +402,7 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
     stance from the lanes that have run - the state-root gate downstream only
     refuses an ABSENT key, so an ``"unmeasured"`` value would pass it.
     """
+    from fno.agents.harnesses import SPAWN_HARNESSES  # call-time read (import-time crashes stale binaries)
     if name in SPAWN_HARNESSES:
         substrate = "headless" if headless else "thread"
         from fno.agents.harness_map import capabilities_or_undeclared
@@ -433,7 +421,7 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
                 "has run that lane unattended. An unattended journey for the "
                 f"lane is what clears it (pi's thread journey is the shape: "
                 "cli/tests/agents/test_pi_spawn_journey.py). "
-                f"Use --substrate pane, which every harness hosts.",
+                "Use the pane lane (--split right), which every harness hosts.",
                 exit_code=2,
             )
         return
@@ -443,15 +431,14 @@ def _check_spawn_harness(name: str, *, headless: bool = False) -> None:
         # an undeclared harness HAS a lane - the pane - so this refusal
         # must name that lane rather than the accept set. It must not fall into
         # the deprecated-harness text below either: that one names agy as a
-        # successor, a harness the operator never mentioned (the same trap the
-        # SPAWN_HARNESSES comment records for pi).
+        # successor, a harness the operator never mentioned.
         raise DispatchAskError(
             f"harness {name!r} declares no capability row (no entry in "
-            "harness_capabilities.toml); --substrate pane is the only substrate "
-            f"available to it ('fno agents spawn -H {name} --substrate pane' "
+            "harness_capabilities.toml); the pane is the only lane "
+            f"available to it ('fno agents spawn -H {name} --split right' "
             "hosts the binary with fno as the viewport). A thread or headless "
             "lane needs the vendor's own protocol and must be measured first.\n"
-            "If you meant a model VENDOR, that is -P/--provider.",
+            "If you meant a model VENDOR, that is --route <vendor>,<model>.",
             exit_code=2,
         )
     # One builder, shared with the `dispatch-lanes` seam: the pane
@@ -930,13 +917,7 @@ def _lane_b_thread_spawn(
     name: str,
     harness: str,
     cwd: Path,
-    model: Optional[str] = None,
-    yolo: bool = False,
-    permission_mode: Optional[str] = None,
-    add_dir: Optional[str] = None,
     resume_session_id: Optional[str] = None,
-    effort: Optional[str] = None,
-    tools: Optional[str] = None, deny_tools: Optional[str] = None,
     passthrough: Optional[Sequence[str]] = None,
     lock_timeout: float = _DEFAULT_LOCK_TIMEOUT,
 ) -> dict:
@@ -980,7 +961,7 @@ def _lane_b_thread_spawn(
     if worker_bin is None:
         raise DispatchAskError(
             "lane-B thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
+            "(cargo build --release -p fno-agents) or spawn on the pane lane (--split)",
             exit_code=13,
         )
 
@@ -1003,37 +984,41 @@ def _lane_b_thread_spawn(
                 exit_code=2,
             )
 
-        session_id = _mint_thread_session_id(
-            harness,
-            cwd,
-            requested=resume_session_id,
-            model=model,
-            effort=effort,
-            permission_mode=permission_mode,
-            yolo=yolo,
-        )
+        session_id = _mint_thread_session_id(harness, cwd, requested=resume_session_id)
         try:
-            argv = render_session_argv(harness, "interactive_create", session_id)
+            # A typed --resume id rides the resume form; a fresh spawn renders
+            # the create form. agy's create is a bare launch (the id binds at
+            # the session report), so the two forms differ now.
+            argv = render_session_argv(
+                harness,
+                "interactive_resume" if resume_session_id else "interactive_create",
+                session_id,
+            )
         except DispatchResolveError as exc:
             raise DispatchAskError(
                 f"harness {harness!r} cannot render an interactive_create "
                 f"argv: {exc}",
                 exit_code=2,
             ) from exc
-        argv = complete_launch_argv(
-            harness,
-            argv,
-            cwd=cwd,
-            model=model,
-            yolo=yolo,
-            permission_mode=permission_mode,
-            add_dir=add_dir,
-            effort=effort, tools=tools, deny_tools=deny_tools,
-        )
-        if passthrough:
-            from fno.agents.mux_spawn import pane_passthrough_tokens
+        # The lane default posture (the row's bypass) is the Rust owner's
+        # answer; the axes that overrode it are retired. agy still needs the
+        # folder trusted before launch.
+        from fno.agents.spawn_axes_client import keeper_posture
 
-            argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
+        if harness == "agy":
+            from fno.agents.keeper_thread import trust_agy_folder
+
+            trust_agy_folder(cwd)
+        argv = [*argv, *keeper_posture(harness, "thread")]
+        if harness == "pi":
+            # Bare pi defaults to provider google; the pane lane asks the
+            # same route owner.
+            from fno.agents.spawn_axes_client import spawn_axes_call
+
+            route = spawn_axes_call({"pi_route": {"model": "", "effort": "", "tools": "", "deny_tools": ""}})
+            argv = [*argv, *(str(t) for t in route["tokens"])]
+        if passthrough:
+            argv = [*argv, "--", *passthrough]
 
         from fno.agents.keeper_thread import _lane_b_keeper_socket
 
@@ -1068,6 +1053,9 @@ def _lane_b_thread_spawn(
         # global footnote extension gates only here and never hijacks a
         # native session that merely sits in a cwd with a stale manifest.
         env["FNO_AGENT_SESSION_ID"] = session_id
+        # The row name rides to the child (the keeper passes its env through):
+        # a callee-minted create form (agy) binds its report by name.
+        env["FNO_AGENT_SELF"] = name
         stderr_fh = open(log_path, "ab")
         try:
             proc = subprocess.Popen(
@@ -1408,7 +1396,7 @@ def _claude_create_path(
     """Spawn a new claude agent under the per-agent flock.
 
     Extracted from the old ask dispatcher's inline create block so
-    Task 1.2 (the new ``spawn`` verb) could call the same machinery
+    Task 1.2 (the new ``spawn`` command) could call the same machinery
     directly. Runs INSIDE the per-agent flock.
 
     The CALLER emits ``agent_ask_started`` (dispatch_spawn does, under its
@@ -1546,7 +1534,7 @@ def _claude_create_path(
     # _capture_spawn_trigger's own docstring for what that mislabels).
     spawn_trigger = _capture_spawn_trigger()
 
-    # A promoted spawn TYPES the term verb as the payload's first line, so the
+    # A promoted spawn TYPES the term command as the payload's first line, so the
     # lead's first turn is the skill itself, not a hand-improvised ritual.
     from fno.agents.team_thread import lead_typed_message
 
@@ -1806,7 +1794,7 @@ def _claude_create_path(
                 )
                 role_declined = True
         if entry.role_level is not None and entry.role_scope:
-            from fno.lead.state import arm_lead_manifest
+            from fno.agents.role import arm_lead_manifest
 
             try:
                 lead_loop_armed = arm_lead_manifest(
@@ -1871,8 +1859,7 @@ def _claude_create_path(
         if role_scope and not role_declined:
             # Typed or not rides the receipt either way, never inferred from silence.
             tail = (
-                "term typed"
-                if term_typed
+                "term typed" if term_typed
                 else "NOT typed (revived session keeps its own payload; send "
                 f"'/fno:lead {role_scope}' by raw mail if it should term)"
             )
@@ -1983,7 +1970,7 @@ def _claude_create_path(
 
 
 # ---------------------------------------------------------------------------
-# Task 1.2: spawn verb (US2 Python fallback runtime)
+# Task 1.2: spawn command (US2 Python fallback runtime)
 # ---------------------------------------------------------------------------
 
 
@@ -2133,10 +2120,10 @@ def _pick_account_overlay(
     *,
     role: Optional[str] = None,
     route_env: Optional[Mapping[str, str]] = None,
-) -> "Optional[AccountOverlay]":
+) -> Optional[Any]:
     """Consult the picker for a spawn that named no account, or None.
 
-    Returns the full :class:`AccountOverlay` (env AND account_id), because the
+    Returns the overlay's ``env`` AND ``account_id``, because the
     spawn seams stamp the picked id on the row's ``launch_account`` ;
     the env alone drops the one fact re-entry needs.
 
@@ -2148,9 +2135,11 @@ def _pick_account_overlay(
     if picked is None:
         return None
     try:
-        from fno.agents.account_env import resolve_account_overlay
+        from types import SimpleNamespace
 
-        return resolve_account_overlay(picked)
+        from fno.agents.spawn_overlay_client import account_overlay
+
+        return SimpleNamespace(**account_overlay(picked))
     except Exception as exc:  # noqa: BLE001 - picking is advisory; never block a spawn
         print(f"account: default (pick unavailable: {exc})", file=sys.stderr)
         return None
@@ -2236,20 +2225,11 @@ def _account_id_for_env(account_env: Optional[Mapping[str, str]]) -> Optional[st
     if not account_env:
         return None
     try:
-        from fno.adapters.providers.loader import load_providers
-        from fno.agents.account_env import resolve_account_overlay
+        from fno.agents.spawn_overlay_client import spawn_overlay_call
 
-        for record in load_providers().records:
-            if record.harness != "claude":
-                continue
-            try:
-                if dict(resolve_account_overlay(record.id).env) == dict(account_env):
-                    return record.id
-            except Exception:  # noqa: BLE001 - an unresolvable record is not a match
-                continue
-    except Exception:  # noqa: BLE001
+        return spawn_overlay_call({"kind": "account-for-env", "env": dict(account_env)})["account"]
+    except Exception:  # noqa: BLE001 - attribution is best-effort
         return None
-    return None
 
 
 def _revival_answer(name: str, harness: str, resume_session_id: str) -> Optional[dict]:
@@ -2294,7 +2274,7 @@ def dispatch_spawn(
     account_record_id: Optional[str] = None,
     role_level: Optional[int] = None,
     role_scope: Optional[str] = None,
-    succession: bool = False,
+    succession: bool = False, take_over: Optional[str] = None,
     route_provider: Optional[str] = None,
     provider_gate: object | None = None,
     parent_edge: Optional[tuple] = None,
@@ -2326,7 +2306,7 @@ def dispatch_spawn(
     - On teardown failure: loud stderr warning, row stays, exit 0 still.
     - On create failure: nonzero exit, no registry row (helpers only write
       registry after subprocess success -- this invariant is pinned by
-      test_spawn_once_create_failure_no_registry_entry).
+      test_codex_fatal_error_dispatch.py).
 
     Returns:
         :class:`SpawnResult`
@@ -2441,7 +2421,7 @@ def dispatch_spawn(
         if once or headless:
             raise DispatchAskError(
                 "--promote needs a session that outlives the grant; a one-shot "
-                "exits after one answer. Use --substrate pane or --substrate thread.",
+                "exits after one answer. Drop --once: a thread or a pane outlives it.",
                 exit_code=2,
             )
 
@@ -2455,12 +2435,12 @@ def dispatch_spawn(
     if harness in ("opencode", "pi") and (once or headless):
         raise DispatchAskError(
             f"{harness} one-shot spawns run through the Rust runtime's headless "
-            "lane; the Python path carries --substrate thread only",
+            "lane; the Python path carries the thread lane only",
             exit_code=2,
         )
 
     effective_message: Optional[str] = None
-    if is_verb_seed(message):
+    if is_command_seed(message):
         try:
             message = render_seed(message, harness)
         except DispatchResolveError as exc:
@@ -2493,10 +2473,10 @@ def dispatch_spawn(
     promotion = None
     if role_level is not None and harness != "claude":
         promotion = plan_thread_promotion(
-            message, role_level, role_scope, succession, harness, parent_edge,
+            message, role_level, role_scope, succession, take_over, harness, parent_edge,
             name=name, revive=bool(resume_session_id))
         message = promotion["message"]
-        name = adopt_drawn_name(succession, promotion.get("plan"), name)
+        name = adopt_drawn_name(promotion.get("plan"), name)
 
     # 3b. Codex thread spawns are held by the Rust app-server lane. The Python
     # runtime delegates there instead of silently downgrading to a one-shot.
@@ -2516,12 +2496,7 @@ def dispatch_spawn(
             message=message,
             cwd=cwd,
             from_name=from_name,
-            model=model,
-            yolo=yolo,
             node=node,
-            effort=effort,
-            add_dir=add_dir,
-            permission_mode=permission_mode,
             passthrough=list(passthrough) if passthrough else None,
             account_env=account_env,
             route_env=route_env,
@@ -2627,11 +2602,11 @@ def dispatch_spawn(
                 role_caller_name = getattr((caller_row := calling_agent_row()), "name", None)
                 role_refusal, role_plan = plan_spawn_role(
                     role_scope or "", caller_row, succession,
-                    exclude_name=name if revive else None, proposed_name=name,
+                    exclude_name=name if revive else None, proposed_name=name, take_over=take_over,
                 )
                 if role_refusal is not None:
                     raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
-                name = adopt_drawn_name(succession, role_plan, name)
+                name = adopt_drawn_name(role_plan, name)
 
             # a revive must come back on the route the row was born with
             # unless this invocation resolved one of its own; raises exit 2 when
@@ -2907,13 +2882,13 @@ def dispatch_spawn(
                 if harness == "opencode":
                     if resume_session_id:
                         raise DispatchAskError(
-                            "--resume is not carried on the opencode serve lane "
-                            "yet; resume on --substrate pane or spawn fresh",
+                            "a resume is not carried on the opencode serve lane "
+                            "yet; resume on the pane lane or spawn fresh",
                             exit_code=2,
                         )
                     short_id = _opencode_serve_spawn(
                         name=name, message=message, cwd=cwd,
-                        from_name=from_name, model=model, node=node, effort=effort,
+                        from_name=from_name, node=node, passthrough=list(passthrough or ()),
                     )
                     if promotion is not None:
                         settle_thread_promotion(promotion, name=name, cwd=cwd, session_id=short_id)
@@ -2943,7 +2918,7 @@ def dispatch_spawn(
                     if account_env:
                         raise DispatchAskError(
                             "a pinned account is not carried on the codex "
-                            "one-shot lane; spawn on --substrate thread (which "
+                            "one-shot lane; drop --once to spawn a thread (which "
                             "forwards the overlay to the app-server child) "
                             "rather than launching on the ambient account",
                             exit_code=2,
@@ -3012,7 +2987,7 @@ def dispatch_spawn(
 
 
 # ---------------------------------------------------------------------------
-# US4-lifecycle: stop / rm / reconcile / attach (write + read verbs)
+# US4-lifecycle: stop / rm / reconcile / attach (write + read commands)
 # ---------------------------------------------------------------------------
 
 
@@ -3081,7 +3056,7 @@ def _resolve_registry_entry(name: str, *, registry_path: Optional[Path] = None) 
     """Load the registry and return the entry for ``name``.
 
     Raises :class:`DispatchAskError`(exit_code=2) when the entry is
-    missing - the convention for lifecycle verbs (AC1-UI / AC2-UI /
+    missing - the convention for lifecycle commands (AC1-UI / AC2-UI /
     AC7-UI). Raises (exit_code=12) on registry-read failures so the
     operator gets a distinct "registry busted" signal.
 
@@ -4003,7 +3978,7 @@ def reconcile_agents(
 
 
 # ---------------------------------------------------------------------------
-# G2 Task 2.1 — send verb (async, durable-first)
+# G2 Task 2.1 — send command (async, durable-first)
 # ---------------------------------------------------------------------------
 
 #: Body size cap enforced before any envelope write (AC3-EDGE).
@@ -4148,7 +4123,7 @@ _SWITCHBOARD_FIRST_HOP_READ_TIMEOUT = _SWITCHBOARD_READ_TIMEOUT
 # the connect fast and demote, rather than burn the 3s default before the
 # existing MCP/socket path runs.
 _SWITCHBOARD_CONNECT_TIMEOUT = 1.0
-# A pre-identity daemon rejects this verb before it can act on the message body.
+# A pre-identity daemon rejects this command before it can act on the message body.
 _SWITCHBOARD_RPC_METHOD = "agent.switchboard_v2"
 
 
@@ -4484,14 +4459,13 @@ def _a2a_first_use_gate(
     keep_on = answer in ("", "y", "yes")
 
     try:
-        from fno.config.writer import set_config_value
+        from fno.rust_binary import resolve_front_binary
 
-        set_config_value(
-            "config.agents.a2a.auto",
-            "true" if keep_on else "false",
-            scope="global",
-            lock_timeout=config_lock_timeout_seconds,
-        )
+        argv = ["config", "set", "config.agents.a2a.auto", "true" if keep_on else "false"]
+        # The budget bounds the lock wait only; the run bound covers startup.
+        env = {**os.environ, "FNO_CONFIG_LOCK_TIMEOUT": str(config_lock_timeout_seconds)}
+        subprocess.run([str(resolve_front_binary() or "fno"), *argv], check=True,
+                       capture_output=True, env=env, timeout=config_lock_timeout_seconds + 30)
     except Exception as exc:
         sys.stderr.write(
             f"\nfno-agents a2a: could not persist confirmation ({exc}); "
@@ -4604,7 +4578,7 @@ def _switchboard_exchange(
     return True
 
 
-# Subprocess budget for the mail-inject verb. It polls the recipient transcript
+# Subprocess budget for the mail-inject command. It polls the recipient transcript
 # for ~10s (40 * 250ms) before reporting not-confirmed; give it headroom.
 _MAIL_INJECT_TIMEOUT_S = 60.0
 
@@ -4664,12 +4638,6 @@ _CODEX_QUEUED_MARKERS = ("queued",)
 # settle+read rounds a paste that has not fully rendered gets.
 _CODEX_POST_SUBMIT_RESENDS = 2
 _CODEX_ABSORB_POLLS = 12
-_CODEX_ACTIVE_REVIEW_MARKERS = (
-    "review in progress",
-    "reviewing",
-    "review mode",
-    "analyzing diff",
-)
 
 
 def _pane_recipient_handle(entry: "AgentEntry") -> Optional[str]:
@@ -4696,26 +4664,17 @@ def _mux_pane_send(
     raw: bool = False,
     gate: Optional[bool] = None,
     failure_out: Optional[list[str]] = None,
-    review: bool = False,
-    review_invocation_id: Optional[str] = None,
-    origin: Optional[str] = None,
-    self_send: bool = False,
     source_label: Optional[str] = None,
 ) -> bool | str:
     """Live-inject to a mux-hosted agent via ``fno mux pane send``.
 
     ``guarded`` rides the server-side turn-taken interlock (no fno caller opts
-    in; the rerun verb uses the verb directly). ``guarded=False`` holds the
+    in; the rerun command uses the command directly). ``guarded=False`` holds the
     best-effort writer claim across the text-then-CR burst; a failed send
     fails closed -> durable. ``confirm`` polls the recipient's own transcript
     for the injected content (claude only: other harnesses have no
     ~/.claude/projects transcript) and reports False on any miss, never a
-    pass on an unreadable transcript. ``review`` classifies a submitted
-    review-request frame: a codex composer showing ``tab to queue message``
-    plus the payload gets one Tab and must then show a queued marker beside
-    the same payload; an active-review marker returns ``started``; markers
-    count only within a few lines of the echoed payload, and an unmatched or
-    unreadable frame returns ``unconfirmed``. ``raw`` opts out of the
+    pass on an unreadable transcript. ``raw`` opts out of the
     enveloped gate for genuine keystrokes; already-wrapped mail passes the
     wrap through untouched. Narrative and node history: docs/backlog-usage
     and the PR bodies that introduced each flag.
@@ -4823,7 +4782,7 @@ def _mux_pane_send(
             return False
 
     # Audit floor: the row this pane write leaves is written by the
-    # Rust verb itself (`fno mux pane send`), one layer below, so it covers a
+    # Rust command itself (`fno mux pane send`), one layer below, so it covers a
     # direct caller too. This lane only DECLARES its provenance (--source) so
     # the floor's row joins the bus record; it must not write a second row of
     # its own, or every pane dispatch reads as two.
@@ -4832,22 +4791,17 @@ def _mux_pane_send(
     pane = str(pane_id)
 
     def _run(args: list[str], stdin_text: Optional[str] = None):
-        """Run one ``fno mux pane`` verb; return its CompletedProcess, or None
+        """Run one ``fno mux pane`` command; return its CompletedProcess, or None
         on spawn failure. A non-zero code's stderr detail is surfaced, never
         swallowed. The process (not a bare code) is the return so the claim
         gate can read the refusal reason without a second wrapper."""
         try:
-            run_env = None
-            if review_invocation_id:
-                run_env = os.environ.copy()
-                run_env["FNO_REVIEW_INVOCATION_ID"] = review_invocation_id
             proc = subprocess.run(
                 [fno_bin, "mux", "pane", *args, "--server", str(session)],
                 input=stdin_text,
                 capture_output=True,
                 text=True,
                 timeout=_MAIL_INJECT_TIMEOUT_S,
-                env=run_env,
             )
         except subprocess.TimeoutExpired as exc:
             print(f"fno mux pane {args[0]} failed: {exc}", file=sys.stderr)
@@ -4944,9 +4898,6 @@ def _mux_pane_send(
         )
         if expected_fno_id:
             send_args.extend(["--fno-id", str(expected_fno_id)])
-        if self_send:
-            # The own-send hold gate passed; the pane's DND refusal stands down.
-            send_args.append("--hold-pass")
         if source_label:
             # The floor's audit row joins this dispatch to its bus record by
             # the mail id; declared, never sniffed from the wrapped body.
@@ -5015,7 +4966,7 @@ def _mux_pane_send(
         return proc.stdout or ""
 
     def _send_pane_key(key: str):
-        """One raw control key at the pane; the caller classifies the verb's
+        """One raw control key at the pane; the caller classifies the command's
         process. A control key is a byte, never a message: always --raw."""
         return _run(
             [
@@ -5062,39 +5013,6 @@ def _mux_pane_send(
             if any(sig in other for other in near):
                 return True
         return False
-
-    def _review_outcome() -> str:
-        if (getattr(entry, "harness", "") or "") != "codex":
-            return "started"
-        # Same settle the Tab gets: classifying before the TUI absorbed the
-        # submit CR reads a pre-submit composer and fires a stray Tab at a
-        # pane whose review already started.
-        time.sleep(enter_delay_s)
-        screen = _read_screen()
-        if screen is None or not _contains_payload(screen):
-            return "unconfirmed"
-        if _marker_near_payload(screen, _CODEX_QUEUE_MARKER):
-            tab = _send_pane_key("\t")
-            if tab is None or tab == _MUX_SEND_UNKNOWN or tab.returncode != 0:
-                return "unconfirmed"
-            # Same settle the CR gets: reading before the TUI absorbed the Tab
-            # classifies a successfully queued request as unconfirmed.
-            time.sleep(enter_delay_s)
-            queued_screen = _read_screen()
-            if queued_screen is None:
-                return "unconfirmed"
-            if _contains_payload(queued_screen) and any(
-                _marker_near_payload(queued_screen, marker)
-                for marker in _CODEX_QUEUED_MARKERS
-            ):
-                return "queued"
-            return "unconfirmed"
-        if any(
-            _marker_near_payload(screen, marker)
-            for marker in _CODEX_ACTIVE_REVIEW_MARKERS
-        ):
-            return "started"
-        return "unconfirmed"
 
     def _codex_post_submit_outcome() -> bool | str:
         # Composer read-back after the submit key: the CR fires after one
@@ -5143,10 +5061,7 @@ def _mux_pane_send(
         sent = _paste_then_submit()
         if not sent:
             _record_failure(last_attempt_phase)
-        outcome: bool | str = sent
-        if sent and review and (getattr(entry, "harness", "") or "") == "codex":
-            outcome = _review_outcome()
-        return outcome
+        return sent
 
     if not _verify_pane_occupant():
         return False
@@ -5215,7 +5130,7 @@ def _mux_pane_send(
             )
             return False
     try:
-        if confirm and not raw and not review:
+        if confirm and not raw:
             # Rust typed lane when a binary resolves; without one the Python
             # lane below carries the same confirm contract.
             from fno import rust_binary as _rb
@@ -5226,10 +5141,8 @@ def _mux_pane_send(
                     _record_failure("pane-lane-not-confirmed")
                 return sent
         sent = _paste_then_submit()
-        outcome = sent
-        if sent and review and (getattr(entry, "harness", "") or "") == "codex":
-            outcome = _review_outcome()
-        elif sent and not review and (getattr(entry, "harness", "") or "") == "codex":
+        outcome: bool | str = sent
+        if sent and (getattr(entry, "harness", "") or "") == "codex":
             # No transcript to confirm against, so the composer is the confirm.
             outcome = _codex_post_submit_outcome()
         elif sent and confirm:
@@ -5242,7 +5155,7 @@ def _mux_pane_send(
             sent = confirm_transcript is not None and confirm_baseline is not None and (
                 _mux_content_confirm(confirm_transcript, marker, confirm_baseline)
             )
-            outcome = "started" if review and sent else sent
+            outcome = sent
             if not sent:
                 _record_failure("unconfirmed")
         elif not sent:
@@ -5254,7 +5167,7 @@ def _mux_pane_send(
 
 
 def mail_inject_probe(recipient: str) -> tuple[bool, str]:
-    """Ask the ``fno-agents mail-inject --probe`` verb whether an injection path to
+    """Ask the ``fno-agents mail-inject --probe`` command whether an injection path to
     ``recipient`` EXISTS, without injecting anything.
 
     Returns ``(injectable, reason)``. The probe resolves through the same
@@ -5301,19 +5214,18 @@ def _mux_recipient_transcript(entry: "AgentEntry") -> Optional[Path]:
     """Locate the mux recipient's OWN claude transcript by session uuid, the
     confirm target for :func:`_mux_pane_send`'s ``confirm`` mode (node).
 
-    Reuses the resolver `fno.doctor._find_transcript_for` already used for the
-    self-diagnostic surface rather than writing a second transcript-by-uuid
-    walk (the Rust control.sock lane's own mirror is `find_transcript` in
-    `crates/fno-agents/src/claude_drive.rs`). None when the entry carries no
-    resolvable full session uuid, or no matching transcript file exists --
-    both fail the confirm closed, never open.
+    Reads through :func:`fno.rust_binary.find_transcript`, the native doctor
+    op door (`fno doctor --find-transcript`), the same resolver the Rust
+    control.sock lane mirrors as `find_transcript` in claude_drive.rs. None
+    when the entry carries no resolvable full session uuid, or no matching
+    transcript file exists -- both fail the confirm closed, never open.
     """
-    from fno.doctor import _find_transcript_for
+    from fno.rust_binary import find_transcript
 
     session_id = entry.harness_session_id or entry.session_id
     if not session_id:
         return None
-    return _find_transcript_for(session_id)
+    return find_transcript(session_id)
 
 
 def _mux_content_confirm(
@@ -5444,17 +5356,17 @@ def _mail_inject_keeper(
     reason_out: Optional[list] = None,
 ) -> bool:
     """Inject ``text`` into a keeper-hosted lane-B thread via the
-    ``fno-agents mail-inject --harness <hosted>`` verb.
+    ``fno-agents mail-inject --harness <hosted>`` command.
 
     ``harness`` is the hosted harness from the recipient's row. It names the
     lane (the Rust side routes a keeper-lane harness to the keeper socket and
-    refuses every other name) and the settle-delay table row: the verb
+    refuses every other name) and the settle-delay table row: the command
     defaults ``--enter-delay-ms`` from that row itself, so this side passes no
-    delay and the one fact stays single-sourced. The verb resolves the
+    delay and the one fact stays single-sourced. The command resolves the
     recipient's registry row, pastes the envelope as one keeper ``Input``
     frame plus the wire-level CR, and confirms by content in the hosted
     harness's own transcript store. Returns True only on that confirmed
-    landing; any miss returns False with the verb's reason token in
+    landing; any miss returns False with the command's reason token in
     ``reason_out`` so the durable demotion names why.
 
     Unlike ``_mail_inject_claude`` there is no claude fallback for an unknown
@@ -5493,11 +5405,11 @@ def _mail_inject_claude(
     self_send: bool = False,
 ) -> bool:
     """Inject ``text`` into a live claude session over the daemon
-    ``control.sock`` via the ``fno-agents mail-inject`` verb. Returns True
-    only when the verb confirms the turn landed in the recipient transcript;
+    ``control.sock`` via the ``fno-agents mail-inject`` command. Returns True
+    only when the command confirms the turn landed in the recipient transcript;
     any miss (binary absent, recipient not on the roster, not confirmed
     within the poll budget) returns False so the caller writes the durable
-    fallback. ``reason_out``, when a non-empty list, receives the verb's own
+    fallback. ``reason_out``, when a non-empty list, receives the command's own
     reason token as a side-channel rather than a second return value, so the
     many callers and test mocks that read this as a plain bool are
     unaffected. ``sender`` is the invoking session's mail handle for the
@@ -5595,7 +5507,7 @@ def _roster_entry_for_session(session_uuid: str) -> Optional["AgentEntry"]:
 
 
 def _respawn_claude_session(short_id: str) -> int:
-    """Shell the public ``claude respawn <shortid>`` verb - the identity-
+    """Shell the public ``claude respawn <shortid>`` command - the identity-
     PRESERVING revival (same uuid, one roster row). A bare ``--bg --resume``
     without a target id mints a fresh one: the fork rung's job, not this
     one's. Returns the honest exit code; claude absent or timeout is non-zero.
@@ -5992,7 +5904,7 @@ def _mail_inject_codex(
     origin: Optional[str] = None,
 ) -> bool:
     """Inject ``text`` into a live codex session over the app-server daemon socket
-    via the ``fno-agents mail-inject --harness codex`` verb (US8, node).
+    via the ``fno-agents mail-inject --harness codex`` command (US8, node).
 
     ``reason_out``, when a non-empty list, receives the live lane's
     cause on a miss -- the same side-channel contract as
@@ -6153,7 +6065,7 @@ def _deliver_live(
     transport below carries the same wrapped turn, ``agy`` mux entries included.
 
     For claude peers the ``control.sock`` inject via the ``fno-agents
-    mail-inject`` verb (G1) is the live primitive (the switchboard / MCP fast
+    mail-inject`` command (G1) is the live primitive (the switchboard / MCP fast
     lanes still apply first for stream-json / MCP-routed peers); for
     codex/gemini peers the daemon ``agent.deliver`` RPC carries the envelope,
     and its failure demotes to durable with a stderr notice.
@@ -6265,11 +6177,11 @@ def _deliver_live(
 
     # Keeper-hosted lane-B thread: the row has neither a pane above
     # nor a lane-A socket below - its keeper unix socket IS the live
-    # transport. The same mail-inject verb drives it with --harness naming the
+    # transport. The same mail-inject command drives it with --harness naming the
     # hosted harness (which owns the settle delay and the confirm store); the
-    # verb resolves the row by harness session id, pastes the envelope as one
+    # command resolves the row by harness session id, pastes the envelope as one
     # Input frame plus the wire-level CR, and confirms by content in the
-    # hosted harness's transcript store. Any miss demotes with the verb's own
+    # hosted harness's transcript store. Any miss demotes with the command's own
     # reason token (no-keeper-listener / not-confirmed / not-injectable), so
     # the durable receipt names the cause instead of a bare live-miss.
     from fno.agents.harness_map import thread_lane_or_none
@@ -6361,7 +6273,7 @@ def _deliver_live(
         return True
 
     # Live inject over control.sock: the SOLE claude live lane since the
-    # PTY worker.sock and MCP-channel lanes retired. The mail-inject verb
+    # PTY worker.sock and MCP-channel lanes retired. The mail-inject command
     # resolves the handle via ClaudeRoster (uuid or 8-hex short id) and
     # confirms transcript growth before reporting delivered; mcp_channel_id
     # (minted 1:1 from short_id) stays the fallback for a cleared short_id.
@@ -6678,6 +6590,7 @@ def dispatch_send(
         name=name, message=message, from_name=from_name, name_is_address=True
     )
 
+    from fno import paths
     from fno.time_budget import validate_timeout_budget
 
     validate_timeout_budget(
@@ -6966,14 +6879,10 @@ def dispatch_send(
                 family1_attemptable = family1_live or family1_state == "unknown" or (
                     existing.harness == "claude" and not existing.mux)
 
-                # W3 write-ahead: a recipient we will not attempt live is asleep,
-                # so it cannot drain during a live window, and there is no live
-                # window to crash in. Write its durable placeholder BEFORE
-                # anything else so a sender crash before the recipient wakes does
-                # not lose the message. A recipient we WILL attempt live gets its
-                # body row staged just before the inject (stage_before_live
-                # below): the bus row is the body's only home. A drain firing
-                # mid-inject can print a duplicate; a duplicate beats a drop.
+                # W3 write-ahead: a recipient we will not attempt live is asleep, so a
+                # sender crash before it wakes must not lose the message; its durable
+                # placeholder writes first. The live lane stages its row before the inject
+                # (the bus row is the body's only home): a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -6988,7 +6897,6 @@ def dispatch_send(
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
                     from fno import rust_binary
-                    from fno.bus.log import record_hosted_delivery, stage_before_live
                     from fno.mail.envelope import wrap_fno_mail
 
                     record: dict[str, Any] = dict(
@@ -7007,11 +6915,12 @@ def dispatch_send(
                         word_count=rust_binary.style_word_count(message),
                         subject=mail_ctx.subject,
                     )
-                    # Stage before the inject; a staging failure demotes to the
-                    # durable floor. An empty recipient (mcp-only row) stages nothing.
+                    bus_live = str(paths.bus_dir() / "messages.jsonl")
+                    staged_fields = {k: v for k, v in record.items() if v is not None}
+                    # Stage before the inject: a staging failure demotes to the durable floor; an mcp-only row stages nothing.
                     try:
                         if record["recipient"]:
-                            stage_before_live(**record)
+                            rust_binary.chats_command(["stage", bus_live], staged_fields)
                     except Exception as exc:  # noqa: BLE001 - demote to durable
                         print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
                         live_miss_reason = "stage-failed"
@@ -7029,7 +6938,9 @@ def dispatch_send(
                         if _live_delivered:
                             delivery = "hosted"
                             try:
-                                record_hosted_delivery(**record)
+                                rust_binary.chats_command(
+                                    ["stage", bus_live, "--delivery", "hosted"], staged_fields,
+                                )
                             except Exception as exc:  # noqa: BLE001 - delivery already succeeded
                                 print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
                         else:
@@ -7422,14 +7333,13 @@ def resolve_to_project(
     on a missing/malformed config, so resolution always works off the registry
     alone (AC6-FR).
     """
+    # A malformed block reads as {} natively; this guard catches a failed run.
     try:
-        from fno.inbox.settings import read_peer_projects
-
-        # read_peer_projects already degrades to {} on a malformed config shape
-        # (with its own stderr warning), so this outer guard only catches an
-        # UNEXPECTED error in the hint path - log it rather than silently
-        # masking a real bug as "no hints".
-        peer_projects = read_peer_projects()
+        from fno.rust_binary import resolve_binary
+        argv = [str(resolve_binary()), "compaction", "inbox-peers", "--json"]
+        proc = subprocess.run(argv, capture_output=True, text=True, check=True)
+        sys.stderr.write(proc.stderr)
+        peer_projects = json.loads(proc.stdout)["projects"]
     except Exception as exc:  # noqa: BLE001 - the hint is best-effort; never fatal
         print(
             f"warning: --to-project peer hint unavailable ({type(exc).__name__}: "
@@ -7573,7 +7483,7 @@ def dispatch_send_to_project(
     )
 
     try:
-        handle = write_new_thread(
+        sent_id = write_new_thread(
             recipient=project,
             sender=from_name,
             kind="send",
@@ -7601,11 +7511,11 @@ def dispatch_send_to_project(
         "agent_send_done",
         name=project,
         provider=provider or "",
-        msg_id=handle.thread_id,
+        msg_id=sent_id,
         delivery="durable",
     )
     return DispatchSendResult(
-        msg_id=handle.thread_id,
+        msg_id=sent_id,
         delivery="durable",
         recipient=None,
         to_project=project,

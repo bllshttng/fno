@@ -42,7 +42,7 @@ use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
 const USAGE: &str = "usage: fno-agents backlog reconcile [--dry-run|-N] [--node ID] [--json|-J] [--pr-number N] [--repo owner/repo]";
 
 /// The door owns the help now: the Python parser that rendered the option
-/// surface is deleted with its verb. The epilog's reopen pointer survives
+/// surface is deleted with its command. The epilog's reopen pointer survives
 /// verbatim.
 const HELP: &str = "\
 fno-agents backlog reconcile
@@ -51,11 +51,14 @@ Close open backlog nodes whose PR has merged outside the ship gate.
 The completion ritual (stamp plan -> mark node done -> capture follow-ups)
 runs automatically only through /target's ship gate or
 scripts/lib/pr-merge.sh. A PR merged any other way (manual GitHub merge,
-bare gh pr merge) leaves the node open. This verb detects that drift and
+bare gh pr merge) leaves the node open. This command detects that drift and
 closes it mechanically: mark done, best-effort stamp the plan, and drop a
 retro sentinel so a later session captures follow-ups. It never
 auto-creates inbox lines or backlog nodes, never auto-resumes work, and
 never clobbers a node that is already done.
+
+A merged PR closes only the nodes its Fixes line names. An earlier wave of
+a multi-wave node merges with no such line, so the node stays open.
 
 Side effect: also runs claim GC, retiring dead claims from graph.db
 into claim_history for at most 20s. Claims it did not reach are
@@ -72,10 +75,10 @@ Options:
   --repo OWNER/REPO  owner/repo scoping --pr-number's gh query and cross-repo claim check. Resolved from the checkout's origin remote when omitted.
   -h, --help       Show this message and exit.
 
-Paired verb: `fno backlog reopen <id> --reason ...` reverses a close this
+Paired command: `fno backlog reopen <id> --reason ...` reverses a close this
 made. It refuses on a merged PR, which is what closed the node here, so an
 intentional correction of an auto-close needs --force. Correction is
-reopen, a verb the native binary serves after the python leg retired.
+reopen, a command the native binary serves after the python leg retired.
 ";
 
 struct Args {
@@ -363,6 +366,56 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         promise_gate_leg(&sweep.closeable, &entries, args.json_out, &mut stderr_log);
     sweep.closeable = gated;
 
+    // The rollup close paths (epic self-heal + parent cascade) hold on the
+    // same plan promise, judged pre-lock (gh I/O stays outside the store
+    // mutation): a parent whose plan promises more than has merged never
+    // closes on its children's closes. The verdicts ride the
+    // promise_held roll so the report names them. Absent = held, so the
+    // warm covers every plan-having rollup candidate this pass can close:
+    // strandable epics, plus the direct parent of each closeable trigger.
+    // A grandparent closing in the same pass holds (fail closed) and closes
+    // gated on the next pass, when it is the direct parent.
+    let warm_candidates: Vec<Value> = sweep
+        .strandable_epics
+        .iter()
+        .filter_map(|pid| {
+            entries
+                .iter()
+                .find(|e| e.get("id").and_then(Value::as_str) == Some(pid.as_str()))
+        })
+        .chain(sweep.closeable.iter().filter_map(|r| {
+            entries
+                .iter()
+                .find(|e| e.get("id").and_then(Value::as_str) == Some(r.node_id.as_str()))
+                .and_then(|trigger| {
+                    trigger
+                        .get("parent")
+                        .and_then(Value::as_str)
+                        .and_then(|pid| {
+                            entries
+                                .iter()
+                                .find(|e| e.get("id").and_then(Value::as_str) == Some(pid))
+                        })
+                })
+        }))
+        .filter(|e| super::promise::rollup_holds_plan(e))
+        .cloned()
+        .collect();
+    let rollup_verdicts = super::promise::rollup_hold_set(&warm_candidates, &mut |node| {
+        resolve_promise_evidence(node, super::promise::gate_cwd_for(node).as_deref(), &[])
+    });
+    for (pid, verdict) in rollup_verdicts.iter().filter(|(_, v)| !v.satisfied()) {
+        let outcome = match verdict.outcome {
+            PromiseOutcome::Unmet => "promise_unmet",
+            _ => "promise_unknown",
+        };
+        promise_held.push((
+            pid.clone(),
+            verdict.reason.clone().unwrap_or_default(),
+            outcome.into(),
+        ));
+    }
+
     // The close: ONE locked mutation, then the post-lock legs.
     let close = if args.dry_run {
         None
@@ -375,6 +428,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
             &sweep,
             &reopen_expired,
             full_sweep,
+            &rollup_verdicts,
             &mut stderr_log,
         )
     };
@@ -396,7 +450,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
     // The dry-run preview simulates the exact close on a throwaway copy.
     let preview = args
         .dry_run
-        .then(|| preview_leg(&entries, &sweep, &supersession_files));
+        .then(|| preview_leg(&entries, &sweep, &supersession_files, &rollup_verdicts));
 
     // Full sweep only: stamp `reverted` on nodes a merged revert PR names.
     let reverted = revert_leg(
@@ -1102,15 +1156,7 @@ fn promise_gate_leg(
                     "pr_url": record.pr_url,
                 })
             });
-        let resolved = effective_reconcile_cwd(
-            node.get("cwd").and_then(Value::as_str).unwrap_or(""),
-            node.get("project").and_then(Value::as_str),
-        );
-        let gate_cwd = if Path::new(&resolved).is_dir() {
-            Some(resolved)
-        } else {
-            None
-        };
+        let gate_cwd = super::promise::gate_cwd_for(&node);
         // Reopen guard BEFORE the promise gate: a deliberate reopen
         // postdating the merge holds, unless a later ref merged after it.
         if reopen_outranks_merge(&node, record.merged_at.as_deref().unwrap_or("")) {
@@ -1136,8 +1182,8 @@ fn promise_gate_leg(
             gated.push(record.clone());
         } else {
             // The FULL refusal rides the row: the notice router puts the
-            // reason and the remedy verb in the question body, so a lead
-            // reads why the node held without re-running the verb.
+            // reason and the remedy command in the question body, so a lead
+            // reads why the node held without re-running the command.
             let reason = verdict.reason.unwrap_or_default();
             let outcome = match verdict.outcome {
                 PromiseOutcome::Unmet => "promise_unmet",
@@ -1151,7 +1197,7 @@ fn promise_gate_leg(
 
 /// The held-open roll, split by WHY the node stayed open.
 fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
-    let verb = if dry_run { "Holding" } else { "Held" };
+    let command = if dry_run { "Holding" } else { "Held" };
     let headlines = [
         ("promise_unmet", "merged PR, unmet plan promise"),
         (
@@ -1177,7 +1223,10 @@ fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
             .find(|(k, _)| k == outcome)
             .map(|(_, v)| *v)
             .unwrap_or(outcome);
-        lines.push(format!("{verb} {} node(s) open ({headline}):", rows.len()));
+        lines.push(format!(
+            "{command} {} node(s) open ({headline}):",
+            rows.len()
+        ));
         for (nid, reason, _) in rows {
             // The roll stays a summary: the first line of the refusal.
             // The full text rides the --json rows for the notice router.
@@ -1218,6 +1267,7 @@ fn close_leg(
     sweep: &Sweep,
     reopen_expired: &[String],
     full_sweep: bool,
+    rollup_held: &super::promise::RollupVerdicts,
     stderr_log: &mut Vec<String>,
 ) -> Option<CloseResult> {
     let settlement_pending = sweep.settlement["receipts"]
@@ -1285,6 +1335,7 @@ fn close_leg(
                 sweep,
                 reopen_expired,
                 full_sweep,
+                rollup_held,
                 &rollups,
                 &result,
                 stderr_log,
@@ -1316,7 +1367,7 @@ fn close_provenance(entry: &mut Value, _record: &MergeDriftRecord) {
 }
 
 /// A merge the journal never saw is labelled `merged_outside_fno` so a
-/// later reader can tell an fno-verb merge from a github.com or
+/// later reader can tell an fno-command merge from a github.com or
 /// foreign-machine one. Called after the graph close published, so a
 /// retried publish finds its own earlier row through `has_record`.
 fn emit_outside_merge_label(record: &MergeDriftRecord) {
@@ -1359,6 +1410,7 @@ fn close_mutator(
     sweep: &Sweep,
     reopen_expired: &[String],
     full_sweep: bool,
+    rollup_held: &super::promise::RollupVerdicts,
     rollups: &HashMap<String, crate::backlog::workflows::Rollup>,
     result: &std::cell::RefCell<CloseResult>,
     stderr_log: &mut Vec<String>,
@@ -1452,7 +1504,7 @@ fn close_mutator(
             .borrow_mut()
             .contained_released
             .append(&mut contained.released);
-        let mut cascaded = cascade_close_parents(entries, &record.node_id);
+        let mut cascaded = cascade_close_parents(entries, &record.node_id, rollup_held);
         result.borrow_mut().cascade_closed.append(&mut cascaded);
         result.borrow_mut().actually_closed.push(record.clone());
     }
@@ -1468,7 +1520,7 @@ fn close_mutator(
         .borrow_mut()
         .contained_released
         .append(&mut contained.released);
-    let mut epics = sweep_close_done_epics(entries);
+    let mut epics = sweep_close_done_epics(entries, rollup_held);
     result.borrow_mut().cascade_closed.append(&mut epics);
     let mut reparented = sweep_reparent_stranded_orphans(entries);
     result.borrow_mut().reparented.append(&mut reparented);
@@ -1551,33 +1603,27 @@ fn apply_ledger_rollup(node: &mut Value, rollup: Option<&crate::backlog::workflo
     }
 }
 
-/// The configured required review bots (config.review.github_apps), for
-/// the dead-bot escape. Unresolvable config reads empty: fail open, no
-/// emit.
+/// The configured required review bots (config.review.github_apps, or its
+/// legacy required_bots alias), for the dead-bot escape. Unresolvable config
+/// reads empty: fail open, no emit.
 fn required_bots_for(cwd: Option<&str>) -> Vec<String> {
-    let anchor = Path::new(cwd.unwrap_or("."));
-    let Some(value) = crate::agents_config::config_value_deep(anchor, &["review", "github_apps"])
-    else {
-        return Vec::new();
-    };
-    value
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|v| v.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    let (bots, _) = crate::accounts::required_bot::review_bots(Path::new(cwd.unwrap_or(".")));
+    bots.into_iter().filter(|s| !s.trim().is_empty()).collect()
 }
 
-/// The retro-pending sentinel dir: the configured override, else the state
-/// root's `retro-pending`.
-fn retro_pending_dir() -> Option<PathBuf> {
+/// The state root the retro sentinel resolves against: the configured
+/// override and FNO_STATE_DIR both answer through `agents_config`, and the
+/// folder itself resolves per write through the layout table's `place`
+/// ladder, so a fold retargets the writer with its readers.
+fn retro_pending_root() -> Option<PathBuf> {
     let anchor = std::env::current_dir().ok()?;
-    let state = crate::agents_config::state_dir(&anchor)?;
-    Some(state.join("retro-pending"))
+    crate::agents_config::state_dir(&anchor)
+}
+
+/// The sentinel folder as readers see it: the `place` ladder's one answer.
+/// The writer re-resolves per write (drift_emit.rs); this is for display.
+fn retro_pending_dir() -> Option<PathBuf> {
+    retro_pending_root().map(|root| crate::state_layout::place(&root, "retro-pending"))
 }
 
 /// The post-lock leg per actually-closed record: plan stamp, retro
@@ -1591,7 +1637,7 @@ fn post_close_leg(
     stderr_log: &mut Vec<String>,
 ) -> Vec<Value> {
     let mut closed_rows: Vec<Value> = Vec::new();
-    let sentinel_dir = retro_pending_dir();
+    let sentinel_root = retro_pending_root();
     let ledger = ledger_path_for_leg();
     for record in &close.actually_closed {
         // The stamp twin is fire-and-forget (best-effort inside), so the
@@ -1609,8 +1655,8 @@ fn post_close_leg(
                 record.pr_url.is_some()
             })
             .unwrap_or(false);
-        let sentinel: Option<String> = match sentinel_dir.as_deref() {
-            Some(dir) => match write_retro_sentinel(record, dir) {
+        let sentinel: Option<String> = match sentinel_root.as_deref() {
+            Some(root) => match write_retro_sentinel(record, root) {
                 Ok(path) => Some(path.to_string_lossy().into_owned()),
                 Err(e) => {
                     stderr_log.push(format!(
@@ -1849,7 +1895,7 @@ fn revert_leg(
 /// Canonical-sync catch-up: reconcile auto-fires on SessionStart, so when
 /// the pr-watch daemon is dead the next interactive session catches the
 /// canonical up instead of the outage waiting for a human. Native: the
-/// Python shim was one verb_call over this same crate's catchup sweep.
+/// Python shim was one command_call over this same crate's catchup sweep.
 /// --dry-run skips (a preview mutates nothing); a failure never fails the
 /// sweep.
 fn sync_catchup_leg(dry_run: bool, json_out: bool) -> Value {
@@ -1886,14 +1932,14 @@ fn sync_catchup_leg(dry_run: bool, json_out: bool) -> Value {
 /// and printed nothing, so no dead claim was ever archived. Best-effort like
 /// sync_catchup: a reap error never fails the sweep.
 fn claim_reap_leg(dry_run: bool, json_out: bool) -> Value {
-    let summary = crate::claim_verbs::reap_roots(Vec::new(), !dry_run, None, CLAIM_REAP_BUDGET);
+    let summary = crate::claim_commands::reap_roots(Vec::new(), !dry_run, None, CLAIM_REAP_BUDGET);
     if !json_out {
         let count = summary[if dry_run { "would_reap" } else { "reaped" }]
             .as_u64()
             .unwrap_or(0);
         if count > 0 {
-            let verb = if dry_run { "would archive" } else { "archived" };
-            eprintln!("claim reap: {verb} {count} dead claim(s)");
+            let command = if dry_run { "would archive" } else { "archived" };
+            eprintln!("claim reap: {command} {count} dead claim(s)");
         }
         let deferred = summary["deferred"].as_u64().unwrap_or(0);
         if deferred > 0 {
@@ -2041,6 +2087,7 @@ fn preview_leg(
     entries: &[Value],
     sweep: &Sweep,
     supersession_files: &HashMap<i64, Vec<String>>,
+    rollup_held: &super::promise::RollupVerdicts,
 ) -> Preview {
     let nothing_pending = sweep.closeable.is_empty()
         && sweep.strandable_epics.is_empty()
@@ -2094,7 +2141,11 @@ fn preview_leg(
         );
         contained.extend(contained_pass.closed);
         released_preview.extend(contained_pass.released);
-        acc.extend(cascade_close_parents(&mut sim, &record.node_id));
+        acc.extend(cascade_close_parents(
+            &mut sim,
+            &record.node_id,
+            rollup_held,
+        ));
     }
     if sweep.strandable_epics.is_empty()
         && sweep.strandable_contained.is_empty()
@@ -2110,7 +2161,7 @@ fn preview_leg(
     let stranded = sweep_close_stranded_contained(&mut sim);
     contained.extend(stranded.closed);
     released_preview.extend(stranded.released);
-    acc.extend(sweep_close_done_epics(&mut sim));
+    acc.extend(sweep_close_done_epics(&mut sim, rollup_held));
     reparented.extend(sweep_reparent_stranded_orphans(&mut sim));
     let carried = sweep_stamp_carried_sessions(&mut sim);
     Preview {
@@ -2585,13 +2636,13 @@ fn human_lines(
         }
     }
     if !outcomes.reverted.is_empty() {
-        let verb = if args.dry_run {
+        let command = if args.dry_run {
             "Would stamp"
         } else {
             "Stamped"
         };
         out.push(format!(
-            "{verb} {} node(s) reverted:",
+            "{command} {} node(s) reverted:",
             outcomes.reverted.len()
         ));
         for rev in &outcomes.reverted {
@@ -2625,7 +2676,7 @@ fn human_lines(
 /// One line per batch. Bare lead is the past tense whose line start groom
 /// parses (`^re-parented N stranded child`); "Would " previews instead.
 fn reparent_receipt_line(pairs: &[(String, Option<String>)], lead: &str) -> String {
-    let verb = if lead.is_empty() {
+    let command = if lead.is_empty() {
         "re-parented"
     } else {
         "re-parent"
@@ -2635,7 +2686,7 @@ fn reparent_receipt_line(pairs: &[(String, Option<String>)], lead: &str) -> Stri
         .map(|(cid, p)| format!("{cid} -> {}", p.clone().unwrap_or_else(|| "(none)".into())))
         .collect();
     format!(
-        "{lead}{verb} {} stranded child(ren) under terminal parents: {}",
+        "{lead}{command} {} stranded child(ren) under terminal parents: {}",
         pairs.len(),
         listed.join(", ")
     )
@@ -2891,6 +2942,7 @@ mod tests {
             &sweep,
             &[],
             false,
+            &Default::default(),
             &HashMap::new(),
             &result,
             &mut stderr_log,

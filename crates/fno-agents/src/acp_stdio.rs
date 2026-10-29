@@ -541,16 +541,8 @@ impl AcpSession {
         Ok(id)
     }
 
-    pub fn session_load(&self, session_id: &str) -> Result<Value, AcpError> {
-        let result = self.session_verb("session/load", json!({"sessionId":session_id}))?;
-        if let Ok(mut slot) = self.session_id.lock() {
-            *slot = Some(session_id.to_string());
-        }
-        Ok(result)
-    }
-
     pub fn session_resume(&self, session_id: &str) -> Result<Value, AcpError> {
-        let result = self.session_verb(
+        let result = self.session_command(
             "session/resume",
             json!({"sessionId":session_id, "cwd":self.cwd, "mcpServers":[]}),
         )?;
@@ -561,7 +553,7 @@ impl AcpSession {
     }
 
     pub fn session_close(&self, session_id: &str) -> Result<Value, AcpError> {
-        let result = self.session_verb("session/close", json!({"sessionId":session_id}))?;
+        let result = self.session_command("session/close", json!({"sessionId":session_id}))?;
         if let Ok(mut slot) = self.session_id.lock() {
             if slot.as_deref() == Some(session_id) {
                 *slot = None;
@@ -570,7 +562,7 @@ impl AcpSession {
         Ok(result)
     }
 
-    fn session_verb(&self, method: &str, params: Value) -> Result<Value, AcpError> {
+    fn session_command(&self, method: &str, params: Value) -> Result<Value, AcpError> {
         self.result(self.request(method, params)?, method)
     }
 

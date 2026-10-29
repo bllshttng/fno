@@ -297,10 +297,8 @@ impl Core {
         if seat {
             let idx = seat_portal.expect("seat implies a portal");
             if let Some(portal) = self.portals.get(&idx) {
-                self.notice_all(format!(
-                    "portal {idx} ({}) closed: {reason}",
-                    portal.row_key
-                ));
+                let label = self.portal_channel_label(&portal.row_key);
+                self.notice_all(format!("portal {idx} ({label}) closed: {reason}"));
             }
             self.journal_portal_take(idx, cause.word());
         }
@@ -496,7 +494,7 @@ impl Core {
         // The tab (and possibly its squad) died: every client whose view named
         // it re-anchors in this same mutation, then the push delivers
         // ModeSync -> Layout -> frames in order (AC2-ERR).
-        self.tab_areas.remove(&tid);
+        self.sizing.areas.remove(&tid);
         // Closing the last pane removes the tab too, so it must
         // honor the same de-persist contract as Command::CloseTab: a
         // template tab drops its stored spec or restore resurrects the

@@ -10,7 +10,7 @@
 //! The speed win is in-process reads. One graph read (the store's
 //! `backlog::api::rows`, the same defaulted view the keeper serves) feeds
 //! claimed-node lookups, PR binding, team scope, AND the unplanned
-//! queue's ready selection (the same `backlog_ready::select` the verb
+//! queue's ready selection (the same `backlog_ready::select` the command
 //! serves). The claims merge is a directory scan. `needs` folds in-process
 //! over the same sources `fno
 //! agents needs` reads. Two source reads stay subprocesses: `gh pr list` (a
@@ -39,11 +39,11 @@ mod classify;
 pub mod pr_closure;
 pub mod pr_closure_produce;
 pub(crate) mod prs;
-mod queues;
+pub(crate) mod queues;
 pub(crate) mod scope;
 mod stranded;
 
-pub(crate) use queues::{not_read_status, unreadable_status};
+pub(crate) use queues::{not_read_status, unreadable_status, NODE_ID_BODY};
 
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -385,13 +385,31 @@ pub(crate) fn as_int(v: &Value) -> i64 {
 
 /// The `fno-agents board` entry point: parse flags, print the payload, exit
 /// with the board's own exit_code. Kept beside the parity sets' reach (an
-/// `==` arm in client.rs), so no advertised verb is added.
+/// `==` arm in client.rs), so no advertised command is added.
+///
+/// `--user-command` is `fno inbox board`: with no `--state` the caller's own
+/// role manifest bounds the board, and the payload prints as the text page
+/// (`--max-rows` per queue) or, with `--json`, indented.
 pub fn run_board(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--last-run") {
+        return crate::lead_ops::run_last_run(args);
+    }
     let mut opts = BoardOpts::default();
+    let mut user_command = false;
+    let mut as_json = false;
+    let mut max_rows = crate::lead_reads::DEFAULT_BOARD_ROWS;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--json" | "-J" => {}
+            "--json" | "-J" => as_json = true,
+            "--user-command" => user_command = true,
+            "--max-rows" => match it.next().and_then(|v| v.parse::<usize>().ok()) {
+                Some(v) => max_rows = v,
+                None => {
+                    eprintln!("fno-agents board: --max-rows needs an integer");
+                    return 2;
+                }
+            },
             "--budget-ms" => match it.next().and_then(|v| v.parse::<u64>().ok()) {
                 Some(v) => opts.budget_ms = v,
                 None => {
@@ -419,11 +437,22 @@ pub fn run_board(args: &[String]) -> i32 {
             }
         }
     }
+    if user_command && opts.state_path.is_none() {
+        opts.state_path = crate::lead_reads::board_default_state();
+    }
     let payload = read_board(&opts);
-    println!(
-        "{}",
-        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into())
-    );
+    if !user_command {
+        println!(
+            "{}",
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into())
+        );
+    } else if as_json {
+        println!("{}", crate::backlog::render::py_json_pretty(&payload));
+    } else {
+        let (out, err) = crate::lead_reads::render_board(&payload, max_rows);
+        print!("{out}");
+        eprint!("{err}");
+    }
     payload
         .get("exit_code")
         .and_then(Value::as_i64)
@@ -442,6 +471,11 @@ pub struct BoardOpts {
     /// because the old subprocess board ran with the lead session's cwd and
     /// the calling process's cwd is not guaranteed to be the same directory.
     pub cwd: Option<PathBuf>,
+    /// A registry the caller already loaded this fire (the stop gate's
+    /// session-binding read). The driver feed reuses it instead of paying a
+    /// second store read inside the board's budgeted slice; None reads the
+    /// store as before.
+    pub registry: Option<crate::state::Registry>,
 }
 
 impl Default for BoardOpts {
@@ -451,6 +485,7 @@ impl Default for BoardOpts {
             max_pr_reads: DEFAULT_MAX_PR_READS,
             state_path: None,
             cwd: None,
+            registry: None,
         }
     }
 }
@@ -507,7 +542,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                         .chain([
                             "size",
                             "model",
-                            "dispatch_verb",
+                            "dispatch_command",
                             "dispatch_brief",
                             "mission_id",
                             "mission_wave",
@@ -629,7 +664,8 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     let (drivers, roster_tokens, driver_name_tokens) = match s_drivers {
         None => (budget.spent_read(), Vec::new(), HashMap::new()),
         Some(_) => {
-            let (mut read, name_to_token) = read_driver_rows(entries.as_deref());
+            let (mut read, name_to_token) =
+                read_driver_rows(entries.as_deref(), opts.registry.as_ref());
             let mut tokens: Vec<String> = Vec::new();
             if let Some(rows) = read.payload.as_mut().and_then(Value::as_array_mut) {
                 // PR-bound non-terminal nodes ride first: the cap spends the
@@ -672,7 +708,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     // what actually fixes it rather than reassigning it.
 
     // The reads that can take real wall time run concurrently: gh pr
-    // list, `fno inbox outstanding`, the batched truth
+    // list, the outstanding fold (in-process), the batched truth
     // probe, the ready selection (in-process; its plan-document disk reads
     // still cost the slice), and the needs fold (in-process, but its refused-worker leg batch
     // probes the whole registry and measured ~7s on a busy fleet). Their
@@ -856,13 +892,11 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 if bound.is_zero() {
                     return SourceRead::over_budget(spent_err);
                 }
-                let mut cmd = fno_py_cmd();
-                cmd.extend(
-                    ["inbox", "outstanding", "--json"]
-                        .iter()
-                        .map(|s| s.to_string()),
-                );
-                run_json(cmd, &cwd, bound)
+                match crate::outstanding::read(&cwd, bound.min(crate::outstanding::LIVENESS_BUDGET))
+                {
+                    Ok(o) => SourceRead::ok(o.as_json()),
+                    Err(e) => SourceRead::err(e),
+                }
             })
         });
         // ONE batched truth probe for every holder the lead cares about (the
@@ -1240,7 +1274,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         }),
     );
 
-    // Lane: a file read; there is no verb behind it.
+    // Lane: a file read; there is no command behind it.
     let lane_path = operator_lane_path(&cwd);
     let lane = match parse_lane(&lane_path) {
         Err(e) => SourceRead::err(e),
@@ -1281,7 +1315,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     rows: Vec::new(),
                     actionable: true,
                     note: String::new(),
-                    verb: "",
+                    command: "",
                 })],
                 "warnings": warnings,
                 "exit_code": 1,
@@ -1306,7 +1340,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     rows: Vec::new(),
                     actionable: true,
                     note: String::new(),
-                    verb: "",
+                    command: "",
                 })],
                 "warnings": warnings,
                 "exit_code": 1,
@@ -1335,7 +1369,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                         rows: Vec::new(),
                         actionable: true,
                         note: String::new(),
-                        verb: "",
+                        command: "",
                     })],
                     "warnings": warnings,
                     "exit_code": 1,
@@ -1444,42 +1478,52 @@ pub fn read_board(opts: &BoardOpts) -> Value {
 /// holds. Also returns a name-to-token map over EVERY registry entry,
 /// whatever its status: the worked feed's worker labels are names, and an
 /// orphaned row's transcript can still answer for the worker it names.
-fn read_driver_rows(entries: Option<&[Value]>) -> (SourceRead, HashMap<String, String>) {
+/// A caller that already loaded the registry this fire (the stop gate's
+/// session-binding read) passes it in, so the board's budgeted slice pays
+/// for no second store read.
+fn read_driver_rows(
+    entries: Option<&[Value]>,
+    supplied: Option<&crate::state::Registry>,
+) -> (SourceRead, HashMap<String, String>) {
+    let fold = |registry: &crate::state::Registry| -> (SourceRead, HashMap<String, String>) {
+        let session_nodes = graph_session_nodes(entries);
+        let mut name_to_token: HashMap<String, String> = HashMap::new();
+        for e in &registry.entries {
+            name_to_token.entry(e.name.clone()).or_insert_with(|| {
+                e.harness_session_id
+                    .clone()
+                    .unwrap_or_else(|| e.name.clone())
+            });
+        }
+        let rows = registry
+            .entries
+            .iter()
+            .filter(|e| is_live_driver_status(e.status))
+            .filter_map(|e| {
+                let node = e.node.as_deref().or_else(|| {
+                    e.harness_session_id
+                        .as_deref()
+                        .and_then(|sid| session_nodes.get(sid))
+                        .map(String::as_str)
+                })?;
+                let token = e
+                    .harness_session_id
+                    .clone()
+                    .unwrap_or_else(|| e.name.clone());
+                Some(json!({"name": e.name, "node": node, "token": token}))
+            })
+            .collect();
+        (SourceRead::ok(Value::Array(rows)), name_to_token)
+    };
+    if let Some(registry) = supplied {
+        return fold(registry);
+    }
     let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
         return (SourceRead::ok(json!([])), HashMap::new());
     };
     let path = home.registry_json();
     match crate::state::load_registry(&path) {
-        Ok(registry) => {
-            let session_nodes = graph_session_nodes(entries);
-            let mut name_to_token: HashMap<String, String> = HashMap::new();
-            for e in &registry.entries {
-                name_to_token.entry(e.name.clone()).or_insert_with(|| {
-                    e.harness_session_id
-                        .clone()
-                        .unwrap_or_else(|| e.name.clone())
-                });
-            }
-            let rows = registry
-                .entries
-                .iter()
-                .filter(|e| is_live_driver_status(e.status))
-                .filter_map(|e| {
-                    let node = e.node.as_deref().or_else(|| {
-                        e.harness_session_id
-                            .as_deref()
-                            .and_then(|sid| session_nodes.get(sid))
-                            .map(String::as_str)
-                    })?;
-                    let token = e
-                        .harness_session_id
-                        .clone()
-                        .unwrap_or_else(|| e.name.clone());
-                    Some(json!({"name": e.name, "node": node, "token": token}))
-                })
-                .collect();
-            (SourceRead::ok(Value::Array(rows)), name_to_token)
-        }
+        Ok(registry) => fold(&registry),
         Err(e) => (
             SourceRead::err(format!("registry unreadable: {e}")),
             HashMap::new(),
@@ -1644,7 +1688,7 @@ pub(crate) fn enrich_worked_rows(
     fresh
 }
 
-/// The needs verb's default sources (needs.default_sources): project + global
+/// The needs command's default sources (needs.default_sources): project + global
 /// events + questions, and the ledger.
 pub(crate) fn default_needs_sources(home: &crate::paths::AgentsHome) -> (Vec<PathBuf>, PathBuf) {
     let fno_dir = home
@@ -1867,7 +1911,7 @@ mod tests {
     #[test]
     fn unplanned_note_names_the_batch_and_undispatched_names_the_target() {
         // a rule without a number is advice nobody applies; the
-        // queue a lead dispatches from names the verb, never the blueprint.
+        // queue a lead dispatches from names the command, never the blueprint.
         let inputs = inputs_with(
             json!([{"id": "x-aaaa", "priority": "p0"}]),
             json!([]),
@@ -1967,7 +2011,7 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["x-open"]);
         // AC8-HP: the row names the worker behind the marker, and the source
-        // hands the reader the peek verb for THAT worker, not the raw holder
+        // hands the reader the peek command for THAT worker, not the raw holder
         // string no resolver accepts.
         let row = &stalled["rows"].as_array().unwrap()[0];
         assert_eq!(row["worker"], "h");
@@ -2254,7 +2298,7 @@ mod tests {
             registry.entries.push(exited_row);
         })
         .unwrap();
-        let (read, name_to_token) = read_driver_rows(None);
+        let (read, name_to_token) = read_driver_rows(None, None);
         std::env::remove_var("FNO_AGENTS_HOME");
         assert!(read.is_ok(), "{read:?}");
         let rows = read.payload.unwrap().as_array().unwrap().clone();
@@ -2269,6 +2313,38 @@ mod tests {
             .filter_map(|r| r.get("node").and_then(Value::as_str))
             .collect();
         assert_eq!(nodes, vec!["x-live"], "{rows:?}");
+    }
+
+    #[test]
+    fn a_supplied_registry_feeds_the_driver_feed_without_a_store_read() {
+        // The board's driver slice must not pay a second registry read when
+        // the caller already loaded one this fire: a supplied registry feeds
+        // the fold even where the store read would answer empty (a test
+        // process with no declared home). That is the proof the store was
+        // never consulted.
+        let registry = crate::state::Registry {
+            entries: vec![crate::state::RegistryEntry {
+                name: "t-supplied-worker".to_string(),
+                node: Some("x-supplied".to_string()),
+                status: crate::AgentStatus::Live,
+                harness: Some("claude".to_string()),
+                harness_session_id: Some("uuid-supplied".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (read, name_to_token) = read_driver_rows(None, Some(&registry));
+        assert!(read.is_ok(), "{read:?}");
+        let rows = read.payload.unwrap().as_array().unwrap().clone();
+        let nodes: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r.get("node").and_then(Value::as_str))
+            .collect();
+        assert_eq!(nodes, vec!["x-supplied"], "{rows:?}");
+        assert_eq!(
+            name_to_token.get("t-supplied-worker").map(String::as_str),
+            Some("uuid-supplied")
+        );
     }
 
     #[test]
@@ -2391,7 +2467,7 @@ mod tests {
 
     #[test]
     fn a_slow_source_is_killed_inside_the_whole_board_budget() {
-        // A scripted `fno` that sleeps 5 seconds under a
+        // A scripted `gh` that sleeps 5 seconds under a
         // 4,000ms board budget must be killed at its deadline-derived spawn
         // bound, so the collector returns inside ~4.75s and the over-budget
         // source reads as unreadable - never the measured 40,776ms-against-
@@ -2412,13 +2488,13 @@ mod tests {
         crate::paths::pin_test_claims_root(dir.path());
         let script =
             crate::write_exec_stub(dir.path(), "sleepy-fno-py", "#!/bin/sh\nexec sleep 5\n");
-        // `gh` answers with an empty-open-PR listing: the prs reads must
-        // never reach the network, whose discretionary GraphQL quota is
-        // shared machine-wide and reads exit 75 under a lock (measured: the
-        // quota refusal surfaced here as an unreadable undriven_pr).
+        // `gh` is the slow source: the operator questions read in-process
+        // now, so the PR listing is the one read still riding a subprocess.
+        // The stub never reaches the network, whose GraphQL quota is shared
+        // machine-wide.
         let stub_dir = dir.path().join("stub-bin");
         std::fs::create_dir_all(&stub_dir).unwrap();
-        crate::write_exec_stub(&stub_dir, "gh", "#!/bin/sh\necho '[]'\n");
+        crate::write_exec_stub(&stub_dir, "gh", "#!/bin/sh\nexec sleep 5\n");
         let prev = std::env::var_os("FNO_PY");
         let prev_path = std::env::var_os("PATH");
         std::env::set_var("FNO_PY", &script);

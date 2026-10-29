@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pytest
-from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
 
@@ -256,7 +255,7 @@ def test_tier_remap_preflight_normalizes_actual_conflict(
 
     from fno.agents.dispatch import DispatchAskError, dispatch_spawn
 
-    with pytest.raises(DispatchAskError, match="--model opus is ambiguous") as exc_info:
+    with pytest.raises(DispatchAskError, match="model 'opus' is ambiguous") as exc_info:
         dispatch_spawn(
             name="remap-worker",
             message="work",
@@ -271,75 +270,3 @@ def test_tier_remap_preflight_normalizes_actual_conflict(
 class _Gate:
     def release(self) -> None:
         pass
-
-
-def test_cmd_spawn_resolves_role_route_once_before_substrate_fanout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Every routed CLI spawn carries one pre-resolved endpoint/auth/model unit."""
-    from fno.agents import dispatch, model_routing, mux_spawn, spawn_gate
-
-    route = _route_unit()
-    resolutions: list[str | None] = []
-    received: dict[str, Any] = {}
-
-    gate_calls: list[dict[str, Any]] = []
-
-    def resolve(role: str | None, **kwargs: Any) -> dict[str, str]:
-        resolutions.append(role)
-        kwargs["resolved_provider"]("zai")
-        return route
-
-    monkeypatch.setattr(model_routing, "resolve_route", resolve)
-    monkeypatch.setattr(
-        spawn_gate,
-        "run_gate",
-        lambda *a, **k: gate_calls.append(k) or _Gate(),
-    )
-    monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *a, **k: {})
-    monkeypatch.setattr(
-        dispatch,
-        "dispatch_spawn",
-        lambda **kwargs: received.update(kwargs)
-        or dispatch.SpawnResult(
-            kind="created",
-            name=kwargs["name"],
-            provider=kwargs["harness"],
-            short_id="abcd1234",
-        ),
-    )
-
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn",
-            "--name",
-            "route-bg",
-            "--harness",
-            "claude",
-            "--role",
-            "tidy",
-            "--here",
-            "--substrate",
-            "thread",
-            "work",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert resolutions == ["tidy"]
-    assert received["route_env"] == _stamped(route)
-    assert received["route_provider"] == "zai"
-    assert gate_calls == [{
-        "force": False,
-        "no_wait": False,
-        "route_provider": "zai",
-        "account": None,
-        "seed": "work",
-        "session_phase": "",
-        "succession_scope": None,
-    }]
-
-

@@ -1,7 +1,7 @@
 //! `route-slot`: the delivery-slot resolver, ported from Python
 //! (law d-450caaeb: Rust is the product; Python is the compatibility shell).
 //!
-//! The verb answers ONE question: which configured lane does this dispatch
+//! The command answers ONE question: which configured lane does this dispatch
 //! ride right now? Input is a JSON payload (profile fields, raw lanes,
 //! declared routing rows, the capacity snapshot, posture flags, vendor
 //! counts/caps); output is JSON `{status, candidate, chain}` where `chain`
@@ -21,7 +21,7 @@ const SLOT_LANES_TABLE: &str = include_str!("slot_lanes.toml");
 /// The inline slot-lane vocabulary, read once from the canonical table
 /// (`slot_lanes.toml`, this crate's owner).
 /// Lane fields are closed: every field has resolver code behind it. Slot
-/// VERBS are the open surface instead (`SLOT_VERBS` plus profiles keys).
+/// COMMANDS are the open surface instead (`SLOT_COMMANDS` plus profiles keys).
 pub(crate) struct LaneVocabulary {
     pub(crate) fields: Vec<String>,
     pub(crate) passthrough: Vec<String>,
@@ -516,8 +516,10 @@ fn order_candidates(mut rows: Vec<InvRow>, objective: &str, prefer_harness: &str
 
 /// The no-lanes fallthrough: difficulty and priority join the declared
 /// inventory under a live capacity snapshot. Receipts are the Python
-/// resolver's, verbatim.
-fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>) -> Value {
+/// resolver's, verbatim. The scorecard router calls this with an empty
+/// capacity map, which reads every row unknown-permitted: the incumbent is
+/// the declared pick, never a live-capacity one.
+pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>) -> Value {
     let capacity = match payload.get("capacity") {
         Some(v) => v.clone(),
         None => crate::route_capacity::capacity(
@@ -1180,7 +1182,7 @@ fn payload_fingerprint(payload: &Value) -> String {
     let facts = json!({
         "rows": payload.get("declared_rows").cloned().unwrap_or(json!({})),
         "policy": payload.get("policy").cloned().unwrap_or(json!({})),
-        "slots": payload.get("slot_by_verb").cloned().unwrap_or(json!({})),
+        "slots": payload.get("slot_by_command").cloned().unwrap_or(json!({})),
     });
     let mut h = Sha256::new();
     h.update(serde_json::to_string(&crate::route_gather::canonical(&facts)).unwrap_or_default());
@@ -1217,7 +1219,7 @@ pub fn resolve_slot_payload(payload: &Value) -> Value {
     out
 }
 
-/// The cwd the verb's own capacity read resolves config against: the process
+/// The cwd the command's own capacity read resolves config against: the process
 /// cwd Python invoked the binary with.
 fn slot_cwd() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -1320,7 +1322,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         .get("enforce_inventory")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let mut strict_ctx: Option<(String, String)> = None; // (operator_access, slot verb)
+    let mut strict_ctx: Option<(String, String)> = None; // (operator_access, slot command)
     let mut rung_base = rung_base;
     let mut profile = profile;
     let mut lanes_raw_value = payload.get("lanes_raw").cloned().unwrap_or(json!([]));
@@ -1341,39 +1343,39 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
                 "routing.operator_access is not local|remote|unknown",
             );
         }
-        let work_verb = payload
-            .get("work_verb")
+        let work_command = payload
+            .get("work_command")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| rung_base.trim_start_matches("agents.profiles.").to_string());
-        let (slot_verb, note) = effective_work_kind(&work_verb);
+        let (slot_command, note) = effective_work_kind(&work_command);
         if let Some(note) = note {
             chain.push(json!(note));
         }
         let slot = payload
-            .get("slot_by_verb")
+            .get("slot_by_command")
             .and_then(Value::as_object)
-            .and_then(|s| s.get(slot_verb.as_str()));
+            .and_then(|s| s.get(slot_command.as_str()));
         match slot {
             Some(s) => {
                 rung_base = s
                     .get("rung_base")
                     .and_then(Value::as_str)
                     .filter(|v| !v.is_empty())
-                    .unwrap_or(&format!("agents.profiles.{slot_verb}"))
+                    .unwrap_or(&format!("agents.profiles.{slot_command}"))
                     .to_string();
                 profile = s.get("profile").cloned().unwrap_or(json!({}));
                 lanes_raw_value = s.get("lanes_raw").cloned().unwrap_or(json!([]));
             }
             None => {
-                rung_base = format!("agents.profiles.{slot_verb}");
+                rung_base = format!("agents.profiles.{slot_command}");
                 profile = json!({});
                 lanes_raw_value = json!([]);
             }
         }
-        strict_ctx = Some((operator_access, slot_verb));
+        strict_ctx = Some((operator_access, slot_command));
     }
     let by_difficulty = profile.get("by_difficulty").cloned().unwrap_or(json!({}));
     let by_difficulty_obj = by_difficulty.as_object();
@@ -1446,7 +1448,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     // A typed model/vendor/route flag is an operator pin (superuser authority)
     // and outranks the lanes under both grid and strict routing: it never
     // borrows a lane's harness or capacity. The check sits before the
-    // empty-slot refusal so a pin on a laneless verb lands instead of
+    // empty-slot refusal so a pin on a laneless command lands instead of
     // refusing - the refusal's "harness default" text would be false when a
     // typed flag already occupies the axis. Config defaults do NOT outrank
     // lanes; only a typed flag does, because these value fields are argv-only
@@ -1492,7 +1494,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     }
 
     if lanes_arr.is_empty() {
-        // A lane-less verb grids instead. An explicit pin never reaches this
+        // A lane-less command grids instead. An explicit pin never reaches this
         // branch (the operator-pin check above returns first), so the grid's
         // own model-axis occupied flag governs. Strict routing has no grid:
         // an empty effective slot is the named refusal, and the text names
@@ -2001,7 +2003,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     }
     // Every lane was skipped ONLY for unknown capacity: naming this
     // "exhausted" would send the operator to wait for a quota reset that is
-    // not coming. The terminal names the real cause; the refresh verb is the
+    // not coming. The terminal names the real cause; the refresh command is the
     // fix.
     if capacity_unknown_skips > 0
         && capacity_unknown_skips == plan.len()
@@ -2169,7 +2171,7 @@ fn refusal_terminal(chain: &[Value]) -> Option<(String, String)> {
     if terminal == "slot=unknown refuse" {
         // None of the lanes was exhausted, so the text must not send the
         // operator to wait for a quota reset: the cause is unknown capacity
-        // and the refresh verb is the fix.
+        // and the refresh command is the fix.
         let text = match oldest_evidence(chain) {
             Some((label, src)) => format!(
                 "every configured lane reads capacity unknown (on_unknown=skip); none is exhausted; oldest evidence {label} old (source={src}). Run `fno config accounts usage --refresh` to re-measure."
@@ -2181,7 +2183,7 @@ fn refusal_terminal(chain: &[Value]) -> Option<(String, String)> {
     }
     if terminal == "slot=exhausted refuse" {
         // The refusal is the one verdict a caller has to argue with, so it
-        // names the oldest evidence it decided on and the verb that refreshes
+        // names the oldest evidence it decided on and the command that refreshes
         // it, instead of a bare word.
         let text = match oldest_evidence(chain) {
             Some((label, src)) => format!(
@@ -2304,11 +2306,11 @@ fn native_view_for(harness: &str) -> Option<&'static str> {
     }
 }
 
-/// the derived verb is the phase authority. The old planless-target ->
+/// the derived command is the phase authority. The old planless-target ->
 /// blueprint rewrite lived here and is retired: the Python layer derives the
-/// workflow verb before this call, so the work verb IS the slot verb.
-fn effective_work_kind(work_verb: &str) -> (String, Option<String>) {
-    (work_verb.trim().to_lowercase(), None)
+/// workflow command before this call, so the work command IS the slot command.
+fn effective_work_kind(work_command: &str) -> (String, Option<String>) {
+    (work_command.trim().to_lowercase(), None)
 }
 
 /// Print stdout/stderr and return the exit code. Used by `bin/client.rs`.
@@ -2332,7 +2334,7 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
         Ok(v) => v,
         Err(fail) => return fail,
     };
-    // The Python transport sends the verb only as argv[1] with the payload on
+    // The Python transport sends the command only as argv[1] with the payload on
     // stdin, so the journal op rides inside the payload, not in argv.
     if payload.get("op").and_then(Value::as_str) == Some("journal") {
         return run_route_slot_journal(&payload);
@@ -2347,6 +2349,33 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
         let out = crate::route_gather::run_mode(&payload, &slot_cwd());
         return (0, format!("{out}\n"), String::new());
     }
+    // The folded door modes answer before the walk: the dispatch-flag trio
+    // delegates to the ported answers module, and `config-route` proxies the
+    // front shim's argv through the routing ops. Their standalone actions
+    // folded into this command, so a modeless payload still means the walk.
+    if matches!(mode, "resolve" | "configured" | "validate-model") {
+        let out = crate::dispatch_harness::answer(&payload);
+        return (
+            0,
+            format!(
+                "{}\n",
+                serde_json::to_string(&out).unwrap_or_else(|_| "{}".into())
+            ),
+            String::new(),
+        );
+    }
+    if mode == "config-route" {
+        let argv: Vec<String> = payload
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        return crate::config_route::run_capture(&argv);
+    }
     let filled = crate::route_gather::fill(&payload, &slot_cwd());
     let out = resolve_slot_payload(&filled);
     journal_routing_refusal(&payload, &out);
@@ -2354,7 +2383,7 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
 }
 
 /// Payload reader shared by every subcommand: one payload file argument, else
-/// stdin. The failure strings are part of the verb's contract.
+/// stdin. The failure strings are part of the command's contract.
 fn read_route_slot_payload(args: &[String]) -> Result<Value, (i32, String, String)> {
     if let Some(path) = args.first() {
         let text = std::fs::read_to_string(path).map_err(|e| {
@@ -2384,59 +2413,10 @@ fn read_route_slot_payload(args: &[String]) -> Result<Value, (i32, String, Strin
         .map_err(|e| (2, String::new(), format!("route-slot: bad payload: {e}\n")))
 }
 
-/// The append half every journal write shares: stamp ts and kind, serialize
-/// one flat envelope line (`kind` plus flattened fields), create the parent
-/// dir, append. The journal op passes `spawn_defaults_applied` and surfaces
-/// every failure; the refusal emit passes its own kind and ignores them.
-fn append_journal_line(
-    path: &std::path::Path,
-    mut record: serde_json::Map<String, Value>,
-    kind: &str,
-) -> Result<(), (i32, String, String)> {
-    record.insert("ts".into(), Value::String(crate::events::now_rfc3339()));
-    record.insert("kind".into(), Value::String(kind.to_string()));
-    let mut line = match serde_json::to_string(&Value::Object(record)) {
-        Ok(l) => l,
-        Err(e) => {
-            return Err((
-                1,
-                String::new(),
-                format!("route-slot journal: serialize failed: {e}\n"),
-            ))
-        }
-    };
-    line.push('\n');
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let mut file = match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        Ok(f) => f,
-        Err(e) => {
-            return Err((
-                1,
-                String::new(),
-                format!("route-slot journal: open failed: {e}\n"),
-            ))
-        }
-    };
-    match std::io::Write::write_all(&mut file, line.as_bytes()) {
-        Ok(()) => Ok(()),
-        Err(e) => Err((
-            1,
-            String::new(),
-            format!("route-slot journal: write failed: {e}\n"),
-        )),
-    }
-}
-
-/// `route-slot journal`: append one spawn_defaults_applied receipt to the
-/// agents event journal. The WRITE belongs to the verb; the row keeps
-/// the flat envelope (`kind` plus flattened fields) every reader of this event
-/// parses, so the emitter here is a plain appender, not the framing.
+/// `route-slot journal`: commit one spawn_defaults_applied receipt to the
+/// event store behind the journal address. The WRITE belongs to the command;
+/// the payload's fields ride nested in `data`, typed per the event schema.
+/// No file is created: the store is the only surface the receipt lands on.
 /// The caller passes the resolved journal path: the binary reads no config.
 pub fn run_route_slot_journal(payload: &Value) -> (i32, String, String) {
     let path = match payload.get("path").and_then(Value::as_str) {
@@ -2449,8 +2429,8 @@ pub fn run_route_slot_journal(payload: &Value) -> (i32, String, String) {
             )
         }
     };
-    let record = match payload.get("event").and_then(Value::as_object) {
-        Some(m) => m.clone(),
+    let data = match payload.get("event").and_then(Value::as_object) {
+        Some(m) => Value::Object(m.clone()),
         None => {
             return (
                 2,
@@ -2459,13 +2439,36 @@ pub fn run_route_slot_journal(payload: &Value) -> (i32, String, String) {
             )
         }
     };
-    match append_journal_line(&path, record, "spawn_defaults_applied") {
-        Ok(()) => (
+    let envelope = serde_json::json!({
+        "ts": crate::events::now_rfc3339(),
+        "type": "spawn_defaults_applied",
+        "source": "agents",
+        "data": data,
+    });
+    let line = match serde_json::to_string(&envelope) {
+        Ok(l) => l,
+        Err(e) => {
+            return (
+                1,
+                String::new(),
+                format!("route-slot journal: serialize failed: {e}\n"),
+            )
+        }
+    };
+    match crate::event_store::append_envelope(&path, &line, None) {
+        Ok(receipt) => (
             0,
-            format!("journal: spawn_defaults_applied -> {}\n", path.display()),
+            format!(
+                "journal: spawn_defaults_applied -> {}\n",
+                receipt.store.display()
+            ),
             String::new(),
         ),
-        Err(fail) => fail,
+        Err(e) => (
+            1,
+            String::new(),
+            format!("route-slot journal: store refused: {e}\n"),
+        ),
     }
 }
 
@@ -2518,20 +2521,21 @@ pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let mut record = serde_json::Map::new();
-    record.insert("reason".into(), json!(reason));
-    record.insert("detail".into(), json!(detail));
-    record.insert("gate".into(), json!("routing"));
+    let mut fields: Vec<(&str, Value)> = vec![
+        ("reason", json!(reason)),
+        ("detail", json!(detail)),
+        ("gate", json!("routing")),
+    ];
     if let Some(vb) = payload.get("rung_base").and_then(Value::as_str) {
-        record.insert(
-            "verb".into(),
+        fields.push((
+            "verb",
             json!(vb.strip_prefix("agents.profiles.").unwrap_or(vb)),
-        );
+        ));
     }
-    record.insert("lanes".into(), Value::Array(lanes_from_chain(chain)));
-    record.insert("exit_code".into(), json!(if queue { 78 } else { 2 }));
+    fields.push(("lanes", Value::Array(lanes_from_chain(chain))));
+    fields.push(("exit_code", json!(if queue { 78 } else { 2 })));
     if let Some(v) = payload.get("substrate").filter(|v| !v.is_null()) {
-        record.insert("substrate".into(), v.clone());
+        fields.push(("substrate", v.clone()));
     }
     // plan_path rides nested in node_payload, not at the payload top level.
     if let Some(v) = payload
@@ -2540,9 +2544,9 @@ pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
-        record.insert("plan_path".into(), json!(v));
+        fields.push(("plan_path", json!(v)));
     }
-    let _ = append_journal_line(&path, record, "spawn_gate_refused");
+    crate::agents_event::append_agents_event(&path, "spawn_gate_refused", &fields);
 }
 
 /// `route-slot audit`: read-only completion evidence for the routing policy
@@ -2940,28 +2944,47 @@ pub(crate) fn audit_load_snapshot(
     };
 
     // Spawn decision receipts: the newest fingerprint per spawn name inside
-    // the window.
+    // the window. The store owns the rows; the window rides the query so the
+    // committed rows are filtered in SQL (durable rows never rotate), and
+    // `within` stays for the live tail the store does not hold yet.
     let mut receipts: BTreeMap<String, String> = BTreeMap::new();
-    match std::fs::read_to_string(state_root.join("events.jsonl")) {
-        Ok(text) => {
-            for line in text.lines() {
-                let Ok(row) = serde_json::from_str::<Value>(line) else {
-                    continue;
-                };
-                if row.get("kind").and_then(Value::as_str) != Some("spawn_defaults_applied") {
-                    continue;
-                }
-                if !within(row.get("ts").and_then(Value::as_str).unwrap_or("")) {
-                    continue;
-                }
-                let name = row.get("name").and_then(Value::as_str).unwrap_or("");
-                let fp = row.get("fingerprint").and_then(Value::as_str).unwrap_or("");
-                if !name.is_empty() && !fp.is_empty() {
-                    receipts.insert(name.to_string(), fp.to_string());
-                }
-            }
+    let text = crate::event_store::journal_text_checked(
+        &state_root.join("events.jsonl"),
+        &crate::event_store::EventQuery {
+            types: vec!["spawn_defaults_applied".to_string()],
+            since_ms: Some(cutoff.timestamp_millis()),
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
+    for line in text.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        // Envelope rows type the row; the imported flat rows carry `kind`.
+        if row
+            .get("type")
+            .or_else(|| row.get("kind"))
+            .and_then(Value::as_str)
+            != Some("spawn_defaults_applied")
+        {
+            continue;
         }
-        Err(_) => {} // no journal: no receipts, the verifier names the boundary
+        if !within(row.get("ts").and_then(Value::as_str).unwrap_or("")) {
+            continue;
+        }
+        let data = row.get("data");
+        let field = |key: &str| -> &str {
+            data.and_then(|d| d.get(key))
+                .or_else(|| row.get(key))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        };
+        let name = field("name");
+        let fp = field("fingerprint");
+        if !name.is_empty() && !fp.is_empty() {
+            receipts.insert(name.to_string(), fp.to_string());
+        }
     }
 
     // View records: one row per subject prefix routing-view:. Retirement
@@ -2976,7 +2999,7 @@ pub(crate) fn audit_load_snapshot(
                                                                             // store owns the index, so this consumer never reads a file. Rows are
                                                                             // flattened: data fields at the top level plus ts and _event_type.
     let decision_rows: Vec<Value> = crate::backlog::api::decisions(
-        &crate::backlog::api::Store::new(&state_root.join("graph.json")),
+        &crate::backlog::api::Store::new(&crate::state_layout::graph_anchor(&state_root)),
         None,
         None,
     )
@@ -3144,11 +3167,10 @@ mod tests {
     }
 
     fn journal_rows(journal: &std::path::Path) -> Vec<Value> {
-        std::fs::read_to_string(journal)
-            .unwrap_or_default()
+        crate::events::committed_journal_text(journal)
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).expect("journal line parses"))
+            .map(|l| serde_json::from_str(l).expect("committed row parses"))
             .collect()
     }
 
@@ -3219,23 +3241,23 @@ mod tests {
         let (code, _, _) = capture_file(dir.path(), &payload(exhausted_capacity()));
         assert_eq!(
             code, 0,
-            "the verb still exits 0; the transport owns the refusal exit"
+            "the command still exits 0; the transport owns the refusal exit"
         );
 
         let rows = journal_rows(&journal);
         assert_eq!(rows.len(), 1, "exactly one row per refusal: {rows:?}");
         let row = &rows[0];
-        assert_eq!(row["kind"], "spawn_gate_refused");
-        assert_eq!(row["gate"], "routing");
-        assert_eq!(row["reason"], "exhausted-refuse");
-        assert_eq!(row["verb"], "target");
-        assert_eq!(row["exit_code"], 2);
-        let detail = row["detail"].as_str().unwrap_or("");
+        assert_eq!(row["type"], "spawn_gate_refused");
+        assert_eq!(row["data"]["gate"], "routing");
+        assert_eq!(row["data"]["reason"], "exhausted-refuse");
+        assert_eq!(row["data"]["verb"], "target");
+        assert_eq!(row["data"]["exit_code"], 2);
+        let detail = row["data"]["detail"].as_str().unwrap_or("");
         assert!(
             detail.contains("every configured lane is exhausted"),
             "detail: {detail}"
         );
-        let lanes = row["lanes"].as_array().expect("lanes array");
+        let lanes = row["data"]["lanes"].as_array().expect("lanes array");
         assert_eq!(lanes.len(), 2, "one entry per slot-skip line: {lanes:?}");
         assert!(
             lanes.iter().all(|l| l["reason"]
@@ -3244,6 +3266,30 @@ mod tests {
                 .contains("capacity=exhausted")),
             "lanes: {lanes:?}"
         );
+    }
+
+    #[test]
+    fn the_journal_op_commits_one_typed_row_and_creates_no_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal = dir.path().join("j.jsonl");
+        let (code, stdout, _) = capture_file(
+            dir.path(),
+            &json!({
+                "op": "journal",
+                "path": journal.display().to_string(),
+                "event": {"name": "w", "verb": "target", "fingerprint": "fp1"},
+            }),
+        );
+        assert_eq!(code, 0);
+        assert!(
+            stdout.contains("spawn_defaults_applied"),
+            "stdout: {stdout}"
+        );
+        let rows = journal_rows(&journal);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["type"], "spawn_defaults_applied");
+        assert_eq!(rows[0]["data"]["verb"], "target");
+        assert!(!journal.exists(), "the journal op must not create the file");
     }
 
     #[test]
@@ -3653,9 +3699,9 @@ mod tests {
     fn strict_payload(overrides: Value) -> Value {
         let mut base = payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "unknown"},
-            "work_verb": "target",
+            "work_command": "target",
             "node": {"difficulty": "high", "priority": "p1", "plan_path": ""},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3678,11 +3724,11 @@ mod tests {
 
     #[test]
     fn strict_pin_rows() {
-        // the derived verb is the phase authority; a planless target
+        // the derived command is the phase authority; a planless target
         // no longer rewrites to the blueprint slot - the walk reads the target
         // slot's own lane and picks it.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3713,12 +3759,12 @@ mod tests {
 
         // Acceptance specimen: a lawful planless low target used to refuse
         // twice - rewritten to the blueprint slot, then refused because the
-        // blueprint lanes carried no zai route. The derived verb is the slot
-        // verb now, so the zai lane on the TARGET slot is simply picked.
+        // blueprint lanes carried no zai route. The derived command is the slot
+        // command now, so the zai lane on the TARGET slot is simply picked.
         let out = resolve_slot_payload(&strict_payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "local"},
             "node": {"difficulty": "low", "priority": "p1", "plan_path": ""},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3752,7 +3798,7 @@ mod tests {
         // says a typed flag is the operator's own statement of intent, and
         // strict exists to bound the MACHINE's autonomous choice, not this.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "opus-x": {"name": "opus-x", "harness": "claude", "model": "claude-opus-5",
                            "operator_view": "claude-native"},
@@ -3769,7 +3815,7 @@ mod tests {
         // The row IS the model's own declaration, so the pin takes
         // the row's harness instead of a config-scalar default.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "codex-astra": {"name": "codex-astra", "harness": "codex",
                                 "model": "gpt-6-astra"},
@@ -3785,7 +3831,7 @@ mod tests {
             .any(|l| l.contains("slot=operator-pin-override row=codex-astra harness=codex")));
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "zai-flash": {"name": "zai-flash", "harness": "claude",
                               "model": "glm-5.3-flash[1m]",
@@ -3807,7 +3853,7 @@ mod tests {
         // the slot refuses instead of guessing. The text names both rows
         // and both -H values.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "row-a": {"name": "row-a", "harness": "claude", "model": "m"},
                 "row-b": {"name": "row-b", "harness": "codex", "model": "m"},
@@ -3829,7 +3875,7 @@ mod tests {
         let rows = r#"{"zai-flash": {"name": "zai-flash", "harness": "claude", "model": "glm"}}"#;
         let row_val: serde_json::Value = serde_json::from_str(rows).unwrap();
         let mut p1 = strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
         }));
         p1["declared_rows"] = row_val.clone();
         p1["explicit_vendor_value"] = json!("zai");
@@ -3843,7 +3889,7 @@ mod tests {
         )));
         assert!(!c1.iter().any(|l| l.contains("row=")));
         let mut p2 = strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
         }));
         p2["declared_rows"] = row_val;
         p2["explicit_lane"] = json!(true);
@@ -3929,7 +3975,7 @@ mod tests {
         let out = resolve_slot_payload(&strict_payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "remote"},
             "node": {"difficulty": "high", "priority": "p1", "plan_path": "/plans/p.md"},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "target": {
                     "rung_base": "agents.profiles.target",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3954,7 +4000,7 @@ mod tests {
         let out = resolve_slot_payload(&strict_payload(json!({
             "policy": {"enforce_inventory": true, "operator_access": "local"},
             "node": {"difficulty": "high", "priority": "p1", "plan_path": "/plans/p.md"},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "target": {
                     "rung_base": "agents.profiles.target",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3972,8 +4018,8 @@ mod tests {
         assert_eq!(out["candidate"]["model"], "glm");
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
-            "slot_by_verb": {
+            "work_command": "blueprint",
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -3992,7 +4038,7 @@ mod tests {
             .any(|l| l.contains("operator_view=\"claude-native\"")));
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "slot_by_verb": {},
+            "slot_by_command": {},
         })));
         assert_eq!(out["status"], "none");
         assert_eq!(out["refusal"], "policy-no-declared-slot");
@@ -4002,10 +4048,10 @@ mod tests {
             .any(|l| l.contains("strict routing refuses the harness default")));
         assert!(chain.iter().any(|l| l.contains("type --model")));
 
-        // A typed model on a verb no slot row declares is the operator's own
+        // A typed model on a command no slot row declares is the operator's own
         // pin: it lands instead of refusing, and the refusal text never fires.
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "lead",
+            "work_command": "lead",
             "explicit_model_value": "gpt-6-astra",
         })));
         assert_eq!(out["status"], "none");
@@ -4017,7 +4063,7 @@ mod tests {
         assert!(!chain.iter().any(|l| l.contains("declares no lanes")));
 
         let out = resolve_slot_payload(&strict_payload(json!({
-            "work_verb": "blueprint",
+            "work_command": "blueprint",
             "declared_rows": {
                 "opus-x": {"name": "opus-x", "harness": "claude", "model": "claude-opus-5",
                            "operator_view": "claude-native"},
@@ -4025,7 +4071,7 @@ mod tests {
             "capacity": {"claude": {"state": "exhausted", "window": "lock",
                                     "accounts": {}, "evidence": {},
                                     "resets": {"opus": 1900000000.0}}},
-            "slot_by_verb": {
+            "slot_by_command": {
                 "blueprint": {
                     "rung_base": "agents.profiles.blueprint",
                     "profile": {"on_exhausted": "queue", "on_low": "prefer_healthy", "on_unknown": "allow"},
@@ -4165,10 +4211,11 @@ mod tests {
         let state_root = dir.clone();
 
         let fresh = chrono::Utc::now().to_rfc3339();
+        let fresh2 = (chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339();
         let stale = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
-        let entry = |sid: &str, created: String, node_v: &str| RegistryEntry {
+        let entry = |sid: &str, created: String, node_v: &str, name: &str| RegistryEntry {
             node: Some(node_v.to_string()),
-            name: "worker-1".into(),
+            name: name.to_string(),
             harness: Some("claude".into()),
             cwd: "/tmp/proj".into(),
             project_root: "/tmp/proj".into(),
@@ -4183,8 +4230,9 @@ mod tests {
         };
         let registry = crate::state::Registry {
             entries: vec![
-                entry("sid-1", fresh.clone(), "x-aaaa"),
-                entry("sid-old", stale, "x-aaaa"),
+                entry("sid-1", fresh.clone(), "x-aaaa", "worker-1"),
+                entry("sid-2", fresh2.clone(), "x-aaaa", "worker-2"),
+                entry("sid-old", stale, "x-aaaa", "worker-1"),
             ],
             ..crate::state::Registry::default()
         };
@@ -4194,6 +4242,21 @@ mod tests {
         )
         .unwrap();
 
+        // One typed row through the store beside the journal address and one
+        // flat legacy row imported from the raw file, so the audit window must
+        // fold both shapes.
+        let envelope = json!({
+            "ts": fresh2,
+            "type": "spawn_defaults_applied",
+            "source": "agents",
+            "data": {"name": "worker-2", "fingerprint": "fp2"},
+        });
+        crate::event_store::append_envelope(
+            &state_root.join("events.jsonl"),
+            &envelope.to_string(),
+            None,
+        )
+        .expect("the spawn receipt store accepted the typed row");
         std::fs::write(
             state_root.join("events.jsonl"),
             format!(
@@ -4201,6 +4264,7 @@ mod tests {
             ),
         )
         .unwrap();
+        crate::event_store::import_all(&state_root.join("events.jsonl")).expect("legacy import");
         // The store owns the decision index: seed the db
         // the audit reads, not a file.
         {
@@ -4255,11 +4319,30 @@ mod tests {
         .unwrap();
         assert_eq!(snap["fingerprint"], "fp1");
         let sessions = snap["sessions"].as_array().unwrap();
-        assert_eq!(sessions.len(), 1, "{sessions:?}");
-        assert_eq!(sessions[0]["session_id"], "sid-1");
-        assert_eq!(sessions[0]["account"], "zai-main");
-        assert_eq!(sessions[0]["receipt_fingerprint"], "fp1");
-        assert_eq!(sessions[0]["view_records"].as_array().unwrap().len(), 1);
+        assert_eq!(sessions.len(), 2, "{sessions:?}");
+        let prints: Vec<(&str, &str)> = sessions
+            .iter()
+            .map(|s| {
+                (
+                    s["session_id"].as_str().unwrap_or(""),
+                    s["receipt_fingerprint"].as_str().unwrap_or(""),
+                )
+            })
+            .collect();
+        assert!(
+            prints.contains(&("sid-1", "fp1")),
+            "flat legacy row folds in: {prints:?}"
+        );
+        assert!(
+            prints.contains(&("sid-2", "fp2")),
+            "typed store row folds in: {prints:?}"
+        );
+        let sid1 = sessions
+            .iter()
+            .find(|s| s["session_id"] == "sid-1")
+            .expect("sid-1 session");
+        assert_eq!(sid1["account"], "zai-main");
+        assert_eq!(sid1["view_records"].as_array().unwrap().len(), 1);
     }
 
     // --- computed capacity + the refresh gate --------------------------------
@@ -4293,9 +4376,8 @@ mod tests {
     }
 
     impl CapacityEnv {
-        /// `fno_bin` pins the refresh subprocess: the stub script's path, or
-        /// None to leave no FNO_BIN in the environment.
-        pub(super) fn new(state_json: &str, fno_bin: Option<&str>) -> Self {
+        /// No FNO_BIN: the usage refresh answers from `RefreshStub`.
+        pub(super) fn new(state_json: &str) -> Self {
             let guard = claims::test_env_lock()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
@@ -4329,10 +4411,7 @@ mod tests {
             std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
             std::env::set_var("FNO_CLAIMS_ROOT", fake_root());
             std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
-            match fno_bin {
-                Some(path) => std::env::set_var("FNO_BIN", path),
-                None => std::env::remove_var("FNO_BIN"),
-            }
+            std::env::remove_var("FNO_BIN");
             // The claude fallback lane names its account, so the identity
             // check reads the slot stamp: makers is materialized, no taint.
             let providers = dir.path().join("providers");
@@ -4406,22 +4485,20 @@ mod tests {
         )
     }
 
+    /// Answer the usage refresh with `body`, writing `marker` when it runs.
     pub(super) fn write_refresh_stub(
-        dir: &std::path::Path,
         body: &str,
         marker: &std::path::Path,
-    ) -> String {
-        let script = crate::write_exec_stub(
-            dir,
-            "refresh-stub.sh",
-            &format!(
-                "#!/bin/sh\nprintf '%s' '{}' > {}\nprintf '%s' '{}'\n",
-                body,
-                marker.display(),
-                body
-            ),
-        );
-        script.display().to_string()
+    ) -> crate::route_capacity::RefreshStub {
+        let body = body.to_string();
+        let marker = marker.to_path_buf();
+        crate::route_capacity::RefreshStub::install(move || {
+            std::fs::write(&marker, &body).ok()?;
+            match serde_json::from_str::<Value>(&body) {
+                Ok(Value::Object(m)) => Some(m),
+                _ => None,
+            }
+        })
     }
 
     pub(super) fn makers_row() -> String {
@@ -4454,10 +4531,9 @@ mod tests {
     /// decides the pick: lanes[0] codex-luna instead of the sonnet fallthrough.
     #[test]
     fn refresh_gate_probes_a_stale_lane_and_the_pick_uses_the_fresh_reading() {
-        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())), None);
+        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
         let marker = env.dir.path().join("marker");
-        let stub = write_refresh_stub(env.dir.path(), &fresh_codex_row(), &marker);
-        std::env::set_var("FNO_BIN", &stub);
+        let _stub = write_refresh_stub(&fresh_codex_row(), &marker);
         let out = resolve_slot_payload(&slot_env_payload(json!({
             "capacity_refresh": true,
         })));
@@ -4477,14 +4553,12 @@ mod tests {
     /// positive-control run with the flag proves the marker would be written.
     #[test]
     fn no_refresh_flag_means_no_probe() {
-        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())), None);
+        let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
         let marker = env.dir.path().join("marker");
-        let stub = write_refresh_stub(
-            env.dir.path(),
+        let _stub = write_refresh_stub(
             r#"{"codex": {"source": "probe", "probed_at": 0, "partial": false, "windows": []}}"#,
             &marker,
         );
-        std::env::set_var("FNO_BIN", &stub);
         // Negative control: no capacity_refresh -> the stub never runs.
         let out = resolve_slot_payload(&slot_env_payload(json!({})));
         assert_eq!(out["status"], "pick", "the fresh claude fallback answers");

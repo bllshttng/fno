@@ -27,7 +27,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Redefined here: the engine's copy in `claim_verbs` is private.
+/// Redefined here: the engine's copy in `claim_commands` is private.
 const HANDOVER_HOLDER_PREFIX: &str = "spawn-handover:";
 /// Mirrors `truth_status._HOLDER_PREFIX`.
 const SESSION_HOLDER_PREFIX: &str = "target-session:";
@@ -246,6 +246,12 @@ fn judge(rec: &ClaimRecord, row: &Value, ctx: &mut ProbeCtx) -> Result<(bool, St
     }
 }
 
+/// [`judge`] for one key outside the sweep loop (the spawn guard's
+/// recovery), with a fresh probe context.
+pub(crate) fn judge_key(rec: &ClaimRecord, row: &Value) -> Result<(bool, String), String> {
+    judge(rec, row, &mut ProbeCtx::default())
+}
+
 /// Record a tokened probe arm (reasons are last-wins per key) and report it.
 fn note_token(
     ctx: &mut ProbeCtx,
@@ -317,7 +323,7 @@ fn claim_meta_repo(rec: &ClaimRecord) -> Option<PathBuf> {
 }
 
 /// Port of `cli._handover_pane_probe_blocked`: consult the worktree policy
-/// through the Python verb (single-resolver doctrine); blocked for `never`
+/// through the Python command (single-resolver doctrine); blocked for `never`
 /// and every failure path, matching Python's `except: return True` (a dead
 /// handover holder is kept, not probed).
 fn handover_pane_probe_blocked(rec: &ClaimRecord) -> bool {
@@ -463,7 +469,7 @@ fn run_with_timeout(bin: &str, args: &[&str], timeout_secs: u64) -> Option<(i32,
 /// rows come from the same in-process records, a vanished requested key
 /// mints the synthetic free row, an impossible omission lands in
 /// reap_failed.
-fn keyed_fresh_row(directory: &Path, key: &str) -> Result<Value, String> {
+pub(crate) fn keyed_fresh_row(directory: &Path, key: &str) -> Result<Value, String> {
     let records =
         crate::claims::list_in(std::slice::from_ref(&PathBuf::from(directory)), None, true)
             .map_err(|err| format!("reap fresh sweep failed: {err}"))?;
@@ -476,7 +482,7 @@ fn keyed_fresh_row(directory: &Path, key: &str) -> Result<Value, String> {
             "provably_dead": false,
         }));
     }
-    let payload = crate::claim_verbs::claim_sweep_payload_from_records(
+    let payload = crate::claim_commands::claim_sweep_payload_from_records(
         &records,
         None,
         &[key.to_string()],
@@ -707,7 +713,7 @@ pub fn run(args: &[String]) -> i32 {
             }
         };
         let payload =
-            crate::claim_verbs::claim_sweep_payload_from_records(&records, None, &[], true);
+            crate::claim_commands::claim_sweep_payload_from_records(&records, None, &[], true);
         let rows = payload
             .get("claims")
             .and_then(Value::as_array)
@@ -762,16 +768,14 @@ pub fn run(args: &[String]) -> i32 {
     i32::from(!summary.reap_failed.is_empty())
 }
 
-/// The opt-out restore fold (cli.py's `restore_reaped_optouts` extend,
-/// cli.py:1502-1505): config files are written through the Python config
-/// writer, so each reaped `config-optout:` claim restores via a
-/// `python -m fno.claims._optout_restore` subprocess carrying the fresh
-/// record as JSON. The child folds its own failure into one stderr line
-/// (`opt-out restore failed: ...`), the exact string Python's fold appends.
-/// Failures land in `reap_failed` after the sweep's own failures and before
-/// render, so the FAILED lines and the exit code match the Python order.
+/// The opt-out restore fold: each reaped `config-optout:` claim restores the
+/// value its metadata recorded through the native config writer, behind
+/// `fno config unset --restore-optout <record>` (this crate does not link
+/// the fno crate). The child folds its own failure into one stderr line
+/// (`opt-out restore failed: ...`). Failures land in `reap_failed` after the
+/// sweep's own failures and before render, so the FAILED lines and the exit
+/// code keep their order.
 fn restore_reaped_optouts(summary: &mut ReapSummary) {
-    let cwd = std::env::current_dir().unwrap_or_default();
     for claim in std::mem::take(&mut summary.optout_sink) {
         let payload = match serde_json::to_string(&claim) {
             Ok(payload) => payload,
@@ -782,9 +786,11 @@ fn restore_reaped_optouts(summary: &mut ReapSummary) {
                 continue;
             }
         };
-        let mut cmd = crate::finalize::py_module(&cwd);
-        cmd.args(["-m", "fno.claims._optout_restore", "--claim", &payload]);
-        match cmd.output() {
+        let output = std::process::Command::new(crate::scrape::fno_bin())
+            .args(["config", "unset", "--restore-optout", payload.as_str()])
+            .stdin(std::process::Stdio::null())
+            .output();
+        match output {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();

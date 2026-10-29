@@ -146,7 +146,7 @@ fn lanes(
                 model,
                 None,
                 harness,
-                node["dispatch_verb"].as_str(),
+                node["dispatch_command"].as_str(),
                 None,
                 source,
             )
@@ -222,7 +222,6 @@ fn lanes(
             }
             let (identity, row) = super::advance_dispatch::launch_resolved(
                 id,
-                &node,
                 resolved,
                 Some((&key, &holder)),
                 "dispatch_lanes",

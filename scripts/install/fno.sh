@@ -84,7 +84,7 @@ fetch_pipe_cmd() {
 # beside this script (an in-tree run); the served fno.sh copy needs nothing.
 # $0 under `curl | sh` is the shell name, so the paths below never resolve and
 # the stable channel stands - the served script keeps its old behavior.
-FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/footnote}"
+FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/fno}"
 FNO_DECLARED_VERSION=
 FNO_CHANNEL=stable
 detect_channel() {
@@ -167,6 +167,12 @@ ensure_uv() {
 	fi
 	if ! find_uv; then
 		die "uv was installed but is not resolvable; add \$HOME/.local/bin to PATH and re-run, or install uv from https://docs.astral.sh/uv/."
+	fi
+	# The marker lets `fno uninstall` offer `uv self uninstall`; a uv found on
+	# PATH above is the user's own and gets no marker.
+	_uv_marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno-bootstrap"
+	if ! { mkdir -p "$_uv_marker_dir" && : >"$_uv_marker_dir/uv-installed-by-fno"; }; then
+		say "warning: could not record that fno installed uv; 'fno uninstall' will not offer to remove it."
 	fi
 	say "installed uv ($FNO_UV)"
 }
@@ -469,25 +475,29 @@ frontdoor_receipt() {
 }
 
 # The post-install shim sweep: repair any fno* shim in the tool bin
-# that dangles or resolves into a temp dir; fail loud when unrepairable.
+# that is missing, dangles, or resolves into a temp dir; fail loud when unrepairable.
 shim_sweep() {
 	[ -n "$FNO_TOOL_BIN" ] || FNO_TOOL_BIN="${HOME:-}/.local/bin"
-	# An installed fno predating the sweep module has nothing to sweep; the
-	# wheel that ships the module always sweeps.
-	"$FNO_VENV_PY" -c "import fno.setup.shim_check" 2>/dev/null || return 0
-	"$FNO_VENV_PY" -m fno.setup.shim_check --repair --bin-dir "$FNO_TOOL_BIN" && return 0
-	say "INCOMPLETE install: fno shims in $FNO_TOOL_BIN dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $FNO_VENV_PY -m fno.setup.shim_check --bin-dir $FNO_TOOL_BIN"
+	# The venv copy of the front door, never the tool-bin shim under check.
+	# A Python-only install has no front door, and one predating the sweep
+	# refuses the command: either way there is nothing to sweep with.
+	[ -n "$FNO_REAL" ] || return 0
+	_mux="$(dirname "$FNO_REAL")/fno"
+	[ -x "$_mux" ] || return 0
+	"$_mux" config setup shim-check --help >/dev/null 2>&1 || return 0
+	"$_mux" config setup shim-check --repair --bin-dir "$FNO_TOOL_BIN" && return 0
+	say "INCOMPLETE install: fno shims in $FNO_TOOL_BIN are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $_mux config setup shim-check --bin-dir $FNO_TOOL_BIN"
 	return 1
 }
 
 # --- plugin auto-wire (detect-and-wire) -------------------------------------
 # The CLI just verified; hand the plugin wiring to the front door's
-# detect-and-wire verb: every agent CLI on PATH gets the fno plugin without
-# asking, and the verb names every outcome (installed, kept, manual, failed)
+# detect-and-wire command: every agent CLI on PATH gets the fno plugin without
+# asking, and the command names every outcome (installed, kept, manual, failed)
 # so nothing is silent. The wizard stays for anyone who wants to choose.
 # FNO_NO_WIRE skips the step for people who manage their own harness configs.
-# Best-effort: the verb exits 0 and names every outcome, and even a hard
-# refusal (an older front door that still forwards this unknown verb to the
+# Best-effort: the command exits 0 and names every outcome, and even a hard
+# refusal (an older front door that still forwards this unknown command to the
 # Python CLI, which errors) is non-fatal - the CLI is already installed.
 wire_harnesses() {
 	[ -n "${FNO_NO_WIRE:-}" ] && return 0
@@ -501,7 +511,7 @@ wire_harnesses() {
 }
 
 # The one run-once setup (config + wiring), best effort: the CLI install
-# already succeeded, and the verb stops at its own done markers. FNO_YES or
+# already succeeded, and the command stops at its own done markers. FNO_YES or
 # a non-TTY stdin (curl | sh) takes the recommended defaults; the JSON
 # report prints so the run is never silent. FNO_NO_WIRE carries through:
 # the opt-out that skips plugin wiring skips the setup pass too, because
@@ -592,14 +602,18 @@ main() {
 			;;
 	esac
 
-	detect_channel
-	resolve_source
-	# Name the channel before the slow provision: a nightly or rc run must say
-	# why it is not touching the stable PyPI package (AC7-UI's installer twin).
-	case "$FNO_CHANNEL" in
-		nightly) say "channel nightly (${FNO_DECLARED_VERSION}): installing this platform's wheel from the nightly GitHub release." ;;
-		rc) say "channel rc: pinning the candidate $FNO_SOURCE from PyPI." ;;
+	# PyPI ships prebuilt wheels (all four Rust binaries inside) for four
+	# targets only. Any other platform gets the Python-only install, so name
+	# that before provisioning and give the build route.
+	case "$(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" in
+		Darwin/arm64 | Darwin/x86_64 | Linux/x86_64 | Linux/aarch64) ;;
+		*)
+			say "no prebuilt wheel for $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null): PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
+			say "this install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
+			;;
 	esac
+
+	detect_channel
 
 	# Honor FNO_INSTALL_DIR by handing it to uv as the tool-bin location.
 	if [ -n "${FNO_INSTALL_DIR:-}" ]; then
@@ -654,6 +668,17 @@ main() {
 			fi
 		fi
 	fi
+
+	# Resolve the source only once we know a provision is needed. A nightly
+	# source lookup hits the GitHub release, which can lack a wheel (not yet
+	# published, or a rate limit), and a no-op rerun must not die on it.
+	resolve_source
+	# Name the channel before the slow provision: a nightly or rc run must say
+	# why it is not touching the stable PyPI package (AC7-UI's installer twin).
+	case "$FNO_CHANNEL" in
+		nightly) say "channel nightly (${FNO_DECLARED_VERSION}): installing this platform's wheel from the nightly GitHub release." ;;
+		rc) say "channel rc: pinning the candidate $FNO_SOURCE from PyPI." ;;
+	esac
 
 	ensure_uv
 

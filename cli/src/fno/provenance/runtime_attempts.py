@@ -25,7 +25,55 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from fno.target.manifest import manifest_identity, read_target_manifest
+_IDENTITY_FIELDS = (
+    "harness",
+    "harness_session_id",
+    "fno_id",
+    "graph_node_id",
+    "target_claim_key",
+    "target_claim_holder",
+)
+
+
+def _read_target_manifest(project_root: Path) -> Optional[dict[str, Any]]:
+    """The session-manifest read target.manifest served, inlined:
+    the target package dies with the family port. Reads the manifest at the
+    project space (or the legacy path) as ``key: value`` scalars,
+    frontmatter-first, first value wins; never raises."""
+    try:
+        from fno.paths import target_state_path_or_legacy
+
+        manifest = target_state_path_or_legacy(project_root)
+        text = manifest.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 - no/unreadable manifest is fine
+        return None
+    raw: dict[str, Any] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped in ("---", ""):
+            continue
+        key, sep, value = stripped.partition(":")
+        if not sep:
+            continue
+        val = value.strip().strip("\"'")
+        if val and val != "null" and key.strip() not in raw:
+            raw[key.strip()] = val
+    return raw or None
+
+
+def _manifest_identity(raw: Optional[dict[str, Any]]) -> Optional[dict[str, str]]:
+    """The minimal identity tuple a resume-bind needs, or None when any
+    field is missing. Inlined from target.manifest."""
+    if not raw:
+        return None
+    ident: dict[str, str] = {}
+    for field in _IDENTITY_FIELDS:
+        val = raw.get(field)
+        val = str(val).strip().strip("\"'") if val is not None else ""
+        if not val or val == "null":
+            return None
+        ident[field] = val
+    return ident
 
 
 def _default_worktree_roots(repo_root: Path) -> list[Path]:
@@ -36,12 +84,16 @@ def _default_worktree_roots(repo_root: Path) -> list[Path]:
     """
     roots = [repo_root]
     try:
-        from fno.runtime.worktree import list_worktrees
+        from fno.rust_binary import call_binary_json
 
-        for wt in list_worktrees(repo_root=repo_root):
-            p = wt.get("worktree_path")
-            if p:
-                roots.append(Path(p))
+        err, payload = call_binary_json(
+            "worktree-list", ["--repo-root", str(repo_root)], timeout=60
+        )
+        if err is None and isinstance(payload, list):
+            for wt in payload:
+                p = wt.get("worktree_path")
+                if p:
+                    roots.append(Path(p))
     except Exception:  # noqa: BLE001 - git unavailable -> canonical only
         pass
     # Dedup, preserve order.
@@ -134,8 +186,8 @@ def runtime_attempts(
 
     rows: dict[str, dict[str, Any]] = {}  # dedup on fno_id
     for wt in roots:
-        raw = read_target_manifest(wt)
-        ident = manifest_identity(raw)
+        raw = _read_target_manifest(wt)
+        ident = _manifest_identity(raw)
         if ident is None or ident.get("graph_node_id") != node_id:
             continue
         fno_id = ident["fno_id"]

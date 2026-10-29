@@ -92,7 +92,7 @@ _EPOCH_STAMP_RE = re.compile(
 #
 # This bound is what keeps a misread stamp from becoming a permanent outage.
 # The lock it feeds is read with NO TTL, so a stamp that resolves to next year
-# takes the provider out until next year, and the fallback-chain verb then drops
+# takes the provider out until next year, and the fallback-chain command then drops
 # the whole harness from the fallback chain with it. Two ways in: a
 # millisecond epoch read as seconds, and an offset-bearing stamp in the body
 # that is not a reset at all (a token expiry, a subscription renewal, a trial
@@ -490,7 +490,7 @@ def normalize(
         # yields None: an invented deadline is worse than an absent one.
         #
         # Scoped to the QUOTA class deliberately. `resets_at` is written
-        # straight through as the provider lock (failover.py, via
+        # straight through as the provider lock (via
         # update_provider_health), replacing the rule's own backoff step, and
         # `for <n> <unit>` is ordinary English that appears in bodies which
         # name no rate-limit window at all. Unscoped, an auth body reading

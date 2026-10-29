@@ -5,9 +5,9 @@
 //! files only, rebuilt wholesale), never from the repo root, because harness
 //! caches copy what they are pointed at.
 //!
-//! This module owns stage build, the `--check`/`--restage` deploy verbs, the
-//! claude, opencode and agy arms plus the old env-export cleanup. The codex arm stays on
-//! the Python `converge` engine in the Python shim.
+//! This module owns stage build, the `--check`/`--restage` deploy commands, the
+//! claude, opencode and agy arms plus the old env-export cleanup. The codex arm
+//! converges through `codex_converge`.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,13 +16,17 @@ use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 
+use crate::pack_profile::{MuxPaths, Profile, HOOK_FILES};
 use crate::paths::{dirs_home, AgentsHome};
 
 const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
 const SCCACHE_DIR_KEY: &str = "SCCACHE_DIR";
+/// The reclaim pass an install chains: every lane except the uv cache prune,
+/// which can hold a first install for its full 120s cap.
+const RECLAIM_ON_INSTALL: [&str; 2] = ["--apply", "--no-uv-prune"];
 const RC_MARK: &str = "# fno: cargo build-dir";
 
-/// Same shape as the Python gate in cli/src/fno/hook_config.py:29.
+/// Same shape as the Python gate's `_PLUGIN_ROOT_RE` in cli/src/fno/lint_cli.py.
 const HOOK_REF_PATTERN: &str =
     r#"\$\{(?:CLAUDE_PLUGIN_ROOT|CODEX_PLUGIN_ROOT|PLUGIN_ROOT)\}/([^\s"'\\]+)"#;
 
@@ -108,7 +112,7 @@ fn repo_root(dir: &Path) -> Result<PathBuf, String> {
 /// Sessions started before the restage hold the old hook config for their
 /// whole life; the hook-tombstones lint protects one merge range, but a stage
 /// stale across many merges can still reference a script the new tree deleted.
-fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
+fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path, mux: Option<&MuxPaths>) -> usize {
     let re = match Regex::new(HOOK_REF_PATTERN) {
         Ok(r) => r,
         Err(_) => return 0,
@@ -125,7 +129,8 @@ fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
         };
         for rel in re.captures_iter(&text).map(|c| c[1].to_string()) {
             let target = new_stage.join(&rel);
-            if target.exists() {
+            // A script reclassified as mux stays out of a pack, old stage or not.
+            if target.exists() || mux.is_some_and(|m| m.covers(&rel)) {
                 continue;
             }
             let src = old_stage.join(&rel);
@@ -149,9 +154,62 @@ fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
 const MARKETPLACE_REL: &str = ".claude-plugin/marketplace.json";
 const CODEX_MARKETPLACE_REL: &str = ".agents/plugins/marketplace.json";
 
+/// The plugin marketplace name, and the name it had before the rename. An
+/// install made under the old name keeps loading: every read accepts both,
+/// and a dev install moves the old registration to the new name.
+const MARKETPLACE_NAME: &str = "fno";
+const LEGACY_MARKETPLACE_NAME: &str = "footnote";
+const PLUGIN_ID: &str = "fno@fno";
+const LEGACY_PLUGIN_ID: &str = "fno@footnote";
+
+/// The fno record in a known_marketplaces.json, under either name.
+fn known_fno_marketplace(known: &Value) -> Option<&Value> {
+    known
+        .get(MARKETPLACE_NAME)
+        .or_else(|| known.get(LEGACY_MARKETPLACE_NAME))
+}
+
+/// The fno entries in an installed_plugins.json, under both plugin ids: a
+/// failed migration leaves both registered, and the sweep's guard must see
+/// each. None when neither id is registered.
+fn registry_fno_entries(registry: &Value) -> Option<Vec<&Value>> {
+    let plugins = registry.get("plugins")?;
+    let lists: Vec<&Vec<Value>> = [PLUGIN_ID, LEGACY_PLUGIN_ID]
+        .iter()
+        .filter_map(|id| plugins.get(*id).and_then(Value::as_array))
+        .collect();
+    (!lists.is_empty()).then(|| lists.into_iter().flatten().collect())
+}
+
+/// The commands that retire an old-name Claude registration, so the
+/// following `marketplace add` + `install` leave one fno@fno. Empty when
+/// known_marketplaces.json names no old-name marketplace.
+fn legacy_claude_migration(claude_dir: &Path) -> Vec<Vec<String>> {
+    let known = std::fs::read_to_string(claude_dir.join("plugins/known_marketplaces.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+    if known
+        .and_then(|k| k.get(LEGACY_MARKETPLACE_NAME).cloned())
+        .is_none()
+    {
+        return Vec::new();
+    }
+    let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    vec![
+        argv(&["claude", "plugin", "uninstall", LEGACY_PLUGIN_ID]),
+        argv(&[
+            "claude",
+            "plugin",
+            "marketplace",
+            "remove",
+            LEGACY_MARKETPLACE_NAME,
+        ]),
+    ]
+}
+
 /// The stage serves its own copy of the public manifest with the fno entry
 /// pointed at the stage root (`source: "./"`), so `claude plugin install
-/// fno@footnote` resolves in place and never clones a GitHub ref: the public
+/// fno@fno` resolves in place and never clones a GitHub ref: the public
 /// pins (`stable`, `nightly`) are release-side refs a dev machine cannot rely
 /// on. The buddy entry points at `./plugins/buddy` the same way. The repo file
 /// stays verbatim. Anything that would leave the fno entry
@@ -190,12 +248,53 @@ fn staged_marketplace_bytes(source_bytes: &str, marketplace: &str) -> Result<Str
     serde_json::to_string_pretty(&manifest).map_err(|e| format!("{marketplace}: {e}"))
 }
 
+/// Refuse a root whose `.claude-plugin/plugin.json` does not name the fno
+/// plugin. The stage replaces the live plugin tree, so a stray cwd (another
+/// repo, a sibling project) must never become the stage.
+fn require_fno_source(source_root: &Path) -> Result<(), String> {
+    let manifest = source_root.join(".claude-plugin").join("plugin.json");
+    let names_fno = std::fs::read_to_string(&manifest)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|v| v.get("name").and_then(Value::as_str) == Some("fno"));
+    if names_fno {
+        return Ok(());
+    }
+    let hint =
+        match std::fs::read_to_string(crate::state_layout::place(&state_root(), "source-path")) {
+            Ok(pin) if !pin.trim().is_empty() => format!(
+                "the pinned fno checkout is {0}: pass --source {0}",
+                pin.trim()
+            ),
+            _ => "cd into the fno checkout and rerun, or pass --source".to_string(),
+        };
+    Err(format!(
+        "{} is not the fno plugin source (no .claude-plugin/plugin.json naming \"fno\"); the stage is untouched; {hint}",
+        source_root.display()
+    ))
+}
+
 /// Rebuild `<stage_parent>/fno` from `source_root` (git-tracked +
 /// untracked-but-not-ignored files). Builds into a sibling temp dir and swaps
 /// by rename so live sessions execing hooks from the stage never see a
 /// half-built tree; running bash hooks keep their open inode and finish on
 /// old bytes. Returns the stage path and the file count copied.
 fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usize), String> {
+    build_stage_as(source_root, stage_parent, Profile::Full)
+}
+
+/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// and holds no mux path and no hook entry that runs one.
+fn build_stage_as(
+    source_root: &Path,
+    stage_parent: &Path,
+    profile: Profile,
+) -> Result<(PathBuf, usize), String> {
+    require_fno_source(source_root)?;
+    let mux = match profile {
+        Profile::Full => None,
+        Profile::Pack => Some(MuxPaths::load(source_root)?),
+    };
     let listed = run_checked(
         &[
             "git".to_string(),
@@ -206,10 +305,11 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
         ],
         Some(source_root),
     )?;
-    let dest = stage_parent.join(STAGE_DIR);
+    let dir = profile.stage_dir();
+    let dest = stage_parent.join(dir);
     let pid = std::process::id();
-    let new_dir = stage_parent.join(format!(".fno.new-{pid}"));
-    let old_dir = stage_parent.join(format!(".fno.old-{pid}"));
+    let new_dir = stage_parent.join(format!(".{dir}.new-{pid}"));
+    let old_dir = stage_parent.join(format!(".{dir}.old-{pid}"));
     let _ = std::fs::remove_dir_all(&new_dir);
     let _ = std::fs::remove_dir_all(&old_dir);
     std::fs::create_dir_all(&new_dir).map_err(|e| format!("stage: {e}"))?;
@@ -217,6 +317,9 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     let copy_all = || -> Result<usize, String> {
         let mut copied = 0usize;
         for rel in listed.split('\0').filter(|s| !s.is_empty()) {
+            if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+                continue;
+            }
             let src = source_root.join(rel);
             let meta = match std::fs::symlink_metadata(&src) {
                 Ok(m) => m,
@@ -232,6 +335,18 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
             std::fs::copy(&src, &target).map_err(|e| format!("stage: {rel}: {e}"))?;
             copied += 1;
         }
+        if let Some(m) = &mux {
+            for rel in HOOK_FILES {
+                let path = new_dir.join(rel);
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let filtered = m
+                    .filter_hooks(&text)
+                    .map_err(|e| format!("stage: {rel}: {e}"))?;
+                std::fs::write(&path, filtered).map_err(|e| format!("stage: {rel}: {e}"))?;
+            }
+        }
         Ok(copied)
     };
     let copied = match copy_all() {
@@ -241,6 +356,17 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
             return Err(e);
         }
     };
+    if let Ok(head) = run_checked(
+        &["git".to_string(), "rev-parse".into(), "HEAD".into()],
+        Some(source_root),
+    ) {
+        let stamp = json!({
+            "source_head": head,
+            "built_at": chrono::Utc::now().to_rfc3339(),
+            "profile": if profile == Profile::Pack { "pack" } else { "full" },
+        });
+        let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
+    }
 
     for marketplace in [MARKETPLACE_REL, CODEX_MARKETPLACE_REL] {
         let manifest = new_dir.join(marketplace);
@@ -254,7 +380,7 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     }
 
     if dest.exists() {
-        carry_referenced_scripts(&dest, &new_dir);
+        carry_referenced_scripts(&dest, &new_dir, mux.as_ref());
         // ponytail: two concurrent manual installs can race these renames;
         // the update:fno claim serializes the automated path.
         std::fs::rename(&dest, &old_dir)
@@ -271,7 +397,7 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     Ok((dest, copied))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 struct StageCheck {
     status: &'static str,
     stage: String,
@@ -282,6 +408,40 @@ struct StageCheck {
     sample: Vec<String>,
     remedy: String,
     detail: Option<String>,
+    /// From the stage stamp; None for a stage built before stamps existed.
+    stage_head: Option<String>,
+    built_at: Option<String>,
+    /// Commits from `stage_head` to source HEAD, when git can count them.
+    commits_behind: Option<u64>,
+    /// Drift (differing + missing) per top-level directory.
+    groups: std::collections::BTreeMap<String, usize>,
+}
+
+impl StageCheck {
+    /// "skills 3, hooks 1; staged from <rev> at <when>, N commit(s) behind",
+    /// or empty when there is no drift to explain.
+    fn lag_summary(&self) -> String {
+        let mut out = self
+            .groups
+            .iter()
+            .map(|(group, n)| format!("{group} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if out.is_empty() {
+            return out;
+        }
+        if let Some(head) = &self.stage_head {
+            out.push_str(&format!(
+                "; staged from {} at {}",
+                head.chars().take(12).collect::<String>(),
+                self.built_at.as_deref().unwrap_or("?")
+            ));
+            if let Some(n) = self.commits_behind {
+                out.push_str(&format!(", {n} commit(s) behind"));
+            }
+        }
+        out
+    }
 }
 
 fn absent_check(stage: &Path, source: &Path) -> StageCheck {
@@ -295,6 +455,7 @@ fn absent_check(stage: &Path, source: &Path) -> StageCheck {
         sample: Vec::new(),
         remedy: String::new(),
         detail: None,
+        ..Default::default()
     }
 }
 
@@ -309,6 +470,7 @@ fn unknown_check(stage: &Path, source: &Path, detail: String) -> StageCheck {
         sample: Vec::new(),
         remedy: String::new(),
         detail: Some(detail),
+        ..Default::default()
     }
 }
 
@@ -347,6 +509,16 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         Ok(l) => l,
         Err(e) => return unknown_check(stage, source_dir, e),
     };
+    // A pack stage leaves the mux paths out and rewrites the hook files on
+    // purpose, so neither is drift.
+    let pack = std::fs::read_to_string(stage.join(STAGE_STAMP))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|v| v.get("profile").and_then(Value::as_str) == Some("pack"));
+    let mux = match pack.then(|| MuxPaths::load(&root)).transpose() {
+        Ok(m) => m,
+        Err(e) => return unknown_check(stage, source_dir, e),
+    };
 
     let mut tracked: Vec<(String, String)> = Vec::new(); // (path, blob sha)
     for entry in listing.split('\0').filter(|s| !s.is_empty()) {
@@ -370,9 +542,14 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
     let mut to_hash: Vec<(&str, &str)> = Vec::new(); // (stage path, HEAD sha)
     let mut manifests = Vec::new();
     for (path, sha) in &tracked {
-        if [MARKETPLACE_REL, CODEX_MARKETPLACE_REL].contains(&path.as_str()) {
+        if mux.as_ref().is_some_and(|m| m.covers(path)) {
+            continue;
+        }
+        if [MARKETPLACE_REL, CODEX_MARKETPLACE_REL].contains(&path.as_str())
+            || (mux.is_some() && HOOK_FILES.contains(&path.as_str()))
+        {
             // The stage serves a rewritten copy of this file
-            // (staged_marketplace_bytes), so no HEAD sha can match it.
+            // (staged_marketplace_bytes, filter_hooks), so no HEAD sha can match it.
             manifests.push(path.as_str());
             continue;
         }
@@ -419,14 +596,23 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         if !stage_manifest.is_file() {
             missing.push(marketplace.to_string());
         } else {
-            let verdict = std::fs::read_to_string(root.join(marketplace))
-                .map_err(|e| format!("{marketplace}: {e}"))
-                .and_then(|t| staged_marketplace_bytes(&t, marketplace))
-                .and_then(|expected| {
-                    std::fs::read_to_string(&stage_manifest)
-                        .map(|actual| actual == expected)
-                        .map_err(|e| format!("{marketplace}: {e}"))
-                });
+            // A pack hook file is filtered from its HEAD blob, so a dirty
+            // working-tree hook file reads stale here as it does on a full stage.
+            let verdict = match &mux {
+                Some(m) if HOOK_FILES.contains(&marketplace) => run_checked(
+                    &["git".into(), "show".into(), format!("HEAD:{marketplace}")],
+                    Some(&root),
+                )
+                .and_then(|t| m.filter_hooks(&t)),
+                _ => std::fs::read_to_string(root.join(marketplace))
+                    .map_err(|e| format!("{marketplace}: {e}"))
+                    .and_then(|t| staged_marketplace_bytes(&t, marketplace)),
+            }
+            .and_then(|expected| {
+                std::fs::read_to_string(&stage_manifest)
+                    .map(|actual| actual == expected)
+                    .map_err(|e| format!("{marketplace}: {e}"))
+            });
             match verdict {
                 Err(e) => return unknown_check(stage, source_dir, e),
                 Ok(false) => differing.push(marketplace.to_string()),
@@ -443,6 +629,35 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
     } else {
         "stale"
     };
+    let mut groups = std::collections::BTreeMap::new();
+    for path in &combined {
+        let group = path.split_once('/').map_or("(root)", |(top, _)| top);
+        *groups.entry(group.to_string()).or_insert(0) += 1;
+    }
+    let stamp: Option<Value> = std::fs::read_to_string(stage.join(STAGE_STAMP))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let stamp_field = |key: &str| {
+        stamp
+            .as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let stage_head = stamp_field("source_head");
+    let commits_behind = stage_head.as_ref().and_then(|from| {
+        run_checked(
+            &[
+                "git".to_string(),
+                "rev-list".into(),
+                "--count".into(),
+                format!("{from}..HEAD"),
+            ],
+            Some(&root),
+        )
+        .ok()
+        .and_then(|n| n.parse().ok())
+    });
     let source_root = root.display().to_string();
     StageCheck {
         status,
@@ -452,8 +667,12 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         differing_count: differing.len(),
         missing_count: missing.len(),
         sample: combined.into_iter().take(10).collect(),
-        remedy: format!("cd {source_root} && fno config plugin install claude"),
+        remedy: format!("fno config plugin install claude --source {source_root}"),
         detail: None,
+        stage_head,
+        built_at: stamp_field("built_at"),
+        commits_behind,
+        groups,
     }
 }
 
@@ -493,7 +712,7 @@ fn push_root(
     roots.push(PluginRoot { path, origin, live });
 }
 
-/// The installPath strings installed_plugins.json registers for fno@footnote,
+/// The installPath strings installed_plugins.json registers for fno,
 /// existence unchecked: the sweep's guard must fire on the registry's word
 /// alone, since a registered-but-deleted path is exactly the lie the sweep
 /// must never create.
@@ -506,9 +725,7 @@ fn registry_install_paths(home: &Path) -> Vec<PathBuf> {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    v.get("plugins")
-        .and_then(|p| p.get("fno@footnote"))
-        .and_then(Value::as_array)
+    registry_fno_entries(&v)
         .map(|list| {
             list.iter()
                 .filter_map(|e| e.get("installPath").and_then(Value::as_str))
@@ -518,14 +735,14 @@ fn registry_install_paths(home: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The footnote marketplace's `source.source` kind ("directory", "file",
-/// "github", ...). None when the registry is unreadable or names no footnote
+/// The fno marketplace's `source.source` kind ("directory", "file",
+/// "github", ...). None when the registry is unreadable or names no fno
 /// marketplace.
 fn marketplace_source_kind(home: &Path) -> Option<String> {
     let text =
         std::fs::read_to_string(home.join(".claude/plugins/known_marketplaces.json")).ok()?;
     let v = serde_json::from_str::<Value>(&text).ok()?;
-    v.get("footnote")?
+    known_fno_marketplace(&v)?
         .get("source")?
         .get("source")?
         .as_str()
@@ -555,8 +772,8 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
     {
         Err(e) => detail.push(format!("{} unreadable: {e}", marketplaces.display())),
         Ok(v) => match (
-            v.get("footnote"),
-            v.get("footnote").and_then(|f| f.get("source")),
+            known_fno_marketplace(&v),
+            known_fno_marketplace(&v).and_then(|f| f.get("source")),
         ) {
             (Some(rec), Some(source)) => {
                 let local = matches!(
@@ -578,7 +795,7 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
                 }
             }
             _ => detail.push(format!(
-                "{} names no footnote marketplace",
+                "{} names no fno marketplace",
                 marketplaces.display()
             )),
         },
@@ -591,15 +808,9 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
     {
         Err(e) => detail.push(format!("{} unreadable: {e}", registry.display())),
         Ok(v) => {
-            let entries = v
-                .get("plugins")
-                .and_then(|p| p.get("fno@footnote"))
-                .and_then(Value::as_array);
+            let entries = registry_fno_entries(&v);
             match entries {
-                None => detail.push(format!(
-                    "{} names no fno@footnote entry",
-                    registry.display()
-                )),
+                None => detail.push(format!("{} names no {PLUGIN_ID} entry", registry.display())),
                 Some(list) => {
                     for entry in list {
                         if let Some(p) = entry.get("installPath").and_then(Value::as_str) {
@@ -614,6 +825,7 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
     for path in [
         home.join(".gemini/config/plugins/footnote"),
         home.join(".codex/plugins/cache/footnote-local"),
+        home.join(".claude/plugins/cache/fno"),
         home.join(".claude/plugins/cache/footnote"),
     ] {
         push_root(&mut roots, &mut seen, path, "orphan", false);
@@ -656,8 +868,20 @@ struct RootsReport {
     enumeration_detail: Vec<String>,
 }
 
-fn root_note(live: bool, drift: usize, remedy: &str) -> String {
-    let mut note = format!(" ({drift} file(s) differ from source HEAD)");
+fn root_note(live: bool, check: &StageCheck) -> String {
+    if let Some(detail) = check
+        .detail
+        .as_deref()
+        .filter(|_| check.status == "unknown")
+    {
+        return format!(" (check could not run: {detail})");
+    }
+    let drift = check.differing_count + check.missing_count;
+    let remedy = check.remedy.as_str();
+    let mut note = format!(
+        " ({drift} file(s) differ from source HEAD: {})",
+        check.lag_summary()
+    );
     if drift == 0 {
         note.clear();
     }
@@ -704,10 +928,11 @@ fn check_roots_report(
         let blocker = if check.status == "stale" && !retired {
             let role = if root.live { "live" } else { "second copy" };
             Some(format!(
-                "plugin root {} ({}) differs from source HEAD in {} file(s) (e.g. {}). Fix: {}",
+                "plugin root {} ({}) differs from source HEAD in {} file(s) ({}; e.g. {}). Fix: {}",
                 root.path.display(),
                 role,
                 drift,
+                check.lag_summary(),
                 check.sample.first().map(String::as_str).unwrap_or("?"),
                 check.remedy
             ))
@@ -719,7 +944,7 @@ fn check_roots_report(
              the harness loads the live root in place)"
                 .to_string()
         } else {
-            root_note(root.live, drift, &check.remedy)
+            root_note(root.live, &check)
         };
         let last_status = check.status;
         roots.push(RootVerdict {
@@ -787,10 +1012,14 @@ enum RestageOutcome {
 
 /// Rebuild an EXISTING stage from `source_dir`. Never installs, exports env,
 /// or reclaims: those belong to install, not deploy. A machine that never set
-/// up the directory marketplace has no stage and gets a no-op.
+/// up the directory marketplace has no stage and gets a no-op. Each profile
+/// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let stage = stage_parent.join("fno");
-    if !stage.exists() {
+    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
+        .into_iter()
+        .filter(|p| stage_parent.join(p.stage_dir()).exists())
+        .collect();
+    if present.is_empty() {
         return Ok(RestageOutcome::Absent);
     }
     let root = repo_root(source_dir)?;
@@ -802,7 +1031,10 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         ],
         Some(&root),
     )?;
-    let (_, files) = build_stage(&root, &stage_parent)?;
+    let mut files = 0;
+    for profile in present {
+        files += build_stage_as(&root, stage_parent, profile)?.1;
+    }
     Ok(RestageOutcome::Restaged {
         files,
         root,
@@ -811,6 +1043,15 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
 }
 
 fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
+    // Best effort: a step that fails leaves the old registration loading,
+    // and the add + install below still land fno@fno.
+    let claude_dir = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => dirs_home().join(".claude"),
+    };
+    for argv in legacy_claude_migration(&claude_dir) {
+        let _ = run_checked(&argv, None);
+    }
     run_checked(
         &[
             "claude".into(),
@@ -821,61 +1062,29 @@ fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
         ],
         None,
     )?;
+    let plugin = |action: &str| -> Vec<String> {
+        vec![
+            "claude".into(),
+            "plugin".into(),
+            action.into(),
+            PLUGIN_ID.into(),
+        ]
+    };
     if force {
         // update keeps same-version files; force means delete and reinstall,
         // and also covers not-yet-installed, so uninstall failure is fine.
-        let _ = run_checked(
-            &[
-                "claude".into(),
-                "plugin".into(),
-                "uninstall".into(),
-                "fno@footnote".into(),
-            ],
-            None,
-        );
-        run_checked(
-            &[
-                "claude".into(),
-                "plugin".into(),
-                "install".into(),
-                "fno@footnote".into(),
-            ],
-            None,
-        )?;
-        return Ok(format!("reinstalled fno@footnote from {}", stage.display()));
+        let _ = run_checked(&plugin("uninstall"), None);
+        run_checked(&plugin("install"), None)?;
+        return Ok(format!("reinstalled {PLUGIN_ID} from {}", stage.display()));
     }
-    match run_checked(
-        &[
-            "claude".into(),
-            "plugin".into(),
-            "install".into(),
-            "fno@footnote".into(),
-        ],
-        None,
-    ) {
-        Ok(_) => Ok(format!("installed fno@footnote from {}", stage.display())),
+    match run_checked(&plugin("install"), None) {
+        Ok(_) => Ok(format!("installed {PLUGIN_ID} from {}", stage.display())),
         Err(e) if e.contains("already installed") => {
-            run_checked(
-                &[
-                    "claude".into(),
-                    "plugin".into(),
-                    "update".into(),
-                    "fno@footnote".into(),
-                ],
-                None,
-            )?;
-            Ok(format!("updated fno@footnote from {}", stage.display()))
+            run_checked(&plugin("update"), None)?;
+            Ok(format!("updated {PLUGIN_ID} from {}", stage.display()))
         }
         Err(e) => Err(e),
     }
-}
-
-fn install_opencode() -> Result<String, String> {
-    let receipt = crate::opencode_install::install(&std::env::current_dir().unwrap_or_default())?;
-    Ok(format!(
-        "{} (footnote {} -> {})",
-        receipt.status, receipt.version, receipt.config_dir
-    ))
 }
 
 /// A value fno wrote: under a `.fno` state dir, or the exact value this
@@ -1003,7 +1212,7 @@ fn marked_block_end(text: &str, mark_at: usize) -> usize {
 /// the shell rc, Claude settings env and Codex shell env. That moved every
 /// Rust project's build files under ~/.fno, where reclaim sweeps them. Install
 /// now removes those lines instead. Footnote builds still land in the fno
-/// base: fno verbs, the target stop hook and the daemon set the build dir per
+/// base: fno commands, the target stop hook and the daemon set the build dir per
 /// process, and the repo's rustc wrapper sets SCCACHE_DIR. Returns the files
 /// rewritten, and an error line per file left alone.
 fn retract_env_exports() -> (Vec<PathBuf>, Vec<String>) {
@@ -1068,60 +1277,62 @@ fn remove_stale_copies(home: &Path, roots: &[PluginRoot]) -> (Vec<PathBuf>, Vec<
             removed.push(path);
         }
     }
-    let cache = home.join(".claude/plugins/cache/footnote");
-    if !cache.exists() {
-        return (removed, refused);
-    }
-    // installed_plugins.json is Claude's own registry: a tree it registers
-    // inside is never the sweep's to delete, whatever its staleness. Install
-    // registered cache/footnote/fno/<ver> here and this sweep deleted it in
-    // the same run, leaving the registry pointing at a missing tree and the
-    // review preflight's plugin-file check reading unknown.
-    if let Some(registered) = registry_install_paths(home)
-        .into_iter()
-        .find(|p| p.starts_with(&cache))
-    {
-        refused.push(format!(
-            "claude cache {} kept: installed_plugins.json registers {} inside it",
-            cache.display(),
-            registered.display()
-        ));
-        return (removed, refused);
-    }
-    let live_roots: Vec<&PluginRoot> = roots.iter().filter(|r| r.live).collect();
-    let cache_is_live = live_roots.iter().any(|r| paths_equal(&r.path, &cache));
-    match marketplace_source_kind(home) {
-        None => refused.push(format!(
-            "claude cache {} kept: footnote marketplace shape unreadable",
-            cache.display()
-        )),
-        Some(kind) if kind != "directory" && kind != "file" => refused.push(format!(
-            "claude cache {} kept: marketplace source is '{kind}', not a local directory",
-            cache.display()
-        )),
-        _ if cache_is_live => refused.push(format!(
-            "claude cache {} kept: it is the live root",
-            cache.display()
-        )),
-        _ if live_roots.is_empty() => refused.push(format!(
-            "claude cache {} kept: no live root proven on this machine",
-            cache.display()
-        )),
-        _ => {
-            // A bare removed-path line reads as an install failure, so the
-            // receipt names the live root the harness loads instead. Rides
-            // the second channel: call sites print its lines verbatim.
-            let live = live_roots
-                .iter()
-                .map(|r| r.path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
+    for name in [MARKETPLACE_NAME, LEGACY_MARKETPLACE_NAME] {
+        let cache = home.join(".claude/plugins/cache").join(name);
+        if !cache.exists() {
+            continue;
+        }
+        // installed_plugins.json is Claude's own registry: a tree it registers
+        // inside is never the sweep's to delete, whatever its staleness. Install
+        // registered cache/<name>/fno/<ver> here and this sweep deleted it in
+        // the same run, leaving the registry pointing at a missing tree and the
+        // review preflight's plugin-file check reading unknown.
+        if let Some(registered) = registry_install_paths(home)
+            .into_iter()
+            .find(|p| p.starts_with(&cache))
+        {
             refused.push(format!(
-                "claude loads fno in place from {live}; removed the unused cache copy {}",
-                cache.display()
+                "claude cache {} kept: installed_plugins.json registers {} inside it",
+                cache.display(),
+                registered.display()
             ));
-            let _ = std::fs::remove_dir_all(&cache);
-            removed.push(cache);
+            continue;
+        }
+        let live_roots: Vec<&PluginRoot> = roots.iter().filter(|r| r.live).collect();
+        let cache_is_live = live_roots.iter().any(|r| paths_equal(&r.path, &cache));
+        match marketplace_source_kind(home) {
+            None => refused.push(format!(
+                "claude cache {} kept: fno marketplace shape unreadable",
+                cache.display()
+            )),
+            Some(kind) if kind != "directory" && kind != "file" => refused.push(format!(
+                "claude cache {} kept: marketplace source is '{kind}', not a local directory",
+                cache.display()
+            )),
+            _ if cache_is_live => refused.push(format!(
+                "claude cache {} kept: it is the live root",
+                cache.display()
+            )),
+            _ if live_roots.is_empty() => refused.push(format!(
+                "claude cache {} kept: no live root proven on this machine",
+                cache.display()
+            )),
+            _ => {
+                // A bare removed-path line reads as an install failure, so the
+                // receipt names the live root the harness loads instead. Rides
+                // the second channel: call sites print its lines verbatim.
+                let live = live_roots
+                    .iter()
+                    .map(|r| r.path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                refused.push(format!(
+                    "claude loads fno in place from {live}; removed the unused cache copy {}",
+                    cache.display()
+                ));
+                let _ = std::fs::remove_dir_all(&cache);
+                removed.push(cache);
+            }
         }
     }
     (removed, refused)
@@ -1138,6 +1349,81 @@ fn default_source_dir() -> PathBuf {
         }
     }
     std::env::current_dir().unwrap_or_default()
+}
+
+/// The release channel the harness's footnote plugin comes from, or None for
+/// a local (dev) install or no install. A dev install must refuse to replace
+/// a release one: `claude plugin marketplace add <stage>` silently repoints
+/// an existing GitHub fno marketplace at the stage, exit 0.
+fn release_channel(harness: &str, claude_dir: &Path, codex_dir: &Path) -> Option<String> {
+    let read = |path: PathBuf| -> Option<Value> {
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    };
+    let (place, git_ref) = match harness {
+        "claude" => {
+            let known = read(claude_dir.join("plugins").join("known_marketplaces.json"))?;
+            let source = known_fno_marketplace(&known)?.get("source")?;
+            let place = match source.get("source").and_then(Value::as_str)? {
+                "github" => format!("github:{}", source.get("repo")?.as_str()?),
+                "git" | "url" => source.get("url")?.as_str()?.to_string(),
+                _ => return None,
+            };
+            (
+                place,
+                source
+                    .get("ref")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            )
+        }
+        "codex" => {
+            let marker = read(codex_dir.join("footnote").join("plugin-channel.json"))?;
+            if marker.get("channel").and_then(Value::as_str) != Some("release") {
+                return None;
+            }
+            let place = marker
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("github")
+                .to_string();
+            (
+                place,
+                marker
+                    .get("ref")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            )
+        }
+        _ => return None,
+    };
+    let channel = match git_ref.as_deref() {
+        None => "main",
+        Some(r) if r.contains("nightly") => "nightly",
+        Some(r) => r,
+    };
+    let git_ref = git_ref.as_deref().unwrap_or("main");
+    Some(format!("{channel} ({place}#{git_ref})"))
+}
+
+fn release_channel_here(harness: &str) -> Option<String> {
+    let home = dirs_home();
+    let env_dir = |key: &str, fallback: &str| match std::env::var_os(key) {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => home.join(fallback),
+    };
+    release_channel(
+        harness,
+        &env_dir("CLAUDE_CONFIG_DIR", ".claude"),
+        &env_dir("CODEX_HOME", ".codex"),
+    )
+}
+
+fn release_refusal(harness: &str, channel: &str) -> String {
+    format!(
+        "plugin install {harness}: refused. Your footnote plugin comes from the {channel} channel. \
+         This command installs your local checkout for development, and it would move you off that channel. \
+         To switch to your local checkout, run: fno config plugin install {harness} --dev"
+    )
 }
 
 fn check_exit_code(status: &str) -> i32 {
@@ -1163,9 +1449,10 @@ fn print_check(report: &StageCheck, json: bool) {
             &report.source_head[..report.source_head.len().min(12)]
         ),
         "stale" => println!(
-            "plugin stage: stale ({} differing, {} missing; e.g. {})",
+            "plugin stage: stale ({} differing, {} missing: {}; e.g. {})",
             report.differing_count,
             report.missing_count,
+            report.lag_summary(),
             report.sample.first().map(String::as_str).unwrap_or("?")
         ),
         "absent" => println!("plugin stage: absent"),
@@ -1194,6 +1481,10 @@ struct PluginInstallArgs {
     extension_src: Option<String>,
     yes: bool,
     dry_run: bool,
+    /// Consent to replace a release-channel plugin with the local checkout.
+    dev: bool,
+    /// Converge codex onto the release channel (setup's wiring).
+    release: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1220,6 +1511,8 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         extension_src: None,
         yes: false,
         dry_run: false,
+        dev: false,
+        release: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1262,11 +1555,19 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.dry_run = true;
                 i += 1;
             }
+            "--dev" => {
+                parsed.dev = true;
+                i += 1;
+            }
+            "--release" => {
+                parsed.release = true;
+                i += 1;
+            }
             "--json" | "-J" => {
                 parsed.json = true;
                 i += 1;
             }
-            "--force" => {
+            "--force" | "-F" => {
                 parsed.force = true;
                 i += 1;
             }
@@ -1290,7 +1591,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.hooks_status = true;
                 i += 1;
             }
-            "--check" | "--restage" | "--stage-only" | "--env-only" => {
+            "--check" | "--restage" => {
                 if parsed.mode.is_none() {
                     parsed.mode = Some(args[i].clone());
                 } else {
@@ -1299,7 +1600,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 i += 1;
             }
             other => {
-                if parsed.mode.is_none() && !other.starts_with('-') {
+                if !other.starts_with('-') && parsed.mode.is_none() {
                     parsed.mode = Some(other.to_string());
                 }
                 i += 1;
@@ -1328,6 +1629,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         extension_src,
         yes,
         dry_run,
+        dev,
+        release,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1383,9 +1686,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         // Deploy-only rebuild of an existing stage; fno doctor update calls
         // this after a successful install.
         Some("--restage") => {
-            let source_dir = source
-                .map(PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
             let stage_parent = state_root().join("plugin-stage");
             match restage_stage(&source_dir, &stage_parent) {
                 Ok(RestageOutcome::Absent) => {
@@ -1409,34 +1710,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 }
             }
         }
-        // Stage-only mode: build the filtered stage, print its path, exit. The
-        // Python codex arm uses it to hand converge a source_root.
-        Some("--stage-only") => {
-            let cwd = source
-                .map(PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            match repo_root(&cwd).and_then(|root| {
-                let parent = state_root().join("plugin-stage");
-                build_stage(&root, &parent).map(|(p, _)| p)
-            }) {
-                Ok(stage) => {
-                    prime_plugin_root_pointer(&stage);
-                    println!("{}", stage.display());
-                    0
-                }
-                Err(e) => {
-                    eprintln!("plugin install: {e}");
-                    1
-                }
-            }
-        }
-        // Env-only mode: remove the old build-dir exports without an install,
-        // so the codex path (converge in Python) cleans up too.
-        Some("--env-only") => {
-            env_retract_receipt();
-            0
-        }
         Some(harness) => {
+            if harness == "codex" && status {
+                return crate::codex_converge::run_status();
+            }
+            if harness == "codex" && release {
+                return crate::codex_converge::run_release(json);
+            }
             if harness == "opencode" {
                 return run_opencode_arm(harness, json, uninstall, status, quick, yes, dry_run);
             }
@@ -1458,7 +1738,12 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 );
                 return 2;
             }
-            let outcome = install_harness(harness, force);
+            if let Some(channel) = release_channel_here(harness).filter(|_| !dev) {
+                eprintln!("{}", release_refusal(harness, &channel));
+                return 3;
+            }
+            let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
+            let outcome = install_harness(harness, force, &source_dir);
             match outcome {
                 Ok(detail) => {
                     println!("plugin install {harness}: {detail}");
@@ -1474,7 +1759,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                         println!("removed stale copies: {}", joined.join(", "));
                     }
                     let home = AgentsHome::from_env();
-                    let _ = crate::reclaim::run_reclaim(&["--apply".to_string()], &home);
+                    let _ =
+                        crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
                     0
                 }
                 Err(e) => {
@@ -1485,11 +1771,14 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok> [--force]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok> [--force] [--dev] [--source <dir>]"
             );
+            eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
             eprintln!("         (no --stage checks every plugin root; exit is the worst status across roots)");
             eprintln!("       fno-agents plugin-install --restage [--source <dir>]");
+            eprintln!("       fno-agents plugin-install codex --release [--json] | --status");
+            eprintln!("         converges codex onto the GitHub stable channel, or prints its freshness verdict");
             2
         }
     }
@@ -1674,8 +1963,9 @@ fn run_opencode_arm(
                 say(format!("removed stale copies: {}", joined.join(", ")));
             }
             let home = AgentsHome::from_env();
-            let _ = crate::reclaim::run_reclaim(&["--apply".to_string()], &home);
-            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(STAGE_DIR));
+            let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
+            let full = Profile::Full.stage_dir();
+            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(full));
             if receipt.status == "partial" {
                 3
             } else {
@@ -1772,7 +2062,7 @@ fn print_status_prose(value: &serde_json::Value) {
 ///   directory and a rename, so a half-written extension is never loadable.
 /// - `--status`: answer `{"installed", "dest", "agent_dir_source", "skills"}`;
 ///   `installed` means the dest exists and, when a source was named, is
-///   byte-equal to it. `skills` reads the same plugin-root pointer the verb
+///   byte-equal to it. `skills` reads the same plugin-root pointer the command
 ///   renderer reads.
 fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
     let dest = crate::pi::pi_agent_dir()
@@ -1992,19 +2282,19 @@ fn zcode_install_config(config_path: &Path, stage: &Path) -> Result<String, Stri
     ))
 }
 
-/// The stage dir name under plugin-stage; build_stage and the pointer prime
-/// must agree on it.
-const STAGE_DIR: &str = "fno";
+/// Written into the stage at build: the source HEAD it was built from and
+/// when, so the check can say how far behind a stale stage is. HEAD never
+/// tracks it, and the check ignores files HEAD lacks.
+const STAGE_STAMP: &str = ".fno-stage.json";
 
-fn install_harness(harness: &str, force: bool) -> Result<String, String> {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let root = repo_root(&cwd)?;
+fn install_harness(harness: &str, force: bool, source_dir: &Path) -> Result<String, String> {
+    let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
     let (stage, _) = build_stage(&root, &parent)?;
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
-        "opencode" => install_opencode()?,
         "agy" => install_agy(&stage, force)?,
+        "codex" => crate::codex_converge::run_dev(&stage, force)?,
         "grok" => install_grok(&stage, force)?,
         "zcode" => install_zcode(&stage, force)?,
         other => {
@@ -2014,13 +2304,13 @@ fn install_harness(harness: &str, force: bool) -> Result<String, String> {
         }
     };
     prime_plugin_root_pointer(&stage);
-    Ok(detail)
+    Ok(format!("{detail}; local checkout {}", root.display()))
 }
 
 /// Persist the installed stage to `<state-root>/install/plugin-root`, the
 /// pointer the session-start hook primes and every env-less reader (provider
-/// verb rosters, opencode install, the lead skill's fallback) resolves. The
-/// install verb must not depend on a session ever starting: on a fresh machine
+/// command rosters, opencode install, the lead skill's fallback) resolves. The
+/// install command must not depend on a session ever starting: on a fresh machine
 /// the first `fno config plugin install` is exactly when no hook has run yet
 /// (2026-10-02 gap audit 6). Best-effort: a failed write never fails the
 /// install. The stage is a self-contained copy (no `.git`), so unlike a
@@ -2274,7 +2564,7 @@ pub(crate) fn loop_install_probe(
                 Ok(path) => path,
                 Err(reason) => return Some(Err(reason)),
             };
-            let root = match repo_root(&std::env::current_dir().unwrap_or_default()) {
+            let root = match repo_root(&default_source_dir()) {
                 Ok(root) => root,
                 Err(reason) => return Some(Err(reason)),
             };
@@ -2647,9 +2937,10 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("hooks/live.sh"), "live\n").unwrap();
+        fs::write(dir.join(".claude-plugin/plugin.json"), r#"{"name":"fno"}"#).unwrap();
         fs::write(
             dir.join(MARKETPLACE_REL),
-            r#"{"name":"footnote","plugins":[{"name":"fno","source":{"source":"github","repo":"bllshttng/footnote","ref":"stable"}},{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/footnote","ref":"nightly"}}]}"#,
+            r#"{"name":"fno","plugins":[{"name":"fno","source":{"source":"github","repo":"bllshttng/fno","ref":"stable"}},{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/fno","ref":"nightly"}}]}"#,
         )
         .unwrap();
         git_in(dir, &["add", "-A"]);
@@ -2666,6 +2957,56 @@ mod tests {
         (source, stage)
     }
 
+    /// AC3/AC4: a pack stage drops mux paths and mux hook entries, checks
+    /// fresh against its own source, and a manifest naming a missing path
+    /// refuses before any temp dir exists.
+    #[test]
+    fn pack_stage_drops_mux_paths_and_checks_fresh() {
+        let base = std::env::temp_dir().join(format!("pi-pack-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        new_repo(&source);
+        fs::create_dir_all(source.join("skills/mail")).unwrap();
+        fs::write(source.join("skills/mail/SKILL.md"), "mail\n").unwrap();
+        fs::write(source.join("hooks/mail.sh"), "mail\n").unwrap();
+        fs::write(
+            source.join("hooks/hooks.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"command":"${R}/hooks/mail.sh"},{"command":"${R}/hooks/live.sh"}]}]}}"#,
+        )
+        .unwrap();
+        let manifest = r#"{"mux":["hooks/mail.sh","skills/mail"]}"#;
+        fs::write(source.join(crate::pack_profile::MANIFEST), manifest).unwrap();
+        git_in(&source, &["add", "-A"]);
+        git_in(&source, &["commit", "-q", "-m", "c2"]);
+        let parent = base.join("stage-parent");
+        fs::create_dir_all(&parent).unwrap();
+
+        let (stage, _) = build_stage_as(&source, &parent, Profile::Pack).unwrap();
+        assert!(stage.ends_with("fno-pack"));
+        assert!(!stage.join("skills/mail").exists());
+        assert!(!stage.join("hooks/mail.sh").exists());
+        let hooks = fs::read_to_string(stage.join("hooks/hooks.json")).unwrap();
+        assert!(
+            !hooks.contains("mail.sh") && hooks.contains("live.sh"),
+            "{hooks}"
+        );
+        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
+
+        fs::write(
+            source.join(crate::pack_profile::MANIFEST),
+            r#"{"mux":["skills/gone"]}"#,
+        )
+        .unwrap();
+        let err = build_stage_as(&source, &parent, Profile::Pack).unwrap_err();
+        assert!(err.contains("skills/gone"), "{err}");
+        let temp = fs::read_dir(&parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().starts_with(".fno-pack."));
+        assert!(!temp, "a refused pack build left a temp dir");
+        let _ = fs::remove_dir_all(&base);
+    }
+
     /// AC1-HP: the swap is atomic (no temp dirs left), new bytes land, and a
     /// handle opened before the rebuild still reads the old bytes.
     #[test]
@@ -2676,9 +3017,24 @@ mod tests {
         let live = stage.join("hooks/live.sh");
         let old_handle = fs::File::open(&live).unwrap();
 
+        let built_from = run_checked(
+            &["git".to_string(), "rev-parse".into(), "HEAD".into()],
+            Some(&source),
+        )
+        .unwrap();
         fs::write(source.join("hooks/live.sh"), "updated\n").unwrap();
         git_in(&source, &["add", "-A"]);
         git_in(&source, &["commit", "-q", "-m", "c2"]);
+
+        // Before the rebuild the stage trails by one commit in hooks/, and
+        // the check says so from the stamp.
+        let lag = check_stage_report(&stage, &source);
+        assert_eq!(lag.status, "stale");
+        assert_eq!(lag.stage_head.as_deref(), Some(built_from.as_str()));
+        assert_eq!(lag.commits_behind, Some(1));
+        let summary = lag.lag_summary();
+        assert!(summary.starts_with("hooks 1; staged from "), "{summary}");
+        assert!(summary.ends_with(", 1 commit(s) behind"), "{summary}");
 
         let stage_parent = stage.parent().unwrap().to_path_buf();
         let (_, copied) = build_stage(&source, &stage_parent).unwrap();
@@ -2715,7 +3071,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
         fs::create_dir_all(source.join(".agents/plugins")).unwrap();
-        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/bllshttng/footnote.git","ref":"stable"}}]}"#).unwrap();
+        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/bllshttng/fno.git","ref":"stable"}}]}"#).unwrap();
         git_in(&source, &["add", CODEX_MARKETPLACE_REL]);
         git_in(&source, &["commit", "-q", "-m", "codex marketplace"]);
         let (stage, _) = build_stage(&source, stage.parent().unwrap()).unwrap();
@@ -2739,7 +3095,7 @@ mod tests {
                 .unwrap();
         assert_eq!(public["plugins"][0]["source"]["ref"], json!("stable"));
         assert_eq!(check_stage_report(&stage, &source).status, "fresh");
-        // The install verb primes the plugin-root pointer from the built
+        // The install command primes the plugin-root pointer from the built
         // stage and ignores a manifest-less one, so the same contract rides
         // this real stage: the pointer lands at <state>/install/plugin-root.
         let previous_root = std::env::var_os("FNO_RECLAIM_STATE_ROOT");
@@ -2790,7 +3146,7 @@ mod tests {
         new_repo(&source);
         fs::write(
             source.join(MARKETPLACE_REL),
-            r#"{"name":"footnote","plugins":[{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/footnote","ref":"nightly"}}]}"#,
+            r#"{"name":"fno","plugins":[{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/fno","ref":"nightly"}}]}"#,
         )
         .unwrap();
         git_in(&source, &["add", "-A"]);
@@ -2802,10 +3158,32 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// A restage from a git repo that is not fno refuses and leaves the live
+    /// stage byte-for-byte untouched (fno-books once replaced the plugin).
+    #[test]
+    fn restage_from_non_fno_repo_refuses_and_keeps_stage() {
+        let base = std::env::temp_dir().join(format!("pi-notfno-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (_, stage) = fresh_stage(&base);
+        let stage_parent = stage.parent().unwrap().to_path_buf();
+        let before = fs::read(stage.join("hooks/live.sh")).unwrap();
+        let books = base.join("books");
+        fs::create_dir_all(&books).unwrap();
+        git_in(&books, &["init", "-b", "main", "-q"]);
+        fs::write(books.join("README.md"), "# Books\n").unwrap();
+        git_in(&books, &["add", "-A"]);
+        git_in(&books, &["commit", "-q", "-m", "c1"]);
+        let err = restage_stage(&books, &stage_parent).unwrap_err();
+        assert!(err.contains("not the fno plugin source"), "err: {err}");
+        assert_eq!(fs::read(stage.join("hooks/live.sh")).unwrap(), before);
+        assert!(!stage.join("README.md").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
     /// Regression: the --force arm once skipped `i += 1`, so the parse loop
     /// spun on the flag forever. The test returning at all is the proof.
     /// Also pins B5 at the same parser boundary: a mode flag after a harness
-    /// positional is recorded, and the verb refuses before any install work -
+    /// positional is recorded, and the command refuses before any install work -
     /// `plugin-install claude --check` once dropped the flag and ran the full
     /// mutating install.
     #[test]
@@ -2827,11 +3205,66 @@ mod tests {
         assert_eq!(parsed.dropped_mode.as_deref(), Some("--check"));
         assert_eq!(run_plugin_install(&args), 2);
 
-        let args: Vec<String> = ["codex", "--stage-only"]
+        let args: Vec<String> = ["--json", "--release", "codex", "-F"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
-        assert_eq!(run_plugin_install(&args), 2);
+        let parsed = parse_plugin_install_args(&args);
+        assert_eq!(parsed.mode.as_deref(), Some("codex"));
+        assert!(parsed.release && parsed.json && parsed.force && !parsed.dev);
+    }
+
+    /// A GitHub-sourced claude marketplace or a codex release marker is a
+    /// release channel the dev install must not replace; a directory source,
+    /// a dev marker, or no record at all is not.
+    #[test]
+    fn release_channel_names_github_and_codex_release_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join("claude");
+        let codex = tmp.path().join("codex");
+        fs::create_dir_all(claude.join("plugins")).unwrap();
+        fs::create_dir_all(codex.join("footnote")).unwrap();
+        assert_eq!(release_channel("claude", &claude, &codex), None);
+        assert_eq!(release_channel("codex", &claude, &codex), None);
+
+        let known = claude.join("plugins/known_marketplaces.json");
+        let claude_with = |source: Value| {
+            fs::write(&known, json!({"fno": {"source": source}}).to_string()).unwrap();
+            release_channel("claude", &claude, &codex)
+        };
+        assert_eq!(
+            claude_with(json!({"source": "github", "repo": "bllshttng/fno", "ref": "stable"}))
+                .as_deref(),
+            Some("stable (github:bllshttng/fno#stable)")
+        );
+        assert_eq!(
+            claude_with(
+                json!({"source": "github", "repo": "bllshttng/fno", "ref": "plugin-nightly"})
+            )
+            .as_deref(),
+            Some("nightly (github:bllshttng/fno#plugin-nightly)")
+        );
+        assert_eq!(
+            claude_with(json!({"source": "github", "repo": "bllshttng/fno"})).as_deref(),
+            Some("main (github:bllshttng/fno#main)")
+        );
+        assert_eq!(
+            claude_with(json!({"source": "directory", "path": "/stage"})),
+            None
+        );
+
+        let marker = codex.join("footnote/plugin-channel.json");
+        let codex_with = |channel: &str| {
+            let v = json!({"channel": channel, "source": "bllshttng/fno", "ref": "stable"});
+            fs::write(&marker, v.to_string()).unwrap();
+            release_channel("codex", &claude, &codex)
+        };
+        assert_eq!(
+            codex_with("release").as_deref(),
+            Some("stable (bllshttng/fno#stable)")
+        );
+        assert_eq!(codex_with("dev"), None);
+        assert_eq!(release_channel("agy", &claude, &codex), None);
     }
 
     /// A throwaway HOME for the root-enumeration fixtures. The marketplace
@@ -2844,7 +3277,7 @@ mod tests {
     }
 
     fn write_marketplace(home: &Path, shape: &str, install_location: &Path, source_path: &Path) {
-        let v = json!({"footnote": {"source": {"source": shape, "path": source_path.display().to_string()},
+        let v = json!({"fno": {"source": {"source": shape, "path": source_path.display().to_string()},
             "installLocation": install_location.display().to_string()}});
         fs::write(
             home.join(".claude/plugins/known_marketplaces.json"),
@@ -2854,13 +3287,79 @@ mod tests {
     }
 
     fn write_registry(home: &Path, install_path: &Path) {
-        let v = json!({"version": 2, "plugins": {"fno@footnote": [
+        let v = json!({"version": 2, "plugins": {"fno@fno": [
             {"scope": "user", "installPath": install_path.display().to_string()}]}});
         fs::write(
             home.join(".claude/plugins/installed_plugins.json"),
             serde_json::to_string(&v).unwrap(),
         )
         .unwrap();
+    }
+
+    /// An install made under the old marketplace name keeps reading as fno,
+    /// and a dev install retires the old registration before it adds fno@fno.
+    #[test]
+    fn legacy_footnote_marketplace_is_read_and_migrated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = fixture_home(tmp.path());
+        let claude = home.join(".claude");
+        assert!(legacy_claude_migration(&claude).is_empty());
+
+        let known = json!({"footnote": {"source": {"source": "github", "repo": "bllshttng/fno", "ref": "stable"}}});
+        fs::write(
+            claude.join("plugins/known_marketplaces.json"),
+            known.to_string(),
+        )
+        .unwrap();
+        let registry = json!({"version": 2, "plugins": {"fno@footnote": [
+            {"scope": "user", "installPath": "/c/cache/footnote/fno/0.4.3"}]}});
+        fs::write(
+            claude.join("plugins/installed_plugins.json"),
+            registry.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(marketplace_source_kind(&home).as_deref(), Some("github"));
+        assert_eq!(
+            registry_install_paths(&home),
+            vec![PathBuf::from("/c/cache/footnote/fno/0.4.3")]
+        );
+        assert_eq!(
+            release_channel("claude", &claude, &home.join(".codex")).as_deref(),
+            Some("stable (github:bllshttng/fno#stable)")
+        );
+        // A failed migration leaves both ids registered; the guard sees both.
+        let both = json!({"version": 2, "plugins": {
+            "fno@fno": [{"scope": "user", "installPath": "/c/cache/fno/fno/0.5.0"}],
+            "fno@footnote": [{"scope": "project", "installPath": "/c/cache/footnote/fno/0.4.3"}]}});
+        fs::write(
+            claude.join("plugins/installed_plugins.json"),
+            both.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            registry_install_paths(&home),
+            vec![
+                PathBuf::from("/c/cache/fno/fno/0.5.0"),
+                PathBuf::from("/c/cache/footnote/fno/0.4.3")
+            ]
+        );
+        assert_eq!(
+            legacy_claude_migration(&claude),
+            vec![
+                vec!["claude", "plugin", "uninstall", "fno@footnote"],
+                vec!["claude", "plugin", "marketplace", "remove", "footnote"],
+            ]
+        );
+
+        // Once the new name is registered, nothing is left to migrate.
+        let known = json!({"fno": {"source": {"source": "github", "repo": "bllshttng/fno", "ref": "stable"}}});
+        fs::write(
+            claude.join("plugins/known_marketplaces.json"),
+            known.to_string(),
+        )
+        .unwrap();
+        assert!(legacy_claude_migration(&claude).is_empty());
     }
 
     /// AC2-HP: trust reads from the location, not from the name alone.
@@ -3013,11 +3512,12 @@ mod tests {
         assert_eq!(second.check.status, "stale");
         assert!(second.blocker.is_none(), "{:?}", second.blocker);
         assert!(second.note.contains("retired cache"), "{}", second.note);
-        // The registry copy also lacks the manifest HEAD tracks.
+        // The registry copy also lacks the manifests HEAD tracks.
         assert_eq!(
             second.check.sample,
             vec![
                 ".claude-plugin/marketplace.json".to_string(),
+                ".claude-plugin/plugin.json".to_string(),
                 "hooks/live.sh".to_string()
             ]
         );

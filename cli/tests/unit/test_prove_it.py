@@ -149,8 +149,8 @@ def test_a_pass_with_a_failing_claim_row_is_refused(tmp_path):
     assert "REFUSED" in out.stderr
 
 
-def test_a_code_plan_without_probes_warns_advisory(tmp_path):
-    """The advisory names the absence and records the reason it is not a gate."""
+def test_a_code_plan_without_probes_is_refused(tmp_path):
+    """A code plan must declare done_probes; a docs plan opts out by domain."""
     plan = tmp_path / "plan.md"
     plan.write_text(
         "---\ntitle: t\nstatus: ready\nproject: fno\ndomain: code\n---\n# t\n",
@@ -159,6 +159,14 @@ def test_a_code_plan_without_probes_warns_advisory(tmp_path):
     out = subprocess.run(
         ["bash", str(PLAN_VALIDATOR), str(plan)], capture_output=True, text=True
     )
-    joined = out.stdout + out.stderr
-    assert "code plan declares no done_probes" in joined
-    assert "advisory" in joined
+    assert out.returncode != 0
+    assert "ERROR: code plan declares no done_probes" in out.stdout + out.stderr
+
+    plan.write_text(
+        "---\ntitle: t\nstatus: ready\nproject: fno\ndomain: docs\n---\n# t\n",
+        encoding="utf-8",
+    )
+    out = subprocess.run(
+        ["bash", str(PLAN_VALIDATOR), str(plan)], capture_output=True, text=True
+    )
+    assert "done_probes" not in out.stdout + out.stderr

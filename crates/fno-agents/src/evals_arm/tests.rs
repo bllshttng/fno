@@ -7,7 +7,15 @@ use super::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
+/// The checkout the run grades: `<tmp>/repo` carrying an `evals/bank` dir.
+fn bank_repo_dir(tmp: &TempDir) -> PathBuf {
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(repo.join("evals").join("bank")).unwrap();
+    repo
+}
+
 fn base_args(tmp: &TempDir, extra: &[&str]) -> Vec<String> {
+    let repo = bank_repo_dir(tmp);
     let mut v: Vec<String> = [
         "--history",
         &tmp.path().join("history.jsonl").to_string_lossy(),
@@ -21,6 +29,8 @@ fn base_args(tmp: &TempDir, extra: &[&str]) -> Vec<String> {
         "7",
         "--claims-root",
         &tmp.path().join("claims-root").to_string_lossy(),
+        "--repo",
+        &repo.to_string_lossy(),
     ]
     .iter()
     .map(|s| s.to_string())
@@ -40,9 +50,13 @@ fn reg_row(task_id: &str, ts_rfc3339: &str) -> String {
 
 /// Fixture `fno-bin`: `doctor evals run` appends ROWS (stamped one second
 /// after the run window opens, so `ts >= started` holds at second
-/// granularity); `inbox notify` records the call.
+/// granularity) and records its cwd in `cwd.log`; `inbox notify` records
+/// the call.
 fn write_fixture(tmp: &TempDir, rows: &[String], history: &Path, notify_log: &Path) {
-    let mut script = String::from("#!/bin/sh\ncase \"$1/$2\" in\n  doctor/evals)\n    sleep 1\n");
+    let mut script = format!(
+        "#!/bin/sh\ncase \"$1/$2\" in\n  doctor/evals)\n    pwd -P > '{}'\n    sleep 1\n",
+        tmp.path().join("cwd.log").to_string_lossy()
+    );
     // Rows baked as literal JSON; the ts is stamped at run time (second
     // granularity), which `sleep 1` places strictly after `--started`. The
     // JSON rides a double-quoted echo so `$(date)` substitutes; its own
@@ -172,13 +186,38 @@ fn fires_past_window_journals_run_and_frees_claim() {
     assert_eq!(data.get("window_days"), Some(&Value::from(7)));
     let claims_root = tmp.path().join("claims-root");
     assert_eq!(claim_state(&claims_root), claims::ClaimState::Free);
+    // The bank resolves from the child's cwd, so the run must sit in the
+    // repo, never in the launchd tick's $HOME.
+    let ran_in = std::fs::read_to_string(tmp.path().join("cwd.log")).unwrap();
+    assert_eq!(
+        Path::new(ran_in.trim()),
+        bank_repo_dir(&tmp).canonicalize().unwrap()
+    );
 }
 
-// The durable stop outranks the capacity counters: an armed incident holds
-// the arm with fleet_stop even with gate headroom, and a clear verdict in
-// the same world still reads the fleet_full case.
+// No checkout carries a bank: the tick names `no_bank` and launches
+// nothing, and an escalation-grade bank journals that reason.
 #[test]
-fn incident_outranks_the_capacity_gate() {
+fn no_bank_skips_and_names_the_reason() {
+    let tmp = TempDir::new().unwrap();
+    let events = tmp.path().join("events.jsonl");
+    let mut args = base_args(&tmp, &["--summary-json", r#"{"age_days": 26.0}"#]);
+    let idx = args.iter().position(|a| a == "--repo").unwrap();
+    args[idx + 1] = tmp.path().join("no-bank").to_string_lossy().into_owned();
+    let o = parse_args(&args).unwrap();
+
+    run_tick_mode(&o, &ok_gate, &clear, &|_a| panic!("must not spawn"));
+
+    let row = wait_for_row(&events, "evals_stale", Duration::from_secs(5)).unwrap();
+    assert_eq!(row["data"]["reason"], "no_bank");
+}
+
+// The durable stop outranks everything: an armed incident holds the arm
+// even with gate headroom. The slot counters lost their veto - the bank's
+// reserved slot launches at a full fleet - so the positive control is a
+// launch, not the fleet_full skip it used to read.
+#[test]
+fn incident_outranks_the_gate_and_a_full_fleet_launches_on_the_reservation() {
     let tmp = TempDir::new().unwrap();
     let notify_log = tmp.path().join("notify.log");
     let events = tmp.path().join("events.jsonl");
@@ -202,10 +241,103 @@ fn incident_outranks_the_capacity_gate() {
     );
     assert!(!text.contains("fleet_full"), "{text}");
 
-    // Positive control: a clear verdict and a full gate still read fleet_full.
-    run_tick_mode(&o, &full_gate, &clear, &never);
-    let text = crate::events::committed_journal_text(&events);
-    assert!(text.contains("spawn gate refused: fleet_full"), "{text}");
+    // Positive control: a clear verdict and a FULL gate still launch the
+    // bank on its reserved slot.
+    let launches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = launches.clone();
+    let counting = move |_argv: &[String]| -> Result<u32, String> {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(std::process::id())
+    };
+    run_tick_mode(&o, &full_gate, &clear, &counting);
+    assert_eq!(
+        launches.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a full fleet launches the bank on its reserved slot"
+    );
+}
+
+// The attention row: an escalation-grade skip files exactly one fleet task
+// naming the run that clears it, a second skip dedups, and a bank that
+// records rows closes it.
+#[test]
+fn escalated_skip_files_one_task_and_a_bank_run_closes_it() {
+    let tmp = TempDir::new().unwrap();
+    let events = tmp.path().join("events.jsonl");
+    let notify_log = tmp.path().join("notify.log");
+    let history = tmp.path().join("history.jsonl");
+    let rows: Vec<String> = (1..=2)
+        .map(|i| reg_row(&format!("reg-task-{i}"), ""))
+        .collect();
+    write_fixture(&tmp, &rows, &history, &notify_log);
+    let summary = r#"{"age_days": 15.0, "never_ran": false}"#;
+    let store = tmp.path().join("questions.jsonl");
+    let mut args = base_args(&tmp, &["--summary-json", summary]);
+    args.push("--questions-store".into());
+    args.push(store.to_string_lossy().into_owned());
+    let o = parse_args(&args).unwrap();
+    let open = || crate::fleet_task::open_tasks(&store).unwrap();
+
+    // The armed incident skips an escalation-grade bank: the row files.
+    run_tick_mode(&o, &ok_gate, &armed, &|_a| panic!("must not spawn"));
+    let filed = open();
+    assert_eq!(filed.len(), 1, "one task after the first skip: {filed:?}");
+    assert_eq!(filed[0].lane, "evals");
+    assert_eq!(filed[0].key, "regression-bank");
+    assert_eq!(filed[0].run, "fno doctor evals run --tier regression -y");
+
+    // The next skip dedups: still one row.
+    run_tick_mode(&o, &ok_gate, &armed, &|_a| panic!("must not spawn"));
+    assert_eq!(open().len(), 1, "the second skip dedups");
+
+    // A bank that records rows closes the task.
+    run_tick_mode(&o, &ok_gate, &clear, &thread_spawner());
+    wait_for_row(&events, "evals_scheduled_run", Duration::from_secs(20))
+        .expect("scheduled-run row within 20s");
+    assert!(
+        open().is_empty(),
+        "the bank ran, so the task closes: {:?}",
+        open()
+    );
+}
+
+// A run-mode plumbing failure on a FRESH bank journals the stale row but
+// files no attention row: the chore tracks an escalation-grade bank only.
+#[test]
+fn fresh_bank_run_failure_journals_but_files_no_task() {
+    let tmp = TempDir::new().unwrap();
+    let events = tmp.path().join("events.jsonl");
+    let notify_log = tmp.path().join("notify.log");
+    // A fixture whose evals run exits nonzero.
+    let mut script = String::from("#!/bin/sh\ncase \"$1/$2\" in\n  doctor/evals)\n    exit 3\n    ;;\n  inbox/notify)\n    echo \"$*\" >> '");
+    script += &notify_log.to_string_lossy();
+    script += "'\n    ;;\nesac\n";
+    crate::write_exec_stub(tmp.path(), "fno-bin.sh", &script);
+    let store = tmp.path().join("questions.jsonl");
+    let args = base_args(
+        &tmp,
+        &[
+            "--run",
+            "--started",
+            &Utc::now().to_rfc3339(),
+            "--run-timeout-s",
+            "5",
+            "--summary-json",
+            r#"{"age_days": 1.0, "never_ran": false}"#,
+            "--questions-store",
+            &store.to_string_lossy(),
+        ],
+    );
+    let o = parse_args(&args).unwrap();
+
+    run_run_mode(&o);
+
+    assert_eq!(
+        count_kind(&events, "evals_stale"),
+        1,
+        "the plumbing failure journals"
+    );
+    assert!(!store.exists(), "a fresh bank files no attention row");
 }
 
 #[test]
@@ -223,7 +355,9 @@ fn no_notice_when_emit_fails() {
     args[idx + 1] = events_dir.to_string_lossy().into_owned();
     let o = parse_args(&args).unwrap();
 
-    run_tick_mode(&o, &full_gate, &clear, &|_a| panic!("must not spawn"));
+    // The armed incident is the refusal that reaches journal_stale; a full
+    // gate no longer refuses (the bank's reserved slot launches).
+    run_tick_mode(&o, &ok_gate, &armed, &|_a| panic!("must not spawn"));
 
     assert!(!notify_log.exists(), "no notice without its journal row");
 }

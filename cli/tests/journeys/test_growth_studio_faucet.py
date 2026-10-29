@@ -5,8 +5,6 @@ from pathlib import Path
 
 import yaml
 
-from fno.plugins.verify import verify_pack
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACK = REPO_ROOT / "plugins" / "growth-studio" / "plugin.yaml"
 PACK_DIR = REPO_ROOT / "plugins" / "growth-studio"
@@ -70,21 +68,8 @@ def test_every_packaged_agent_tool_list_is_bounded() -> None:
 # (effect_gate.rs, tested there); this file no longer asserts the table.
 
 
-# The faucet surface verifies clean: agents, skill, and runnable evaluators all
-# declared and checked.
-
-
-def test_faucet_pack_verifies_all_checked_and_passed() -> None:
-    report = verify_pack(PACK, installed={})
-    assert report.ok, [c.name for c in report.conditions if not c.ok]
-    names = {c.name for c in report.conditions}
-    for agent in ("growth-marketer", "growth-comms", "growth-designer", "growth-social"):
-        assert f"source:agent:{agent}" in names
-        assert f"agent-role-binding:{agent}" in names
-        assert f"agent-tools-bounded:{agent}" in names
-    assert "source:skill:growth-launch" in names
-    for evaluator in ("factual-review", "brand-review", "accessibility-review"):
-        assert f"evaluator-runnable:{evaluator}" in names
+# The faucet pack verifying clean is held by plugins_parity.rs, on the native
+# verify command.
 
 
 # AC8 re-confirmed at the faucet level: the evaluators run and a cited draft

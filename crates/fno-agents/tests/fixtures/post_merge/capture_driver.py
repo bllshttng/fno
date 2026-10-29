@@ -29,7 +29,7 @@ REPO_ROOT = TESTS_DIR.parents[2]
 CORRUPT_BYTES = b"this fixture ledger is deliberately corrupt\n"
 
 # Live-session identity and routing vars that must never reach a hermetic
-# child (the merge-verb driver's list, trimmed to what this corpus needs).
+# child (the merge-command driver's list, trimmed to what this corpus needs).
 STRIP_VARS = [
     "CLAUDE_CODE_SESSION_ID",
     "TARGET_SESSION_ID",
@@ -141,7 +141,7 @@ elif len(argv) >= 2 and argv[0] == "backlog" and argv[1] == "advance":
     op = "backlog-advance"
 elif len(argv) >= 2 and argv[0] == "backlog" and argv[1] == "find":
     op = "backlog-find"
-elif len(argv) >= 2 and argv[0] == "retro" and argv[1] == "run":
+elif len(argv) >= 3 and argv[0] == "backlog" and argv[1] == "retro" and argv[2] == "run":
     op = "retro-run"
 elif len(argv) >= 2 and argv[0] == "do" and argv[1] == "plan":
     op = "do-plan"

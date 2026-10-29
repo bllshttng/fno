@@ -3,7 +3,7 @@
 //! liveness reads built on it.
 
 use crate::claude_ask::ClaudeHome;
-use crate::client_verbs::{row_liveness_with_indexed, RowLiveness};
+use crate::client_commands::{row_liveness_with_indexed, RowLiveness};
 use crate::truth_probe::family1_truth_state;
 use serde_json::Value;
 

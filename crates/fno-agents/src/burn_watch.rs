@@ -4,7 +4,9 @@
 //! branch sit flat; nothing else in the fleet reads cost against progress.
 //! This arm samples every live session carrying an open execute phase: ledger
 //! spend, branch head, commit count and newest commit time (`git` in the
-//! row's own cwd), and the node's `touched_at` (graph). Progress on any axis
+//! row's own cwd), and the node's `touched_at` beside its newest thread row
+//! (graph; a note resets the untouched clock without standing the ladder
+//! down as progress). Progress on any axis
 //! resets the ladder; a flat sample where spend grew, or where BOTH the node
 //! and the branch aged past the idle ceiling, wakes the worker (a fresh
 //! commit is progress even when the node row is ancient - the row only moves
@@ -45,10 +47,10 @@ const SENDER_LINE: &str = "Automatic notice from the fno daemon burn-watch arm, 
 /// The bounded subprocess budget for a status read or an ask.
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The resume argv's own bound. The parked revive waits inside the verb
+/// The resume argv's own bound. The parked revive waits inside the command
 /// (roster polls plus content confirms) before the respawn returns, so the
 /// 30 s budget would cut it short by construction; 180 s is the bound
-/// `fno agents watchdog` gives the same verb.
+/// `fno agents watchdog` gives the same command.
 const RESUME_RUN_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// A mail send's bound. A send can try two live rungs (the socket inject,
@@ -58,7 +60,7 @@ const RESUME_RUN_TIMEOUT: Duration = Duration::from_secs(180);
 const MAIL_SEND_RUN_TIMEOUT: Duration =
     Duration::from_secs(2 * crate::mail_inject::LIVE_RUNG_WORST_S + 30);
 
-/// The bound for one daemon subprocess, by verb.
+/// The bound for one daemon subprocess, by command.
 pub(crate) fn run_timeout(argv: &[String]) -> Duration {
     match (
         argv.get(2).map(String::as_str),
@@ -93,6 +95,10 @@ pub struct Sample {
     /// Node `touched_at` as epoch seconds, when the node row carried a
     /// parsable stamp.
     pub touched_at: Option<i64>,
+    /// Newest node thread row (note or progress) as epoch seconds, when any
+    /// row carried a parsable stamp. A thread row does not move
+    /// `touched_at`, so the age arm reads it beside the row stamp.
+    pub last_thread_at: Option<i64>,
     /// Newest commit time on the sampled HEAD as epoch seconds, read from
     /// the same probe as `head`.
     pub last_commit_at: Option<i64>,
@@ -109,6 +115,8 @@ pub struct BurnState {
     pub commits: Option<u64>,
     #[serde(default)]
     pub touched_at: Option<i64>,
+    #[serde(default)]
+    pub last_thread_at: Option<i64>,
     #[serde(default)]
     pub last_commit_at: Option<i64>,
     #[serde(default)]
@@ -203,6 +211,7 @@ pub fn decide(
         head: sample.head.clone(),
         commits: sample.commits,
         touched_at: sample.touched_at,
+        last_thread_at: sample.last_thread_at,
         last_commit_at: sample.last_commit_at,
         ..BurnState::default()
     };
@@ -215,13 +224,18 @@ pub fn decide(
     // last good sample and hold the ladder, never decide on unknown.
     let probe_died = matches!((prev.cost_usd, sample.cost_usd), (Some(_), None))
         || matches!((prev.commits, sample.commits), (Some(_), None))
-        || matches!((&prev.head, &sample.head), (Some(_), None));
+        || matches!((&prev.head, &sample.head), (Some(_), None))
+        || matches!(
+            (prev.last_thread_at, sample.last_thread_at),
+            (Some(_), None)
+        );
     if probe_died {
         next = BurnState {
             cost_usd: prev.cost_usd,
             head: prev.head.clone(),
             commits: prev.commits,
             touched_at: prev.touched_at,
+            last_thread_at: prev.last_thread_at,
             last_commit_at: prev.last_commit_at,
             attempts: prev.attempts,
             escalated: prev.escalated,
@@ -253,13 +267,17 @@ pub fn decide(
     if head_moved || count_moved || touch_moved {
         return (Decision::StandDown, next);
     }
-    // Flat, probes read: the two burn arms.
+    // Flat, probes read: the two burn arms. The untouched clock reads the
+    // node row stamp beside the newest thread row: a note (the notice's own
+    // taught remedy) resets the clock, while `touch_moved` and the spend arm
+    // stay keyed on the row stamp so talk never masks real progress.
     let spend_grew = match (prev.cost_usd, sample.cost_usd) {
         (Some(before), Some(now)) => now - before >= spend_min,
         _ => false,
     };
     let node_aged = sample
         .touched_at
+        .max(sample.last_thread_at)
         .is_some_and(|t| now_epoch.saturating_sub(t) >= idle_s);
     // Both flat, or no alarm: a fresh commit on the branch IS progress even
     // when the node row's touched_at is ancient, because the row only moves
@@ -274,9 +292,10 @@ pub fn decide(
             sample.cost_usd.unwrap_or(0.0)
         ))
     } else if node_aged && branch_aged {
+        let touched = sample.touched_at.max(sample.last_thread_at);
         Some(format!(
             "node untouched {}h with no new commit in {}h",
-            now_epoch.saturating_sub(sample.touched_at.unwrap_or(0)) / 3600,
+            now_epoch.saturating_sub(touched.unwrap_or(0)) / 3600,
             now_epoch.saturating_sub(sample.last_commit_at.unwrap_or(0)) / 3600
         ))
     } else {
@@ -314,6 +333,7 @@ struct ScopedSession {
 struct NodeFacts {
     status: String,
     touched_at: Option<i64>,
+    last_thread_at: Option<i64>,
     pr_number: Option<u64>,
     first_execute_at: Option<i64>,
 }
@@ -395,6 +415,14 @@ fn node_facts(rows: &[Value]) -> HashMap<String, NodeFacts> {
             .get("touched_at")
             .and_then(Value::as_str)
             .and_then(parse_epoch);
+        let last_thread_at = row
+            .get("progress_notes")
+            .and_then(Value::as_array)
+            .and_then(|rows| {
+                rows.iter()
+                    .filter_map(|r| r.get("ts").and_then(Value::as_str).and_then(parse_epoch))
+                    .max()
+            });
         let first_execute_at = row
             .get("sessions")
             .and_then(Value::as_array)
@@ -415,6 +443,7 @@ fn node_facts(rows: &[Value]) -> HashMap<String, NodeFacts> {
             NodeFacts {
                 status: status.to_string(),
                 touched_at,
+                last_thread_at,
                 pr_number: row.get("pr_number").and_then(Value::as_u64),
                 first_execute_at,
             },
@@ -1052,6 +1081,7 @@ fn sample_session(
         commits,
         last_commit_at,
         touched_at: facts.get(node).and_then(|f| f.touched_at),
+        last_thread_at: facts.get(node).and_then(|f| f.last_thread_at),
     }
 }
 
@@ -1092,6 +1122,7 @@ fn run_pass(
                     "touched_at",
                     "sessions",
                     "pr_number",
+                    "progress_notes",
                     "completed_at",
                     "superseded_by",
                     "deferred_at",
@@ -1457,6 +1488,7 @@ mod tests {
             head: head.map(str::to_string),
             commits: head.map(|_| 1),
             touched_at: touched,
+            last_thread_at: None,
             last_commit_at: touched,
         }
     }
@@ -1511,12 +1543,79 @@ mod tests {
     }
 
     #[test]
+    fn a_node_thread_row_resets_the_untouched_clock_but_not_the_budget_arm() {
+        // The measured incident: the node row sat 129h stale and the branch
+        // was flat, but the hold-acknowledgment notes landed minutes ago.
+        // The notice's own remedy (fno backlog note) must stand the age
+        // arm down, while a spend that still grows keeps waking.
+        let prev = BurnState {
+            cost_usd: Some(1.0),
+            head: Some("a".into()),
+            commits: Some(1),
+            touched_at: Some(1000),
+            last_commit_at: Some(1000),
+            attempts: 2,
+            ..Default::default()
+        };
+        let noted = Sample {
+            cost_usd: Some(1.0),
+            head: Some("a".into()),
+            commits: Some(1),
+            touched_at: Some(1000),
+            last_thread_at: Some(460_000),
+            last_commit_at: Some(1000),
+        };
+        let now = 461_000;
+        let (d, next) = decide(Some(&prev), &noted, now, 7200, 0.01);
+        assert_eq!(d, Decision::StandDown);
+        assert_eq!(next.last_thread_at, Some(460_000));
+        // The same flat world with the acknowledgment long stale still
+        // fires the age arm - once per stale acknowledgment, per the ladder.
+        let stale = Sample {
+            last_thread_at: Some(1000),
+            ..noted.clone()
+        };
+        let (d, _) = decide(Some(&prev), &stale, now, 7200, 0.01);
+        assert!(matches!(d, Decision::Wake(_)));
+        // A fresh note never masks the budget arm: spend grew, it wakes.
+        let spending = Sample {
+            cost_usd: Some(3.0),
+            ..noted
+        };
+        let (d, _) = decide(Some(&prev), &spending, now, 7200, 0.01);
+        assert!(
+            matches!(&d, Decision::Wake(text) if text.contains("spend grew")),
+            "the reason names spend, not the clock"
+        );
+    }
+
+    #[test]
+    fn node_facts_reads_the_newest_thread_row_and_skips_unparsable() {
+        let row = json!({
+            "id": "x-1",
+            "status": "in_progress",
+            "touched_at": "2026-01-01T00:00:00+00:00",
+            "progress_notes": [
+                {"ts": "2026-10-19T08:10:00+00:00", "text": "held by the operator halt"},
+                {"ts": "not a stamp", "text": "legacy row"},
+                {"ts": "2026-10-20T09:00:00+00:00", "text": "still held"}
+            ]
+        });
+        let facts = node_facts(std::slice::from_ref(&row));
+        let newest = chrono::DateTime::parse_from_rfc3339("2026-10-20T09:00:00+00:00")
+            .unwrap()
+            .timestamp();
+        assert_eq!(facts["x-1"].last_thread_at, Some(newest));
+    }
+
+    #[test]
     fn a_probe_that_died_carries_the_last_good_sample_and_holds() {
         let prev = BurnState {
             cost_usd: Some(1.0),
             head: Some("a".into()),
             commits: Some(1),
             touched_at: Some(1000),
+            last_thread_at: Some(500),
             last_commit_at: Some(1000),
             attempts: 3,
             escalated: true,
@@ -1530,6 +1629,7 @@ mod tests {
             head: None,
             commits: None,
             touched_at: Some(1000),
+            last_thread_at: None,
             last_commit_at: None,
         };
         let (d, next) = decide(Some(&prev), &sample, 2000, 1000, 0.01);
@@ -1539,6 +1639,7 @@ mod tests {
         assert_eq!(next.head.as_deref(), Some("a"));
         assert_eq!(next.cost_usd, Some(1.0));
         assert_eq!(next.last_commit_at, Some(1000));
+        assert_eq!(next.last_thread_at, Some(500));
         assert_eq!(next.task_key.as_deref(), Some("burning worker on x-1"));
     }
 
@@ -1995,13 +2096,18 @@ mod tests {
             ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
             ("FNO_CLAIMS_ROOT", std::env::var_os("FNO_CLAIMS_ROOT")),
             ("FNO_AGENTS_HOME", std::env::var_os("FNO_AGENTS_HOME")),
+            ("FNO_CONFIG", std::env::var_os("FNO_CONFIG")),
+            (
+                "FNO_GLOBAL_SETTINGS_PATH",
+                std::env::var_os("FNO_GLOBAL_SETTINGS_PATH"),
+            ),
         ]);
         let td = tempfile::tempdir().unwrap();
         let state_dir = td.path().join("state");
         std::fs::create_dir_all(state_dir.join("locks")).unwrap();
         std::env::set_var("FNO_STATE_DIR", &state_dir);
         let claims_root = td.path().join("claims");
-        let waiters = claims_root.join(".fno/claim-aux/build-waiters");
+        let waiters = claims_root.join(".fno/state/claim-aux/build-waiters");
         std::fs::create_dir_all(&waiters).unwrap();
         std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
         let workdir = td.path().join("workdir");
@@ -2081,6 +2187,12 @@ mod tests {
             "[work.workspaces.ws]\n[[work.workspaces.ws.projects]]\nname = \"proj-a\"\n",
         )
         .unwrap();
+        // The owner read climbs the config chain, and $FNO_CONFIG is the sole
+        // candidate when set: an ambient FNO_CONFIG a parallel test left
+        // behind makes proj-a unresolvable and the note reads zero. Pin the
+        // chain to this world's config (the lead_history input_tree posture).
+        std::env::set_var("FNO_CONFIG", proj.join(".fno/config.toml"));
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         let mut team = crate::state::RegistryEntry::default();
         team.name = "team-1".into();
         team.status = crate::AgentStatus::Live;

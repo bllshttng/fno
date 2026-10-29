@@ -2,7 +2,7 @@
 
 Project context for AI agents (Claude Code, Gemini CLI, Codex CLI). Canonical source; `CLAUDE.md` / `GEMINI.md` are stubs that import it. Quick reference + index: deep subsystem mechanics live in `docs/` (see [Deep-dive docs](#deep-dive-docs)).
 
-****footnote** is a Claude Code plugin: idea -> shipped PR. Setup: `fno config setup run` or `/fno:setup`.
+**fno** is a Claude Code plugin: idea -> shipped PR. Setup: `fno config setup run` or `/fno:setup`.
 
 ## Precedence and output style
 
@@ -33,13 +33,7 @@ Traps a fresh agent re-hits because no lint, guard or refusal catches them yet. 
 
 AC9 delivery sentinel (echoed verbatim by a fresh worker, asserted by unit test): `kdc-delivery-sentinel-1932`.
 
-### Codex RPC
-
-`fno agents mail send <full-session-id> --raw <payload>` types any single-line payload verbatim. /fno:verb and $fno:verb both name an fno verb. The lane rewrites the verb to the form of the receiving harness. The codex app-server lane sends a non-review payload over turn/start.
-
-- specimens: mail_inject.rs, mux_cli.rs
-- graduates-to: Codex RPC dispatch returns a submit receipt naming the accepted verb.
-- added: 2026-08-24
+No entries today. The last one aged out to [Sending a raw command to a worker](docs/harness-command-matrix.md#sending-a-raw-command-to-a-worker).
 
 ## Repository
 
@@ -68,7 +62,7 @@ footnote/
 
 ## Commands
 
-Five advertised verbs (table below): `target`, `think`, `review`, `ship`, `fix`. Full set in `skills/using-fno/SKILL.md`. Always write verbs plugin-qualified per harness (bare `/execute` resolves elsewhere). Claude/opencode use `/fno:verb`. Codex uses `$fno:verb` (`/` is reserved for harness commands). See [docs/harness-command-matrix.md](docs/harness-command-matrix.md).
+Five advertised commands (table below): `target`, `think`, `review`, `ship`, `fix`. Full set in `skills/using-fno/SKILL.md`. Always write commands plugin-qualified per harness (bare `/execute` resolves elsewhere). Claude/opencode use `/fno:command`. Codex uses `$fno:command` (`/` is reserved for harness commands). See [docs/harness-command-matrix.md](docs/harness-command-matrix.md).
 
 | Command (claude/opencode `/fno:`, codex `$fno:`) | Purpose |
 |---|---|
@@ -91,7 +85,7 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 - **Node IDs:** `<prefix>-<hex>` (e.g. `fno-a3f9`); generation config-driven, resolution format-agnostic. Every node also has an immutable `slug`; slugs, bare hex, `next`, and fuzzy matches all resolve.
 - **Lifecycle:** `intake -> triage -> ready/next -> done`. Side states: `blocked`, `deferred` (`defer`/`undefer`), `superseded`.
 - **Priority:** `p0`..`p3` (default `p2`); orthogonal to `--size S|M|L`.
-- **Editing:** `fno backlog update <id>` in place (`details+=text` appends, `blocked_by+=<id>` adds, ...). Never recreate via `idea` (dupes). Status moves through the same verb: `update <id> --status <word>`, a repeatable `--set <field>=<value>`, and `--leave deferred|superseded`. The patch door validates the move. A refusal names the missing fact and the flag or verb that supplies it.
+- **Editing:** `fno backlog update <id>` in place (`details+=text` appends, `blocked_by+=<id>` adds, ...). Never recreate via `idea` (dupes). Status moves through the same command: `update <id> --status <word>`, a repeatable `--set <field>=<value>`, and `--leave deferred|superseded`. The patch door validates the move. A refusal names the missing fact and the flag or command that supplies it.
 - **Operator asks:** file with `fno backlog idea "..." --source-kind operator_request`. `fno inbox operator status` reads the operator-turn queue, `ack` disposes a turn.
 - **Subtasks:** `fno backlog contain <owner> <id>...` folds existing nodes into a feature with no plan. They stay on the board, never dispatch alone, and close on the owner's merge. Never defer to mean contained.
 - **Board == work order:** non-Done cards share a rank suffix (live-epic children before epics, then priority, then created_at); project lane is a board-only display prefix; `rank <id> --top` orders, never dispatches; `_kanban_column` is the sole column authority. [backlog-board-ordering](docs/architecture/backlog-board-ordering.md).
@@ -112,7 +106,7 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 
 NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / `fno do state`:
 - `~/.fno/db/graph.db` - the backlog graph. Mutate via `fno backlog` only.
-- `<space>/worktrees/<name>/target-state.md` - immutable manifest. Only post-init write is first-fill of `plan_path` via `fno do state set`.
+- `<space>/worktrees/<name>/target-state.md` - immutable manifest for agent tools. Native post-init writes stay legal: the plan_path first-fill via `fno do state set`, the claim-handover refresh, and the child rebind. The child rebind lands the forked child's claim in the parent's worktree and re-points the node lines. When a `--handover-from` acquire lands for the manifest's node, the refresh drops the stale line and appends the claim lines.
 - Generated copies named in `generated-artifacts.tsv` or `skill-bundles.yaml`, and the installed plugin copy. Edit, Write, and Bash writes are refused. The refusal names the source and regen command.
 
 | File | Default | Purpose | Owner |
@@ -159,19 +153,19 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 - **`fno inbox decide`** - records a ruling per subject. `fno inbox decisions X` recovers it, newest first. [decision-record](docs/architecture/decision-record.md).
 - **`fno agents fleet feed`** - one ordered projection of questions.jsonl + the graph store. Rows carry the node id + session id the mux `prefix+e` overlay deep-links through. [activity-feed](docs/architecture/activity-feed.md).
 - **`fno whoami` / `fno whoami status`** - read-only self-introspection; run when confused after compaction.
-- **`fno do target start <node>`** - one-verb worktree cold-start (ensure off `origin/main` -> `target init`), idempotent. [target-start-verb](docs/architecture/target-start-verb.md).
-- **Spawn substrate** - `fno agents spawn --substrate <pane|thread|headless>`. Both attachable. `thread` is the default where the harness seats one (pane placement flags or a `--` fence imply pane). Persistent, hosts no pane until a **portal** opens a view, 0-indexed, several at once ([portals](docs/architecture/portals.md)). `pane` is the mux-hosted fallback, `headless` the one-shot non-interactive substrate. The retired `bg` spelling refuses with a redirect to `thread`.
-- **`fno mux workspace restore`** - one verb resumes a session's workers through their harness's resume form after reboot or server kill. Every member it cannot bring back is named with the reason. [workspace-restore](docs/architecture/workspace-restore.md).
+- **`fno do target start <node>`** - one-command worktree cold-start (ensure off `origin/main` -> `target init`), idempotent. [target-start-command](docs/architecture/target-start-command.md).
+- **Spawn lane** - `fno agents spawn --as thread|pane|headless|cloud`, default `thread`. A pane needs `--as pane`: placement flags, an uncarried `--` fence and a thread-less harness refuse without it. A thread is persistent and shows through a **portal** ([portals](docs/architecture/portals.md)). `cloud` is the remote lane ([cloud-substrate](docs/architecture/cloud-substrate.md)).
+- **`fno mux workspace restore`** - one command resumes a session's workers through their harness's resume form after reboot or server kill. Every member it cannot bring back is named with the reason. [workspace-restore](docs/architecture/workspace-restore.md).
 - **Pane keeper** - every pane's pty master lives in a keeper, not the server. A fresh server re-adopts the same pid; kill-server refuses an unkept pane. `fno mux pane keeper list` reads survivors. The page answers why, not the daemon. [pane-keeper](docs/architecture/pane-keeper.md).
 - **watchdog** - transcript-truth wake/reroute/reap; dry run, `--apply`/`--apply-all`. [fleet-watchdog](docs/architecture/fleet-watchdog.md)
 - **`fno doctor`** - compares deployed `fno` with local source. Reports lag. `--fix` runs `fno doctor update`. [installed-fno-staleness](docs/architecture/installed-fno-staleness.md).
 - **`fno doctor footprint`** - measures sustained fleet CPU and process count without load average; see [machine footprint](docs/architecture/machine-footprint.md).
 - **Accounts + rotation** - `fno config accounts`: records, failover, lockout, routing, combos. Five axes, never confuse them: harness (`-H`), provider (vendor, `-P`), model (`-m`), effort (`--effort`), account (`--account`). `opencode` is legally both harness and provider. Never infer the axis from a value. Defined in [axis-vocabulary](docs/architecture/axis-vocabulary.md).
-- **[Stage table](docs/architecture/role-based-model-routing.md)** (per-stage axis) - `config.agents.profiles.<verb>` overlays `agents.defaults`, reaches autonomous dispatch. `dispatch.harness` is deprecated. `route`=vendor/model (`--route`) beside `provider`=harness (`provider` is the config key name, not the axis. It holds a harness value.)
-- **Curated CLI menu** - `fno doctor lint menu-caps` caps the first three levels of `fno` and `fno-agents` at 12 verbs each; hidden verbs count. Over-cap groups sit in shrink-only `scripts/ci/menu-caps-debt.tsv`. Group actions are arguments not leaves.
+- **[Stage table](docs/architecture/role-based-model-routing.md)** (per-stage axis) - `config.agents.profiles.<command>` overlays `agents.defaults`, reaches autonomous dispatch. `dispatch.harness` is deprecated. `route`=vendor/model (`--route`) beside `provider`=harness (`provider` is the config key name, not the axis. It holds a harness value.)
+- **Curated CLI menu** - `fno doctor lint menu-caps` caps the first three levels of `fno` and `fno-agents` at 12 commands each; hidden commands count. Over-cap groups sit in shrink-only `scripts/ci/menu-caps-debt.tsv`. Group actions are arguments not leaves.
 - **Post-merge ritual** - `/fno:ship pr merged` runs reconcile + retro. Follow-ups: `config.post_merge.parking_lot_path`.
 - **Target self-handoff** - `/target` can hand the execute phase to a fresh-context successor, generation-capped. [target-self-handoff](docs/architecture/target-self-handoff.md).
-- **Self-improvement** - autocorrect (git-post-commit + verifier + `/insights` -> monthly review), two memory-pass checkpoints, stuck terminals write postmortems. See [memory-system](docs/architecture/memory-system.md) and [self-improvement-loops](docs/architecture/self-improvement-loops.md) (the loop map: triggers, config keys, where output lands).
+- **Self-improvement** - autocorrect (git-post-commit + verifier + `/insights` -> weekly review), two memory-pass checkpoints, stuck terminals write postmortems. See [memory-system](docs/architecture/memory-system.md) and [self-improvement-loops](docs/architecture/self-improvement-loops.md) (the loop map: triggers, config keys, where output lands).
 
 ## Skill / agent development
 

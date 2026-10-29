@@ -2,7 +2,7 @@
 
 A sender could see that mail was stranded and could do nothing about it: the
 count in `mail status` and the every-prompt nudge named a number and no ids, and
-no verb retracted anything. `mail ack` only advances an INBOUND read cursor.
+no command retracted anything. `mail ack` only advances an INBOUND read cursor.
 
 The withdrawal is a tombstone because the bus log is append-only and read state
 is a per-consumer cursor. Deleting the line is impossible and advancing the
@@ -10,7 +10,7 @@ recipient's cursor would mark every OTHER message queued for them as seen.
 
 The tests below are grouped by the thing that actually broke in the field: a
 tombstone honored by only one reader. `scan_unread` is the choke point for seven
-readers, but the sender's own nag and the relay router read `iter_messages`
+readers, but the sender's own nag and the relay router read the bus rows
 directly and bypass it. Each of the three is asserted independently, because an
 assertion that two paths agree pins the tag, not the destination.
 """
@@ -52,29 +52,27 @@ def env(tmp_path, monkeypatch):
 def _send(
     from_, to, body, *, ts=None, to_kind="session", delivery=None
 ) -> str:
-    from fno.bus.log import Envelope, append
+    from tests.fixtures.bus_rows import append_row
 
-    env_ = Envelope.new(
-        from_=from_, to=to, kind="send", body=body, ts=ts,
-        to_kind=to_kind, delivery=delivery,
-    )
-    append(env_)
-    return env_.id
+    fields = {"from": from_, "to": to, "kind": "send", "body": body, "ts": ts, "to_kind": to_kind}
+    if delivery is not None:
+        fields["delivery"] = delivery
+    return append_row(fields)
 
 
 def _tombstone(msg_id: str, from_: str = MY_HANDLE, to: str = PEER) -> None:
     """The tombstone the withdraw leaf writes, appended directly: these tests
-    pin the readers' contract with that line, not the verb that produces it."""
-    from fno.bus.log import WITHDRAW_KIND, Envelope, append
+    pin the readers' contract with that line, not the command that produces it."""
+    from tests.fixtures.bus_rows import append_row
 
-    append(
-        Envelope.new(
-            from_=from_,
-            to=to,
-            kind=WITHDRAW_KIND,
-            body=f"withdrawn: {msg_id}",
-            meta={"withdraws": msg_id},
-        )
+    append_row(
+        {
+            "from": from_,
+            "to": to,
+            "kind": "withdraw",
+            "body": f"withdrawn: {msg_id}",
+            "meta": {"withdraws": msg_id},
+        }
     )
 
 
@@ -89,21 +87,21 @@ def _run(*args):
 
 def test_reader_1_scan_unread_omits_a_withdrawn_message(env):
     """The recipient side: seven readers reach the bus through here."""
-    from fno.bus.cursor import scan_unread
+    from tests.fixtures.bus_rows import scan_unread
 
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
     kept = _send(MY_HANDLE, PEER, "keep me", ts=_ts_ago(3600))
 
     _tombstone(mid)
 
-    assert [m.id for m in scan_unread(PEER)] == [kept]
+    assert [m["id"] for m in scan_unread(PEER)] == [kept]
 
 
 def test_reader_2_sent_unclaimed_stops_counting_it(env):
-    """The nag reads iter_messages directly and bypasses scan_unread. A
+    """The nag reads the bus rows directly and bypasses scan_unread. A
     withdrawal that did not reach here would leave the every-prompt line firing
     forever on a message the sender already retracted -- the exact symptom this
-    verb exists to end."""
+    command exists to end."""
     from fno.config import load_settings
     from fno.mail.landed import _sent_unclaimed
 
@@ -125,7 +123,7 @@ def test_withdraw_does_not_advance_the_recipient_cursor(env):
     """The failure this shape was chosen to avoid. A cursor is a last-seen
     POSITION, so advancing it past the withdrawn message would mark every other
     message queued for that recipient as seen -- trading one strand for many."""
-    from fno.bus.cursor import read_cursor, scan_unread
+    from tests.fixtures.bus_rows import read_cursor, scan_unread
 
     from_other = _send(PEER, PEER, "unrelated, still unread", ts=_ts_ago(3600))
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
@@ -133,28 +131,27 @@ def test_withdraw_does_not_advance_the_recipient_cursor(env):
     _tombstone(mid)
 
     assert read_cursor(PEER) is None
-    assert [m.id for m in scan_unread(PEER)] == [from_other]
+    assert [m["id"] for m in scan_unread(PEER)] == [from_other]
 
 
 def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
-    """The sender check lives at the READ side as well as in the verb. The verb
+    """The sender check lives at the READ side as well as in the command. The command
     is one reachable path; a hand-appended or replayed line is another, and a
-    tombstone that only the verb validated would let one appear."""
-    from fno.bus.cursor import scan_unread
-    from fno.bus.log import WITHDRAW_KIND, Envelope, append
+    tombstone that only the command validated would let one appear."""
+    from tests.fixtures.bus_rows import append_row, scan_unread
 
     mid = _send(PEER, "cccc1111", "theirs", ts=_ts_ago(3600))
-    append(
-        Envelope.new(
-            from_=MY_HANDLE,
-            to="cccc1111",
-            kind=WITHDRAW_KIND,
-            body=f"withdrawn: {mid}",
-            meta={"withdraws": mid},
-        )
+    append_row(
+        {
+            "from": MY_HANDLE,
+            "to": "cccc1111",
+            "kind": "withdraw",
+            "body": f"withdrawn: {mid}",
+            "meta": {"withdraws": mid},
+        }
     )
 
-    assert [m.id for m in scan_unread("cccc1111")] == [mid]
+    assert [m["id"] for m in scan_unread("cccc1111")] == [mid]
 
 
 def test_withdrawing_a_typed_message_refuses_instead_of_pretending(env):

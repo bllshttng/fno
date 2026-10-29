@@ -12,7 +12,7 @@
 # the surfaces without a unit-testable seam:
 #   1. worktree-create-hook.sh refusal + branch hint
 #   2. preflight.sh unidentified-lock refusal
-#   3. client_verbs.rs resume cwd messages (source-level: the paths eprintln
+#   3. client_commands.rs resume cwd messages (source-level: the paths eprintln
 #      inside the command flow with env side effects)
 #   4. rm-naming refusals in dispatch.py and the Rust ask twins
 #      (claude_ask/codex_ask/gemini_ask) + their teardown warnings
@@ -58,7 +58,7 @@ require_before() { # require_before <haystack-file> <first> <second> <label>
 
 HOOK="$REPO_ROOT/scripts/setup/worktree-create-hook.sh"
 PRE="$REPO_ROOT/scripts/ci/preflight.sh"
-CV="$REPO_ROOT/crates/fno-agents/src/client_verbs.rs"
+CV="$REPO_ROOT/crates/fno-agents/src/client_commands.rs"
 RG="$REPO_ROOT/crates/fno-agents/src/resume_gate.rs"
 
 # --- 1. worktree-create-hook.sh -------------------------------------------

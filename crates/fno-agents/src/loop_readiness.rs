@@ -65,8 +65,6 @@ pub struct EffectiveLoopReadiness {
     pub continuation_owner: String,
 }
 
-pub type LoopReadiness = EffectiveLoopReadiness;
-
 impl EffectiveLoopReadiness {
     pub fn ready(&self) -> bool {
         !self.continuation_owner.trim().is_empty()
@@ -142,7 +140,7 @@ pub fn admit(readiness: EffectiveLoopReadiness) -> Result<EffectiveLoopReadiness
 /// exists, so the stop leg reads ready with a reason naming the worker's own
 /// Stop hook. Shared by `loop readiness --pre-launch` and the target-family
 /// gate's native arm, which must refuse a looping dispatch on exactly the
-/// legs the readiness verb refuses on.
+/// legs the readiness command refuses on.
 fn pre_launch_snapshot(harness: &str, command: &str, owner: String) -> EffectiveLoopReadiness {
     let stop = ReadinessLeg {
         state: LegState::Ready,
@@ -171,7 +169,9 @@ fn leg_json(leg: &ReadinessLeg) -> Value {
 }
 
 const READINESS_EVENT_TYPES: &[&str] = &["context_snapshot", "stop_decision"];
-const CODEX_PLUGIN_ID: &str = "fno@footnote";
+const CODEX_PLUGIN_ID: &str = "fno@fno";
+// An install made before the marketplace rename still loads fno.
+const CODEX_LEGACY_PLUGIN_ID: &str = "fno@footnote";
 const CODEX_PLUGIN_REPAIR: &str = "fno config plugin install codex";
 const CODEX_PLUGIN_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -183,9 +183,13 @@ fn codex_machine_leg_from_plugin_list(raw: &str) -> ReadinessLeg {
     let Some(installed) = value.get("installed").and_then(Value::as_array) else {
         return ReadinessLeg::unreadable("codex plugin list has no installed array");
     };
-    let plugin = installed
+    let plugin = [CODEX_PLUGIN_ID, CODEX_LEGACY_PLUGIN_ID]
         .iter()
-        .find(|row| row.get("pluginId").and_then(Value::as_str) == Some(CODEX_PLUGIN_ID));
+        .find_map(|id| {
+            installed
+                .iter()
+                .find(|row| row.get("pluginId").and_then(Value::as_str) == Some(*id))
+        });
     let Some(plugin) = plugin else {
         return ReadinessLeg::blocked(format!(
             "plugin-missing: {CODEX_PLUGIN_ID} is not enabled; run `{CODEX_PLUGIN_REPAIR}`"
@@ -361,7 +365,7 @@ fn stop_leg(harness: &str, session: &str, cwd: &Path) -> ReadinessLeg {
     stop_leg_from_events(&events, harness, session)
 }
 
-/// Direct client verb used by the Python admission seams. All four legs are
+/// Direct client command used by the Python admission seams. All four legs are
 /// assembled before the result is rendered, so a caller pays one native read
 /// and gets one refusal that names the failed leg.
 pub fn run(args: &[String]) -> i32 {
@@ -527,9 +531,13 @@ mod tests {
     #[test]
     fn codex_machine_leg_requires_the_enabled_footnote_plugin() {
         let enabled = codex_machine_leg_from_plugin_list(
-            r#"{"installed":[{"pluginId":"fno@footnote","installed":true,"enabled":true}]}"#,
+            r#"{"installed":[{"pluginId":"fno@fno","installed":true,"enabled":true}]}"#,
         );
         assert!(enabled.state.is_ready());
+        let legacy = codex_machine_leg_from_plugin_list(
+            r#"{"installed":[{"pluginId":"fno@footnote","installed":true,"enabled":true}]}"#,
+        );
+        assert!(legacy.state.is_ready());
 
         let missing = codex_machine_leg_from_plugin_list(r#"{"installed":[]}"#);
         assert_eq!(missing.state, LegState::Blocked);

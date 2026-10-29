@@ -1,0 +1,1 @@
+note: review hold on feat/a expired (holder review-session:s1, expires_at 1000); it no longer blocks. A review hold is a lease: it lapses on its TTL whether or not the holder session still runs.

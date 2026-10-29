@@ -57,7 +57,7 @@ done
 [ -n "$FNO_PYTHON" ] || { fail "no interpreter can import fno.cli (cd cli && uv sync)"; exit 1; }
 # The vocabulary lives in the fno-agents binary; the sandbox stub below pins
 # FNO_AGENTS_BIN, so capture the REAL binary now for the stub to delegate the
-# naming verbs to (naming is the contract under test, not a scenario input).
+# naming commands to (naming is the contract under test, not a scenario input).
 # PATH is stripped for the resolution so a stale PATH-installed binary cannot
 # shadow the repo's own cargo build.
 REAL_AGENTS_BIN="$(env PATH='/usr/bin:/bin' PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.resolve_binary(); print(b or "")')"
@@ -115,7 +115,7 @@ acquire_claim('node:${NODE_ID}', holder='target-session:${SID}',
 # requires before it emits delegated.
 cat > "${BIN_DIR}/fno" <<ABIEOF
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "\${1:-} \${2:-}" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "\${@:3}" ;;
 esac
@@ -136,8 +136,8 @@ case "\$1 \$2" in
     printf '{"state":"your-move","last_message":"FNO_CAPABILITY_READY:${CAP_DIGEST}","observed_model":{"kind":"observed","model":"opus","samples":1}}\n' ;;
   "agents name")
     # Naming is the contract under test, not a scenario input: delegate to the
-    # real bridge exactly like the capability probe delegates truth.
-    exec env PYTHONPATH="${FNO_SRC}" "${FNO_PYTHON}" -m fno.cli agents name "\${@:3}" ;;
+    # real bridge, the binary's name door.
+    exec "${REAL_AGENTS_BIN}" status --name "\${@:3}" ;;
   "agents mail")
     touch "${TMP_DIR}/child-active"
     cat > .fno/target-state.md <<'CHILD'
@@ -160,11 +160,14 @@ chmod +x "${BIN_DIR}/fno"
 # The claim operations run for real: the handoff's custody release goes native
 # (the legacy Python leg is idle for global keys), so the stub must forward
 # `claim` to the real binary instead of answering it with a silent exit 0.
+# `target-gates` joins for the same reason: the manifest archive + exact
+# release IS the custody op under test, and a swallowed prepare would leave
+# the archive never written while the delegation commits.
 FIN_MARKER="${TMP_DIR}/finalize_called"
 cat > "${BIN_DIR}/fno-agents" <<AGEOF
 #!/usr/bin/env bash
 case "\$1" in
-  name-mint|name-codes|name-parse|claim)
+  name-mint|name-codes|name-parse|claim|target-gates)
     exec "${REAL_AGENTS_BIN}" "\$@" ;;
 esac
 if [[ "\$1" == "finalize" ]]; then

@@ -26,3 +26,202 @@ fn enum_rendering_byte_identical_to_legacy_strings() {
     assert_eq!(CiConclusion::Skipped.render(), "skipped");
     assert_eq!(CiConclusion::None.render(), "none");
 }
+
+/// The manifest node's primary PR pins the terminal read's selector, and
+/// every unreadable shape falls open to the branch-resolved read (None) -
+/// the branch read is the only correct answer before the PR exists at all.
+#[test]
+fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
+    let _guard = crate::claims::test_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::env::set_var("FNO_STATE_DIR", dir.path().join("state"));
+    let graph = crate::graph_get::graph_path_for(&cwd);
+    std::fs::create_dir_all(graph.parent().expect("graph path always has a parent")).unwrap();
+    std::fs::write(&graph, b"{\"entries\": []}").unwrap();
+    let connection = crate::backlog::open(&graph).unwrap();
+    crate::backlog::save_aggregate(
+        &connection,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-sel", "slug": "sel", "title": "T", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 930,
+            "pr_url": "https://github.com/o/r/pull/930",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // A second node carrying no PR: the branch-resolved read stays.
+    crate::backlog::save_aggregate(
+        &connection,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-bare", "slug": "bare", "title": "B", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-sel")).as_deref(),
+        Some("930")
+    );
+    assert_eq!(manifest_node_pr_selector(&cwd, Some("x-bare")), None);
+    // An unknown node and a missing manifest node both fail open.
+    assert_eq!(manifest_node_pr_selector(&cwd, Some("x-absent")), None);
+    assert_eq!(manifest_node_pr_selector(&cwd, None), None);
+    std::env::remove_var("FNO_STATE_DIR");
+
+    // A node whose attached rows disagree: a merged-stamped primary with a
+    // later attached row picks the later PR, and an all-terminal node picks
+    // the newest number. attach writes merge_status None, so an attached row
+    // always outranks a stamped dead one. The second store lives under its
+    // own state root, so the function under test reads it via the same
+    // FNO_STATE_DIR door as the first.
+    std::env::set_var("FNO_STATE_DIR", dir.path().join("state2"));
+    let graph2 = crate::graph_get::graph_path_for(&cwd);
+    std::fs::create_dir_all(graph2.parent().expect("graph path always has a parent")).unwrap();
+    std::fs::write(&graph2, b"{\"entries\": []}").unwrap();
+    let conn2 = crate::backlog::open(&graph2).unwrap();
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-multi", "slug": "multi", "title": "M", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 900,
+            "pr_url": "https://github.com/o/r/pull/900",
+            "merge_status": "MERGED",
+            "additional_prs": [
+                {"number": 940, "url": "https://github.com/o/r/pull/940"},
+                {"number": 930, "url": "https://github.com/o/r/pull/930", "merge_status": "MERGED"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-reopen", "slug": "reopen", "title": "R", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 900,
+            "pr_url": "https://github.com/o/r/pull/900",
+            "merge_status": "MERGED",
+            "additional_prs": [
+                {"number": 930, "url": "https://github.com/o/r/pull/930", "merge_status": "MERGED"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // The store's own stamps are lowercase (additional_prs attach and the
+    // api reconcile writers): a lowercase-stamped primary must lose to the
+    // live row exactly as the uppercase spelling does.
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-lower", "slug": "lower", "title": "L", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 900,
+            "pr_url": "https://github.com/o/r/pull/900",
+            "merge_status": "merged",
+            "additional_prs": [
+                {"number": 950, "url": "https://github.com/o/r/pull/950"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-reolder", "slug": "reolder", "title": "O", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 960,
+            "pr_url": "https://github.com/o/r/pull/960",
+            "merge_status": "merged",
+            "additional_prs": [
+                {"number": 930, "url": "https://github.com/o/r/pull/930"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // An explicitly marked history row sinks whatever its number: state,
+    // not number order, decides for rows the reopen demotion wrote.
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-marked", "slug": "marked", "title": "K", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 900,
+            "pr_url": "https://github.com/o/r/pull/900",
+            "merge_status": "merged",
+            "additional_prs": [
+                {"number": 970, "url": "https://github.com/o/r/pull/970", "history": true},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-multi")).as_deref(),
+        Some("940")
+    );
+    // A reopened node's history row: the older unstamped row predates the
+    // stamp, so the merged current pr_number pins the gate.
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-reolder")).as_deref(),
+        Some("960")
+    );
+    // A marked history row sinks even newer than the stamp: state beats
+    // number order.
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-marked")).as_deref(),
+        Some("900")
+    );
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-reopen")).as_deref(),
+        Some("930")
+    );
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-lower")).as_deref(),
+        Some("950")
+    );
+    std::env::remove_var("FNO_STATE_DIR");
+}
+
+/// A replacement PR binds only through its own `Fixes` line, open or
+/// merged, never the closed PR it replaced or one that merely mentions the
+/// node.
+#[test]
+fn live_fixes_pr_picks_the_newest_open_or_merged_closure() {
+    let found = serde_json::json!({"items": [
+        {"number": 900, "state": "closed", "pull_request": {"merged_at": null}, "body": "Fixes x-aaaa"},
+        {"number": 940, "state": "closed", "pull_request": {"merged_at": "2026-10-21T00:00:00Z"}, "body": "body\n\nFixes x-aaaa"},
+        {"number": 950, "state": "open", "pull_request": {"merged_at": null}, "body": "mentions x-aaaa\n\nFixes x-bbbb"},
+        {"number": 930, "state": "open", "pull_request": {"merged_at": null}, "body": "Fixes x-aaaa x-bbbb"},
+    ]});
+    assert_eq!(
+        pr_read::pick_live_fixes_pr(&found, "x-aaaa", 900),
+        Some(940)
+    );
+    assert_eq!(
+        pr_read::pick_live_fixes_pr(&found, "x-aaaa", 940),
+        Some(930)
+    );
+    assert_eq!(pr_read::pick_live_fixes_pr(&found, "x-cccc", 900), None);
+    assert_eq!(
+        pr_read::pick_live_fixes_pr(&serde_json::json!({}), "x-aaaa", 900),
+        None
+    );
+}

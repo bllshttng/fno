@@ -12,7 +12,7 @@
 //! (cover the middle, no bleed) without a real bg color.
 //! The selected target renders as a normal-video cut-out in the inverse block.
 
-use crate::chrome::{self, BodyLine, Chrome, FramedLine, Scroll};
+use crate::chrome::{self, BodyLine, Chrome, FramedLine, Join, Scroll};
 use crate::proto::{Cell, Color};
 use crate::theme::{Role, Theme};
 
@@ -121,27 +121,29 @@ impl PopupRow {
 /// inert continuation Headers indented under the text column. An Entry hint
 /// that leaves its label too little room moves onto continuation lines of its
 /// own. A FullWidth row keeps its first line selectable. Returns each output
-/// row's source index; continuations are inert, so the selectable order holds.
-fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupRow>, Vec<usize>) {
+/// row's source index and how it follows the row above, so a copy can join a
+/// wrapped row back; continuations are inert, so the selectable order holds.
+fn wrap_rows(
+    rows: &[PopupRow],
+    w: usize,
+    kw: usize,
+    plain: bool,
+) -> (Vec<PopupRow>, Vec<(usize, Join)>) {
     const MIN_LABEL_W: usize = 12;
-    let wrap = |text: &str, width: usize| {
-        let mut out = Vec::new();
-        crate::client::wrap_line(text, width.max(1), &mut out);
-        out
-    };
+    let wrap = |text: &str, width: usize| crate::client::wrap_line_joined(text, width.max(1));
     let mut out = Vec::with_capacity(rows.len());
     let mut src = Vec::with_capacity(rows.len());
     fn tail(
         out: &mut Vec<PopupRow>,
-        src: &mut Vec<usize>,
+        src: &mut Vec<(usize, Join)>,
         i: usize,
         indent: usize,
-        lines: Vec<String>,
+        lines: Vec<(String, Join)>,
         cont: fn(String) -> PopupRow,
     ) {
-        for line in lines {
+        for (line, join) in lines {
             out.push(cont(format!("{}{line}", " ".repeat(indent))));
-            src.push(i);
+            src.push((i, join));
         }
     }
     for (i, row) in rows.iter().enumerate() {
@@ -150,20 +152,20 @@ fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupR
             // A Header renders as " {s}" with two cells of air after it.
             PopupRow::Header(s) | PopupRow::FullWidth(s) if cols(s) + 1 > w => {
                 let mut lines = wrap(s, w.saturating_sub(2)).into_iter();
-                let first = lines.next().unwrap_or_default();
+                let first = lines.next().map(|(l, _)| l).unwrap_or_default();
                 out.push(match row {
                     PopupRow::FullWidth(_) => PopupRow::FullWidth(first),
                     _ => PopupRow::Header(first),
                 });
-                src.push(i);
+                src.push((i, Join::Line));
                 tail(&mut out, &mut src, i, 0, lines.collect(), PopupRow::Header);
             }
             // Body text wraps like a Header but lands as plain Text rows.
             PopupRow::Text(s) if cols(s) + 1 > w => {
                 let mut lines = wrap(s, w.saturating_sub(2)).into_iter();
-                let first = lines.next().unwrap_or_default();
+                let first = lines.next().map(|(l, _)| l).unwrap_or_default();
                 out.push(PopupRow::Text(first));
-                src.push(i);
+                src.push((i, Join::Line));
                 tail(&mut out, &mut src, i, 0, lines.collect(), PopupRow::Text);
             }
             // An Entry wraps only where render would cut it: pad + key column
@@ -196,7 +198,7 @@ fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupR
                 let mut lines = wrap(label, label_w).into_iter();
                 out.push(PopupRow::Entry {
                     glyph: glyph.clone(),
-                    label: lines.next().unwrap_or_default(),
+                    label: lines.next().map(|(l, _)| l).unwrap_or_default(),
                     hint: if hint_inline {
                         hint.clone()
                     } else {
@@ -204,7 +206,7 @@ fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupR
                     },
                     enabled: *enabled,
                 });
-                src.push(i);
+                src.push((i, Join::Line));
                 tail(
                     &mut out,
                     &mut src,
@@ -228,9 +230,9 @@ fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupR
                 let mut lines = wrap(value, w.saturating_sub(kw + 4)).into_iter();
                 out.push(PopupRow::Info {
                     label: label.clone(),
-                    value: lines.next().unwrap_or_default(),
+                    value: lines.next().map(|(l, _)| l).unwrap_or_default(),
                 });
-                src.push(i);
+                src.push((i, Join::Line));
                 tail(
                     &mut out,
                     &mut src,
@@ -250,12 +252,12 @@ fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupR
                 let mut lines = wrap(label, w.saturating_sub(kw + 8)).into_iter();
                 out.push(PopupRow::SwatchEntry {
                     glyph: glyph.clone(),
-                    label: lines.next().unwrap_or_default(),
+                    label: lines.next().map(|(l, _)| l).unwrap_or_default(),
                     hint: hint.clone(),
                     enabled: *enabled,
                     color: *color,
                 });
-                src.push(i);
+                src.push((i, Join::Line));
                 tail(
                     &mut out,
                     &mut src,
@@ -267,7 +269,7 @@ fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupR
             }
             row => {
                 out.push(row.clone());
-                src.push(i);
+                src.push((i, Join::Line));
             }
         }
     }
@@ -358,6 +360,8 @@ pub struct Popup {
     /// The content width ceiling, [`WIDTH_CAP`] by default. The screen still
     /// caps it in [`Popup::render`].
     pub width_cap: usize,
+    /// Paint the selected row inverted ([`Role::BodyFocus`]); settings opts in.
+    pub focus_invert: bool,
 }
 
 /// One laid-out line ready to draw, plus its style and the selected sub-span
@@ -398,6 +402,8 @@ pub struct Rendered {
     pub origin: (usize, usize),
     pub width: usize,
     pub lines: Vec<RenderedLine>,
+    /// One per line: the mouse-selectable body text, `None` on chrome rows.
+    pub body_spans: Vec<Option<chrome::BodySpan>>,
 }
 
 impl Rendered {
@@ -455,6 +461,7 @@ impl Popup {
             body_cap_pct: 0,
             label_first: false,
             width_cap: WIDTH_CAP,
+            focus_invert: false,
         }
     }
 
@@ -561,6 +568,9 @@ impl Popup {
             self.plain_body,
         )
         .1
+        .into_iter()
+        .map(|(ri, _)| ri)
+        .collect()
     }
 
     /// The fixed key-column width for a plain-body popup: the widest entry
@@ -788,7 +798,7 @@ impl Popup {
         let mut target_idx = 0usize;
         let mut lines = Vec::with_capacity(rows.len());
         for (li, row) in rows.iter().enumerate() {
-            let ri = src[li];
+            let ri = src[li].0;
             let line = match row {
                 PopupRow::Header(s) => {
                     let text = pad(&format!(" {s}"), width);
@@ -1087,13 +1097,15 @@ impl Popup {
         // inside it, so the builder rows padded to `width` survive whole.
         let body: Vec<BodyLine> = windowed
             .iter()
-            .map(|l| BodyLine {
+            .zip(&src[scroll..])
+            .map(|(l, &(_, join))| BodyLine {
                 segs: l.segs.clone(),
                 pad_role: l.pad_role,
                 text: l.text.clone(),
                 disabled: l.disabled,
                 sel_span: l.sel_span,
                 hits: l.hits.clone(),
+                join,
             })
             .collect();
         let framed = chrome::frame(
@@ -1106,6 +1118,7 @@ impl Popup {
         let origin = origin(self.anchor, framed.width, total_h, (trows, tcols));
         // Convert framed lines back to RenderedLines (roles carry styling; hits
         // are now in framed coordinates).
+        let body_spans = framed.lines.iter().map(|fl| fl.body).collect();
         let lines = framed
             .lines
             .into_iter()
@@ -1114,7 +1127,17 @@ impl Popup {
                 disabled: false,
                 sel_span: None,
                 hits: fl.hits,
-                roles: fl.roles,
+                roles: if self.focus_invert {
+                    fl.roles
+                        .into_iter()
+                        .map(|r| match r {
+                            Role::BodySel | Role::BodyCursor => Role::BodyFocus,
+                            other => other,
+                        })
+                        .collect()
+                } else {
+                    fl.roles
+                },
                 segs: vec![],
                 pad_role: Role::PanelBody,
             })
@@ -1123,6 +1146,7 @@ impl Popup {
             origin,
             width: framed.width,
             lines,
+            body_spans,
         }
     }
 }
@@ -1250,6 +1274,14 @@ pub fn draw(cells: &mut [Cell], rows: usize, cols: usize, r: &Rendered, theme: &
             theme,
         );
         chrome::record_close_spans((rows, cols), (r0 + i, c0), r.width, &line.hits);
+        crate::modal_select::paint_line(
+            cells,
+            (rows, cols),
+            theme,
+            (r0 + i, c0),
+            &line.text,
+            r.body_spans.get(i).copied().flatten(),
+        );
     }
 }
 

@@ -34,9 +34,9 @@ def _pin_profile(cfg, lanes):
 
 
 def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None):
-    """Pin the capacity readings the verb judges lanes with.
+    """Pin the capacity readings the command judges lanes with.
 
-    The Python capacity read was deleted: the verb computes it from
+    The Python capacity read was deleted: the command computes it from
     the runtime-state file, so a hermetic one rides in through env instead of
     a monkeypatched Python function. claude/codex pin one account record each
     (`cl-a` for claude, `cx-a` for codex); None leaves the harness with no
@@ -112,10 +112,10 @@ def test_sibling_lane_selection_carries_that_lanes_bundle(monkeypatch):
         ["spawn", "--name", "w", "/fno:target x-1"],
         stderr=err,
     )
-    assert out[out.index("--model") + 1] == "claude-opus-5"
+    # The selected lane's model rides its bundle; the skipped lane's never does.
     i = out.index("--")
-    assert out[i + 1 : i + 3] == ["--settings", "b.json"]
-    assert "a.json" not in out
+    assert out[i + 1 :] == ["--settings", "b.json", "--model", "claude-opus-5"]
+    assert "a.json" not in out and "claude-sonnet-5" not in out
     assert "agents.profiles.target.lanes[1].args" in err.getvalue()
     assert "unverified" in err.getvalue()
 

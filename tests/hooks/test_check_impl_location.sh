@@ -118,7 +118,7 @@ OUT="$(run_helper "$SIB")"
 # --- per-project `never` policy flips canonical-protected -> ok -------------
 # The verdict consults `fno agents workspace worktree policy`; a `never` project (working tree IS
 # the product) is legitimately worked on its canonical branch. Stub fno so the
-# case is hermetic and independent of the resolver (covered in test_worktree_ensure).
+# case is hermetic and independent of the resolver (covered in crates/fno-agents/tests/worktree_ensure.rs).
 echo ""
 echo "--- never policy flips protected -> ok ---"
 mk_fno_stub() { # <dir> <policy-line-or-'error'>
@@ -169,7 +169,7 @@ OUT="$( cd "$T" && PATH="$TMP_BASE/stub-hn-multi:$PATH" bash "$HELPER" )"
 [[ "$(val "$OUT" verdict)" == "canonical-protected" ]] && pass "multi-line harness-native stays protected" || fail "verdict was '$(val "$OUT" verdict)'"
 
 echo ""
-echo "--- policy verb error stays fail-closed to protected ---"
+echo "--- policy command error stays fail-closed to protected ---"
 mk_fno_stub "$TMP_BASE/stub-err" error
 T="$TMP_BASE/err-canon"; make_repo "$T" main
 OUT="$( cd "$T" && PATH="$TMP_BASE/stub-err:$PATH" bash "$HELPER" )"

@@ -32,6 +32,10 @@ pub(crate) struct PrMergeState {
     pub merge_sha: Option<String>,
     pub changed_files: Vec<String>,
     pub files_truncated: bool,
+    /// The PR body; its closure line names the nodes this merge closes.
+    /// None on a cache hit: a body stays editable after merge, so the
+    /// permanent row never holds it ([`read_body`] reads it fresh).
+    pub body: Option<String>,
 }
 
 /// The production read: cache first, REST on a miss, write-back on a fresh
@@ -89,6 +93,7 @@ fn cached_row(
             })
             .unwrap_or_default(),
         files_truncated: false,
+        body: None,
     })
 }
 
@@ -180,7 +185,27 @@ pub(crate) fn fresh_read(
         merge_sha: str_field(map.get("merge_sha")),
         changed_files,
         files_truncated: false,
+        body: Some(
+            map.get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
     })
+}
+
+/// The PR body, read fresh: the closure evidence a cached merge row omits.
+pub(crate) fn read_body(
+    pr: i64,
+    repo: Option<&str>,
+    cwd: Option<&str>,
+) -> Result<String, PrReadError> {
+    let info = read_info(pr, repo, Path::new(cwd.unwrap_or(".")))?;
+    Ok(info
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
 }
 
 /// The production info seam: resolve the slug, one `gh api` pull read,
@@ -222,6 +247,7 @@ fn read_info(pr: i64, repo: Option<&str>, cwd: &Path) -> Result<Value, PrReadErr
         "url": data.get("html_url"),
         "merged_at": data.get("merged_at"),
         "merge_sha": data.get("merge_commit_sha"),
+        "body": data.get("body").and_then(Value::as_str).unwrap_or_default(),
     }))
 }
 

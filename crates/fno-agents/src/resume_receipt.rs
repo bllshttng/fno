@@ -1,9 +1,20 @@
 //! Resume's preserved-record fallback (task 4): where a resume
-//! finds a retired session.
+//! finds a retired session. The typed resume receipt (write/validate/show)
+//! lives in the submodules beside it: this file is the family's named Rust
+//! landing, and the argv door is [`door::run`].
 
 use std::path::Path;
 
 use crate::paths::AgentsHome;
+
+pub mod door;
+pub mod model;
+pub mod revalidate;
+
+/// The argv entry: `fno-agents resume-receipt <command> [options]`.
+pub fn run(args: &[String]) -> i32 {
+    door::run(args)
+}
 
 /// The preserved-record fallback (task 4): a session-shaped resume
 /// miss consults the reap-receipts store before refusing. A retirement that
@@ -139,25 +150,13 @@ mod tests {
         // session-id change a copied command causes.
         let mut receipt = receipt_value(
             SID,
-            "fno agents spawn --resume 11111111-2222-3333-4444-555555555555 -P zai -m 'glm-5.3-flash[1m]'",
+            "fno agents resume 11111111-2222-3333-4444-555555555555",
         );
-        receipt["resume_argv"] = serde_json::json!([
-            "fno",
-            "agents",
-            "spawn",
-            "--resume",
-            SID,
-            "-P",
-            "zai",
-            "-m",
-            "glm-5.3-flash[1m]"
-        ]);
+        receipt["resume_argv"] = serde_json::json!(["fno", "agents", "resume", SID]);
         let (_dir, home) = home_with_receipt(receipt);
         let hint = resume_hint(&home, SID).unwrap();
         assert!(
-            hint.contains(&format!(
-                "  resume: fno agents spawn --resume {SID} -P zai -m 'glm-5.3-flash[1m]'\n"
-            )),
+            hint.contains(&format!("  resume: fno agents resume {SID}\n")),
             "{hint}"
         );
         assert!(hint.contains("the session id changes"), "{hint}");

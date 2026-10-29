@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::merge_evidence::PrReadError;
-use super::merge_state::{query_pr_merge_state, PrMergeState};
+use super::merge_state::{query_pr_merge_state, read_body, PrMergeState};
 use super::pr_link::repo_slug_from_url;
 use crate::backlog_ready::node_is_open;
 use crate::loop_dispatch::which_binary;
@@ -381,6 +381,20 @@ fn listing_answer<'a>(rows: &'a [Value], number: i64, ref_repo: Option<&str>) ->
     })
 }
 
+/// True when the PR body's closure line names `nid`. A merged PR closes
+/// only the nodes it claims: an early wave of a multi-wave node merges with
+/// no line for it, and an approved Retarget line moves the claim to another
+/// node, so neither PR is this node's closing evidence.
+fn closure_names(body: &str, nid: &str) -> bool {
+    crate::org_board::pr_closure::parse(body)
+        .iter()
+        .any(|id| id == nid)
+}
+
+fn row_closure_names(row: &Value, nid: &str) -> bool {
+    closure_names(row.get("body").and_then(Value::as_str).unwrap_or(""), nid)
+}
+
 /// Close open nodes with NO PR refs by matching the id in a merged branch.
 pub(crate) fn reverse_map_unstamped(
     entries: &[Value],
@@ -482,7 +496,7 @@ pub(crate) fn reverse_map_unstamped(
                     branch_matches_node(
                         row.get("headRefName").and_then(Value::as_str).unwrap_or(""),
                         nid,
-                    )
+                    ) && row_closure_names(row, nid)
                 })
                 .collect();
             if hits.is_empty() {
@@ -622,7 +636,8 @@ pub(crate) fn detect_reverted_nodes(merged_prs: &[Value], entries: &[Value]) -> 
     out
 }
 
-/// Find open nodes whose PR has merged outside the ship gate. With
+/// Find open nodes whose PR has merged outside the ship gate and whose
+/// closure line names them (see [`closure_names`]). With
 /// `listings`, a ref resolves against the repo's listings first; the
 /// per-node query fires only for a number in neither listing.
 ///
@@ -708,6 +723,9 @@ pub(crate) fn scan_merge_drift(
             // same-numbered PR elsewhere.
             let repo = repo_slug_from_url(url.as_deref());
             if let Some(hit) = listing_answer(&merged_rows, *number, repo.as_deref()) {
+                if !row_closure_names(hit, nid) {
+                    continue;
+                }
                 // No mergeCommit oid/files on a listing row - like a
                 // reverse-mapped record.
                 merged = Some(PrMergeState {
@@ -718,6 +736,7 @@ pub(crate) fn scan_merge_drift(
                     merge_sha: None,
                     changed_files: Vec::new(),
                     files_truncated: false,
+                    body: None,
                 });
                 break;
             }
@@ -743,7 +762,8 @@ pub(crate) fn scan_merge_drift(
                     continue;
                 }
                 Ok(state) => {
-                    if state.state == "MERGED" {
+                    let body = state.body.as_deref().unwrap_or_default();
+                    if state.state == "MERGED" && closure_names(body, nid) {
                         merged = Some(state);
                         break;
                     }
@@ -796,14 +816,19 @@ pub(crate) fn scan_merge_drift(
     records
 }
 
-/// The production query seam: the cache-first merge-state read.
+/// The production query seam: the cache-first merge-state read, with the
+/// closure body read fresh when the cache served the merge facts.
 pub(crate) fn query_seam(
     pr: i64,
     repo: Option<&str>,
     cwd: Option<&str>,
     include_files: bool,
 ) -> Result<PrMergeState, PrReadError> {
-    query_pr_merge_state(pr, repo, cwd, include_files)
+    let mut state = query_pr_merge_state(pr, repo, cwd, include_files)?;
+    if state.state == "MERGED" && state.body.is_none() {
+        state.body = Some(read_body(pr, repo, cwd)?);
+    }
+    Ok(state)
 }
 
 fn str_field(v: Option<&Value>) -> Option<String> {
@@ -834,7 +859,7 @@ mod tests {
             "headRefName": head,
             "url": format!("https://github.com/o/r/pull/{number}"),
             "mergedAt": "2026-10-01T00:00:00Z",
-            "body": "",
+            "body": "Fixes x-aaaa",
         })
     }
 
@@ -874,6 +899,7 @@ mod tests {
                 merge_sha: Some("abc".into()),
                 changed_files: vec!["a.rs".into()],
                 files_truncated: false,
+                body: Some("Fixes x-aaaa".into()),
             })
         });
         assert_eq!(records[0].pr_state, "MERGED");
@@ -890,6 +916,64 @@ mod tests {
             panic!("an open listing row means no drift")
         });
         assert!(records.is_empty(), "{records:?}");
+    }
+
+    #[test]
+    fn a_merged_pr_closes_only_a_node_its_closing_line_names() {
+        // The recorded shape: wave 1 of a multi-wave node merges with no
+        // closing line, and the node must stay open for its later waves.
+        let entries = vec![open_node(json!({
+            "pr_number": 7,
+            "pr_url": "https://github.com/o/r/pull/7",
+            "cwd": ".",
+        }))];
+        let scan_listing = |body: &str| {
+            let mut row = pr_row(7, "feature/x-aaaa", "MERGED");
+            row["body"] = json!(body);
+            let cache = ListingCache::new();
+            cache
+                .rows_for_with("merged", ".", |_| Ok(vec![row.clone()]))
+                .expect("seed merged");
+            cache
+                .rows_for_with("open", ".", |_| Ok(Vec::new()))
+                .expect("seed open");
+            scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
+                panic!("query owed nothing: the listing answered")
+            })
+        };
+        assert!(scan_listing("wave 1 of 2").is_empty());
+        // An approved Retarget hand-off names the new node, not this one.
+        assert!(scan_listing("Fixes x-bbbb\n\nRetarget x-aaaa x-bbbb msg-123456").is_empty());
+        let records = scan_listing("Fixes x-bbbb x-aaaa");
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert!(records[0].closeable());
+
+        let scan_query = |body: &str| {
+            scan_merge_drift(&entries, None, None, |pr, _, _, _| {
+                Ok(PrMergeState {
+                    number: pr,
+                    state: "MERGED".into(),
+                    url: None,
+                    merged_at: None,
+                    merge_sha: None,
+                    changed_files: Vec::new(),
+                    files_truncated: false,
+                    body: Some(body.to_string()),
+                })
+            })
+        };
+        assert!(scan_query("").is_empty());
+        assert_eq!(scan_query("Fixes: x-aaaa").len(), 1);
+
+        // A ref-less node matched by branch name holds to the same rule.
+        let refless = vec![open_node(json!({"cwd": "."}))];
+        let mut row = pr_row(11, "feature/x-aaaa", "MERGED");
+        row["body"] = json!("part 1 of 4");
+        let cache = ListingCache::new();
+        cache
+            .rows_for_with("merged", ".", |_| Ok(vec![row.clone()]))
+            .expect("seed merged");
+        assert!(reverse_map_unstamped(&refless, None, Some(&cache)).is_empty());
     }
 
     #[test]

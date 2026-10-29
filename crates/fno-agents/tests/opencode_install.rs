@@ -12,7 +12,7 @@ use std::sync::{Mutex, MutexGuard};
 use fno_agents::opencode_install::{
     command_file_name, install, installed_status, manifest_path, status_json, uninstall,
 };
-use fno_agents::provider::{opencode_run_tail, render_verb_seed};
+use fno_agents::provider::{opencode_run_tail, render_command_seed};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -132,19 +132,19 @@ fn read(path: &Path) -> String {
 /// chooses the root over the XDG fallback; `OPENCODE_CONFIG_DIR` outranks the
 /// binary; a binary that answers nothing still renders 2.x and names the
 /// version unknown in the receipt. Naming agreement leads: opencode_run_tail
-/// routes a seed at --command fno:think; render_verb_seed keeps the /fno:
+/// routes a seed at --command fno:think; render_command_seed keeps the /fno:
 /// spelling on the slash surface; the generator names the file fno:think.md.
 /// One string, three renderers; the surface below is named by the same rule.
 #[test]
 fn install_targets_the_binary_writes_the_full_surface_and_reinstall_is_a_noop() {
     assert_eq!(opencode_run_tail("/fno:think extra words")[1], "fno:think");
-    assert_eq!(render_verb_seed("/fno:think", "opencode"), "/fno:think");
+    assert_eq!(render_command_seed("/fno:think", "opencode"), "/fno:think");
     assert_eq!(command_file_name("think"), "fno:think.md");
     let s = installed("full-surface");
-    for verb in ["fno:target.md", "fno:ship.md", "fno:think.md"] {
+    for command in ["fno:target.md", "fno:ship.md", "fno:think.md"] {
         assert!(
-            s.conf.join("commands").join(verb).is_file(),
-            "{verb} missing"
+            s.conf.join("commands").join(command).is_file(),
+            "{command} missing"
         );
     }
     let target = read(&s.conf.join("commands/fno:target.md"));
@@ -255,20 +255,20 @@ fn install_targets_the_binary_writes_the_full_surface_and_reinstall_is_a_noop() 
     }
 }
 
-/// The upgrade contract: a lost verb is removed, a new one written, a lost
+/// The upgrade contract: a lost command is removed, a new one written, a lost
 /// file the user edited since the install is kept and named, and untouched
 /// files keep their mtime.
 #[test]
 fn upgrade_removes_lost_writes_new_keeps_edited() {
     let s = installed("upgrade");
     let archer_before = mtime(&s.conf.join("agents/fno:archer.md"));
-    // A lost verb footnote still owns: removed.
+    // A lost command footnote still owns: removed.
     std::fs::remove_file(s.root.join("commands/ship.md")).unwrap();
     write_file(
         &s.root.join("commands/review.md"),
         "---\ndescription: review it\n---\nbody\n",
     );
-    // A lost verb the user edited: theirs.
+    // A lost command the user edited: theirs.
     write_file(&s.conf.join("commands/fno:target.md"), "// user edit\n");
     std::fs::remove_file(s.root.join("commands/target.md")).unwrap();
     let receipt = install(Path::new("/nonexistent-repo")).unwrap();

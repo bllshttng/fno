@@ -1,6 +1,6 @@
 # Troubleshooting
 
-The failures below are the ones real runs hit most often, ordered roughly by how much trouble they cause. For first-install verification see [getting-started.md](getting-started.md); for credentials see [auth.md](auth.md); for the habits that prevent most of these see [best-practices.md](best-practices.md).
+The failures below are the ones real runs hit most often, ordered roughly by how much trouble they cause. For first-install verification see [install.md](install.md#verify-it-worked); for credentials see [auth.md](auth.md); for the habits that prevent most of these see [best-practices.md](best-practices.md).
 
 ## A run runs for a long time and never converges
 
@@ -24,13 +24,13 @@ What to check:
 - The install is current (`fno doctor`); a stale binary can no-op a phase that a newer one would complete.
 - Re-run with a smaller, clearer ask. Vague large asks stall here most.
 
-## `fno: command not found`, or a verb you expect is missing
+## `fno: command not found`, or a command you expect is missing
 
-The deployed `fno` is a snapshot. A verb added to the source after your last install is invisible to the installed binary, and a missing verb often shows up indirectly (for example a loop that will not finish because a capture step silently did nothing). Check for skew first, network-free:
+The deployed `fno` is a snapshot. A command added to the source after your last install is invisible to the installed binary, and a missing command often shows up indirectly (for example a loop that will not finish because a capture step silently did nothing). Check for skew first, network-free:
 
 ```bash
 fno doctor          # fresh / stale / unknown
-fno doctor --json   # lists any missing verbs
+fno doctor --json   # lists any missing commands
 fno doctor --fix    # refresh a stale install
 ```
 

@@ -31,7 +31,7 @@
 # homebrew-core submission would require - out of scope for the own tap.)
 class Fno < Formula
   desc "Autonomous delivery pipeline CLI (footnote)"
-  homepage "https://github.com/bllshttng/footnote"
+  homepage "https://github.com/bllshttng/fno"
 
   # The x86_64 wheel (macosx_10_12) is the top-level default so a `url` is ALWAYS
   # defined - including on Linux, where the on_macos block is skipped. Homebrew
@@ -88,7 +88,7 @@ class Fno < Formula
     # explicitly. The fno-agents* symlink is the load-bearing step (Locked
     # Decision 4): the CLI invokes the binaries by name on PATH. The `fno`
     # symlink is the advertised front door : the Rust mux that owns
-    # `fno` on PATH and forwards non-mux verbs to the `fno-py` beside it.
+    # `fno` on PATH and forwards non-mux commands to the `fno-py` beside it.
     # Arch-agnostic via libexec.
     bin.install_symlink libexec/"bin/fno"
     bin.install_symlink libexec/"bin/fno-py"
@@ -105,7 +105,7 @@ class Fno < Formula
     assert_match "fno", shell_output("#{bin}/fno-py --version")
 
     # All four Rust/Python executables must be present + executable on the keg
-    # bin, or the front door or a daemon/loop verb would 127 at runtime. Fail
+    # bin, or the front door or a daemon/loop command would 127 at runtime. Fail
     # the test on any miss (no silent success for a half-installed CLI).
     %w[fno fno-py fno-agents fno-agents-daemon fno-agents-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"

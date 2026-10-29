@@ -5,12 +5,12 @@
 
 include!("review_invocation_core.rs");
 
-/// The mux transport's projection: verb and args only, the signature
+/// The mux transport's projection: command and args only, the signature
 /// `mux_cli.rs` has always called. The full parse is the one owner above.
 pub(crate) fn review_invocation_command(bytes: &[u8]) -> Option<(String, String)> {
     let raw = std::str::from_utf8(bytes).ok()?;
     let parsed = parse_review_invocation(raw)?;
-    Some((parsed.verb, parsed.args_raw))
+    Some((parsed.command, parsed.args_raw))
 }
 
 /// One journal resolver for the crate: setup's per-run events ride the
@@ -113,7 +113,7 @@ fn append_review_invocation_at(
     submit_confirmed: bool,
     receipt: &str,
 ) {
-    let Some((verb, args_raw)) = command else {
+    let Some((command_name, args_raw)) = command else {
         return;
     };
     let (branch, head_sha) = review_invocation_branch_and_head();
@@ -129,7 +129,7 @@ fn append_review_invocation_at(
     let data = serde_json::json!({
         "invocation_id": invocation_id,
         "stage": "sent",
-        "verb": verb,
+        "verb": command_name,
         "args_raw": args_raw,
         "transport": "mux_pane_send_raw",
         "initiator": "unknown",
@@ -147,7 +147,12 @@ fn append_review_invocation_at(
         "source": "daemon",
         "data": data,
     });
-    let _ = crate::pane_send_audit::append_agents_event(path, &event);
+    if let Err(e) = crate::pane_send_audit::append_agents_event(path, &event) {
+        eprintln!(
+            "fno mux: review_invocation emit failed at {}: {e}",
+            path.display()
+        );
+    }
 }
 
 /// Wall-clock RFC3339 UTC timestamp, seconds precision, no chrono in the

@@ -1,0 +1,5 @@
+# json-stdout-baseline.tsv - waivers for check-json-stdout.sh.
+# Format: <row id>\t<reason>. Shrink-only by review: a row leaves as its fix
+# lands; a row enters only naming the observed violation. Seeded empty: the
+# first run convicted backlog get's miss (fixed in the same PR) and doctor
+# lint registry parsed clean.

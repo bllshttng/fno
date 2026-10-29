@@ -1,8 +1,8 @@
-# footnote - f[no]
+# fno
 
 **Set a target and walk away. Say f[no] to mostly done.**
 
-footnote is an orchestration loop that ships software. It plans, builds, reviews, and opens a green PR, and it does not stop until external truth says so. It runs as a plugin on any harness that accepts plugins and hooks (Claude Code, Codex, OpenCode, and agy are wired today), with a standalone CLI underneath.
+fno is an orchestration loop that ships software. It plans, builds, reviews, and opens a green PR, and it does not stop until external truth says so. It runs as a plugin on any harness that accepts plugins and hooks. Claude Code, Codex, OpenCode, and agy are wired today, with a standalone CLI underneath.
 
 ![The fno mux with four agent panes working fno tasks, a sideline roster, and a live status row](docs/images/ux-shot-live-fleet.png)
 
@@ -18,13 +18,13 @@ Start with the CLI:
 curl -fsSL fno.sh | sh
 ```
 
-When `uv` is missing the script installs it first. The install lands the `fno` CLI with its bundled binaries and adds the tool bin to your PATH. It then wires the plugin into every agent CLI it detects: `claude`, `codex`, `opencode`, `pi`, `agy`, `gemini`. Each harness prints one summary line. Set `FNO_NO_WIRE=1` to skip this step. `fno do wizard` wires a harness by hand. The per-harness commands below do it manually. The plugin-only install routes pick up their CLI on the next session.
+When `uv` is missing the script installs it first. The install lands the `fno` CLI with its bundled binaries and adds the tool bin to your PATH. It then wires the plugin into every agent CLI it detects: `claude`, `codex`, `opencode`, `pi`, `agy`, `gemini`. Each harness prints one summary line. Then it runs the one-time setup with its defaults. Set `FNO_NO_WIRE=1` to skip both steps. The plugin install routes do the same work. `fno config setup run --check` names anything the machine still lacks, each with its fix. The per-harness commands below wire a harness by hand.
 
 Claude Code:
 
 ```
-/plugin marketplace add bllshttng/footnote#stable
-/plugin install fno@footnote
+/plugin marketplace add bllshttng/fno#stable
+/plugin install fno@fno
 ```
 
 `#stable` pins the add to the `stable` branch (781 files). Without it, the add clones `main` (7,949 files, 80s+), which can time out: Claude Desktop's "Add marketplace" dialog gives up after 120s and reports "Failed to add marketplace."
@@ -32,13 +32,13 @@ Claude Code:
 Codex CLI:
 
 ```
-codex plugin marketplace add bllshttng/footnote@stable
-codex plugin add fno@footnote
+codex plugin marketplace add bllshttng/fno@stable
+codex plugin add fno@fno
 ```
 
 The plugin-only route gets its CLI on the next session: the first session you start after installing runs the installer. Until then `fno` is not on PATH and the `/fno:` skills cannot run.
 
-CLI only, for scripting, CI, or driving footnote yourself:
+CLI only, for scripting, CI, or driving fno yourself:
 
 ```
 uv tool install fno
@@ -48,10 +48,10 @@ cargo install fno
 From a clone, `bash scripts/setup.sh` installs the CLI and scaffolds the project. One skill runs without the CLI at all:
 
 ```
-npx skills add bllshttng/footnote --skill tdd
+npx skills add bllshttng/fno --skill tdd
 ```
 
-Other harnesses (opencode, agy, gemini, pi): see [docs/HARNESSES.md](docs/HARNESSES.md). Then run `/fno:setup` (or `fno do wizard` in a terminal), and point `/fno:target` at a feature.
+Other harnesses (opencode, agy, gemini, pi): see [docs/HARNESSES.md](docs/HARNESSES.md). Then run `/fno:setup` in a session or `fno config setup run` in a terminal. `fno do wizard` asks each question instead. Then point `/fno:target` at a feature.
 
 ## Uninstall
 
@@ -78,7 +78,10 @@ The finish line is a PR with CI green and review done under your configured poli
 
 ## Docs
 
-- [Getting started](docs/getting-started.md): install, setup, and the commands to run day to day
+- [Docs home](docs/README.md): every page, grouped by what you are trying to do
+- [Install](docs/install.md): install, verify, and set up a project
+- [Quickstart](docs/quickstart.md): your first PR
+- [Workflows](docs/workflows.md): which command for which task
 - [Target pipeline](docs/guides/target.md): the loop's flags, gates, and resume behavior
 - [Think and plan](docs/guides/think-and-plan.md): design exploration and planning
 - [PR lifecycle](docs/guides/pr-lifecycle.md): review, create, check, merged

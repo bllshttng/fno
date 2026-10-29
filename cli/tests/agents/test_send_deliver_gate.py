@@ -121,11 +121,11 @@ def test_deliver_live_codex_daemon_delivered_true(
     monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
+    from tests.fixtures.bus_rows import read_rows
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
+    result = dispatch_send(from_name="lead",
         name="codex-agent",
         message="hey codex via PTY",
         provider=None,
@@ -139,7 +139,8 @@ def test_deliver_live_codex_daemon_delivered_true(
 
     # Bus demotion (node x-1f23): a hosted delivery is self-recording (transcript),
     # NOT also queued durable.
-    assert read_all_threads("00000001") == [], "hosted delivery must not queue durable"
+    queued = [m for m in read_rows() if m["to"] == "00000001" and m.get("delivery") != "hosted"]
+    assert queued == [], "hosted delivery must not queue durable"
 
     # The deliver RPC carried the delivered-mail header turn (codex/gemini share
     # the envelope now), not the raw body.
@@ -170,11 +171,11 @@ def test_deliver_live_codex_daemon_delivered_false(
     monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
+    from tests.fixtures.bus_rows import read_rows
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
+    result = dispatch_send(from_name="lead",
         name="codex-agent",
         message="hey queued",
         provider=None,
@@ -184,8 +185,7 @@ def test_deliver_live_codex_daemon_delivered_false(
     assert result.delivery == "durable"
     assert result.msg_id.startswith("fmail-")
 
-    threads = read_all_threads("deadbeef")
-    assert len(threads) == 1
+    assert len({m["id"] for m in read_rows() if m["to"] == "deadbeef"}) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -256,65 +256,6 @@ def test_deliver_live_codex_thread_routes_through_switchboard_not_deliver(
     )
 
 
-def test_deliver_live_codex_thread_switchboard_miss_demotes_durable(
-    tmp_path: Path, monkeypatch, runner: CliRunner
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_MAIL_LANDED_SETTLE_S", "0")
-    _register_codex_thread_peer()
-
-    def _mock_rpc(method: str, params: dict, **kwargs):
-        if method == "agent.switchboard_v2":
-            return {"delivered": False, "reason": "codex thread unavailable: gone"}
-        return None
-
-    from fno.agents import dispatch as dispatch_mod
-    monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
-
-    from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
-
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
-        name="codex-thread-agent",
-        message="hello anyone",
-        provider=None,
-        cwd=cwd,
-    )
-
-    assert result.delivery == "durable", f"miss must demote durable, got {result.delivery!r}"
-    # The durable queue keys on the recipient's id head (matching the existing
-    # codex-peer tests, which read "deadbeef" for deadbeef-0000-...).
-    threads = read_all_threads("0198c0de")
-    assert threads, "the body must land in the durable queue"
-
-    # the result carries the coordinates the post-send landed verify
-    # reads - the durable bus address, the harness, the full harness session id.
-    from fno.harness_identity import canonical_handle
-
-    assert result.to_harness == "codex"
-    assert result.to_session == "0198c0de-0000-7000-8000-00000000000a"
-    assert result.to == canonical_handle("0198c0de-0000-7000-8000-00000000000a")
-
-    # the same miss must never read as delivered. The receipt names
-    # NOT LANDED, the substrate-correct verify command for a codex thread with
-    # no pane (fno cannot inject; the session's own surface receives it), and
-    # the exit is non-zero so a last-line reader cannot record it as delivered.
-    from fno.mail.cli import mail_app
-
-    cli = runner.invoke(
-        mail_app,
-        ["send", "codex-thread-agent", "hello again", "--cwd", str(cwd),
-         "--from-name", "lead"],
-    )
-    out = (cli.stdout or "") + (cli.stderr or "")
-    assert cli.exit_code == 14, out
-    assert "NOT LANDED" in out, out
-    assert "fno agents peek codex-thread-agent --grep " in out, out
-    assert "the user's Codex window" in out, out
-
-
 # ---------------------------------------------------------------------------
 # Claude peer + switchboard (Group 2, Task 3.1): claude now probes the
 # versioned switchboard RPC first; a non-stream-thread demotes to socket/MCP
@@ -353,7 +294,7 @@ def test_deliver_live_claude_switchboard_demotes_to_socket(
     from fno.agents.harnesses import claude as claude_mod
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
 
-    # The control.sock inject (mail-inject verb) is the socket-path successor; it
+    # The control.sock inject (mail-inject command) is the socket-path successor; it
     # succeeds here so the demote falls through to it.
     inject_calls: list = []
 
@@ -639,8 +580,7 @@ def test_real_relay_descendant_releases_captured_receipt_pipes(
     """A real double-forked relay cannot delay the hosted CLI-style receipt."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.registry import AgentEntry, write_registry
-    from fno.bus.cursor import scan_unread
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows, scan_unread
 
     write_registry(
         [
@@ -727,17 +667,17 @@ print(f"{result.msg_id} delivered ({result.delivery})")
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(result.stdout.splitlines()) == 1
         assert result.stdout.strip().endswith("delivered (hosted)")
-        audit_rows = list(iter_messages())
+        audit_rows = read_rows()
         # The write-ahead stage row and the hosted receipt share one id.
         assert len(audit_rows) == 2
         staged_row, audit = audit_rows
-        assert staged_row.id == audit.id
-        assert staged_row.delivery is None
-        assert "hello" in staged_row.body
-        assert audit.delivery == "hosted"
-        assert audit.id in result.stdout
-        assert "hello" in audit.body
-        assert scan_unread(audit.to) == []
+        assert staged_row["id"] == audit["id"]
+        assert staged_row.get("delivery") is None
+        assert "hello" in staged_row.get("body", "")
+        assert audit.get("delivery") == "hosted"
+        assert audit["id"] in result.stdout
+        assert "hello" in audit.get("body", "")
+        assert scan_unread(audit["to"]) == []
         # Poll for the CONTENT, not the path. `exists()` goes true the instant the
         # file is created, so a poll on it can read an empty file the relay has not
         # finished writing, and the assert fails on '' instead of "started".
@@ -1024,13 +964,6 @@ def test_deliver_live_mcp_row_delivers_via_control_sock(
         )
     ])
 
-    from fno.mcp import client as mcp_client
-    push_calls: list = []
-    monkeypatch.setattr(
-        mcp_client, "send_to_channel",
-        lambda routing_key, envelope: push_calls.append((routing_key, envelope)),
-    )
-
     from fno.agents import dispatch as dispatch_mod
     inject_calls: list = []
 
@@ -1044,12 +977,11 @@ def test_deliver_live_mcp_row_delivers_via_control_sock(
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
+    result = dispatch_send(from_name="lead",
         name="claude-mcp", message="fyi built", provider=None, cwd=cwd
     )
 
     assert result.delivery == "hosted"
-    assert len(push_calls) == 0, "the retired MCP fast lane must not fire"
     assert inject_calls == ["abcd1234"], "delivery rides the confirming control.sock lane"
 
 

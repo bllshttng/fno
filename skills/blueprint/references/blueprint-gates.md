@@ -234,12 +234,12 @@ Transcription is purely mechanical: same Locked Decisions input yields the
 same frontmatter output. No LLM judgment in this step.
 
 ```bash
-# The locked-decision parser is the in-package module fno.executor._locked
-# (the SINGLE source of truth). In a checkout, point PYTHONPATH at cli/src so
-# it imports pre-install; an installed `fno` needs no PYTHONPATH.
-_PKG_SRC="$(cd "${CLAUDE_PLUGIN_ROOT:-$SKILL_DIR/../..}" 2>/dev/null && pwd)/cli/src"
-[[ -f "${_PKG_SRC}/fno/executor/_locked.py" ]] && export PYTHONPATH="${_PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
-LOCKED_VALUE=$(python3 -m fno.executor._locked < "$DESIGN_DOC_PATH")
+# The locked-decision parser is the native executor-route door
+# (crates/fno-agents/src/executor_route.rs, the SINGLE source of truth since
+# the worker-family port deleted the Python leg). Resolve the fno-agents
+# binary through the shared resolver (hooks/lib/agents-bin.sh) and exec the
+# door; a checkout with a built binary needs nothing else.
+LOCKED_VALUE=$(fno-agents executor-route locked < "$DESIGN_DOC_PATH")
 # LOCKED_VALUE is one of: '' | tdd | impeccable | mixed
 ```
 
@@ -303,10 +303,10 @@ sources in precedence order (frontmatter wins):
 ```bash
 # 1. Plan frontmatter `model:` (primary). Scope to the frontmatter block only.
 MODEL_PIN="$(awk '/^---[[:space:]]*$/{c++; next} c==1 && /^model:/{sub(/^model:[[:space:]]*/,""); print; exit}' "$PLAN_INDEX")"
-# 2. Fallback: a `Model: <token>` Locked Decision (same parser module as the
+# 2. Fallback: a `Model: <token>` Locked Decision (same native door as the
 #    executor lock, selected with --key model; empty when none).
 if [[ -z "$MODEL_PIN" ]]; then
-  MODEL_PIN="$(python3 -m fno.executor._locked --key model < "$DESIGN_DOC_PATH")"
+  MODEL_PIN="$(fno-agents executor-route locked --key model < "$DESIGN_DOC_PATH")"
 fi
 ```
 
@@ -482,7 +482,7 @@ A probe is what forces that last mile before the session can claim done.
 
 ```yaml
 done_probes:
-  - "fno agents mail list --kind report --since 24h | grep -o groom"
+  - "fno agents mail unread --json | grep -o groom"
 ```
 
 **Assert freshness, never bare existence.**
@@ -537,7 +537,7 @@ Two declarations are honored, either or both:
 | Key | Read by | Question |
 |-----|---------|----------|
 | `done_probes` | `fno-agents loop-check` | may this SESSION stop? |
-| `close_probes` | the three close verbs (`backlog done`, `done`, `reconcile`) | may this NODE close? |
+| `close_probes` | the three close commands (`backlog done`, `done`, `reconcile`) | may this NODE close? |
 
 Session termination and node closure are different questions with different
 right answers: wave 1 ships, its session is finished and should stop, but the
@@ -546,17 +546,17 @@ Putting wave 2's outcome assertion under `done_probes` would wedge wave 1's
 session; putting it under `close_probes` lets the session end while the node
 stays open until the promise lands.
 
-The close verbs shell out to `fno-agents probe-run --key close_probes`, the
+The close commands shell out to `fno-agents probe-run --key close_probes`, the
 same runner `loop-check` uses for `done_probes` - one runner, two gates.
 
 ```yaml
 close_probes:
-  - "test $(wc -l < scripts/ci/verb-baseline.txt) -lt 364"   # the cull ran
+  - "test $(wc -l < scripts/ci/command-baseline.txt) -lt 364"   # the cull ran
 ```
 
 **Assert an observable outcome, not a checkbox.**
 A probe asserts something a reader can check in the world: a count dropped, a
-file gained a section, a leaf verb disappeared.
+file gained a section, a leaf command disappeared.
 Checkboxes are ticked by the party that wants to close, the weakest evidence
 class.
 
@@ -573,7 +573,18 @@ close_probes:
   - "fno-agents probe-run main-ci --workflow cli-ci --node <id>"
 ```
 
-It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close verbs keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.
+It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close commands keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.
+
+### recheck_probes: the symptom stays fixed
+
+A close probe proves the fix at close time. It can read a window (`--since 24h`) or a surface that retires later. A plan that fixes a lasting symptom also declares `recheck_probes:`. That is a promise that the probe holds forever. The daemon re-runs it on every done node every 6 hours. A probe that fails twice in one pass files a bug node with `source_node_id` set to the original node.
+
+```yaml
+recheck_probes:
+  - "fno agents reap --dry-run --json | grep -o '\"kept_open_pr\"'"   # the open-PR keep still fires
+```
+
+Write no window into a recheck probe, and name no file that a later port deletes. The same shape rules apply: at most 3 probes, a 60 s timeout each, and only a FAIL verdict counts. Doc: `docs/architecture/plan-completion-stamp.md`, section "Re-checking after close".
 
 ## Join posture (step 3, every plan carrying an `## Execution Strategy`)
 
@@ -593,7 +604,7 @@ The gate runs after the Execution Strategy is enriched and before `validate-plan
 WIDTH=$(fno backlog join width "$PLAN_PATH" 2>/dev/null); WIDTH_RC=$?
 ```
 
-**Use the native verb.** The old `python -m fno.backlog.join_trigger` module is gone. Every call to it fails with `ModuleNotFoundError`, so `WIDTH_RC` reads 1 on every plan. The gate then takes the unmeasured row every time and records `manual` without printing the width it exists to print.
+**Use the native command.** The old `python -m fno.backlog.join_trigger` module is gone. Every call to it fails with `ModuleNotFoundError`, so `WIDTH_RC` reads 1 on every plan. The gate then takes the unmeasured row every time and records `manual` without printing the width it exists to print.
 
 That is the same canonical probe `init-target-state.sh` shells out to. When the plan cannot be measured, it exits 1 and prints nothing. Otherwise it prints the measured int and exits 0. Branch on the exit code, never on the empty string:
 
@@ -644,7 +655,7 @@ Apply the user's choice:
 
 - **Option 1 (proceed):** continue to step 3b. Once the new node ID is known, run `fno backlog update <new-id> 'collisions_acknowledged=ab-XYZ,ab-ABC,...'` so the new node carries an audit trail of the collisions deliberately ignored.
 - **Option 2 (modify):** print the existing plan path and exit cleanly. The user edits the older plan. The new file is left on disk for reference but not adopted.
-- **Option 3 (supersede):** continue to step 3b. After adoption, run `fno backlog supersede <new-id> --replaces ab-XYZ --cause "..." --surface <path>`. Use the colliding plan's rationale or ask the user for a reason.
+- **Option 3 (supersede):** continue to step 3b. After adoption, run `fno backlog supersede <new-id> --replaces ab-XYZ --cause "..." --surface <path> --reason "..." --covers "..."`. Use the colliding plan's rationale or ask the user for a reason.
 - **Option 4 (cancel):** delete the plan file and exit cleanly.
 
 Medium and low-severity collisions are reported as single-line warnings on
@@ -657,9 +668,11 @@ The `no-collision-check` positional modifier (and `--no-collision-check` flag) s
 After the plan file is written and any collision check has resolved, but BEFORE auto-intake, scan the plan's Files-to-Modify table for paths that match a peer-owned surface. Mechanical resolution, not LLM judgment. Skip the whole step silently when no `peers` block exists (opt-in by design).
 
 ```python
-from fno.inbox.settings import read_peer_surfaces, read_surface_patterns
-peers = read_peer_surfaces()           # {peer: [surface_name, ...]}
-patterns = read_surface_patterns()     # {surface_name: [glob, ...]}
+import json, subprocess
+maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
+                                 capture_output=True, text=True, check=True).stdout)
+peers = maps["peers"]                  # {peer: [surface_name, ...]}
+patterns = maps["surface_patterns"]    # {surface_name: [glob, ...]}
 ```
 
 For each peer, union the glob patterns of every surface that peer owns,
@@ -723,7 +736,7 @@ blasting.
 Every plan answers five questions before designing, into a `## Five questions` section (schema: `quick-template.md`). Each answer is a named thing or the word `none`. The word `none` is a claim, judged like any other.
 
 1. **Persona**: who hits this, what do they do today instead, and what does it cost them per week? Name the person: user, titled lead, worker session, or plugin user. Tie the cost to a source the plan cites.
-2. **Surface fit**: which existing verb, skill or config does this extend? Name it, or name the one you searched for and why it does not cover this.
+2. **Surface fit**: which existing command, skill or config does this extend? Name it, or name the one you searched for and why it does not cover this.
 3. **Uncovered case**: which realistic input or state breaks the design as written? Two sessions at once, a moved index or branch, an empty or stale input the plan already relies on.
 4. **Deletable**: what can you delete and still ship the stated goal?
 5. **Duplication**: which existing module already implements this, or can be extended so the feature falls out? Name a module and a relationship. Advice to consider consolidation is not an answer.

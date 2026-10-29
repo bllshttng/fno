@@ -1,4 +1,4 @@
-//! Client interceptor for the `ask` verb on an opencode target, plus
+//! Client interceptor for the `ask` command on an opencode target, plus
 //! the headless one-shot dispatch (`dispatch_opencode_once`).
 //!
 //! opencode is hosted two ways: a serve thread (the `ask` resume path) and an
@@ -59,10 +59,9 @@ pub fn maybe_run_opencode_ask(
         entry.harness_name() == "opencode" && entry.substrate.as_deref() == Some("thread")
     }) {
         let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-        let from_name = params
-            .get("from_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("fno");
+        let from_name_stamped =
+            crate::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+        let from_name = from_name_stamped.as_str();
         let model = params.get("model").and_then(|v| v.as_str());
         let timeout = params
             .get("timeout")
@@ -223,14 +222,14 @@ pub(crate) fn apply_opencode_variant_at(
     result
 }
 
-/// The one opencode prompt envelope: a footnote verb seed (`/fno:verb
+/// The one opencode prompt envelope: a footnote command seed (`/fno:command
 /// ...`, either sigil) is a command dispatch, not a conversational message, so
 /// it rides WITHOUT the `[from:]` envelope (`opencode run --command`; an
 /// envelope would demote it to prose no-op). A prose message keeps the
 /// orgesy envelope.
 pub fn opencode_envelope(effective_message: &str, from_name: &str) -> String {
     let first = effective_message.split_whitespace().next().unwrap_or("");
-    if crate::provider::parse_verb_token(first).is_some() {
+    if crate::provider::parse_command_token(first).is_some() {
         effective_message.to_string()
     } else {
         format!("[from: {from_name}]\n\n{effective_message}")
@@ -447,7 +446,7 @@ pub fn dispatch_opencode_once(
 
     // spawn allows an empty initial message; default to "hello" (Python parity -
     // only the empty string, not whitespace).
-    let effective_message = crate::provider::render_verb_seed(
+    let effective_message = crate::provider::render_command_seed(
         if message.is_empty() { "hello" } else { message },
         "opencode",
     );
@@ -542,7 +541,7 @@ mod tests {
 
     #[test]
     fn argv_routes_footnote_slash_command_via_command_flag() {
-        // A rendered `/fno:verb` rides `--command` so opencode expands the plugin
+        // A rendered `/fno:command` rides `--command` so opencode expands the plugin
         // command instead of running it as prose (/ codex P1). A
         // LEADING-DASH args tail rides as separate WORDS behind a `--`
         // separator (a single "--no-merge x" element would read as an unknown

@@ -1,4 +1,4 @@
-//! The verb-level daemon swap (`fno-agents restart`): run the swap and
+//! The command-level daemon swap (`fno-agents restart`): run the swap and
 //! render its receipts. Lives in the library so the bin stays under the
 //! file budget; the pure renderer's unit tests ride the bin's test module.
 
@@ -57,7 +57,7 @@ fn restart_gate(state: &DriftState) -> bool {
 }
 
 /// Bring only the daemon onto the installed build before `rm`. The public
-/// restart verb also cycles mux servers, store keepers, the Codex app-server,
+/// restart command also cycles mux servers, store keepers, the Codex app-server,
 /// and pr-watch; those fleet-wide legs do not belong on a row-removal path.
 pub async fn restart_daemon_for_rm() -> Result<(), RestartError> {
     let home = AgentsHome::from_env();
@@ -163,7 +163,7 @@ pub(crate) fn render_upgrade(
 
 /// The verdict fold: a failed daemon leg, a failed mux leg, a failed codex
 /// upgrade leg, or a spared store keeper each mean the fleet is NOT healed.
-/// Pure so the contract "every unhealed leg fails the verb" is unit-testable.
+/// Pure so the contract "every unhealed leg fails the command" is unit-testable.
 fn verdict(
     code: i32,
     mux_failed: bool,
@@ -309,14 +309,14 @@ pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -
     // change 6: cycle the stale store keepers. A store cycle ends
     // nothing a person can see (the graph on disk survives; the next read
     // respawns the keeper on this binary), so this leg is not behind
-    // --force/--mux gating. Spared keepers fail the verb: a spared keeper
+    // --force/--mux gating. Spared keepers fail the command: a spared keeper
     // was NOT healed.
     let (cycled, stale_panes) = crate::census::cycle_stale_store_keepers().await;
     say_keeper_cycle(&cycled, stale_panes, &say);
     // The codex shared-daemon leg: the session-preserving upgrade
     // transaction, riding the SAME restart receipt as every other
     // component. Reused-current, held, refused, upgraded, or failed - and
-    // ONLY a post-restart verification failure fails the verb.
+    // ONLY a post-restart verification failure fails the command.
     let upgrade_outcome = crate::codex_daemon_upgrade::codex_daemon_upgrade_transaction().await;
     let (up_out, up_err, upgrade_failed) = render_upgrade(&upgrade_outcome);
     for line in &up_out {
@@ -328,7 +328,7 @@ pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -
     // The pr-watch LaunchAgent embeds an absolute binary path that a daemon
     // swap never re-renders (`fno agents restart` reaches no launchd job);
     // re-render and bounce it, the same tail `fno doctor update` appends.
-    // The verb self-gates on pr_watch.enabled and prints its own skip line
+    // The command self-gates on pr_watch.enabled and prints its own skip line
     // then, so this is not behind --force, matching the keeper cycle above.
     // Receipt lands BEFORE the summary, which stays the last stdout line.
     let (said, rc) = crate::pr_watch::refresh::leaf_output(&[]);
@@ -346,13 +346,14 @@ pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -
     }
     // The mux leg: pane-less stale-wire servers heal automatically; --mux
     // adds stale-with-panes and every current-wire session. The shared
-    // kill-selector owns the session policy and its refusal - this verb
+    // kill-selector owns the session policy and its refusal - this command
     // holds none of its own. Its JSON object folds into the summary below,
     // so the operator sees the preserved list the kill measured.
     let selector = if mux { "--all" } else { "--stale-idle" };
-    let mux_out = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["mux", "kill-server", selector, "--json"])
-        .output();
+    // Bounded: a wedged server must fail the mux leg, not park the restart.
+    let mut kill = std::process::Command::new(crate::scrape::fno_bin());
+    kill.args(["mux", "kill-server", selector, "--json"]);
+    let mux_out = crate::bounded_cmd::output_with_timeout_result(kill, 600);
     // The selector's stderr carries the human narratives (the spared line,
     // the unkept refusal): relay them - capturing and dropping them is the
     // exact gap that deleted this leg from the operator's view.
@@ -378,7 +379,7 @@ pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -
     // see a keeper the OLD server spawned during the kill window (measured:
     // one survived under launchd and needed a separate watchdog reap). After
     // a PROVEN kill, run the stale-keeper cycle again on this binary; a
-    // keeper still busy is reported spared and fails the verb, never a
+    // keeper still busy is reported spared and fails the command, never a
     // force-kill.
     let post_mux = post_mux_kill(&mux_summary);
     let (post_mux_keepers, post_mux_unproven) = if post_mux {
@@ -476,7 +477,7 @@ pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -
         || mux_failed
         || upgrade_failed;
     // The closing line names whether the daemon now runs the build on disk;
-    // a restart that leaves it on an older build fails the verb.
+    // a restart that leaves it on an older build fails the command.
     let daemon = match check_daemon_drift(&home).await {
         DriftState::Fresh => Ok(format!(
             "daemon pid {} runs the new build {}",
@@ -558,7 +559,7 @@ fn say_keeper_cycle(
 /// and print the same `keepers` machine line the full restart prints. Never
 /// restarts the daemon, touches mux servers, upgrades codex, or refreshes
 /// pr-watch. Exit 0 only when every keeper found is proven cycled; a busy or
-/// unresponsive keeper is reported spared and fails the verb (never an
+/// unresponsive keeper is reported spared and fails the command (never an
 /// unproven kill). `fno agents restart --mux` drives this after each mux
 /// kill, closing the gap where a keeper spawned by the OLD server outlived
 /// the restart.
@@ -669,7 +670,7 @@ mod tests {
         assert!(out.is_empty());
         assert!(err[0].contains("FAILED"));
         assert!(err[0].contains("thr-9"));
-        assert!(failed, "only a failed upgrade fails the verb");
+        assert!(failed, "only a failed upgrade fails the command");
     }
 
     #[test]

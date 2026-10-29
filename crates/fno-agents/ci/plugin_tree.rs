@@ -176,7 +176,7 @@ fn build(source: &Path, dest: &Path, sha: &str, version: &str) -> Result<()> {
     }
     fs::write(dest.join("SOURCE_COMMIT"), format!("{sha}\n"))?;
     fs::write(dest.join("README.md"), format!(
-        "# Footnote marketplace plugin\n\nThis tree is generated from main at source commit `{sha}`. Do not edit this branch.\n\nSource and contributions: https://github.com/bllshttng/footnote/tree/main\n\nRuntime: install `fno` and `fno-agents` on PATH with https://fno.sh before using the plugin.\n\nClaude and Codex install this same tree. Stable uses `stable`; nightly plugins use `plugin-nightly`. The rolling `nightly` release tag is separate and force-moved by design. Plugin branches advance by fast-forward commits.\n"
+        "# Footnote marketplace plugin\n\nThis tree is generated from main at source commit `{sha}`. Do not edit this branch.\n\nSource and contributions: https://github.com/bllshttng/fno/tree/main\n\nRuntime: install `fno` and `fno-agents` on PATH with https://fno.sh before using the plugin.\n\nClaude and Codex install this same tree. Stable uses `stable`; nightly plugins use `plugin-nightly`. The rolling `nightly` release tag is separate and force-moved by design. Plugin branches advance by fast-forward commits.\n"
     ))?;
     check(dest)?;
     Ok(())
@@ -185,8 +185,8 @@ fn build(source: &Path, dest: &Path, sha: &str, version: &str) -> Result<()> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
-        [verb, root] if verb == "check" => check(Path::new(root)).map(|_| ()),
-        [verb, source, dest, sha, version] if verb == "build" => {
+        [command, root] if command == "check" => check(Path::new(root)).map(|_| ()),
+        [command, source, dest, sha, version] if command == "build" => {
             build(Path::new(source), Path::new(dest), sha, version)
         }
         _ => Err("usage: plugin-tree build SOURCE DEST SHA VERSION | check TREE".into()),

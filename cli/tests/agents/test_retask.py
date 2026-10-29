@@ -12,11 +12,11 @@ from fno.agents.registry import AgentEntry
 # The mint is a real pre-spawn subprocess; fakes route it here.
 _REAL_SUBPROCESS_RUN = _subprocess.run
 
-_NAME_VERBS = frozenset({"name-mint", "name-codes", "name-parse"})
+_NAME_COMMANDS = frozenset({"name-mint", "name-codes", "name-parse"})
 
 
-def _is_name_verb(command) -> bool:
-    return bool(_NAME_VERBS & {str(p) for p in command})
+def _is_name_command(command) -> bool:
+    return bool(_NAME_COMMANDS & {str(p) for p in command})
 
 
 @pytest.fixture(autouse=True)
@@ -24,9 +24,9 @@ def _cold_name_codes_cache():
     """A fake that answers name-codes with pane text must fail on every run.
 
     ``naming._codes`` is an lru_cache'd shellout, so a fake that skips the
-    name-verb route passes only when an earlier test in the same xdist worker
+    name-command route passes only when an earlier test in the same xdist worker
     already warmed the cache. Clearing it around every test makes that fake
-    fail deterministically; routing through ``_is_name_verb`` is the fix, this
+    fail deterministically; routing through ``_is_name_command`` is the fix, this
     fixture is the detector. The routed fake still reaches the real binary,
     which is what the sibling fakes already pay.
     """
@@ -62,8 +62,8 @@ def _config_env(monkeypatch, tmp_path, body):
 
 @pytest.fixture(autouse=True)
 def _graph_with_target_node(monkeypatch):
-    """Verb resolution loads the node record; default it to a planless low
-    node so the probe resolves the target verb. A test overrides this by
+    """Command resolution loads the node record; default it to a planless low
+    node so the probe resolves the target command. A test overrides this by
     monkeypatching read_nodes_by_ids again inside its own body."""
     monkeypatch.setattr(
         "fno.graph.store.read_nodes_by_ids",
@@ -92,16 +92,16 @@ def test_retask_node_resolution_canonicalizes_slug_and_bare_hex(monkeypatch):
 
 def _patch_rename_call(monkeypatch, sink, receipt):
     """Intercept only the transaction hand-off; the spawn-defaults resolver
-    makes its own verb_call rounds that must reach the real binary."""
-    from fno.rust_binary import verb_call as real_verb_call
+    makes its own command_call rounds that must reach the real binary."""
+    from fno.rust_binary import CommandUnavailable, command_call as real_command_call
 
-    def fake(verb, payload, unavailable, *, timeout=30):
-        if verb == "rename":
+    def fake(command, payload, unavailable=CommandUnavailable, *, timeout=30):
+        if command == "rename":
             sink.append(payload)
             return receipt
-        return real_verb_call(verb, payload, unavailable, timeout=timeout)
+        return real_command_call(command, payload, unavailable, timeout=timeout)
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", fake)
+    monkeypatch.setattr("fno.rust_binary.command_call", fake)
 
 
 def test_run_retask_hands_the_transaction_to_fno_agents(tmp_path, monkeypatch):
@@ -136,12 +136,14 @@ def test_run_retask_hands_the_transaction_to_fno_agents(tmp_path, monkeypatch):
     assert payload["worker"] == "bp-xbdb9-retask"
     assert payload["node"] == "x-bdb9"
     assert payload["mux"] == {"session": "main", "pane_id": 12}
-    assert payload["target"]["harness"] == "codex"
+    # The profile's provider no longer picks the harness: the lane owns it,
+    # so the coordinate rides the ambient harness.
+    assert payload["target"]["harness"] == "claude"
     assert payload["target"]["verb"] == "target"
-    assert payload["target_command"] == "$fno:target --no-merge x-bdb9"
+    assert payload["target_command"] == "/target --no-merge x-bdb9"
 
 
-def test_run_retask_renders_a_non_target_verb_command(tmp_path, monkeypatch):
+def test_run_retask_renders_a_non_target_command_command(tmp_path, monkeypatch):
     import fno.agents.retask as retask
 
     monkeypatch.setattr(
@@ -149,7 +151,7 @@ def test_run_retask_renders_a_non_target_verb_command(tmp_path, monkeypatch):
         lambda path, tokens: {"entries": [{
             "id": "x-bdb9",
             "difficulty": "medium",
-            "dispatch_verb": "/fno:blueprint",
+            "dispatch_command": "/fno:blueprint",
         }], "missing": []},
     )
     _config_env(monkeypatch, tmp_path, '[agents.profiles.target]\nprovider = "codex"\n')
@@ -179,10 +181,10 @@ def test_run_retask_converts_a_transport_failure_into_a_refused_receipt(monkeypa
         retask, "resolve_agent", lambda *_args, **_kwargs: SimpleNamespace(entry=row)
     )
 
-    def fail(verb, payload, unavailable, *, timeout=30):
+    def fail(command, payload, unavailable=None, *, timeout=30):
         raise RetaskTransportError("pane_send_timeout", detail="pane 12 went away")
 
-    monkeypatch.setattr("fno.rust_binary.verb_call", fail)
+    monkeypatch.setattr("fno.rust_binary.command_call", fail)
     receipt = retask.run_retask("bp-xbdb9-retask", node="x-bdb9", env={})
 
     assert receipt["status"] == "refused"
@@ -212,9 +214,9 @@ def _fake_parse_many(names):
     rows = []
     for name in names:
         parts = (name or "").split("-")
-        verb = parts[1] if len(parts) > 2 else ""
+        command = parts[1] if len(parts) > 2 else ""
         node = parts[2] if len(parts) > 2 else ""
-        rows.append(naming.DispatchName(name, parts[0] if parts else "", verb, node, ""))
+        rows.append(naming.DispatchName(name, parts[0] if parts else "", command, node, ""))
     return rows
 
 
@@ -270,7 +272,7 @@ def test_finished_planner_picks_the_earliest_finished_row_on_the_epic(monkeypatc
     assert got is not None and got.name == "ac-bp-x-aaaa-slug"
 
 
-def test_run_retask_refuses_when_the_dispatch_verb_cannot_resolve(monkeypatch):
+def test_run_retask_refuses_when_the_dispatch_command_cannot_resolve(monkeypatch):
     import fno.agents.retask as retask
 
     monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", lambda path, tokens: {"entries": [], "missing": []})
@@ -280,7 +282,7 @@ def test_run_retask_refuses_when_the_dispatch_verb_cannot_resolve(monkeypatch):
     receipt = retask.run_retask("bp-xbdb9-retask", node="x-bdb9", env={})
 
     assert receipt["status"] == "refused"
-    assert receipt["reason"] == "dispatch_verb_unresolved"
+    assert receipt["reason"] == "dispatch_command_unresolved"
     assert receipt["detail"]
 
 

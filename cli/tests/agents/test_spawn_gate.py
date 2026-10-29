@@ -36,21 +36,32 @@ def _no_live_cpu_axis(monkeypatch):
 
     Since x-7783 every spawn takes the footprint reading, and that read is a
     ps snapshot against the real machine. Left unstubbed these tests refuse
-    or hold according to what the developer's box happens to be doing. The
-    prefetch is pinned too: run_gate takes the read before the decider, and
-    an unpinned read would price a real ps snapshot per pass.
+    or hold according to what the developer's box happens to be computing.
+    The prefetch is pinned too: run_gate takes the read before the decider,
+    and an unpinned read would price a real census run per pass. The census
+    owns the admission math (Rust tests pin it); the gate's mapping is what
+    these tests stub past.
     """
-    from fno import doctor_footprint
-    from fno.footprint import Admission, Footprint
-
-    idle = Footprint(0.0, 0.0, 0.1, 0, 0, 0, 0, 0.0, 0.2, [], 0, None)
+    idle_payload = {
+        "admission": {
+            "verdict": "admit",
+            "reason": "test admit",
+            "share_low": 0.1,
+            "share_high": 0.1,
+            "bound": "exact",
+            "fleet_cores": 1.2,
+            "machine_cores": 6.0,
+            "capacity_cores": 12.0,
+            "ceiling": 0.5,
+            "gap": None,
+        }
+    }
     monkeypatch.setattr(
-        spawn_gate, "_prefetch_fleet_reading", lambda: (idle, None)
+        spawn_gate, "_prefetch_fleet_reading", lambda: (idle_payload, None)
     )
-    monkeypatch.setattr(doctor_footprint, "_admission_config", lambda: 0.5)
-    admit = Admission(
+    admit = spawn_gate.Admission(
         verdict="admit",
-        axis="fleet_cpu_share",
+        axis="fleet_cpu",
         reason="test admit",
         share_low=0.1,
         share_high=0.1,
@@ -84,27 +95,7 @@ def _row(name: str, *, status="live", pid=None, short_id=""):
 ALIVE = os.getpid()  # a pid that is definitely alive (this test process)
 
 
-class TestCensus:
-    def test_succession_keeps_one_positive_slot_and_current_address(self, monkeypatch):
-        """AC5-HP/AC6-HP: one row remains one slot while its address advances."""
-        from fno.agents.registry import resolve_agent_in
-
-        row = _row("target-worker", pid=ALIVE, short_id="old-session")
-        row.mux = {"session": "main", "pane_id": 12}
-        row.harness_session_id = "old-session"
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-        before = spawn_gate.census()
-
-        row.harness_session_id = "new-session"
-        row.predecessor_session_ids = ["old-session"]
-        after = spawn_gate.census()
-        resolved = resolve_agent_in([row], "new-session")
-
-        assert before.fno_slot_workers == 1
-        assert after.fno_slot_workers == 1
-        assert resolved.entry.harness_session_id == "new-session"
-        assert resolved.entry.mux == {"session": "main", "pane_id": 12}
-
+class TestPidLiveness:
 
     def test_pid_start_token_mismatch_is_not_our_process(self, monkeypatch):
         """A reused numeric PID must not keep an old registry row alive."""
@@ -134,126 +125,33 @@ class TestCensus:
         assert spawn_gate._pid_alive(4242, 42_000_000, _psutil=Psutil) is None
         assert not spawn_gate._pid_alive(4242, 42_000_000, _psutil=Psutil)
 
-    def test_union_counts_and_dedups_adopted_session(self, tmp_path, monkeypatch):
-        """AC1-EDGE: 1 fno pane worker + 1 foreign roster worker + 1 adopted
-        session (roster row AND minted registry row) -> count 3."""
-        _write_roster(
-            tmp_path,
-            {
-                "aaaaaaaa": {"sessionId": "aaaaaaaa-1-2-3-4", "pid": ALIVE},
-                "bbbbbbbb": {"sessionId": "bbbbbbbb-1-2-3-4", "pid": ALIVE},
-            },
-        )
-        rows = [
-            _row("pane-worker", pid=ALIVE),  # fno-only
-            _row("adopted", pid=ALIVE, short_id="bbbbbbbb"),  # dup of roster
-        ]
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-        c = spawn_gate.census()
-        assert c.count == 3
-        assert not c.warnings
 
-
-    def test_spawning_outlived_by_a_live_pid_renders_quiet_with_basis(
-        self, monkeypatch
-    ):
-        """(x-d401 / x-0248) AC3-HP: a stored `spawning` token a live pid has
-        outlived does not render a bare `spawning` - the row names the
-        movement-derived state and a basis for the rewrite. The process is
-        confirmed but the transcript is unread, so the served word is
-        `quiet`, never a `live` token. AC3-EDGE: a row with no pid recorded
-        yet keeps its honest token."""
-        from datetime import datetime, timedelta, timezone
-
-        stale = datetime.now(timezone.utc) - timedelta(hours=13)
-        fresh = datetime.now(timezone.utc) - timedelta(seconds=5)
-        rows = [
-            _row("stale-spawn", status="spawning", pid=ALIVE),
-            _row("fresh-spawn", status="spawning", pid=ALIVE),
-        ]
-        rows[0].created_at = stale.strftime("%Y-%m-%dT%H:%M:%SZ")
-        rows[1].created_at = fresh.strftime("%Y-%m-%dT%H:%M:%SZ")
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-
-        by_name = {w.name: w for w in spawn_gate.census().workers}
-
-        assert by_name["stale-spawn"].status == "quiet", (
-            "a working row must not read spawning"
-        )
-        assert by_name["stale-spawn"].status_basis == "stale-spawning-live-pid"
-        assert by_name["fresh-spawn"].status == "spawning", (
-            "a live pid younger than the spawn timeout is still mid-spawn"
-        )
-        assert by_name["fresh-spawn"].status_basis is None
-
-
-    def test_unknown_process_incarnation_counts_conservatively(self, monkeypatch):
-        row = _row("unreadable-worker", pid=ALIVE)
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-        monkeypatch.setattr(spawn_gate, "_pid_alive", lambda *_args: None)
-
-        result = spawn_gate.census()
-
-        assert result.count == 1
-        assert result.fno_slot_workers == 1
-        assert [worker.name for worker in result.workers] == ["unreadable-worker"]
-        assert any("incarnation unreadable" in warning for warning in result.warnings)
-
-
-    def test_malformed_roster_fails_open_with_warning(self, tmp_path, monkeypatch):
-        (tmp_path / "daemon" / "roster.json").write_text("{ not json")
-        rows = [_row("ok", pid=ALIVE)]
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-        c = spawn_gate.census()
-        assert c.count == 1, "registry still counts when the roster is garbage"
-        assert any("roster unreadable" in w for w in c.warnings)
-
-
-    def test_live_registry_row_deduplicates_worker_claim(self, monkeypatch):
-        monkeypatch.setattr(
-            "fno.agents.registry.load_registry",
-            lambda: [_row("revived", pid=ALIVE)],
-        )
-        from fno.claims.core import acquire_claim
-        from fno.claims.io import global_claims_root
-
-        acquire_claim(
-            "worker:revived", "h1", ttl_ms=60_000, root=global_claims_root()
-        )
-
-        result = spawn_gate.census()
-
-        assert result.fno_slot_workers == 1
-        assert result.slot_claims == 0
-        assert result.slot_count == 1
-
-
-def _stub_verb(monkeypatch, answer=None, error=None):
-    """Stub the gate verb: a fixed JSON answer, or a failure."""
+def _stub_command(monkeypatch, answer=None, error=None):
+    """Stub the gate command: a fixed JSON answer, or a failure."""
     from fno import rust_binary
 
     if error is not None:
         def boom(*_a, **_k):
             raise error
-        monkeypatch.setattr(rust_binary, "verb_call", boom)
+        monkeypatch.setattr(rust_binary, "command_call", boom)
         return boom
 
-    def fake(verb, payload, **_kwargs):
-        assert verb == "spawn-gate", f"the transport must call the gate verb, got {verb}"
+    def fake(command, payload, **_kwargs):
+        assert command == "spawn-gate", f"the transport must call the gate command, got {command}"
         fake.payload = payload
         return answer
 
     fake.payload = None
-    monkeypatch.setattr(rust_binary, "verb_call", fake)
+    monkeypatch.setattr(rust_binary, "command_call", fake)
     return fake
 
 
 class TestTransport:
-    """The transport contract: run_gate asks the ONE gate verb and carries
+    """The transport contract: run_gate asks the ONE gate command and carries
     the answer out; the axes themselves are pinned in Rust."""
 
-    def test_admitted_answer_becomes_a_guard_holding_the_verbs_keys(self, monkeypatch):
-        stub = _stub_verb(
+    def test_admitted_answer_becomes_a_guard_holding_the_commands_keys(self, monkeypatch):
+        stub = _stub_command(
             monkeypatch,
             {
                 "status": "admitted",
@@ -269,7 +167,7 @@ class TestTransport:
         assert guard._route_provider is None
         assert guard._spawn_name == "w1"
         assert guard._substrate == "bg"
-        # The caller's pid travels in the payload: the verb's claims are
+        # The caller's pid travels in the payload: the command's claims are
         # owned by the CALLER across the process boundary (locked decision 3).
         assert stub.payload["holder_pid"] == os.getpid()
         assert stub.payload["mode"] == "gate"
@@ -287,7 +185,7 @@ class TestTransport:
             "count": 5,
             "current_count": 5,
         }
-        _stub_verb(
+        _stub_command(
             monkeypatch,
             {
                 "status": "refused",
@@ -312,13 +210,13 @@ class TestTransport:
         assert data["substrate"] == "pane"
 
     def test_missing_binary_refuses_exit_87_gate_unavailable(self, monkeypatch, capsys):
-        from fno.rust_binary import VerbUnavailable
+        from fno.rust_binary import CommandUnavailable
 
         events = []
         monkeypatch.setattr(
             spawn_gate, "_emit_gate_event", lambda kind, **data: events.append((kind, data))
         )
-        _stub_verb(monkeypatch, error=VerbUnavailable("the fno-agents binary was not found"))
+        _stub_command(monkeypatch, error=CommandUnavailable("the fno-agents binary was not found"))
         with pytest.raises(spawn_gate.GateRefused) as exc:
             spawn_gate.run_gate("w", "pane")
         assert exc.value.code == spawn_gate.EXIT_GATE_UNAVAILABLE
@@ -332,33 +230,14 @@ class TestTransport:
             f"spawn-gate: refused on gate (gate_unavailable, exit {spawn_gate.EXIT_GATE_UNAVAILABLE})"
         )
 
-
     def test_probe_never_raises_on_an_unanswered_gate(self, monkeypatch):
-        from fno.rust_binary import VerbUnavailable
+        from fno.rust_binary import CommandUnavailable
 
-        _stub_verb(monkeypatch, error=VerbUnavailable("exited 1"))
+        _stub_command(monkeypatch, error=CommandUnavailable("exited 1"))
         answer = spawn_gate.probe_capacity()
         assert answer["verdict"] == "unknown"
         assert answer["reason"] == "gate_unavailable"
         assert "exited 1" in answer["error"]
-
-class TestQos:
-
-
-    def test_demote_failure_is_nonfatal_warning(self, monkeypatch, capsys):
-        """AC3-ERR: taskpolicy failure warns once, never raises."""
-        monkeypatch.setattr(spawn_gate, "_qos_enabled", lambda: True)
-        import subprocess
-
-        def boom(*a, **k):
-            raise FileNotFoundError("taskpolicy not found")
-
-        monkeypatch.setattr(subprocess, "run", boom)
-        spawn_gate.qos_demote_pid(12345)
-        err = capsys.readouterr().err
-        assert "non-fatal" in err
-        # Pass-path lines carry the note prefix: only refusals say `spawn-gate:`
-        assert err.strip().startswith("spawn-gate note:")
 
 
 # --- parent-edge visibility (x-7b36 change 12) --------------------------------
@@ -422,7 +301,6 @@ def _point_binary(monkeypatch, fake: Path) -> None:
 
 class TestGateExitReporting:
 
-
     def test_run_gate_refusal_names_the_real_exit_not_the_strip_error(
         self, tmp_path, monkeypatch
     ):
@@ -441,5 +319,3 @@ class TestGateExitReporting:
         assert data["reason"] == "gate_unavailable"
         assert "exited 87" in data["error"]
         assert "NoneType" not in data["error"]
-
-

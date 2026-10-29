@@ -1,6 +1,6 @@
 """The unfinished-work report: the operator question the fleet watchdog answers.
 
-Four dimensions, one clearing verb each; liveness from pid and transcript
+Four dimensions, one clearing command each; liveness from pid and transcript
 truth only; unreadable evidence keeps the dimension unknown, never clean.
 The full contract lives in
 docs/architecture/unfinished-work-and-row-registration.md.
@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from fno.worktree_stranded import resolve_node_id
 from fno.agents.registry import registry_rows_by_cwd
 
 # --- kinds and dimension vocabulary ----------------------------------------
@@ -238,20 +237,20 @@ def _node_idle_age(node: NodeObs, now_epoch: float) -> Optional[float]:
 
 
 def _checked(finding: Optional[Finding], warnings: list) -> Optional[Finding]:
-    """A finding without a clearing verb is not a report, it is noise: it is
+    """A finding without a clearing command is not a report, it is noise: it is
     dropped with a scan warning naming it, never emitted as a row."""
     if finding is None:
         return None
     if not (finding.subject and finding.basis and finding.clear_command):
         warnings.append(
-            f"finding without a clearing verb withheld: {finding_identity(finding)}"
+            f"finding without a clearing command withheld: {finding_identity(finding)}"
         )
         return None
     return finding
 
 
 def _dirty_clear_command(w: WorktreeObs) -> str:
-    """The verb that moves a dirty ownerless worktree out of its class. A
+    """The command that moves a dirty ownerless worktree out of its class. A
     resolved node resumes delivery; a node-less tree gets a live owner
     spawned into it, which is the adoption path this fleet actually has."""
     if w.node_id:
@@ -658,7 +657,7 @@ def dirty_path_count(worktree: Path, *, runner=None) -> Optional[int]:
 
 def report_roots() -> "list[Path]":
     """Every project scope the report covers. The scheduled tick and the
-    manual verb resolve their roots here so the two surfaces cannot
+    manual command resolve their roots here so the two surfaces cannot
     disagree on scope: the invoking repo (when it is a checkout) plus the
     distinct cwd of every tracked sidecar."""
     roots: list[Path] = []
@@ -671,10 +670,10 @@ def report_roots() -> "list[Path]":
     except Exception:  # noqa: BLE001 - an unknown scope must not scan `/`
         pass
     try:
-        from fno.tracker import sidecar as sidecar_store
+        from fno import rust_binary
 
-        for sc in sidecar_store.load_all().values():
-            cwd = getattr(sc, "cwd", None)
+        for sc in rust_binary.sidecar_all().values():
+            cwd = sc.get("cwd")
             if cwd and Path(cwd) not in roots:
                 roots.append(Path(cwd))
     except Exception:  # noqa: BLE001 - no sidecar store means the repo root only
@@ -716,6 +715,25 @@ def _default_pid_alive(pid: Optional[int]) -> Optional[bool]:
 
 def _session_handle(row: dict) -> Optional[str]:
     return row.get("harness_session_id") or row.get("short_id") or None
+
+
+def _worktree_node_id(path: str, branch: Optional[str]) -> Optional[str]:
+    """The node a worktree works, through the native resolver door: the
+    deterministic tiers over the ambient graph (basename, branch tail,
+    manifest line), the deleted worktree_stranded.resolve_node_id."""
+    from fno.rust_binary import call_binary_json
+
+    try:
+        err, payload = call_binary_json(
+            "worktree-resolve-node",
+            ["--path", path, "--branch", branch or ""],
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001 - an unresolved tree warns, never fails
+        return None
+    if err is not None or not isinstance(payload, dict):
+        return None
+    return payload.get("node")
 
 
 def _main_worktree(listed: list, runner=None) -> str:
@@ -798,7 +816,6 @@ def collect_observations(
     worktree_rows: list[tuple[str, str, Optional[str]]] = []  # path, repo, branch
     fetched_ok: dict[str, bool] = {}
     unscanned: list[str] = []
-    from fno.worktree_stranded import _worktrees
 
     for root in roots:
         left = _budget_left()
@@ -806,7 +823,19 @@ def collect_observations(
             unscanned.append(str(root))
             continue
         try:
-            listed = _worktrees(Path(root))
+            from fno.rust_binary import call_binary_json
+
+            err, payload = call_binary_json(
+                "worktree-status",
+                ["--repo", str(root), "--json"],
+                timeout=60,
+            )
+            if err is not None or not isinstance(payload, dict):
+                raise RuntimeError(f"worktree-status door failed: {err}")
+            listed = [
+                (row.get("branch"), row.get("path"))
+                for row in payload.get("worktrees") or []
+            ]
         except Exception as exc:  # noqa: BLE001 - a failed listing is a warning
             warnings.append(f"worktree list failed for {root}: {exc}")
             listed = []
@@ -814,7 +843,7 @@ def collect_observations(
         # rather than the listing's first row: a bare worktree-container
         # contributes no main row at all, so "first listed" would name a
         # linked tree and silently exclude it from the dirty dimension.
-        # Clearing verbs name the main tree, never whichever linked worktree
+        # Clearing commands name the main tree, never whichever linked worktree
         # happened to run the report.
         main_path = _main_worktree(listed, runner) if listed else str(root)
         fetched_ok[main_path] = fetch_origin_main(Path(root), runner=runner)
@@ -908,11 +937,10 @@ def collect_observations(
     worktrees: list[WorktreeObs] = []
     for path, repo, branch in worktree_rows:
         wt_node_id: Optional[str]
-        _entry: Optional[dict]
         if entries_by_id:
-            wt_node_id, _entry = resolve_node_id(path, branch, entries_by_id)
+            wt_node_id = _worktree_node_id(path, branch)
         else:
-            wt_node_id, _entry = None, None
+            wt_node_id = None
         dirty = dirty_path_count(Path(path), runner=runner)
         ahead = (
             ahead_of_main(Path(path), runner=runner)
@@ -1090,7 +1118,7 @@ def build_report(
     now_s: Optional[float] = None,
     **kwargs,
 ) -> Snapshot:
-    """The one producer: collect then classify. Both the manual verb and the
+    """The one producer: collect then classify. Both the manual command and the
     scheduled tick call this, so their reports cannot diverge."""
     obs = collect_observations(roots, now_s=now_s, **kwargs)
     return classify(obs)
@@ -1104,7 +1132,7 @@ def publish_report(
     mail_to: str,
     log: Optional[Callable[[str], None]] = None,
 ) -> dict:
-    """The one publish sequence, shared by the manual verb and the tick:
+    """The one publish sequence, shared by the manual command and the tick:
     mail (change-gated, push not pull), sweep-file stamps (the positive
     complete marker only on a fully measured scan), the scan event plus
     fresh finding events, and the deduplicated durable question.

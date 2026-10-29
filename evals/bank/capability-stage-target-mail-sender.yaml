@@ -1,0 +1,33 @@
+# Stage tier (slice 3), target stage: a missing field on one code path.
+# Specimen: demand row x-3a70 - the quiet-recovery lane's mail send carried
+# no sender name, so the relay refused it and a stuck worker could never be
+# resumed, while the direct path always carried the name. The lane must make
+# the recovery envelope carry the sender's own registry handle.
+id: capability-stage-target-mail-sender
+tier: capability
+prompt: |
+  Work only inside evals/fixtures/stage-tasks/mail-sender/.
+
+  mailsend.py builds mail envelopes. build_direct always carries the
+  sender's registry handle, but build_resume builds the recovery envelope
+  by hand and leaves from_name empty, so the relay refuses every resume
+  send and stuck workers are never brought back.
+
+  Fix build_resume so its envelope carries the recovery lane's own
+  registry handle (look the kind up in REGISTRY, the same source
+  build_direct uses). Keep the recipient and body as they are, and leave
+  build_direct alone.
+
+  Do not modify verify.py. Do not touch any file outside
+  evals/fixtures/stage-tasks/mail-sender/.
+grade:
+  - kind: exit
+    command: 'cd evals/fixtures/stage-tasks/mail-sender && python3 verify.py'
+  - kind: exit
+    # The verifier must survive the run untouched: a lane that edits the
+    # grader instead of the code grades fail here. A tamper committed
+    # alongside the fix still lands (status reads clean); the bank accepts
+    # that residual, the same as every fixture-verifier task.
+    command: 'test -z "$(git status --porcelain -- evals/fixtures/stage-tasks/mail-sender/verify.py)"'
+timeout_minutes: 20
+tags: [stage-climb, target]

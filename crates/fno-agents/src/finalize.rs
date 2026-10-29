@@ -22,7 +22,7 @@
 //!
 //! ## Why this does not break the read-only stop hook
 //!
-//! `loop-check` stays a pure read-only DECISION verb; `finalize` is a separate
+//! `loop-check` stays a pure read-only DECISION command; `finalize` is a separate
 //! WRITER the shim runs AFTER the allow decision. Nothing `finalize` writes is
 //! read by a future `loop-check` decision as a gate:
 //!
@@ -45,14 +45,15 @@
 //! remaining work (each shelled script is itself idempotent: ledger flock +
 //! scalar-session-id dedup, first-writer-wins stamp, filename-keyed handoff).
 //!
-//! The proven Python helpers (`fno.cost._session_cost`, `fno.cost._register`,
-//! both in-package modules run via `python3 -m`) do the cost/dedup/flock work;
-//! the stamp is the in-process plan-doc writer. This verb is a thin
-//! orchestrator (Locked Decision 6 - avoids the Python->Rust byte-parity
-//! trap), so the shim keeps its Rust-only dependency surface (Domain Pitfall).
+//! The proven cost/ledger legs are native now (`session_cost.rs` prices the
+//! transcript; `ledger_register.rs` parses the manifest, builds the row, and
+//! appends it under the ledger flock); the stamp is the in-process plan-doc
+//! writer. This command is a thin orchestrator (Locked Decision 6 - avoids
+//! the Python->Rust byte-parity trap), so the shim keeps its Rust-only
+//! dependency surface (Domain Pitfall).
 
 use crate::finalize_run_summary;
-use crate::loopcheck::{emit_to_both, now_rfc3339_utc};
+use crate::loopcheck::{emit_to_both, now_rfc3339_utc, TerminationReason};
 use crate::run_outcome::classify_legacy;
 use serde_json::{json, Value};
 use std::fs;
@@ -134,8 +135,8 @@ Reason values: DonePRGreen|DoneAdvisory|DoneDelivery|DoneBatched|DoneAwaitingMer
 
 // ── manifest fields finalize reads directly ────────────────────────────────
 
-/// The three manifest fields finalize needs itself (everything else is read by
-/// the shelled Python helpers from the same manifest path).
+/// The three manifest fields finalize needs itself (the ledger row reads the
+/// same manifest natively in `ledger_register::parse_target_state`).
 #[derive(Debug, Default)]
 pub(crate) struct ManifestFields {
     /// Target-minted session id: idempotency key, handoff every manifest reader
@@ -145,7 +146,7 @@ pub(crate) struct ManifestFields {
     /// Canonical target-minted id, retained separately so it wins regardless of
     /// manifest key order over the one-release `session_id` fallback.
     fno_id: Option<String>,
-    /// Claude transcript UUID: positional arg to fno.cost._session_cost / _register.
+    /// Claude transcript UUID: the native cost leg and ledger row key on it.
     claude_transcript_id: Option<String>,
     /// Plan to stamp/graduate (ship branch only). Empty/absent -> skip.
     plan_path: Option<String>,
@@ -530,7 +531,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // NO merge event - ship IS its completion - so it must still graduate to
     // `done` here, else the plan is stranded at `in_review` on the active board
     // (codex P2). expected_url_count is still recorded either way for the manual
-    // `graduate` verb and the cross-project safety net.
+    // `graduate` command and the cross-project safety net.
     let mut stamped = false;
     let mut handoff_path: Option<String> = None;
     let mut delivery_terminal_message: Option<String> = None;
@@ -713,7 +714,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // A worker that idles on an unanswered question and then dies (measured:
     // 7h idle, "awaiting operator's terminal/mux info", `fno inbox outstanding`
     // empty the whole time) takes the diagnosis it already completed down
-    // with it. The verb (`fno inbox outstanding ask`) already exists; nothing
+    // with it. The command (`fno inbox outstanding ask`) already exists; nothing
     // forced the filing. Mechanical, not instructional: the same STUCK bucket
     // that gets a postmortem, with an operator-directed question in its last
     // message and nothing already filed for this session, gets it filed here.
@@ -774,6 +775,25 @@ pub fn run_finalize(args: &[String]) -> i32 {
                 eprintln!("finalize: terminal-stop marker written: {}", p.display());
             }
             Err(e) => eprintln!("finalize: terminal-stop marker failed (non-fatal): {e}"),
+        }
+    }
+
+    // ── terminal-run receipt (count, not stop) ────────────────────
+    // Beside the marker, WITHOUT the open-PR gate: a releasing terminal
+    // frees the lead's share while the parked session stays alive for late
+    // review mail. The next non-terminal loop-check fire clears the
+    // receipt, so a re-woken loop counts again.
+    if TerminationReason::releases_claim_str(&reason) {
+        if let Some(key) = crate::terminal_run::should_record(
+            agent_self,
+            driver_lib,
+            m.harness_session_id.as_deref(),
+        ) {
+            let agents_home = crate::paths::AgentsHome::from_env();
+            match crate::terminal_run::write_receipt(&agents_home, key, &reason) {
+                Ok(p) => eprintln!("finalize: terminal-run receipt written: {}", p.display()),
+                Err(e) => eprintln!("finalize: terminal-run receipt failed (non-fatal): {e}"),
+            }
         }
     }
 
@@ -1137,10 +1157,10 @@ fn py_interpreter(cwd: &Path) -> String {
     "python3".to_string()
 }
 
-/// Run `python3 -m fno.cost._session_cost` for cost, then
-/// `python3 -m fno.cost._register` to append exactly one ledger row carrying
+/// Build the terminal ledger row in-process (the ported `fno.cost._register`):
+/// the native session-cost leg prices the transcript, then the row carries
 /// graph_node_id + provider_id + session_id + cost + termination_reason.
-/// Dedup/flock stay in _register (proven). A missing transcript yields
+/// Dedup/flock stay in the append (ported). A missing transcript yields
 /// cost=null - the row still lands (US7-ERR).
 fn write_ledger_record(
     cwd: &Path,
@@ -1148,66 +1168,27 @@ fn write_ledger_record(
     transcript_uuid: &str,
     reason: &str,
 ) -> Result<(), String> {
-    // Cost JSON (best-effort: empty string -> register-task records cost=null).
     let cost_json = if transcript_uuid.is_empty() {
-        String::new()
+        None
     } else {
-        match py_module(cwd)
-            .arg("-m")
-            .arg("fno.cost._session_cost")
-            .arg("--json")
-            .arg(transcript_uuid)
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                String::from_utf8_lossy(&out.stdout).trim().to_string()
-            }
-            Ok(out) => {
-                eprintln!(
-                    "finalize: fno.cost._session_cost exit {:?}: {}",
-                    out.status.code(),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
-                String::new()
-            }
-            Err(e) => {
-                eprintln!("finalize: fno.cost._session_cost spawn failed: {e}");
-                String::new()
-            }
-        }
+        crate::session_cost::cost_json_for_transcript(transcript_uuid)
     };
-
-    let mut cmd = py_module(cwd);
-    cmd.arg("-m")
-        .arg("fno.cost._register")
-        .arg(state)
-        .arg(transcript_uuid)
-        .arg("--termination-reason")
-        .arg(reason);
-    if !cost_json.is_empty() {
-        cmd.arg("--cost-json").arg(&cost_json);
-    }
-    let out = cmd
-        .output()
-        .map_err(|e| format!("fno.cost._register spawn failed: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "fno.cost._register exit {:?}: {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ))
-    }
+    crate::ledger_register::register_target_entry(
+        cwd,
+        state,
+        transcript_uuid,
+        reason,
+        cost_json.as_ref(),
+    )
 }
 
 // ── stamp (ship only) ────────────────────────────────────────────────────────
 
 /// After a stamp writes, validate the plan's frontmatter via `fno do plan validate`
-/// (the same read-only verb). Non-fatal-but-loud: a non-zero exit (e.g. a stamp
+/// (the same read-only command). Non-fatal-but-loud: a non-zero exit (e.g. a stamp
 /// that left `status` unset) is reported on stderr for the next session to fix;
 /// the stamp is never rolled back and finalize never fails on it (AC1-FR). A
-/// concurrent edit is fine - the verb reads whatever snapshot is on disk.
+/// concurrent edit is fine - the command reads whatever snapshot is on disk.
 fn validate_stamped_frontmatter(cwd: &Path, plan_path: &str) {
     if plan_path.is_empty() {
         return;
@@ -1240,7 +1221,7 @@ fn validate_stamped_frontmatter(cwd: &Path, plan_path: &str) {
 /// write-time projection at merge, not here. For an ADVISORY ship
 /// (`DoneAdvisory`) there is no merge event, so the caller passes `true` and
 /// this graduates the plan now. `expected_url_count` is recorded either way for
-/// the manual `graduate` verb and the cross-project safety net.
+/// the manual `graduate` command and the cross-project safety net.
 fn stamp_and_graduate(
     cwd: &Path,
     plan_path: &str,
@@ -1416,51 +1397,18 @@ fn write_handoff(
     Ok(file.to_string_lossy().into_owned())
 }
 
-/// One-line cost summary for the handoff header, sourced from the in-package
-/// _session_cost module (`python3 -m fno.cost._session_cost`).
-fn handoff_cost_line(cwd: &Path, transcript_uuid: &str) -> String {
+/// One-line cost summary for the handoff header, priced by the native
+/// session-cost leg (the ported `_session_cost` extractor).
+fn handoff_cost_line(_cwd: &Path, transcript_uuid: &str) -> String {
     if transcript_uuid.is_empty() {
         return "(unavailable)".into();
     }
-    // Route through py_module so this shares the interpreter + PYTHONPATH
-    // resolution used by the ledger write; a raw `python3` here (no PYTHONPATH,
-    // no venv) was the source of the recurring `handoff cost: ... exit` errors.
-    match py_module(cwd)
-        .arg("-m")
-        .arg("fno.cost._session_cost")
-        .arg("--json")
-        .arg(transcript_uuid)
-        .output()
-    {
-        Ok(out) if out.status.success() => {
-            match serde_json::from_slice::<Value>(&out.stdout) {
-                Ok(v) => match v.get("cost_usd").and_then(|c| c.as_f64()) {
-                    Some(c) => format!("${c:.2}"),
-                    None => "(unavailable)".into(),
-                },
-                Err(e) => {
-                    // Surface a crashed/garbage cost module (mirrors
-                    // write_ledger_record): a reader must tell "no transcript"
-                    // from "fno.cost._session_cost emitted non-JSON".
-                    eprintln!(
-                        "finalize: handoff cost: fno.cost._session_cost emitted non-JSON: {e}"
-                    );
-                    "(unavailable)".into()
-                }
-            }
-        }
-        Ok(out) => {
-            eprintln!(
-                "finalize: handoff cost: fno.cost._session_cost exit {:?}: {}",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-            "(unavailable)".into()
-        }
-        Err(e) => {
-            eprintln!("finalize: handoff cost: fno.cost._session_cost spawn failed: {e}");
-            "(unavailable)".into()
-        }
+    match crate::session_cost::cost_json_for_transcript(transcript_uuid) {
+        Some(v) => match v.get("cost_usd").and_then(|c| c.as_f64()) {
+            Some(c) => format!("${c:.2}"),
+            None => "(unavailable)".into(),
+        },
+        None => "(unavailable)".into(),
     }
 }
 
@@ -1480,7 +1428,7 @@ fn handoff_cost_line(cwd: &Path, transcript_uuid: &str) -> String {
 ///      parameter owns the bare default, and the ambient global config read
 ///      broke every hermetic fixture on a machine that pins the key.
 ///
-/// Pure-Rust resolution: it never shells `fno`, so the verb keeps its Python-CLI
+/// Pure-Rust resolution: it never shells `fno`, so the command keeps its Python-CLI
 /// independence (it only ever runs the in-package metric modules via
 /// `python3 -m`).
 pub(crate) fn resolve_handoffs_dir(
@@ -1564,12 +1512,12 @@ struct ObsidianBlock {
 }
 
 /// Parse a config.toml file into a table; None on a missing or unparseable file.
-fn load_config_toml(path: &Path) -> Option<toml::Table> {
+pub(crate) fn load_config_toml(path: &Path) -> Option<toml::Table> {
     fs::read_to_string(path).ok()?.parse::<toml::Table>().ok()
 }
 
 /// A dotted string value from a config.toml table (e.g. `["paths","handoffs_dir"]`).
-fn toml_string_at(t: &toml::Table, path: &[&str]) -> Option<String> {
+pub(crate) fn toml_string_at(t: &toml::Table, path: &[&str]) -> Option<String> {
     let mut cur = t.get(*path.first()?)?;
     for k in &path[1..] {
         cur = cur.as_table()?.get(*k)?;
@@ -1716,8 +1664,8 @@ fn repo_project_name(cwd: &Path) -> String {
         .unwrap_or_else(|| "project".into())
 }
 
-/// Last path segment of a git remote URL, one trailing `.git` stripped. Mirrors
-/// the Python `_remote_url_to_slug` (paths.py): takes the last `/`-or-`:` segment
+/// Last path segment of a git remote URL, one trailing `.git` stripped. Takes
+/// the last `/`-or-`:` segment
 /// so scp-like (`git@host:org/repo.git`), https, and local-path remotes all
 /// resolve. Returns None for an empty URL or a degenerate segment that would
 /// escape `internal/<project>/`.
@@ -2082,7 +2030,13 @@ fn optional_review_block_reason(cwd: &Path) -> Option<String> {
     // not exist yet.
     let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
 
-    let mut cmd = Command::new("fno-gh-coverage");
+    // The family's one env seam outranks the built-in adapter: a staged fake
+    // must win, exactly as it does for loop-check and review-coverage.
+    let gh_bin = std::env::var("FNO_LOOPCHECK_GH_BIN")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "fno-gh-coverage".to_string());
+    let mut cmd = Command::new(gh_bin);
     cmd.args([
         "pr",
         "view",
@@ -2320,12 +2274,12 @@ fn is_do_stamp_terminal(reason: &str) -> bool {
 /// one would spin.
 ///
 /// Also the do row's CLOSE, not only its backstop open: it now passes
-/// `--ended-at` alongside `--started-at`, so a do row that `claim release
-/// --stamp-do` never closed (the common case - a do session's claim is
-/// commonly freed by something other than `release`) still gets `ended_at`
-/// here, at its own finish line. `append_session_record`'s duplicate-fill is
-/// the same one `release --stamp-do` uses: it fills only timestamps the row
-/// left open, so when release already closed the row this is a no-op.
+/// `--ended-at` alongside `--started-at`, so a do row that its release never
+/// closed - freed by `--force`, which stamps nothing, or by a release whose
+/// own stamp skipped - still gets `ended_at` here, at its own finish line.
+/// `append_session_record`'s duplicate-fill is the same one the release
+/// stamp uses: it fills only timestamps the row left open, so when the
+/// release already closed the row this is a no-op.
 fn stamp_node_do(cwd: &Path, m: &ManifestFields, reason: &str) {
     let Some(node) = m.graph_node_id.as_deref() else {
         return;

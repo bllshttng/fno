@@ -4,7 +4,7 @@
 //! crate: the probe resolves the handle, reads the tail through per-file
 //! cursors, and decodes the answer through the same [`parse_truth_payload`]
 //! the wire always used, so the Rust list emitter reports the identical
-//! reading the Python `fno agents truth` verb renders. No `fno-py` child
+//! reading the Python `fno agents truth` command renders. No `fno-py` child
 //! starts on this path.
 //!
 //! Moved out of `claude_ask` because it answers a different question. That file
@@ -155,7 +155,7 @@ fn lower_state_with_verdict<'a>(state: &'a str, reachability: Option<&str>) -> &
     state
 }
 
-/// Variant of [`family1_truth_state`] for the resume smart verb. The shared
+/// Variant of [`family1_truth_state`] for the resume smart command. The shared
 /// lowering renders a gone process as `"unreachable"` (matches no arm, so resume
 /// refuses it as inconclusive - the safe answer for the mail path). Resume wants
 /// the opposite for a worker the verdict confirms is DEAD: relaunch it. So an
@@ -281,7 +281,7 @@ fn parse_truth_payload(value: &serde_json::Value) -> Option<TruthProbe> {
 /// handle answers from the in-memory cursors. Anywhere else the batch asks
 /// the daemon over its socket, one round trip, so a CLI caller reads the
 /// same warm cursors instead of rebuilding them. A daemon that is down, or
-/// one that predates the `agent.truth` verb, falls back to the same reader
+/// one that predates the `agent.truth` command, falls back to the same reader
 /// in this process: still Rust, still bounded, never a Python child. An
 /// EMPTY slice answers an empty map without touching anything.
 pub fn family1_truth_probe_many(
@@ -427,7 +427,7 @@ pub fn start_daemon_warm(home: &crate::paths::AgentsHome) {
     }
 }
 
-/// The daemon's `agent.truth` verb: `{"handles": [...]}` in, `{"answers":
+/// The daemon's `agent.truth` command: `{"handles": [...]}` in, `{"answers":
 /// {handle: payload}}` out, every payload from memory.
 pub fn truth_rpc<C>(_ctx: &C, req: &crate::protocol::Request) -> crate::protocol::Response {
     let handles: Vec<String> = req
@@ -453,12 +453,11 @@ pub fn truth_rpc<C>(_ctx: &C, req: &crate::protocol::Request) -> crate::protocol
 
 /// One bounded `agent.truth` round trip on the daemon socket. `None` when no
 /// daemon listens, the deadline passes, or the daemon does not know the
-/// verb; the caller then reads in process.
+/// command; the caller then reads in process.
 fn ask_daemon(
     handles: &[String],
     deadline: Option<Instant>,
 ) -> Option<Vec<(String, serde_json::Value)>> {
-    use std::io::{Read, Write};
     let budget = deadline
         .map(|d| d.saturating_duration_since(Instant::now()))
         .unwrap_or(ASK_BUDGET)
@@ -467,24 +466,13 @@ fn ask_daemon(
         return None;
     }
     let sock = crate::paths::AgentsHome::from_env().supervisor_sock();
-    let mut stream = std::os::unix::net::UnixStream::connect(sock).ok()?;
-    stream.set_read_timeout(Some(budget)).ok()?;
-    stream.set_write_timeout(Some(budget)).ok()?;
-    let req =
-        crate::protocol::Request::new(1, "agent.truth", serde_json::json!({ "handles": handles }));
-    let body = serde_json::to_vec(&req).ok()?;
-    stream.write_all(&(body.len() as u32).to_le_bytes()).ok()?;
-    stream.write_all(&body).ok()?;
-    let mut len = [0u8; 4];
-    stream.read_exact(&mut len).ok()?;
-    let len = u32::from_le_bytes(len);
-    if len > crate::protocol::MAX_FRAME_BYTES {
-        return None;
-    }
-    let mut reply = vec![0u8; len as usize];
-    stream.read_exact(&mut reply).ok()?;
-    let resp: crate::protocol::Response = serde_json::from_slice(&reply).ok()?;
-    let answers = resp.result()?.get("answers")?.as_object()?;
+    let result = crate::protocol::blocking_call(
+        &sock,
+        "agent.truth",
+        serde_json::json!({ "handles": handles }),
+        budget,
+    )?;
+    let answers = result.get("answers")?.as_object()?;
     Some(
         answers
             .iter()

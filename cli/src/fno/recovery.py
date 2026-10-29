@@ -520,8 +520,7 @@ def _safe_read_state(jobs_dir):
 # ---------------------------------------------------------------------------
 # Out-of-usage provider failover
 #
-# This wires the already-built+tested failover engine
-# (``adapters/providers/error_taxonomy`` + ``failover.FailoverController``) into
+# This wires the error taxonomy (``adapters/providers/error_taxonomy``) into
 # the recovery watchdog - the ONLY live autonomous loop in production. The design
 # named an in-loop megawalk path as primary, but that path had zero production
 # call sites and footnote's real autonomous loop (Rust ``loop run`` +
@@ -719,7 +718,8 @@ def _node_is_done(node: str) -> bool:
         return False
 
 
-# (provenance/spawn_think.py). Only a birth pass is certified by ``plan_path``.
+# The think dispatch reasons (crates/fno-agents/src/think_dispatch.rs). Only a
+# birth pass is certified by ``plan_path``.
 _NON_BIRTH_THINK_REASONS = ("work-start", "retro", "conversational")
 
 
@@ -764,7 +764,7 @@ def mission_complete(candidate: "Candidate") -> Optional[bool]:
         if entry is None or entry.get("archived_at"):
             return None
         if kind == "think":
-            # Only a BIRTH pass is certified by the node's artifacts (spawn_think:
+            # Only a BIRTH pass is certified by the node's artifacts (think dispatch:
             # a design pass ending without a linked plan_path FAILED). A lifecycle
             # or conversational pass runs on a node that ALREADY carries the link,
             # and a retro fires only once the node is `done` - so those artifacts
@@ -843,14 +843,14 @@ def _alias_predecessor(new_name: Optional[str], old_name: Optional[str]) -> None
 def _recovery_agent_name(
     predecessor: Optional[str], node_or_session: str, short: str
 ) -> Optional[str]:
-    """The ``rec-<verb>-<node-or-session>-<short>`` recovery name, or None when
-    the mint refuses; the verb parses from the predecessor (legacy spellings
+    """The ``rec-<command>-<node-or-session>-<short>`` recovery name, or None when
+    the mint refuses; the command parses from the predecessor (legacy spellings
     resolve in the binary, else t)."""
     from fno.agents.naming import mint_or_none, parse_dispatch_agent_name
 
     parsed = parse_dispatch_agent_name(predecessor or "")
-    verb = parsed.verb if parsed else "t"
-    return mint_or_none("rec", verb, node_or_session, slug=short)
+    command = parsed.command if parsed else "t"
+    return mint_or_none("rec", command, node_or_session, slug=short)
 
 
 def _redispatch(
@@ -887,8 +887,8 @@ def _redispatch(
     non-zero force-release means the claim is still held → skip the spawn (it
     would refuse anyway) and let the caller nudge. Any miss returns False and the
     caller falls back to the bounded nudge, so the session is never left
-    dead-and-unnudged. Reuses the canonical ``fno agents spawn --substrate bg``
-    shape from dispatch-node.sh.
+    dead-and-unnudged. Reuses the canonical detached-thread spawn shape
+    from dispatch-node.sh.
     """
     import subprocess
 
@@ -919,9 +919,9 @@ def _redispatch(
                 text = out.decode("utf-8", "replace")
                 m = re.search(r"fno mux pane kill (\S+):(\d+)", text)
                 if m:
-                    # The daemon refuses `stop` on a pane row and names the verb
+                    # The daemon refuses `stop` on a pane row and names the command
                     # that reaches it (daemon.rs handle_stop). This caller is a
-                    # subprocess, so honor the named verb instead of treating the
+                    # subprocess, so honor the named command instead of treating the
                     # refusal as "worker may still be live" - which would degrade
                     # every pane-worker failover to a nudge. The pane kill does
                     # not touch the registry row; the claim release below still
@@ -1016,17 +1016,16 @@ def _materialize_managed_switch(record_id: str, repo_root: Optional[str] = None)
     is stopped (so it no longer pins the slot) and BEFORE the replacement spawns.
     Loads the dead session's project-local config (``repo_root`` = its worktree)
     so a worktree-local ``auto_switch`` / record set is honored. Re-checks
-    ``auto_switch`` as defense-in-depth (the caller already gated it). A live-pin
-    defer by ANOTHER live session (``SwitchDeferred``) or any store/keychain
-    failure returns False - never redispatch onto un-switched (exhausted) creds.
-    Reuses ``managed.switch`` (capture-before-overwrite + live-pin gate) and its
-    ``account_switched`` emit from the manual `use` path (US2); no new switch
-    logic here.
+    ``auto_switch`` as defense-in-depth (the caller already gated it). The switch
+    is ``fno-agents spawn-overlay accounts switch``: the same Rust switch the
+    manual `use` runs, with a live pin by ANOTHER session deferring and no
+    routing pointer written. A deferral or any store/keychain failure exits
+    nonzero and returns False - never redispatch onto un-switched (exhausted)
+    creds.
     """
     try:
         from fno.adapters.providers.loader import load_providers
-        from fno.adapters.providers import managed
-        from fno.agents.events import emit as _emit
+        from fno.rust_binary import command_call
 
         config = load_providers(repo_root=Path(repo_root) if repo_root else None)
         if not getattr(config, "auto_switch", False):
@@ -1034,8 +1033,14 @@ def _materialize_managed_switch(record_id: str, repo_root: Optional[str] = None)
         record = config.by_id.get(record_id)
         if record is None or record.auth != "managed":
             return False
-        managed.switch(record, by_id=config.by_id, emit_fn=_emit, pin_policy="defer")
-        return True
+        # The switch waits up to 10s on its mutex, then makes several 10s vault
+        # round trips; a 30s kill would land mid-write on the shared slot.
+        receipt = command_call(
+            ["spawn-overlay", "accounts", "switch"],
+            {"id": record_id, "repo_root": repo_root},
+            timeout=120,
+        )
+        return receipt.get("active") == record_id
     except Exception:  # noqa: BLE001 - a materialize miss must never crash the sweep; degrade to nudge
         return False
 
@@ -1140,9 +1145,16 @@ def _target_projects_dir(provider_id: str, repo_root: Optional[str]) -> Path:
 def _transcript_visible(session_uuid: str, projects_dir: Path) -> bool:
     """Is ``<session_uuid>.jsonl`` present under ``projects_dir``? (AC3/AC4-FR)."""
     try:
-        from fno.relay.registry import transcript_path_for
+        from fno.rust_binary import call_binary_json
 
-        return transcript_path_for(session_uuid, projects_dir=projects_dir) is not None
+        err, payload = call_binary_json(
+            "provider-cap",
+            ["claude-transcript", "--projects", str(projects_dir), session_uuid],
+            timeout=30,
+        )
+        if err or not isinstance(payload, dict):
+            return False
+        return payload.get("path") is not None
     except Exception:  # noqa: BLE001 - unreadable -> treat as not visible (notify)
         return False
 
@@ -1171,10 +1183,10 @@ def _notify_manual_resume(candidate: "Candidate", snap, session_uuid: str) -> No
     """US5: one OS notification carrying the exact resume command for a session
     footnote could not auto-revive (unshared transcript / interactive). Best-effort."""
     try:
-        from fno.notify._impl import send_notification
+        from fno.rust_binary import notify_operator
 
         cmd = _resume_command(snap.id, getattr(candidate, "cwd", None), session_uuid)
-        send_notification(
+        notify_operator(
             f"footnote: switched to {snap.id}",
             f"Session {candidate.short_id} needs a manual resume:\n{cmd}",
         )
@@ -1292,9 +1304,9 @@ def _notify_close(candidate: "Candidate") -> bool:
     that never reached the operator.
     """
     try:
-        from fno.notify._impl import send_notification
+        from fno.rust_binary import notify_operator
 
-        code, _msg = send_notification(
+        code, _msg = notify_operator(
             f"footnote: {candidate.short_id} finished but still open",
             CLOSE_MESSAGE,
         )

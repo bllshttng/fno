@@ -77,14 +77,15 @@ def merge_deprecated_alias(
 
 
 #: The axis-split tombstone. The harness axis (the CLI binary) was
-#: ``--provider/-p`` on every verb except spawn; it is ``--harness/-H`` everywhere
+#: ``--provider/-p`` on every command except spawn; it is ``--harness/-H`` everywhere
 #: now. A model vendor routes ONLY at spawn, so the retired spelling is a hidden
 #: long-only option whose sole behavior is to exit 2 with this map - a tombstone,
 #: not an alias (one spelling, one meaning).
 PROVIDER_AXIS_TOMBSTONE = (
-    "--provider was split at the axis rename: the CLI binary is --harness/-H; "
-    "a model vendor is only routable at spawn "
-    "(`fno agents spawn --provider <vendor> --model <m>`)."
+    # retired-ok: this tombstone exists to name the rename, not to teach the
+    # retired spelling; the route owns the vendor now.
+    "--provider was split at the axis rename and is retired on spawn; "
+    "the route owns the vendor (docs/HARNESSES.md names each native form)."
 )
 
 

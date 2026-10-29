@@ -1,12 +1,12 @@
 //! The durable-grant verdict and the merge queue, behind the
-//! `authorized-merge` verb's `op` field.
+//! `authorized-merge` command's `op` field.
 //!
 //! The spawner records a `merge_grant` receipt on the worker's `phase: do`
 //! graph row, so merge authority outlives the worker that earned it. This
 //! module is the ONE reader of that record: `grant-verdict` answers for one
 //! PR, `grant-queue` answers which PRs a dispatch lane may execute this
 //! tick. Ported arm for arm from `cli/src/fno/pr/_merge_grant.py`, which
-//! becomes a `verb_call` transport; status, the merge verb and the pr-watch
+//! becomes a `command_call` transport; status, the merge command and the pr-watch
 //! merge phase read one owner here.
 //!
 //! Every arm fails closed: absence, malformed receipts, ambiguity, a live
@@ -402,7 +402,7 @@ pub fn parse_head_grant_subject(subject: &str) -> Option<(String, i64, String)> 
         .strip_prefix(':')?;
     let (repo, rest) = rest.split_once('#')?;
     let (pr, head) = rest.split_once('@')?;
-    // The slug is whatever the minter held (`bllshttng/footnote` from a
+    // The slug is whatever the minter held (`bllshttng/fno` from a
     // remote URL, a bare `footnote` from a short remote), so any non-empty
     // token between the colon and the `#` is the subject's repo half.
     if repo.is_empty() || head.len() != 40 || !head.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -982,7 +982,7 @@ pub fn verdict_op(rows: Result<Vec<Value>, String>, payload: &Value) -> String {
     // only ever downgrades: `auto_merge_approved: false` refuses, an
     // unreadable or ambiguous binding reads unknown, and provenance lands
     // whenever a binding was read. A projection never widens the merge
-    // verb's own gates.
+    // command's own gates.
     if let Some(node_id) = verdict.node_id.clone() {
         match bound_fold(&root, &node_id) {
             ManifestFold::Unbound => {}
@@ -1032,7 +1032,7 @@ fn row_node_id(row: &Value) -> &str {
 /// guesses a queue. The receipt carries `elapsed_ms` so the caller can see
 /// the read's cost. The bound-manifest fold runs after the pure queue: a
 /// granted row whose node's bound manifest refuses, or whose binding cannot
-/// be read, drops. A queue only ever narrows the merge verb's gates.
+/// be read, drops. A queue only ever narrows the merge command's gates.
 pub fn queue_op(rows: Result<Vec<Value>, String>, rotate: u64, started: Instant) -> Value {
     match rows {
         Err(e) => json!({
@@ -1093,7 +1093,7 @@ pub fn queue_op(rows: Result<Vec<Value>, String>, rotate: u64, started: Instant)
 }
 
 /// Dispatch one `grant-` op from an `authorized-merge` payload. Always
-/// answers with a JSON receipt; the verb's exit status answers only whether
+/// answers with a JSON receipt; the command's exit status answers only whether
 /// the op RAN.
 pub fn run_op(op: &str, payload: &Value) -> String {
     // The caller's wall deadline for this op: the tick names how much of its

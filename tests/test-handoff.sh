@@ -353,7 +353,7 @@ acquire_claim('node:${NODE_ID}', holder='${claim_holder}',
   # Write stub fno binary
   cat > "$sbx/stub-bin/fno" <<'STUBEOF'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -394,8 +394,12 @@ fi
 
 if [ "$subcmd1 $subcmd2" = "agents name" ]; then
   # Name minting is the contract under test, not a scenario input: delegate
-  # to the real implementation exactly like `do plan rung` above.
-  exec env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -m fno.cli agents name "${@:3}"
+  # to the real implementation exactly like `do plan rung` above. The name
+  # door is native, and the default router never execs a dev build, so the
+  # stub calls this checkout's binary itself.
+  bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
+  [ -n "$bin" ] || { echo "no fno-agents binary for agents name" >&2; exit 127; }
+  exec "$bin" status --name "${@:3}"
 fi
 
 case "$subcmd1 $subcmd2" in
@@ -538,7 +542,7 @@ STUBEOF
   chmod +x "$sbx/stub-bin/fno"
 
   # The probe prefers `fno-py`, and an ambient deployed fno-py predating the
-  # verb fold does not know `fno whoami context`, so scenarios 7/7b would read
+  # command fold does not know `fno whoami context`, so scenarios 7/7b would read
   # empty and park without the measurement. Delegate to the same FNO_PYTHON
   # the stub's doors use, keeping the suite hermetic against the machine.
   printf '#!/usr/bin/env bash\nexec env PYTHONPATH="%s" "%s" -m fno.cli "$@"\n' \
@@ -1349,7 +1353,7 @@ check_contains "x-3ad5: an unknown status is still parked" "parked" "$output"
 #
 # The gate no longer parses `^status:` itself. Two things follow that the
 # vocabulary scenarios above cannot show: a pre-design rung parks (it used to
-# derive `ready` and dispatch), and a stale `fno` that lacks the verb parks with
+# derive `ready` and dispatch), and a stale `fno` that lacks the command parks with
 # a reason naming the binary rather than blaming the plan.
 # ---------------------------------------------------------------------------
 echo ""
@@ -1366,14 +1370,14 @@ for st in idea stub; do
   check_contains "x-3571: '$st' uses canonical do plan rung" "fno do plan rung" "$(cat "$CALL_LOG")"
 done
 
-# A stale fno (no `rung` verb) must park loudly, not pass silently and not
+# A stale fno (no `rung` command) must park loudly, not pass silently and not
 # blame the plan. Overwrite the stub so `do plan rung` fails the way an older
 # installed binary does: exit 2, nothing on stdout.
 SBX="$(make_sandbox s6b-stale)"
 CALL_LOG="$SBX/call-log"
 cat > "$SBX/stub-bin/fno" <<'STALEEOF'
 #!/usr/bin/env bash
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")

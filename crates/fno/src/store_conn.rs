@@ -35,8 +35,13 @@ pub fn open_write(path: &Path) -> Result<Connection, String> {
 /// A read-only handle. Never creates the file.
 pub fn open_read(path: &Path) -> Result<Connection, String> {
     refuse_truncated_database(path)?;
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| named(path, error))?;
+    // The plain open first so its error stays the named failure; the
+    // immutable retry only fires on the clean-exit mint (header stays WAL,
+    // sidecars gone) that this door's own WAL stores become.
+    let connection = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(connection) => connection,
+        Err(original) => open_read_only_wal_safe(path).ok_or_else(|| named(path, original))?,
+    };
     connection
         .busy_timeout(BUSY_WAIT)
         .map_err(|error| named(path, error))?;
@@ -44,6 +49,32 @@ pub fn open_read(path: &Path) -> Result<Connection, String> {
         .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
         .map_err(|error| named(path, error))?;
     Ok(connection)
+}
+
+/// The one read-only open over a WAL-mode store, shared by this door's
+/// readers: an ordinary read-only open, then the immutable retry a store
+/// whose daemon exited clean (the -shm sidecar gone while the header stays
+/// WAL) needs. The URI spelling percent-encodes the path so the
+/// `?immutable=1` query survives reserved characters in the path itself.
+/// The retry fires only when the plain open refused, so a live writer never
+/// takes it. `None` when neither opens. Self-contained because build.rs
+/// copies this module verbatim into the fno twin, which has no graph_store.
+fn open_read_only_wal_safe(path: &Path) -> Option<Connection> {
+    if let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        return Some(conn);
+    }
+    let mut encoded = String::new();
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    let uri = format!("file:{encoded}?immutable=1");
+    let uri_flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+    Connection::open_with_flags(uri, uri_flags).ok()
 }
 
 fn refuse_truncated_database(path: &Path) -> Result<(), String> {

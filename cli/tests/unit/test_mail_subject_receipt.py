@@ -2,7 +2,7 @@
 
 The send receipt is one JSON line {msg_id, subject, to, status} on every
 lane. The subject flag lives on the Rust front, which peels it off the
-argv and hands it over as FNO_MAIL_SUBJECT; this verb reads that env, and
+argv and hands it over as FNO_MAIL_SUBJECT; this command reads that env, and
 the subject rides the wire envelope (the delivered header's third field),
 the durable bus row, and the receipt.
 """
@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from fno.bus.log import Envelope, from_json_line, to_json_line
 from fno.paths_testing import use_tmpdir
 
 
@@ -39,8 +38,7 @@ def _invoke(isolated, runner: CliRunner, *args: str):
 
 
 def test_kind_lane_send_subject_rides_bus_row_and_receipt(isolated, runner, monkeypatch) -> None:
-    from fno.bus.log import iter_messages
-    from fno.inbox.store import read_unread_threads
+    from tests.fixtures.bus_rows import read_rows
 
     monkeypatch.setenv("FNO_MAIL_SUBJECT", "schema freeze Friday")
     result = _invoke(
@@ -57,10 +55,8 @@ def test_kind_lane_send_subject_rides_bus_row_and_receipt(isolated, runner, monk
     assert receipt["to"] == "acme-docs"
     assert "queued (durable)" in receipt["status"]
     # The kind lane's durable row carries the inbox kind, not "send".
-    rows = [m for m in iter_messages() if m.subject == "schema freeze Friday"]
-    assert rows and rows[-1].to == "acme-docs"
-    threads = read_unread_threads("acme-docs")
-    assert len(threads) == 1
+    rows = [m for m in read_rows() if m.get("subject") == "schema freeze Friday"]
+    assert rows and rows[-1]["to"] == "acme-docs"
 
     # No env, no subject: the receipt's subject reads null.
     monkeypatch.delenv("FNO_MAIL_SUBJECT")
@@ -90,15 +86,6 @@ def test_kind_lane_send_subject_rides_bus_row_and_receipt(isolated, runner, monk
     )
     assert row["subject"] == "s"
 
-    # The bus row serializes with the subject and parses it back; a row from
-    # before the field existed parses None and re-serializes without it.
-    env = Envelope.new(from_="a", to="b", kind="send", body="hi", subject="gate fix")
-    line = to_json_line(env)
-    assert '"subject":"gate fix"' in line
-    assert from_json_line(line).subject == "gate fix"
-    legacy = from_json_line(
-        '{"v":1,"id":"fmail-aaaaaaaaaaaa","ts":"2026-10-06T00:00:00Z",'
-        '"thread":"fmail-aaaaaaaaaaaa","from":"a","to":"b","kind":"send","body":"x"}'
-    )
-    assert legacy.subject is None
-    assert "subject" not in to_json_line(legacy)
+    # The bus-row serialization round trip rode the deleted Python serializer;
+    # the row shape with the subject field is frozen by
+    # crates/fno-agents/tests/bus_read_parity.rs.

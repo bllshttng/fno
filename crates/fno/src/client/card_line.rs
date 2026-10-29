@@ -1,5 +1,6 @@
 //! Shared sideline card fields and hit ranges.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use unicode_width::UnicodeWidthStr;
@@ -66,6 +67,28 @@ pub(super) fn binding_suffix(a: &AgentRow) -> String {
             String::new()
         }
     }
+}
+
+/// Fit the node beside a name that must stay whole: `keep` is the first
+/// column the node may take. The node keeps its tail and cuts its front
+/// (`…0e630a0a`), and drops when fewer than three of its characters fit.
+pub(super) fn fit_node(
+    node: &str,
+    span: Range<usize>,
+    keep: usize,
+) -> Option<(Range<usize>, String)> {
+    if span.start >= keep {
+        return Some((span, node.to_string()));
+    }
+    let room = span.end.saturating_sub(keep);
+    if room < 4 {
+        return None;
+    }
+    let chars: Vec<char> = node.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(room - 1)..]
+        .iter()
+        .collect();
+    Some((span.end - room..span.end, format!("\u{2026}{tail}")))
 }
 
 pub(super) fn node_span(a: &AgentRow, text_w: usize) -> Option<Range<usize>> {
@@ -274,13 +297,91 @@ pub(super) fn metrics(
     )
 }
 
-/// The card's short model: no `[1m]` window tag, and a `claude-` id names
-/// its family (`claude-opus-5-5` -> `opus`).
-fn short_model(model: &str) -> &str {
+/// Card line 1's label in `w` columns: `slug · role`. The slug is the word
+/// that names the card, so it stays whole and only the role is cut, from
+/// its end. Too little room for a readable role leaves the slug alone; a
+/// slug wider than `w` keeps its tail, the name cell's rule.
+pub(super) fn card_label(slug: &str, role: Option<&str>, w: usize) -> String {
+    const SEP: &str = " \u{b7} ";
+    const MIN_ROLE_W: usize = 4;
+    let slug_w = slug.width();
+    if slug_w >= w {
+        return crate::chrome::clip_tail(slug, w);
+    }
+    let Some(role) = role.filter(|r| !r.is_empty()) else {
+        return slug.to_string();
+    };
+    let room = w - slug_w;
+    if room < SEP.width() + MIN_ROLE_W {
+        return slug.to_string();
+    }
+    let role = crate::chrome::fit_ellipsis(role, room - SEP.width());
+    format!("{slug}{SEP}{role}")
+}
+
+/// A `claude-` id split into family and version: `claude-opus-4-8` is
+/// `("opus", [4, 8])`. A trailing date stamp is no part of the version.
+fn claude_family(id: &str) -> Option<(&str, Vec<u32>)> {
+    let rest = id.strip_prefix("claude-")?;
+    let mut family = None;
+    let mut version = Vec::new();
+    for part in rest.split('-') {
+        if part.len() == 8 && part.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        match part.parse::<u32>() {
+            Ok(n) => version.push(n),
+            Err(_) => family = family.or(Some(part)),
+        }
+    }
+    Some((family?, version))
+}
+
+/// Each Claude family's newest version in the models.dev catalog.
+pub(super) type NewestFamilies = HashMap<String, Vec<u32>>;
+
+pub(super) fn newest_families<'a>(ids: impl IntoIterator<Item = &'a str>) -> NewestFamilies {
+    let mut newest = NewestFamilies::new();
+    for (family, version) in ids.into_iter().filter_map(claude_family) {
+        let slot = newest.entry(family.to_string()).or_default();
+        if version > *slot {
+            *slot = version;
+        }
+    }
+    newest
+}
+
+/// The catalog read once per client: paint runs every frame, and the cache
+/// refreshes daily. Tests read no catalog, so they never see the machine's.
+fn catalog_families() -> &'static NewestFamilies {
+    static NEWEST: std::sync::OnceLock<NewestFamilies> = std::sync::OnceLock::new();
+    NEWEST.get_or_init(|| {
+        if cfg!(test) {
+            return NewestFamilies::new();
+        }
+        let catalog = crate::model_catalog::load(&crate::model_catalog::state_dir());
+        let ids = catalog
+            .ok()
+            .and_then(|c| c.get("anthropic").map(|p| p.model_ids()))
+            .unwrap_or_default();
+        newest_families(ids.iter().map(String::as_str))
+    })
+}
+
+/// The card's short model, with no `[1m]` window tag. A `claude-` id names
+/// its family alone when it is that family's newest (`opus`), else the
+/// family and version (`opus-4.8`). With no catalog it names the family.
+pub(super) fn short_model(model: &str, newest: &NewestFamilies) -> String {
     let model = model.split('[').next().unwrap_or(model);
-    match model.strip_prefix("claude-") {
-        Some(rest) => rest.split('-').next().unwrap_or(rest),
-        None => model,
+    let Some((family, version)) = claude_family(model) else {
+        return model.to_string();
+    };
+    match newest.get(family) {
+        Some(top) if *top != version && !version.is_empty() => {
+            let dotted: Vec<String> = version.iter().map(u32::to_string).collect();
+            format!("{family}-{}", dotted.join("."))
+        }
+        _ => family.to_string(),
     }
 }
 
@@ -288,19 +389,8 @@ fn short_model(model: &str) -> &str {
 pub(super) fn model_label(a: &AgentRow) -> Option<String> {
     a.model
         .as_deref()
-        .map(short_model)
+        .map(|m| short_model(m, catalog_families()))
         .filter(|m| !m.is_empty())
-        .map(str::to_string)
-}
-
-/// The board's model badge includes the harness; card line 2 keeps just the
-/// model label so the lead name or role remains visible.
-pub(super) fn harness_model(a: &AgentRow) -> Option<String> {
-    match (a.harness.as_deref(), model_label(a)) {
-        (Some(h), Some(m)) => Some(format!("{h}/{m}")),
-        (Some(h), None) => Some(h.to_string()),
-        (None, model) => model,
-    }
 }
 
 /// The card's name: the worker name without the node and model the card
@@ -427,5 +517,18 @@ mod binding_display_tests {
         assert_eq!(pr, 28..40);
         assert_eq!(spans.node, Some(20..25));
         assert_eq!(spans.separator, Some(25..28));
+    }
+
+    #[test]
+    fn fit_node_cuts_the_node_front_before_the_name() {
+        // `scout` ends at column 7 with one space after it, so the node may
+        // start at 8. The specimen cut the name to `scou` instead.
+        let node = "zz-00aa11bb";
+        assert_eq!(fit_node(node, 10..21, 8), Some((10..21, node.into())));
+        assert_eq!(
+            fit_node(node, 6..17, 8),
+            Some((8..17, "\u{2026}00aa11bb".into()))
+        );
+        assert_eq!(fit_node(node, 6..17, 14), None, "under 3 node chars drops");
     }
 }

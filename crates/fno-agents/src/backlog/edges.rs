@@ -148,7 +148,7 @@ pub(crate) fn record_spawn(
         .parent()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let graph = crate::state_layout::place(&root, "graph.json");
+    let graph = crate::state_layout::graph_anchor(&root);
     let connection = super::open(&graph)?;
     append(
         &connection,
@@ -157,6 +157,30 @@ pub(crate) fn record_spawn(
         EdgeKind::Spawn,
     )?;
     Ok(())
+}
+
+/// Rename one node id across every endpoint. The update --to rename's
+/// satellite pass calls this under the store lock; edge rows carry no FK,
+/// so the
+/// rename is a plain endpoint rewrite. Node endpoints carry kind 'node'.
+pub fn rename_node_endpoints(
+    connection: &Connection,
+    old: &str,
+    new: &str,
+) -> Result<usize, String> {
+    let src = connection
+        .execute(
+            "UPDATE edges SET src_id=?1 WHERE src_kind='node' AND src_id=?2",
+            params![new, old],
+        )
+        .map_err(|e| e.to_string())?;
+    let dst = connection
+        .execute(
+            "UPDATE edges SET dst_id=?1 WHERE dst_kind='node' AND dst_id=?2",
+            params![new, old],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(src + dst)
 }
 
 #[cfg(test)]

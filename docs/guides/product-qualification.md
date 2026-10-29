@@ -31,7 +31,7 @@ A conformance run needs no provider because the journey task is grade-only.
 
 ## Read the report
 
-The report verb folds the declared expected set against the history:
+The report command folds the declared expected set against the history:
 
 ```bash
 fno doctor evals report --qualification evals/fixtures/product-delivery/qualification.json
@@ -64,4 +64,4 @@ Live trials are an authorized, budgeted activity. This page describes the protoc
 
 ## What is deliberately absent
 
-There is no second benchmark service, no automation of foreign tools before a supported runner exists, and no publication or outreach step. The first-run experience is documented in [getting-started.md](../getting-started.md). This guide does not rewrite onboarding. External feedback is a later observation activity, not part of this package.
+There is no second benchmark service, no automation of foreign tools before a supported runner exists, and no publication or outreach step. The first-run experience is documented in [quickstart.md](../quickstart.md). This guide does not rewrite onboarding. External feedback is a later observation activity, not part of this package.

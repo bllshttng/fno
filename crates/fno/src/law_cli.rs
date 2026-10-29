@@ -1,20 +1,21 @@
-//! Native law-door verbs under `fno inbox law`.
+//! Native law-door commands under `fno inbox law`.
 //!
 //! The Python `fno inbox` group keeps every other name; `law set`, `law
 //! stage`, and `law match` run natively. The door's machinery stays in the
 //! runtime crate, reached through the worker's one-shot `--law-exec` lane:
 //! the mux never links the runtime (crates/fno/tests/product_boundary.rs),
-//! so these verbs spawn the worker exactly the way the store's `--store-exec`
-//! clients do. No top-level verb exists (law d-fe66560a); the group stays
+//! so these commands spawn the worker exactly the way the store's `--store-exec`
+//! clients do. No top-level command exists (law d-fe66560a); the group stays
 //! nested under `inbox`.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
-/// The verbs the native surface serves. The Python `fno inbox law` group
+/// The commands the native surface serves. The Python `fno inbox law` group
 /// forwards here instead of holding its own write path.
-pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &["set", "stage", "match", "retract", "history"];
+pub const NATIVE_LAW_SUBCOMMANDS: &[&str] =
+    &["set", "stage", "match", "retract", "restore", "history"];
 
 /// Classify `fno inbox law <sub> ...` for the front door: `Some(rest)` runs
 /// natively, `None` forwards to the Python CLI.
@@ -33,7 +34,7 @@ pub fn classify_inbox_law(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// Classify `fno inbox decide ...` for the front door: the decide record
-/// verb runs natively through the same worker lane as the law door,
+/// command runs natively through the same worker lane as the law door,
 /// `None` forwards to the Python CLI for the rest of the `inbox` tree.
 pub fn classify_inbox_decide(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 2 {
@@ -71,7 +72,7 @@ pub fn run(args: &[OsString]) -> i32 {
         .any(|a| a.to_str() == Some("-h") || a.to_str() == Some("--help"))
     {
         println!(
-            "usage: fno inbox law set <subject> [decision] [--global] [--paths g1,g2] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... | fno inbox law stage | fno inbox law match (one JSON request on stdin) | fno inbox law retract <subject-or-id> --reason <why> | fno inbox law history <subject-or-id>"
+            "usage: fno inbox law set <subject> [decision] [--global] [--paths g1,g2] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... | fno inbox law stage | fno inbox law match (one JSON request on stdin) | fno inbox law retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox law restore <decision-id> | fno inbox law history <subject-or-id>"
         );
         return 0;
     }
@@ -84,7 +85,7 @@ pub fn run(args: &[OsString]) -> i32 {
                 .collect();
             // A piped stdin rides the request ONLY for `--decision-file -`:
             // every other call never touches stdin, so a daemon whose stdin
-            // is an open pipe cannot block the verb.
+            // is an open pipe cannot block the command.
             let stdin_text = if stdin_requested(&argv) {
                 let mut buf = String::new();
                 let _ = std::io::stdin().read_to_string(&mut buf);
@@ -111,13 +112,13 @@ pub fn run(args: &[OsString]) -> i32 {
             }
             law_exec(&buf, Attended::No)
         }
-        "retract" => {
+        "retract" | "restore" => {
             let argv: Vec<String> = rest
                 .iter()
                 .filter_map(|a| a.to_str().map(str::to_owned))
                 .collect();
             let request = serde_json::json!({
-                "mode": "retract",
+                "mode": sub,
                 "argv": argv,
             })
             .to_string();
@@ -139,7 +140,9 @@ pub fn run(args: &[OsString]) -> i32 {
             law_exec(&request, Attended::No)
         }
         _ => {
-            eprintln!("error: expected a subcommand (set | stage | match | retract | history)");
+            eprintln!(
+                "error: expected a subcommand (set | stage | match | retract | restore | history)"
+            );
             2
         }
     }
@@ -258,7 +261,7 @@ mod tests {
     #[test]
     fn stdin_only_for_decision_file_dash() {
         // A daemon whose stdin is an open pipe must never block the
-        // verb. Only `--decision-file -` (either spelling) asks for stdin.
+        // command. Only `--decision-file -` (either spelling) asks for stdin.
         assert!(stdin_requested(&[
             "subject".to_string(),
             "--decision-file".to_string(),
@@ -293,6 +296,10 @@ mod tests {
         );
         assert_eq!(
             classify_inbox_law(&mk(&["inbox", "law", "history"])).map(|r| r.len()),
+            Some(1)
+        );
+        assert_eq!(
+            classify_inbox_law(&mk(&["inbox", "law", "restore"])).map(|r| r.len()),
             Some(1)
         );
         // Unknown subcommands still fall through to the Python group.

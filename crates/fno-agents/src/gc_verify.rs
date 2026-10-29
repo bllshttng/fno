@@ -9,7 +9,7 @@
 //! set (`native-stop`, `active-surface`, `resume-evidence`, `mux-member`,
 //! each at a confirmed or measured not-applicable outcome), and nothing
 //! unconfirmed. An empty store, an unreadable receipt, a partial effect
-//! set: each is a named refusal with a nonzero exit - this verb must fail
+//! set: each is a named refusal with a nonzero exit - this command must fail
 //! before its evidence exists, because it is the plan's done probe. The
 //! required set is what closes the synthetic-receipt hole: the auditor's
 //! receipt carried one op and the gate certified it; a pass now means the
@@ -137,13 +137,18 @@ impl VerifyReport {
 /// still works.
 pub fn current_build() -> String {
     let version = env!("CARGO_PKG_VERSION");
+    format!("fno-agents {version} rev {}", current_rev())
+}
+
+/// The crates rev this binary was built from, `-dirty` when the tree was.
+pub fn current_rev() -> String {
     let rev = env!("FNO_AGENTS_CRATES_REV");
     let dirty = if env!("FNO_AGENTS_GIT_DIRTY") == "1" {
         "-dirty"
     } else {
         ""
     };
-    format!("fno-agents {version} rev {rev}{dirty}")
+    format!("{rev}{dirty}")
 }
 
 /// The ops every verified retirement must carry: a pass means the promised
@@ -295,7 +300,7 @@ fn audit_receipt(
     }
     // The sweep is the only writer that runs the four retirement effects,
     // so it is the only writer this audit has an opinion about. Any OTHER
-    // non-empty stamp (roster-reap, the argv verb of an `rm` door) is a
+    // non-empty stamp (roster-reap, the argv command of an `rm` door) is a
     // removal receipt and skips, exactly as before. An EMPTY stamp is the
     // pre-stamp tail (every receipt written before `removed_by` was
     // required) and stays in the population until the retention window

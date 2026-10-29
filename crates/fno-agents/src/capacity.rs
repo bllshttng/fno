@@ -2,9 +2,12 @@
 //! `<agents home>/capacity/`, written by the machine_watch tick, read by the
 //! spawn gate, the probe, the lead beat, and the mux meter. The user's
 //! `agents.max_live` stays the ceiling; the loop only LOWERS an effective cap
-//! (AIMD: a sustained run-queue breach cuts 25%, sustained calm decays +1 per
-//! window) and decays it back. A missing or unreadable state file lowers
-//! nothing: every reader falls back to the ceiling and says so.
+//! (AIMD: a sustained fleet CPU share breach cuts 25%, sustained calm decays
+//! +1 per window) and decays it back. The share is the spawn gate's own
+//! signal (`agents.max_fleet_cpu_share`), so the two never read the machine
+//! two ways: a load average counts process churn and the user's own apps.
+//! A missing or unreadable state file lowers nothing: every reader falls
+//! back to the ceiling and says so.
 
 use std::io;
 use std::path::PathBuf;
@@ -16,14 +19,15 @@ use serde_json::Value;
 use crate::machine_sample::MachineSample;
 use crate::paths::AgentsHome;
 
-/// Run queue per core above which a breach counts (the runaway band).
-pub const DEFAULT_CUT_LOAD_PER_CORE: f64 = 4.0;
+/// Fleet CPU share above which a breach counts: half again over the spawn
+/// gate's default ceiling of 0.5.
+pub const DEFAULT_CUT_FLEET_SHARE: f64 = 0.75;
 /// Sustained breach before a cut fires (the runaway hold).
 pub const DEFAULT_CUT_HOLD_SECONDS: u64 = 600;
 /// Each cut multiplies the effective cap by `1 - fraction`.
 pub const DEFAULT_CUT_FRACTION: f64 = 0.25;
-/// Run queue per core below which the box counts as calm.
-pub const DEFAULT_RAISE_LOAD_PER_CORE: f64 = 2.0;
+/// Fleet CPU share below which the box counts as calm.
+pub const DEFAULT_RAISE_FLEET_SHARE: f64 = 0.35;
 /// Sustained calm before one +1 decay step.
 pub const DEFAULT_RAISE_HOLD_SECONDS: u64 = 900;
 /// The learned cap never drops below this unless the user sets a higher floor.
@@ -42,10 +46,10 @@ pub const FLOOR_REMEDY: &str = "fno agents spawn --floor N";
 /// `[agents.capacity]` thresholds, defaults mirroring the runaway arm's band.
 #[derive(Debug, Clone, Copy)]
 pub struct CapacityThresholds {
-    pub cut_per_core: f64,
+    pub cut_share: f64,
     pub cut_hold_seconds: u64,
     pub cut_fraction: f64,
-    pub raise_per_core: f64,
+    pub raise_share: f64,
     pub raise_hold_seconds: u64,
     /// `[agents.capacity] floor`: the user's lower bound on the learned cap.
     pub floor: u32,
@@ -54,10 +58,10 @@ pub struct CapacityThresholds {
 impl Default for CapacityThresholds {
     fn default() -> Self {
         Self {
-            cut_per_core: DEFAULT_CUT_LOAD_PER_CORE,
+            cut_share: DEFAULT_CUT_FLEET_SHARE,
             cut_hold_seconds: DEFAULT_CUT_HOLD_SECONDS,
             cut_fraction: DEFAULT_CUT_FRACTION,
-            raise_per_core: DEFAULT_RAISE_LOAD_PER_CORE,
+            raise_share: DEFAULT_RAISE_FLEET_SHARE,
             raise_hold_seconds: DEFAULT_RAISE_HOLD_SECONDS,
             floor: DEFAULT_FLOOR,
         }
@@ -82,13 +86,13 @@ pub fn thresholds(cwd: &std::path::Path) -> CapacityThresholds {
             .unwrap_or(default)
     };
     CapacityThresholds {
-        cut_per_core: float("cut_load_per_core", DEFAULT_CUT_LOAD_PER_CORE),
+        cut_share: float("cut_fleet_share", DEFAULT_CUT_FLEET_SHARE),
         cut_hold_seconds: uint("cut_hold_seconds", DEFAULT_CUT_HOLD_SECONDS),
         cut_fraction: read("cut_fraction")
             .and_then(|v| v.as_float())
             .filter(|v| *v > 0.0 && *v < 1.0)
             .unwrap_or(DEFAULT_CUT_FRACTION),
-        raise_per_core: float("raise_load_per_core", DEFAULT_RAISE_LOAD_PER_CORE),
+        raise_share: float("raise_fleet_share", DEFAULT_RAISE_FLEET_SHARE),
         raise_hold_seconds: uint("raise_hold_seconds", DEFAULT_RAISE_HOLD_SECONDS),
         floor: read("floor")
             .and_then(|v| v.as_integer())
@@ -97,15 +101,29 @@ pub fn thresholds(cwd: &std::path::Path) -> CapacityThresholds {
     }
 }
 
-/// The one memory figure: the vm_stat compressor-occupied share of physical
-/// RAM, written by the tick and printed by the meter and the org overlay so
-/// the two can never disagree. macmon keeps CPU and watts only.
+/// The one memory figure: RAM used plus swap used over RAM plus swap, written
+/// by the tick and printed by the meter and the org overlay so the two can
+/// never disagree. The compressor share alone read half full while RAM sat at
+/// 85% and swap at 98%, so it stays a field, not the headline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryFigure {
     pub used_fraction: f64,
     pub total_gb: f64,
+    #[serde(default)]
+    pub ram_used_gb: f64,
+    #[serde(default)]
+    pub swap_used_gb: f64,
+    #[serde(default)]
+    pub swap_total_gb: f64,
     pub compressor_occupied_gb: f64,
     pub compressor_stored_gb: f64,
+}
+
+impl MemoryFigure {
+    /// The compressor-occupied share of physical RAM.
+    pub fn compressor_fraction(&self) -> f64 {
+        (self.compressor_occupied_gb / self.total_gb).clamp(0.0, 1.0)
+    }
 }
 
 /// One provider quota window folded from the ledger.
@@ -390,12 +408,13 @@ fn render_clock(epoch: i64) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// One AIMD step from a tick's sample. Seeds the state at the ceiling on
-/// first run, folds the memory figure and the account windows, and
-/// persists the result. `Ok(None)` when the sample carries no run queue (the
-/// one signal the loop reads) and there is nothing to refresh.
+/// One AIMD step from a tick's sample and the fleet CPU share the same tick
+/// read. Seeds the state at the ceiling on first run, folds the memory
+/// figure and the account windows, and persists the result. An unreadable
+/// share (`None`) moves no streak and no cap.
 pub fn feed(
     sample: &MachineSample,
+    fleet_share: Option<f64>,
     cwd: &std::path::Path,
     home: &AgentsHome,
     now_epoch: i64,
@@ -409,7 +428,7 @@ pub fn feed(
         state.since = None;
     }
     state.ceiling = ceiling;
-    if let Some(next) = step(&state, sample, &thresholds, now_epoch) {
+    if let Some(next) = fleet_share.and_then(|share| step(&state, share, &thresholds, now_epoch)) {
         state = next;
     }
     // The file the mux meter reads agrees with the reader within one tick.
@@ -445,21 +464,19 @@ fn seed(ceiling: u32, now_epoch: i64) -> CapacityState {
 /// streaks. The streak bookkeeping is ALWAYS updated in the returned state
 /// (a pre-threshold sample arms the clock; discarding it would restart the
 /// hold every tick and AIMD would never fire from natural ticks); the cap
-/// itself only moves on a threshold event. `None` when the sample carries no
-/// run queue, the one signal the loop reads.
+/// itself only moves on a threshold event. `None` on a share that is no
+/// reading (not finite or negative).
 fn step(
     state: &CapacityState,
-    sample: &MachineSample,
+    share: f64,
     t: &CapacityThresholds,
     now_epoch: i64,
 ) -> Option<CapacityState> {
-    let per_core = sample
-        .runnable
-        .zip(sample.cores)
-        .filter(|(_, cores)| *cores > 0.0)
-        .map(|(runnable, cores)| runnable as f64 / cores)?;
+    if !share.is_finite() || share < 0.0 {
+        return None;
+    }
     let mut next = state.clone();
-    if per_core > t.cut_per_core {
+    if share > t.cut_share {
         let over = state.over_since.unwrap_or(now_epoch);
         next.over_since = Some(over);
         next.calm_since = None;
@@ -472,7 +489,7 @@ fn step(
         }
         return Some(next);
     }
-    if per_core < t.raise_per_core {
+    if share < t.raise_share {
         let calm = state.calm_since.unwrap_or(now_epoch);
         next.calm_since = Some(calm);
         next.over_since = None;
@@ -495,9 +512,16 @@ pub(crate) fn memory_figure(sample: &MachineSample) -> Option<MemoryFigure> {
     if total <= 0.0 {
         return None;
     }
+    // No RAM-used reading (a Linux host): the compressor share stands in.
+    let ram_used = sample.ram_used_gb.unwrap_or(occupied);
+    let swap_used = sample.swap_used_gb.unwrap_or(0.0).max(0.0);
+    let swap_total = sample.swap_total_gb.unwrap_or(0.0).max(swap_used);
     Some(MemoryFigure {
-        used_fraction: (occupied / total).clamp(0.0, 1.0),
+        used_fraction: ((ram_used + swap_used) / (total + swap_total)).clamp(0.0, 1.0),
         total_gb: total,
+        ram_used_gb: ram_used,
+        swap_used_gb: swap_used,
+        swap_total_gb: swap_total,
         compressor_occupied_gb: occupied,
         compressor_stored_gb: sample.compressed_gb.unwrap_or(0.0),
     })
@@ -541,86 +565,69 @@ pub(crate) struct AccountRecord {
     pub reset_timezone: Option<String>,
 }
 
-/// `[[accounts.records]]` through the same candidate chain
-/// `record_reset_timezones` reads, so one config file is one truth. The
-/// chain is walked highest priority first and the first record with an id
-/// wins, the same first-hit-wins rule every config key follows.
+/// `[[accounts.records]]` merged across the config layers by the accounts
+/// loader's one reader, so a local record replaces a global one by id. A
+/// duplicate id inside one file keeps its first record.
 pub(crate) fn account_records(cwd: &std::path::Path) -> Vec<AccountRecord> {
-    let paths = crate::agents_config::config_candidates(cwd);
     let mut out: Vec<AccountRecord> = Vec::new();
-    for path in &paths {
-        let Ok(raw) = std::fs::read_to_string(path) else {
+    for rec in &crate::accounts::records::raw_records(None, cwd) {
+        let Some(id) = rec.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
-        let Ok(table) = raw.parse::<toml::Table>() else {
+        if out.iter().any(|known| known.id == id) {
             continue;
-        };
-        let Some(records) = table
-            .get("accounts")
-            .and_then(|v| v.get("records"))
-            .and_then(toml::Value::as_array)
-        else {
-            continue;
-        };
-        for rec in records {
-            let Some(id) = rec.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            if out.iter().any(|known| known.id == id) {
-                continue;
-            }
-            // A record may name its route (provider/model) or skip it: an
-            // OAuth entry identifies its account without the model axis. A
-            // route-less record folds no tokens (no provider to match), but
-            // it stays in the state so the config is never silently dropped.
-            let (provider, route_model) = match rec.get("route").and_then(|v| v.as_str()) {
-                Some(route) => match route.split_once('/') {
-                    Some((p, m)) if !p.is_empty() => (p, m),
-                    _ => continue,
-                },
-                None => ("", ""),
-            };
-            let billing = rec
-                .get("billing")
-                .and_then(|v| v.as_str())
-                .unwrap_or("subscription");
-            if billing != "subscription" && billing != "metered" {
-                continue;
-            }
-            let windows: Vec<String> = rec
-                .get("windows")
-                .and_then(toml::Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|v| v.as_str())
-                        .filter(|w| *w == "5h" || *w == "weekly")
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
-            out.push(AccountRecord {
-                id: id.to_string(),
-                provider: provider.to_string(),
-                route_model: route_model.to_string(),
-                billing: billing.to_string(),
-                show: rec
-                    .get("show")
-                    .and_then(toml::Value::as_bool)
-                    .unwrap_or(true),
-                windows: match billing {
-                    "subscription" => windows,
-                    _ => Vec::new(),
-                },
-                limit_tokens: rec
-                    .get("limit_tokens")
-                    .and_then(toml::Value::as_integer)
-                    .map(|v| v as u64),
-                reset_timezone: rec
-                    .get("reset_timezone")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-            });
         }
+        // A record may name its route (provider/model) or skip it: an
+        // OAuth entry identifies its account without the model axis. A
+        // route-less record folds no tokens (no provider to match), but
+        // it stays in the state so the config is never silently dropped.
+        let (provider, route_model) = match rec.get("route").and_then(|v| v.as_str()) {
+            Some(route) => match route.split_once('/') {
+                Some((p, m)) if !p.is_empty() => (p, m),
+                _ => continue,
+            },
+            None => ("", ""),
+        };
+        let billing = rec
+            .get("billing")
+            .and_then(|v| v.as_str())
+            .unwrap_or("subscription");
+        if billing != "subscription" && billing != "metered" {
+            continue;
+        }
+        let windows: Vec<String> = rec
+            .get("windows")
+            .and_then(toml::Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|w| *w == "5h" || *w == "weekly")
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(AccountRecord {
+            id: id.to_string(),
+            provider: provider.to_string(),
+            route_model: route_model.to_string(),
+            billing: billing.to_string(),
+            show: rec
+                .get("show")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true),
+            windows: match billing {
+                "subscription" => windows,
+                _ => Vec::new(),
+            },
+            limit_tokens: rec
+                .get("limit_tokens")
+                .and_then(toml::Value::as_integer)
+                .map(|v| v as u64),
+            reset_timezone: rec
+                .get("reset_timezone")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
     }
     out
 }
@@ -822,18 +829,50 @@ mod tests {
     use super::*;
     use crate::machine_sample::MachineSample;
 
-    fn sample(runnable: Option<u64>, cores: f64) -> MachineSample {
-        let mut sample = MachineSample::default();
-        sample.runnable = runnable;
-        sample.cores = Some(cores);
-        sample
-    }
-
     fn tmp_home(tag: &str) -> AgentsHome {
         let dir = std::env::temp_dir().join(format!("fno-capacity-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         AgentsHome::at(dir)
+    }
+
+    /// The 2026-10-21 machine: compressor at half of RAM, RAM 85% used,
+    /// swap 98% full. The headline must read the swapping machine as full.
+    #[test]
+    fn the_memory_figure_counts_ram_used_and_swap_not_the_compressor_alone() {
+        let page = 16384.0_f64;
+        let pages = |gb: f64| (gb * 1024.0 * 1024.0 * 1024.0 / page) as u64;
+        let vm_stat = format!(
+            "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
+             Pages free:                {}.\n\
+             Pages active:              {}.\n\
+             Pages inactive:            {}.\n\
+             Pages speculative:         0.\n\
+             Pages wired down:          {}.\n\
+             Pages purgeable:           0.\n\
+             \"Translation faults\":      123.\n\
+             File-backed pages:         {}.\n\
+             Pages stored in compressor: {}.\n\
+             Pages occupied by compressor: {}.\n",
+            pages(2.0),
+            pages(20.0),
+            pages(6.0),
+            pages(6.0),
+            pages(5.0),
+            pages(90.0),
+            pages(48.0),
+        );
+        let (occupied, _, used) = crate::machine_sample::parse_vm_stat_memory(&vm_stat).unwrap();
+        assert!((used - 75.0).abs() < 0.01, "{used}");
+        let mut s = MachineSample::default();
+        s.total_mem_gb = Some(96.0);
+        s.compressor_gb = Some(occupied);
+        s.ram_used_gb = Some(81.6);
+        s.swap_used_gb = Some(26.5);
+        s.swap_total_gb = Some(27.0);
+        let m = memory_figure(&s).unwrap();
+        assert!((m.compressor_fraction() - 0.5).abs() < 0.01);
+        assert_eq!((m.used_fraction * 100.0).round(), 88.0);
     }
 
     /// The ceiling comes from CONFIG, not the test: a runner without an
@@ -867,11 +906,12 @@ mod tests {
         // cutting, the state file carries it, and the tick past the hold
         // window fires the cut - no pre-seeded timestamps.
         let natural = tmp_home("natural");
-        let hot = sample(Some(60), 12.0); // 5 per core, over the 4.0 band
-        let armed = feed(&hot, &cwd, &natural, now).unwrap();
+        let tick = MachineSample::default();
+        let hot = Some(0.9); // over the 0.75 cut band
+        let armed = feed(&tick, hot, &cwd, &natural, now).unwrap();
         assert_eq!(armed.effective, 23, "the arming tick does not cut");
         assert_eq!(armed.over_since, Some(now), "the breach clock is persisted");
-        let cut = feed(&hot, &cwd, &natural, now + 600).unwrap();
+        let cut = feed(&tick, hot, &cwd, &natural, now + 600).unwrap();
         assert_eq!(cut.effective, 17, "a 25% cut of 23 floors to 17");
         assert_eq!(cut.reason.as_deref(), Some("CPU-bound"));
         let _ = std::fs::remove_dir_all(natural.root());
@@ -893,8 +933,7 @@ mod tests {
         };
         write_state(&home, &state).unwrap();
         let cwd = std::env::temp_dir();
-        let hot = sample(Some(60), 12.0); // 5 per core, over the 4.0 band
-        let fed = feed(&hot, &cwd, &home, now).unwrap();
+        let fed = feed(&tick, hot, &cwd, &home, now).unwrap();
         assert_eq!(fed.effective, 17, "a 25% cut of 23 floors to 17");
         assert_eq!(fed.reason.as_deref(), Some("CPU-bound"));
         let learned = effective(&home, 23, 1);
@@ -937,7 +976,10 @@ mod tests {
         };
         write_state(&home, &state).unwrap();
         let cwd = std::env::temp_dir();
-        let fed = feed(&sample(Some(6), 12.0), &cwd, &home, now).unwrap();
+        // An unreadable share moves nothing: the calm streak stays armed.
+        let blind = feed(&tick, None, &cwd, &home, now).unwrap();
+        assert_eq!((blind.effective, blind.calm_since), (17, Some(now - 900)));
+        let fed = feed(&tick, Some(0.1), &cwd, &home, now).unwrap();
         assert_eq!(fed.effective, 18);
         assert!(fed.reason.is_none(), "a raised cap carries no cut reason");
         // At the ceiling a further calm tick stops, never exceeds.
@@ -945,7 +987,7 @@ mod tests {
         at_ceiling.effective = 23;
         at_ceiling.calm_since = Some(now - 900);
         write_state(&home, &at_ceiling).unwrap();
-        let fed = feed(&sample(Some(6), 12.0), &cwd, &home, now + 300).unwrap();
+        let fed = feed(&tick, Some(0.1), &cwd, &home, now + 300).unwrap();
         assert_eq!(fed.effective, 23);
         let _ = std::fs::remove_dir_all(home.root());
         drop_ceiling_pin(env_lock, &cfg_dir);
@@ -998,20 +1040,20 @@ mod tests {
             floor: 8,
             ..Default::default()
         };
-        let hot = sample(Some(60), 12.0);
+        let hot = 0.9;
         let mut ten = learned_five.clone();
         ten.effective = 10;
         ten.over_since = Some(now - 600);
-        let cut = step(&ten, &hot, &t, now).unwrap();
+        let cut = step(&ten, hot, &t, now).unwrap();
         assert_eq!(cut.effective, 8, "a 25% cut of 10 is 7; the floor holds 8");
         let mut on_floor = ten.clone();
         on_floor.effective = 8;
-        assert_eq!(step(&on_floor, &hot, &t, now).unwrap().effective, 8);
+        assert_eq!(step(&on_floor, hot, &t, now).unwrap().effective, 8);
         // With no floor key the cut still clamps at 1.
         let mut two = ten.clone();
         two.effective = 2;
         let bare = CapacityThresholds::default();
-        assert_eq!(step(&two, &hot, &bare, now).unwrap().effective, 1);
+        assert_eq!(step(&two, hot, &bare, now).unwrap().effective, 1);
 
         // After the cut is persisted the state's learned cap equals the floor.
         // The reader still names the floor, so a tick never hides it.

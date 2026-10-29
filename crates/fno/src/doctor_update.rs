@@ -102,11 +102,14 @@ pub(crate) struct Flags {
     pub(crate) rust: bool,
     pub(crate) no_rust: bool,
     pub(crate) check: bool,
+    pub(crate) published: bool,
+    /// `--published <rev>`: that exact published build, older included.
+    pub(crate) published_rev: Option<String>,
 }
 
 pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
     let mut f = Flags::default();
-    let mut it = rest.iter();
+    let mut it = rest.iter().peekable();
     while let Some(tok) = it.next() {
         let t = tok
             .to_str()
@@ -123,6 +126,15 @@ pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
             "--rust" => f.rust = true,
             "--no-rust" => f.no_rust = true,
             "--check" => f.check = true,
+            "--published" => {
+                f.published = true;
+                if let Some(rev) = it
+                    .next_if(|v| v.to_str().is_some_and(|s| !s.starts_with('-')))
+                    .and_then(|v| v.to_str())
+                {
+                    f.published_rev = Some(rev.to_string());
+                }
+            }
             other => return Err(format!("unknown flag: {other}")),
         }
     }
@@ -306,9 +318,14 @@ fn deploy_prebuilt(crates_rev: &str, bin_dir: &Path, dry_run: bool) -> Result<()
 /// yet: install the newest tarball CI DID publish, never compile. The bins
 /// then trail the source honestly: the update's rev marker is left
 /// unwritten, so the staleness stays visible and the next update retries
-/// once CI publishes. Only a real deploy defect pushes to `failed`.
+/// once CI publishes. A build git proves older than the installed one never
+/// installs: on 2026-10-22 the arm moved bins at e1fb4bc5ca back to
+/// 688197448d (the newest published build had fallen behind the installed
+/// one) and the restart chain seated the daemon on the older build. Only a
+/// real deploy defect pushes to `failed`.
 fn install_newest_published_arm(
     subtree: Option<&str>,
+    repo: &Path,
     install_root: &Path,
     installed_rev: &str,
     dry_run: bool,
@@ -345,10 +362,32 @@ fn install_newest_published_arm(
         }
     };
     let got12: String = newest_rev.chars().take(12).collect();
-    if !installed_rev.is_empty() && installed_rev == newest_rev {
-        return wait(format!(
-            "the newest published build ({got12}) is already installed; waiting for CI to publish {want12}"
-        ));
+    if !installed_rev.is_empty() {
+        if installed_rev == newest_rev {
+            println!(
+                "fno doctor update: the newest published build ({got12}) is already installed; waiting for CI to publish {want12}; NOT compiling"
+            );
+            return "newest-published-current".into();
+        }
+        // A downgrade refused beats a downgrade explained: only a build git
+        // proves NOT older installs, and an unreadable ordering refuses to
+        // guess. The next update retries, and CI publishing the source rev
+        // ends the wait through the normal arm.
+        match published_is_older(repo, &newest_rev, installed_rev) {
+            Some(true) => {
+                let inst12: String = installed_rev.chars().take(12).collect();
+                return wait(format!(
+                    "the installed build ({inst12}) is newer than the newest published ({got12}); refusing to downgrade; waiting for CI to publish {want12}"
+                ));
+            }
+            Some(false) => {}
+            None => {
+                return wait(
+                    "cannot prove the newest published build is not older than the installed one; refusing to guess"
+                        .to_string(),
+                );
+            }
+        }
     }
     println!(
         "fno doctor update: the source rev {want12} has no published tarball yet; installing the newest published build {got12}; never compiles"
@@ -388,15 +427,153 @@ pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
         outcome,
         "waiting-ci"
             | "installed-newest-published"
+            | "newest-published-current"
             | "skipped-no-origin"
             | "skipped-no-cargo"
             | "failed"
     )
     .then(|| {
         format!(
-            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together (`--no-rust` moves python alone, at your risk)"
+            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel stays as installed (the plugin stage still restages: it is not compiled); the next update moves both halves together (`--published` installs both from the newest published rev; `--no-rust` moves python alone, at your risk)"
         )
     })
+}
+
+/// A planned hold: the rust leg sits on the newest build CI published, so
+/// the hold is publish lag, not a defect. It prints as a note and exits 0
+/// when the daemon runs the bins on disk, so `fno update && fno restart`
+/// still restarts.
+pub(crate) fn hold_is_planned(rust_outcome: Option<&str>) -> bool {
+    matches!(
+        rust_outcome,
+        Some("installed-newest-published") | Some("newest-published-current")
+    )
+}
+
+/// The newest commit on `repo`'s first-parent line whose crates/ rev is
+/// `published`: every commit from that crates/ change up to the next one
+/// shares the published bins, so the newest of them is the last green rev.
+/// Candidates are HEAD, then the commit before each crates/ change.
+pub(crate) fn last_green_rev(repo: &Path, published: &str) -> Result<String, String> {
+    let off_line = || {
+        format!(
+            "the newest published build {} is not on this checkout's first-parent line within the last 50 crates/ changes",
+            &published[..published.len().min(12)]
+        )
+    };
+    // One ancestry read refuses an off-line build before the walk's 50 reads.
+    if published_is_older(repo, published, "HEAD") != Some(true) {
+        return Err(off_line());
+    }
+    let changes = git_in(
+        repo,
+        &[
+            "rev-list",
+            "--first-parent",
+            "--max-count=50",
+            "HEAD",
+            "--",
+            "crates/",
+        ],
+    )
+    .unwrap_or_default();
+    let candidates =
+        std::iter::once("HEAD".to_string()).chain(changes.lines().map(|c| format!("{c}^1")));
+    for candidate in candidates {
+        let crates = git_in(
+            repo,
+            &["log", "-1", "--format=%H", &candidate, "--", "crates/"],
+        );
+        if crates.as_deref() == Some(published) {
+            return git_in(repo, &["rev-parse", &candidate])
+                .ok_or_else(|| format!("cannot resolve {candidate}"));
+        }
+    }
+    Err(off_line())
+}
+
+/// `--published`: Some((rev, crates_rev)) when the source's crates/ rev has
+/// no published build yet, None when it has one (a plain update then
+/// installs it). Local dev only: it needs a git checkout and the bin-cache
+/// tarballs, never the release channel. A `pin` names one exact rev instead:
+/// it installs when its crates/ rev is published, older than the tip or not.
+fn resolve_last_green(
+    source: &Path,
+    pin: Option<&str>,
+) -> Result<Option<(String, String)>, String> {
+    let repo = git_in(source, &["rev-parse", "--show-toplevel"])
+        .map(PathBuf::from)
+        .ok_or("--published needs a git source checkout (local dev only)")?;
+    let platform =
+        crate::update_prebuilt::platform().ok_or("CI builds no binary for this platform")?;
+    if let Some(pin) = pin {
+        let rev = git_in(
+            &repo,
+            &["rev-parse", "--verify", &format!("{pin}^{{commit}}")],
+        )
+        .ok_or_else(|| format!("{pin} names no commit in this checkout"))?;
+        let crates = git_in(&repo, &["log", "-1", "--format=%H", &rev, "--", "crates/"])
+            .ok_or_else(|| format!("{pin} has no crates/ history"))?;
+        crate::update_prebuilt::probe_published(&crates, platform).map_err(|why| {
+            format!(
+                "{pin} has no published build (crates {}): {why}",
+                &crates[..crates.len().min(12)]
+            )
+        })?;
+        if source_rev(source).as_deref() == Some(rev.as_str()) {
+            return Ok(None);
+        }
+        return Ok(Some((rev, crates)));
+    }
+    let published = crate::update_prebuilt::newest_published(platform)
+        .map_err(|why| format!("cannot list the published builds ({why})"))?
+        .ok_or_else(|| format!("no published build for {platform} at all"))?;
+    if rust_subtree_rev(source).as_deref() == Some(published.as_str()) {
+        return Ok(None);
+    }
+    let rev = last_green_rev(&repo, &published)?;
+    Ok(Some((rev, published)))
+}
+
+/// Where `source` sits inside the last green checkout.
+fn last_green_source(source: &Path) -> PathBuf {
+    let prefix = git_in(source, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+    install_dir().join("last-green").join(prefix)
+}
+
+/// Check `rev` out, detached, in the update's own worktree under the install
+/// dir, and return the source path inside it. The developer's checkout never
+/// moves backward.
+fn stage_last_green(source: &Path, rev: &str) -> Result<PathBuf, String> {
+    let repo = git_in(source, &["rev-parse", "--show-toplevel"])
+        .ok_or("--published needs a git source checkout")?;
+    let dir = install_dir().join("last-green");
+    let dir_s = dir.to_string_lossy().into_owned();
+    let git = |cwd: &str, args: &[&str]| {
+        let mut argv: Vec<String> = ["-C", cwd, "-c", "core.hooksPath=/dev/null"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        argv.extend(args.iter().map(|a| a.to_string()));
+        match run_bounded(Path::new("git"), &argv, Duration::from_secs(120), None) {
+            Ok((0, _, _)) => Ok(()),
+            Ok((code, _, err)) => Err(format!("git {} exited {code}: {}", args[0], err.trim())),
+            Err(e) => Err(format!("git {}: {e}", args[0])),
+        }
+    };
+    let reused = dir.join(".git").exists()
+        && git(&dir_s, &["checkout", "--quiet", "--detach", "--force", rev]).is_ok();
+    if !reused {
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = git(&repo, &["worktree", "prune"]);
+        git(
+            &repo,
+            &[
+                "worktree", "add", "--quiet", "--detach", "--force", &dir_s, rev,
+            ],
+        )?;
+    }
+    Ok(last_green_source(source))
 }
 
 fn command_for(bin: &Path, args: &[String]) -> std::io::Result<Command> {
@@ -450,6 +627,65 @@ fn rust_subtree_rev(source: &Path) -> Option<String> {
         source.parent()?,
         &["log", "-1", "--format=%H", "--", "crates/"],
     )
+}
+
+/// Some(true) when `newest` is an ancestor of `installed`: deploying it
+/// would move the bins backwards. Some(false) when git proves it would not
+/// (installed is the ancestor, or the two diverge). None when git cannot
+/// answer, so the caller refuses to guess.
+pub(crate) fn published_is_older(repo: &Path, newest: &str, installed: &str) -> Option<bool> {
+    let out = crate::process_admission::std_command("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge-base", "--is-ancestor", newest, installed])
+        .output()
+        .ok()?;
+    match out.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
+}
+
+/// The bin names the fno-agents crate defines, read from its Cargo.toml
+/// `[[bin]]` entries. None when the file is unreadable or the scan finds no
+/// entries: the caller then degrades to the triad-only freshness gate rather
+/// than wedge an update on a parse it cannot trust.
+pub(crate) fn crate_bin_names(crate_dir: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(crate_dir.join("Cargo.toml")).ok()?;
+    let mut in_bin = false;
+    let mut names = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("[[bin]]") {
+            in_bin = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_bin = false;
+            continue;
+        }
+        if in_bin {
+            if let Some(rest) = trimmed.strip_prefix("name") {
+                if let Some(value) = rest.trim_start().strip_prefix('=') {
+                    let name = value.trim().trim_matches('"');
+                    if !name.is_empty() {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    (!names.is_empty()).then_some(names)
+}
+
+/// The names from `names` whose binary is absent from `bin_dir`.
+pub(crate) fn missing_inventory_bins(names: &[String], bin_dir: &Path) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| !bin_dir.join(format!("{n}{}", exe_suffix())).is_file())
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn read_marker(path: &Path) -> Option<String> {
@@ -576,27 +812,30 @@ fn journal_call(type_name: &str, fields: &[(&str, String)], mail_from: Option<&s
     let _ = run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None);
 }
 
-/// The newest `fno_update_*` row in the machine journal, or None. Bounded
-/// read of the last 1 MiB: the journal is machine-global and unbounded, so
-/// --check must not read it whole on every TUI refresh. An update row older
-/// than 1 MiB of fleet traffic reads as None until the next update writes
-/// a fresh one.
-fn last_update_event() -> Option<Value> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    const WINDOW: u64 = 1024 * 1024;
-    let path = events_journal();
-    let mut file = std::fs::File::open(&path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(WINDOW);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    text.lines()
-        .rev()
-        .filter(|line| line.contains("fno_update_"))
-        .find_map(|line| serde_json::from_str::<Value>(line).ok())
+/// The newest `fno_update_*` row in the machine's event store, or None. The
+/// window is strict: corrupt and typeless rows stay out (`of_types` would
+/// admit them), so a stray row committed after the last update event can
+/// never read as the outcome. With no row (or no store yet) --check reads
+/// None, as it does behind an empty journal today.
+pub(crate) fn last_update_event() -> Option<Value> {
+    let rows = crate::event_store::query_events(
+        &events_journal(),
+        &crate::event_store::EventQuery {
+            types: [
+                "fno_update_started",
+                "fno_update_built",
+                "fno_update_installed",
+                "fno_update_failed",
+            ]
+            .iter()
+            .map(|t| (*t).to_string())
+            .collect(),
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let row = rows.last()?;
+    serde_json::from_str::<Value>(&row.line).ok()
 }
 
 /// One native resolution: path, eligibility evidence, allow/refuse, warning.
@@ -816,6 +1055,84 @@ pub(crate) fn component_lines(report: Option<&Value>, prefix: &str) -> Vec<Strin
         .unwrap_or_default()
 }
 
+/// The 12-char display form of a build rev, shared by the side-by-side
+/// lines. A plain fn, not a closure: elision names the returned lifetime
+/// here, where a closure's inferred type cannot.
+fn short_rev(rev: &str) -> &str {
+    &rev[..rev.len().min(12)]
+}
+
+/// The component name and self-reported build rev of every cargo row whose
+/// probe answered. The python-tool row stays out: its marker carries the
+/// source HEAD the wheel installed from, not the crates/ rev the cargo rows
+/// report, so counting it would read a python-only advance as a mixed build.
+pub(crate) fn component_build_revs(components: Option<&Value>) -> Vec<(String, String)> {
+    let Some(rows) = components
+        .and_then(|c| c.get("components"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter(|c| c.get("component").and_then(Value::as_str) != Some("python-tool"))
+        .filter_map(|c| {
+            Some((
+                c.get("component")?.as_str()?.to_string(),
+                c.get("observed_rev")?.as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// The mixed-build line, or None when no mix is provable: fewer than two
+/// cargo rows answered, or every reported build rev matches. Binary vs
+/// binary only; a row behind the source pin is the stale verdict's finding
+/// (`component_lines`), while two installed builds that disagree with each
+/// other cannot talk straight no matter which rev is current.
+pub(crate) fn mixed_component_line(components: Option<&Value>) -> Option<String> {
+    let revs = component_build_revs(components);
+    let (_, first) = revs.first()?;
+    let (_, other) = revs.iter().find(|(_, rev)| rev != first)?;
+    let at = |rev: &str| -> String {
+        revs.iter()
+            .filter(|(_, r)| r == rev)
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(" and ")
+    };
+    Some(format!(
+        "mixed component builds: {} at {} vs {} at {}",
+        at(first),
+        short_rev(first),
+        at(other),
+        short_rev(other)
+    ))
+}
+
+/// The one side-by-side line for the update modal: every build rev the check
+/// compared, each under its label. None when nothing answered and no pin was
+/// read, so a dark machine adds no empty row.
+pub(crate) fn revisions_summary(
+    build_revs: &[(String, String)],
+    pin: Option<&str>,
+) -> Option<String> {
+    if build_revs.is_empty() && pin.is_none() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !build_revs.is_empty() {
+        let named: Vec<String> = build_revs
+            .iter()
+            .map(|(n, r)| format!("{n} {}", short_rev(r)))
+            .collect();
+        parts.push(format!("build revs: {}", named.join(", ")));
+    }
+    if let Some(pin) = pin {
+        parts.push(format!("crates/ pin {}", short_rev(pin)));
+    }
+    Some(parts.join("; "))
+}
+
 /// Deduped install-location dirs that already host >=1 of the triad bins.
 /// NEVER seeds a new location (locked decision 4). Candidates: the uv tool
 /// venv bin and PATH. The cargo dir may appear via PATH; the caller skips it.
@@ -992,7 +1309,7 @@ fn install_crate_bins(
     true
 }
 
-/// Chain the crate's drift-gated daemon swap; the verb is quiet on fresh or
+/// Chain the crate's drift-gated daemon swap; the command is quiet on fresh or
 /// down. A failed swap keeps its last stderr line for the closing verdict.
 fn chained_restart_if_drifted(binary: &Path, dry_run: bool) {
     let args: Vec<String> = ["restart".into(), "--if-drifted".into()].to_vec();
@@ -1090,7 +1407,7 @@ pub(crate) fn sync_source_checkout(source: &Path, dry_run: bool) -> Result<(), S
 }
 
 /// The closing verdict: does the running daemon run the build on disk? Ok
-/// when it does or when none runs (the next verb runs the build on disk).
+/// when it does or when none runs (the next command runs the build on disk).
 fn daemon_verdict() -> Result<String, String> {
     let bin = fno_agents_bin();
     let rev = run_bounded(
@@ -1134,7 +1451,7 @@ fn daemon_verdict() -> Result<String, String> {
             }
         }
         Ok((13, _, _)) => Ok(format!(
-            "no daemon running; the next fno-agents verb runs the build on disk ({rev})"
+            "no daemon running; the next fno-agents command runs the build on disk ({rev})"
         )),
         Ok((code, _, err)) => Err(format!(
             "the daemon status read exited {code} ({}){restart_failure}",
@@ -1247,7 +1564,18 @@ fn refresh_rust_bins(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let all_fresh = installed_bin.is_some()
+    // Freshness is per-binary; the inventory is per-install. A bin the
+    // source crate defines but this install lacks (a machine whose last
+    // deploy predates the bin, or whose swap list dropped it) is a missing
+    // component, not a fresh install: the deploy path fills it from the
+    // tarball.
+    let mut inventory_missing: Vec<String> = Vec::new();
+    if let (Some(bin), Some(names)) = (installed_bin.as_deref(), crate_bin_names(&crate_dir)) {
+        if let Some(dir) = bin.parent() {
+            inventory_missing = missing_inventory_bins(&names, dir);
+        }
+    }
+    let triad_fresh = installed_bin.is_some()
         && subtree.is_some()
         && triad_names().iter().all(|n| {
             pre_rows
@@ -1260,6 +1588,13 @@ fn refresh_rust_bins(
                 })
                 .unwrap_or(false)
         });
+    if triad_fresh && !inventory_missing.is_empty() {
+        println!(
+            "fno doctor update: the triad is fresh, but the install lacks {} (the source crate defines them); deploying the CI build to fill the inventory",
+            inventory_missing.join(", ")
+        );
+    }
+    let all_fresh = triad_fresh && inventory_missing.is_empty();
     if all_fresh {
         let mux_fresh = pre_rows
             .get("fno")
@@ -1311,6 +1646,7 @@ fn refresh_rust_bins(
         if on_main == Some(true) {
             return install_newest_published_arm(
                 subtree.as_deref(),
+                src_parent,
                 &install_root,
                 &installed_rev,
                 dry_run,
@@ -1614,7 +1950,7 @@ fn await_fno_py(fno_py: &Path, dry_run: bool) -> bool {
     false
 }
 
-/// Best-effort commands chained after a successful install, each verb
+/// Best-effort commands chained after a successful install, each command
 /// self-gating. The plugin-stage restage rides last: live sessions exec
 /// hooks straight from the stage, so a restage IS the deploy; the codex
 /// refresh follows the restage when its channel marker says dev.
@@ -1642,6 +1978,14 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         );
         failed.push("post-install groom agent refresh".into());
     }
+    restage_plugin(resolved, failed);
+}
+
+/// The plugin-stage restage, plus the codex refresh when its channel marker
+/// says dev. The stage holds skills, hooks and scripts, none of them
+/// compiled, so it also rides a Python hold: a skill fix never waits on a
+/// Rust tarball.
+fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
     if let Some(agents_bin) = cargo_installed_bin() {
         let args: Vec<String> = [
             "plugin-install".into(),
@@ -1661,14 +2005,14 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         // forced converge, so the dev-channel marker gates the refresh.
         if codex_channel_is_dev() {
             let args: Vec<String> = [
-                "config".into(),
-                "plugin".into(),
-                "install".into(),
+                "plugin-install".into(),
                 "codex".into(),
                 "--force".into(),
+                "--source".into(),
+                resolved.to_string_lossy().into_owned(),
             ]
             .to_vec();
-            let code = run_inherit(&fno_py, &args);
+            let code = run_inherit(&agents_bin, &args);
             if code != 0 {
                 eprintln!(
                     "fno doctor update: WARNING: post-install codex refresh exited {code}; continuing"
@@ -1788,17 +2132,7 @@ fn has_shipped_pyc(td: &Path) -> bool {
 /// marker reads this run's rev) or is under way, so it JOINS that run and
 /// exits with its result. It never starts a second install.
 fn acquire_update_claim(rev: Option<&str>) -> Result<(), i32> {
-    let holder = format!("fno-update-pid{}", std::process::id());
-    let args: Vec<String> = [
-        "claim".into(),
-        "acquire".into(),
-        UPDATE_CLAIM_KEY.into(),
-        "--holder".into(),
-        holder,
-        "--reason".into(),
-        "machine-global install guard (tool env + cargo bins)".into(),
-    ]
-    .to_vec();
+    let args = update_claim_acquire_args(std::process::id());
     match run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None) {
         Ok((0, _, _)) => Ok(()),
         Ok((1, out, _err)) => {
@@ -1831,6 +2165,29 @@ fn acquire_update_claim(rev: Option<&str>) -> Result<(), i32> {
             Err(1)
         }
     }
+}
+
+/// The acquire argv for the update claim held by process `pid`. The claim's
+/// liveness pid is the update itself, stamped `holder-process`: left unset,
+/// acquire anchors it to the calling harness session, and a killed or
+/// finished update then held the claim for as long as that session lived.
+pub(crate) fn update_claim_acquire_args(pid: u32) -> Vec<String> {
+    [
+        "claim",
+        "acquire",
+        UPDATE_CLAIM_KEY,
+        "--holder",
+        &format!("fno-update-pid{pid}"),
+        "--pid",
+        &pid.to_string(),
+        "--pid-provenance",
+        "holder-process",
+        "--reason",
+        "machine-global install guard (tool env + cargo bins)",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// The pid in an update claim holder (`fno-update-pid<N>`), or None for any
@@ -1907,7 +2264,7 @@ fn release_update_claim() {
     }
 }
 
-/// Run the verb for one argv tail (`doctor update ...` minus the leading
+/// Run the command for one argv tail (`doctor update ...` minus the leading
 /// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let started = Instant::now();
@@ -1927,6 +2284,10 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     }
     if flags.rust && flags.no_rust {
         eprintln!("fno doctor update: --rust and --no-rust are mutually exclusive");
+        return 2;
+    }
+    if flags.published && (flags.no_rust || flags.check) {
+        eprintln!("fno doctor update: --published moves both halves to one rev; it cannot combine with --no-rust or --check");
         return 2;
     }
     if target_in_progress() && !flags.force {
@@ -1957,7 +2318,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         eprintln!("{SOURCE_PIN_UNAVAILABLE}");
         return 1;
     };
-    let resolved = PathBuf::from(path_str);
+    let mut resolved = PathBuf::from(path_str);
     println!("Reinstalling fno from {}", resolved.display());
 
     let mut failed: Vec<String> = Vec::new();
@@ -1965,10 +2326,36 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
 
     if flags.dry_run {
         let _ = sync_source_checkout(&resolved, true);
+        let mut last_green_crates: Option<String> = None;
+        if flags.published {
+            match resolve_last_green(&resolved, flags.published_rev.as_deref()) {
+                Ok(Some((r, crates))) => {
+                    let dir = last_green_source(&resolved);
+                    println!(
+                        "Would check out the last green rev {} (crates {}) at {}",
+                        &r[..r.len().min(12)],
+                        &crates[..crates.len().min(12)],
+                        dir.display()
+                    );
+                    resolved = dir;
+                    last_green_crates = Some(crates);
+                }
+                Ok(None) => {
+                    println!("--published: the source rev is published; a plain update installs it")
+                }
+                Err(why) => {
+                    eprintln!("fno doctor update: --published refused: {why}");
+                    return 1;
+                }
+            }
+        }
         // The rust leg still prints its plan here (a dry run states
         // everything an update would do); it EXECUTES only below, under the
-        // claim. A dry run writes NOTHING.
-        if !flags.no_rust {
+        // claim. A dry run writes NOTHING. The last green checkout does not
+        // exist yet, so its plan is the tarball it would deploy.
+        if let Some(crates) = &last_green_crates {
+            let _ = deploy_prebuilt(crates, &install_dir(), true);
+        } else if !flags.no_rust {
             refresh_rust_bins(&resolved, flags.rust, true, &mut failed);
         }
         if which_uv().is_some() {
@@ -2013,6 +2400,52 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         return 1;
     }
     rev = source_rev(&resolved);
+
+    // --published swaps the source for a detached checkout of the newest rev
+    // CI published, so the rust bins, the wheel, and the plugin stage all
+    // come from that one rev. The pinned source checkout stays as it is.
+    let mut last_green: Option<String> = None;
+    if flags.published {
+        let pin = flags.published_rev.as_deref();
+        let staged = resolve_last_green(&resolved, pin).and_then(|found| match found {
+            None => Ok(None),
+            Some((r, crates)) => stage_last_green(&resolved, &r).map(|dir| Some((r, crates, dir))),
+        });
+        match staged {
+            Ok(None) => println!(
+                "fno doctor update: --published: the source already sits on a published rev; installing it as usual"
+            ),
+            Ok(Some((r, crates, dir))) => {
+                let why = if pin.is_some() {
+                    "the pinned published build"
+                } else {
+                    "the source tip has no published build yet"
+                };
+                println!(
+                    "fno doctor update: --published: installing rev {} (crates {}) from {}; {why}",
+                    &r[..r.len().min(12)],
+                    &crates[..crates.len().min(12)],
+                    dir.display()
+                );
+                if let Some(installed) = read_marker(&installed_rev_file()) {
+                    if installed != r && published_is_older(&dir, &r, &installed) == Some(true) {
+                        println!(
+                            "fno doctor update: --published: moved back from the installed rev {}",
+                            &installed[..installed.len().min(12)]
+                        );
+                    }
+                }
+                resolved = dir;
+                rev = Some(r.clone());
+                last_green = Some(r);
+            }
+            Err(why) => {
+                release_update_claim();
+                eprintln!("fno doctor update: --published refused: {why}");
+                return 1;
+            }
+        }
+    }
 
     // The lifecycle journal opens here, matching the deleted Python leg:
     // started after the claim, built on the rust leg's own verdict,
@@ -2070,12 +2503,17 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
 
     // Python never moves ahead of the rust bins it talks to: a new wheel
     // sends wire kinds an old fno-agents does not know, and every spawn
-    // fails until CI publishes. The wheel and the plugin restage wait for
-    // the update that installs both halves together.
+    // fails until CI publishes. The wheel waits for the update that installs
+    // both halves together; the plugin stage restages regardless.
     let held = python_hold_line(rust_outcome.as_deref());
+    let planned_hold = held.is_some() && hold_is_planned(rust_outcome.as_deref());
     if let Some(line) = &held {
-        eprintln!("fno doctor update: {line}");
-        failed.push("python held behind rust".into());
+        if planned_hold {
+            println!("fno doctor update: note: {line}");
+        } else {
+            eprintln!("fno doctor update: {line}");
+            failed.push("python held behind rust".into());
+        }
     }
 
     let cmd: Vec<String> = if held.is_some() {
@@ -2159,6 +2597,8 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         post_install_steps(&resolved, &mut failed);
     } else if held.is_none() {
         failed.push("uv install".into());
+    } else {
+        restage_plugin(&resolved, &mut failed);
     }
 
     release_update_claim();
@@ -2166,7 +2606,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let verdict = daemon_verdict();
 
     // The journal records the install; the daemon verdict only sets the exit.
-    let code = if failed.is_empty() {
+    let code = if failed.is_empty() && held.is_none() {
         let installed_fields: Vec<(&str, String)> = {
             let mut f: Vec<(&str, String)> = Vec::new();
             if let Some(r) = &rev {
@@ -2183,12 +2623,27 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         journal_call("installed", &installed_fields, front_door.as_deref());
         0
     } else {
-        let mut fields: Vec<(&str, String)> = vec![("rc", "1".to_string())];
+        // A planned hold with no failed step exits 0; the row still names
+        // the hold, so the journal never reads the wheel as installed.
+        let rc = if failed.is_empty() && planned_hold {
+            0
+        } else {
+            1
+        };
+        let mut fields: Vec<(&str, String)> = vec![("rc", rc.to_string())];
+        if let Some(r) = &rev {
+            fields.push(("new_rev", r.clone()));
+        }
         if let Some(line) = &held {
             fields.push(("reason", line.clone()));
         }
-        journal_call("failed", &fields, None);
-        1
+        // A hold leaves the install skewed: the door pages it once per rev.
+        let front_door = std::env::current_exe()
+            .ok()
+            .filter(|_| held.is_some())
+            .map(|p| p.to_string_lossy().into_owned());
+        journal_call("failed", &fields, front_door.as_deref());
+        rc
     };
     // An update finishes in 60 seconds (user order 2026-10-09). One that runs
     // longer still installs, but exits 1 and names its time, so a slow path
@@ -2199,7 +2654,18 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     }
     // One summary line, always last: the daemon verdict, then any failed step.
     match &verdict {
-        Ok(line) if failed.is_empty() => println!("fno update: done; {line}."),
+        Ok(line) if failed.is_empty() => {
+            match &last_green {
+                Some(r) => println!(
+                    "fno update: done; last green rev {}; {line}.",
+                    &r[..r.len().min(12)]
+                ),
+                None if planned_hold => {
+                    println!("fno update: done; rust on the newest published build, python held; {line}.")
+                }
+                None => println!("fno update: done; {line}."),
+            }
+        }
         Err(line) if failed.is_empty() => eprintln!("fno update: FAILED: installed, but {line}."),
         Ok(line) | Err(line) => {
             eprintln!("fno update: FAILED step(s): {}; {line}.", failed.join(", "))
@@ -2350,7 +2816,7 @@ fn source_prs_ahead(installed_rev: &str, source: &Path) -> Option<u64> {
 }
 
 /// Release notes for the update modal, built by the native leg through the
-/// verb seam: one line per merged PR between `installed_rev` and source
+/// command seam: one line per merged PR between `installed_rev` and source
 /// HEAD. None on any failure; the payload never blocks on it.
 fn release_notes_payload(installed_rev: &str, source: &Path) -> Option<Value> {
     let body = serde_json::json!({
@@ -2654,6 +3120,31 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
         .unwrap_or(Value::Null),
         _ => Value::Null,
     };
+    let build_revs = component_build_revs(Some(&components));
+    let mixed_line = mixed_component_line(Some(&components));
+    let summary = revisions_summary(&build_revs, subtree.as_deref());
+    let observed: serde_json::Map<String, Value> = build_revs
+        .into_iter()
+        .map(|(name, rev)| (name, Value::String(rev)))
+        .collect();
+    let revisions = serde_json::json!({
+        // Every rev this check compared, named side by side: each installed
+        // cargo binary's self-reported build rev, the installed-rev marker,
+        // the crates/ rev the verdict pins on, and the source checkout's
+        // HEAD. `mixed` is null when the verdict could not answer at all, so
+        // a dark probe never reads as a clean bill.
+        "observed": observed,
+        "installed_rev": installed_rev,
+        "rust_subtree_rev": subtree,
+        "source_rev": src_rev,
+        "mixed": if components.is_null() {
+            Value::Null
+        } else {
+            serde_json::json!(mixed_line.is_some())
+        },
+        "mixed_detail": mixed_line,
+        "summary": summary,
+    });
     let probes = serde_json::json!({
         "installed_rev": installed_rev,
         "rust_subtree_rev": subtree,
@@ -2685,6 +3176,7 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
             "source": source_wire,
             "bump": wire_bump,
         },
+        "revisions": revisions,
         "shells": if shells_known { serde_json::json!(shells) } else { Value::Null },
         "shells_ended": if shells_known { serde_json::json!(shells_ended) } else { Value::Null },
         "sessions": if shells_known { serde_json::json!(sessions) } else { Value::Null },

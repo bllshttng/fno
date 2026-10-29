@@ -1,12 +1,12 @@
 //! How a resume wake delivers, and when its receipt may say live.
 //!
-//! Split out of `client_verbs.rs` : that file is over the 5,000-line
+//! Split out of `client_commands.rs` : that file is over the 5,000-line
 //! budget and shrink-only, and the wake-delivery + respawn-confirm question
 //! outgrew living beside the argv parsers. Callers keep thin call sites in
-//! `client_verbs.rs`; the delivery and confirmation logic lives here.
+//! `client_commands.rs`; the delivery and confirmation logic lives here.
 
 use crate::claude_ask::{read_state_json, ClaudeHome};
-use crate::client_verbs::{append_agents_event, trace_events_path};
+use crate::client_commands::{append_agents_event, trace_events_path};
 use crate::daemon::PaneProbe;
 use crate::paths::AgentsHome;
 use crate::state;
@@ -453,7 +453,7 @@ fn finish_on_the_thread_lane(
 
 /// Run a respawn plan as a child and confirm it actually revived the row.
 ///
-/// `claude respawn` exits as soon as the job is relaunched, so this verb must
+/// `claude respawn` exits as soon as the job is relaunched, so this command must
 /// NOT exec it (the exec convention the other arms use): the operator's shell
 /// would come back with nothing to show. And exit 0 is not proof - the
 /// receipt-can-lie shape `fno agents rm` already shipped once. The
@@ -477,14 +477,14 @@ fn copy_short_from_notice(text: &str) -> Option<String> {
 pub(crate) fn run_and_confirm_respawn(
     plan: &crate::reentry::ReentryPlan,
     name: &str,
-    verb: &str,
+    command: &str,
     event_kind: &str,
     home: &AgentsHome,
 ) -> i32 {
     run_and_confirm_respawn_with_truth(
         plan,
         name,
-        verb,
+        command,
         event_kind,
         home,
         ClaudeHome::from_env(),
@@ -547,11 +547,7 @@ where
     let Some(message) = message else {
         return respawn(plan, name);
     };
-    // Resolve and refuse BEFORE the respawn: a senderless message must not
-    // relaunch a session it can never wrap for.
-    let Some(sender) = resume_sender_name(home, from_name) else {
-        return refuse_senderless_message();
-    };
+    let sender = resume_sender_name(home, from_name);
     let code = respawn(plan, name);
     if code != 0 {
         return code;
@@ -596,7 +592,7 @@ where
 pub(crate) fn run_and_confirm_respawn_with_truth<F, S>(
     plan: &crate::reentry::ReentryPlan,
     name: &str,
-    verb: &str,
+    command_name: &str,
     event_kind: &str,
     home: &AgentsHome,
     claude_home: ClaudeHome,
@@ -637,20 +633,24 @@ where
         command.env(key, value);
     }
     // This relaunch can lazily birth the claude supervisor; make sure a clean
-    // one is up first. The client command is never touched, so the
+    // one is up first. The client drops only its route keys, so the
     // identity stamp above stays the only carrier of the fno name.
+    crate::claude_supervisor::strip_route_carriers(&mut command);
     crate::claude_supervisor::guard_birth_for_plan(&plan.env);
     if bg_resume {
         let out = match command.output() {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("fno agents {verb}: failed to run {}: {e}", plan.argv[0]);
+                eprintln!(
+                    "fno agents {command_name}: failed to run {}: {e}",
+                    plan.argv[0]
+                );
                 return 1;
             }
         };
         if !out.status.success() {
             eprintln!(
-                "fno agents {verb}: {} for {name} exited {}",
+                "fno agents {command_name}: {} for {name} exited {}",
                 plan.argv.join(" "),
                 out.status
                     .code()
@@ -682,7 +682,7 @@ where
                 let _ = stop.status();
             }
             eprintln!(
-                "fno agents {verb}: refused: session {} is already running, so the \
+                "fno agents {command_name}: refused: session {} is already running, so the \
                  relaunch started a COPY instead of continuing it and the copy was \
                  stopped. Reach the live original with `fno agents attach {name}`.",
                 plan.session_id
@@ -693,13 +693,16 @@ where
         let status = match command.status() {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("fno agents {verb}: failed to run {}: {e}", plan.argv[0]);
+                eprintln!(
+                    "fno agents {command_name}: failed to run {}: {e}",
+                    plan.argv[0]
+                );
                 return 1;
             }
         };
         if !status.success() {
             eprintln!(
-                "fno agents {verb}: {} for {name} exited {}",
+                "fno agents {command_name}: {} for {name} exited {}",
                 plan.argv.join(" "),
                 status
                     .code()
@@ -724,7 +727,7 @@ where
     };
     if !confirmed {
         eprintln!(
-            "fno agents {verb}: respawn for {name} reported success but {} did not \
+            "fno agents {command_name}: respawn for {name} reported success but {} did not \
              advance; the row is NOT confirmed back in agent view. Check \
              `claude agents` before retrying.",
             jobs_dir.join("state.json").display()
@@ -779,7 +782,7 @@ where
     }
     if !live {
         eprintln!(
-            "fno agents {verb}: respawned {name}, but truth reads \
+            "fno agents {command_name}: respawned {name}, but truth reads \
              {last_state}; not confirmed live."
         );
         return 16;
@@ -806,14 +809,14 @@ where
         Ok(true) => {}
         Ok(false) => {
             eprintln!(
-                "fno agents {verb}: {name} is live, but no registry row carries \
+                "fno agents {command_name}: {name} is live, but no registry row carries \
                  session {}; the row was removed while the relaunch ran.",
                 plan.session_id
             );
             return 16;
         }
         Err(e) => {
-            eprintln!("fno agents {verb}: registry flip failed: {e}");
+            eprintln!("fno agents {command_name}: registry flip failed: {e}");
             return 16;
         }
     }
@@ -873,6 +876,7 @@ fn relaunch_command(plan: &crate::reentry::ReentryPlan) -> std::process::Command
     for (key, value) in &plan.env {
         command.env(key, value);
     }
+    crate::claude_supervisor::strip_route_carriers(&mut command);
     command
 }
 
@@ -923,26 +927,16 @@ fn parked_roster_state(short_id: &str) -> Option<String> {
 
 /// The sender name a resume delivery carries: a caller-passed `--from-name`
 /// wins; otherwise the caller's own session id's first 8 characters;
-/// otherwise `None` - a daemon-spawned resume with no session identity and
-/// no `--from-name` has nothing to wrap a message under.
-fn resume_sender_name(home: &AgentsHome, from_name: Option<&str>) -> Option<String> {
-    if let Some(name) = from_name.filter(|n| !n.is_empty()) {
-        return Some(name.to_string());
-    }
-    let get = |k: &str| std::env::var(k).ok();
-    crate::spawn_context::resolve_self_identity(&get, None, None, home)
-        .session_id
-        .map(|id| id.chars().take(8).collect())
-}
-
-/// Refuse a message with no resolvable sender before any respawn, claim or
-/// injection (R13's remedy, carried to every container route).
-fn refuse_senderless_message() -> i32 {
-    eprintln!(
-        "fno agents resume: a message needs a sender: pass --from-name fno/<arm>, \
-         or resume from a session"
-    );
-    2
+/// otherwise `unknown`, with the remedy on stderr. A daemon-spawned resume
+/// with no session identity still delivers, under a name that claims no
+/// authority.
+fn resume_sender_name(home: &AgentsHome, from_name: Option<&str>) -> String {
+    crate::system_sender::stamp_or_unknown(from_name, || {
+        let get = |k: &str| std::env::var(k).ok();
+        crate::spawn_context::resolve_self_identity(&get, None, None, home)
+            .session_id
+            .map(|id| id.chars().take(8).collect())
+    })
 }
 
 /// Bring a parked session whose daemon worker is gone back up, then wait for
@@ -1044,7 +1038,7 @@ pub(crate) fn parked_claude_route(
     // Mirror `_with`'s own applicability gate (harness, a real message, a
     // claude short id and a UUID-shaped session) before resolving a sender:
     // a row this route would not take anyway must read None ("not this
-    // arm"), never a senderless-message refusal.
+    // arm").
     if harness != "claude" || message.is_none() {
         return None;
     }
@@ -1070,10 +1064,7 @@ pub(crate) fn parked_claude_route(
     if !matches!(state.as_str(), "blocked" | "done" | "stopped" | "failed") {
         return None;
     }
-    let from = match resume_sender_name(home, from_name) {
-        Some(sender) => sender,
-        None => return Some(refuse_senderless_message()),
-    };
+    let from = resume_sender_name(home, from_name);
     parked_claude_route_with(
         harness,
         entry,
@@ -1090,7 +1081,7 @@ pub(crate) fn parked_claude_route(
                 home,
                 name,
                 row_name,
-                crate::client_verbs::resume_session_id(entry, harness),
+                crate::client_commands::resume_session_id(entry, harness),
                 short,
                 uuid,
                 cwd,
@@ -1171,7 +1162,6 @@ pub(crate) fn claude_live_route(
     message_already_queued: bool,
     from_name: Option<&str>,
     reentry_plan: Option<&crate::reentry::ReentryPlan>,
-    cross_project: bool,
     home: &AgentsHome,
 ) -> i32 {
     claude_live_route_with(
@@ -1183,7 +1173,6 @@ pub(crate) fn claude_live_route(
         message_already_queued,
         from_name,
         reentry_plan,
-        cross_project,
         home,
         None,
         crate::claude_roster::read_all_agents_in,
@@ -1215,7 +1204,6 @@ fn claude_live_route_with<F, I, M>(
     message_already_queued: bool,
     from_name: Option<&str>,
     reentry_plan: Option<&crate::reentry::ReentryPlan>,
-    _cross_project: bool,
     home: &AgentsHome,
     claims_root: Option<&Path>,
     read_roster: F,
@@ -1236,7 +1224,7 @@ where
         .get("claude_session_uuid")
         .and_then(Value::as_str)
         .filter(|value| is_uuid_shaped(value))
-        .unwrap_or_else(|| crate::client_verbs::resume_session_id(entry, "claude"));
+        .unwrap_or_else(|| crate::client_commands::resume_session_id(entry, "claude"));
     if !is_uuid_shaped(session_uuid) {
         eprintln!("fno agents resume: no valid claude session id for {name} ({short_id})");
         return 16;
@@ -1351,19 +1339,7 @@ where
     }
 
     let text = message.unwrap_or(RESUME_WAKE_MESSAGE);
-    // Only a REAL message needs a resolvable sender: a bare resume with no
-    // --message still carries the generic wake text, and refusing that one
-    // for want of a sender would break a plain `resume NAME` from a caller
-    // with no session identity, which worked before this fix and reports
-    // nothing to a mail envelope that could ever refuse it.
-    let sender = if message.is_some() {
-        match resume_sender_name(home, from_name) {
-            Some(sender) => sender,
-            None => return refuse_senderless_message(),
-        }
-    } else {
-        resume_sender_name(home, from_name).unwrap_or_else(|| "fno".to_string())
-    };
+    let sender = resume_sender_name(home, from_name);
     let wrapped = match crate::claude_ask::build_cross_session_container(text, &sender) {
         Ok(wrapped) => wrapped,
         Err(reason) => {
@@ -1512,10 +1488,12 @@ fn relaunch_name(claude_home: &ClaudeHome, row_name: &str, short_id: &str, uuid:
 }
 
 /// The exited-row relaunch: a full, warning-free roster that lacks
-/// the row is affirmative death no process answered, and the recovery the old
-/// refusal printed is one command. Run it as a child and let the spawn
-/// receipt answer; refuse only when no transcript exists to seed from. A
-/// wake message seeds the fork as its opening prompt.
+/// the row is affirmative death no process answered, and the recovery is one
+/// command, claude's own `--bg --resume` (the spawn command's resume axis is
+/// retired). Run it as a child in the session's cwd, which keys the
+/// transcript, and let its exit answer; the resumed session adopts its own
+/// fleet row at SessionStart. Refuse only when no transcript exists to seed
+/// from. A wake message seeds the fork as its opening prompt.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn relaunch_exited_claude(
     home: &AgentsHome,
@@ -1562,6 +1540,14 @@ pub(crate) fn relaunch_exited_claude_with(
             );
         }
     };
+    // A stale pid proves nothing: `--bg --resume` on a held session copies it.
+    if claude_home.session_held(&uuid) {
+        eprintln!(
+            "fno agents resume: a live claude process still holds {uuid}, so a relaunch \
+             would start a copy of it; attach it with `claude attach {short_id}` or stop it first"
+        );
+        return crate::reentry::REENTRY_REFUSED_EXIT;
+    }
     let spawn_name = relaunch_name(claude_home, row_name, short_id, &uuid);
     // A down-route launch refuses when another holder took the node or PR:
     // the same gate the dead arm runs before its relaunch.
@@ -1573,28 +1559,19 @@ pub(crate) fn relaunch_exited_claude_with(
          the transcript on a thread",
         short = short_id
     );
-    let mut command = std::process::Command::new(crate::scrape::fno_bin());
-    command.args([
-        "agents",
-        "spawn",
-        "--name",
-        &spawn_name,
-        "--resume",
-        &uuid,
-        "--cwd",
-        cwd,
-        "--substrate",
-        "thread",
-        "-H",
-        "claude",
-    ]);
+    let mut command = std::process::Command::new("claude");
+    command.args(["--bg", "--name", &spawn_name, "--resume", &uuid]);
+    if !cwd.is_empty() {
+        command.current_dir(cwd);
+    }
+    crate::claims::stamp_command_env(&mut command, Some(&spawn_name), "claude", Some(&uuid));
     if let Some(message) = message {
         command.arg(message);
     }
     match command.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents resume: relaunch failed to run fno: {e}");
+            eprintln!("fno agents resume: relaunch failed to run claude: {e}");
             1
         }
     }
@@ -1610,13 +1587,13 @@ fn live_claude_missing_row(
     cwd: &str,
     cause: &str,
 ) -> i32 {
-    let cwd_arg = if cwd.is_empty() {
+    let cd = if cwd.is_empty() {
         String::new()
     } else {
-        format!(" --cwd {cwd}")
+        format!("cd {cwd} && ")
     };
     eprintln!(
-        "fno agents resume: {name} ({short_id}) has no live process, and fno could not relaunch it by itself: {cause}.\nRelaunch it by hand: fno agents spawn --name {name} -H claude --resume {session_id}{cwd_arg}"
+        "fno agents resume: {name} ({short_id}) has no live process, and fno could not relaunch it by itself: {cause}.\nRelaunch it by hand: {cd}claude --bg --name {name} --resume {session_id}"
     );
     16
 }
@@ -2453,7 +2430,7 @@ mod tests {
         // resolves a sender. A row the real ambient `claude agents --json
         // --all` does not list (the case in this sandboxed test run, same
         // as `_with`'s own `roster_state(short_id)?`) is not this route's
-        // to refuse: it must read None, never a senderless-message exit 2.
+        // to take: it must read None.
         let _guard = crate::path_test_guard();
         let home = AgentsHome::at(std::env::temp_dir().join("fno-parked-senderless"));
         let code = parked_claude_route(
@@ -2653,7 +2630,6 @@ mod tests {
             message_already_queued,
             from_name,
             plan,
-            false,
             home,
             Some(claims_root),
             |config_dir| {
@@ -2684,7 +2660,7 @@ mod tests {
     }
 
     #[test]
-    fn ac4_edge_live_claude_idle_row_with_no_sender_refuses_before_delivery() {
+    fn a_live_claude_idle_row_with_no_sender_delivers_never_as_fno() {
         let _guard = crate::path_test_guard();
         let (_temp, home) = parked_home("live-claude-senderless");
         let claims = tempfile::tempdir().unwrap();
@@ -2709,8 +2685,13 @@ mod tests {
             None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
         }
 
-        assert_eq!(code, 2);
-        assert!(deliveries.borrow().is_empty());
+        // No --from-name and, in a sandboxed run, no session identity: the
+        // message still lands, under `unknown` rather than a bare `fno`.
+        assert_eq!(code, 0);
+        assert_eq!(deliveries.borrow().len(), 1);
+        let (_, wrapped, _, _) = &deliveries.borrow()[0];
+        assert!(wrapped.contains("hello"), "{wrapped}");
+        assert!(!wrapped.contains("from-name=\"fno\""), "{wrapped}");
     }
 
     #[test]
@@ -2957,13 +2938,16 @@ mod tests {
     fn an_absent_full_roster_row_relaunches_the_transcript() {
         // The node's shape: the fno truth view says live, the claude roster
         // answers without the row. The relaunch the refusal used to print must
-        // RUN: spawn --resume <uuid> --cwd <cwd> --substrate thread, the wake
-        // message seeded when one was typed, its exit code returned.
+        // RUN: claude --bg --name <name> --resume <uuid> in the session's cwd,
+        // the wake message seeded when one was typed, its exit code returned.
         let _guard = crate::path_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let claude_home = crate::claude_ask::ClaudeHome::at(temp.path().join("clhome"));
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let slug = crate::claude_ask::claude_cwd_slug(std::path::Path::new("/tmp/wt"));
+        let wt = temp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let wt_str = wt.to_str().unwrap();
+        let slug = crate::claude_ask::claude_cwd_slug(&wt);
         let transcript = claude_home.project_dirs()[0]
             .join(&slug)
             .join(format!("{uuid}.jsonl"));
@@ -2975,11 +2959,26 @@ mod tests {
         let launch_log = temp.path().join("launch.log");
         crate::write_exec_stub(
             &bin,
-            "fno-stub",
-            &format!("#!/bin/sh\necho \"$*\" >> '{}'\n", launch_log.display()),
+            "claude",
+            &format!(
+                "#!/bin/sh\necho \"$(pwd) $*\" >> '{}'\n",
+                launch_log.display()
+            ),
         );
-        let old_bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_BIN", bin.join("fno-stub"));
+        let old_path = std::env::var_os("PATH");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            old_path
+                .as_deref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        );
+        std::env::set_var("PATH", &path);
+        let restore = |old: &Option<std::ffi::OsString>| match old {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        };
 
         let home = AgentsHome::at(temp.path().join("agents-home"));
         let code = relaunch_exited_claude_with(
@@ -2988,22 +2987,23 @@ mod tests {
             "w1",
             "0a1b2c3d",
             uuid,
-            "/tmp/wt",
+            wt_str,
             Some("continue the work"),
             &claude_home,
         );
-        match &old_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
+        restore(&old_path);
         assert_eq!(code, 0, "the stub exits 0 and its code is the receipt");
         let launch = std::fs::read_to_string(&launch_log).unwrap();
         assert!(
-            launch.contains("agents spawn --name w1 --resume 0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"),
+            launch.contains("--bg --name w1 --resume 0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"),
             "{launch}"
         );
-        assert!(launch.contains("--cwd /tmp/wt"), "{launch}");
-        assert!(launch.contains("--substrate thread -H claude"), "{launch}");
+        let wt_real = std::fs::canonicalize(&wt).unwrap();
+        assert!(
+            launch.starts_with(wt_str) || launch.starts_with(wt_real.to_str().unwrap()),
+            "the relaunch runs in the session's cwd: {launch}"
+        );
+        assert!(!launch.contains("--substrate"), "{launch}");
         assert!(launch.contains("continue the work"), "{launch}");
 
         // An adopted row is named by its short id; the relaunch takes the
@@ -3014,25 +3014,22 @@ mod tests {
         )
         .unwrap();
         std::fs::write(&launch_log, "").unwrap();
-        std::env::set_var("FNO_BIN", bin.join("fno-stub"));
+        std::env::set_var("PATH", &path);
         let code = relaunch_exited_claude_with(
             &home,
             "0a1b2c3d",
             "0a1b2c3d",
             "0a1b2c3d",
             uuid,
-            "/tmp/wt",
+            wt_str,
             None,
             &claude_home,
         );
-        match &old_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
+        restore(&old_path);
         assert_eq!(code, 0);
         let launch = std::fs::read_to_string(&launch_log).unwrap();
         assert!(
-            launch.contains("agents spawn --name mods-think --resume"),
+            launch.contains("--bg --name mods-think --resume"),
             "{launch}"
         );
 
@@ -3045,7 +3042,7 @@ mod tests {
             "w1",
             "0a1b2c3d",
             uuid,
-            "/tmp/wt",
+            wt_str,
             None,
             &claude_home,
         );

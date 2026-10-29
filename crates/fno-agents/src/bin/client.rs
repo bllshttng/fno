@@ -1,4 +1,4 @@
-//! `fno-agents` client entrypoint. Parses a verb + flags into a JSON-RPC
+//! `fno-agents` client entrypoint. Parses a command + flags into a JSON-RPC
 //! request, lazy-starts the daemon, forwards the request, prints the result,
 //! and maps the daemon's error code to a process exit code. Power users can
 //! call it directly.
@@ -9,15 +9,22 @@ use fno_agents::client::resolve_daemon_bin;
 use fno_agents::client::{
     call, call_if_running, check_daemon_drift, drift_from_status, ClientError,
 };
-use fno_agents::client_render::{render_checked, truncate_cell, LAST_MESSAGE_WIDTH};
 use fno_agents::drift::{drift_warning, DriftState};
 use fno_agents::paths::AgentsHome;
 use fno_agents::protocol::{ErrorCode, Request, ResponsePayload};
 use fno_agents::provider::{known_providers_csv, KNOWN_PROVIDERS};
-use fno_agents::spawn_gate::machine_reading_notes;
-use fno_agents::usage::{verb_help, verb_usage, CLIENT_VERB_USAGE};
+use fno_agents::usage::{command_help, command_usage, CLIENT_COMMAND_USAGE};
 use serde_json::{json, Map, Value};
 use std::io::IsTerminal;
+
+// The client-side `ask` provider hooks live beside the entrypoint for the
+// file budget; `use` keeps every call site below unchanged.
+#[path = "asks/client_asks.rs"]
+mod client_asks;
+use client_asks::{
+    maybe_run_agy_ask, maybe_run_claude_ask, maybe_run_codex_ask, maybe_run_gemini_ask,
+    maybe_run_opencode_ask, opt_timeout,
+};
 
 // Registered spellings are frozen at the pre-rename set (the shrink gate
 // allows no added token); the lead-/org- spellings dispatch below as
@@ -131,8 +138,18 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // First, so a proxied gh call pays no other arm; transport-only.
+    if let Some(code) = fno_agents::pr_status::adapter::gh_transport_door(&args) {
+        std::process::exit(code);
+    }
     if args.first().map(String::as_str) == Some("backlog") {
         std::process::exit(fno_agents::backlog::cli::run(&args[1..]));
+    }
+    // The ported target-family doors dispatch through family_doors: hidden
+    // daemon-free leaves in the graph-get mold, never registered
+    // ALL_CLIENT_ACTIONS tokens (the shrink law allows no added token).
+    if let Some(code) = fno_agents::family_doors::client_dispatch(&args) {
+        std::process::exit(code);
     }
     if args.first().map(String::as_str) == Some("question-intake") {
         std::process::exit(fno_agents::question_intake::run_question_intake());
@@ -151,16 +168,18 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
+    // executor-route: the parser door; body in executor_route.rs (registers no command).
+    if args.first().map(String::as_str) == Some("executor-route") {
+        std::process::exit(fno_agents::executor_route::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("wave") {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }
-    // cli/src/fno/pr/_sync_canonical.py transports HERE through verb_call:
-    // the post-merge canonical sync + its catch-up sweep and staleness
-    // alarm, native. Registers no verb (the shrink law allows no new
-    // action); the transport reaches it through resolve_binary like the
-    // other early arms.
+    // cli/src/fno/pr/_sync_canonical.py transports HERE through command_call:
+    // the post-merge sync + its catch-up sweep and staleness alarm, native.
+    // Registers no command (the shrink law allows no new action).
     if args.first().map(String::as_str) == Some("sync-canonical") {
-        std::process::exit(fno_agents::sync_canonical::run_sync_canonical_verb(
+        std::process::exit(fno_agents::sync_canonical::run_sync_canonical_command(
             &args[1..],
         ));
     }
@@ -168,21 +187,29 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr-worktree") {
         std::process::exit(fno_agents::pr_worktree::run());
     }
-    // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
-    // base-lineage reach it through verb_call; transport-only.
-    if args.first().map(String::as_str) == Some("gh-cache") {
-        std::process::exit(fno_agents::gh_cache::run());
+    if args.first().map(String::as_str) == Some("do")
+        && args.get(1).map(String::as_str) == Some("pr")
+    {
+        std::process::exit(fno_agents::pr_front::run(&args[2..]));
     }
-    // `launch-workdir`: the spawn door's launch-cwd resolution (see
-    // launch_workdir.rs doc). Transport-only: registers no client action; Python's
-    // ensure_launch_workdir reaches it through verb_call, and a `hold`
-    // answer is a valid exit-0 answer the caller renders.
-    if args.first().map(String::as_str) == Some("launch-workdir") {
-        std::process::exit(fno_agents::launch_workdir::run_launch_workdir(&args[1..]));
+    if args.first().map(String::as_str) == Some("pr") {
+        std::process::exit(fno_agents::pr_front::run(&args[1..]));
     }
-    // `worktree-reapable`: the worktree-removal gate; callers: worktree_gate.py, worktree-reapable.sh.
-    if args.first().map(String::as_str) == Some("worktree-reapable") {
-        std::process::exit(fno_agents::worktree_reapable::run_client(&args[1..]));
+    if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
+        std::process::exit(fno_agents::ci_front::run(&args[2..]));
+    }
+    // gh-cache, target-status: the early transport arms; client_transport.rs
+    // holds their bodies and comments. worktree-reapable and launch-workdir
+    // stay here: their own ports own the moves into their modules.
+    if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
+        std::process::exit(code);
+    }
+    // One dispatch site per family; the op tables live in the modules.
+    if let Some(code) = fno_agents::worktree::client_dispatch(&args) {
+        std::process::exit(code);
+    }
+    if let Some(code) = fno_agents::launch_workdir::client_dispatch(&args) {
+        std::process::exit(code);
     }
     // `harness-probe` / `harness-matrix` / `harness-beat`: capability reads, transport-only.
     if matches!(
@@ -221,6 +248,20 @@ fn main() {
     if args.first().map(String::as_str) == Some("mail-hold") {
         std::process::exit(fno_agents::mail_hold::run_mail_hold(&args[1..]));
     }
+    // The resume receipt's argv door: transport-only, like mail-hold. The
+    // forwarding leaf (cli/src/fno/resume_receipt_cli.py) shells the do
+    // command here with the same options; the menu counter never sees
+    // transport arms.
+    if args.first().map(String::as_str) == Some("resume-receipt") {
+        std::process::exit(fno_agents::resume_receipt::run(&args[1..]));
+    }
+    // `delivery-evaluate`: the native evaluator behind the `fno delivery
+    // evaluate` forward leaf; transport-only (no client action - the shrink
+    // law allows none), answers in microseconds, so it dispatches before the
+    // runtime builds, with the other early arms.
+    if args.first().map(String::as_str) == Some("delivery-evaluate") {
+        std::process::exit(fno_agents::delivery_eval::run(&args[1..]));
+    }
     // `mail-notify-self`: transport-only; the inject-mail-notify hook is the caller; early arm, answers in microseconds.
     if args.first().map(String::as_str) == Some("mail-notify-self") {
         std::process::exit(fno_agents::mail_notify_self::run(&args[1..]));
@@ -245,6 +286,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals-arm") {
         std::process::exit(fno_agents::evals_arm::run_evals_arm(&args[1..]));
     }
+    // `evals`: the leaf's family dispatch; the shrink law bars a new `run` arm (contract in evals.rs).
+    if args.first().map(String::as_str) == Some("evals") {
+        std::process::exit(fno_agents::evals::run(&args[1..]));
+    }
     // `evals-trend` and `corrections-verify`: transport-only folds (the
     // shrink law allows no new `run` arm); their module docs carry the
     // contract, autocorrect-pack.sh embeds the verify one.
@@ -261,30 +306,29 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals-attempt") {
         std::process::exit(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
     }
-    // `pr-park` and `pr-watch`: the two verb families behind `fno do pr
+    // `scoreboard`: the telemetry family's transport door, dispatched here
+    // like evals-trend because the shrink law bars a new `run` arm. The
+    // front door (`fno whoami scoreboard`) execs here; the parity goldens
+    // replay the same spelling.
+    if args.first().map(String::as_str) == Some("scoreboard") {
+        std::process::exit(fno_agents::scoreboard::run_scoreboard(&args[1..]));
+    }
+    // `pr-park` and `pr-watch`: the two command families behind `fno do pr
     // watch`; both dispatch here like evals-arm because the shrink law bars
-    // a new `run` arm. Their module docs carry the per-verb contract.
+    // a new `run` arm. Their module docs carry the per-command contract.
     if args.first().map(String::as_str) == Some("pr-park") {
         std::process::exit(fno_agents::pr_park::run(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("pr-watch") {
         std::process::exit(fno_agents::pr_watch::run(&args[1..]));
     }
+    // A spawn is admitted in process (spawn_seam) before run() parses it.
+    let args = match fno_agents::spawn_seam::admit_spawn(args) {
+        Ok(args) => args,
+        Err(code) => std::process::exit(code),
+    };
     let code = rt.block_on(run(args));
     std::process::exit(code);
-}
-
-/// Per-column widths in chars, not bytes: the `{:<width$}` pad counts chars,
-/// so a byte width on non-ASCII text (a CJK cwd, an emoji message) pads past
-/// the intended column and shoves the rest of the row wide.
-fn display_widths<const N: usize>(headers: [&str; N], display: &[[String; N]]) -> [usize; N] {
-    let mut widths = headers.map(str::len);
-    for row in display {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.chars().count());
-        }
-    }
-    widths
 }
 
 async fn run(args: Vec<String>) -> i32 {
@@ -292,8 +336,8 @@ async fn run(args: Vec<String>) -> i32 {
         print_help();
         return 0;
     }
-    let verb = args[0].as_str();
-    if matches!(verb, "-h" | "--help" | "help") {
+    let command = args[0].as_str();
+    if matches!(command, "-h" | "--help" | "help") {
         print_help();
         return 0;
     }
@@ -302,20 +346,20 @@ async fn run(args: Vec<String>) -> i32 {
     // from -- the prerequisite for Rust-side `fno doctor` staleness. `--json`
     // emits the machine surface `fno doctor` reads off the resolved binary path.
     // Side-effect-free, like `--emit-schema`/`help`: it never starts the daemon
-    // and is NOT a routable daemon verb, so it stays out of CLIENT_VERB_USAGE /
-    // RUST_CLIENT_VERBS (callers invoke the binary directly). Matched here rather
-    // than as a dispatch arm so the routable-verb parity guard does not see it.
-    if matches!(verb, "version" | "-V" | "--version") {
+    // and is NOT a routable daemon command, so it stays out of CLIENT_COMMAND_USAGE /
+    // RUST_CLIENT_COMMANDS (callers invoke the binary directly). Matched here rather
+    // than as a dispatch arm so the routable-command parity guard does not see it.
+    if matches!(command, "version" | "-V" | "--version") {
         let json = fno_agents::json_output::requested(&args[1..]);
         fno_agents::version::print_version(json);
         return 0;
     }
 
-    // `mail-inject`: the one-shot live-delivery verb `fno agents mail send` calls
+    // `mail-inject`: the one-shot live-delivery command `fno agents mail send` calls
     // to inject a turn into a live `claude --bg` session. Binary-direct, not
     // routable (the `matches!` shape hides it from the parity guard); it connects
     // to an existing daemon and never lazy-starts one.
-    if matches!(verb, "mail-inject") {
+    if matches!(command, "mail-inject") {
         // The control drain rides this action as a mode flag: the PreToolUse
         // hook calls it binary-direct at every tool boundary, so a frozen
         // worker's freeze mail lands even when the daemon is the thing wedged.
@@ -331,44 +375,47 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `mail-record`: binary-direct origin-record leaf `mail send/reply` calls.
-    if matches!(verb, "mail-record") {
+    if matches!(command, "mail-record") {
         return fno_agents::decision_trace::run_mail_record(&args[1..]);
     }
 
-    if matches!(verb, "mail-envelope") {
+    if matches!(command, "mail-envelope") {
         return fno_agents::mail_envelope::run(&args[1..]);
     }
 
-    if matches!(verb, "mail") {
+    if matches!(command, "mail") {
         return fno_agents::mail_cli::run(&args[1..]);
     }
 
-    // Cross-host relay verb; binary-direct like `mail-inject`. Contract: mail_remote's module docs.
-    if matches!(verb, "mail-remote") {
+    // Cross-host relay command; binary-direct like `mail-inject`. Contract: mail_remote's module docs.
+    if matches!(command, "mail-remote") {
         return fno_agents::mail_remote::run(&args[1..]);
     }
 
-    // The cross-machine hand-off relay; binary-direct like `mail-remote`. Contract: org_remote's module docs.
-    if matches!(verb, "org-remote") {
+    // The cross-machine relays, binary-direct like `mail-remote` (contract: each module's docs).
+    if matches!(command, "org-remote") {
         return fno_agents::org_remote::run(&args[1..]);
+    }
+    if matches!(command, "spawn-remote") {
+        return fno_agents::spawn_remote::run(&args[1..]);
     }
 
     // Binary-direct mail transport for the events/note Python adapters; not routable.
-    if matches!(verb, "machine-mail-send") {
+    if matches!(command, "machine-mail-send") {
         return fno_agents::machine_mail::run(&args[1..]).await;
     }
 
-    if matches!(verb, "manifest-eval") {
+    if matches!(command, "manifest-eval") {
         return fno_agents::manifest::run_manifest_eval(&args[1..]);
     }
 
     // `orphan-reap` is the hidden reap lever for orphaned cargo test binaries:
     // the daemon's 300s sweep and a human on a wedged box both run
     // it binary-direct. Same `matches!` treatment as `mail-inject` so it stays
-    // out of CLIENT_VERB_USAGE / RUST_CLIENT_VERBS and the routable-verb
+    // out of CLIENT_COMMAND_USAGE / RUST_CLIENT_COMMANDS and the routable-command
     // parity guard - it reads one ps snapshot and prints, it is not an
-    // `fno agents` verb.
-    if matches!(verb, "orphan-reap") {
+    // `fno agents` command.
+    if matches!(command, "orphan-reap") {
         return fno_agents::orphan_reap::run_orphan_reap(&args[1..]);
     }
 
@@ -376,41 +423,41 @@ async fn run(args: Vec<String>) -> i32 {
     // Claude re-entry door: the Rust/Python attach+resume arms and
     // the mux gestures consume its verdict instead of each rebuilding a
     // provider argv. Matched with `matches!` (like `claim`/`detect`) so it
-    // stays out of the routable-verb parity sets - it is not an `fno agents`
-    // verb, and adding one needs the Python surface to grow with it.
-    if matches!(verb, "reentry-plan") {
+    // stays out of the routable-command parity sets - it is not an `fno agents`
+    // command, and adding one needs the Python surface to grow with it.
+    if matches!(command, "reentry-plan") {
         return fno_agents::reentry::run_reentry_plan(&args[1..], &AgentsHome::from_env());
     }
 
-    // `resume-argv` is the INTERNAL machine verb behind the mux resume
+    // `resume-argv` is the INTERNAL machine command behind the mux resume
     // gesture: the server shells it for the codex lane instead of
     // re-deriving the declared form and losing the writable-roots grant.
     // Same `matches!` treatment as `reentry-plan` - it is not an `fno agents`
-    // verb, so the routable-verb parity guard never sees it.
-    if matches!(verb, "resume-argv") {
+    // command, so the routable-command parity guard never sees it.
+    if matches!(command, "resume-argv") {
         return fno_agents::pane_relaunch::run_resume_argv(&args[1..]);
     }
 
-    if matches!(verb, "manifest-for-session") {
+    if matches!(command, "manifest-for-session") {
         return fno_agents::manifest_lookup::run_manifest_for_session(&args[1..]);
     }
 
-    // `name-mint`/`name-parse`/`name-codes` are the INTERNAL machine verbs
+    // `name-mint`/`name-parse`/`name-codes` are the INTERNAL machine commands
     // behind the delegation flip: Python's naming.py shells them so the
     // vocabulary tables, mint, and parse own exactly one implementation.
-    // `matches!` like `reentry-plan`: not `fno agents` verbs, so the
-    // routable-verb parity sets never see them.
-    if matches!(verb, "name-mint") {
+    // `matches!` like `reentry-plan`: not `fno agents` commands, so the
+    // routable-command parity sets never see them.
+    if matches!(command, "name-mint") {
         return fno_agents::naming::run_name_mint(&args[1..]);
     }
-    if matches!(verb, "name-parse") {
+    if matches!(command, "name-parse") {
         return fno_agents::naming::run_name_parse();
     }
-    if matches!(verb, "name-codes") {
+    if matches!(command, "name-codes") {
         return fno_agents::naming::run_name_codes(&args[1..]);
     }
 
-    if matches!(verb, "claude-birth-exec") {
+    if matches!(command, "claude-birth-exec") {
         // `revive-proof` rides this action as an argument (the fleet-incident
         // gh-budget shape): law d-fe66560a allows no new client action, and
         // the revival gate belongs to this door. A fork that never started
@@ -428,27 +475,35 @@ async fn run(args: Vec<String>) -> i32 {
     // review-level is the resolve-level leaf the Python caller reaches through
     // the binary. The `review_doors::dispatch` match table routes them the
     // way the `matches!` arms route `claim`/`detect`, outside the
-    // routable-verb parity guard - they read state and print.
-    if let Some(code) = fno_agents::review_doors::dispatch(verb, &args[1..]) {
+    // routable-command parity guard - they read state and print.
+    if let Some(code) = fno_agents::review_doors::dispatch(command, &args[1..]) {
         return code;
     }
 
     // PR creation reads this branch-vs-base test inventory for its body; it
     // stays binary-direct because it only folds a local diff and needs no daemon.
-    if matches!(verb, "test-delta") {
+    if matches!(command, "test-delta") {
         return fno_agents::test_delta::run_test_delta(&args[1..]);
     }
 
     // The style gate's hidden binary-direct door (mail, encounters, markdown);
-    // matched with `matches!` so the routable-verb parity sets never see it.
-    if matches!(verb, "style-check") {
+    // matched with `matches!` so the routable-command parity sets never see it.
+    if matches!(command, "style-check") {
         return fno_agents::backlog::style_check::run_cli(&args[1..]);
+    }
+
+    // The settings fact set's hidden binary-direct door: the node-id knobs,
+    // the config candidates, and the work-map walk (with the cwd -> project
+    // detect) in one spawn. Same `matches!` treatment so the parity guard
+    // never sees it.
+    if matches!(command, "settings-read") {
+        return fno_agents::backlog::settings_read::run_settings_read(&args[1..]);
     }
 
     // The mail receipt renderer's hidden binary-direct door: the send receipt
     // prose moved from Python (file budget) with Python keeping transports.
     // Same `matches!` treatment so the parity guard never sees it.
-    if matches!(verb, "mail-receipt") {
+    if matches!(command, "mail-receipt") {
         return fno_agents::mail_receipt::run_mail_receipt(&args[1..]);
     }
 
@@ -456,47 +511,47 @@ async fn run(args: Vec<String>) -> i32 {
     // archive id, the receiver-side block parser, and the provenance
     // validation live in Rust once; Python keeps the transcript scan and the
     // bus write. Same `matches!` treatment so the parity guard never sees it.
-    if matches!(verb, "mail-backfill") {
+    if matches!(command, "mail-backfill") {
         return fno_agents::mail_backfill::run_mail_backfill(&args[1..]);
     }
 
-    // `component-verdict` is the HIDDEN decision verb for deployed-component
+    // `component-verdict` is the HIDDEN decision command for deployed-component
     // convergence: reads one JSON request on stdin (expected rev +
     // per-component probes) and prints the per-component verdict. Binary-direct
     // transport for update/doctor, matched with `matches!` like `state` so it
-    // stays out of CLIENT_VERB_USAGE / RUST_CLIENT_VERBS and the parity guard.
-    if matches!(verb, "component-verdict") {
+    // stays out of CLIENT_COMMAND_USAGE / RUST_CLIENT_COMMANDS and the parity guard.
+    if matches!(command, "component-verdict") {
         return fno_agents::component_update::run_component_verdict(&args[1..]);
     }
 
-    // `source-pin` is the HIDDEN decision verb for machine-wide update source
+    // `source-pin` is the HIDDEN decision command for machine-wide update source
     // eligibility: resolve|record|sync. A refusal is data (exit 0,
     // decision: refuse), not a process error, so the Python transport can map
     // it to its own refusal message verbatim. Same `matches!` treatment as
-    // `component-verdict` so the routable-verb parity guard does not see it.
-    if matches!(verb, "source-pin") {
+    // `component-verdict` so the routable-command parity guard does not see it.
+    if matches!(command, "source-pin") {
         return fno_agents::source_pin::run_source_pin(&args[1..]);
     }
 
     // `task-context-prepare`/`-gate`/`-stage`/`-show`/`-revalidate`/`-payload`
-    // are the INTERNAL machine verbs behind the task-context execution binding
+    // are the INTERNAL machine commands behind the task-context execution binding
     // the doors (target init, resume receipt validate/show, spawn
     // payload adapter) shell them so every enforced decision (validation,
     // digest, stage monotonicity, live-source revalidation, declared-gate env
     // semantics, bounded payload render) is native. stdin-JSON like
-    // evidence-gate, so the routable-verb parity sets never see them.
-    if matches!(verb, "task-context-prepare") {
+    // evidence-gate, so the routable-command parity sets never see them.
+    if matches!(command, "task-context-prepare") {
         return fno_agents::task_context::run_prepare(&args[1..]);
     }
     if matches!(
-        verb,
+        command,
         "task-context-gate"
             | "task-context-stage"
             | "task-context-show"
             | "task-context-revalidate"
             | "task-context-payload"
     ) {
-        return match verb {
+        return match command {
             "task-context-gate" => fno_agents::task_context::run_gate(&args[1..]),
             "task-context-stage" => fno_agents::task_context::run_stage(&args[1..]),
             "task-context-show" => fno_agents::task_context::run_show(&args[1..]),
@@ -511,8 +566,8 @@ async fn run(args: Vec<String>) -> i32 {
     // one JSON request on stdin (lane, text, reads, root, timeout) and prints
     // one JSON answer on stdout; a refusal is data (`ok: false`), not a
     // process error. Same `matches!` treatment as `component-verdict`, so no
-    // advertised fno verb is added.
-    if matches!(verb, "evidence-gate") {
+    // advertised fno command is added.
+    if matches!(command, "evidence-gate") {
         return fno_agents::evidence::run_evidence_gate(&args[1..]);
     }
 
@@ -520,84 +575,84 @@ async fn run(args: Vec<String>) -> i32 {
     // lead escalation renderer (ported out of `fno.lead.escalate`): Python
     // keeps the question fold and the liveness read, this side only renders.
     // Same `matches!` treatment as `component-verdict`, so no advertised fno
-    // verb is added.
-    if matches!(verb, "lead-escalation-text") {
+    // command is added.
+    if matches!(command, "lead-escalation-text") {
         return fno_agents::lead_escalation::run_lead_escalation_text(&args[1..]);
     }
 
     // `fleet-task` is the hidden binary-direct transport the Python reconcile
-    // lanes ride through verb_call (fleet_task.rs). Same `matches!` treatment
-    // as `component-verdict`: no advertised fno verb.
-    if matches!(verb, "fleet-task") {
+    // lanes ride through command_call (fleet_task.rs). Same `matches!` treatment
+    // as `component-verdict`: no advertised fno command.
+    if matches!(command, "fleet-task") {
         return fno_agents::fleet_task::run_fleet_task(&args[1..]);
     }
 
-    // `review-start` (hidden codex review verb, node): the app-server
-    // `review/start` RPC; claude's `--raw /code-review` counterpart; no advertised verb.
-    if matches!(verb, "review-start") {
+    // `review-start` (hidden codex review command, node): the app-server
+    // `review/start` RPC; claude's `--raw /code-review` counterpart; no advertised command.
+    if matches!(command, "review-start") {
         return fno_agents::codex_inject::run_review_start(&args[1..]).await;
     }
 
     // `scratch` is the scratch-shape sweep: `fno doctor scratch
     // sweep|report` routes here binary-direct via the Python leaf. Matched
-    // with `matches!` like `mail-inject` so the routable-verb parity guard
-    // does not see it - it is not an `fno agents` verb; the doctor group
+    // with `matches!` like `mail-inject` so the routable-command parity guard
+    // does not see it - it is not an `fno agents` command; the doctor group
     // owns its surface.
-    if matches!(verb, "scratch") {
+    if matches!(command, "scratch") {
         return fno_agents::scratch::run_cli(&args[1..]);
     }
 
-    // `codex-assign-project` is the hidden project-assignment verb:
+    // `codex-assign-project` is the hidden project-assignment command:
     // resolve or create the repo's codex project for --cwd, and when
     // --thread-id is given, assign that bound thread to it. The Python headless
     // create lane shells this binary fire-and-forget after `thread.started`.
     // Same `matches!` treatment as `review-start` so it stays out of
-    // CLIENT_VERB_USAGE / RUST_CLIENT_VERBS and the routable-verb parity guard.
-    if matches!(verb, "codex-assign-project") {
+    // CLIENT_COMMAND_USAGE / RUST_CLIENT_COMMANDS and the routable-command parity guard.
+    if matches!(command, "codex-assign-project") {
         return fno_agents::codex_inject::run_codex_assign_project(&args[1..]).await;
     }
 
     // Hidden native claim operations; `fno agents claim` owns the operator surface.
-    if matches!(verb, "claim") {
+    if matches!(command, "claim") {
         if args.get(1).map(String::as_str) == Some("birth") {
             return fno_agents::first_check::run_record(&args[2..]);
         }
-        return fno_agents::claim_verbs::run_claim(&args[1..]);
+        return fno_agents::claim_commands::run_claim(&args[1..]);
     }
 
     // `detect` is the HIDDEN debug front over the screen-manifest fallback
     // authority (`fno_agents::scrape`): `detect explain <agent>` prints which
     // rung of the badge lattice currently badges the agent. Same `matches!`
-    // treatment as `claim` so it stays out of CLIENT_VERB_USAGE /
-    // RUST_CLIENT_VERBS and the parity guard.
-    // `node-origin` is the HIDDEN transport verb over the request-origin
+    // treatment as `claim` so it stays out of CLIENT_COMMAND_USAGE /
+    // RUST_CLIENT_COMMANDS and the parity guard.
+    // `node-origin` is the HIDDEN transport command over the request-origin
     // decision (fno_agents::node_origin): Python birth assembly posts birth
     // records and stamps the receipt. Same `matches!` treatment as `claim`
-    // so the routable-verb parity guard does not see it; the verb IS
-    // registered in ALL_CLIENT_ACTIONS because the verb-surface ratchet's
-    // binary probe reads the unknown-verb refusal.
-    if matches!(verb, "node-origin") {
+    // so the routable-command parity guard does not see it; the command IS
+    // registered in ALL_CLIENT_ACTIONS because the command-surface ratchet's
+    // binary probe reads the unknown-command refusal.
+    if matches!(command, "node-origin") {
         return fno_agents::node_origin::run_node_origin(&args[1..]);
     }
 
-    if matches!(verb, "detect") {
+    if matches!(command, "detect") {
         return fno_agents::scrape::run_detect(&args[1..]);
     }
 
-    // Per-verb help: `fno agents <verb> --help` prints that verb's usage line
-    // and exits 0, instead of the verb's arg parser erroring "unknown flag:
+    // Per-command help: `fno agents <command> --help` prints that command's usage line
+    // and exits 0, instead of the command's arg parser erroring "unknown flag:
     // --help" / "takes no arguments". Only fires for a recognized
-    // verb; an unknown verb falls through to its normal error path. The scan
+    // command; an unknown command falls through to its normal error path. The scan
     // stops at an `--argv`/`--` boundary so a `--help` inside a spawn/host argv
     // payload reaches the spawned command instead of being captured here.
     if is_help_request(&args[1..]) {
-        // A verb with a full help body owns its --help; the one-line table
+        // A command with a full help body owns its --help; the one-line table
         // entry stays for the top-level list.
-        if let Some(body) = verb_help(verb) {
+        if let Some(body) = command_help(command) {
             println!("{body}");
             return 0;
         }
-        if let Some(usage) = verb_usage(verb) {
+        if let Some(usage) = command_usage(command) {
             println!("usage: fno-agents {usage}");
             return 0;
         }
@@ -607,7 +662,7 @@ async fn run(args: Vec<String>) -> i32 {
     // envelope + status-v1 schema + known event kinds as JSON to stdout, then
     // exits 0. Used by scripts/check-event-schema-parity.sh. Must not start
     // the daemon or read any runtime state (AC2-HP: side-effect-free).
-    if verb == "--emit-schema" {
+    if command == "--emit-schema" {
         let schema = fno_agents::emit_schema_json();
         match serde_json::to_string_pretty(&schema) {
             Ok(s) => {
@@ -621,116 +676,109 @@ async fn run(args: Vec<String>) -> i32 {
         }
     }
 
-    // `loop-check`: stop-hook decision verb (see loopcheck.rs module doc).
+    // `loop-check`: stop-hook decision command (see loopcheck.rs module doc).
     // Direct dispatch; no daemon RPC.
-    if verb == "loop-check" {
+    if command == "loop-check" {
         return fno_agents::loopcheck::run_loop_check(&args[1..]);
     }
 
     // `loops`: daemon-free global pause sentinel owner. Direct dispatch keeps
     // the safety switch usable when the daemon itself is unavailable.
-    if verb == "loops" {
+    if command == "loops" {
         return fno_agents::loops_pause::run_loops(&args[1..]);
     }
 
     // `state path` is the shell-hook surface for project-space path resolution
     // (matched with `matches!` like `version`/`mail-inject`: a binary-direct
-    // verb that stays out of CLIENT_VERB_USAGE / RUST_CLIENT_VERBS and so out
-    // of the client<->router parity guard; the verb-surface ratchet's binary
-    // probe reads the unknown-verb refusal, so the verb IS registered in
+    // command that stays out of CLIENT_COMMAND_USAGE / RUST_CLIENT_COMMANDS and so out
+    // of the client<->router parity guard; the command-surface ratchet's binary
+    // probe reads the unknown-command refusal, so the command IS registered in
     // ALL_CLIENT_ACTIONS like every direct dispatch). No daemon, from cwd.
-    if matches!(verb, "state") {
+    if matches!(command, "state") {
         return fno_agents::state_path::run(&args[1..]);
     }
 
     // `honesty-sweep`: declared-vs-measured sweeps over declared populations
     // (see its own doc in honesty_sweep.rs). Direct dispatch; no daemon RPC -
     // a sweep reads tables, manifests, or piped rows from disk.
-    if verb == "honesty-sweep" {
+    if command == "honesty-sweep" {
         return fno_agents::honesty_sweep::run_honesty_sweep(&args[1..]);
     }
 
     // `probe-run`: see its own doc in acceptance_evidence.rs. Direct dispatch.
-    if verb == "probe-run" {
+    if command == "probe-run" {
         return fno_agents::acceptance_evidence::run_probe_run(&args[1..]);
     }
 
     // `prove-it-verdicts`: the one reader for terminal prove-it records
     // (see its own doc in prove_it_verdicts.rs). Direct dispatch; no
     // daemon RPC - a verdict read walks the graph and plan artifacts files.
-    if verb == "prove-it-verdicts" {
+    if command == "prove-it-verdicts" {
         return fno_agents::prove_it_verdicts::run_prove_it_verdicts(&args[1..]);
     }
 
     // `test-run`: the native process-group owner behind `fno doctor test`
     // (see test_run.rs doc). Direct dispatch, no daemon RPC - a test run must
     // not depend on a live daemon to clean up after itself. Same `matches!`
-    // treatment as `probe-run`/`state` so it stays out of CLIENT_VERB_USAGE /
-    // RUST_CLIENT_VERBS and the routable-verb parity guard: not an `fno
-    // agents` verb; callers are `cli/src/fno/test_runner.py` and the wrapper.
-    if verb == "test-run" {
-        return fno_agents::test_run::run_test_run(&args[1..]);
+    // treatment as `probe-run`/`state` so it stays out of CLIENT_COMMAND_USAGE /
+    // RUST_CLIENT_COMMANDS and the routable-command parity guard: not an `fno
+    // agents` command; callers are `cli/src/fno/test_runner.py` and the wrapper.
+    // `test-run`: the bounded suite runner, plus the test family's raw
+    // doors as its arguments (the shrink law allows no new action, so
+    // `env`, `sweep` and `command` are arguments, not actions): `test-run env`
+    // is the hermetic child env door, `test-run sweep` the orphaned-keeper
+    // sweep for the pytest conftest, and `test-run doctor <argv>` the whole
+    // native test command (pytest/rust/smoke/census; the advertised surface is
+    // the `fno doctor test` front).
+    if command == "test-run" {
+        let rest = &args[1..];
+        match rest.first().map(String::as_str) {
+            Some("env") => return fno_agents::test_env::run_test_env(&rest[1..]),
+            Some("sweep") => return fno_agents::graph_keeper::run_keeper_sweep(&rest[1..]),
+            Some("doctor") => return fno_agents::test_command::run_test_command(&rest[1..]),
+            _ => {}
+        }
+        return fno_agents::test_run::run_test_run(rest);
     }
 
     // `fleet-incident`: the durable fleet incident breaker (see
-    // fleet_incident.rs doc). Direct dispatch, no daemon RPC: a stop must be
-    // writable even when the daemon is the thing wedged. Python's `fno agents
-    // incident` adapter relays it; the admission gates call the library in
-    // process. Same `==` dispatch + ALL_CLIENT_ACTIONS registration as
-    // `test-run`, so the parity tests stay in sync. The fleet GitHub request
-    // budget rides THIS action as its `gh-budget` argument (law d-fe66560a
-    // allows no new client action): an admit must answer before every gh
-    // call, including when the daemon is the thing wedged, so it dispatches
-    // here with no daemon RPC either.
-    if verb == "fleet-incident" {
-        if args.get(1).map(String::as_str) == Some("gh-budget") {
-            return fno_agents::gh_budget::run_gh_budget(&args[2..]);
-        }
-        // `cutover` quiesces the writers and snapshots the stores for a
-        // machine move; it rides this action for the same reason.
-        if args.get(1).map(String::as_str) == Some("cutover") {
-            return fno_agents::cutover::run_cutover(&args[2..]).await;
-        }
-        if args.len() < 2 {
-            match fno_agents::gh_budget::run_gh_budget_stdin_door() {
-                -1 => {}
-                code => return code,
-            }
-        }
-        return fno_agents::fleet_incident::run_fleet_incident(&args[1..]);
+    // fleet_incident.rs doc). Direct dispatch, no daemon RPC; the routing
+    // body lives in the module beside the breaker.
+    if command == "fleet-incident" {
+        return fno_agents::fleet_incident::run_dispatch(&args[1..]).await;
     }
 
-    if verb == "compaction" {
+    if command == "compaction" {
         return fno_agents::compaction::run_compaction(&args[1..]);
     }
 
-    // `mail-teach`: the fmail read verb's once-per-session lesson state
+    // `mail-teach`: the fmail read command's once-per-session lesson state
     // (see mail_teach.rs doc). Direct dispatch like compaction - a hook
     // carrier must resolve under the same session-start and post-compact
     // budgets where the daemon is beside the point.
-    if verb == "mail-teach" {
+    if command == "mail-teach" {
         return fno_agents::mail_teach::run_mail_teach(&args[1..]);
     }
 
-    // `provider-cap`: the armed cap actor's read + decide verbs (see
+    // `provider-cap`: the armed cap actor's read + decide commands (see
     // provider_cap.rs doc). Direct dispatch, no daemon RPC: a status read
     // computes on demand when no fresh daemon snapshot exists, and a decision
     // record must be writable when the daemon is the thing wedged.
-    if verb == "provider-cap" {
-        return fno_agents::provider_cap_verbs::run_provider_cap(&args[1..]);
+    if command == "provider-cap" {
+        return fno_agents::provider_cap_commands::run_provider_cap(&args[1..]);
     }
 
     // `announce`: fleet announcements (see announce.rs doc). Direct
     // dispatch; no daemon RPC - a send is one locked bus append, a read is a
     // scan + cursor write, and both must work when the daemon is wedged.
-    if verb == "announce" {
+    if command == "announce" {
         return fno_agents::announce::run_announce(&args[1..]);
     }
 
     // `chats`: the conversation record plane (see chats.rs doc). Direct
     // dispatch like announce; no daemon RPC - a record write must work when
     // the daemon is wedged, and the read doors back the thread read model.
-    if verb == "chats" {
+    if command == "chats" {
         return fno_agents::chats::run_chats(&args[1..]);
     }
 
@@ -738,7 +786,7 @@ async fn run(args: Vec<String>) -> i32 {
     // mail_threads.rs doc). Direct dispatch like chats; no daemon RPC - a
     // read must work when the daemon is wedged. Hidden from help and from
     // ALL_CLIENT_ACTIONS, like team-fold.
-    if verb == "mail-threads" {
+    if command == "mail-threads" {
         return fno_agents::mail_threads::run_mail_threads(&args[1..]);
     }
 
@@ -748,8 +796,8 @@ async fn run(args: Vec<String>) -> i32 {
     // failure the node exists to name. Never registered in
     // ALL_CLIENT_ACTIONS (the action list is shrink-only); the update
     // lifecycle execs the binary directly, the dispatch rides the
-    // `verb ==` arm.
-    if verb == "update-journal" {
+    // `command ==` arm.
+    if command == "update-journal" {
         return fno_agents::update_journal::run_update_journal(&args[1..]);
     }
 
@@ -757,116 +805,108 @@ async fn run(args: Vec<String>) -> i32 {
     // over the packaged capability table and the merge-posture family table,
     // `review-coverage`: standalone review_coverage producer (see its own doc
     // in loopcheck.rs). Direct dispatch like loop-check; no daemon RPC.
-    if verb == "review-coverage" {
+    if command == "review-coverage" {
         return fno_agents::loopcheck::run_review_coverage(&args[1..]);
     }
 
     // `loop run`: unified driver loop (see loop_target.rs doc). Direct
     // dispatch like loop-check; no daemon RPC.
-    if verb == "loop" {
-        return fno_agents::loop_target::run_loop_verb(&args[1..]);
+    if command == "loop" {
+        return fno_agents::loop_target::run_loop_command(&args[1..]);
     }
     // `finalize`: terminal-only side-effect WRITER (see finalize.rs doc); no daemon RPC.
-    if verb == "finalize" {
+    if command == "finalize" {
         return fno_agents::finalize::run_finalize(&args[1..]);
     }
 
     // `kill-check`: the Rust port of scripts/lib/kill-criteria.sh; no daemon RPC.
-    if verb == "kill-check" {
+    if command == "kill-check" {
         return fno_agents::kill_criteria::run_kill_check(&args[1..]);
     }
 
     // `authorized-merge`: the one merge/arm authorization (see
     // authorized_merge.rs doc). One payload in, one receipt out, one verdict.
-    if verb == "worked-nodes" {
+    if command == "worked-nodes" {
         return fno_agents::worked_nodes::run_worked_nodes(&args[1..]);
     }
 
-    if verb == "authorized-merge" {
+    if command == "authorized-merge" {
         return fno_agents::authorized_merge::run_authorized_merge(&args[1..]);
     }
 
-    // `rename` with no argv is the retask payload door: the Python
-    // `fno agents retask` front sends one JSON payload and reads the receipt
-    // back. No action added (the shrink law); the transaction's contract
-    // lives in retask.rs.
-    if verb == "rename" && args.len() == 1 {
+    if command == "rename" && args.len() == 1 {
         return fno_agents::retask::transport::run_payload();
     }
 
-    // `route-slot`: the delivery-slot resolver; Python's spawn seam, advance
-    // and the readouts send one JSON payload, read {status, candidate, chain}.
-    if verb == "route-slot" {
+    if command == "route-slot" {
         return fno_agents::route_slot::run_route_slot(&args[1..]);
     }
 
-    // `spawn-gate`: the ONE spawn gate; the Python transport sends one JSON
-    // payload and reads the admit (with held claim keys) or refusal back.
-    if verb == "spawn-gate" {
-        return fno_agents::spawn_gate_verb::run_spawn_gate(&args[1..]);
+    if command == "spawn-gate" {
+        return fno_agents::spawn_gate_command::run_spawn_gate(&args[1..]);
     }
 
     // `spawn-overlay`: the spawn-defaults resolver; Python's spawn seam, the
     // doctor readout and the failover walker send one payload, read the answer.
-    if verb == "spawn-overlay" {
+    if command == "spawn-overlay" {
         return fno_agents::spawn_overlay::run_spawn_overlay(&args[1..]);
     }
 
     // `spawn-axes`: the seam's billing axes (route/account/model); the Python
     // front door projects the seam's facts and applies the returned plan.
-    if verb == "spawn-axes" {
+    if command == "spawn-axes" {
         return fno_agents::spawn_axes::run_spawn_axes(&args[1..]);
     }
 
     // `permission-tokens`: the one permission vocabulary; Python's pane mapper,
     // the seam's mappability read and both front doors call it - ONE table,
     // not three disagreeing copies.
-    if verb == "permission-tokens" {
+    if command == "permission-tokens" {
         return fno_agents::codex_posture::run_permission_tokens(&args[1..]);
     }
 
-    // `sandbox-probe`: the pre-seating verdict; Python's spawn gate owns the
-    // exit-85 refusal - the verb answers, the caller judges.
-    if verb == "sandbox-probe" {
+    // `sandbox-probe`: the pre-seating verdict as a command. The spawn seam
+    // calls the probe in process and owns the exit-85 refusal.
+    if command == "sandbox-probe" {
         return fno_agents::sandbox_probe::run_sandbox_probe(&args[1..]);
     }
 
     // `release-notes`: the update modal's PR-grouped release notes (see
     // release_notes.rs). Python's `fno doctor update --check` resolver calls
-    // it through the verb seam; it answers `{"notes": null}` on any git
+    // it through the command seam; it answers `{"notes": null}` on any git
     // failure rather than refusing - the payload never blocks on it.
-    if verb == "release-notes" {
+    if command == "release-notes" {
         return fno_agents::release_notes::run_release_notes(&args[1..]);
     }
 
     // `fallback-chain`: the failover chain walk (see fallback_chain.rs doc).
     // Python resolves config and paths and serializes the candidate links;
-    // this verb reads the provider runtime-state file, derives headroom
+    // this command reads the provider runtime-state file, derives headroom
     // verdicts, and answers the eligible links with their walk-memory ids
     // and spawn flags.
-    if verb == "fallback-chain" {
+    if command == "fallback-chain" {
         return fno_agents::fallback_chain::run_fallback_chain(&args[1..]);
     }
 
-    // `verbs`: hidden claim-style (matches!); the action list is
-    // shrink-only, so the harness-verbs skill teaches the spelling.
-    if matches!(verb, "verbs") {
-        return fno_agents::harness_verbs::run_verbs(&args[1..]);
+    // `commands`: hidden claim-style (matches!); the action list is
+    // shrink-only, so the harness-commands skill teaches the spelling.
+    if matches!(command, "commands") {
+        return fno_agents::harness_commands::run_commands(&args[1..]);
     }
 
     // `publish-review`: the reviewer lane's second GitHub identity (see
     // publish_review.rs doc). Direct dispatch; no daemon RPC. Python's emit
-    // chokepoint and the hidden `fno do pr publish-review` verb send one JSON
-    // payload and read the answer back; the verb is binary-first, never an
+    // chokepoint and the hidden `fno do pr publish-review` command send one JSON
+    // payload and read the answer back; the command is binary-first, never an
     // auto-routed `fno agents` surface.
-    if verb == "publish-review" {
+    if command == "publish-review" {
         return fno_agents::publish_review::run_publish_review(&args[1..]);
     }
 
     // `canonical-check`: the canonical-sync divergence read. Direct
     // dispatch; no daemon RPC. The Python post-merge sync sends one JSON
     // payload and reads the answer back; binary-first like `publish-review`.
-    if verb == "canonical-check" {
+    if command == "canonical-check" {
         return fno_agents::canonical_check::run_canonical_check(&args[1..]);
     }
 
@@ -874,27 +914,27 @@ async fn run(args: Vec<String>) -> i32 {
     // and staleness alarm, native. The Python `fno do pr sync-canonical`
     // transport sends one JSON payload and reads the answer back;
     // binary-first like `canonical-check`.
-    if verb == "sync-canonical" {
-        return fno_agents::sync_canonical::run_sync_canonical_verb(&args[1..]);
+    if command == "sync-canonical" {
+        return fno_agents::sync_canonical::run_sync_canonical_command(&args[1..]);
     }
 
     // `lead-state`/`lead-shape`: the lead reader and the shape rewrite (see
     // lead_state.rs doc). Direct dispatch, daemon-free reads; the Python
     // `fno agents org shape` shell and escalate's client invoke the binary
-    // directly rather than routing through the agents verb set.
-    if matches!(verb, "lead-state" | "term-state") {
+    // directly rather than routing through the agents command set.
+    if matches!(command, "lead-state" | "term-state") {
         return fno_agents::lead_state::run_lead_state(&args[1..]);
     }
-    if matches!(verb, "lead-shape" | "term-shape") {
+    if matches!(command, "lead-shape" | "term-shape") {
         return fno_agents::lead_state::run_lead_shape_or_term(&args[1..]);
     }
 
-    // `graph-get`/`bash-census`/`session-start-bytes`: daemon-free reads, not routable `fno agents` verbs (same reasoning as kill-check).
+    // `graph-get`/`bash-census`/`session-start-bytes`: daemon-free reads, not routable `fno agents` commands (same reasoning as kill-check).
     // `judge`: the blueprint judge's grading half (lens prompts,
     // model spawn, verdict parsing). Daemon-free like graph-get; the Python
     // `fno doctor observer judge` / `sweep --judge` wrappers shell HERE and
     // own event emission (fno.events single-sourced there).
-    if verb == "judge" {
+    if command == "judge" {
         return fno_agents::blueprint_judge::run_judge(&args[1..]);
     }
 
@@ -902,128 +942,129 @@ async fn run(args: Vec<String>) -> i32 {
     // dispatcher (the early transport arm); see backlog::cli's doc.
     // `org-vacancies`: the orphan-team sweep for `fno agents org`, daemon-free;
     // `==` dispatch like graph-get, registered in ALL_CLIENT_ACTIONS.
-    if verb == "org-vacancies" || verb == "team-orphans" {
+    if command == "org-vacancies" || command == "team-orphans" {
         return fno_agents::lead_state::run_org_vacancies(&args[1..]);
     }
     // `org-fold`: the team scope fold for `fno agents org --nodes` and the
     // local board's org section, daemon-free like org-vacancies; the workers
     // column rides the same native claim verdicts `claim sweep` established,
     // so a fold and the claims surface cannot disagree about who holds a node.
-    if verb == "org-fold" || verb == "team-fold" {
+    if command == "org-fold" || command == "team-fold" {
         return fno_agents::org_fold::run_org_fold(&args[1..]);
     }
 
-    // `lead-history`: the team-scope lead_checkin readback for
-    // `fno agents org history`. Daemon-free read, `==` dispatch like
-    // org-fold: Python resolves the caller's team scope and pins the
-    // journal path (identity and paths are Python-owned), the native side
-    // owns the scan so the file-budget Python-tree ratchet holds.
-    // `--verdict` is the same journals read as a tenure verdict (law
-    // d-fe66560a: the verdict rides this action as an argument, never a
-    // new action).
-    if verb == "lead-history" || verb == "lead-history" {
+    // `lead-history`: the team-scope lead_checkin readback for `fno agents org history`, exec'd by the front door.
+    //
+    // Daemon-free `==` dispatch like org-fold: the caller's team scope and the live journals resolve natively when the argv names none. `--verdict` reads the same journals as a tenure verdict (law d-fe66560a).
+    if command == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
+            if let Err(message) = fno_agents::role_cwd::rebind("verdict") {
+                eprintln!("{message}");
+                return 2;
+            }
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);
         }
         return fno_agents::lead_history::run_lead_history(&args[1..]);
     }
 
-    // `lead-checkin`: one verb runs the lead check-in body for
+    // `lead-checkin`: one command runs the lead check-in body for
     // `fno agents org checkin`. Daemon-free beat like lead-history: Python
     // resolves the caller's team scope and Python-owned paths, the native
     // side gathers, prints, diffs and journals the row, reusing the org-fold
     // fold and the lead-history scan in process.
-    if verb == "lead-checkin" || verb == "lead-checkin" {
+    if command == "lead-checkin" {
+        if let Err(message) = fno_agents::role_cwd::rebind("checkin") {
+            eprintln!("{message}");
+            return 2;
+        }
         return fno_agents::lead_checkin::run_lead_checkin(&args[1..]);
     }
     // `evals-macro`: the macro-eval failure-pattern leaderboard for
     // `fno doctor evals macro`. Daemon-free read, `==` dispatch like
-    // lead-history: Python resolves the journal paths (identity and paths are
-    // Python-owned), the native side owns the fold so the file-budget
-    // Python-tree ratchet holds.
-    if verb == "evals-macro" {
+    // lead-history: Python resolves the journal paths, the native side owns
+    // the fold so the file-budget Python-tree ratchet holds.
+    if command == "evals-macro" {
         return fno_agents::evals_macro::run_evals_macro(&args[1..]);
     }
     // `stalls`: the weekly stall-cause table, daemon-free read, == dispatch
     // like evals-macro: never registered in ALL_CLIENT_ACTIONS; `fno doctor
     // stalls` shells HERE through resolve_binary.
-    if verb == "stalls" {
+    if command == "stalls" {
         return fno_agents::stalls::run_stalls(&args[1..]);
     }
     // `lead-rundown`: the lead ledger page for `fno agents lead ledger`.
     // Same split as lead-history: Python resolves the org and the paths,
     // the native side owns the page assembly, and the fold's scope_nodes ride
     // in the org JSON, so the page cannot disagree with the org.
-    if verb == "lead-rundown" || verb == "term-ledger" {
+    if command == "lead-rundown" || command == "term-ledger" {
         return fno_agents::rundown::run_lead_ledger(&args[1..]);
     }
-    if verb == "bash-census" {
+    if command == "bash-census" {
         return fno_agents::bash_census::run_bash_census(&args[1..]);
     }
-    if verb == "session-backfill" {
+    if command == "session-backfill" {
         return fno_agents::session_backfill::run(&args[1..]);
     }
     // `intel`: the session-provenance fold, daemon-free read, == dispatch
     // like board/reclaim: never registered in ALL_CLIENT_ACTIONS (the action
     // list is shrink-only, d-fe66560a) and never routed by `fno agents`;
     // `fno doctor intel` shells HERE through resolve_binary.
-    if verb == "intel" {
+    if command == "intel" {
         return fno_agents::intel::run_intel(&args[1..]);
     }
     // `reclaim`: the machine janitor, daemon-free. Not a routable
-    // `fno agents` verb; the Python surface is `fno doctor reclaim`, a thin
+    // `fno agents` command; the Python surface is `fno doctor reclaim`, a thin
     // wrapper that shells HERE, and the daemon's daily sweep calls the gate
     // in-process.
-    if verb == "reclaim" {
+    if command == "reclaim" {
         return fno_agents::reclaim::run_reclaim(&args[1..], &AgentsHome::from_env());
     }
     // `plugin-install`: the filtered-stage installer for the plugin
     // harnesses, daemon-free. The Python surface `fno config plugin install`
-    // shells HERE for claude, opencode and agy; codex stays on the Python
-    // converge engine per the ship-phase ruling.
-    if verb == "plugin-install" {
+    // shells HERE for every harness.
+    if command == "plugin-install" {
         return fno_agents::plugin_install::run_plugin_install(&args[1..]);
     }
-    if verb == "session-start-bytes" {
+    if command == "session-start-bytes" {
         return fno_agents::session_start_bytes::run_session_start_bytes(&args[1..]);
     }
 
     // `territory-rows`: the territory fact set's daemon-free reads. Direct
     // dispatch like graph-get: the Python `fno config active-backlog-*`
     // passthroughs invoke the binary directly.
-    if verb == "territory-rows" {
+    if command == "territory-rows" {
         return fno_agents::territory::run_territory_rows(&args[1..]);
     }
-    if verb == "active-backlog-receipt" {
+    if command == "active-backlog-receipt" {
         return fno_agents::territory::run_active_backlog_receipt(&args[1..]);
     }
-    if verb == "select-read" {
+    if command == "select-read" {
         return fno_agents::select_read::run(&args[1..]);
     }
-    if verb == "territory-verdict" {
+    if command == "territory-verdict" {
         return fno_agents::spawn_gate::run_territory_verdict(&args[1..]);
     }
 
     // `board`: the lead board collector, read-only, daemon-free. Not a
-    // routable `fno agents` verb (same `matches!` treatment as graph-get): the
-    // Python surface is `fno inbox board` / `fno lead board`, whose typer
-    // command shells HERE and renders, and the stop hook reads the collector
-    // in-process. Matched with `==` beside graph-get so the routable-verb
-    // parity guard does not see it - no advertised fno verb is added.
-    if verb == "board" {
+    // routable `fno agents` command (same `matches!` treatment as graph-get): the
+    // front door execs `board --user-command` for `fno inbox board` / `fno lead
+    // board`, which renders the text page here, and the stop hook reads the
+    // collector in-process. Matched with `==` beside graph-get so the routable-command
+    // parity guard does not see it - no advertised fno command is added.
+    if command == "board" {
         return fno_agents::org_board::run_board(&args[1..]);
     }
 
     // `notify-watch`: the operator-notice sampler, read-only,
     // daemon-free. Same `==` treatment as `board`: a read-only collector, not
-    // a routable `fno agents` verb, so no advertised fno verb is added.
-    if verb == "notify-watch" {
-        return fno_agents::operator_notice::run_notify_watch_verb(&args[1..]);
+    // a routable `fno agents` command, so no advertised fno command is added.
+    if command == "notify-watch" {
+        return fno_agents::operator_notice::run_notify_watch_command(&args[1..]);
     }
 
     // `verify-evidence`: Rust port of scripts/lib/verify-event-evidence.sh
     // (see verify_evidence.rs doc). Direct dispatch.
-    if verb == "verify-evidence" {
+    if command == "verify-evidence" {
         return fno_agents::verify_evidence::run_verify_evidence(&args[1..]);
     }
 
@@ -1031,37 +1072,40 @@ async fn run(args: Vec<String>) -> i32 {
     // interactive daemon PTY hosting behind `host`/`promote` were deleted when
     // the mux became the agent-PTY substrate. Each prints a one-line pointer to
     // the mux and exits non-zero, never a silent no-op (AC5-EDGE).
-    if let Some(pointer) = retired_verb_pointer(verb) {
+    if let Some(pointer) = retired_command_pointer(command) {
         eprintln!("{pointer}");
         return 2;
     }
 
-    // Python-only verbs ported to the Rust client: these read state/registry/
+    // Python-only commands ported to the Rust client: these read state/registry/
     // event files directly (or print a stub) without a daemon RPC, so they
     // dispatch here before build_request. Byte-for-byte parity with the Python
-    // implementations is the contract; see `fno_agents::client_verbs`.
-    if verb == "drive-authority" {
-        return fno_agents::client_verbs::run_drive_authority(&args[1..], &AgentsHome::from_env());
+    // implementations is the contract; see `fno_agents::client_commands`.
+    if command == "drive-authority" {
+        return fno_agents::client_commands::run_drive_authority(
+            &args[1..],
+            &AgentsHome::from_env(),
+        );
     }
-    if verb == "trace" {
-        return fno_agents::client_verbs::run_trace(&args[1..], &AgentsHome::from_env());
+    if command == "trace" {
+        return fno_agents::client_commands::run_trace(&args[1..], &AgentsHome::from_env());
     }
     // rename --from-journal: the daemon-free label rebuild, keyed by session
     // id; every other rename form still RPCs the daemon below.
-    if verb == "rename" && args[1..].iter().any(|a| a == "--from-journal") {
+    if command == "rename" && args[1..].iter().any(|a| a == "--from-journal") {
         return fno_agents::rename::run_from_journal(&args[1..], &AgentsHome::from_env());
     }
     // registry-json: the daemon-free registry projection the hooks read.
     // Starts nothing, so the Stop hook's never-lazy-start promise holds.
-    if verb == "registry-json" {
+    if command == "registry-json" {
         return fno_agents::registry_json::run_registry_json(&args[1..], &AgentsHome::from_env());
     }
-    if matches!(verb, "worker-wake") {
+    if matches!(command, "worker-wake") {
         return fno_agents::worker_wake::run_dry_run(&args[1..], &AgentsHome::from_env());
     }
     // revival-check: whether a spawn --resume revives an existing row instead
     // of forking. Starts nothing.
-    if verb == "revival-check" {
+    if command == "revival-check" {
         return fno_agents::revival_check::run_revival_check(&args[1..], &AgentsHome::from_env());
     }
     // `resume --substrate thread` is the pane-to-thread LIFECYCLE move, not a
@@ -1069,7 +1113,7 @@ async fn run(args: Vec<String>) -> i32 {
     // daemon's agent.convert, whose agent lock outlives the client.
     // A row that is not a pane has nothing to convert, so the same flag falls
     // back to the plain resume, which relaunches an exited session as a thread.
-    let resume_rest = if verb != "resume" {
+    let resume_rest = if command != "resume" {
         None
     } else if fno_agents::resume_args::requests_conversion(&args[1..]) {
         fno_agents::resume_args::reentry_argv_for_unpaned_conversion(
@@ -1085,32 +1129,34 @@ async fn run(args: Vec<String>) -> i32 {
         // thread is legal in both contexts (gc_sweep::stop_row_process is
         // the same shape).
         let home = AgentsHome::from_env();
-        return match std::thread::spawn(move || fno_agents::client_verbs::run_resume(&rest, &home))
-            .join()
+        return match std::thread::spawn(move || {
+            fno_agents::client_commands::run_resume(&rest, &home)
+        })
+        .join()
         {
             Ok(code) => code,
             Err(payload) => std::panic::resume_unwind(payload),
         };
     }
-    if verb == "adopt" {
-        return fno_agents::client_verbs::run_adopt(&args[1..], &AgentsHome::from_env());
+    if command == "adopt" {
+        return fno_agents::client_commands::run_adopt(&args[1..], &AgentsHome::from_env());
     }
-    if verb == "attach" {
+    if command == "attach" {
         return fno_agents::attach::run_attach(&args[1..], &AgentsHome::from_env());
     }
     // `recover`: manual restoration of a recorded session under its
     // account/route; reads the registry and resolver directly, no daemon RPC.
-    if verb == "recover" {
-        return fno_agents::client_verbs::run_recover(&args[1..], &AgentsHome::from_env());
+    if command == "recover" {
+        return fno_agents::client_commands::run_recover(&args[1..], &AgentsHome::from_env());
     }
-    if verb == "logs" {
-        return fno_agents::client_verbs::run_logs(&args[1..], &AgentsHome::from_env()).await;
+    if command == "logs" {
+        return fno_agents::client_commands::run_logs(&args[1..], &AgentsHome::from_env()).await;
     }
     // Inside-leg state push (E3.2): a per-turn hook reports {working|blocked|done}.
     // `report`: sends to an ALREADY-RUNNING daemon; must never lazy-start one.
     // `report --kind session` rides the SAME action (the action list is
     // shrink-only): the SessionStart transport with the raw payload on stdin.
-    if verb == "report" {
+    if command == "report" {
         return fno_agents::session_report::run_report_dispatch(
             &args[1..],
             &AgentsHome::from_env(),
@@ -1118,60 +1164,57 @@ async fn run(args: Vec<String>) -> i32 {
         .await;
     }
     // `wait`: poll registry.json directly for a state (no daemon RPC).
-    if verb == "wait" {
+    if command == "wait" {
         return fno_agents::wait::run_wait(&args[1..], &AgentsHome::from_env()).await;
     }
 
     // The list path is an internal operand of the existing binary action;
     // public callers keep using `fno do pr list` through the Python adapter.
-    if matches!(verb, "pr-heal") {
+    if matches!(command, "pr-heal") {
         if args.get(1).map(String::as_str) == Some("list") {
             return fno_agents::pr_list::run_pr_list(&args[2..]);
         }
         return fno_agents::heal::run_heal(&args[1..]);
     }
-    if matches!(verb, "pr-push") {
+    if matches!(command, "pr-push") {
         return fno_agents::pr_push::run_push(&args[1..]);
     }
-    // The binary-direct `pr-*` verbs (body-check, create, base-lineage-check,
-    // and the ports that follow them) route through one door, so a new verb
+    // The binary-direct `pr-*` commands (body-check, create, base-lineage-check,
+    // and the ports that follow them) route through one door, so a new command
     // costs a match arm in pr_door.rs, not routing lines against this file's
     // shrink-only budget.
-    if let Some(code) = fno_agents::pr_door::run_verb(verb, &args) {
+    if let Some(code) = fno_agents::pr_door::run_command(command, &args) {
         return code;
     }
     // `pr-closure-*`: the closure-line parser/renderer (parse, render) and
-    // the produce verbs ported from Python (branch-ids, ensure, trailer,
+    // the produce commands ported from Python (branch-ids, ensure, trailer,
     // bind-created, context); binary-direct like `pr-body-check`.
-    if verb.starts_with("pr-closure") {
-        return fno_agents::org_board::pr_closure::run_verb(&args);
+    if command.starts_with("pr-closure") {
+        return fno_agents::org_board::pr_closure::run_command(&args);
     }
-    if matches!(verb, "pr-rebase") {
+    if matches!(command, "pr-rebase") {
         return fno_agents::pr_rebase::run_rebase(&args[1..]);
     }
     // `subscribe`: follow the daemon's own `events.jsonl` and stream registry
     // state transitions + pane exits as NDJSON. File-follow, no daemon RPC, so it
     // dispatches here before build_request.
-    if verb == "subscribe" {
+    if command == "subscribe" {
         return fno_agents::subscribe::run_subscribe(&args[1..], &AgentsHome::from_env()).await;
     }
 
-    if verb == "digest" {
+    if command == "digest" {
         return fno_agents::digest::run_digest(&args[1..], &AgentsHome::from_env()).await;
     }
 
-    if verb == "distress-scan" {
+    if command == "distress-scan" {
         return fno_agents::distress::run_distress_scan(&args[1..]);
     }
-    if verb == "attest" {
+    if command == "attest" {
         return fno_agents::attest::dispatch(&args[1..]);
     }
 
-    // `needs`: read-only needs-me-queue fold over events.jsonl +
-    // ledger.json across ALL sessions, emitting review_wedged / budget_stop
-    // items. Never touches the daemon; exits 0 on empty. The mux client shells
-    // this off-loop when the prefix+a overlay opens.
-    if verb == "needs" {
+    // `needs`: read-only needs-me-queue fold over events + ledger; daemon-free.
+    if command == "needs" {
         return fno_agents::needs::run_needs(&args[1..], &AgentsHome::from_env()).await;
     }
 
@@ -1180,21 +1223,21 @@ async fn run(args: Vec<String>) -> i32 {
     // deep link resolves. Read-only, daemon-free like `needs`: it dispatches
     // here before build_request. events.jsonl is deliberately NOT a source
     // (72% ticks; lifecycle derives from the graph, never copied).
-    if verb == "feed" {
+    if command == "feed" {
         return fno_agents::feed::run_feed(&args[1..], &AgentsHome::from_env()).await;
     }
 
     // `day`: daemon-free like `feed`; `--commit` appends the boundary row.
-    // `matches!` treatment as `claim`: the verb is unregistered (the action
+    // `matches!` treatment as `claim`: the command is unregistered (the action
     // list is shrink-only, d-fe66560a); the inbox relay reaches it through
     // resolve_binary, and no advertised `fno agents day` spelling exists.
-    if matches!(verb, "day") {
+    if matches!(command, "day") {
         return fno_agents::day::run_day(&args[1..], &AgentsHome::from_env());
     }
 
     // `status` reports on a *running* daemon: it must NOT lazy-start one just to
     // describe it as up. A down daemon is exit 13 (AC10-ERR).
-    if verb == "status" {
+    if command == "status" {
         // `--json`/`-J` selects the machine payload; the default renders the
         // human arms table + daemon lines. Anything else is rejected rather
         // than silently ignored (Codex P3).
@@ -1203,8 +1246,32 @@ async fn run(args: Vec<String>) -> i32 {
         // `status` as arguments instead of actions of their own. The Python
         // router rewrites `fno agents capabilities <h> ...` into
         // `fno-agents status --capabilities <h> ...`. With neither flag the
-        // behavior is exactly the plain status read.
+        // behavior is exactly the plain status read. The /fno-me join rides
+        // the same way: `fno agents register ...` arrives as
+        // `status --register ...`, daemon-free like registry-json, and so do
+        // the name, whoami, registry-repair and heal-token leaves.
         let rest = &args[1..];
+        match rest.first().map(String::as_str) {
+            Some("--register") => {
+                return fno_agents::register::run_register(&rest[1..], &AgentsHome::from_env())
+            }
+            Some("--name") => return fno_agents::naming::run_agents_name(&rest[1..]),
+            Some("--whoami") => {
+                return fno_agents::registry_commands::run_whoami(
+                    &rest[1..],
+                    &AgentsHome::from_env(),
+                )
+            }
+            Some("--registry-repair") => {
+                return fno_agents::registry_commands::run_registry_repair(&rest[1..])
+            }
+            Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
+            Some("--pane-identity") => {
+                return fno_agents::pane_identity::run_pane_identity(&rest[1..])
+            }
+            Some("--watch") => return fno_agents::watch::run_watch(&rest[1..]),
+            _ => {}
+        }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
         let has_family = rest.iter().any(|a| a.as_str() == "--target-family");
         if has_cap && has_family {
@@ -1220,6 +1287,34 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::capability_leaves::run_capabilities(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--liveness") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--liveness")
+                .cloned()
+                .collect();
+            return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
+        }
+        // The notify port's two ops ride `status` as arguments, the same
+        // group-action shape as --liveness: the front door's
+        // `fno doctor event fanout tick` execs `status --fanout`, and
+        // scripts/lib/wake-signals.sh execs `status --wake-signals`.
+        if rest.iter().any(|a| a.as_str() == "--fanout") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--fanout")
+                .cloned()
+                .collect();
+            return fno_agents::status_fanout::run_tick_command(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--wake-signals") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--wake-signals")
+                .cloned()
+                .collect();
+            return fno_agents::wake_read::run_wake_signals(&sub);
         }
         if has_family {
             let sub: Vec<String> = rest
@@ -1255,11 +1350,11 @@ async fn run(args: Vec<String>) -> i32 {
     // `census`: one JSON row per long-lived process, the build-
     // staleness read that doctor/restart/update render. Composes the daemon
     // status (in-process), a ps walk of keepers, and `fno mux ls --json`.
-    if verb == "census" {
-        return fno_agents::census::run_verb(&args[1..]).await;
+    if command == "census" {
+        return fno_agents::census::run_command(&args[1..]).await;
     }
 
-    if verb == "restart" {
+    if command == "restart" {
         let parsed = match RestartArgs::try_parse_from(&args[1..]) {
             Ok(p) => p,
             Err(e) => {
@@ -1283,27 +1378,27 @@ async fn run(args: Vec<String>) -> i32 {
     // on its idle tick, on demand. It operates on the registry directly under the
     // shared flock, so it needs no running daemon and dispatches here before
     // build_request.
-    if verb == "reap" {
+    if command == "reap" {
         return run_reap(&args[1..]);
     }
 
     // The roster-side sweep (gap one): claude rows no fno row names.
     // Like `reap`, it operates directly on live surfaces so it needs no
     // running daemon. Dry-run by default; `--apply` executes.
-    if verb == "roster-reap" {
+    if command == "roster-reap" {
         return run_roster_reap(&args[1..]);
     }
 
     // The cascade verdict per NAME: the squad store's Unknown
-    // members carry no session id, so the fno side asks this verb for a
+    // members carry no session id, so the fno side asks this command for a
     // positive verdict per name instead of re-implementing the cascade.
-    if verb == "node-route" {
+    if command == "node-route" {
         return run_node_route(&args[1..]);
     }
 
-    // Capture the verb name so format_success can use it at the print site
+    // Capture the command name so format_success can use it at the print site
     // without threading it through the protocol layer.
-    let verb_owned = verb.to_string();
+    let command_owned = command.to_string();
 
     // Task 3.1: capture --json before build_request strips it, and detect TTY.
     // --json is a client-side rendering flag and must NOT be forwarded to the daemon.
@@ -1321,7 +1416,7 @@ async fn run(args: Vec<String>) -> i32 {
         .take_while(|a| a.as_str() != "--argv")
         .any(|a| a == "--no-discovered");
 
-    let (method, mut params) = match build_request(verb, &args[1..]) {
+    let (method, mut params) = match build_request(command, &args[1..]) {
         Ok(v) => v,
         Err(msg) => {
             eprintln!("fno-agents: {msg}");
@@ -1329,49 +1424,38 @@ async fn run(args: Vec<String>) -> i32 {
         }
     };
 
+    // An anycast ask swaps its project for the one live peer before any
+    // lane reads the name.
+    if method == "agent.ask" {
+        if let Err((msg, code)) = fno_agents::ask_project::resolve(&mut params) {
+            eprintln!("{msg}");
+            return code;
+        }
+    }
+
     // Resolve the agent name from the PARSED params, not args.get(1): build_request
     // strips leading flags (and their values) when collecting positionals, so
     // `fno agents stop --force worker-A` yields name="worker-A". Reading args.get(1)
     // would capture "--force" and print the wrong success line (gemini-code-assist
-    // high on PR #361). Falls back to the raw first positional for verbs that don't
-    // set params.name (none of the formatted verbs hit that path today).
-    let agent_name = params
+    // high on PR #361). Falls back to the raw first positional for commands that don't
+    // set params.name (none of the formatted commands hit that path today).
+    let mut agent_name = params
         .get("name")
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .unwrap_or_default();
 
     let home = AgentsHome::from_env();
-    // (AC20): the codex-thread-target lookup moved INTO the agent.ask
-    // block below, derived from the registry read already performed there. The
-    // old spot loaded the registry for EVERY client verb and swallowed read
-    // failures at `.ok()`.
 
-    // Claude `ask` is handled entirely client-side: claude is a
-    // `claude --bg` shellout, not a daemon-PTY agent, so it bypasses the daemon
-    // RPC. Only claude targets take this path; codex/gemini ask still routes to
-    // the daemon below. Resolution: an existing registry row's provider, else
-    // the `--provider` flag on first contact.
+    // `ask` runs client-side for every harness: each lane below takes the
+    // rows it owns, and only a codex thread target reaches the daemon.
     if method == "agent.ask" {
-        // Task 1.3a: ask never creates. Pre-check the registry before provider
-        // resolution: if no row exists for the name, surface the unknown-agent
-        // error (exit 16) regardless of --provider. This mirrors Python's
-        // dispatch_ask after Task 1.1 (unknown-name check precedes provider
-        // selection). Provider-mismatch logic (inside maybe_run_claude_ask) still
-        // applies for existing rows.
-        // (AC20): ONE registry read for the whole ask path. The
-        // codex-thread-target lookup below derives from THIS read - the old
-        // second load ran for EVERY client verb and swallowed failures at
-        // `.ok()`.
+        // Ask never creates: an unknown name exits 16 whatever --harness
+        // says. One registry read serves the whole ask path.
         use fno_agents::claude_ask::{emit_event, py_repr};
         use fno_agents::state::load_registry;
-        // A corrupt/unreadable registry must surface as exit 12 ("registry
-        // read failed"), NOT degrade to an empty registry where every name
-        // looks unknown (exit 16 + a forensically wrong unknown-name
-        // event). Python parity: dispatch_ask raises exit 12 on
-        // (OSError, ValueError, RegistryVersionError); the lib dispatch
-        // fns do the same. A MISSING file is not an error (load_registry
-        // returns the default). Sigma-review finding, this PR.
+        // An unreadable registry exits 12, never an empty registry where every
+        // name looks unknown. A MISSING file is not an error.
         let registry = match load_registry(&home.registry_json()) {
             Ok(r) => r,
             Err(e) => {
@@ -1441,8 +1525,7 @@ async fn run(args: Vec<String>) -> i32 {
         {
             return code;
         }
-        if let Some(code) = fno_agents::footnote_harness::maybe_run_ask(&home, &params, &agent_name)
-        {
+        if let Some(code) = fno_agents::thread_host::maybe_run_ask(&home, &params, &agent_name) {
             return code;
         }
         // Opencode `ask` is intercepted client-side: opencode is
@@ -1467,41 +1550,21 @@ async fn run(args: Vec<String>) -> i32 {
         }
     }
 
-    // Task 1.3a: intercept `spawn` (NOT host/promote, which also map to
-    // agent.spawn) to route claude -> dispatch_claude_spawn, and
-    // codex/gemini + --once -> dispatch_codex_once / dispatch_gemini_once.
-    // `host` and `promote` must fall through to the daemon RPC unchanged.
-    if method == "agent.spawn" && verb_owned == "spawn" {
-        // The seam gate comes FIRST. A spawn that skipped
-        // the Python seam carries no configured route/model/effort/account,
-        // so it goes back to the front door (FNO_AGENTS_RUNTIME=python stops
-        // the loop: the re-exec crosses the seam, gets the marker, and comes
-        // back marked). On exec failure this spawn's only decision path is
-        // gone and its policy state is unknown, so it refuses rather than
-        // falling through to a harness default the seam could have refused.
-        if spawn_needs_python_seam(&params) {
-            let err = exec_python_front(&args);
-            eprintln!(
-                "fno-agents: config.agents.profiles is read only by the Python \
-                 spawn seam, and exec of 'fno agents spawn' failed: {err}. No \
-                 configured route, model, effort or account was applied; policy \
-                 state unknown; refusing."
-            );
-            return 2;
+    // Intercept `spawn` only: `host` and `promote` also map to agent.spawn
+    // and fall through to the daemon RPC unchanged.
+    let mut spawn_hold: Option<fno_agents::spawn_guard::SpawnHold> = None;
+    let mut promotion = None;
+    if method == "agent.spawn" && command_owned == "spawn" {
+        if let Some(map) = params.as_object_mut() {
+            if let Err((line, code)) = fno_agents::spawn_bare::admit(map) {
+                eprintln!("{line}");
+                return code;
+            }
         }
-        // 4a-G2: the `pane` substrate (the default) is mux-hosted now, and the
-        // Python back half owns it (fno.agents.mux_spawn: front-half reuse +
-        // `fno mux pane run` + the registry mux ref). The Python front door
-        // already carves pane spawns out of the binary route (rust_runtime),
-        // so this arm is only reached by a DIRECT `fno-agents spawn` call -
-        // re-exec the Python CLI rather than falling through to the daemon
-        // PTY host (retiring at G4; a silent daemon fallback is exactly what
-        // AC1-ERR forbids). FNO_AGENTS_RUNTIME=python stops the front door
-        // routing straight back here.
         let mut substrate = params
             .get("substrate")
             .and_then(|v| v.as_str())
-            .unwrap_or_else(|| default_substrate(&params))
+            .unwrap_or("thread")
             .to_string();
         // `thread` is the public substrate name. The lower-level dispatch arms
         // retain their historical `bg` selector until their wire contract moves.
@@ -1518,68 +1581,31 @@ async fn run(args: Vec<String>) -> i32 {
         if fno_agents::claude_workspace_trust::spawn_preflight_refuses(&params, substrate) {
             return 2;
         }
+        promotion = match fno_agents::spawn_promote::plan(&mut params, &mut agent_name, substrate) {
+            Ok(planned) => planned,
+            Err(code) => return code,
+        };
         // A DEFAULT never opens a view: a bare spawn is a paneless thread,
         // inside a mux or out. Only an explicit placement flag opens
         // anything, and it opens through place_thread_portal_after_spawn.
         if substrate == "pane" {
-            use fno_agents::claude_ask::py_repr;
-            // Provider parity with the optional-provider Python resolver: a
-            // MISSING --provider is legal on the pane substrate (the Python
-            // re-exec resolves it from the invoking harness), so let None fall
-            // through. An UNKNOWN provider is still a client-side exit 2 even
-            // where the `fno` front door is absent (CI), matching the resolver's
-            // downstream substrate-aware rejection.
-            match params.get("provider").and_then(|v| v.as_str()) {
-                None => {}
-                Some(p) if !KNOWN_PROVIDERS.contains(&p) => {
-                    eprintln!(
-                        "unknown provider {}; supported: {}",
-                        py_repr(p),
-                        known_providers_csv()
-                    );
-                    return 2;
-                }
-                Some(_) => {}
-            }
-            // A marked call that still lands here must not forward the marker
-            // into the Python CLI (an unknown flag there): strip it from the
-            // re-exec argv. The seam gate above already sent unmarked spawns
-            // back; this keeps even a hand-built marked pane argv clean.
-            let pane_args: Vec<String> = args
-                .iter()
-                .filter(|a| !a.starts_with("--defaults-applied"))
-                .cloned()
-                .collect();
-            let err = exec_python_front(&pane_args);
-            eprintln!(
-                "fno-agents: substrate 'pane' is mux-hosted via the Python CLI, \
-                 but exec of 'fno agents spawn' failed: {err}. Install the fno \
-                 front door or run `fno agents spawn ...` directly."
-            );
-            return 127;
+            // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
+            // the pane spine answers every harness arm itself - the Python
+            // bounce this branch kept for unseated shapes is deleted.
+            return fno_agents::spawn_guard::run_guarded_pane(&params, &agent_name, || {
+                let code =
+                    fno_agents::pane_spawn::run_pane_spawn(&home, &params, &agent_name, &args);
+                fno_agents::spawn_promote::settle(promotion.as_ref(), code, &agent_name)
+            });
         }
-        // an --account spawn on ANY substrate resolves its four-lane env
-        // overlay in Python (fno.agents.account_env); re-exec the Python CLI here
-        // rather than the native Rust bg spawn below, so the resolver + refusals
-        // live in exactly one place (pane already re-exec'd above). Without this
-        // the flag silently vanishes on the Rust-intercepted bg/headless path -
-        // the known "two path gates for a new provider field" drift class.
-        // FNO_AGENTS_RUNTIME=python stops the Python front door bouncing back.
-        if params.get("account").and_then(|v| v.as_str()).is_some() {
-            let account_args: Vec<String> = args
-                .iter()
-                .filter(|a| !a.starts_with("--defaults-applied"))
-                .cloned()
-                .collect();
-            let err = exec_python_front(&account_args);
-            eprintln!(
-                "fno-agents: --account resolution runs in the Python CLI, but \
-                 exec of 'fno agents spawn' failed: {err}. Run `fno agents \
-                 spawn ...` directly."
-            );
-            return 127;
-        }
-        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name) {
+        // An --account spawn is decided inside maybe_run_spawn: the seam's
+        // stamp names the account it applied; a spawn no arm takes falls
+        // through to the daemon RPC below.
+        let promoted = promotion.as_ref();
+        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &mut spawn_hold, promoted)
+        {
+            fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
+            let code = fno_agents::spawn_promote::settle(promoted, code, &agent_name);
             if code == 0 {
                 // A placement failure never recolors the spawn verdict: the
                 // receipt is the truth, the worker is live, and a nonzero here
@@ -1645,7 +1671,7 @@ async fn run(args: Vec<String>) -> i32 {
     // the registry row, so the spawn gate is held across exactly this exchange
     // (acquire before the write, release after the response read) - one gate
     // evaluation per spawn, and the first spawn's row is counted before the
-    // second is evaluated. Other verbs skip this entirely. Read before
+    // second is evaluated. Other commands skip this entirely. Read before
     // `method`/`params` move into the request.
     // Daemon-bound is DERIVED from the same capability contract the daemon
     // routes on (attach lane + a harness-owned server). Both binaries
@@ -1698,22 +1724,25 @@ async fn run(args: Vec<String>) -> i32 {
     } else {
         None
     };
+    let daemon_wait = params.get("wait_secs").and_then(Value::as_f64);
     let req = Request::new(1, method, params);
 
     let daemon_spawn_gate = if daemon_bound_thread_spawn {
         let config_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        match fno_agents::spawn_gate::run_gate(
-            &config_cwd,
-            &home.registry_json(),
-            fno_agents::spawn_gate::GateInput {
-                name: agent_name.clone(),
-                substrate: "bg".into(),
-                flags: daemon_gate_flags,
-                seed: daemon_gate_seed,
-                route_provider: daemon_gate_route_provider,
-                ..Default::default()
-            },
-        ) {
+        match fno_agents::spawn_bare::gate_with_wait(daemon_wait, || {
+            fno_agents::spawn_gate::run_gate(
+                &config_cwd,
+                &home.registry_json(),
+                fno_agents::spawn_gate::GateInput {
+                    name: agent_name.clone(),
+                    substrate: "bg".into(),
+                    flags: daemon_gate_flags,
+                    seed: daemon_gate_seed.clone(),
+                    route_provider: daemon_gate_route_provider.clone(),
+                    ..fno_agents::spawn_promote::gate_input(promotion.as_ref())
+                },
+            )
+        }) {
             Ok(guard) => Some(guard),
             Err(refusal) => {
                 if let Some(receipt) = &refusal.receipt {
@@ -1726,7 +1755,7 @@ async fn run(args: Vec<String>) -> i32 {
         None
     };
 
-    let call_result = if verb_owned == "rm" {
+    let call_result = if command_owned == "rm" {
         let Ok(result) = fno_agents::restart_run::rm_after_drift_repair(
             &check_daemon_drift(&home).await,
             fno_agents::restart_run::restart_daemon_for_rm(),
@@ -1741,6 +1770,10 @@ async fn run(args: Vec<String>) -> i32 {
         call(&home, &daemon_bin, &req).await
     };
     drop(daemon_spawn_gate);
+    if matches!(&call_result, Ok(resp) if matches!(resp.payload, ResponsePayload::Ok(_))) {
+        fno_agents::spawn_guard::settle(&mut spawn_hold, 0, &agent_name);
+        fno_agents::spawn_promote::settle(promotion.as_ref(), 0, &agent_name);
+    }
     match call_result {
         Ok(resp) => match resp.payload {
             ResponsePayload::Err(err) => {
@@ -1749,11 +1782,11 @@ async fn run(args: Vec<String>) -> i32 {
             }
             ResponsePayload::Ok(result) => {
                 // The loaded-thread answer rides `list --harness codex` as a
-                // field instead of a hidden verb root. Gated on the codex
+                // field instead of a hidden command root. Gated on the codex
                 // filter so no other list pays the app-server round trip; an
                 // unreachable daemon becomes `available: false`, never a list
                 // failure. The await must happen here - format_success is sync.
-                let result = if verb_owned == "list"
+                let mut result = if command_owned == "list"
                     && result["filters_applied"]["provider"].as_str() == Some("codex")
                 {
                     let mut with_loaded = result;
@@ -1764,8 +1797,15 @@ async fn run(args: Vec<String>) -> i32 {
                 } else {
                     result
                 };
+                // A registry rename moves fno's label only; the harness
+                // session keeps its old title until the native rename
+                // reaches it. Best-effort: the receipt names a failed push,
+                // the rename still exits 0.
+                if command_owned == "rename" {
+                    fno_agents::rename::stamp_title_push(&home, &mut result);
+                }
                 if let Some(line) = format_success(
-                    &verb_owned,
+                    &command_owned,
                     &agent_name,
                     &result,
                     json_flag,
@@ -1778,7 +1818,7 @@ async fn run(args: Vec<String>) -> i32 {
                     // the only path that routes ask to this client). Every other
                     // formatted output (ask create short_id, stop/rm/list/reconcile)
                     // keeps the trailing newline.
-                    let ask_followup = verb_owned == "ask"
+                    let ask_followup = command_owned == "ask"
                         && !result
                             .get("created")
                             .and_then(|v| v.as_bool())
@@ -1794,9 +1834,9 @@ async fn run(args: Vec<String>) -> i32 {
                         serde_json::to_string_pretty(&result).unwrap_or_default()
                     );
                 }
-                // Keep drift warnings on read/removal verbs stderr-only; `call`
-                // already ensured a daemon, so only these verbs pay the probe.
-                if warns_on_daemon_drift(&verb_owned) {
+                // Keep drift warnings on read/removal commands stderr-only; `call`
+                // already ensured a daemon, so only these commands pay the probe.
+                if warns_on_daemon_drift(&command_owned) {
                     let state = check_daemon_drift(&home).await;
                     if let Some(w) = drift_warning(&state, None) {
                         eprintln!("{w}");
@@ -1809,7 +1849,7 @@ async fn run(args: Vec<String>) -> i32 {
                 // that is still running, which is the report the daemon arm
                 // refuses to make. `Busy` is the shape: the turn holds the
                 // thread, and a retry can still reach it.
-                if verb_owned == "stop"
+                if command_owned == "stop"
                     && result.get("stopped").and_then(Value::as_bool) == Some(false)
                 {
                     return 18;
@@ -1829,7 +1869,7 @@ async fn run(args: Vec<String>) -> i32 {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .contains("already absent");
-                if verb_owned == "rm" && harness_survives {
+                if command_owned == "rm" && harness_survives {
                     return 21;
                 }
                 // The daemon-bound thread lane (codex and every other
@@ -1846,7 +1886,7 @@ async fn run(args: Vec<String>) -> i32 {
             }
         },
         Err(e) => {
-            if verb_owned == "rm" && !agent_name.is_empty() {
+            if command_owned == "rm" && !agent_name.is_empty() {
                 // A dead connection does not prove the daemon skipped the
                 // removal; read the store rather than assert the outcome. An
                 // unread store reports unknown instead of absent.
@@ -1867,98 +1907,6 @@ async fn run(args: Vec<String>) -> i32 {
     }
 }
 
-/// Read the `timeout` param as whole seconds; `None` when absent, negative, or fractional.
-fn opt_timeout(params: &Value) -> Option<std::time::Duration> {
-    params
-        .get("timeout")
-        .and_then(|v| v.as_u64())
-        .map(std::time::Duration::from_secs)
-}
-
-/// Read the `yolo` param as a bool, defaulting to false when absent.
-fn flag_yolo(params: &Value) -> bool {
-    params
-        .get("yolo")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-/// Route a claude `ask` to the client-side `claude --bg` path, bypassing the
-/// daemon. Returns `Some(exit_code)` when the target is claude
-/// (resolved from an existing registry row, else the `--provider` flag), or
-/// `None` to fall through to the daemon RPC for codex/gemini.
-fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
-    use fno_agents::claude_ask::{dispatch_claude_ask, ClaudeHome};
-    use fno_agents::state::load_registry;
-
-    let provider_param = params.get("provider").and_then(|v| v.as_str());
-    let registry = load_registry(&home.registry_json()).unwrap_or_default();
-    let existing_provider = registry
-        .find_name_or_full_session_id(name)
-        .map(|e| e.harness_name().to_string());
-
-    // Provider mismatch: an existing claude agent plus a conflicting --provider
-    // flag. Python's select_provider rejects this as a mismatch; without the
-    // check the registry value silently wins and the message is delivered to
-    // the wrong provider/session on a stale or mistyped flag (Codex P2).
-    if let (Some(ep), Some(pp)) = (existing_provider.as_deref(), provider_param) {
-        if ep == "claude" && pp != "claude" {
-            eprintln!(
-                "fno-agents: agent {name:?} already exists with provider 'claude'; refusing to override with --provider {pp}"
-            );
-            return Some(2);
-        }
-    }
-
-    let resolved = existing_provider.as_deref().or(provider_param);
-    if resolved != Some("claude") {
-        return None; // not a claude target; the daemon path handles it
-    }
-
-    let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
-    // ask is a follow-up to an already-registered session: dispatch_claude_ask
-    // takes the cwd as `_cwd` and never launches in it. So resolve only an
-    // explicit --cwd (canonicalized, Python's `Path(cwd).resolve()`; empty is
-    // absent) or the caller cwd -- NEVER the canonical default or the redirect
-    // note, which would be a false diagnostic for an operation that does not
-    // consume the launch dir (review).
-    let cwd = params
-        .get("cwd")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(fno_agents::spawn_cwd::canonicalize_cwd)
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        });
-    let timeout = opt_timeout(params);
-    let yolo = flag_yolo(params);
-
-    let claude_home = ClaudeHome::from_env();
-    let outcome = dispatch_claude_ask(
-        home,
-        &claude_home,
-        name,
-        message,
-        from_name,
-        &cwd,
-        yolo,
-        timeout,
-        &[],
-    );
-    // stderr/stdout carry exact bytes (newlines baked in); write verbatim.
-    if !outcome.stderr.is_empty() {
-        eprint!("{}", outcome.stderr);
-    }
-    if !outcome.stdout.is_empty() {
-        print!("{}", outcome.stdout);
-    }
-    Some(outcome.exit_code)
-}
-
 /// Invoking-harness env markers, highest priority first. Mirror of Python
 /// `harness_identity.HARNESS_SESSION_MARKERS`; cross-language drift is caught by
 /// the pytest `test_harness_markers_match_client_rs`, which reads this const from
@@ -1971,52 +1919,6 @@ const HARNESS_MARKERS: &[(&str, &str)] = &[
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
 ];
-
-/// Infer the dispatch provider when `--provider` is absent, mirroring Python
-/// `infer_invoking_harness`: resolve when the present markers name exactly one
-/// *distinct* harness. Multiple markers for the same harness (Codex's thread id
-/// plus its legacy session id) agree; markers naming different harnesses, or
-/// none, fall through to the builtin `claude`. Never guesses. `lookup` is
-/// injectable so tests don't touch process-global env.
-fn infer_dispatch_provider(lookup: impl Fn(&str) -> Option<String>) -> &'static str {
-    match fno_agents::claims::resolve_harness_from(lookup).as_deref() {
-        Some("claude") => "claude",
-        Some("codex") => "codex",
-        Some("gemini") => "gemini",
-        Some("opencode") => "opencode",
-        Some("agy") => "agy",
-        _ => "claude",
-    }
-}
-
-/// Route a codex `ask` to the client-side `codex exec` path, bypassing the
-/// daemon. Returns `Some(exit_code)` when the target is codex
-/// (resolved from an existing registry row, else the `--provider` flag), or
-/// `None` to fall through to the next provider hook.
-fn maybe_run_codex_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
-    fno_agents::codex_ask::maybe_run_codex_ask(home, params, name)
-}
-
-/// Route a gemini `ask` to the client-side `gemini -p` path, bypassing the
-/// daemon. Returns `Some(exit_code)` when the target is gemini,
-/// or `None` to fall through to the unresolvable-`ask` surface.
-fn maybe_run_gemini_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
-    fno_agents::gemini_ask::maybe_run_gemini_ask(home, params, name)
-}
-
-/// Route an agy `ask` to the client-side stateless guard (Phase C). agy is
-/// plain-text with no session id, so a stateful resume is unsupported; this
-/// returns `Some(2)` with a redirect error for an agy target, else `None`.
-fn maybe_run_agy_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
-    fno_agents::agy_ask::maybe_run_agy_ask(home, params, name)
-}
-
-/// Route an opencode `ask` to the client-side pane-only guard.
-/// opencode is hosted as a pane with no client-side stateful resume; this
-/// returns `Some(2)` with a redirect error for an opencode target, else `None`.
-fn maybe_run_opencode_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
-    fno_agents::opencode_ask::maybe_run_opencode_ask(home, params, name)
-}
 
 fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), String> {
     let squad = params.get("squad").and_then(Value::as_str);
@@ -2035,25 +1937,25 @@ fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), Strin
     // the parse arm, so a bad index never reaches this check.
     if portal.is_some() && substrate != "bg" {
         return Err(
-            "--portal applies only to --substrate thread; a pane hosts its \
+            "--portal applies only to the thread lane; a pane hosts its \
              own geometry and headless hosts no session at all"
                 .into(),
         );
     }
     if at.is_some() && substrate == "bg" {
-        return Err("--at applies only to --substrate pane (a thread has no calling pane)".into());
+        return Err("--at needs --as pane (a thread has no calling pane)".into());
     }
     let placement_requested = squad.is_some() || split.is_some() || at.is_some() || tab.is_some();
     if placement_requested && substrate == "bg" && portal.is_none() {
-        return Err("--workspace/-s, --split/-x, and --tab on --substrate \
-             thread need --portal N: a thread hosts no pane until a portal \
+        return Err("--workspace/-s, --split/-x, and --tab on the \
+             thread lane need --portal N: a thread hosts no pane until a portal \
              opens one, so the placement has nothing to place"
             .into());
     }
     if placement_requested && portal.is_none() && substrate != "pane" {
         return Err(
-            "--workspace/-s, --split/-x, --at, and --tab apply only to --substrate pane \
-             (bg/headless have no pane geometry)"
+            "--workspace/-s, --split/-x, --at, and --tab apply only to the pane lane \
+             (thread/headless have no pane geometry)"
                 .into(),
         );
     }
@@ -2075,26 +1977,6 @@ fn effective_spawn_message(message: &str, substrate: &str) -> String {
     } else {
         fno_agents::spawn_payload::enrich_spawn_payload(message)
     }
-}
-
-fn validate_effort_for_spawn(
-    provider: &str,
-    substrate: &str,
-    effort: Option<&str>,
-) -> Result<(), String> {
-    if substrate == "pane" {
-        return Ok(());
-    }
-    let Some(value) = effort else {
-        return Ok(());
-    };
-    if value.is_empty() {
-        return Err("--effort must be non-empty".to_string());
-    }
-    // The one effort owner (effort_surface.rs) answers the whole deny set:
-    // gemini, cursor-agent and an undeclared harness refuse on the thread and
-    // headless lanes exactly as the Python lane's bridge refuses them.
-    fno_agents::effort_surface::effort_tokens(provider, value).map(|_| ())
 }
 
 /// Route a `spawn` (NOT host/promote) to the appropriate client-side path.
@@ -2204,51 +2086,13 @@ fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), Str
     Ok(())
 }
 
-/// The Python seam (rust_runtime.make_context -> compose_spawn_argv) is
-/// the only reader of config.agents.profiles. A spawn that skipped it carries
-/// no configured route, model, effort or account, so it goes back to the
-/// front door; the marker asserts the crossing and is parsed beside `--yolo`.
-/// A marker is an upstream seam crossing, never proof a model is authorized -
-/// the strict coordinate checks still own that.
-fn spawn_needs_python_seam(params: &Value) -> bool {
-    // FNO_SPAWN_GATE=0 is the operator bypass both gate implementations honor
-    // (spawn_gate.rs, spawn_gate.py); it excuses the seam bounce the same way.
-    if std::env::var_os("FNO_SPAWN_GATE").is_some_and(|v| v == "0") {
-        return false;
-    }
-    params.get("defaults_applied").is_none()
-}
-
-fn exec_python_front(args: &[String]) -> std::io::Error {
-    use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(fno_agents::scrape::fno_bin())
-        .arg("agents")
-        .args(args)
-        .env("FNO_AGENTS_RUNTIME", "python")
-        .exec();
-    if err.kind() == std::io::ErrorKind::NotFound {
-        return std::process::Command::new(fno_agents::scrape::fno_py())
-            .arg("agents")
-            .args(args)
-            .env("FNO_AGENTS_RUNTIME", "python")
-            .exec();
-    }
-    err
-}
-
-// The `--agent` refusal for codex names the native role form, not generic advice.
-fn agent_unsupported_line(provider: &str, agent: &str) -> Option<String> {
-    let role = agent.strip_prefix("fno:").unwrap_or(agent);
-    (provider == "codex").then(|| {
-        format!(
-            "--agent is not supported for harness 'codex': codex has no main-thread agent flag. \
-             Its native form is the agent role .codex/agents/{role}.toml: seed the session to \
-             call spawn_agent with agent_type {role}, or pass -H claude."
-        )
-    })
-}
-
-fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+fn maybe_run_spawn(
+    home: &AgentsHome,
+    params: &Value,
+    name: &str,
+    hold: &mut Option<fno_agents::spawn_guard::SpawnHold>,
+    promotion: Option<&fno_agents::spawn_promote::Promotion>,
+) -> Option<i32> {
     use fno_agents::agy_ask::dispatch_agy_once_with_effort;
     use fno_agents::claude_ask::{
         dispatch_claude_headless, dispatch_claude_spawn, py_repr, ClaudeHome,
@@ -2270,24 +2114,24 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         fno_agents::merge_posture::apply_env_from_message(message);
     }
 
-    // A payload verb the node does not derive refuses before the registry,
+    // A payload command the node does not derive refuses before the registry,
     // the launch and the claim transfer: a refused spawn leaves nothing behind.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if let Some(refusal) = fno_agents::node_seed::spawn_payload_verb_refusal(params, &cwd) {
+    if let Some(refusal) = fno_agents::node_seed::spawn_payload_command_refusal(params, &cwd) {
         eprintln!("fno-agents spawn: {refusal}");
         return Some(2);
     }
 
     let provider_param = params.get("provider").and_then(|v| v.as_str());
     // `substrate` is a CLIENT-ONLY routing key: build_request validates and
-    // inserts it (default `pane`) for the spawn verb and this is its sole
+    // inserts it (default `pane`) for the spawn command and this is its sole
     // consumer. It is never forwarded in a daemon-bound request (the `pane`
     // fall-through below sends params WITHOUT it mattering; the daemon ignores
     // unknown params).
     let substrate = params
         .get("substrate")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| default_substrate(&params))
+        .unwrap_or("thread")
         .to_string();
     let substrate = if substrate == "thread" {
         "bg"
@@ -2320,8 +2164,77 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // which already infers via the Python re-exec.
     let provider = match provider_param {
         Some(p) => p,
-        None => infer_dispatch_provider(|k| std::env::var(k).ok()),
+        None => fno_agents::provider::infer_dispatch_provider(|k| std::env::var(k).ok()),
     };
+
+    // The row-9 flag seams: the refusals the binary owns print the Python
+    // door's line bare and exit 2 before the gate takes a slot (the account
+    // seam's ordering rationale, and the doors' shared Python order:
+    // monitor gates, then output-format, then account, then route). A valid
+    // pane monitor spawn never reaches here via the seam (the pane predicate
+    // keeps it Python), so Launch falls through to the normal flow.
+    let public_substrate = if substrate == "bg" {
+        "thread"
+    } else {
+        substrate
+    };
+    match fno_agents::spawn_axes::monitor_seam(
+        params.get("monitor").and_then(Value::as_str),
+        provider,
+        public_substrate,
+    ) {
+        fno_agents::spawn_axes::MonitorSeam::None | fno_agents::spawn_axes::MonitorSeam::Launch => {
+        }
+        fno_agents::spawn_axes::MonitorSeam::Refuse(line) => {
+            eprintln!("{line}");
+            return Some(2);
+        }
+    }
+    let output_format = match fno_agents::spawn_axes::output_format_seam(
+        params.get("output_format").and_then(Value::as_str),
+        provider,
+        public_substrate,
+    ) {
+        Ok(v) => v,
+        Err(line) => {
+            eprintln!("{line}");
+            return Some(2);
+        }
+    };
+
+    // The route arm, then the role arm (an explicit route wins): resolved
+    // before the gate, so a refusal takes no slot, and before the account
+    // scrub, which can remove the var a vendor key lives in.
+    let env_get = |k: &str| std::env::var(k).ok();
+    let text = |k: &str| params.get(k).and_then(Value::as_str);
+    let route = match fno_agents::spawn_route::route_seam(
+        text("route"),
+        provider,
+        public_substrate,
+        &cwd,
+        &env_get,
+    ) {
+        fno_agents::spawn_route::RouteSeam::None => {
+            fno_agents::spawn_route::role_seam(text("role"), provider, &cwd, &env_get)
+        }
+        seam => seam,
+    };
+    let mut route = match route {
+        fno_agents::spawn_route::RouteSeam::None => None,
+        fno_agents::spawn_route::RouteSeam::Refuse(line) => {
+            eprintln!("{line}");
+            return Some(2);
+        }
+        fno_agents::spawn_route::RouteSeam::Routed(route) => {
+            std::env::set_var(fno_agents::spawn_route::ROUTE_PROVIDER_ENV, &route.provider);
+            Some(route)
+        }
+    };
+    // The account arm: both account flags resolve here, before the gate.
+    let route_env = route.as_ref().map(|r| &r.env);
+    if let Some(code) = fno_agents::accounts::launch::seam_exit(params, provider, route_env) {
+        return Some(code);
+    }
 
     // R3, the state-root grant gate. Placed HERE because every non-pane spawn
     // passes through this function exactly once, including the codex thread
@@ -2350,14 +2263,13 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         }
     }
 
-    let message = effective_spawn_message(
+    let enriched_message = effective_spawn_message(
         params.get("message").and_then(|v| v.as_str()).unwrap_or(""),
         substrate,
     );
-    let from_name = params
-        .get("from_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("fno");
+    let from_name_stamped =
+        fno_agents::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+    let from_name = from_name_stamped.as_str();
     // --cwd > --here (caller) > default canonical; resolve_dispatch_cwd
     // canonicalizes an explicit --cwd and shells to git on the default path
     // (no --cwd, no --here). Resolve only for CLIENT-SIDE spawns, which are the
@@ -2373,7 +2285,13 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         (std::path::PathBuf::new(), false)
     } else {
         let caller = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        match fno_agents::spawn_cwd::node_cwd_or_refuse(params, &caller) {
+        // An explicit --cwd (or the node's worktree, spawn_bare's render)
+        // wins over the node row's recorded checkout, as on the daemon path.
+        let node_cwd = match params.get("cwd") {
+            Some(_) => Ok(None),
+            None => fno_agents::spawn_cwd::node_cwd_or_refuse(params, &caller),
+        };
+        match node_cwd {
             Err(msg) => {
                 eprintln!("fno-agents: refusing to dispatch: {msg}");
                 return Some(2);
@@ -2385,33 +2303,26 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
-    let timeout = opt_timeout(params);
-    let yolo = flag_yolo(params);
-    // Optional --model, forwarded as the provider's exact --model token.
-    let model = params.get("model").and_then(|v| v.as_str());
-    // permission mode for the bg/headless lanes. The pane substrate
-    // never reaches here (it re-execs the Python CLI, which owns pane mapping);
-    // this arm handles the claude and grok headless lanes plus mapped codex threads.
-    let permission_mode = params.get("permission_mode").and_then(|v| v.as_str());
-    let effort = params.get("effort").and_then(|v| v.as_str());
-    // Tier-3 harness-native passthrough. add_dir has 3 real cells
-    // (claude/codex/agy); agent/tools/deny_tools are claude-only on this
-    // bg/headless lane. Every non-equivalent cell fails closed below (mirrors
-    // --permission-mode /). The pane substrate re-execs the Python CLI,
-    // which owns its own per-provider mapping + fail-closed for these.
-    // Normalize empty-as-None once: an empty value is UNSET (the builders omit an
-    // empty flag), so the guard below must not trip on `--add-dir=""` and the
-    // bundle must carry None, not Some("").
-    let empty_as_none = |k: &str| {
-        params
-            .get(k)
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
+
+    // The fleet-law block composes for the WORKER's cwd (a --cwd foreign-repo
+    // spawn must not inherit the spawner's repo freezes), after the dispatch
+    // cwd resolves. A pane composes nowhere here: its Python leg or the
+    // server arm owns it with the true seat cwd.
+    let (message, fleet_laws) = if substrate == "pane" {
+        (enriched_message, Vec::new())
+    } else {
+        fno_agents::spawn_payload::finalize_spawn_payload_at(&enriched_message, &cwd)
     };
-    let add_dir = empty_as_none("add_dir");
-    let agent = empty_as_none("agent");
-    let tools = empty_as_none("tools");
-    let deny_tools = empty_as_none("deny_tools");
+    if !fleet_laws.is_empty() {
+        // The receipt names the laws the seed carries: stderr keeps
+        // stdout/JSON clean for the line-by-line receipt consumers.
+        eprintln!(
+            "fno-agents spawn: seed carries {} active fleet law(s): {}",
+            fleet_laws.len(),
+            fleet_laws.join("; ")
+        );
+    }
+    let timeout = opt_timeout(params);
 
     // Validate the provider FIRST so an unknown provider is a client-side
     // error (exit 2) for every substrate, never a fall-through to the daemon.
@@ -2424,144 +2335,12 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         return Some(2);
     }
 
-    // AC5-ERR: one knob at a time (pane enforces this in Python; here for
-    // bg/headless).
-    if permission_mode.is_some() && yolo {
-        eprintln!("--permission-mode and --yolo are mutually exclusive; pass one");
-        return Some(2);
-    }
-    // Fail closed: claude and the capability-mapped codex thread and grok
-    // headless lanes accept --permission-mode. gemini/agy one-shot lanes and opencode
-    // bg serve lane hardcode their own bypass form, so a mode here can't be
-    // honored without a silent downgrade - reject it, pointing at the pane
-    // substrate (which DOES map every provider's vocabulary). The codex
-    // THREAD lane (substrate "bg" after the thread normalization) is exempt:
-    // the shared app-server resolves the posture server-side
-    // (resolve_thread_posture), so a mapped mode is native there.
-    let mapped_permission_lane =
-        (provider == "codex" || provider == "footnote" || substrate == "headless")
-            && permission_mode
-                .map(|mode| {
-                    // The capability table decides, through the one vocabulary
-                    // (see codex_posture.rs); a resolution problem answers
-                    // false, which degrades to the refusal below, never a
-                    // guessed yes. Codex and footnote threads and declared
-                    // headless mappings are the only non-claude lanes here.
-                    fno_agents::codex_posture::permission_mappable(provider, mode, substrate)
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-    if permission_mode.is_some() && provider != "claude" && !mapped_permission_lane {
-        let remedy = match provider {
-            "codex" => "drop --permission-mode and pass -Y/--yolo",
-            "footnote" => "pass a mode its capability row lists in permission_modes",
-            _ => "use --substrate pane",
+    // `--print` answers here; a sandbox block writes its settings file.
+    let sandbox_settings =
+        match fno_agents::spawn_bare::pre_gate(params, provider, name, route.as_mut(), &cwd) {
+            Ok(path) => path,
+            Err(code) => return Some(code),
         };
-        eprintln!(
-            "--permission-mode is not supported for harness {} on --substrate thread/headless (its one-shot lane hardcodes its own bypass form); {remedy}",
-            py_repr(provider),
-        );
-        return Some(2);
-    }
-    if let Err(reason) = validate_effort_for_spawn(provider, substrate, effort) {
-        eprintln!("{reason}");
-        return Some(2);
-    }
-    // A fenced token naming a flag fno itself emits is two sources for one
-    // value; the pane lane refuses that by name (pane_passthrough_tokens) and
-    // so does this one, instead of letting argv order pick the winner.
-    let carries_axis = |flag: &str| -> bool {
-        let set = |k: &str| {
-            params
-                .get(k)
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .is_some()
-        };
-        match flag {
-            "--permission-mode" => set("permission_mode"),
-            "--effort" => set("effort"),
-            "--add-dir" => set("add_dir"),
-            "--agent" => set("agent"),
-            "--tools" | "--allowedTools" => set("tools"),
-            "--deny-tools" | "--disallowedTools" => set("deny_tools"),
-            "--model" => set("model"),
-            _ => false,
-        }
-    };
-    for token in params
-        .get("harness_args")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_str())
-    {
-        let Some(flag) = token.strip_prefix('-') else {
-            continue;
-        };
-        let flag = format!("--{}", flag.split('=').next().unwrap_or(flag));
-        if carries_axis(&flag) {
-            eprintln!(
-                "refusing {flag} on both sides: fno emitted it from its own flag \
-                 and the passthrough carries it too. Two sources for one value is \
-                 the defect, not the collision. Drop one."
-            );
-            return Some(2);
-        }
-    }
-
-    // fail-closed matrix for the client-owned bg/headless lanes (pane
-    // re-execs Python, which guards there). A flag with no equivalent for the
-    // resolved provider is a hard error BEFORE launch - never a silent drop.
-    // Message shape mirrors --permission-mode. (opencode's bg lane DOES reach
-    // these checks now: `--add-dir`/`--agent`-shaped flags on an opencode bg
-    // spawn refuse HERE - the serve lane grants writable dirs itself, through
-    // the per-session permission rules.)
-    if substrate != "pane" {
-        // No "use --substrate pane" advice: unlike --permission-mode, pane does
-        // NOT map these cells any wider than bg/headless does (gemini --add-dir,
-        // codex --agent fail closed on pane too), so that advice would mislead.
-        let unsupported = |flag: &str| {
-            eprintln!(
-                "{} is not supported for harness {}; drop it or use a harness that maps it",
-                flag,
-                py_repr(provider)
-            );
-        };
-        // --model: zcode has no model flag (the model is the account's own
-        // default; the row's model_switch_strategy is unsupported), so a
-        // requested model would silently no-op.
-        if model.is_some() && provider == "zcode" {
-            unsupported("--model");
-            return Some(2);
-        }
-        // --add-dir: claude/codex/agy map it; gemini has no verified equivalent.
-        // (The codex thread lane carries it too: the client puts it ahead of
-        // the state-root grant in params.state_dirs for the daemon.)
-        if add_dir.is_some() && !matches!(provider, "claude" | "codex" | "agy") {
-            unsupported("--add-dir");
-            return Some(2);
-        }
-        // --agent / --tools / --deny-tools: claude-only on this lane.
-        if agent.is_some() && provider != "claude" {
-            match agent
-                .as_deref()
-                .and_then(|a| agent_unsupported_line(provider, a))
-            {
-                Some(line) => eprintln!("{line}"),
-                None => unsupported("--agent"),
-            }
-            return Some(2);
-        }
-        if tools.is_some() && provider != "claude" {
-            unsupported("--tools");
-            return Some(2);
-        }
-        if deny_tools.is_some() && provider != "claude" {
-            unsupported("--deny-tools");
-            return Some(2);
-        }
-    }
     // fno's computed writable-dir set, published by the Python spawn seam. A
     // worker that cannot write ~/.fno takes no node claim, and the graph then
     // reads that node free while it works. Read once here so every lane below
@@ -2579,14 +2358,29 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         })
         .unwrap_or_default();
     // The claude-only bundle, resolved once for both claude lanes.
+    // The old tier-3 bundle (add-dir/agent/tools/deny-tools) no longer
+    // arrives as typed fields: --add-dir/--agent/--tools ride the fenced
+    // passthrough with every other harness flag, and --deny-tools refuses at
+    // the door. The builders keep their parameters; the call sites pass
+    // neutrals.
     let claude_flags = fno_agents::claude_ask::HarnessFlags {
-        add_dir,
+        add_dir: None,
         state_dirs: &state_dirs,
-        agent,
-        allowed_tools: tools,
-        disallowed_tools: deny_tools,
+        agent: None,
+        allowed_tools: None,
+        disallowed_tools: None,
         passthrough: &harness_args,
+        route: route.as_ref().map(|r| fno_agents::claude_ask::RouteStamp {
+            provider: &r.provider,
+            model: &r.model,
+            settings: &r.settings,
+        }),
+        settings: sandbox_settings.as_deref(),
     };
+    let route_env: Vec<(&str, &str)> = route
+        .iter()
+        .flat_map(|r| r.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .collect();
 
     // Spawn gate: cap + RAM floor for the CLIENT-SIDE substrates only.
     // `pane` re-execs into the Python CLI whose mirrored gate is the sole gate
@@ -2599,23 +2393,41 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // guard held here drops before any row exists and two rapid thread spawns
     // both pass the cap. The gate moves to run(), wrapped around that RPC.
     let codex_thread_fallthrough = provider == "codex" && substrate == "bg";
+    // The family-2 node guard runs after the cwd it judges and before the
+    // gate. The caller owns the hold, so a codex thread keeps its keys across
+    // the daemon RPC, and every exit before a proven launch releases them.
+    *hold = match fno_agents::spawn_guard::guard_client_spawn(params, name, &cwd) {
+        Ok(hold) => hold,
+        Err(code) => return Some(code),
+    };
     let mut gate_guard = if substrate == "pane" || codex_thread_fallthrough {
         None
     } else {
         let flags = gate_flags_from_params(&params);
         let config_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        match fno_agents::spawn_gate::run_gate(
-            &config_cwd,
-            &home.registry_json(),
-            fno_agents::spawn_gate::GateInput {
-                name: name.to_string(),
-                substrate: substrate.to_string(),
-                flags,
-                seed: fno_agents::spawn_phase::params_seed(&params),
-                route_provider: fno_agents::claude_adopt::gate_route_provider(&params),
-                ..Default::default()
-            },
-        ) {
+        let wait_secs = params.get("wait_secs").and_then(Value::as_f64);
+        match fno_agents::spawn_bare::gate_with_wait(wait_secs, || {
+            fno_agents::spawn_gate::run_gate(
+                &config_cwd,
+                &home.registry_json(),
+                fno_agents::spawn_gate::GateInput {
+                    name: name.to_string(),
+                    substrate: substrate.to_string(),
+                    flags,
+                    seed: fno_agents::spawn_phase::params_seed(&params),
+                    route_provider: fno_agents::claude_adopt::gate_route_provider(&params),
+                    account: params
+                        .get("account")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    session_phase: params
+                        .get("session_phase")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    ..fno_agents::spawn_promote::gate_input(promotion)
+                },
+            )
+        }) {
             Ok(g) => Some(g),
             Err(refusal) => {
                 // One line by default; the receipt rides --json.
@@ -2646,14 +2458,16 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     }
 
     match (provider, substrate) {
-        // pane (default): mux-hosted since 4a-G2. The caller intercepts pane
-        // spawns BEFORE this fn and re-execs the Python CLI (mux_spawn back
-        // half), so this arm is unreachable; None keeps the match total.
+        // pane: the caller sends it to the pane spine before this fn.
         (_, "pane") => None,
 
         // claude bg: the detached `claude --bg` thread (appears in `claude
         // agents`; attach/peek/reply; NOT a grid pane). claude-only by nature.
         ("claude", "bg") => {
+            let native = fno_agents::spawn_bare::native_lane(params, name, route.as_ref(), &cwd);
+            if let Some(code) = native {
+                return Some(code);
+            }
             let claude_home = ClaudeHome::from_env();
             let daemon_receipt = match fno_agents::claude_ask::preflight_claude_daemon(&claude_home)
             {
@@ -2670,8 +2484,8 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
                 }
             };
             // The refusal carrier rides the inherited env (see the note
-            // above), so extra_env stays empty: a worker that drops the flag
-            // post-compaction still folds the refusal at init.
+            // above), so extra_env carries only a route's env: a worker that
+            // drops the flag post-compaction still folds the refusal at init.
             let mut outcome = dispatch_claude_spawn(
                 home,
                 &claude_home,
@@ -2679,12 +2493,12 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
                 &message,
                 from_name,
                 &cwd,
-                yolo,
+                false,
                 timeout,
-                &[],
-                model,
-                permission_mode,
-                effort,
+                &route_env,
+                None,
+                None,
+                route.as_ref().and_then(|r| r.effort.as_deref()),
                 claude_flags,
                 surface_cwd,
             );
@@ -2752,18 +2566,32 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
                 &message,
                 from_name,
                 &cwd,
-                yolo,
+                false,
                 timeout,
-                model,
-                permission_mode,
-                effort,
+                None,
+                None,
+                None,
+                output_format.as_deref(),
                 claude_flags,
+                &route_env,
             ))
         }
 
+        // claude cloud: the lane module owns the arm (axis refusals, the
+        // pty-held create, refusal by name). The gate guard drops as the arm
+        // ends.
+        (_, "cloud") => fno_agents::claude_cloud::client_spawn_arm(
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
+            surface_cwd,
+            provider,
+            &params,
+        ),
         // codex/gemini/agy headless: the client-side one-shot (codex --exec /
-        // gemini -p / agy -p).: --model is forwarded to each (exact
-        // passthrough to the provider CLI's own --model).
+        // gemini -p / agy -p). Model selection rides each lane's own config.
         ("codex", "headless") => {
             // The daemon receipt is teardown telemetry, never a precondition: a
             // codex whose app-server cannot boot (stubbed CLI, partial install,
@@ -2782,11 +2610,11 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
                 &message,
                 from_name,
                 &cwd,
-                yolo,
+                false,
                 timeout,
-                model,
-                effort,
-                add_dir,
+                None,
+                None,
+                None,
                 &harness_args,
             );
             if let Some(receipt) = daemon_receipt.as_ref() {
@@ -2795,7 +2623,7 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             emit!(outcome)
         }
         ("gemini", "headless") => emit!(dispatch_gemini_once(
-            home, name, &message, from_name, &cwd, yolo, timeout, model,
+            home, name, &message, from_name, &cwd, false, timeout, None,
         )),
         // opencode headless: the client-side one-shot `opencode run
         // --dangerously-skip-permissions` (the bare TUI stays the `pane` form).
@@ -2806,10 +2634,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             &message,
             from_name,
             &cwd,
-            yolo,
+            false,
             timeout,
-            model,
-            effort,
+            None,
+            None,
             &harness_args,
         )),
 
@@ -2821,8 +2649,8 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             from_name,
             &cwd,
             timeout,
-            model,
-            effort,
+            None,
+            None,
             &harness_args,
         )),
 
@@ -2832,31 +2660,46 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // JSON events to the log. The spawn returns immediately - the session
         // on the serve IS the worker (steering/mail over the API is a filed
         // follow-up).
-        ("opencode", "bg") => emit!(fno_agents::opencode_serve::dispatch_opencode_serve(
-            home,
-            name,
-            &message,
-            from_name,
-            &cwd,
-            model,
-            effort,
-            params.get("node").and_then(|v| v.as_str()),
-        )),
-
-        ("agy", "headless") => {
-            // agy is stateless (plain text, no session id): a one-shot `agy -p`.
-            // It ignores `yolo` (headless create always passes
-            // --dangerously-skip-permissions) and honors optional effort/model.
-            emit!(dispatch_agy_once_with_effort(
+        ("opencode", "bg") => {
+            // The serve lane carries one harness flag, the model. Any other
+            // token refuses by name: a dropped flag runs a worker that is
+            // not what the spawn asked for.
+            let model = fno_agents::claude_ask::passthrough_model(&harness_args);
+            if let Some(extra) = fno_agents::opencode_serve::uncarried_flag(&harness_args) {
+                eprintln!(
+                    "refused: the opencode thread lane carries only --model; {extra} cannot ride it. \
+                     Spawn on the pane lane (--split) to pass other opencode flags."
+                );
+                if let Some(g) = gate_guard.as_mut() {
+                    g.release();
+                }
+                return Some(2);
+            }
+            emit!(fno_agents::opencode_serve::dispatch_opencode_serve(
                 home,
                 name,
                 &message,
                 from_name,
                 &cwd,
                 model,
-                effort,
+                None,
+                params.get("node").and_then(|v| v.as_str()),
+            ))
+        }
+
+        ("agy", "headless") => {
+            // agy is stateless (plain text, no session id): a one-shot `agy -p`
+            // under its lane-default bypass posture.
+            emit!(dispatch_agy_once_with_effort(
+                home,
+                name,
+                &message,
+                from_name,
+                &cwd,
+                None,
+                None,
                 timeout,
-                add_dir,
+                None,
                 &harness_args,
             ))
         }
@@ -2867,10 +2710,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             &message,
             from_name,
             &cwd,
-            model,
-            effort,
-            yolo,
-            permission_mode,
+            None,
+            None,
+            false,
+            None,
             timeout,
             &harness_args,
         )),
@@ -2884,26 +2727,55 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             &message,
             from_name,
             &cwd,
-            yolo,
-            permission_mode,
+            false,
+            None,
             timeout,
             &harness_args,
             params.get("node").and_then(|v| v.as_str()),
         )),
 
-        // footnote headless: footnote's own loop, run in this process.
-        ("footnote", "headless") => emit!(fno_agents::footnote_harness::dispatch_once(
-            home, name, &message, from_name, &cwd, model, timeout, params,
-        )),
-        // footnote thread: an fno-owned host holds fnh's ACP session open.
-        ("footnote", "bg") => emit!(fno_agents::footnote_harness::thread::dispatch_thread(
-            home, name, &message, from_name, &cwd, model, params,
-        )),
+        // footnote (ACP) and muse (MSP): an fno-owned host holds the session.
+        (h @ ("footnote" | "muse"), s @ ("headless" | "bg")) => {
+            emit!(fno_agents::thread_host::dispatch(
+                home, h, s, name, &message, from_name, &cwd, timeout, params
+            ))
+        }
 
         // Codex thread is supervisor-hosted by the daemon. Returning `None`
         // preserves the request's `substrate=thread` so the daemon can own the
         // held app-server process and register its full thread identity.
         ("codex", "bg") => None,
+
+        // The keeper-lane thread spawns (pi, cursor-agent, grok, agy): the
+        // keeper_spawn arm reads the harness's capability row and launches
+        // the keeper from the binary, with no Python crossing. A keeper row
+        // names the harness and the row's refusals answer the unmeasured
+        // stances, so the guard is the row itself.
+        (other, "bg") if fno_agents::keeper_spawn::carries_keeper_row(other) => {
+            let outcome = fno_agents::keeper_spawn::dispatch(
+                home,
+                other,
+                name,
+                &message,
+                from_name,
+                &cwd,
+                &harness_args,
+                &params,
+            );
+            if !outcome.stderr.is_empty() {
+                eprint!("{}", outcome.stderr);
+            }
+            if !outcome.stdout.is_empty() {
+                print!("{}", outcome.stdout);
+            }
+            // The row exists once dispatch returned: release the gate now,
+            // like the claude arm, so a waiter never queues behind this
+            // spawn's post-receipt work.
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            Some(outcome.exit_code)
+        }
 
         // The three arms above stay NAMED rather than lane-routed: claude's
         // thread is hosted by the detached client, codex's by its own
@@ -2956,13 +2828,13 @@ fn unresolvable_ask_exit(params: &Value, name: &str) -> i32 {
     2
 }
 
-/// One-line pointers for the verbs retired at G4: the grid, the
+/// One-line pointers for the commands retired at G4: the grid, the
 /// WebSocket drive surface, and the interactive daemon PTY hosting behind
-/// `host`/`promote` moved to the mux. Returns `None` for a live verb. Callers
-/// print the pointer and exit non-zero so a script never reads a retired verb
+/// `host`/`promote` moved to the mux. Returns `None` for a live command. Callers
+/// print the pointer and exit non-zero so a script never reads a retired command
 /// as a silent success (AC5-EDGE).
-fn retired_verb_pointer(verb: &str) -> Option<&'static str> {
-    match verb {
+fn retired_command_pointer(command: &str) -> Option<&'static str> {
+    match command {
         "grid" => Some(
             "fno agents grid was retired at G4: agent panes now live in the mux. \
              Open `fno mux`, or script panes with `fno mux pane ls|read|run|send|wait|kill`.",
@@ -2972,12 +2844,12 @@ fn retired_verb_pointer(verb: &str) -> Option<&'static str> {
              Use `fno mux pane send <pane> --raw ...` for keystrokes (without --raw the payload is wrapped in an <fno_mail> envelope), or open `fno mux` and type into the pane.",
         ),
         "host" => Some(
-            "fno agents host was retired at G4: spawn a mux-hosted agent pane with \
-             `fno agents spawn --name <n> --substrate pane`.",
+            "fno agents host was retired at G4: open `fno mux` (the spawn command \
+             launches in the mux itself; the lane template owns the placement).",
         ),
         "promote" => Some(
             "fno agents promote is now fno agents org promote <session> --scope <scope>; \
-             the old pane verb was retired at G4 (spawn with `fno agents spawn --name <n> --substrate pane`).",
+             the old pane command was retired at G4 (a spawn lands in the mux by default).",
         ),
         _ => None,
     }
@@ -2990,7 +2862,7 @@ fn retired_verb_pointer(verb: &str) -> Option<&'static str> {
 /// but the arms rows print either way.
 async fn run_status(json_out: bool) -> i32 {
     let home = AgentsHome::from_env();
-    let (mut arms, trace) = arms_readout(&home);
+    let (mut arms, trace) = fno_agents::status_render::arms_readout(&home);
     let req = Request::new(1, "agent.status", Value::Object(Map::new()));
     match call_if_running(&home, &req).await {
         Ok(resp) => match resp.payload {
@@ -3021,9 +2893,10 @@ async fn run_status(json_out: bool) -> i32 {
                     // every consumer reads the same verdict.
                     obj.insert(
                         "arms_attention".into(),
-                        serde_json::to_value(arms_attention(&arms)).unwrap_or(Value::Null),
+                        serde_json::to_value(fno_agents::status_render::arms_attention(&arms))
+                            .unwrap_or(Value::Null),
                     );
-                    // What work is stuck right now: hung verbs and dead
+                    // What work is stuck right now: hung commands and dead
                     // flight holders, from the one stuck_work read.
                     obj.insert(
                         "stuck_work".into(),
@@ -3046,7 +2919,7 @@ async fn run_status(json_out: bool) -> i32 {
                         serde_json::to_string_pretty(&result).unwrap_or_default()
                     );
                 } else {
-                    print_status_human(&result, &arms);
+                    fno_agents::status_render::print_status_human(&result, &arms);
                 }
                 // Drift warning, stderr-only so --json/automation
                 // consumers of stdout are never contaminated. We already hold the
@@ -3070,14 +2943,14 @@ async fn run_status(json_out: bool) -> i32 {
                 &fno_agents::tick_ledger::DaemonFacts::Down,
                 &trace,
             );
-            let payload = degraded_status_payload(&arms);
+            let payload = fno_agents::status_render::degraded_status_payload(&arms);
             if json_out {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&payload).unwrap_or_default()
                 );
             } else {
-                print_status_human(&payload, &arms);
+                fno_agents::status_render::print_status_human(&payload, &arms);
             }
             eprintln!("fno-agents: daemon not running");
             13
@@ -3092,116 +2965,18 @@ async fn run_status(json_out: bool) -> i32 {
                 &fno_agents::tick_ledger::DaemonFacts::Unknown,
                 &trace,
             );
-            let payload = degraded_status_payload(&arms);
+            let payload = fno_agents::status_render::degraded_status_payload(&arms);
             if json_out {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&payload).unwrap_or_default()
                 );
             } else {
-                print_status_human(&payload, &arms);
+                fno_agents::status_render::print_status_human(&payload, &arms);
             }
             eprintln!("fno-agents: {e}");
             1
         }
-    }
-}
-
-/// The control-plane arms rows from the arm journals plus the pr_watch tick
-/// trace the readout's cause rules consult.
-fn arms_readout(
-    home: &AgentsHome,
-) -> (
-    Vec<fno_agents::tick_ledger::ArmStatus>,
-    fno_agents::tick_ledger::TickTrace,
-) {
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // The journal list is owned by tick_ledger::journals, so the readout
-    // and the arm_watch fold the same files and cannot drift.
-    let journals = fno_agents::tick_ledger::journals(home);
-    let arms = fno_agents::tick_ledger::read_arms_starved(&journals, now_unix);
-    let trace = fno_agents::tick_ledger::read_tick_trace_live(&journals, &arms, now_unix);
-    (arms, trace)
-}
-
-/// The Rust-owned attention set: rows needing operator attention (unobserved,
-/// stale, or failing), selected by the one predicate in `tick_ledger`. The
-/// Python doctor consumes this list as its `red` set and never re-derives the
-/// verdict from the legacy booleans.
-fn arms_attention(
-    arms: &[fno_agents::tick_ledger::ArmStatus],
-) -> Vec<fno_agents::tick_ledger::ArmStatus> {
-    arms.iter()
-        .filter(|r| fno_agents::tick_ledger::needs_attention(r))
-        .cloned()
-        .collect()
-}
-
-/// The degraded status payload (daemon down or unreachable): the arms readout
-/// stands on its own, carrying both the full row list and the Rust-owned
-/// attention set, so a daemon's health never changes the payload schema.
-fn degraded_status_payload(arms: &[fno_agents::tick_ledger::ArmStatus]) -> Value {
-    json!({
-        "schema_version": 1,
-        "daemon": null,
-        "arms": arms,
-        "arms_attention": arms_attention(arms),
-        "stuck_work": fno_agents::stuck_work::status_value(
-            &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        ),
-    })
-}
-
-/// The human render: one owned line per arm (red rows first-class), then the
-/// daemon block the JSON payload carries. `explain` filled every row's
-/// `line`, so the render prints them without re-formatting.
-fn print_status_human(result: &Value, arms: &[fno_agents::tick_ledger::ArmStatus]) {
-    println!("control-plane arms:");
-    for arm in arms {
-        println!("  {}", arm.line);
-    }
-    // The readout teaches its own detail verb (the loops table).
-    println!("  loop detail: fno agents loops table");
-    if let Some(stuck) = result.get("stuck_work") {
-        for line in fno_agents::stuck_work::render_lines(stuck) {
-            println!("{line}");
-        }
-    }
-    let Some(daemon) = result.get("daemon").and_then(Value::as_object) else {
-        return;
-    };
-    let state = daemon.get("state").and_then(Value::as_str).unwrap_or("?");
-    let pid = daemon.get("pid").and_then(Value::as_u64);
-    let uptime = daemon.get("uptime_secs").and_then(Value::as_u64);
-    println!(
-        "daemon: {state}{}{}",
-        pid.map(|p| format!(" pid={p}")).unwrap_or_default(),
-        uptime
-            .map(|u| format!(" uptime={}s", u))
-            .unwrap_or_default(),
-    );
-    if let Some(agents) = result.get("agents").and_then(Value::as_object) {
-        println!(
-            "agents: total={} by_status={}",
-            agents.get("total").and_then(Value::as_u64).unwrap_or(0),
-            agents
-                .get("by_status")
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "{}".into())
-        );
-    }
-    // Best-effort: a machine whose footprint cannot be read prints no line
-    // rather than a stale or fabricated one. The keeper note names the path
-    // the live store keeper runs from, beside the footer (AC13).
-    let (machine_line, keeper_note) = machine_reading_notes();
-    if let Some(line) = machine_line {
-        println!("machine: {line}");
-    }
-    if let Some(note) = keeper_note {
-        println!("{note}");
     }
 }
 
@@ -3362,7 +3137,7 @@ fn run_reap(rest: &[String]) -> i32 {
         return if report.passes() { 0 } else { 1 };
     }
 
-    // The release verb: apply a ruling to one escalated hold through the
+    // The release command: apply a ruling to one escalated hold through the
     // sweep's own door. Classify, refuse fresh holds and open work by name,
     // apply, print the whole-sweep receipt. The keep mark: set, clear, or
     // list the user's standing exception. Both parse beside the sweep; the
@@ -3376,27 +3151,72 @@ fn run_reap(rest: &[String]) -> i32 {
 
     let dry_run = rest.iter().any(|a| a == "--dry-run");
     let no_mux = rest.iter().any(|a| a == "--no-mux");
+    let only_done = rest.iter().any(|a| a == "--done");
+    let apply = rest.iter().any(|a| a == "--apply");
     let extras: Vec<&str> = rest
         .iter()
         .map(String::as_str)
-        .filter(|a| *a != "--json" && *a != "-J" && *a != "--dry-run" && *a != "--no-mux")
+        .filter(|a| {
+            *a != "--json"
+                && *a != "-J"
+                && *a != "--dry-run"
+                && *a != "--no-mux"
+                && *a != "--done"
+                && *a != "--apply"
+        })
         .collect();
     if !extras.is_empty() {
         eprintln!(
-            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux (got: {})",
+            "fno-agents: reap takes no arguments other than --json/--dry-run/--no-mux/--done/--apply (got: {})",
             extras.join(" ")
+        );
+        return 2;
+    }
+    if apply && !only_done {
+        eprintln!(
+            "fno-agents: reap --apply only rides --done (the bulk all-clear): `reap --done --apply`"
         );
         return 2;
     }
     let home = AgentsHome::from_env();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let grace_secs = fno_agents::agents_config::retire_grace_secs(&cwd) as i64;
-    // Dead teams first, matching the arm's in-arm order.
-    let teams = fno_agents::team_reap::production_sweep(&home, &cwd, !dry_run);
-    let mut summary = if dry_run {
+    // The bulk all-clear: --apply executes the scoped pass; without it the
+    // pass rehearses, whatever --dry-run says.
+    if only_done && apply && dry_run {
+        eprintln!("fno-agents: reap --done takes --apply or --dry-run, not both");
+        return 2;
+    }
+    let effective_dry = if only_done { !apply } else { dry_run };
+    // What this invocation runs: `--done` scopes the whole command to the
+    // done/eval pass. The team sweep and the mux tab sweep touch rows the
+    // scoped pass never judges, so a scoped run runs neither, apply or dry.
+    let plan = reap_plan(only_done);
+    let teams = if plan.teams {
+        // Dead teams first, matching the arm's in-arm order.
+        Some(fno_agents::team_reap::production_sweep(
+            &home,
+            &cwd,
+            !effective_dry,
+        ))
+    } else {
+        None
+    };
+    let mut summary = if only_done {
+        if apply {
+            fno_agents::gc::gc_sweep_done_only(
+                &home,
+                &fno_agents::events::EventEmitter::new(home.events_jsonl(), "daemon"),
+                grace_secs,
+                fno_agents::agents_config::reap_receipt_retain_days(&cwd),
+            )
+        } else {
+            fno_agents::gc::gc_sweep_done_only_dry_run(&home, grace_secs)
+        }
+    } else if dry_run {
         fno_agents::daemon::gc_sweep_dry_run(&home, grace_secs)
     } else {
-        // Source "daemon": the manual verb is the same operation as the tick.
+        // Source "daemon": the manual command is the same operation as the tick.
         let emitter = fno_agents::events::EventEmitter::new(home.events_jsonl(), "daemon");
         fno_agents::daemon::gc_sweep(
             &home,
@@ -3406,26 +3226,28 @@ fn run_reap(rest: &[String]) -> i32 {
         )
     };
     summary.mark_escalated(fno_agents::agents_config::hold_escalate_after(&cwd));
-    summary.teams = Some(teams);
+    summary.teams = teams;
 
     // The dry-run JSON read also carries the census (task 4): who would
     // retire and what was seen, one read. Text dry-runs carry it too now:
     // the text receipt prints the counts beside the judged rows instead of
     // the census living only in the JSON read.
-    let inventory = if dry_run {
+    let inventory = if effective_dry {
         Some(fno_agents::gc_inventory::census(&home))
     } else {
         None
     };
     // The mux sideline sweep: the registry pass above reaps rows,
     // but ghost panes are the surface an operator SEES. The sweep body stays
-    // the one prune verb (reused, not reimplemented); `--no-mux` skips it.
-    // The manual verb keeps `--include-used-shells`: closing a human's spent
-    // shells is an attended choice, never the daemon's default.
-    let mux = if no_mux {
+    // the one prune command (reused, not reimplemented); `--no-mux` skips it.
+    // The manual command keeps `--include-used-shells`: closing a human's spent
+    // shells is an attended choice, never the daemon's default. A scoped
+    // `--done` run skips it entirely: the tabs belong to rows the scoped
+    // pass never judged.
+    let mux = if no_mux || !plan.mux_tabs {
         fno_agents::reap_render::MuxSweep::Skipped
     } else {
-        fno_agents::gc::mux_tab_sweep(None, &cwd, dry_run, true)
+        fno_agents::gc::mux_tab_sweep(None, &cwd, effective_dry, true)
     };
     print!(
         "{}",
@@ -3434,10 +3256,41 @@ fn run_reap(rest: &[String]) -> i32 {
             inventory.as_ref(),
             Some(&mux),
             json_out,
-            dry_run
+            effective_dry
         )
     );
     0
+}
+
+/// What one `reap` invocation runs. `--done` scopes the whole command to the
+/// done/eval pass: the team sweep and the mux tab sweep touch rows the
+/// scoped pass never judges, so a scoped run runs neither, apply or dry.
+struct ReapPlan {
+    teams: bool,
+    mux_tabs: bool,
+}
+
+fn reap_plan(only_done: bool) -> ReapPlan {
+    ReapPlan {
+        teams: !only_done,
+        mux_tabs: !only_done,
+    }
+}
+
+#[cfg(test)]
+mod reap_tests {
+    use super::*;
+
+    /// The scope contract the merge hold names: a scoped `--done` run runs
+    /// the done/eval pass alone. The unscoped run keeps both sidelines.
+    #[test]
+    fn a_done_scoped_reap_runs_neither_sideline_sweep() {
+        let plan = reap_plan(true);
+        assert!(!plan.teams, "a scoped run never sweeps teams");
+        assert!(!plan.mux_tabs, "a scoped run never sweeps mux tabs");
+        let plain = reap_plan(false);
+        assert!(plain.teams && plain.mux_tabs, "the unscoped run keeps both");
+    }
 }
 
 /// `fno-agents roster-reap`: the roster-side sweep (gap one). Dry-run
@@ -3655,29 +3508,7 @@ fn apply_interactive_defaults(params: &mut Map<String, Value>) -> Result<(), Str
     Ok(())
 }
 
-/// The substrate a spawn with NO explicit `--substrate` gets: thread where the
-/// harness seats one, else the closable pane. The Python seam (the public
-/// `fno agents spawn` front door) resolves the SAME default in its own body
-/// and opens the thread's default view through the mux thread verb, so this
-/// helper only answers for a DIRECT binary call.
-/// It seats only the three lanes this client itself routes (claude/codex
-/// bg, opencode serve); a keeper-lane harness (pi, cursor-agent, grok, agy)
-/// keeps the pane default here and seats its thread through the Python seam's
-/// keeper carve-out instead. The harness default matches the daemon's
-/// `handle_spawn` provider default (codex) so a bare direct call and the
-/// daemon route cannot disagree.
-fn default_substrate(params: &Value) -> &'static str {
-    let harness = params
-        .get("provider")
-        .and_then(|v| v.as_str())
-        .unwrap_or("codex");
-    match harness {
-        "claude" | "codex" | "opencode" => "thread",
-        _ => "pane",
-    }
-}
-
-fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String> {
+fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), String> {
     let mut params = Map::new();
     let mut positional: Vec<String> = Vec::new();
     let mut argv: Option<Vec<String>> = None;
@@ -3703,10 +3534,14 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--message",
         "--name",
         "--node",
+        "--slug",
+        "--plan",
+        "--session-phase",
         "--session-id",
         "--status",
         "--progress",
         "--from-name",
+        "--to-project",
         "--answer",
         "--timeout",
         "--model",
@@ -3714,6 +3549,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--substrate",
         "--workspace",
         "--squad",
+        "--pane",
         "--split",
         "--portal",
         "--tab",
@@ -3732,6 +3568,12 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "--harness-arg",
         "--role-level",
         "--role-scope",
+        "--promote",
+        "--take-over",
+        "--output-format",
+        "--monitor",
+        "--dispatch-account",
+        "--role",
     ];
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
@@ -3774,34 +3616,30 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
     }
 
     // on spawn the head's axis flags parse ONCE through the shared
-    // SpawnAxes schema (the same parser the spawn-overlay verb runs), and the
+    // SpawnAxes schema (the same parser the spawn-overlay command runs), and the
     // axis tokens leave the loop's input below. The values seed the same
     // params and fields the old axis arms fed, after the loop.
-    let axes = if verb == "spawn" {
+    let axes = if command == "spawn" {
         let (axes, fence) = SpawnAxes::scan(&normalized)?;
         normalized = SpawnAxes::strip_axes(&normalized, fence);
         Some(axes)
     } else {
         None
     };
-    // three orthogonal axes. --harness/-H names the CLI binary,
-    // --provider/-P the model VENDOR, --model the model at that vendor. The vendor
-    // is held aside so a harness name typed there fails closed after the loop
-    // (the historical confusion) rather than launching the wrong binary.
-    // (Non-spawn verbs still collect --harness/--provider through the loop.)
+    // Non-spawn commands collect --harness/-H through the loop (the resume command
+    // keeps the spelling); on spawn scan reads it as the one live binary axis.
     let mut harness_val: Option<String> = None;
     let mut vendor_val: Option<String> = None;
     let mut it = normalized.into_iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             // --harness/-H is the CLI-binary axis, the --harness vocabulary the
-            // rest of fno uses. -H no longer means headless (that is
-            // --substrate headless / --headless / -p / --once now).
+            // rest of fno uses. -H has never meant headless here.
             "--harness" | "-H" => {
                 harness_val = Some(it.next().ok_or("--harness needs a value")?);
             }
-            // --provider/-P is the model-vendor axis. Capital P: -p is headless,
-            // mirroring the harnesses' own one-shot short.
+            // --provider/-P is a tombstone on every command: the vendor axis only
+            // ever meant something alongside a routable spawn.
             "--provider" | "-P" => {
                 vendor_val = Some(it.next().ok_or("--provider needs a value")?);
             }
@@ -3810,7 +3648,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             // one-shot, so -p is a loud tombstone here - never silently bound to
             // headless (the arm below) or to a harness. This arm must precede the
             // headless one, which also matches "-p".
-            "-p" if verb != "spawn" => {
+            "-p" if command != "spawn" => {
                 return Err(format!(
                     "-p is not valid here; the one-shot short (--headless) is spawn-only, \
                      and the CLI binary is --harness/-H. \
@@ -3824,7 +3662,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 params.insert("split".into(), str_arg(&mut it, "-x/--split")?);
             }
             // The portal placement trio, same spellings the mux
-            // thread verb uses. Parsed here so the default Rust runtime
+            // thread command uses. Parsed here so the default Rust runtime
             // accepts what the help advertises; the placement itself runs
             // after the spawn receipt (place_thread_portal_after_spawn).
             "--portal" => {
@@ -3839,15 +3677,25 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--tab" => {
                 params.insert("tab".into(), str_arg(&mut it, "--tab")?);
             }
+            "--pane" if command == "spawn" => {
+                // The existing-pane attach: the spine resolves, checks and
+                // starts inside the named pristine shell.
+                let raw = str_arg(&mut it, "--pane")?;
+                let id: u64 = raw
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| "--pane needs a positive integer pane id".to_string())?;
+                params.insert("pane".into(), Value::from(id));
+            }
             "--at" => {
                 params.insert("at".into(), str_arg(&mut it, "--at")?);
             }
             // The named cell a split halves (spawn only): `portal N`, a
             // worker name, or `current`. `current` stays literal here: the
             // placement layer resolves it from FNO_PANE when the spawn ran
-            // inside a pane. Every other verb's `--from` is promote's
+            // inside a pane. Every other command's `--from` is promote's
             // resume pointer below.
-            "--from" if verb == "spawn" => {
+            "--from" if command == "spawn" => {
                 params.insert("from".into(), str_arg(&mut it, "--from")?);
             }
             "--from" => {
@@ -3869,8 +3717,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--name" => {
                 params.insert("name".into(), str_arg(&mut it, "--name")?);
             }
-            "--node" => {
-                params.insert("node".into(), str_arg(&mut it, "--node")?);
+            "--node" | "--slug" | "--plan" | "--session-phase" => {
+                params.insert(a[2..].replace('-', "_"), str_arg(&mut it, &a)?);
             }
             // The seam's node-reason receipt, set only when the seed
             // named a node the seam could not resolve. Forwarded so the mint
@@ -3897,7 +3745,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--json" | "-J" => {
                 // Client-side rendering flag; never forwarded to the daemon.
                 // On spawn the gate refusal's receipt prints only with it.
-                if verb == "spawn" {
+                if command == "spawn" {
                     params.insert("json_out".into(), Value::Bool(true));
                 }
             }
@@ -3914,22 +3762,32 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             "--force" | "-F" => {
                 params.insert("force".into(), Value::Bool(true));
             }
-            "--cross-project" if verb == "rm" || verb == "stop" => {
-                // The lifecycle verbs' store heal resolves through the same
-                // project-confinement refusal resume/adopt answer with this
-                // flag; accept it so the refusal's taught remedy is a form
-                // these verbs take.
-                params.insert("cross_project".into(), Value::Bool(true));
+            "--cross-project" if command == "rm" || command == "stop" => {
+                // Retired (d-460ea8c7): the store heal is machine-wide;
+                // accepted as a silent no-op for one release.
             }
             "--no-wait" => {
                 // Spawn-gate escape: fail immediately at max_live
                 // instead of queueing for a free slot. Client-side only.
                 params.insert("no_wait".into(), Value::Bool(true));
             }
-            "--model" | "-m" => {
-                // Exact model name forwarded to the provider CLI's own --model.
-                // -m is the mobile short. No fuzzy resolution.
-                params.insert("model".into(), str_arg(&mut it, "-m/--model")?);
+            // The harness's own flags, typed before the fence, are shorthand
+            // for the same flag behind it. They join the fenced tail in
+            // harness_args, so every lane that carries a fenced flag carries
+            // these, and a lane that cannot refuses by name.
+            "--model" | "-m" | "--effort" | "--permission-mode" | "--add-dir" | "--agent"
+            | "--tools"
+                if command == "spawn" =>
+            {
+                let flag = if a == "-m" { "--model" } else { a.as_str() };
+                let value = str_arg(&mut it, flag)?;
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String(flag.to_string()));
+                    list.push(value);
+                }
             }
             "--from-name" => {
                 // Forwarded for Python flag-parity; every ask path validates it.
@@ -3940,59 +3798,14 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 params.insert("answer".into(), str_arg(&mut it, "--answer")?);
             }
             "--yolo" | "-Y" => {
-                // The daemon resolves yolo through resolve_thread_posture.
-                params.insert("yolo".into(), Value::Bool(true));
+                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--yolo"));
             }
-            // The Python spawn seam (rust_runtime
-            // make_context -> compose_spawn_argv) is the only reader of
-            // config.agents.profiles. This token asserts it crossed upstream
-            // and carries its enforcement verdict. Consumed here - never
-            // forwarded, never read past the `--` fence - so no harness argv
-            // or worker message can see it. Not in VALUE_FLAGS on purpose:
-            // the bare token must not eat a neighbor as its value.
-            "--defaults-applied" => {
-                params.insert(
-                    "defaults_applied".into(),
-                    Value::String("unenforced".into()),
-                );
-            }
-            other if other.starts_with("--defaults-applied=") => {
-                // if/else, not a match: an inner `"word" =>` arm would read as
-                // a phantom verb to the Python parity parser's arm scan.
-                let v = &other["--defaults-applied=".len()..];
-                if v != "enforced" && v != "unenforced" {
-                    return Err("--defaults-applied takes 'enforced' or 'unenforced'".into());
-                }
-                params.insert("defaults_applied".into(), Value::String(v.into()));
-            }
-            "--permission-mode" => {
-                // provider permission/approval mode. Parsed here so the
-                // pane substrate (raw-arg re-exec to Python) is not blocked by an
-                // unknown-flag error; bg/headless read it in maybe_run_spawn.
-                // Mapping + fail-closed validation live at the spawn seam.
-                params.insert(
-                    "permission_mode".into(),
-                    str_arg(&mut it, "--permission-mode")?,
-                );
-            }
-            "--effort" => {
-                params.insert("effort".into(), str_arg(&mut it, "--effort")?);
-            }
-            // Tier-3 harness-native passthrough. Parsed here (space +
-            // equals form via VALUE_FLAGS) so the pane re-exec is not blocked by
-            // an unknown-flag error; the mapping + fail-closed live at the spawn
-            // seam (maybe_run_spawn) and the Python pane builder.
-            "--add-dir" => {
-                params.insert("add_dir".into(), str_arg(&mut it, "--add-dir")?);
-            }
-            "--agent" => {
-                params.insert("agent".into(), str_arg(&mut it, "--agent")?);
-            }
-            "--tools" => {
-                params.insert("tools".into(), str_arg(&mut it, "--tools")?);
-            }
+            // fno's own spelling of claude's --disallowedTools: it refuses by
+            // name, since forwarding it would hand claude a flag it lacks.
             "--deny-tools" => {
-                params.insert("deny_tools".into(), str_arg(&mut it, "--deny-tools")?);
+                return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
+                    "--deny-tools",
+                ));
             }
             // The front door's carrier for a fenced `--` token a thread or
             // one-shot lane maps (codex: -c/--config/--add-dir). Repeatable;
@@ -4009,15 +3822,21 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             }
             // The role halves the Python seam carries for a promoted codex
             // thread spawn; the typed parse lives in spawn_axes.
-            "--role-level" | "--role-scope" => {
+            f if fno_agents::spawn_axes::ROLE_FLAGS.contains(&f) => {
                 fno_agents::spawn_axes::insert_role_flag(&a, &mut it, &mut params)?;
             }
+            // The row-9 flags: typed parse in spawn_axes (the equals form
+            // split above); the value gates run after the loop where harness
+            // and substrate are both known.
+            "--output-format" | "--monitor" | "--dispatch-account" if command == "spawn" => {
+                fno_agents::spawn_axes::insert_spawn_flag(&a, &mut it, &mut params)?;
+            }
+            "--role" if command == "spawn" => {
+                // Resolved by spawn_route::role_seam in the spawn arm.
+                params.insert("role".into(), str_arg(&mut it, "--role")?);
+            }
             "--account" => {
-                // per-spawn account selection. Parsed here so the spawn
-                // arm is not blocked by an unknown-flag error; the four-lane
-                // overlay resolution lives in Python (fno.agents.account_env), so
-                // an account spawn re-execs the Python CLI on EVERY substrate (see
-                // the spawn intercept) rather than duplicating the resolver here.
+                // Resolved by accounts::launch in the spawn arm.
                 params.insert("account".into(), str_arg(&mut it, "--account")?);
             }
             "--audit-actor" => {
@@ -4056,7 +3875,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                     }
                     Some("bg") => {
                         return Err(
-                            "substrate 'bg' was retired; use --substrate thread".to_string()
+                            "substrate 'bg' was retired; a bare spawn seats a thread".to_string()
                         );
                     }
                     other => {
@@ -4068,24 +3887,29 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 }
             }
             "--once" | "-o" => {
-                // Back-compat alias: every live `--once` caller is a codex/gemini
-                // one-shot, i.e. headless. Map it to --substrate headless so old
-                // callers keep working without the conflated `once` boolean. An
-                // explicit --substrate already present wins. `--headless`/`-p`
-                // retired with change 6; `--substrate headless` is the spelling.
-                params
-                    .entry("substrate")
-                    .or_insert_with(|| Value::String("headless".into()));
+                // A one-shot: spawn_bare::settle_substrate makes it headless.
+                params.insert("once".into(), Value::Bool(true));
             }
             "--fresh" => {
                 // Accepted no-op alias: the worker cwd already defaults
                 // to the canonical repo root. Parsed for dispatcher compat.
                 params.insert("fresh".into(), Value::Bool(true));
             }
+            "--bounded-placement" => {
+                // The dispatchers' automated pane spell (fallback_chain /
+                // spawn_overlay emit it beside `--as pane`): the pane arm
+                // reads it as hold-the-placement-lease-and-`--fit`. Parsed
+                // on every command like the other placement flags; only the
+                // pane arm consumes it.
+                params.insert("bounded_placement".into(), Value::Bool(true));
+            }
             "--here" | "--in-place" => {
                 // Explicit opt-in to the caller's cwd instead of the canonical
                 // default: extend WIP right here.
                 params.insert("here".into(), Value::Bool(true));
+            }
+            "--to-project" | "--any" if command == "ask" => {
+                fno_agents::ask_project::take_flag(&a, &mut it, &mut params)?;
             }
             "--timeout" | "-t" => {
                 let val = str_arg(&mut it, "--timeout")?;
@@ -4117,7 +3941,10 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             // The resume arm re-parses the original `rest` with
             // parse_conversion_args, which owns both flags; swallow them here
             // so the catch-all does not refuse them first.
-            "--dry-run" | "--allow-new-id" if verb == "resume" => {}
+            "--dry-run" | "--allow-new-id" if command == "resume" => {}
+            f if command == "spawn" && fno_agents::spawn_bare::owns(f) => {
+                fno_agents::spawn_bare::take_flag(&a, &mut it, &mut params)?;
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown flag: {other}"));
             }
@@ -4125,78 +3952,46 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         }
     }
 
-    // On `spawn` the two flags are different axes: --harness is the CLI binary,
-    // --provider the model vendor. Off spawn the vendor axis routes nothing, so
-    // --provider/-P (the retired harness spelling AND the vendor short) is a
-    // tombstone: exit 2 with the axis map, never silently forwarded.
-    if let Some(v) = vendor_val {
-        let v = v.trim().to_string();
-        if verb == "spawn" {
-            // A harness name on the vendor axis is refused BY NAME. This lane
-            // never re-execs Python cmd_spawn, so without this a `--provider
-            // claude` reaches the daemon as a vendor it cannot resolve.
-            if KNOWN_PROVIDERS.contains(&v.as_str()) || v == "agy" || v == "opencode" {
-                return Err(format!(
-                    "{v} is a harness, not a provider; use --harness {v}"
-                ));
-            }
-            // The vendor axis only means anything alongside a materialized route,
-            // and routing lives in the Python spawn path (the front door keeps
-            // every --provider spawn there). Reaching here means the binary was
-            // driven directly: say what to run instead of failing downstream.
-            return Err(format!(
-                "--provider {v} names a model vendor; routing is applied by the fno \
-                 CLI (`fno agents spawn ... --provider {v} --model <m>`), not by \
-                 fno-agents directly"
-            ));
-        }
-        return Err(format!(
-            "--provider/-P was split at the axis rename: the CLI binary is --harness/-H; \
-             a model vendor is only routable at spawn \
-             (`fno agents spawn --provider {v} --model <m>`)."
-        ));
+    // Off spawn the vendor axis routes nothing, so --provider/-P is a
+    // tombstone: exit 2 with the axis map, never silently forwarded. On spawn
+    // the token never survives scan (the retired-axis refusal fires first).
+    if vendor_val.is_some() {
+        return Err(
+            "--provider/-P was split at the axis rename: the CLI binary is \
+             --harness/-H; a model vendor is only routable at spawn via the \
+             lane template."
+                .to_string(),
+        );
     }
     if let Some(v) = harness_val {
         params.insert("provider".into(), Value::String(v));
     }
     if let Some(axes) = &axes {
         if let Some(v) = &axes.provider {
-            let v = v.trim().to_string();
-            if KNOWN_PROVIDERS.contains(&v.as_str()) || v == "agy" || v == "opencode" {
+            // Spawn never reaches here with a value (scan refuses the axis
+            // tokens up front); the arm stays a named refusal should the
+            // strip ever regress.
+            if KNOWN_PROVIDERS.contains(&v.as_str()) || v == "agy" || "opencode" == v {
                 return Err(format!(
                     "{v} is a harness, not a provider; use --harness {v}"
                 ));
             }
             return Err(format!(
-                "--provider {v} names a model vendor; routing is applied by the fno \
-                 CLI (`fno agents spawn ... --provider {v} --model <m>`), not by \
-                 fno-agents directly"
+                "--provider {v} names a model vendor; routing is applied by the \
+                 lane template, not by fno-agents directly"
             ));
         }
         if let Some(h) = &axes.harness {
             params.insert("provider".into(), Value::String(h.clone()));
         }
-        if let Some(m) = &axes.model {
-            params.insert("model".into(), Value::String(m.clone()));
-        }
-        if let Some(e) = &axes.effort {
-            params.insert("effort".into(), Value::String(e.clone()));
-        }
         if let Some(a) = &axes.account {
             params.insert("account".into(), Value::String(a.clone()));
         }
-        if let Some(sx) = &axes.substrate {
-            // if/else, not a match: an inner `"word" =>` arm reads as a
-            // phantom verb to the Python parity parser's arm scan.
-            if sx == "pane" || sx == "thread" || sx == "headless" {
-                params.insert("substrate".into(), Value::String(sx.clone()));
-            } else if sx == "bg" {
-                return Err("substrate 'bg' was retired; use --substrate thread".to_string());
-            } else {
-                return Err(format!(
-                    "--substrate must be one of: pane, thread, headless (got {sx})"
-                ));
-            }
+        if let Some(r) = &axes.route {
+            params.insert("route".into(), Value::String(r.clone()));
+        }
+        if let Some(s) = &axes.substrate {
+            params.insert("substrate".into(), Value::String(s.clone()));
         }
     }
 
@@ -4207,7 +4002,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         );
     }
 
-    let method = match verb {
+    let method = match command {
         "spawn" => {
             // The client runs as a child of the spawning session, so its env
             // still carries the harness markers the daemon's scrubbed env
@@ -4256,12 +4051,14 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                     Value::String(positional[msg_from..].join(" ")),
                 );
             }
-            // / spawn defaults to an owned interactive pane (the
-            // `pane` substrate) for PTY-capable providers. Only `pane` gets the
-            // interactive host_mode/mint; `bg` (claude --bg) and `headless`
-            // (-p/--exec) are client-side one-shots that never touch the daemon
-            // (byte-unchanged: no host_mode, no mint). An unknown provider keeps
-            // today's behavior (the daemon's provider_for_pty errors as before).
+            // The lane resolves once, here: with the --substrate flag retired,
+            // an unflagged spawn takes default_substrate, and the value rides
+            // params so dispatch, the thread-only grant and the portal all read
+            // the same lane. Only `pane` gets the interactive host_mode/mint;
+            // `thread` and `headless` never touch the daemon's PTY host. An
+            // unknown provider keeps today's behavior (the daemon's
+            // provider_for_pty errors as before).
+            fno_agents::spawn_bare::settle_substrate(&mut params);
             let substrate = params
                 .get("substrate")
                 .and_then(Value::as_str)
@@ -4273,21 +4070,13 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
             if substrate == "pane" && pty_capable {
                 apply_interactive_defaults(&mut params)?;
             }
-            fno_agents::spawn_context::refuse_inherited_tier_remap(&params)?;
             fno_agents::spawn_context::stamp_spawn_lineage(&mut params)?;
             "agent.spawn"
         }
         "ask" => {
-            let name = positional.first().ok_or("ask needs a <name>")?;
-            params.insert("name".into(), Value::String(name.clone()));
-            if !params.contains_key("message") && positional.len() > 1 {
-                params.insert("message".into(), Value::String(positional[1..].join(" ")));
-            }
+            fno_agents::ask_project::parse(&mut params, &positional)?;
             "agent.ask"
         }
-        // `host`/`promote` (interactive daemon PTY hosting) were retired at G4
-        // and intercepted with a mux pointer before build_request; they
-        // never reach this match.
         "list" => "agent.list",
         "status" => "agent.status",
         "stop" => {
@@ -4318,7 +4107,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
         "reconcile" => "agent.reconcile",
         other => {
             return Err(format!(
-                "unknown verb: {other} (expected {})",
+                "unknown command: {other} (expected {})",
                 ALL_CLIENT_ACTIONS.join("|")
             ))
         }
@@ -4401,8 +4190,8 @@ fn rm_failure_line(name: &str, err: &str, still_registered: Option<bool>) -> Str
 
 /// Format a successful daemon response for human-readable stdout.
 ///
-/// Returns `Some(line)` for verbs with a defined output contract, `None` for
-/// verbs that still use the generic `serde_json::to_string_pretty` fallback.
+/// Returns `Some(line)` for commands with a defined output contract, `None` for
+/// commands that still use the generic `serde_json::to_string_pretty` fallback.
 ///
 /// - `stop`: prints `stopped: <name> (<short_id>)` using the `short_id` the
 ///   daemon now includes in every stop success payload. Falls back to
@@ -4411,14 +4200,14 @@ fn rm_failure_line(name: &str, err: &str, still_registered: Option<bool>) -> Str
 /// - `list`: Task 3.1 - JSON when `json_flag` or not a TTY; table otherwise.
 /// - `reconcile`: Task 3.1 - JSON when `json_flag` or not a TTY; human summary otherwise.
 fn format_success(
-    verb: &str,
+    command: &str,
     name: &str,
     result: &Value,
     json_flag: bool,
     is_tty: bool,
     discover: bool,
 ) -> Option<String> {
-    match verb {
+    match command {
         "ask" => {
             // Create path (first contact): daemon returns {created: true, short_id: "..."}.
             // Python prints exactly `<short_id>\n` (no banner).
@@ -4497,7 +4286,7 @@ fn format_success(
             // helper (which has psutil's cross-platform reuse-safe liveness) and
             // folds the result in. Fail-open: an empty lane on any error.
             let discovered = if discover {
-                fetch_discovered_sessions(
+                fno_agents::list_render::fetch_discovered_sessions(
                     filters.get("cwd").and_then(|v| v.as_str()),
                     filters.get("provider").and_then(|v| v.as_str()),
                     filters.get("status").and_then(|v| v.as_str()),
@@ -4518,7 +4307,7 @@ fn format_success(
                     result.get("retired_sessions").unwrap_or(&Value::Null),
                 ))
             } else {
-                Some(render_list_table(
+                Some(fno_agents::list_render::render_list_table(
                     agents,
                     &discovered,
                     result["truth_probe_asked"].as_u64(),
@@ -4618,286 +4407,6 @@ fn render_list_json(
     serde_json::to_string_pretty(&payload).unwrap_or_default()
 }
 
-/// The `; released N claim(s); kept <key> (<observed>)` suffix a stop/rm line
-/// carries when the daemon released or kept claims for the stopped worker
-/// (change 5d). Empty when the receipt names neither, so a stop that
-/// released nothing renders byte-identical to today.
-
-/// Shell out to the Python `fno agents discovered-json` helper for the P1
-/// discovered-live-sessions lane and return the rows.
-///
-/// The Rust client owns the `list` rendered surface, but discovery lives in
-/// Python (it needs psutil's cross-platform process create-time for the
-/// reuse-safe liveness the design requires; the Rust-native liveness degrades
-/// to existence-only on macOS). Fail-open by contract: a missing `fno`, a
-/// non-zero exit, or unparseable output yields an empty lane so `list` is
-/// never broken by discovery (US5). `FNO_AGENTS_RUNTIME=python` pins the child
-/// to the Python dispatch so it cannot recurse back into this binary.
-fn fetch_discovered_sessions(
-    cwd_filter: Option<&str>,
-    provider_filter: Option<&str>,
-    status_filter: Option<&str>,
-    progress_filter: Option<&str>,
-) -> Vec<Value> {
-    use std::process::Command;
-
-    // No live-only early return. It encoded "a discovered session is live by
-    // definition", which the shared reachability verdict retired: a discovered
-    // row whose process is provably gone now comes back `orphaned`, so the
-    // early return made `--status orphaned` drop through Rust a row that Python
-    // prints -- one runtime-dependent answer to one question. The row-level
-    // filter at the bottom is the single place status is applied.
-    let mut argv = vec!["agents".to_string(), "discovered-json".to_string()];
-    if let Some(c) = cwd_filter {
-        argv.push("--cwd".into());
-        argv.push(c.into());
-    }
-    // Without this the rendered surface disagrees with the Python one:
-    // `--harness claude` would list every discovered codex/opencode session.
-    // An empty value is "no filter" on the Python side, so forwarding it would
-    // make the two runtimes disagree again in the other direction.
-    if let Some(p) = provider_filter.filter(|p| !p.is_empty()) {
-        argv.push("--harness".into());
-        argv.push(p.into());
-    }
-
-    // Every `fno agents list` on the box runs this, so several terminals asking
-    // at once each paid their own Python cold start for one answer. The latch
-    // is keyed on the argv above, so a run with a different `--cwd` or
-    // `--harness` is a different flight and keeps its own answer.
-    let key = fno_agents::single_flight::flight_key(&argv);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let flight = fno_agents::single_flight::run_or_join(
-        &key,
-        fno_agents::agents_config::single_flight_ttl(&cwd),
-        fno_agents::agents_config::single_flight_join_budget(&cwd),
-        // No outer deadline to subtract from: this path has no caller-supplied
-        // budget, so the wait it may have spent changes nothing about the run.
-        |_spent| {
-            let mut cmd = Command::new(fno_agents::scrape::fno_bin());
-            cmd.args(&argv);
-            cmd.env("FNO_AGENTS_RUNTIME", "python");
-            // Fail-open by contract, and the same rule the latch needs: only a
-            // clean run is worth sharing, so a failure spends no cache entry
-            // and the next caller retries for real.
-            match cmd.output() {
-                Ok(o) if o.status.success() => Some(o.stdout),
-                _ => None,
-            }
-        },
-    );
-    let output = match flight.stdout {
-        Some(bytes) => bytes,
-        None => return Vec::new(),
-    };
-    let parsed: Value = match serde_json::from_slice(&output) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let mut rows: Vec<Value> = parsed
-        .get("discovered_sessions")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    retain_discovered_by_status(&mut rows, status_filter);
-    retain_discovered_by_progress(&mut rows, progress_filter);
-    rows
-}
-
-/// Keep only the discovered rows whose OWN verdict matches the requested one.
-///
-/// Split out so it is assertable without the shellout above. The test that
-/// used to cover this pinned the early return (`a non-live filter yields
-/// nothing`), and once that return was gone the same assertion still passed --
-/// vacuously, because the subprocess answers with nothing under test. An
-/// assertion that survives the behavior it describes is not covering it.
-fn retain_discovered_by_status(rows: &mut Vec<Value>, status_filter: Option<&str>) {
-    // A discovered session whose process is provably gone now comes back
-    // `orphaned` (the shared reachability verdict), so a live-only run that
-    // trusted the CALLER's filter alone would print an orphaned row under a
-    // banner that says LIVE.
-    if let Some(want) = status_filter {
-        rows.retain(|r| r.get("status").and_then(Value::as_str) == Some(want));
-    }
-}
-
-fn retain_discovered_by_progress(rows: &mut Vec<Value>, progress_filter: Option<&str>) {
-    if let Some(want) = progress_filter {
-        rows.retain(|r| r.get("progress").and_then(Value::as_str) == Some(want));
-    }
-}
-
-/// Compact single-unit age for the CHECKED column: the largest whole unit of
-/// the elapsed seconds -- `3s`, `4m`, `18h`, `2d` (plan, AC2-EDGE).
-/// Negative input (a row reconciled in the "future" via clock skew) clamps to
-/// `0s` rather than rendering a misleading negative age.
-/// Render agents list as a human-readable table: ROW NAME SESSION HARNESS
-/// MODEL EFFORT PR AGE LAST MESSAGE STATUS. MODEL and PR name the basis they
-/// were read from, so an absent value never reads as unset. AGE is the age of
-/// the transcript's newest activity, beside LAST MESSAGE and STATUS on
-/// purpose: a row claiming to be busy while its transcript is hours old shows
-/// the disagreement. JSON keeps every column this table drops.
-fn render_list_table(
-    agents: &Value,
-    discovered: &[Value],
-    truth_probe_asked: Option<u64>,
-    truth_probe_answered: Option<u64>,
-    retired: &Value,
-) -> String {
-    let headers = [
-        "ROW",
-        "NAME",
-        "SESSION",
-        "HARNESS",
-        "MODEL",
-        "EFFORT",
-        "PR",
-        "AGE",
-        "LAST MESSAGE",
-        "STATUS",
-    ];
-    let empty_arr = vec![];
-    let rows = agents.as_array().unwrap_or(&empty_arr);
-    let now = chrono::Utc::now();
-    let text = |r: &Value, key: &str| {
-        r[key]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("-")
-            .to_string()
-    };
-
-    let display: Vec<[String; 10]> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            // The full id, never truncated: the first eight are the address.
-            let session = r["harness_session_id"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .or_else(|| {
-                    // Claude's legacy `session_id` is its short transport id,
-                    // not the full session id promised by this column.
-                    (r["harness"].as_str() != Some("claude")).then(|| text(r, "session_id"))
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-            // `unknown`, not `never`: no transcript was READ, which is an
-            // absent reading, not a claim that no event ever happened.
-            let age = match r["last_event_at"].as_str() {
-                Some(ts) => render_checked(Some(ts), now),
-                None => "unknown".to_string(),
-            };
-            let last_msg = r["last_message"]
-                .as_str()
-                .map(|s| truncate_cell(s, LAST_MESSAGE_WIDTH))
-                .unwrap_or_else(|| "-".to_string());
-            [
-                (i + 1).to_string(),
-                text(r, "name"),
-                session,
-                text(r, "harness"),
-                fno_agents::list_row::model_cell(r),
-                text(r, "effort"),
-                fno_agents::list_row::pr_cell(r),
-                age,
-                last_msg,
-                text(r, "status"),
-            ]
-        })
-        .collect();
-
-    let widths = display_widths(headers, &display);
-
-    let mut lines = Vec::new();
-    // The instrument's receipt, in the artifact itself: a total
-    // outage must not read as a wall of `unknown` statuses the reader was
-    // meant to trust. The daemon's stderr WARN is write-only; this line is
-    // the one the operator actually sees.
-    if truth_probe_asked.unwrap_or(0) > 0 && truth_probe_answered == Some(0) {
-        lines.push(format!(
-            "truth probe failed: 0 of {} rows answered; every STATUS below is unmeasured, not healthy",
-            truth_probe_asked.unwrap_or(0)
-        ));
-    }
-    // Header row
-    let header_line = headers
-        .iter()
-        .enumerate()
-        .map(|(i, h)| format!("{:width$}", h, width = widths[i]))
-        .collect::<Vec<_>>()
-        .join(" ");
-    lines.push(header_line.trim_end().to_string());
-    // Data rows
-    for row in &display {
-        let data_line = row
-            .iter()
-            .enumerate()
-            .map(|(i, cell)| format!("{:width$}", cell, width = widths[i]))
-            .collect::<Vec<_>>()
-            .join(" ");
-        lines.push(data_line.trim_end().to_string());
-    }
-    let mut out = lines.join("\n") + "\n";
-    if !discovered.is_empty() {
-        out.push_str(&render_discovered_section(discovered));
-    }
-    out.push_str(&fno_agents::reap_render::retired_section(retired));
-    out
-}
-
-/// Render the host-local discovered-live-sessions lane below the registry
-/// table (AC1-UI). Columns: ADDRESS (the mailbox) LABEL (friendly alias)
-/// STATUS PROJECT CWD. ADDRESS leads, matching the Python renderer:
-/// `<project>-<short8>` is not an address. The value is read off the row
-/// (`to_row` resolves it from the session's own harness), so this renderer
-/// and the Python one cannot answer differently about the same session.
-fn render_discovered_section(discovered: &[Value]) -> String {
-    let headers = ["ADDRESS", "LABEL", "STATUS", "PROJECT", "CWD"];
-    let display: Vec<[String; 5]> = discovered
-        .iter()
-        .map(|r| {
-            let address = r["address"].as_str().unwrap_or("-").to_string();
-            let label = r["handle"].as_str().unwrap_or("-").to_string();
-            let status = r["status"].as_str().unwrap_or("-").to_string();
-            let project = r["project"].as_str().unwrap_or("-").to_string();
-            let cwd = r["cwd"].as_str().unwrap_or("-").to_string();
-            [address, label, status, project, cwd]
-        })
-        .collect();
-
-    let widths = display_widths(headers, &display);
-
-    let mut lines = Vec::new();
-    lines.push(String::new()); // blank separator line
-    lines.push(format!(
-        "DISCOVERED LIVE SESSIONS ({}, host-local)",
-        display.len()
-    ));
-    lines.push(
-        headers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| format!("{:width$}", h, width = widths[i]))
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim_end()
-            .to_string(),
-    );
-    for row in &display {
-        lines.push(
-            row.iter()
-                .enumerate()
-                .map(|(i, cell)| format!("{:width$}", cell, width = widths[i]))
-                .collect::<Vec<_>>()
-                .join(" ")
-                .trim_end()
-                .to_string(),
-        );
-    }
-    lines.join("\n") + "\n"
-}
-
 /// Render reconcile result as Python-matching JSON (Task 3.1).
 ///
 /// Shape: `{"scanned": N, "orphaned": [...], "recovered": [...], "skipped": [...], "errors": [...]}`
@@ -4926,7 +4435,7 @@ fn render_reconcile_human(result: &Value) -> String {
     )
 }
 
-/// Map a daemon error code to the design's verb exit codes.
+/// Map a daemon error code to the design's command exit codes.
 fn exit_code_for(code: ErrorCode) -> i32 {
     match code {
         ErrorCode::AgentNotFound | ErrorCode::AgentExists | ErrorCode::InvalidStatus => 13,
@@ -4948,14 +4457,14 @@ fn exit_code_for(code: ErrorCode) -> i32 {
     }
 }
 
-fn warns_on_daemon_drift(verb: &str) -> bool {
-    matches!(verb, "list" | "rm")
+fn warns_on_daemon_drift(command: &str) -> bool {
+    matches!(command, "list" | "rm")
 }
 
-/// True when `--help`/`-h` appears in the verb's OWN options, i.e. before an
+/// True when `--help`/`-h` appears in the command's OWN options, i.e. before an
 /// `--argv`/`--` payload boundary. A `--help` after that boundary belongs to a
 /// spawned command's argv (e.g. `spawn wk --harness codex --argv -- tool
-/// --help`) and must not be captured as our per-verb help request
+/// --help`) and must not be captured as our per-command help request
 /// (review: gemini HIGH / codex P2).
 fn is_help_request(opts: &[String]) -> bool {
     let boundary = opts
@@ -4970,7 +4479,7 @@ fn print_help() {
         "{}",
         json!({
             "binary": "fno-agents",
-            "verbs": CLIENT_VERB_USAGE,
+            "verbs": CLIENT_COMMAND_USAGE,
         })
     );
 }

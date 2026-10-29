@@ -41,8 +41,8 @@ class RetaskCoordinate:
     permission_mode: Optional[str]
     route: Optional[str]
     account: Optional[str]
-    # The node's next lifecycle verb; profiles.<verb> supplies the tier.
-    verb: str = "target"
+    # The node's next lifecycle command; profiles.<command> supplies the tier.
+    command: str = "target"
 
 
 def _resolve_retask_node(node: str) -> str:
@@ -149,20 +149,18 @@ def resolve_target_coordinate(
     effort: Optional[str] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> RetaskCoordinate:
-    # The node's next lifecycle verb; an abstain (None) means ``target``.
+    # The node's next lifecycle command; an abstain (None) means ``target``.
     # The table answers canonical "/blueprint"; probe and rename take the
     # bare word. One lookup and one wrapper, shared with the door.
-    from fno.agents.node_dispatch import find_node_row, node_effective_verb
+    from fno.agents.node_dispatch import find_node_row, node_effective_command
 
-    verb = (node_effective_verb(find_node_row(node), node_id=node) or "target").lstrip(
+    command = (node_effective_command(find_node_row(node), node_id=node) or "target").lstrip(
         "/"
     ) or "target"
+    # The probe argv carries no --model/--effort: both are retired at the
+    # spawn door, so the operator's values overlay the composed answer below.
     args = ["spawn", "--name", "retask-probe"]
-    if model is not None:
-        args += ["--model", model]
-    if effort is not None:
-        args += ["--effort", effort]
-    args.append(f"/fno:{verb} {node}")
+    args.append(f"/fno:{command} {node}")
     # a probe, not a real dispatch - the builtin rung would otherwise
     # read as an explicit override and force every retask to respawn.
     resolved = compose_spawn_argv(
@@ -173,9 +171,16 @@ def resolve_target_coordinate(
     )
     harness = _flag_value(resolved, "--harness", "-H")
     if not harness:
-        from fno.dispatch_flags import resolve_dispatch_harness
+        from fno.rust_binary import CommandUnavailable, command_call
 
-        harness = resolve_dispatch_harness(None, env=env)[0]
+        try:
+            answer = command_call(
+                "route-slot",
+                {"mode": "resolve", "explicit": None, "env": dict(env or {})},
+            )
+            harness = answer.get("harness")
+        except CommandUnavailable:
+            harness = None
     route = _flag_value(resolved, "--route")
     provider = _flag_value(resolved, "--provider", "-P")
     route_model: Optional[str] = None
@@ -184,17 +189,18 @@ def resolve_target_coordinate(
         if not separator:
             provider = route
             route_model = None
-    resolved_model = _flag_value(resolved, "--model", "-m") or route_model
+    resolved_model = model or _flag_value(resolved, "--model", "-m") or route_model
     return RetaskCoordinate(
-        harness=harness,
+        # No door and a null answer both read unset downstream.
+        harness=harness or "",
         provider=provider,
         model=resolved_model,
-        effort=_flag_value(resolved, "--effort"),
+        effort=effort or _flag_value(resolved, "--effort"),
         substrate=_flag_value(resolved, "--substrate"),
         permission_mode=_flag_value(resolved, "--permission-mode"),
         route=route,
         account=_flag_value(resolved, "--account"),
-        verb=verb,
+        command=command,
     )
 
 
@@ -214,7 +220,7 @@ def finished_planner(
     for entry, parsed in zip(entries, parse_many([e.name for e in entries])):
         if entry.status != "live" or entry.substrate not in {"pane", "thread"}:
             continue
-        if parsed is None or parsed.verb != "bp":
+        if parsed is None or parsed.command != "bp":
             continue
         inside = entry.inside_leg or {}
         if inside.get("state") != "done":
@@ -268,7 +274,7 @@ def run_retask(
             env=env,
         )
     except DispatchResolveError as exc:
-        return _refused("dispatch_verb_unresolved", detail=str(exc))
+        return _refused("dispatch_command_unresolved", detail=str(exc))
     except RetaskTransportError as exc:
         # The compose probe rides the same transport as the transaction; a
         # pane that went away mid-probe is the same refused receipt.
@@ -280,20 +286,20 @@ def run_retask(
             mux = {"session": resolved_session, "pane_id": resolved_pane_id}
         else:
             mux = entry.mux or {}
-        if target.verb == "target":
+        if target.command == "target":
             command_template = dispatch_command(target.harness)
         else:
-            command_template = normalize_command(f"/{target.verb} {{id}}", target.harness)
+            command_template = normalize_command(f"/{target.command} {{id}}", target.harness)
         from fno import paths
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
-        return verb_call(
+        return command_call(
             "rename",
             {
                 "op": "retask",
                 "worker": entry.name,
                 "node": node,
-                "target": asdict(target),
+                "target": {**asdict(target), "command": None, "verb": target.command},  # verb-wording: allow (older binaries read this key)
                 "target_command": command_template.format(id=node),
                 "mux": mux,
                 "graph": str(paths.graph_json()),

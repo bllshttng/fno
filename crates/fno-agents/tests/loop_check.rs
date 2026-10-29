@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-/// Integration tests for `fno-agents loop-check` verb.
+/// Integration tests for `fno-agents loop-check` command.
 ///
 /// Each test drives the public `run_loop_check` function directly (no process
 /// spawn), using temporary directories for all file I/O.  gh/git are mocked
@@ -418,7 +418,7 @@ struct Decision {
     fingerprint: Option<String>,
 }
 
-/// Run the verb, capture stdout, parse the JSON decision.
+/// Run the command, capture stdout, parse the JSON decision.
 fn fire(args: &[&str]) -> (i32, Decision) {
     // run_loop_check writes JSON to stdout via println!; we capture it via
     // an in-process pipe simulation.  For simplicity, call via the public
@@ -430,7 +430,7 @@ fn fire(args: &[&str]) -> (i32, Decision) {
     args_owned.push("--global-settings".to_string());
     args_owned.push("/nonexistent/global-settings.yaml".to_string());
     // Hermeticity, third door: the fleet GitHub request budget ledger
-    // defaults to the developer's real ~/.fno/locks/github-request-budget.json.
+    // defaults to the machine locks folder's github-request-budget.json.
     // This suite runs under a live footnote session whose gh calls stamp that
     // real ledger all session long, so an unisolated test inherits whatever
     // backoff or window pressure the machine is actually under. Default to
@@ -470,12 +470,12 @@ fn fire(args: &[&str]) -> (i32, Decision) {
     ));
     (code, d)
 }
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 mod awaiting_merge_ruling;
 mod cancel_sentinel;
 mod gh_budget_gate;
+mod merged_stamp;
 mod watch_lease_gate;
 
 /// AC1-HP: promise with green PR -> DonePRGreen, exit 0, termination event.
@@ -619,7 +619,7 @@ fn unparseable_local_settings_not_outranked_by_global_github_apps() {
     fs::write(&transcript_path, transcript_with_promise()).unwrap();
 
     let mock = MockBins::green();
-    // Call the verb directly (NOT via `fire`, which forces --global-settings
+    // Call the command directly (NOT via `fire`, which forces --global-settings
     // /nonexistent); pass our own global so the merge overlay runs.
     let args: Vec<String> = vec![
         "loop-check".into(),
@@ -2943,7 +2943,7 @@ fn fire_pr_payload(cwd: &Path, settings: &str, mock: &MockBins) -> (i32, Decisio
         settings_path.to_str().unwrap(),
         // The fire() hermeticity default pins `none`, the hermetic opt-out
         // that disables the floor; the payload tests exercise the floor, so
-        // they pin a verbful harness the way a live claude fire resolves.
+        // they pin a commandful harness the way a live claude fire resolves.
         "--author-harness",
         "claude",
         &format!("--gh-bin={}", mock.gh.display()),
@@ -6875,7 +6875,7 @@ fn done_ends_unreviewed_not_awaiting_review_when_optional_app_refuses() {
     assert_eq!(d.termination_reason.as_deref(), Some("DoneUnreviewed"));
     assert!(d.message.contains("chatgpt-codex-connector"));
     assert!(d.message.contains("refused"));
-    assert!(d.message.contains("run the review verb at HEAD"));
+    assert!(d.message.contains("run the review command at HEAD"));
     assert!(d.message.contains("merge by hand"));
 }
 
@@ -7036,11 +7036,11 @@ fn coverage_receipt_zero_names_refused_and_absent() {
     // being waited on - not merely counted, and not conflated with the refused
     // reviewer, which is the only other name on the line.
     assert!(line.contains("waiting on gemini-code-assist"), "{line}");
-    // Never prescribes the local verb while someone is outstanding. This line
+    // Never prescribes the local command while someone is outstanding. This line
     // cannot tell required from optional, and `fno do pr merge` reads coverage
     // alone, so a worker that self-attests past a required bot lands the PR
     // before its blocking finding posts.
-    assert!(!line.contains("review verb"), "{line}");
+    assert!(!line.contains("review command"), "{line}");
     // Not a bare wait either: an optional App that is never installed sits
     // absent forever, so a move that is safe either way is always named.
     assert!(line.contains("check config.review"), "{line}");
@@ -7052,9 +7052,9 @@ fn coverage_receipt_zero_names_refused_and_absent() {
 
 /// A refusal is not an absence. The only configured reviewer hit its quota and
 /// declined, so nothing is still coming and a local attestation IS the move -
-/// the line prescribes the verb here, unlike the absent case above.
+/// the line prescribes the command here, unlike the absent case above.
 #[test]
-fn coverage_receipt_zero_prescribes_the_verb_when_the_only_reviewer_refused() {
+fn coverage_receipt_zero_prescribes_the_command_when_the_only_reviewer_refused() {
     let comments = vec![serde_json::json!({
         "author": {"login": "chatgpt-codex-connector[bot]"},
         "body": "You have reached your Codex usage limits for code reviews."
@@ -7073,7 +7073,7 @@ fn coverage_receipt_zero_prescribes_the_verb_when_the_only_reviewer_refused() {
     let line = coverage_receipt_line(&rep, None, None);
     assert!(line.contains("1 refused"), "{line}");
     assert!(line.contains("0 absent"), "{line}");
-    assert!(line.contains("run the review verb at HEAD"), "{line}");
+    assert!(line.contains("run the review command at HEAD"), "{line}");
 }
 
 #[test]
@@ -7721,7 +7721,7 @@ exit 1"#,
 // ── coverage commit-status publish (x-6352) ─────────────────────────────────
 //
 // AC8: both emitters of the review_coverage row (the stop-hook decide path and
-// the standalone verb) also publish the commit status, and the load-bearing
+// the standalone command) also publish the commit status, and the load-bearing
 // assert is the POSTED TARGET SHA + CONTEXT - never merely that a helper ran.
 // A status on the wrong sha or under a mistyped context is a green marker on
 // nothing, which is worse than no marker: the ruleset reads one exact name on
@@ -7839,8 +7839,8 @@ fn pub_fixture(cwd: &Path, review_config: &str) {
     fs::write(cwd.join(".fno/config.toml"), review_config).unwrap();
 }
 
-/// Run the standalone verb against `cwd`, returning its (exit code, stdout).
-fn fire_verb(cwd: &Path, gh: &Path, git: &Path, project: &Path, global: &Path) -> (i32, String) {
+/// Run the standalone command against `cwd`, returning its (exit code, stdout).
+fn fire_command(cwd: &Path, gh: &Path, git: &Path, project: &Path, global: &Path) -> (i32, String) {
     fno_agents::loopcheck::run_review_coverage_capture(&[
         "review-coverage".to_string(),
         "--cwd".to_string(),
@@ -7912,9 +7912,9 @@ fn coverage_status_publish_fires_from_both_emitters_to_the_pr_head() {
     ]);
     assert_eq!(code, 0, "loop-check must allow: {:?}", d);
 
-    // Emitter 2: the standalone verb.
-    let (vcode, vjson) = fire_verb(&cwd, &gh, &git, &project, &global);
-    assert_eq!(vcode, 0, "verb must emit a row: {vjson}");
+    // Emitter 2: the standalone command.
+    let (vcode, vjson) = fire_command(&cwd, &gh, &git, &project, &global);
+    assert_eq!(vcode, 0, "command must emit a row: {vjson}");
 
     let posts = status_posts(&record);
     assert_eq!(posts.len(), 4, "two POSTs per emitter, got: {posts:?}");
@@ -7971,11 +7971,11 @@ fn coverage_status_publish_posts_failure_when_unreviewed() {
     let gh = recording_green_gh(bins.path(), &record, false);
     let git = pub_git(bins.path());
 
-    let (vcode, vjson) = fire_verb(&cwd, &gh, &git, &project, &global);
-    assert_eq!(vcode, 0, "verb must emit a row: {vjson}");
+    let (vcode, vjson) = fire_command(&cwd, &gh, &git, &project, &global);
+    assert_eq!(vcode, 0, "command must emit a row: {vjson}");
 
     let posts = status_posts(&record);
-    assert_eq!(posts.len(), 2, "verb arm posts both contexts: {posts:?}");
+    assert_eq!(posts.len(), 2, "command arm posts both contexts: {posts:?}");
     let required = posts
         .iter()
         .find(|post| post.contains("context=fno/review-coverage "))
@@ -8004,11 +8004,11 @@ fn coverage_status_publish_requires_local_code_review_pass_when_configured() {
     let gh = recording_green_gh(bins.path(), &record, true);
     let git = pub_git(bins.path());
 
-    let (vcode, vjson) = fire_verb(&cwd, &gh, &git, &project, &global);
-    assert_eq!(vcode, 0, "verb must emit a row: {vjson}");
+    let (vcode, vjson) = fire_command(&cwd, &gh, &git, &project, &global);
+    assert_eq!(vcode, 0, "command must emit a row: {vjson}");
 
     let posts = status_posts(&record);
-    assert_eq!(posts.len(), 2, "verb arm posts both contexts: {posts:?}");
+    assert_eq!(posts.len(), 2, "command arm posts both contexts: {posts:?}");
     assert!(
         posts
             .iter()
@@ -8043,7 +8043,7 @@ fn coverage_status_protects_an_override_after_three_refused_label_reads() {
     );
     let git = pub_git(bins.path());
 
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
 
     assert_eq!(code, 0, "{json}");
     let recorded = fs::read_to_string(&record).unwrap();
@@ -8070,7 +8070,7 @@ fn coverage_status_posts_covered_after_refused_label_reads_find_no_override() {
     );
     let git = pub_git(bins.path());
 
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
 
     assert_eq!(code, 0, "{json}");
     let recorded = fs::read_to_string(&record).unwrap();
@@ -8104,7 +8104,7 @@ fn coverage_status_posts_failure_after_refused_label_reads_find_no_status() {
     let gh = fallback_gh(bins.path(), &record, false, "always-fail", "");
     let git = pub_git(bins.path());
 
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
 
     assert_eq!(code, 0, "{json}");
     let recorded = fs::read_to_string(&record).unwrap();
@@ -8132,7 +8132,7 @@ fn coverage_status_retries_a_label_read_then_honors_the_override() {
     let gh = fallback_gh(bins.path(), &record, false, "second-true", "unused");
     let git = pub_git(bins.path());
 
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
 
     assert_eq!(code, 0, "{json}");
     let recorded = fs::read_to_string(&record).unwrap();
@@ -8665,7 +8665,7 @@ fn review_posture_defaults_to_self_review_and_reports_gaps() {
     let gh = recording_green_gh(bins.path(), &tmp.path().join("rec"), false);
     let git = pub_git(bins.path());
 
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
     assert_eq!(code, 0, "{json}");
     let p = last_review_coverage_row(&project)["data"]["review_posture"].clone();
     assert_eq!(p["posture"], "self_review");
@@ -8694,7 +8694,7 @@ fn review_posture_explicit_github_rung_is_satisfied_by_app_review() {
     let gh = recording_green_gh(bins.path(), &tmp.path().join("rec"), true);
     let git = pub_git(bins.path());
 
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
     assert_eq!(code, 0, "{json}");
     let p = last_review_coverage_row(&project)["data"]["review_posture"].clone();
     assert_eq!(p["posture"], "github_review");
@@ -8725,7 +8725,7 @@ fn review_posture_legacy_inference_names_self_and_github() {
     let gh = recording_green_gh(bins.path(), &tmp.path().join("rec"), true);
     let git = pub_git(bins.path());
 
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
     assert_eq!(code, 0, "{json}");
     let p = last_review_coverage_row(&project)["data"]["review_posture"].clone();
     assert_eq!(p["posture"], "self_and_github");
@@ -8765,7 +8765,7 @@ fn review_posture_independent_rung_requires_fresh_context_marker() {
         ),
     )
     .unwrap();
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
     assert_eq!(code, 0, "{json}");
     let p = last_review_coverage_row(&project)["data"]["review_posture"].clone();
     assert_eq!(p["posture"], "independent_review");
@@ -8778,7 +8778,7 @@ fn review_posture_independent_rung_requires_fresh_context_marker() {
         "{{\"type\":\"review_attestation\",\"data\":{{\"reviewer\":\"code-review\",\"head_sha\":\"{PUB_HEAD}\",\"verdict\":\"pass\",\"session_id\":\"run-a\",\"attester_session_id\":\"sess-fresh\",\"branch\":\"main\",\"reviewer_context\":\"fresh\"}}}}\n"
     ));
     fs::write(&project, seeded).unwrap();
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
     assert_eq!(code, 0, "{json}");
     let p = last_review_coverage_row(&project)["data"]["review_posture"].clone();
     assert_eq!(p["posture_satisfied"], true, "{p}");
@@ -8813,7 +8813,7 @@ fn review_posture_declare_and_sigma_never_satisfy_the_self_component() {
         ),
     )
     .unwrap();
-    let (code, json) = fire_verb(&cwd, &gh, &git, &project, &global);
+    let (code, json) = fire_command(&cwd, &gh, &git, &project, &global);
     assert_eq!(code, 0, "{json}");
     let p = last_review_coverage_row(&project)["data"]["review_posture"].clone();
     assert_eq!(p["posture_satisfied"], false, "{p}");

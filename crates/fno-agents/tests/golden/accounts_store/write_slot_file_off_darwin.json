@@ -1,0 +1,1 @@
+{"platform": "linux", "op": "write_slot_blob", "args": {"cli": "claude", "blob": "{\"claudeAiOauth\": {\"accessToken\": \"t-new\", \"refreshToken\": \"r\"}}"}, "now": 1800000000.0, "expect": {"result": null, "error": null, "store": {}, "modes": {}, "files": {"slot": "{\"claudeAiOauth\": {\"accessToken\": \"t-new\", \"refreshToken\": \"r\"}}"}, "keychain_writes": []}}

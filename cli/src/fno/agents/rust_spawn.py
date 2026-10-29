@@ -16,8 +16,8 @@ from typing import Mapping, Optional
 
 
 def _defaults_applied_marker() -> str:
-    """The seam marker both bridges carry; it keeps the binary's seam
-    gate from bouncing an already-configured spawn back to the front door.
+    """The seam marker both bridges carry; the client seam strips it and
+    skips admission, since the bridge's caller already composed the argv.
     """
     from fno.agents.spawn_defaults import spawn_seam_marker
 
@@ -30,9 +30,8 @@ def _opencode_serve_spawn(
     message: str,
     cwd: Path,
     from_name: str,
-    model: Optional[str],
     node: Optional[str] = None,
-    effort: Optional[str] = None,
+    passthrough: Optional[list[str]] = None,
 ) -> str:
     """Delegate an opencode thread spawn to the Rust serve lane; return short_id.
 
@@ -50,34 +49,29 @@ def _opencode_serve_spawn(
     if binary is None:
         raise DispatchAskError(
             "opencode thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
+            "(cargo build --release -p fno-agents) or spawn on the pane lane (--split)",
             exit_code=13,
         )
     argv = [
         str(binary),
         "spawn",
-        # Straight after the verb, never inside the fence below.
+        # Straight after the command, never inside the fence below.
         _defaults_applied_marker(),
         "--name",
         name,
         "--harness",
         "opencode",
-        # thread: the binary refuses the retired bg spelling.
-        "--substrate",
-        "thread",
+        # No substrate flag: the binary refuses the retired axis, and its
+        # default for opencode is the thread lane.
         "--cwd",
         str(cwd),
     ]
     if from_name:
         argv += [f"--from-name={from_name}"]
-    if model:
-        argv += [f"--model={model}"]
-    if effort:
-        # The serve lane applies effort as opencode's persisted model variant
-        # (apply_opencode_variant); the row's carries list answers for the axis.
-        argv += [f"--effort={effort}"]
     if node:
         argv += ["--node", node]
+    # The binary carries the model and refuses any other token by name.
+    argv += [f"--harness-arg={token}" for token in passthrough or ()]
     # The seed rides as the fenced positional tail, never a bare flag value:
     # with --name set the whole tail is the message, and a hyphen-leading
     # message as the value of `--message <msg>` would die as an unknown flag
@@ -138,12 +132,7 @@ def _codex_thread_spawn(
     message: str,
     cwd: Path,
     from_name: str,
-    model: Optional[str],
-    yolo: bool,
     node: Optional[str] = None,
-    effort: Optional[str] = None,
-    add_dir: Optional[str] = None,
-    permission_mode: Optional[str] = None,
     passthrough: Optional[list[str]] = None,
     account_env: Optional[Mapping[str, str]] = None,
     route_env: Optional[Mapping[str, str]] = None,
@@ -159,11 +148,12 @@ def _codex_thread_spawn(
     ``account_env``/``route_env`` overlay the client subprocess environment.
     They reach the app-server child only when this client also lazy-starts the
     daemon (the child inherits the daemon's env); a warm daemon keeps its own.
-    The state roots that have an env carrier are pinned around the overlay
-    by ``seal_state_root``; that docstring names what still follows HOME.
+    The state roots that have an env carrier (``FNO_AGENTS_HOME``,
+    ``FNO_CLAIMS_ROOT``, ``FNO_STATE_DIR``) are pinned around a moved HOME by
+    ``accounts::credentials::seal``; the ``FNO_HOME`` sidecars still follow it.
     """
-    from fno.agents.account_env import seal_state_root
     from fno.agents.dispatch import DispatchAskError
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
     from fno import rust_binary
 
@@ -171,20 +161,18 @@ def _codex_thread_spawn(
     if binary is None:
         raise DispatchAskError(
             "codex thread spawn needs the fno-agents runtime; install it "
-            "(cargo build --release -p fno-agents) or use --substrate pane",
+            "(cargo build --release -p fno-agents) or spawn on the pane lane (--split)",
             exit_code=13,
         )
     argv = [
         str(binary),
         "spawn",
-        # Straight after the verb so it never lands inside the fence below.
+        # Straight after the command so it never lands inside the fence below.
         _defaults_applied_marker(),
         "--name",
         name,
         "--harness",
         "codex",
-        "--substrate",
-        "thread",
         "--cwd",
         str(cwd),
     ]
@@ -192,16 +180,6 @@ def _codex_thread_spawn(
         argv += [f"--role-level={role_level}", f"--role-scope={role_scope}"]
     if from_name:
         argv += [f"--from-name={from_name}"]
-    if model:
-        argv += [f"--model={model}"]
-    if yolo:
-        argv += ["--yolo"]
-    if effort:
-        argv += [f"--effort={effort}"]
-    if add_dir:
-        argv += [f"--add-dir={add_dir}"]
-    if permission_mode:
-        argv += [f"--permission-mode={permission_mode}"]
     # Fenced tokens ride as first-class flags; the equals form is load-bearing
     # (a hyphen-leading value dies as an unknown flag in the space form).
     for token in passthrough or ():
@@ -216,9 +194,20 @@ def _codex_thread_spawn(
     # This client IS a footnote process and a non-claude oauth_dir overlay is a
     # HOME override, so seal it or the client's own reads resolve under the
     # account's home and go unfindable. Env is the only channel to the
-    # app-server child, so the override stays; seal_state_root's docstring says
-    # what that leaves open.
-    env = seal_state_root(env)
+    # app-server child, so the override stays.
+    if env.get("HOME") != os.environ.get("HOME"):
+        try:
+            env = spawn_overlay_call({"kind": "state-root-seal", "env": env})["env"]
+        except SpawnOverlayUnavailable as exc:
+            # The seal rides the same binary the spawn will launch: one that
+            # cannot answer the door cannot hold the seal either, so refuse
+            # with the staleness receipt instead of the raw transport error.
+            raise DispatchAskError(
+                f"sealed spawn refused: {binary} cannot answer the state-root "
+                f"seal ({exc}); the seal cannot hold - run `fno doctor update` "
+                "to refresh the binary",
+                exit_code=13,
+            ) from exc
     if env.get("HOME") != os.environ.get("HOME") and env.get("FNO_STATE_DIR"):
         _confirm_seal_honored(binary, env)
     try:

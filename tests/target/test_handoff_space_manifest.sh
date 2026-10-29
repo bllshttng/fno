@@ -48,7 +48,7 @@ MAN
 
 # run_handoff <cwd> [env assignments...]; sets OUT and RC. The assignments
 # ride `env` itself: handoff.sh ignores unknown argv, so a KEY=VALUE passed
-# after the verb would silently pin nothing.
+# after the command would silently pin nothing.
 run_handoff() {
   local dir="$1"; shift
   set +e
@@ -81,7 +81,7 @@ assert_reached_manifest() {
 set -e
 
 # A hermetic `fno` so the dependency guard never reaches a real install; the
-# state-path verb rides the pinned fno-agents stub instead.
+# state-path command rides the pinned fno-agents stub instead.
 BIN_DIR="${TMP_DIR}/bin"; mkdir -p "$BIN_DIR"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN_DIR/fno"
 chmod +x "$BIN_DIR/fno"

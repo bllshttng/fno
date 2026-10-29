@@ -1,6 +1,6 @@
 //! The decide door: the `fno inbox decide` / `fno backlog decide`
-//! record verb, its provenance lanes, and the decide-reindex recovery
-//! verb, ported from the deleted Python decide family. Shared law-door
+//! record command, its provenance lanes, and the decide-reindex recovery
+//! command, ported from the deleted Python decide family. Shared law-door
 //! helpers stay in `law_match`; this module reaches them through
 //! `crate::law_match`.
 
@@ -43,7 +43,7 @@ const AUTHORITY_SOURCES: &[&str] = &["operator", "role", "agent", "beastmode"];
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
 /// or a scrubbed identity (`None`), the seam the tests drive where the law
-/// door injects a caller.
+/// door injects a caller. A `Forced` handle holds no team.
 #[derive(Clone, Copy)]
 pub(crate) enum DecideIdentity {
     Ambient,
@@ -74,6 +74,62 @@ impl DecideIdentity {
             Self::Forced(Some(h)) => Some((*h).to_string()),
         }
     }
+
+    /// Whether `handle` holds a live team whose territory covers `subject`.
+    /// An unreadable registry or graph reads as no cover (fail closed).
+    fn role_covers(self, handle: &str, subject: &str) -> bool {
+        match self {
+            Self::Ambient => ambient_role_covers(handle, subject),
+            Self::Forced(_) => false,
+        }
+    }
+}
+
+fn ambient_role_covers(handle: &str, subject: &str) -> bool {
+    let registry = crate::paths::AgentsHome::from_env().registry_json();
+    let Ok(teams) = crate::territory::live_teams(&registry) else {
+        return false;
+    };
+    let mine: Vec<crate::territory::Team> = teams
+        .into_iter()
+        .filter(|t| crate::question_clear::holds_team(std::slice::from_ref(t), handle))
+        .collect();
+    let Ok(entries) = crate::backlog::decisions_cli::read_graph_entries() else {
+        return false;
+    };
+    let projects = std::env::current_dir()
+        .map_err(|e| e.to_string())
+        .and_then(|cwd| crate::org_board::scope::project_map(&cwd));
+    role_covers_subject(&mine, subject, &entries, &projects)
+}
+
+/// The role-scope rule: the caller holds a team, and a subject that names a
+/// node (by id or slug) must sit inside one of the caller's territories. A
+/// topic subject names no node, so holding a team is enough there.
+fn role_covers_subject(
+    mine: &[crate::territory::Team],
+    subject: &str,
+    entries: &[Value],
+    projects: &Result<std::collections::HashMap<String, String>, String>,
+) -> bool {
+    if mine.is_empty() {
+        return false;
+    }
+    let field = |e: &Value, k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
+    let Some(node) = entries
+        .iter()
+        .find(|e| {
+            field(e, "id").as_deref() == Some(subject)
+                || field(e, "slug").as_deref() == Some(subject)
+        })
+        .and_then(|e| field(e, "id"))
+    else {
+        return true;
+    };
+    mine.iter().any(|t| {
+        crate::territory::compile_scope_ids(&t.scope, entries, projects)
+            .is_ok_and(|ids| ids.contains(&node))
+    })
 }
 
 /// The authority lanes the origin floor can cap (`enforce_origin_floor`): an
@@ -452,7 +508,7 @@ fn decide_graduation_or_guidance(
     }
 }
 
-/// The decide-reindex verb, ported from `reindex` (cli/src/fno/decide/
+/// The decide-reindex command, ported from `reindex` (cli/src/fno/decide/
 /// __init__.py, deleted): compact damaged rows out of the raw index and
 /// recover any journaled row the index store lacks, without minting ids.
 /// The machine-wide project-roots walk the Python engine paid is not
@@ -541,7 +597,7 @@ pub fn run_decide_reindex(_argv: &[String]) -> i32 {
 }
 
 /// The decide door entry: parse, then the gated write. The argv is the
-/// `fno inbox decide` / `fno backlog decide` command line minus its verb
+/// `fno inbox decide` / `fno backlog decide` command line minus its command
 /// tokens.
 pub fn run_decide_door(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -633,9 +689,22 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         }
         Err(DecideRefusal::UnattributedAuthority) => return decide_unattributed_refusal(),
     };
+    // The role lane is a lead's ruling inside its own scope, and gates read
+    // it (the visual gate clears on a role row). An agent session must hold
+    // a live team that covers the subject; a caller with no identity and no
+    // terminal holds none.
+    if provenance.authority_source.as_deref() == Some("role") {
+        let allowed = match caller_session.as_deref() {
+            Some(handle) => id.role_covers(handle, &subject),
+            None => provenance.decided_by != "unattributed-caller",
+        };
+        if !allowed {
+            return decide_role_refusal(&provenance.decided_by);
+        }
+    }
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator (an attended terminal;
-    // the waiver verb inherits this).
+    // the waiver command inherits this).
     let mut read_rows: Option<Vec<Value>> = None;
     if provenance.authority_source.as_deref() != Some("operator") {
         let text = format!(
@@ -862,6 +931,9 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     if let Some(rows) = &read_rows {
         data["reads"] = json!(rows);
     }
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::stamp_person(map);
+    }
     // Minted after the route span: the row is the child, and its ts must not
     // precede the parent the trace names.
     let ts = now_iso();
@@ -957,6 +1029,16 @@ this refusal. Append agent findings without replacing node details with \
     3
 }
 
+/// The role-lane refusal: no live team of the caller covers the subject.
+fn decide_role_refusal(caller: &str) -> i32 {
+    eprintln!(
+        "decide: refused. --authority role is a lead's ruling inside its own scope, and \
+{caller} holds no live team whose territory covers this subject. Nothing was recorded. \
+Omit --authority to record it as agent, or ask the lead who owns the node to record it."
+    );
+    3
+}
+
 /// The decide door's unattributed refusal (`UnattributedAuthorityError`).
 fn decide_unattributed_refusal() -> i32 {
     eprintln!(
@@ -1042,19 +1124,7 @@ pub(crate) fn resolve_decider_lanes(
         });
     }
     if attended_terminal() {
-        // State 2. A person is at a terminal; the stated name IS the record.
-        // Authority is never defaulted to operator here.
-        let decider = decided_by
-            .map(str::trim)
-            .filter(|d| !d.is_empty())
-            .unwrap_or("operator");
-        let attested = origin.filter(|o| !o.is_empty()).unwrap_or(decider);
-        return Ok(DecideProvenance {
-            decided_by: decider.to_string(),
-            authority_source: authority_source.map(str::to_string),
-            attested_by: Some(attested.to_string()),
-            relayed_by: None,
-        });
+        return Ok(attended_provenance(decided_by, authority_source, origin));
     }
     // State 3, fail closed.
     if authority_source == Some("operator") {
@@ -1071,10 +1141,59 @@ pub(crate) fn resolve_decider_lanes(
     })
 }
 
+/// State 2: a person at a terminal with no session identity; the stated name
+/// IS the record. With no stated authority this resolves operator, the lane
+/// the law door's `resolve_caller` gives the same caller: a row that reads
+/// "decided by operator" must be law, or it cannot lift the hold it answers.
+/// A relayed name or a non-operator origin is someone else's ruling, so the
+/// superuser lane is never defaulted for it.
+fn attended_provenance(
+    decided_by: Option<&str>,
+    authority_source: Option<&str>,
+    origin: Option<&str>,
+) -> DecideProvenance {
+    let decider = decided_by
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .unwrap_or("operator");
+    let origin = origin.filter(|o| !o.is_empty());
+    let authority = authority_source.or_else(|| {
+        (decider == "operator" && origin.is_none_or(|o| max_authority_by_origin(o) == "operator"))
+            .then_some("operator")
+    });
+    DecideProvenance {
+        decided_by: decider.to_string(),
+        authority_source: authority.map(str::to_string),
+        attested_by: Some(origin.unwrap_or(decider).to_string()),
+        relayed_by: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::law_match::scope_tests::DoorEnv;
+
+    #[test]
+    fn attended_decide_with_no_stated_authority_records_law() {
+        let lane = |by, auth, origin| attended_provenance(by, auth, origin).authority_source;
+        assert_eq!(lane(None, None, None).as_deref(), Some("operator"));
+        assert_eq!(
+            lane(None, None, Some("operator")).as_deref(),
+            Some("operator")
+        );
+        assert_eq!(lane(None, Some("role"), None).as_deref(), Some("role"));
+        assert_eq!(lane(Some("robin"), None, None), None);
+        assert_eq!(lane(None, None, Some("scheduler")), None);
+        let p = attended_provenance(None, None, None);
+        let row = json!({
+            "subject": "fb-b44f",
+            "decided_by": p.decided_by,
+            "authority_source": p.authority_source,
+            "ts": now_iso(),
+        });
+        assert!(crate::decision_index::is_law(&row), "{row}");
+    }
 
     // -------------------------------------------------------------------
     // The decide door: injected-identity unit tests (the parity goldens
@@ -1225,6 +1344,79 @@ mod tests {
             route["ts"].as_str().unwrap() <= row["ts"].as_str().unwrap(),
             "route precedes the row in ts order"
         );
+    }
+
+    #[test]
+    fn decide_records_person_beside_the_session() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        save_node(
+            &crate::graph_get::default_graph_path(),
+            "x-node4",
+            "node-four",
+        );
+        let code = decide_door_write(
+            decide_argv(&["x-node4", "Ship it", "--authority", "agent"]),
+            DecideIdentity::Forced(Some("cl-test4")),
+        );
+        assert_eq!(code, 0);
+        let (rows, _) = all_decision_rows().expect("reads");
+        let row = rows.last().expect("a row landed");
+        // The person rides beside decided_by; it never replaces the caller.
+        assert_eq!(row["person"], json!(crate::identity::person()));
+        assert_ne!(row["decided_by"], row["person"], "{row}");
+        let machine_id = crate::claims::machine_id();
+        if !machine_id.is_empty() {
+            assert_eq!(row["machine_id"], json!(machine_id));
+        }
+    }
+
+    #[test]
+    fn decide_role_lane_needs_a_live_team() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let role = || decide_argv(&["x-n1", "Approved: PR 7", "--authority", "role"]);
+        // A worker with no team cannot mint the lead's lane.
+        assert_eq!(
+            decide_door_write(role(), DecideIdentity::Forced(Some("cl-role1"))),
+            3
+        );
+        // Nor can a caller with no identity and no terminal.
+        assert_eq!(decide_door_write(role(), DecideIdentity::Forced(None)), 3);
+        let (rows, _) = all_decision_rows().unwrap_or((Vec::new(), 0));
+        assert!(rows.is_empty(), "nothing recorded");
+    }
+
+    #[test]
+    fn role_scope_covers_only_the_callers_territory() {
+        let team = crate::territory::Team {
+            scope: "e-1".to_string(),
+            level: 2,
+            holder: "lead-a".to_string(),
+            holder_session: Some("s-lead".to_string()),
+        };
+        let entries = vec![
+            json!({"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"}),
+            json!({"id": "e-1a", "slug": "inside", "parent": "e-1", "project": "alpha", "status": "ready"}),
+            json!({"id": "e-outs", "project": "beta", "status": "ready"}),
+        ];
+        let projects = Err("no projects".to_string());
+        let mine = [team];
+        assert!(role_covers_subject(&mine, "e-1a", &entries, &projects));
+        assert!(role_covers_subject(&mine, "inside", &entries, &projects));
+        assert!(!role_covers_subject(&mine, "e-outs", &entries, &projects));
+        assert!(role_covers_subject(
+            &mine,
+            "release-cadence",
+            &entries,
+            &projects
+        ));
+        assert!(!role_covers_subject(
+            &[],
+            "release-cadence",
+            &entries,
+            &projects
+        ));
     }
 
     #[test]

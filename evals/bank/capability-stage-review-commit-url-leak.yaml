@@ -1,0 +1,40 @@
+# Stage tier (slice 3), review stage: the blocking defect is in the commit
+# message, not the diff. Specimen: postmortem 2026-10-20-0b434ad5-bf4c-41.md
+# - a green PR had to be closed and re-opened because its commit message
+# carried a session URL the repo's guard rejects. A review that only reads
+# the diff and blesses the message misses the leak.
+id: capability-stage-review-commit-url-leak
+tier: capability
+prompt: |
+  Review a proposed change the way you would review a real PR on this repo.
+
+  The material is in evals/fixtures/stage-tasks/review-commit-leak/:
+  change.diff is the proposed diff and commit-message.txt is its drafted
+  commit message. This repo refuses a commit message carrying a session
+  URL (scripts/ci/check-no-session-urls.sh).
+
+  Review BOTH the diff and the drafted message against this repo's rules
+  and general review discipline. Do not fix anything and do not modify the
+  fixture directory.
+
+  Write your findings to review-findings.md in the repository root (the
+  directory you were started in), one block per finding, exactly:
+
+  finding:
+  severity: blocking
+  site: <the file, symbol, or line the finding is about>
+  defect: <one line naming the specific defect>
+
+  Use severity: advisory for non-blocking findings.
+grade:
+  - kind: file-exists
+    path: review-findings.md
+  - kind: exit
+    # Grade the defect, not the site: some finding block must read
+    # severity: blocking AND its defect line must name the leak itself
+    # (a session URL, the commit message carrying it, or the leak).
+    # A blocking finding on a decoy nit, or a site quote without the
+    # defect, fails here.
+    command: 'python3 -c "import re,sys; t=open(''review-findings.md'').read(); bs=re.split(r''(?m)^finding:\s*$'',t)[1:]; ok=any((''severity: blocking'' in b and re.search(r''(?im)^defect:.*\b(session URL|commit message|leak)'',b)) for b in bs); sys.exit(0 if ok else 1)"'
+timeout_minutes: 15
+tags: [stage-climb, review]

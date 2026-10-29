@@ -947,6 +947,9 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--convert") {
         return crate::claude_records::run_convert(args);
     }
+    if args.iter().any(|a| a == "--receipt") {
+        return crate::session_receipt::run(args);
+    }
     if args
         .iter()
         .any(|a| a == "--corpus" || a == "--corpus-ingest")
@@ -962,6 +965,7 @@ pub fn run_intel(args: &[String]) -> i32 {
              [--readers <secs>] [--every-ms N] (CPU-seconds per process class over a window)\n\
              [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\
              [--convert <transcript.jsonl> --from claude] (the transcript as footnote session records, one JSON line each)\n\
+             [--receipt [--session <id>] [--harness <h>] [--json]] (one session's last turn: who woke it, calls, edits, errors, cost, denials)\n\
              [--corpus <dir> [--days N] [-H claude,codex]] [--corpus-ingest <dir>]\n\n\
              The provenance fold: per-session operator/relay/harness/keepalive counters,\n\
              tool_use, commits, the node and PR join, and the relay facets of every bus\n\
@@ -996,7 +1000,22 @@ pub fn run_intel(args: &[String]) -> i32 {
              (whole sessions, none of whose rows reach the other files), eval-check/NN.md\n\
              pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
              It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
-             the ticked items and writes eval.jsonl. Nothing leaves the machine.\n"
+             the ticked items and writes eval.jsonl. Nothing leaves the machine.\n\n\
+             --lens decisions traces every ruling in the window through four questions\n\
+             from records, never model judgment: who issued it, where its authority\n\
+             came from (witnessed_operator, law_citation, succession_event, relayed, or\n\
+             unsourced - a ruling that reads as the user's word with no witnessed\n\
+             submit behind it reads unsourced), whether anything enforced it (a\n\
+             decision_span guard in the journal, else prose_only), and whether the\n\
+             fleet obeyed (overturned:<kind> from the retirement map, blocked when a\n\
+             gate span names it, else uncontested). Prints the unsourced and\n\
+             prose-only-enforced shares with their denominator, a fleet mail graph\n\
+             (who mails whom, unanswered tails, hops that relay a ruling id), and\n\
+             the compliance limit: uncontested is no recorded counter-evidence,\n\
+             never proven obedience.\n\n\
+             --lens rules counts each event rule's fires and samples them with the reply\n\
+             tail (--sample N or all, default 5). --labels <file> of judged fires prints\n\
+             each rule's false-fire rate. See docs/architecture/event-rules.md.\n"
         );
         return 0;
     }
@@ -1014,6 +1033,8 @@ pub fn run_intel(args: &[String]) -> i32 {
     let mut categories: Option<String> = None;
     let mut fold_file: Option<String> = None;
     let mut score_prior: Option<String> = None;
+    let mut lens: Option<String> = None;
+    let mut labels: Option<String> = None;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut i = 0;
     while i < args.len() {
@@ -1154,6 +1175,28 @@ pub fn run_intel(args: &[String]) -> i32 {
                     }
                 }
             }
+            "--lens" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => lens = Some(v.clone()),
+                    None => {
+                        eprintln!(
+                            "fno-agents intel: --lens needs a name (known: decisions, rules)"
+                        );
+                        return 2;
+                    }
+                }
+            }
+            "--labels" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => labels = Some(v.clone()),
+                    None => {
+                        eprintln!("fno-agents intel: --labels needs <file>");
+                        return 2;
+                    }
+                }
+            }
             "--json" | "-J" => json = true,
             "--all-projects" => all_projects = true,
             "--scorecard" => scorecard = true,
@@ -1177,6 +1220,29 @@ pub fn run_intel(args: &[String]) -> i32 {
             "fno-agents intel: --score-prior needs --categories <run> --fold <saved fold JSON>"
         );
         return 2;
+    }
+    if labels.is_some() && lens.as_deref() != Some("rules") {
+        eprintln!("fno-agents intel: --labels needs --lens rules");
+        return 2;
+    }
+    let scoped = all_projects || !projects.is_empty() || !harness_spec.is_empty();
+    if lens.is_some() && (scoped || session.is_some() || node.is_some()) {
+        eprintln!("fno-agents intel: --lens reads this project's journal; drop the scope flags");
+        return 2;
+    }
+    if json && lens.as_deref() == Some("rules") {
+        eprintln!("fno-agents intel: --lens rules prints text only; drop --json");
+        return 2;
+    }
+    if let Some(name) = lens.as_deref() {
+        return match name {
+            "decisions" => crate::intel_lens::run_lens(days, json),
+            "rules" => crate::intel_rules_lens::run_lens(days, &sample, labels.as_deref()),
+            _ => {
+                eprintln!("fno-agents intel: unknown lens {name} (known: decisions, rules)");
+                2
+            }
+        };
     }
 
     let home = AgentsHome::from_env();
@@ -1347,10 +1413,18 @@ fn fold_all(
     // The rollup cache: one lock holder per run; every advance reads only
     // bytes appended since the last run, and the save lands before the
     // lock drops. No agents home, no cache (the fold then reads whole).
-    let rollup_path = crate::intel_rollup::RollupStore::default_path();
-    let _rollup_guard = rollup_path
+    // A busy lock runs the fold with no cache, the same as no agents home.
+    let mut rollup_path = crate::intel_rollup::RollupStore::default_path();
+    let _rollup_guard = match rollup_path
         .as_deref()
-        .map(crate::intel_rollup::RollupStore::acquire_lock);
+        .map(crate::intel_rollup::RollupStore::acquire_lock)
+    {
+        Some(Ok(guard)) => Some(guard),
+        _ => {
+            rollup_path = None;
+            None
+        }
+    };
     let mut ctx = FoldCtx {
         bus,
         join,

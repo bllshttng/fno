@@ -1,0 +1,1 @@
+{"op": "set_taint", "args": {"cli": "claude", "tainted": false, "pids": []}, "store": {".active-claude.tainted": "{\"pids\": [1], \"writers\": []}"}, "now": 1800000000.0, "expect": {"result": null, "error": null, "store": {}, "modes": {}, "files": {}, "keychain_writes": []}}

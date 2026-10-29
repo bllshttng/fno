@@ -1,6 +1,6 @@
 //! The x-aaaa worker-name vocabulary owner, ported from Python `naming.py`
 //! (team ruling on laws d-4b39ad4c / d-52ae01cb: the tree budget ports the
-//! touched verb to crates/ rather than raising the allowance).
+//! touched command to crates/ rather than raising the allowance).
 //!
 //! One data file stays the contract: the tables are read from the crate-local
 //! `naming-codes.yaml` at compile time (the Python copy is deleted; the
@@ -25,7 +25,7 @@ const CODES_YAML: &str = include_str!("naming-codes.yaml");
 #[derive(Deserialize)]
 struct RawCodes {
     sources: Vec<String>,
-    verbs: Vec<String>,
+    commands: Vec<String>,
     word_codes: std::collections::HashMap<String, String>,
     model_codes: std::collections::HashMap<String, String>,
     provenance: Vec<ProvenanceRow>,
@@ -35,12 +35,12 @@ struct RawCodes {
 struct ProvenanceRow {
     site: String,
     source: String,
-    verb: String,
+    command: String,
 }
 
 pub struct Codes {
     pub sources: HashSet<String>,
-    pub verbs: HashSet<String>,
+    pub commands: HashSet<String>,
     pub word_codes: std::collections::HashMap<String, String>,
     pub model_codes: std::collections::HashMap<String, String>,
     pub provenance: Vec<(String, String, String)>,
@@ -52,13 +52,13 @@ fn codes() -> &'static Codes {
         let raw: RawCodes = serde_yaml_ng::from_str(CODES_YAML).expect("naming-codes.yaml parses");
         Codes {
             sources: raw.sources.into_iter().collect(),
-            verbs: raw.verbs.into_iter().collect(),
+            commands: raw.commands.into_iter().collect(),
             word_codes: raw.word_codes,
             model_codes: raw.model_codes,
             provenance: raw
                 .provenance
                 .into_iter()
-                .map(|r| (r.site, r.source, r.verb))
+                .map(|r| (r.site, r.source, r.command))
                 .collect(),
         }
     })
@@ -68,8 +68,8 @@ pub fn dispatch_sources() -> &'static HashSet<String> {
     &codes().sources
 }
 
-pub fn dispatch_verbs() -> &'static HashSet<String> {
-    &codes().verbs
+pub fn dispatch_commands() -> &'static HashSet<String> {
+    &codes().commands
 }
 
 pub fn provenance_rows() -> &'static [(String, String, String)] {
@@ -288,13 +288,13 @@ pub fn agent_name(
     Ok(name)
 }
 
-/// Whether `verb` names a footnote work verb (a `word_codes` key): the same
+/// Whether `command` names a footnote work command (a `word_codes` key): the same
 /// vocabulary the name mint resolves.
-pub fn is_word_code_verb(verb: &str) -> bool {
-    codes().word_codes.contains_key(verb)
+pub fn is_word_code_command(command: &str) -> bool {
+    codes().word_codes.contains_key(command)
 }
 
-/// The word-code keys, sorted: the accepted-verb vocabulary the write gate
+/// The word-code keys, sorted: the accepted-command vocabulary the write gate
 /// names in its refusals.
 pub fn word_code_words() -> Vec<String> {
     let mut words: Vec<String> = codes().word_codes.keys().cloned().collect();
@@ -302,38 +302,38 @@ pub fn word_code_words() -> Vec<String> {
     words
 }
 
-/// The verb code for a work-verb word (`/target`, `$fno:blueprint`, ...).
+/// The command code for a work-command word (`/target`, `$fno:blueprint`, ...).
 /// Unknown words raise: nothing defaults to `t`.
-pub fn verb_code_for(word: Option<&str>) -> Result<String, NameError> {
+pub fn command_code_for(word: Option<&str>) -> Result<String, NameError> {
     let w = word.unwrap_or("").trim();
-    let v = match crate::provider::parse_verb_token(w) {
-        Some((verb, _)) => verb,
+    let v = match crate::provider::parse_command_token(w) {
+        Some((command, _)) => command,
         None if w.is_empty() => "target",
         None => w,
     };
     codes().word_codes.get(v).cloned().ok_or_else(|| {
-        NameError::refused(format!("unknown dispatch verb '{}'", word.unwrap_or("")))
+        NameError::refused(format!("unknown dispatch command '{}'", word.unwrap_or("")))
     })
 }
 
-/// Build `[<source>-]<verb>-<hex>[-<qualifier>][-<slug>][-<model>][-<disc>]`.
+/// Build `[<source>-]<command>-<hex>[-<qualifier>][-<slug>][-<model>][-<disc>]`.
 /// `source` None is the attended manual form; unknown codes raise rather than
 /// fabricating provenance. The dispatch form caps the human slug at
 /// [`DISPATCH_SLUG_CAP`] and carries the model tag.
 pub fn dispatch_agent_name(
     source: Option<&str>,
-    verb: &str,
+    command: &str,
     identity: &str,
     slug: Option<&str>,
     qualifier: Option<&str>,
     discriminator: Option<&str>,
     model: Option<&str>,
 ) -> Result<String, NameError> {
-    let v = verb.trim();
-    if !dispatch_verbs().contains(v) {
+    let v = command.trim();
+    if !dispatch_commands().contains(v) {
         return Err(NameError::refused(format!(
-            "unknown dispatch verb '{}'",
-            verb
+            "unknown dispatch command '{}'",
+            command
         )));
     }
     if let Some(s) = source {
@@ -360,7 +360,7 @@ pub fn dispatch_agent_name(
     )
 }
 
-/// The `fno agents name` assembly: `--verb`/`--source` select the dispatch
+/// The `fno agents name` assembly: `--command`/`--source` select the dispatch
 /// form; a positional prefix alone is the legacy form. `prefix`/`node_id` are
 /// the CLI positionals AFTER the one-positional-binds-the-node rule.
 pub fn bridge_name(
@@ -370,24 +370,24 @@ pub fn bridge_name(
     qualifier: Option<&str>,
     discriminator: Option<&str>,
     source: Option<&str>,
-    verb: Option<&str>,
+    command: Option<&str>,
     model: Option<&str>,
 ) -> Result<String, NameError> {
-    if verb.is_some() || source.is_some() {
+    if command.is_some() || source.is_some() {
         let p = prefix.unwrap_or("");
         if !p.is_empty() {
             return Err(NameError::usage(
-                "pass the legacy prefix form or --source/--verb, not both",
+                "pass the legacy prefix form or --source/--command, not both",
             ));
         }
-        let Some(v) = verb.filter(|v| !v.trim().is_empty()) else {
-            return Err(NameError::usage("--source requires --verb"));
+        let Some(v) = command.filter(|v| !v.trim().is_empty()) else {
+            return Err(NameError::usage("--source requires --command"));
         };
         let source = source.filter(|s| !s.trim().is_empty());
-        let code = if dispatch_verbs().contains(v.trim()) {
+        let code = if dispatch_commands().contains(v.trim()) {
             v.trim().to_string()
         } else {
-            verb_code_for(Some(v))?
+            command_code_for(Some(v))?
         };
         return dispatch_agent_name(
             source,
@@ -401,7 +401,7 @@ pub fn bridge_name(
     }
     match prefix.filter(|p| !p.trim().is_empty()) {
         Some(p) => agent_name(p, node_id, slug, qualifier, discriminator, model),
-        None => Err(NameError::usage("a prefix or --verb is required")),
+        None => Err(NameError::usage("a prefix or --command is required")),
     }
 }
 
@@ -411,7 +411,7 @@ pub fn bridge_name(
 pub struct Parsed {
     pub name: String,
     pub source: Option<String>,
-    pub verb: String,
+    pub command: String,
     pub node: Option<String>,
     pub tail: String,
 }
@@ -421,8 +421,8 @@ fn node_shape() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^(?:([a-z][a-z0-9]*-)?([0-9a-f]+))(?:-(.*))?$").unwrap())
 }
 
-/// Parse `[<source>-]<verb>-<identity>`, else None. Positional grammar: the
-/// first token is a source only when the second is a verb, so a node prefix
+/// Parse `[<source>-]<command>-<identity>`, else None. Positional grammar: the
+/// first token is a source only when the second is a command, so a node prefix
 /// colliding with a code cannot misread. Pre-cutover `target-`/`think-`
 /// names resolve through the legacy read window.
 pub fn parse_dispatch_agent_name(name: Option<&str>) -> Option<Parsed> {
@@ -431,21 +431,21 @@ pub fn parse_dispatch_agent_name(name: Option<&str>) -> Option<Parsed> {
         return None;
     }
     let tokens: Vec<&str> = name.split('-').collect();
-    let (source, verb, rest): (Option<&str>, &str, &[&str]);
+    let (source, command, rest): (Option<&str>, &str, &[&str]);
     if tokens.len() >= 2
         && dispatch_sources().contains(tokens[0])
-        && dispatch_verbs().contains(tokens[1])
+        && dispatch_commands().contains(tokens[1])
     {
         source = Some(tokens[0]);
-        verb = tokens[1];
+        command = tokens[1];
         rest = &tokens[2..];
-    } else if dispatch_verbs().contains(tokens[0]) {
+    } else if dispatch_commands().contains(tokens[0]) {
         source = None;
-        verb = tokens[0];
+        command = tokens[0];
         rest = &tokens[1..];
     } else if tokens[0] == "target" || tokens[0] == "think" {
         source = None;
-        verb = if tokens[0] == "target" { "t" } else { "th" };
+        command = if tokens[0] == "target" { "t" } else { "th" };
         rest = &tokens[1..];
     } else {
         return None;
@@ -458,7 +458,7 @@ pub fn parse_dispatch_agent_name(name: Option<&str>) -> Option<Parsed> {
         return Some(Parsed {
             name: name.to_string(),
             source: source.map(str::to_string),
-            verb: verb.to_string(),
+            command: command.to_string(),
             node: None,
             tail: joined,
         });
@@ -467,7 +467,7 @@ pub fn parse_dispatch_agent_name(name: Option<&str>) -> Option<Parsed> {
         Some(c) => Some(Parsed {
             name: name.to_string(),
             source: source.map(str::to_string),
-            verb: verb.to_string(),
+            command: command.to_string(),
             node: Some(match (c.get(1), c.get(2)) {
                 // Full form keeps the prefix; bare hex stays bare - the
                 // Python bridge re-attaches the id via the graph.
@@ -480,7 +480,7 @@ pub fn parse_dispatch_agent_name(name: Option<&str>) -> Option<Parsed> {
         None => Some(Parsed {
             name: name.to_string(),
             source: source.map(str::to_string),
-            verb: verb.to_string(),
+            command: command.to_string(),
             node: None,
             tail: joined,
         }),
@@ -489,30 +489,17 @@ pub fn parse_dispatch_agent_name(name: Option<&str>) -> Option<Parsed> {
 
 /// Is this a blueprint dispatch name? The grammar answers it, never a
 /// prefix test: `bp-x-1-slug` and `ac-bp-x-2-slug` both
-/// parse to verb `bp`; `t-x-4-slug` does not (AC4-HP).
+/// parse to command `bp`; `t-x-4-slug` does not (AC4-HP).
 pub fn is_blueprint_name(name: &str) -> bool {
-    parse_dispatch_agent_name(Some(name)).is_some_and(|p| p.verb == "bp")
+    parse_dispatch_agent_name(Some(name)).is_some_and(|p| p.command == "bp")
 }
 
-/// Verb code for a pre-cutover convention name (`target-*` -> `t`,
-/// `think-*` -> `th`), else None: the legacy-read window helper.
-pub fn legacy_verb_code(name: Option<&str>) -> Option<String> {
-    let name = name?;
-    if name.starts_with("target-") {
-        Some("t".to_string())
-    } else if name.starts_with("think-") {
-        Some("th".to_string())
-    } else {
-        None
-    }
-}
-
-// ── internal machine verbs (binary-direct, not `fno agents` surface) ─────────
+// ── internal machine commands (binary-direct, not `fno agents` surface) ─────────
 //
 // The delegation flip: Python's naming.py keeps its public signatures and
-// shells THESE verbs, so the tables, mint, and parse own exactly one
+// shells THESE commands, so the tables, mint, and parse own exactly one
 // implementation. Matched with `matches!` in client.rs like `reentry-plan`,
-// they stay out of the routable-verb parity sets by design.
+// they stay out of the routable-command parity sets by design.
 
 fn value_of(args: &[String], flag: &str) -> Option<String> {
     args.iter()
@@ -545,10 +532,203 @@ fn positionals(args: &[String]) -> Vec<String> {
     out
 }
 
+/// Slug words the `{slug}` token keeps.
+const WORKER_SLUG_WORDS: usize = 3;
+/// A three-word head longer than this keeps two words, so a sideline row
+/// stays readable.
+const WORKER_SLUG_CAP: usize = 24;
+/// A rendered worker name is a CLI handle no longer than this.
+const WORKER_NAME_CAP: usize = 32;
+
+/// `agents.naming.worker` when the config sets none.
+pub const DEFAULT_WORKER_TEMPLATE: &str = "t-{slug}";
+
+/// What a worker name template draws on. A token with no fact leaves the
+/// template unrendered: the caller falls to its next name source.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WorkerFacts<'a> {
+    pub node: Option<&'a str>,
+    pub slug: Option<&'a str>,
+    pub skill: Option<&'a str>,
+    /// Seeds `{random}`, so a row renamed on a later beat keeps one name.
+    pub session: Option<&'a str>,
+}
+
+/// The `agents.naming.worker` template the project at `cwd` resolves.
+pub fn worker_template(cwd: &std::path::Path) -> String {
+    crate::agents_config::config_lookup(cwd, &["agents", "naming", "worker"])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_WORKER_TEMPLATE.to_string())
+}
+
+/// The first words of a node slug (`visual-approval-gate-two-paint` ->
+/// `visual-approval-gate`).
+fn slug_head(slug: &str) -> Option<String> {
+    let clean = slug_component(Some(slug), usize::MAX);
+    let words: Vec<&str> = clean.split('-').filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let mut head = words[..words.len().min(WORKER_SLUG_WORDS)].join("-");
+    if head.len() > WORKER_SLUG_CAP && words.len() > 2 {
+        head = words[..2].join("-");
+    }
+    let head = cut_slug(Some(head.as_str()), WORKER_SLUG_CAP);
+    (!head.is_empty()).then_some(head)
+}
+
+/// Four hex digits: the second group of the session's UUID, else of a fresh
+/// one. Never the first group: that is the short id the name replaces.
+fn random_token(session: Option<&str>) -> Option<String> {
+    let id = session.map_or_else(crate::identity::mint_fno_id, |s| Ok(s.to_string()));
+    id.ok()?.get(9..13).map(str::to_ascii_lowercase)
+}
+
+/// A worker's name from an `agents.naming.worker` template: `{slug}` (the
+/// node slug's first words), `{node}`, `{skill}` (the seed's command) and
+/// `{random}`. No model token: the lane picks the model after the name is
+/// set. `None` for a token with no fact, an unknown token, or a result that
+/// does not start with a letter.
+pub fn render_worker_name(template: &str, facts: &WorkerFacts) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let close = open + rest[open..].find('}')?;
+        let value = match &rest[open + 1..close] {
+            "slug" => slug_head(facts.slug?)?,
+            "node" => slug_component(facts.node, usize::MAX),
+            "skill" => slug_component(facts.skill, usize::MAX),
+            "random" => random_token(facts.session)?,
+            _ => return None,
+        };
+        if value.is_empty() {
+            return None;
+        }
+        out.push_str(&value);
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    let name = cut_slug(Some(out.as_str()), WORKER_NAME_CAP);
+    name.starts_with(|c: char| c.is_ascii_lowercase())
+        .then_some(name)
+}
+
+/// The node a `/target <node>` seed names, else None. Only a target seed
+/// binds: another command's worker keeps its own name form.
+fn target_seed_node(seed: &str) -> Option<String> {
+    let first = seed.split_whitespace().next()?;
+    match crate::provider::parse_command_token(first) {
+        Some(("target", _)) => crate::node_seed::scan_seed_node(seed),
+        _ => None,
+    }
+}
+
+/// The command a seed opens with (`/fno:target x-aaaa` -> `target`).
+fn seed_skill(seed: &str) -> Option<String> {
+    let first = seed.split_whitespace().next()?;
+    crate::provider::parse_command_token(first).map(|(command, _)| command.to_string())
+}
+
+/// The `agents.naming.worker` name of the node `token` names. A row's own
+/// cwd picks its project, so its graph and its template.
+pub fn node_worker_name(token: &str, cwd: &std::path::Path, session: &str) -> Option<String> {
+    let slug = node_slug(token, cwd);
+    let facts = WorkerFacts {
+        node: Some(token),
+        slug: slug.as_deref(),
+        skill: None,
+        session: Some(session),
+    };
+    render_worker_name(&worker_template(cwd), &facts)
+}
+
+/// The slug of the node `token` names (id first, then slug), else None.
+fn node_slug(token: &str, cwd: &std::path::Path) -> Option<String> {
+    let path = crate::graph_get::graph_path_for(cwd);
+    let by_id = crate::backlog::RowQuery {
+        filter: crate::backlog::api::NodeFilter {
+            id_in: Some(vec![token.to_string()]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut rows = crate::graph_store::read_rows_where(&path, &by_id).ok()?;
+    if rows.is_empty() {
+        rows = crate::graph_store::read_rows_where(&path, &Default::default()).ok()?;
+    }
+    crate::graph_get::find_entry(&rows, token)?
+        .get("slug")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// `name-mint --worker <node> [--seed TEXT] [--slug S]`: a node worker's
+/// name, rendered from `agents.naming.worker`. An empty `--worker` reads the
+/// node from a `/target` seed, and the seed's command fills `{skill}`.
+/// Prints the name; exit 3 when a template token has no fact.
+fn run_worker_mint(args: &[String]) -> i32 {
+    let cwd = std::path::Path::new(".");
+    let (template, name) = worker_mint(
+        value_of(args, "--worker").as_deref(),
+        value_of(args, "--seed").as_deref(),
+        value_of(args, "--slug").as_deref(),
+        cwd,
+    );
+    match name {
+        Some(name) => {
+            println!("{name}");
+            0
+        }
+        None => {
+            eprintln!("error: agents.naming.worker {template:?} has a token with no value");
+            3
+        }
+    }
+}
+
+/// A node worker's name and the template it rendered from. An empty node
+/// reads the node from a `/target` seed; the seed's command fills `{skill}`.
+pub(crate) fn worker_mint(
+    node: Option<&str>,
+    seed: Option<&str>,
+    slug: Option<&str>,
+    cwd: &std::path::Path,
+) -> (String, Option<String>) {
+    let nonblank = |v: &&str| !v.trim().is_empty();
+    let seed = seed.filter(nonblank);
+    let node = node
+        .filter(nonblank)
+        .map(str::to_string)
+        .or_else(|| seed.and_then(target_seed_node));
+    let slug = slug
+        .filter(nonblank)
+        .map(str::to_string)
+        .or_else(|| node.as_deref().and_then(|n| node_slug(n, cwd)));
+    let skill = seed.and_then(seed_skill);
+    let template = worker_template(cwd);
+    let facts = WorkerFacts {
+        node: node.as_deref(),
+        slug: slug.as_deref(),
+        skill: skill.as_deref(),
+        session: None,
+    };
+    let name = render_worker_name(&template, &facts);
+    (template, name)
+}
+
 /// `fno-agents name-mint [prefix] <node> [--slug S] [--qualifier Q]
-/// [--discriminator D] [--source S] [--verb V]`: the bridge, byte-compatible
+/// [--discriminator D] [--source S] [--command V]`: the bridge, byte-compatible
 /// with `fno agents name`. Prints the name; exit 2 usage, 3 refusal.
 pub fn run_name_mint(args: &[String]) -> i32 {
+    if args
+        .iter()
+        .any(|a| a == "--worker" || a.starts_with("--worker="))
+    {
+        return run_worker_mint(args);
+    }
     let pos = positionals(args);
     // One positional binds the node (the CLI contract: Click would bind it to
     // the legacy prefix slot; the bridge reads it as the node instead).
@@ -568,7 +748,9 @@ pub fn run_name_mint(args: &[String]) -> i32 {
         value_of(args, "--qualifier").as_deref(),
         value_of(args, "--discriminator").as_deref(),
         value_of(args, "--source").as_deref(),
-        value_of(args, "--verb").as_deref(),
+        value_of(args, "--command")
+            .or_else(|| value_of(args, "--verb")) // verb-wording: allow (old flag, one release)
+            .as_deref(),
         value_of(args, "--model").as_deref(),
     ) {
         Ok(name) => {
@@ -582,8 +764,76 @@ pub fn run_name_mint(args: &[String]) -> i32 {
     }
 }
 
+/// The shell dispatchers' bridge model: `$FNO_AGENTS_NAME_MODEL`, never a
+/// flag, so a dispatcher carries it as cheaply as any env var.
+pub fn name_model_from_env() -> Option<String> {
+    std::env::var("FNO_AGENTS_NAME_MODEL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// `fno agents name [prefix] <node>`: the routed bridge, the same mint as
+/// `name-mint` with the model read from the env. Exit 3 (never 2) is the
+/// naming refusal; 2 is a usage error, which a stale install also returns.
+pub fn run_agents_name(args: &[String]) -> i32 {
+    const USAGE: &str = "usage: fno agents name [prefix] <node-id> [--slug S] [--qualifier Q] \
+                         [--discriminator D] [--source S] [--command C]";
+    const VALUE_FLAGS: [&str; 6] = [
+        "--slug",
+        "--qualifier",
+        "--discriminator",
+        "--source",
+        "--command",
+        "--verb", // verb-wording: allow (old flag, one release)
+    ];
+    // The shared mint parser is lenient by design; this public door keeps
+    // the strict grammar the retired Click front enforced.
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--help" || a == "-h" {
+            println!("{USAGE}");
+            return 0;
+        }
+        if let Some(flag) = a.strip_prefix("--") {
+            let (name, inline) = match flag.split_once('=') {
+                Some((n, _)) => (format!("--{n}"), true),
+                None => (a.to_string(), false),
+            };
+            if !VALUE_FLAGS.contains(&name.as_str()) {
+                eprintln!("error: no such option: {name}\n{USAGE}");
+                return 2;
+            }
+            if !inline && args.get(i + 1).is_none_or(|v| v.starts_with("--")) {
+                eprintln!("error: option {name} requires a value\n{USAGE}");
+                return 2;
+            }
+            i += if inline { 1 } else { 2 };
+            continue;
+        }
+        i += 1;
+    }
+    let pos = positionals(args);
+    if pos.is_empty() {
+        eprintln!("error: a node id is required: fno agents name [prefix] <node-id>");
+        return 2;
+    }
+    if pos.len() > 2 {
+        eprintln!("error: got unexpected extra argument ({})\n{USAGE}", pos[2]);
+        return 2;
+    }
+    let mut argv = args.to_vec();
+    if value_of(args, "--model").is_none() {
+        if let Some(model) = name_model_from_env() {
+            argv.extend(["--model".to_string(), model]);
+        }
+    }
+    run_name_mint(&argv)
+}
+
 /// `fno-agents name-parse` reads one name per line on stdin and prints one
-/// JSON object per line: {name, source, verb, node, tail} or {name, null}.
+/// JSON object per line: {name, source, verb, node, tail} or {name, null} (verb-wording: allow, wire key).
 pub fn run_name_parse() -> i32 {
     use std::io::{BufRead, Write};
     let stdin = std::io::stdin();
@@ -593,13 +843,13 @@ pub fn run_name_parse() -> i32 {
         let parsed = parse_dispatch_agent_name(Some(line.trim_end_matches('\n')));
         let json = match parsed {
             Some(p) => format!(
-                "{{\"name\":{},\"source\":{},\"verb\":{},\"node\":{},\"tail\":{}}}",
+                "{{\"name\":{},\"source\":{},\"verb\":{},\"node\":{},\"tail\":{}}}", // verb-wording: allow (wire key)
                 serde_json::to_string(&p.name).unwrap_or_else(|_| "null".into()),
                 p.source
                     .as_ref()
                     .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "null".into()))
                     .unwrap_or_else(|| "null".into()),
-                serde_json::to_string(&p.verb).unwrap_or_else(|_| "null".into()),
+                serde_json::to_string(&p.command).unwrap_or_else(|_| "null".into()),
                 p.node
                     .as_ref()
                     .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "null".into()))
@@ -622,7 +872,7 @@ pub fn run_name_parse() -> i32 {
 fn provenance_problems(
     rows: &[(String, String, String)],
     sources: &HashSet<String>,
-    verbs: &HashSet<String>,
+    commands: &HashSet<String>,
 ) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     if rows.len() != 17 {
@@ -635,12 +885,12 @@ fn provenance_problems(
     if rows.iter().filter(|(_, s, _)| s == "ab").count() != 2 {
         problems.push("both active-backlog rows must carry ab".to_string());
     }
-    for (site, source, verb) in rows {
+    for (site, source, command) in rows {
         if !sources.contains(source) {
             problems.push(format!("{site}: unknown source {source:?}"));
         }
-        if !verbs.contains(verb) && verb != "resolved" {
-            problems.push(format!("{site}: unknown verb {verb:?}"));
+        if !commands.contains(command) && command != "resolved" {
+            problems.push(format!("{site}: unknown command {command:?}"));
         }
     }
     problems
@@ -652,9 +902,9 @@ fn provenance_problems(
 pub fn run_name_codes(args: &[String]) -> i32 {
     let c = codes();
     if args.iter().any(|a| a == "--check") {
-        let problems = provenance_problems(&c.provenance, &c.sources, &c.verbs);
-        for (site, source, verb) in &c.provenance {
-            println!("{site}\t{source}\t{verb}");
+        let problems = provenance_problems(&c.provenance, &c.sources, &c.commands);
+        for (site, source, command) in &c.provenance {
+            println!("{site}\t{source}\t{command}");
         }
         for problem in &problems {
             eprintln!("error: {problem}");
@@ -668,7 +918,7 @@ pub fn run_name_codes(args: &[String]) -> i32 {
     }
     let json = serde_json::json!({
         "sources": c.sources.iter().collect::<Vec<_>>(),
-        "verbs": c.verbs.iter().collect::<Vec<_>>(),
+        "verbs": c.commands.iter().collect::<Vec<_>>(),
         "word_codes": c.word_codes,
         "model_codes": c.model_codes,
         "provenance": c
@@ -686,10 +936,10 @@ mod tests {
     use super::*;
 
     /// AC4-HP: the grammar answers the blueprint question - every
-    /// verb-bp name matches whatever its source prefix, and a target row
+    /// command-bp name matches whatever its source prefix, and a target row
     /// never does.
     #[test]
-    fn blueprint_names_parse_by_verb_not_prefix() {
+    fn blueprint_names_parse_by_command_not_prefix() {
         assert!(is_blueprint_name("bp-x-3-slug"));
         assert!(is_blueprint_name("ac-bp-x-1-slug"));
         assert!(!is_blueprint_name("t-x-4-slug"));
@@ -744,13 +994,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_source_and_verb_refuse() {
+    fn unknown_source_and_command_refuse() {
         assert!(dispatch_agent_name(Some("zz"), "t", "x-1", None, None, None, None).is_err());
         assert!(dispatch_agent_name(None, "zz", "x-1", None, None, None, None).is_err());
-        assert!(verb_code_for(Some("impeccable")).is_err());
-        assert_eq!(verb_code_for(Some("/fno:target")).unwrap(), "t");
-        assert_eq!(verb_code_for(Some("$fno:blueprint")).unwrap(), "bp");
-        assert_eq!(verb_code_for(Some("builtin")).unwrap(), "t");
+        assert!(command_code_for(Some("impeccable")).is_err());
+        assert_eq!(command_code_for(Some("/fno:target")).unwrap(), "t");
+        assert_eq!(command_code_for(Some("$fno:blueprint")).unwrap(), "bp");
+        assert_eq!(command_code_for(Some("builtin")).unwrap(), "t");
     }
 
     #[test]
@@ -761,11 +1011,106 @@ mod tests {
         assert_eq!(err.exit, 3);
     }
 
+    /// A node of another project than the cwd still names its worker: the
+    /// slug reads from the shared store the cwd resolves.
+    #[test]
+    fn node_worker_name_reads_the_slug_from_the_store() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let saved = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", tmp.path());
+        let graph = crate::state_layout::graph_anchor(tmp.path());
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({
+                "id": "fb-bd7a",
+                "slug": "books-index-sweep-run",
+                "title": "Books index sweep",
+                "status": "idea",
+                "project": "fno-books"
+            })],
+        )
+        .unwrap();
+        let sid = "cccccccc-ab12-0000-0000-000000000003";
+        let named = node_worker_name("fb-bd7a", tmp.path(), sid);
+        let missing = node_worker_name("fb-0000", tmp.path(), sid);
+        // A project's agents.naming.worker renders every token it names.
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(project.join(".fno")).unwrap();
+        std::fs::write(
+            project.join(".fno/config.toml"),
+            "[agents.naming]\nworker = \"{node}-{slug}-{random}\"\n",
+        )
+        .unwrap();
+        let templated = node_worker_name("fb-bd7a", &project, sid);
+        match saved {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        assert_eq!(named.as_deref(), Some("t-books-index-sweep"));
+        assert_eq!(missing, None);
+        assert_eq!(templated.as_deref(), Some("fb-bd7a-books-index-sweep-ab12"));
+    }
+
+    /// The default template: `t-` and the first slug words, two when three
+    /// run long, and no model token. `{random}` is stable per session and is
+    /// never the session's own short id. Only a target seed binds a node.
+    #[test]
+    fn worker_template_renders_its_tokens() {
+        let slug = |s: &str| {
+            render_worker_name(
+                DEFAULT_WORKER_TEMPLATE,
+                &WorkerFacts {
+                    slug: Some(s),
+                    ..Default::default()
+                },
+            )
+        };
+        assert_eq!(
+            slug("visual-approval-gate-two-paint").as_deref(),
+            Some("t-visual-approval-gate")
+        );
+        assert_eq!(
+            slug("spawned-workers-name-them-t-short").as_deref(),
+            Some("t-spawned-workers-name")
+        );
+        assert_eq!(
+            slug("observability-instrumentation-dashboards").as_deref(),
+            Some("t-observability")
+        );
+        assert_eq!(slug("fix").as_deref(), Some("t-fix"));
+        assert_eq!(slug("--"), None);
+        let facts = WorkerFacts {
+            node: Some("X-AAAA"),
+            session: Some("cccccccc-AB12-0000-0000-000000000003"),
+            ..Default::default()
+        };
+        let random = render_worker_name("w-{node}-{random}", &facts);
+        assert_eq!(random.as_deref(), Some("w-x-aaaa-ab12"));
+        // No skill fact, an unknown token, an open brace, a leading digit.
+        for bad in ["{skill}-{node}", "{bogus}", "t-{node", "7-{node}"] {
+            assert_eq!(render_worker_name(bad, &facts), None, "{bad}");
+        }
+        assert_eq!(seed_skill("/fno:blueprint x").as_deref(), Some("blueprint"));
+        assert_eq!(
+            target_seed_node("/fno:target x-aaaa").as_deref(),
+            Some("x-aaaa")
+        );
+        assert_eq!(
+            target_seed_node("$fno:target L x-aaaa").as_deref(),
+            Some("x-aaaa")
+        );
+        assert_eq!(target_seed_node("/fno:blueprint x-aaaa"), None);
+        assert_eq!(target_seed_node("go"), None);
+    }
+
     #[test]
     fn parse_positional_grammar() {
         let p = parse_dispatch_agent_name(Some("ab-bp-x-aaaa-slug")).unwrap();
         assert_eq!(p.source.as_deref(), Some("ab"));
-        assert_eq!(p.verb, "bp");
+        assert_eq!(p.command, "bp");
         assert_eq!(p.node.as_deref(), Some("x-aaaa"));
         assert_eq!(p.tail, "slug");
         // Bare-hex node: parsed as the node, hex kept bare.
@@ -775,7 +1120,7 @@ mod tests {
         // A node prefix colliding with a code never misreads as a source.
         let p = parse_dispatch_agent_name(Some("t-x-aaaa")).unwrap();
         assert!(p.source.is_none());
-        assert_eq!(p.verb, "t");
+        assert_eq!(p.command, "t");
         assert_eq!(p.node.as_deref(), Some("x-aaaa"));
         // Typed identities stay opaque.
         let p = parse_dispatch_agent_name(Some("ro-t-session-abcd1234")).unwrap();
@@ -786,7 +1131,7 @@ mod tests {
         assert_eq!(legacy.source.as_deref(), None);
         assert_eq!(
             (
-                legacy.verb.as_str(),
+                legacy.command.as_str(),
                 legacy.node.as_deref(),
                 legacy.tail.as_str()
             ),
@@ -794,7 +1139,7 @@ mod tests {
         );
         let legacy = parse_dispatch_agent_name(Some("think-x-aaaa-retro")).unwrap();
         assert_eq!(
-            (legacy.verb.as_str(), legacy.node.as_deref()),
+            (legacy.command.as_str(), legacy.node.as_deref()),
             ("th", Some("x-aaaa"))
         );
         assert!(parse_dispatch_agent_name(Some("j-x-cccc-2")).is_none());
@@ -843,7 +1188,7 @@ mod tests {
         );
         let n = bridge_name(Some("target"), "x-cccc", None, None, None, None, None, None).unwrap();
         assert_eq!(n, "target-cccc");
-        // One positional (empty prefix) with a verb is the node.
+        // One positional (empty prefix) with a command is the node.
         let n = bridge_name(
             None,
             "x-aaaa",
@@ -863,7 +1208,7 @@ mod tests {
         // A doctored row list exercises the audit's negative path without
         // breaking the real inventory: an unknown source names the site.
         let rows = vec![("x-site".to_string(), "zz".to_string(), "t".to_string())];
-        let problems = provenance_problems(&rows, dispatch_sources(), dispatch_verbs());
+        let problems = provenance_problems(&rows, dispatch_sources(), dispatch_commands());
         assert!(
             problems
                 .iter()

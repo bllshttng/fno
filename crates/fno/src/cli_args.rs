@@ -1,7 +1,7 @@
 //! Typed classification for the `fno` front door.
 //!
 //! One clap declaration set owns the native-vs-forward boundary and the
-//! already-typed native verbs; the carry-verbatim mux families (pane, block,
+//! already-typed native commands; the carry-verbatim mux families (pane, block,
 //! tab, layout, rows, where, thread, reseat, retire-session, view, workspace,
 //! serve, web) still parse inside `mux_cli` until their cutover wave, so
 //! `MuxCmd::Other` carries their argv byte-verbatim. The classifier keeps
@@ -43,7 +43,7 @@ pub struct MuxParsed {
     pub cmd: MuxCmd,
 }
 
-/// The mux verbs typed in this wave, plus the carry-verbatim `Other` arm the
+/// The mux commands typed in this wave, plus the carry-verbatim `Other` arm the
 /// later mux wave consumes.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum MuxCmd {
@@ -96,7 +96,7 @@ pub enum MuxCmd {
     },
     /// `mux shell-init [<shell>] [--json]`
     ShellInit {
-        /// Shell to print the snippet for (the verb validates the spelling)
+        /// Shell to print the snippet for (the command validates the spelling)
         shell: Option<String>,
         #[command(flatten)]
         json: JsonOnly,
@@ -118,7 +118,7 @@ pub enum MuxCmd {
         #[command(subcommand)]
         op: WebOp,
     },
-    /// `mux pane <verb> ...`: the v4 pane script API (nothing under
+    /// `mux pane <command> ...`: the v4 pane script API (nothing under
     /// `mux pane` ever forwards to Python).
     Pane {
         #[command(subcommand)]
@@ -131,7 +131,7 @@ pub enum MuxCmd {
         op: BlockOp,
     },
     /// `mux tab ls|create|rename|join|move|close ...`: the
-    /// layout-tab script verbs.
+    /// layout-tab script commands.
     Tab {
         #[command(subcommand)]
         op: TabOp,
@@ -266,7 +266,7 @@ pub enum TabOp {
 /// `mux layout`'s operation set. The re-sliced tail keeps the operation
 /// word in place (`mux layout --json apply spec.toml` slices to
 /// `["--json","apply","spec.toml"]`), because a common flag may sit
-/// before the verb and [`MuxCommon::take`] strips it from any position.
+/// before the command and [`MuxCommon::take`] strips it from any position.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum LayoutOp {
     /// Dump the nested layout tree + geometry (the default read)
@@ -489,6 +489,7 @@ pub enum RootCmd {
         json: bool,
     },
     /// Remove the fno plugins, binaries, launchd agents and harness hooks
+    #[command(disable_help_flag = true)]
     Uninstall(crate::uninstall::Opts),
     /// Unclaimed argv: the forwarded Python surface, byte-verbatim.
     #[command(external_subcommand)]
@@ -505,7 +506,7 @@ pub struct MuxRoot {
 /// `mux web`'s operation set.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum WebOp {
-    /// `mux web reap [--json]`: remove every bridge marker whose port refuses
+    /// `mux web reap [--json]`: remove every bridge marker whose recorded pid is gone or whose port refuses
     #[command(disable_help_flag = true)]
     Reap(MuxTail),
 }
@@ -563,7 +564,7 @@ pub enum KeeperOp {
     List(MuxTail),
 }
 
-/// Shared machine-output flag group for the scriptable no-positional verbs
+/// Shared machine-output flag group for the scriptable no-positional commands
 /// (contracts build on this): one declaration, `-J` as the short alias.
 #[derive(Args, Debug, PartialEq, Eq)]
 pub struct JsonOnly {
@@ -656,21 +657,21 @@ pub fn front_command() -> clap::Command {
     })
 }
 
-/// The pane verb words, kept in sync with [`PaneOp`] by the tree test.
-pub const PANE_VERBS_LIST: &str =
+/// The pane command words, kept in sync with [`PaneOp`] by the tree test.
+pub const PANE_COMMANDS_LIST: &str =
     "ls|read|run|send|wait|kill|claim|release|split|break|focus|keeper";
 
 /// The pane group's self-teaching help: the reference line plus the three
-/// long help texts. clap renders it on `fno mux pane -h`; the run verb
+/// long help texts. clap renders it on `fno mux pane -h`; the run command
 /// reuses it for the `-h` inside its tail.
 pub fn pane_group_help() -> String {
     format!(
-        "{}; verbs: {}
+        "{}; commands: {}
 {}
 {}
 {}",
         crate::mux_cli::PANE_REFERENCE_USAGE,
-        PANE_VERBS_LIST,
+        PANE_COMMANDS_LIST,
         crate::mux_cli::PANE_SEND_RAW_HELP,
         crate::mux_cli::PANE_RUN_WORKER_HELP,
         crate::mux_cli::PANE_LS_IDENTITY_HELP
@@ -683,7 +684,7 @@ pub fn pane_group_help() -> String {
 /// error); `render_path_help(["mux", "thread"])` reads it.
 pub fn thread_group_help() -> String {
     "\
-The addressing door onto a live thread row. An explicit placement flag creates a portal from any verb, human or agent: `--portal new`, or `--portal N` when N is not open, and a `--split DIR` halves the caller's own pane unless `--from portal N|worker|current` names another cell. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agents spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
+The addressing door onto a live thread row. An explicit placement flag creates a portal from any command, human or agent: `--portal new`, or `--portal N` when N is not open, and a `--split DIR` halves the caller's own pane unless `--from portal N|worker|current` names another cell. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agents spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
 
   fno mux thread w2
   fno mux thread w2 --portal new --split right --from portal 0
@@ -831,7 +832,7 @@ fn mux_with_tail(cmd: MuxCmd, args: &[OsString]) -> MuxCmd {
                 ThreadOp::Name(words) => ThreadOp::Name(words),
             },
         },
-        // The seven already-typed verbs carry no tail.
+        // The seven already-typed commands carry no tail.
         typed => typed,
     }
 }
@@ -854,7 +855,7 @@ fn tail_req_from(args: &[OsString], start: usize) -> MuxTailReq {
 fn native_first(args: &[OsString]) -> bool {
     matches!(
         args.first().and_then(|a| a.to_str()),
-        Some("mux" | "version" | "--server" | "--session")
+        Some("mux" | "version" | "uninstall" | "--server" | "--session")
     )
 }
 
@@ -1084,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn mux_simple_verbs_parse_typed() {
+    fn mux_simple_commands_parse_typed() {
         assert_eq!(
             classify(&os(&["mux", "ls", "--json"])),
             FrontDoor::Mux(MuxParsed {
@@ -1184,7 +1185,7 @@ mod tests {
     #[test]
     fn inventory_paths_classify_as_positive_controls() {
         // Every leaf row classifies without an unrecognized-subcommand
-        // refusal; every group row plus the probe verb refuses BY NAME. The
+        // refusal; every group row plus the probe command refuses BY NAME. The
         // thread group is the one exception: its external arm accepts a bare
         // name, so the probe resolves as the thread's name argument.
         for row in render_inventory().lines().filter(|l| !l.starts_with('#')) {
@@ -1196,10 +1197,10 @@ mod tests {
             let tokens: Vec<OsString> = path.split(' ').map(OsString::from).collect();
             if cols[1] == "group" {
                 let mut probe = tokens.clone();
-                probe.push(OsString::from("__fno_verb_probe__"));
+                probe.push(OsString::from("__fno_command_probe__"));
                 match classify(&probe) {
                     FrontDoor::Usage { message } => assert!(
-                        message.contains("__fno_verb_probe__"),
+                        message.contains("__fno_command_probe__"),
                         "group {path} must name the probe in its refusal"
                     ),
                     FrontDoor::Mux(_) if path == "mux thread" => {
@@ -1247,7 +1248,7 @@ mod tests {
     fn thread_group_help_renders_the_addressing_contract() {
         // The help body is the contract the two portal documents quote:
         // the TV rule (explicit placement creates, a default never does),
-        // the split-from form, the discovery verb, the exact-match boundary,
+        // the split-from form, the discovery command, the exact-match boundary,
         // and the no-spawn refusal. `attach_id` stays internal; the help
         // teaches `name`, `session` and `short_id` (the whoami fields).
         let help = render_path_help(&["mux", "thread"]);
@@ -1283,19 +1284,19 @@ mod tests {
                 other => panic!("expected a refusal for {bad:?}, got {other:?}"),
             }
         }
-        // The unknown verb is NAMED in its refusal (AC1-ERR).
+        // The unknown command is NAMED in its refusal (AC1-ERR).
         let msg = match classify(&os(&["mux", "bogus"])) {
             FrontDoor::Usage { message } => message,
             other => panic!("expected a refusal, got {other:?}"),
         };
-        assert!(msg.contains("bogus"), "refusal names the verb: {msg}");
+        assert!(msg.contains("bogus"), "refusal names the command: {msg}");
         let msg = match classify(&os(&["mux", "pane", "bogus"])) {
             FrontDoor::Usage { message } => message,
             other => panic!("expected a refusal, got {other:?}"),
         };
         assert!(
             msg.contains("fno mux pane") && msg.contains("bogus"),
-            "refusal names the path and the verb: {msg}"
+            "refusal names the path and the command: {msg}"
         );
     }
 
@@ -1329,7 +1330,7 @@ mod tests {
             }
             other => panic!("typed workspace expected, got {other:?}"),
         }
-        // layout: a common flag before the verb still resolves the verb, and
+        // layout: a common flag before the command still resolves the command, and
         // the tail keeps the flag for the family's own MuxCommon::take.
         let r = classify(&os(&["mux", "layout", "--json", "apply", "spec.toml"]));
         match r {
@@ -1372,10 +1373,10 @@ mod tests {
     }
 }
 
-/// The common mux verb flags: the server axis plus the machine-output flag
-/// every scriptable verb parses. One declaration; the deprecation
-/// note fires here when the legacy `--session` spelling binds. Verb-specific
-/// tokens ride through in `rest`, order kept, so each verb's own grammar
+/// The common mux command flags: the server axis plus the machine-output flag
+/// every scriptable command parses. One declaration; the deprecation
+/// note fires here when the legacy `--session` spelling binds. Command-specific
+/// tokens ride through in `rest`, order kept, so each command's own grammar
 /// still refuses its unknowns.
 #[derive(Parser, Debug, Default, PartialEq, Eq)]
 #[command(
@@ -1384,7 +1385,7 @@ mod tests {
     disable_version_flag = true
 )]
 pub struct MuxCommon {
-    /// Server (socket session) this verb addresses
+    /// Server (socket session) this command addresses
     #[arg(long, value_name = "NAME")]
     pub server: Option<String>,
     /// Deprecated spelling of --server (warns)
@@ -1399,9 +1400,9 @@ impl MuxCommon {
     /// The known flag spellings this group owns.
     pub const FLAGS: &'static [&'static str] = &["--server", "--session", "--json"];
 
-    /// Split the common flags out of a small verb's argv. Non-UTF-8 input is
+    /// Split the common flags out of a small command's argv. Non-UTF-8 input is
     /// the old refusal; a valueless server flag is the old `{flag} needs a
-    /// value` error; a repeated common flag is refused so the verb's own
+    /// value` error; a repeated common flag is refused so the command's own
     /// grammar cannot disagree with this one.
     pub fn take(toks: &[OsString]) -> Result<(MuxCommon, Vec<String>), String> {
         let mut pairs: Vec<String> = Vec::new();
@@ -1451,7 +1452,7 @@ impl MuxCommon {
 }
 
 /// `fno mux thread <name>`'s flags (/): the portal reach and the
-/// placement trio, one typed declaration replacing the verb's scan and its
+/// placement trio, one typed declaration replacing the command's scan and its
 /// flag-value macro.
 #[derive(Parser, Debug, Default, PartialEq, Eq)]
 #[command(
@@ -1492,7 +1493,7 @@ pub struct ThreadArgs {
     disable_version_flag = true
 )]
 pub struct BlockPipeArgs {
-    /// Server (socket session) this verb addresses
+    /// Server (socket session) this command addresses
     #[arg(long, value_name = "NAME")]
     pub server: Option<String>,
     /// Deprecated spelling of --server (warns)
@@ -1524,7 +1525,7 @@ pub struct BlockPipeArgs {
     disable_version_flag = true
 )]
 pub struct BlockAnnotateArgs {
-    /// Server (socket session) this verb addresses
+    /// Server (socket session) this command addresses
     #[arg(long, value_name = "NAME")]
     pub server: Option<String>,
     /// Deprecated spelling of --server (warns)

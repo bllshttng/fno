@@ -104,6 +104,9 @@ fn x2774_terminal_harness_state_releases_an_open_work_row() {
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
     let quiet = quiet_transcript(transcripts.path(), "q.jsonl", 2 * 3600);
+    // Inside the origin ruling's one idle hour: the age the open-work
+    // keep legs stage, past the old grace but inside the retire hour.
+    let young = quiet_transcript(transcripts.path(), "young.jsonl", 1800);
     stage_graph(
         dir.path(),
         json!([x2774_open_node("N1", "in_review", &["s-term"])]),
@@ -116,6 +119,10 @@ fn x2774_terminal_harness_state_releases_an_open_work_row() {
         Some("s-term") => Some(vec![quiet.clone()]),
         _ => None,
     };
+    let young_picks = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
+        Some("s-term") => Some(vec![young.clone()]),
+        _ => None,
+    };
 
     // The inverse FIRST (a dry run mutates nothing, and the apply pass below
     // retires the row): a working state keeps under open work, and the keep
@@ -123,7 +130,7 @@ fn x2774_terminal_harness_state_releases_an_open_work_row() {
     let working_agents = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
         crate::claude_roster::ClaudeAgentRow::new("t-term", Some("working")),
     ]);
-    let summary = x2774_sweep(&home, &emitter, 900, true, picks, working_agents);
+    let summary = x2774_sweep(&home, &emitter, 900, true, young_picks, working_agents);
     assert!(summary.retired.is_empty(), "{summary:?}");
     assert_eq!(
         summary.kept_open_work_stale,
@@ -137,7 +144,7 @@ fn x2774_terminal_harness_state_releases_an_open_work_row() {
 
     // A roster read that fails outright keeps everything (change 1).
     let unreadable = crate::claude_roster::ClaudeAgentsSnapshot::unknown("staged: unreadable");
-    let summary = x2774_sweep(&home, &emitter, 900, true, picks, unreadable);
+    let summary = x2774_sweep(&home, &emitter, 900, true, young_picks, unreadable);
     assert!(summary.retired.is_empty(), "{summary:?}");
     assert_eq!(summary.kept_open_work_stale.len(), 1, "{summary:?}");
 
@@ -155,6 +162,20 @@ fn x2774_terminal_harness_state_releases_an_open_work_row() {
             .1
             .starts_with("session terminal: harness state done (via sessions); node N1 in_review"),
         "basis names the session state: {summary:?}"
+    );
+    // The reaper ended the session whose manifest bound the node; the node
+    // itself survives the pass untouched: the sweep's session-end writes
+    // fill session rows only, so a close reads only from the gated close
+    // paths (the plan's ship promise checked against merged refs).
+    let rows = crate::graph_store::read_rows(&dir.path().join("graph.json")).unwrap();
+    let n1 = rows.iter().find(|e| e["id"] == "N1").unwrap();
+    assert_eq!(
+        n1["status"], "in_review",
+        "the reaper never closes the node whose session it ends"
+    );
+    assert!(
+        n1.get("completed_at").map(|v| v.is_null()).unwrap_or(true),
+        "no completion stamp appears on a reaped session's node"
     );
     std::fs::remove_dir_all(home.root()).ok();
 }
@@ -207,8 +228,12 @@ fn x2774_supersession_and_its_fail_closed_corner() {
         "the live newest row keeps under its own open-work shield: {summary:?}"
     );
 
+    // Both quiet and INSIDE the idle hour: the peer's 1800 s transcript
+    // is past the grace, so it is not a live peer and neither row retires
+    // on the supersession path - both keep under their open-work shields.
+    let young = quiet_transcript(transcripts.path(), "young.jsonl", 1800);
     let both_quiet = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
-        Some("s-old") | Some("s-new") => Some(vec![quiet.clone()]),
+        Some("s-old") | Some("s-new") => Some(vec![young.clone()]),
         _ => None,
     };
     // Run 1 (acting) retired and removed t-old; restore it for the
@@ -243,6 +268,7 @@ fn x2774_dry_and_acting_agree_row_for_row() {
     let transcripts = tempfile::tempdir().unwrap();
     let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 2 * 3600);
     let fresh = quiet_transcript(transcripts.path(), "fresh.jsonl", 10);
+    let young = quiet_transcript(transcripts.path(), "young.jsonl", 1800);
     let done_node = json!({
         "id": "ND",
         "status": "done",
@@ -275,7 +301,12 @@ fn x2774_dry_and_acting_agree_row_for_row() {
     let picks = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
         Some("s-done") => Some(vec![quiet.clone()]),
         Some("s-donefresh") => Some(vec![fresh.clone()]),
-        Some("s-nostop") | Some("s-term") | Some("s-work") => Some(vec![quiet.clone()]),
+        // The working open-node row stages inside the idle hour: it is
+        // the open-work keep this test agrees on, not a retirement.
+        // s-nostop stays past the hour: its dry-only needs_live_stop
+        // divergence needs a would-retire verdict to exist.
+        Some("s-work") => Some(vec![young.clone()]),
+        Some("s-nostop") | Some("s-term") => Some(vec![quiet.clone()]),
         _ => None,
     };
     let roster = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
@@ -631,10 +662,6 @@ fn a_keep_mark_holds_a_quiet_done_row_the_unmarked_twin_retires() {
     assert!(
         summary.kept_marked[0].1.starts_with("keep mark: set "),
         "the keep names the set time and the setter: {summary:?}"
-    );
-    assert!(
-        summary.kept_user_typed.is_empty(),
-        "the mark prints ahead of user typed: {summary:?}"
     );
     std::fs::remove_dir_all(home.root()).ok();
 }

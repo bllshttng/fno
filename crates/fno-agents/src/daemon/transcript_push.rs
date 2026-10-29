@@ -26,6 +26,10 @@ fn line_timestamp(line: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// The daemon's command for a transcript push. The arm and the hook request
+/// both spell it through this const, after `SESSION_REPORT_COMMAND`.
+pub const TRANSCRIPT_APPEND_COMMAND: &str = "transcript-append";
+
 /// `agent.transcript-append` - store raw transcript lines for one session.
 /// Each record rides the event store's idempotent append (the event id is the
 /// sha256 of the envelope line, so a hook retry is an idempotent hit, never a
@@ -173,7 +177,7 @@ mod tests {
         let records: Vec<Value> = lines.iter().map(|line| json!({ "line": line })).collect();
         Request::new(
             1,
-            "agent.transcript-append",
+            format!("agent.{TRANSCRIPT_APPEND_COMMAND}"),
             json!({ "session_id": session_id, "records": records }),
         )
     }
@@ -209,7 +213,7 @@ mod tests {
         let (ctx, _journal) = ctx_with_journal();
         let req = Request::new(
             1,
-            "agent.transcript-append",
+            format!("agent.{TRANSCRIPT_APPEND_COMMAND}"),
             json!({ "session_id": "sess-a", "records": [{ "noline": true }] }),
         );
         let res = handle_transcript_append(&ctx, &req);

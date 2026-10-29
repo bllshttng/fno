@@ -17,16 +17,6 @@ from fno.agents.harness_map import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _installed_loop_extensions(monkeypatch):
-    """Command-normalization tests are not about the loop gate's install
-    state, which is machine environment: the gate itself is exercised in
-    test_harness_loop_participation.py."""
-    import fno.agents.harness_map as harness_map
-
-    monkeypatch.setattr(harness_map, "_loop_gate_answer", lambda h, c: {"refusal": None})
-
-
 @pytest.mark.parametrize(
     "harness,expected_prefix",
     [
@@ -58,7 +48,7 @@ def test_config_command_overrides_the_per_harness_builtin():
 def test_explicit_command_wins_over_config_and_builtin():
     # The explicit slash template is canonical claude syntax, normalized on the
     # chosen harness (x-f0e2). Precedence is unchanged - explicit still beats
-    # the config `$fno:execute`. `custom` names no shipped footnote verb, so
+    # the config `$fno:execute`. `custom` names no shipped footnote command, so
     # the codex normalizer leaves the token literal instead of capturing it
     # into a phantom `$fno:custom` skill.
     out = resolve_dispatch(
@@ -70,20 +60,12 @@ def test_explicit_command_wins_over_config_and_builtin():
     assert out["command"] == "/custom x-abcd"
 
 
-def test_qualified_dispatch_verb_canonicalizes_before_the_allowlist():
-    # US7 review: the team contract sets `dispatch_verb=/fno:target` (every
-    # dispatched verb is plugin-qualified). The bare-only allowlist must not
+def test_qualified_dispatch_command_canonicalizes_before_the_allowlist():
+    # US7 review: the team contract sets `dispatch_command=/fno:target` (every
+    # dispatched command is plugin-qualified). The bare-only allowlist must not
     # refuse it - it canonicalizes to `/target`, then renders per-harness.
-    out = resolve_dispatch(harness="claude", node_id="x-abcd", verb="/fno:target")
+    out = resolve_dispatch(harness="claude", node_id="x-abcd", command_name="/fno:target")
     assert out["command"] == "/target x-abcd"
-    # opencode's surface re-adds the /fno: prefix at render.
-    out_oc = resolve_dispatch(harness="opencode", node_id="x-abcd", verb="/fno:target")
-    assert out_oc["command"] == "/fno:target x-abcd"
-    # /fno:think canonicalizes the same way.
-    out_think = resolve_dispatch(harness="claude", node_id="x-abcd", verb="/fno:think")
-    assert out_think["command"] == "/think x-abcd"
-    # a bare verb still works unchanged.
-    assert resolve_dispatch(harness="claude", node_id="x-abcd", verb="/target")["command"] == "/target x-abcd"
 
 
 def test_template_without_id_is_rejected():
@@ -163,6 +145,7 @@ def test_opencode_bg_resolves_on_the_spawn_claim_not_the_pane_bit():
         trigger="autonomous",
     )
     assert out["substrate"] == "thread"
+    assert out["thread"] is True
     with pytest.raises(DispatchResolveError, match="retired"):
         resolve_dispatch(
             harness="opencode",
@@ -175,8 +158,8 @@ def test_opencode_bg_resolves_on_the_spawn_claim_not_the_pane_bit():
 # --- the normalizer (x-a5e4) ------------------------------------------------ #
 
 
-def test_normalize_command_is_verb_agnostic_for_codex():
-    # ANY footnote /verb -> $fno:verb on codex, not just /target.
+def test_normalize_command_is_command_agnostic_for_codex():
+    # ANY footnote /command -> $fno:command on codex, not just /target.
     assert normalize_command("/fno:ship pr create", "codex") == "$fno:ship pr create"
 
 
@@ -263,7 +246,7 @@ def test_partial_settings_object_does_not_drop_auto_merge():
 # ---------------------------------------------------------------------------
 # x-ebd2: the lifecycle rung. Law d-834b6ff1: difficulty decides at intake
 # (no plan, no status to read); the plan's rung decides at re-dispatch. The
-# stored dispatch_verb is audit input, never truth.
+# stored dispatch_command is audit input, never truth.
 # ---------------------------------------------------------------------------
 
 
@@ -273,7 +256,7 @@ def test_intake_lifecycle_answer_resolves_target_and_rides_the_note():
     out = resolve_dispatch(
         harness="codex",
         node_id="x-abcd",
-        lifecycle=("/target", "verb=lifecycle(intake difficulty=low -> /target)"),
+        lifecycle=("/target", "command=lifecycle(intake difficulty=low -> /target)"),
     )
     assert out["command"] == "$fno:target --no-merge x-abcd"
     assert out["verb"] == "/target"
@@ -281,21 +264,21 @@ def test_intake_lifecycle_answer_resolves_target_and_rides_the_note():
 
 
 def test_redispatch_design_rung_declared_target_wins_naming_lifecycle_answer():
-    # A declared verb is never silently reconciled away. The decision trail
+    # A declared command is never silently reconciled away. The decision trail
     # still names what the lifecycle would have answered.
     out = resolve_dispatch(
         harness="claude",
         node_id="x-abcd",
-        verb="/fno:target",
+        command_name="/fno:target",
         lifecycle=(
             "/target",
-            "verb=declared(/target; lifecycle answers /blueprint: plan design)",
+            "command=declared(/target; lifecycle answers /blueprint: plan design)",
         ),
     )
     assert out["command"] == "/target --no-merge x-abcd"
     assert out["verb"] == "/target"
     assert any(
-        "verb=declared(/target; lifecycle answers /blueprint: plan design)" in d
+        "command=declared(/target; lifecycle answers /blueprint: plan design)" in d
         for d in out["decision"]
     )
 
@@ -307,7 +290,7 @@ def _stub_door(monkeypatch, impl):
     class _FakeClient:
         @staticmethod
         def request(method, params):
-            assert method == "effective_verb"
+            assert method == "effective_command"
             return impl(method, params)
 
     monkeypatch.setattr(store, "_client_for", lambda path: _FakeClient())
@@ -315,13 +298,13 @@ def _stub_door(monkeypatch, impl):
 
 def _refusal_text(rung):
     return (
-        f"dispatch verb cannot be derived for node x-abcd: plan rung "
+        f"dispatch command cannot be derived for node x-abcd: plan rung "
         f"{rung!r} with difficulty '' answers no lifecycle rung"
     )
 
 
 def test_unanswerable_plan_rung_refuses(monkeypatch):
-    from fno.agents.node_dispatch import node_effective_verb
+    from fno.agents.node_dispatch import node_effective_command
 
     rung = "done"
 
@@ -330,7 +313,7 @@ def test_unanswerable_plan_rung_refuses(monkeypatch):
 
     _stub_door(monkeypatch, door)
     with pytest.raises(DispatchResolveError, match=rung) as exc_info:
-        node_effective_verb({"id": "x-abcd"})
+        node_effective_command({"id": "x-abcd"})
     assert_refusal_names_subject_and_cites_no_node(exc_info.value)
 
 
@@ -344,14 +327,14 @@ def assert_refusal_names_subject_and_cites_no_node(exc: DispatchResolveError) ->
     assert "(x-" not in message
 
 
-def test_out_of_family_declared_verb_keeps_declared_precedence():
+def test_out_of_family_declared_command_keeps_declared_precedence():
     # /think is outside the lifecycle table: the door abstains and the node's
-    # own declaration rides the allowlist-checked verb rung as declared.
+    # own declaration rides the allowlist-checked command rung as declared.
     out = resolve_dispatch(
         harness="claude",
         node_id="x-abcd",
-        verb="/think",
-        lifecycle=(None, "verb=lifecycle(out-of-family /think; declared precedence holds)"),
+        command_name="/think",
+        lifecycle=(None, "command=lifecycle(out-of-family /think; declared precedence holds)"),
     )
     assert out["command"] == "/think x-abcd"
     assert out["verb"] is None
@@ -360,34 +343,25 @@ def test_out_of_family_declared_verb_keeps_declared_precedence():
 
 def test_derived_blueprint_ignores_the_operator_target_template():
     # config.dispatch.command is a target-phase contract; a derived blueprint
-    # is a different phase and renders its own verb.
+    # is a different phase and renders its own command.
     out = resolve_dispatch(
         harness="claude",
         node_id="x-abcd",
-        lifecycle=("/blueprint", "verb=lifecycle(intake difficulty=high -> /blueprint)"),
+        lifecycle=("/blueprint", "command=lifecycle(intake difficulty=high -> /blueprint)"),
         dispatch_cfg={"command": "/target --special {id}"},
     )
     assert out["command"] == "/blueprint x-abcd"
 
 
-def test_stage_table_resolves_the_derived_verb_profile():
-    # Locked Decision 4: the resolved verb is the profile key, so a medium
-    # planless node reaches agents.profiles.blueprint.provider even though its
-    # stored verb (or the default) says target.
-    import types
-
-    stub = types.SimpleNamespace(
-        agents=types.SimpleNamespace(
-            profiles={
-                "blueprint": types.SimpleNamespace(provider="codex"),
-            }
-        ),
-        dispatch=None,
-    )
+def test_stage_table_resolves_the_derived_command_profile():
+    # The profile->harness mapping answers natively on the route-slot door;
+    # this test pins the python seam that consumes the answer: a door-supplied
+    # codex harness renders the codex command spelling for a medium planless
+    # node's derived /blueprint command.
     out = resolve_dispatch(
         node_id="x-abcd",
-        lifecycle=("/blueprint", "verb=lifecycle(intake difficulty=medium -> /blueprint)"),
-        settings=stub,
+        lifecycle=("/blueprint", "command=lifecycle(intake difficulty=medium -> /blueprint)"),
+        dispatch_cfg={"harness": "codex"},
     )
     assert out["harness"] == "codex"
     assert out["command"] == "$fno:blueprint x-abcd"

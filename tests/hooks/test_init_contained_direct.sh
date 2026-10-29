@@ -115,8 +115,47 @@ fi
 exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
-  # State-path stub: pins init's manifest location to the scenario space dir.
-  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  # The containment gate rides fno-agents since the port, so the counted
+  # pre/post verdicts move onto a thin wrapper at the pinned binary: it
+  # intercepts `target-gates check-contained` with the scenario's rcs and
+  # delegates every other command to the shared state-path double (state
+  # path, green gates, mint).
+  cat > "${_dir}/bin/fno-agents" << WRAPPER
+#!/usr/bin/env bash
+# The containment verdicts this scenario counts.
+if [[ "\$1" == "target-gates" && "\$2" == "check-contained" ]]; then
+  echo "call" >> "${_dir}/contained-calls.log"
+  _n=\$(wc -l < "${_dir}/contained-calls.log" | tr -d ' ')
+  if [[ "\$_n" == "1" ]]; then
+    _rc=${_pre_rc}
+  else
+    _rc=${_post_rc}
+  fi
+  if [[ "\$_rc" == "9" ]]; then
+    echo "stub: x-261c ships inside x-6320's PR; run \\\`/fno:target x-6320\\\`." >&2
+  fi
+  exit \$_rc
+fi
+# Commands the shared double owns: it answers these BEFORE its own PATH walk,
+# so handing them over can never bounce back here and loop the two execs.
+case "\$1 \${2:-}" in
+  "state path"|"state mint-id"|"target-gates "*)
+    exec "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "\$@" ;;
+esac
+# Anything else (executor-route, claims) goes to the next real binary on PATH,
+# skipping this wrapper's own file the way the shared double's walk does.
+_self_dir="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+_oldifs="\$IFS"
+IFS=':'
+for _d in \$PATH; do
+  IFS="\$_oldifs"
+  [[ "\$_d" == "\$_self_dir" ]] && continue
+  [[ -x "\$_d/fno-agents" ]] || continue
+  exec "\$_d/fno-agents" "\$@"
+done
+IFS="\$_oldifs"
+exit 1
+WRAPPER
   chmod +x "${_dir}/bin/fno-agents"
   mkdir -p "${_dir}/space"
 }
@@ -218,7 +257,7 @@ pass "post-claim: the message reports the release"
 # worker did no work, so the row must come back out or the node reads as
 # permanently in progress. The flag is the only thing that removes it, and it
 # lives on THIS release call - asserting the row-removal logic in Python proves
-# the verb works, not that init asks for it.
+# the command works, not that init asks for it.
 grep -q -- "--rollback-do" "$TMP_POST/release-calls.log" \
   || fail "post-claim: release did not pass --rollback-do - the open do row survives a refusal that earned no work (got: $(cat "$TMP_POST/release-calls.log"))"
 grep -q -- "--stamp-do" "$TMP_POST/release-calls.log" \
@@ -334,7 +373,7 @@ grep -q "node:x-261c" "$_MANIFEST_PATH" \
 pass "shared plan: resolved to the delivery unit"
 
 # ── A BROKEN post-claim gate must say so, not degrade silently ──
-# Only rc 9 refuses, but a crash or a stale fno without the verb must not look
+# Only rc 9 refuses, but a crash or a stale fno without the command must not look
 # identical to "checked, and it is fine" - and here it happens with the claim
 # already held. The pre-claim gate has said this for its own rc all along.
 log "post-claim: broken gate (rc 1) => note and proceed, claim kept"

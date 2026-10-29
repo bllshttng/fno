@@ -1,0 +1,10 @@
+Usage: fno whoami status [OPTIONS]
+
+  Show gate satisfaction, bounded events tail, inconsistencies.
+
+Options:
+  -J, --json         emit JSON to stdout
+  --state-file PATH  override session state-file detection
+  --no-walker        suppress walker layer in output
+  --no-fleet         suppress fleet layer in output
+  --help             Show this message and exit.

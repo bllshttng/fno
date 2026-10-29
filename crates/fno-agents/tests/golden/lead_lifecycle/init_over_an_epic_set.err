@@ -1,0 +1,1 @@
+lead: warning: manifest armed, but this session resolves to no registry row, so its role cannot be checked. Run `/fno-me` to register, then ask your lead to grant it: `fno agents org promote <handle> --scope epic-y,epic-z`.

@@ -11,7 +11,7 @@ use crate::spawn_gate::{Refusal, EXIT_FLEET_STOP};
 /// worker carries none (the supervisor strips it), so CLAUDECODE=1 with
 /// CLAUDE_CODE_SESSION_ATTENDED=0, the harness's own unattended marker,
 /// counts too. An attended session, or one without both markers, is the
-/// user's own typed verb, and no gate may refuse or hold it.
+/// user's own typed command, and no gate may refuse or hold it.
 pub(crate) fn gate_agent_origin() -> bool {
     std::env::var_os("FNO_AGENT_SELF").is_some_and(|name| !name.is_empty())
         || (std::env::var_os("CLAUDECODE").is_some_and(|v| v == "1")
@@ -25,6 +25,20 @@ pub(crate) fn gate_agent_origin() -> bool {
 pub(crate) fn process_admission_gate() -> Result<(), Refusal> {
     if !gate_agent_origin() {
         return Ok(());
+    }
+    // The fleet map's takes-work toggle: the user said this machine takes
+    // no new agent work, so no load figure needs to agree.
+    let home = crate::paths::AgentsHome::from_env();
+    if !crate::fleet_beacon::takes_work(&home) {
+        return Err(Refusal::code(EXIT_FLEET_STOP)
+            .ev("reason", serde_json::json!("machine-takes-no-work"))
+            .ev(
+                "detail",
+                serde_json::json!(format!(
+                    "this machine takes no new agent work; `fno agents fleet top --machines --takes-work on` clears {}",
+                    crate::fleet_beacon::takes_work_path(&home).display()
+                )),
+            ));
     }
     match crate::machine_watch::brake_holds() {
         None => Ok(()),

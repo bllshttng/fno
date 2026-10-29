@@ -111,9 +111,21 @@ impl Probes for FakeGitHub {
     fn fno_shell(
         &self,
         _cwd: &Path,
-        _args: &[String],
+        args: &[String],
     ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
-        Ok((Some(0), Vec::new(), Vec::new()))
+        // The plan-fidelity probe is the one fno-shell ask the merge decision
+        // still shells; answer it clear so the coverage gate is the only arm
+        // under test.
+        let _ = args;
+        Ok((Some(0), br#"{"refused": false}"#.to_vec(), Vec::new()))
+    }
+    fn coverage_verdict(&self, _cwd: &Path, _pr: u64) -> fno_agents::loopcheck::GateVerdict {
+        fno_agents::loopcheck::GateVerdict {
+            state: fno_agents::loopcheck::GateState::Covered,
+            refusal: String::new(),
+            covered_head: self.head.borrow().clone(),
+            note: String::new(),
+        }
     }
     fn covered_head(&self, _cwd: &Path) -> Option<String> {
         Some(self.head.borrow().clone())
@@ -172,6 +184,7 @@ fn a_queue_arm_walks_arm_pending_merge_and_reconcile_without_ever_merging_twice(
         Outcome::Armed {
             head: HEAD.to_string(),
             merge_grant: None,
+            queued: false,
         }
     );
     let calls = gh.merge_calls();
@@ -189,6 +202,7 @@ fn a_queue_arm_walks_arm_pending_merge_and_reconcile_without_ever_merging_twice(
         Outcome::Armed {
             head: HEAD.to_string(),
             merge_grant: None,
+            queued: false,
         }
     );
     assert_eq!(gh.merge_calls().len(), 1, "re-arming spends no request");

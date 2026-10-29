@@ -1,5 +1,5 @@
 //! The lead-escalation question renderer : one pure function set
-//! behind a hidden JSON verb, reached as `fno-agents lead-escalation-text`.
+//! behind a hidden JSON command, reached as `fno-agents lead-escalation-text`.
 //! The lane's reconcile fold lives in Rust (`fleet_task::reconcile`, reached
 //! from Python through the `fleet-task` transport); this side only renders
 //! text from the reading the producer passed.
@@ -10,11 +10,97 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 /// How many stalled rows the question names before it says "and N more".
 const MAX_LISTED_IDS: usize = 20;
 
 const MARKER: &str = "lead-escalation";
+
+/// The `questions.route` decision: who else learns of an escalated
+/// question beyond the board row. `ladder`, the unset default, sends a
+/// worker's ask to its lead first and sends no relay mail. `direct` keeps
+/// the board alone. `triage` is a team's opt-in to a triage lead's mail
+/// copy. Anything else degrades to ladder and says so.
+/// Returns `(mail_relay, nudge)`.
+fn relay_mail(route: Option<&str>) -> (bool, Option<String>) {
+    const TAIL: &str = "no relay mail went out. A lead files a decision only the \
+                        user can make with fno inbox outstanding ask. Set \
+                        questions.route=direct or triage in .fno/config.toml to opt out.";
+    match route {
+        Some("triage") => (true, None),
+        Some("direct") => (
+            false,
+            Some(format!(
+                "questions.route=direct: the question stays on the board and {TAIL}"
+            )),
+        ),
+        Some(other) if other != "ladder" => (
+            false,
+            Some(format!(
+                "questions.route reads '{other}' (ladder, direct or triage), so ladder \
+                 applies: a worker's question goes to its lead first, and {TAIL}"
+            )),
+        ),
+        _ => (
+            false,
+            Some(format!(
+                "questions.route=ladder (default): a worker's question goes to its \
+                 lead first, and {TAIL}"
+            )),
+        ),
+    }
+}
+
+/// The config candidates the route knob reads: the caller's cwd first, then
+/// home, per key (the same cwd-then-home fallback `read_project_id` uses).
+fn route_candidates(cwd: Option<&Path>, agents_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(c) = cwd {
+        candidates.push(c.join(".fno/config.toml"));
+    }
+    if let Some(h) = agents_home {
+        // AgentsHome roots at ~/.fno/agents; config.toml lives at ~/.fno.
+        if let Some(base) = h.parent() {
+            candidates.push(base.join("config.toml"));
+        }
+    }
+    candidates
+}
+
+/// Tolerant scan: the first candidate that sets `questions.route` wins.
+/// The `questions.route` knob for a native caller in `cwd`: the read
+/// starts at the enclosing checkout root, so a run from a subdirectory still
+/// reads the project config.
+pub(crate) fn route_for(cwd: &Path) -> Option<String> {
+    route_from_configs(&config_candidates(cwd))
+}
+
+/// The `[questions]` config files for a caller in `cwd`, most specific first.
+pub(crate) fn config_candidates(cwd: &Path) -> Vec<PathBuf> {
+    let root = cwd
+        .ancestors()
+        .find(|p| p.join(".git").exists())
+        .unwrap_or(cwd);
+    route_candidates(
+        Some(root),
+        crate::paths::AgentsHome::from_env_opt()
+            .map(|h| h.root().to_path_buf())
+            .as_deref(),
+    )
+}
+
+fn route_from_configs(candidates: &[PathBuf]) -> Option<String> {
+    for candidate in candidates {
+        let Some(table) = crate::finalize::load_config_toml(candidate) else {
+            continue;
+        };
+        if let Some(route) = crate::finalize::toml_string_at(&table, &["questions", "route"]) {
+            return Some(route);
+        }
+    }
+    None
+}
 
 // Reading ids are minted here so no call site writes a string literal that
 // can drift from the parser below. A scope's commas become `+` so a
@@ -51,6 +137,12 @@ pub fn reading_stale_team_doc() -> String {
     "reading:stale-team-doc".to_owned()
 }
 
+/// A verdict escalation states the verdict itself: a degraded or unknown
+/// lead often has no stalled board row to name.
+pub fn reading_verdict(scope: &str) -> String {
+    format!("reading:verdict:{}", scope.replace(',', "+"))
+}
+
 #[derive(Deserialize)]
 pub struct EscalationRequest {
     pub stalled: Vec<String>,
@@ -74,6 +166,16 @@ pub struct EscalationRequest {
     /// legacy shared channel.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The `questions.route` knob, read by the transport from config and
+    /// passed in so `render` stays deterministic. `None` reads as direct.
+    #[serde(default)]
+    pub route: Option<String>,
+    /// The directory whose `.fno/config.toml` the route read starts from:
+    /// the caller's repository root, so a run from a subdirectory
+    /// still reads the project config. Absent falls back to the process
+    /// cwd.
+    #[serde(default)]
+    pub route_cwd: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +191,12 @@ pub struct EscalationAnswer {
     /// every ok answer so the caller never re-derives the channel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<String>,
+    /// False under `questions.route=direct`: the caller skips the
+    /// presiding lead's mail copy. The board row still records.
+    pub mail_relay: bool,
+    /// The teaching line the caller prints when the relay mail is skipped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nudge: Option<String>,
 }
 
 fn refused(message: &str) -> EscalationAnswer {
@@ -98,6 +206,8 @@ fn refused(message: &str) -> EscalationAnswer {
         mail: None,
         message: Some(format!("lead escalation refused: {message}")),
         marker: None,
+        mail_relay: false,
+        nudge: None,
     }
 }
 
@@ -127,6 +237,13 @@ fn subject_for_reading(id: &str) -> Option<String> {
         return Some(format!(
             "a quiet board whose delivery count for scope {scope} it could not read"
         ));
+    }
+    if let Some(scope) = scope_of("reading:verdict:") {
+        return Some(if scope.is_empty() {
+            "its own verdict, with no board row stalled".to_owned()
+        } else {
+            format!("its own verdict for scope {scope}, with no board row stalled")
+        });
     }
     match id {
         "reading:board-unreadable" => Some("a board it could not read".to_owned()),
@@ -186,6 +303,8 @@ fn append_verdict(closing: &mut String, verdict: &str, scope: Option<&str>, read
             .or_else(|| {
                 readings.iter().find_map(|r| {
                     r.strip_prefix("reading:undelivered:")
+                        .or_else(|| r.strip_prefix("reading:verdict:"))
+                        .filter(|s| !s.is_empty())
                         .map(|s| s.replace('+', ","))
                 })
             })
@@ -240,6 +359,16 @@ pub fn render(req: &EscalationRequest) -> EscalationAnswer {
 
     let (subject, rows_branch) = if readings.len() == 1 {
         let reading = &readings[0];
+        if reading.starts_with("reading:verdict:") {
+            let name = req.verdict.as_deref().and_then(|v| v.split(' ').next());
+            match name {
+                None => return refused("a verdict reading carries no verdict"),
+                Some("converging") => {
+                    return refused("the verdict reads converging; it states nothing to escalate")
+                }
+                Some(_) => {}
+            }
+        }
         match subject_for_reading(reading) {
             Some(s) => (s, false),
             None => return refused(&format!("unknown reading id [{reading}]")),
@@ -276,12 +405,15 @@ pub fn render(req: &EscalationRequest) -> EscalationAnswer {
         subject = subject,
         reason = req.reason,
     );
+    let (mail_relay, nudge) = relay_mail(req.route.as_deref());
     EscalationAnswer {
         ok: true,
         question: Some(question),
         mail: Some(mail),
         message: None,
         marker: Some(marker),
+        mail_relay,
+        nudge,
     }
 }
 
@@ -303,13 +435,30 @@ pub fn run_lead_escalation_text(args: &[String]) -> i32 {
         eprintln!("fno-agents lead-escalation-text: could not read stdin");
         return 2;
     }
-    let req: EscalationRequest = match serde_json::from_str(&input) {
+    let mut req: EscalationRequest = match serde_json::from_str(&input) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("fno-agents lead-escalation-text: bad request: {e}");
             return 2;
         }
     };
+    // The knob read lives here, not in `render`: the renderer stays
+    // deterministic on its request, and the tests pin the route through the
+    // field the transport fills. The caller names its repository root, so a
+    // run from a subdirectory still reads the project config.
+    if req.route.is_none() {
+        let cwd = req
+            .route_cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok());
+        req.route = route_from_configs(&route_candidates(
+            cwd.as_deref(),
+            crate::paths::AgentsHome::from_env_opt()
+                .map(|h| h.root().to_path_buf())
+                .as_deref(),
+        ));
+    }
     let answer = serde_json::to_string(&render(&req)).expect("serializes");
     println!("{answer}");
     0
@@ -359,7 +508,94 @@ mod tests {
             verdict: None,
             scope: None,
             session_id: None,
+            route: None,
+            route_cwd: None,
         }
+    }
+
+    // --- the questions.route decision ---
+
+    #[test]
+    fn the_default_route_is_the_ladder_and_skips_the_relay_mail() {
+        let (mail_relay, nudge) = relay_mail(None);
+        assert!(!mail_relay);
+        let nudge = nudge.expect("the ladder carries the teaching line");
+        assert!(nudge.contains("questions.route=ladder (default)"));
+        assert!(nudge.contains("fno inbox outstanding ask"));
+        let (mail_relay, nudge) = relay_mail(Some("direct"));
+        assert!(!mail_relay);
+        assert!(nudge.unwrap().starts_with("questions.route=direct:"));
+
+        let ans = render(&req(IDS.to_vec(), Some(true)));
+        assert!(ans.ok);
+        assert!(!ans.mail_relay);
+        assert!(ans.nudge.is_some());
+    }
+
+    #[test]
+    fn triage_keeps_the_mail_and_stays_quiet() {
+        let (mail_relay, nudge) = relay_mail(Some("triage"));
+        assert!(mail_relay);
+        assert!(nudge.is_none());
+
+        let mut r = req(IDS.to_vec(), Some(true));
+        r.route = Some("triage".to_owned());
+        let ans = render(&r);
+        assert!(ans.mail_relay);
+        assert!(ans.nudge.is_none());
+    }
+
+    #[test]
+    fn an_unknown_route_degrades_to_the_ladder_and_names_the_value() {
+        let (mail_relay, nudge) = relay_mail(Some("relay"));
+        assert!(!mail_relay);
+        let nudge = nudge.expect("unknown carries the teaching line");
+        assert!(nudge.contains("reads 'relay'"));
+        assert!(nudge.contains("so ladder applies"));
+        assert!(nudge.contains("fno inbox outstanding ask"));
+    }
+
+    #[test]
+    fn the_route_candidate_list_reads_cwd_then_agents_home() {
+        let cwd = Path::new("/repo");
+        let home = Path::new("/u/.fno/agents");
+        let candidates = route_candidates(Some(cwd), Some(home));
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/repo/.fno/config.toml"),
+                PathBuf::from("/u/.fno/config.toml"),
+            ]
+        );
+        assert!(route_candidates(None, None).is_empty());
+    }
+
+    #[test]
+    fn route_scan_reads_the_first_candidate_that_sets_the_key() {
+        let dir = std::env::temp_dir().join(format!("lead-esc-route-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("bare.toml");
+        std::fs::write(&bare, "[project]\nid = \"fno\"\n").unwrap();
+        let set = dir.join("set.toml");
+        std::fs::write(
+            &set,
+            "[project]\nid = \"fno\"\n[questions]\nroute = \"triage\"\n",
+        )
+        .unwrap();
+        // A file without the key keeps the caller looking; a bad table reads
+        // as absent.
+        assert_eq!(
+            route_from_configs(&[bare.clone(), set.clone()]).as_deref(),
+            Some("triage")
+        );
+        assert_eq!(route_from_configs(&[bare.clone()]), None);
+        let garbage = dir.join("garbage.toml");
+        std::fs::write(&garbage, "not toml at all [[[").unwrap();
+        assert_eq!(
+            route_from_configs(&[garbage, set]).as_deref(),
+            Some("triage")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn question(req: &EscalationRequest) -> String {
@@ -456,6 +692,30 @@ mod tests {
             None,
         ));
         assert!(text.contains("--promote x-bbbb,x-1111 --hand-off"));
+    }
+
+    #[test]
+    fn a_verdict_reading_escalates_with_no_stalled_row() {
+        let reading = reading_verdict("fnh,fno");
+        let text = question(&with_verdict(
+            req(vec![reading.as_str()], Some(true)),
+            "degraded compactions 12 of 3",
+            None,
+        ));
+        assert!(text.contains("stopped on its own verdict for scope fnh, fno"));
+        assert!(text.contains("Verdict degraded compactions 12 of 3."));
+        assert!(text.contains("--promote fnh,fno --hand-off"));
+
+        let ans = render(&with_verdict(
+            req(vec![reading.as_str()], Some(true)),
+            "converging",
+            None,
+        ));
+        assert!(!ans.ok);
+        assert!(ans
+            .message
+            .expect("refusal names itself")
+            .contains("converging"));
     }
 
     #[test]

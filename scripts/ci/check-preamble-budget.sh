@@ -20,14 +20,14 @@ set -euo pipefail
 # prior preamble had 8B headroom so any meaningful contract required a raise.
 # The DoneUnreviewed terminal in the ship-vocabulary line took 45 more, since
 # the auto-loaded preamble must name every public TerminationReason.
-# Raised from 38000 to 38100 by the prescribed-verbs fix. AGENTS.md's
+# Raised from 38000 to 38100 by the prescribed-commands fix. AGENTS.md's
 # search line prescribed `rg -uu` as the over-exclusion remedy, which is inert:
 # the trap has two layers (a ripgreprc `--glob=!target` and an unanchored
 # `target/` in ~/.ignore), and `-u` governs ignore files, never a `--glob`. The
 # working remedy `RIPGREP_CONFIG_PATH= rg -uu` plus a one-clause why is longer
 # than the inert form it replaces, and the preamble sat at 37999/38000 (1B spare).
 # Raised by a further 300 for the stage-table pointer in AGENTS.md, which names
-# config.agents.profiles.<verb> and links the role-based-model-routing doc: the
+# config.agents.profiles.<command> and links the role-based-model-routing doc: the
 # per-stage axis is undiscoverable from the preamble without it (~66 tok/turn).
 #
 # LOWERED from 38400 to 36726, the first lowering in this file's history. Every
@@ -54,7 +54,7 @@ set -euo pipefail
 #
 # The header governs the CORPUS and exists to stop a new pitfalls entry buying
 # room by moving this number. Main's overage came from documenting two new
-# verbs, not from corpus growth, so the rule was never aimed at this case.
+# commands, not from corpus growth, so the rule was never aimed at this case.
 # A rule whose stated premise is false gets changed deliberately, and this
 # one was: the AGENTS.md header no longer carries the absolute.
 #
@@ -74,15 +74,15 @@ set -euo pipefail
 #
 # RAISED to 37411, same zero-spare rule, funding the demand-signal pointer in
 # AGENTS.md. Compression ran first and took the line from 317 bytes to 237. The
-# remaining 230 buy the only session-start mention of two new verbs, and this
+# remaining 230 buy the only session-start mention of two new commands, and this
 # feature dies without one: `fno backlog encounter` is hidden, an agent files an
 # encounter at the moment it hits a wall, and a signal nothing names at session
 # start collects zero encounters. Zero encounters is the state the feature
 # exists to replace, so a pointer nobody reads is the same as no feature.
 # This is the case the corpus header was explicitly NOT aimed at: the overage
-# is two documented verbs, not corpus growth.
-# Raised by 400 for the workspace-restore pointer (verb bullet + deep-dive
-# list entry), same shape as the prescribed-verbs raise above: a hidden verb
+# is two documented commands, not corpus growth.
+# Raised by 400 for the workspace-restore pointer (command bullet + deep-dive
+# list entry), same shape as the prescribed-commands raise above: a hidden command
 # (`fno mux workspace restore`) with no session-start mention collects zero
 # use, and reboot recovery is exactly the moment no agent is reading docs.
 # 352 measured, the rest is the rounding the zero-spare rule below demands.
@@ -91,7 +91,7 @@ set -euo pipefail
 # an elimination). Measured, no band banked: zero spare.
 # Raised by 263 for the pane-keeper pointer: worker panes now outlive the mux
 # server, so the SessionStart line must say the shutdown sweep spares
-# keeper-hosted panes and name the keeper-list verb. Same shape as the
+# keeper-hosted panes and name the keeper-list command. Same shape as the
 # workspace-restore raise: reboot recovery is exactly the moment no agent is
 # reading docs. The bullet was already cut to its floor and the redundant
 # deep-dive list entry dropped; 263 is the measured remainder, zero spare.
@@ -105,7 +105,7 @@ set -euo pipefail
 # Demand-signal raise, and it is a RAISE rather than a trade on purpose. The
 # measurement that funded it: 3 of 2392 nodes carried an encounter after six
 # weeks, because `fno backlog encounter` was named only in this repo's
-# AGENTS.md. AGENTS.md does not ship, so for every user but this one the verb
+# AGENTS.md. AGENTS.md does not ship, so for every user but this one the command
 # was taught in zero places. Only machinery and ARMED skills reach an install,
 # and using-fno is the armed one, so moving the line out of the preamble
 # (option 2) would delete the teaching rather than relocate it. The line was
@@ -164,14 +164,14 @@ set -euo pipefail
 # it (no conflict was flagged - the two hunks merged cleanly). Measured from
 # the actual committed AGENTS.md, zero spare.
 # +55 (39640 -> 39695), measured 2026-09-04: the `/fno:lead` row in
-# skills/using-fno/SKILL.md. Lead is a new first-class verb and that table is
+# skills/using-fno/SKILL.md. Lead is a new first-class command and that table is
 # its only session-start mention, the same shape as the workspace-restore and
 # demand-signal raises. The row was compressed to neighbor idiom first
 # ("Lead as the teamed lead", -22 B). 55 is the measured residue, zero spare.
 # +16 (39695 -> 39711), measured 2026-09-06: the mesh-spawn row in
 # skills/using-fno/SKILL.md gained one clause naming the new unattended
 # `--permission-mode` built-in (agents.defaults.permission_mode collapsed the
-# old spawn_permission_mode key onto it) - the fact a verb-seeded spawn is no
+# old spawn_permission_mode key onto it) - the fact a command-seeded spawn is no
 # longer left in unpinned auto mode belongs on this row, the sole session-start
 # mention of the spawn seam. Trimmed from 265 to 133 measured bytes first
 # (dropped the "seedless seed resolves nothing" clause as inferable); 16 is
@@ -201,7 +201,7 @@ set -euo pipefail
 # short sentences, and 109 is the measured residue of the version that passes.
 # The raise spends exactly its delta and leaves the bank above intact.
 # +510 (40300 -> 40808), measured 2026-10-02: the "If `fno` is missing" block
-# in skills/using-fno/SKILL.md. A fresh /plugin install leaves every fno verb
+# in skills/using-fno/SKILL.md. A fresh /plugin install leaves every fno command
 # failing until the background installer finishes, and using-fno is the one
 # preamble a CLI-less session still receives (it is injected by the plugin's
 # own hook, not the CLI), so the installing-vs-failed states, the log path and
@@ -335,10 +335,9 @@ done
 shopt -u nullglob
 
 # Reach: which sessions actually pay for a file's bytes. hooks/codex-hooks.json
-# SessionStart runs hooks/session-start.sh, which calls
-# session-start-using-fno.sh, so using-fno is hook-injected (claude plus
-# top-level codex sessions, but not codex subagent threads) rather than absent
-# from codex. CLAUDE.md and the rules directory reach claude only. A byte that
+# SessionStart runs session-start-using-fno.sh directly, so using-fno is
+# hook-injected (claude plus top-level codex sessions that joined fno, but not
+# codex subagent threads) rather than absent from codex. CLAUDE.md and the rules directory reach claude only. A byte that
 # must reach a session type none of these cover can live only in AGENTS.md,
 # which is exactly the trade the refusal text below names.
 reach_of() {

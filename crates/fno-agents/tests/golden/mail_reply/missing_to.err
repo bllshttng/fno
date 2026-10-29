@@ -1,0 +1,4 @@
+Usage: fno agents mail reply [OPTIONS] [BODY_ARG]
+Try 'fno agents mail reply --help' for help.
+
+Error: Missing option '--to'.

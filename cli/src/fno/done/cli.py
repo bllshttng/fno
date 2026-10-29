@@ -30,7 +30,7 @@ Never hand-rolls graph writes - goes through locked_mutate_graph for safety.
 Registered under `fno backlog done` : the plain node-id close is
 graph.cli's cmd_done; this command owns the rich completion surface
 (--backfill rollups, PR/link/note metadata, fuzzy and branch queries) and is
-reached through cmd_done's delegation and the `fno done` VERB_MOVES shim.
+reached through cmd_done's delegation.
 """
 
 from __future__ import annotations
@@ -227,7 +227,8 @@ def _rollup_from_ledger(node: Optional[dict]) -> dict:
 
     # One cost_sessions row per ledger row, carrying that row's whole cost.
     # A row's `sessions` is an ALIAS SET for ONE run, not a list of sessions:
-    # cost/_register.py records up to five identifier forms of the same
+    # the register leg (now crates/fno-agents/src/ledger_register.rs, formerly
+    # cost/_register.py) records up to five identifier forms of the same
     # session (the minted run id, the harness id, a claude transcript uuid, a
     # codex thread id), and its only other writer emits a single-element list.
     # So len(sessions) counts NAMES and dividing by it splits one run's cost
@@ -446,7 +447,7 @@ def done_command(
         # roster lives in the tracker and the rollup lives in the footnote
         # sidecar, so both halves target the wrong store; the per-node door
         # above already fills sidecar rollups at completion time.
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             typer.echo(
@@ -530,7 +531,7 @@ def done_command(
     # before the close, exactly one tracker.close - instead of the local
     # graph resolution below. Requires an explicit node id: the branch-based
     # auto-detect resolves through footnote-minted slug metadata.
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() != "graph":
         from fno.graph.cli import _done_via_seam
@@ -689,6 +690,20 @@ def done_command(
         if promise.warning:
             typer.echo(f"warning: {promise.warning}", err=True)
 
+    # -- ancestor rollup gate: the cascade stops at a held parent --
+    # Thin call into the close gate, same shape as the native close's warm
+    # map: an unmet or unwarmed plan promise holds, no new gate logic.
+    cascade_held: dict = {}
+    _pid = node.get("parent")
+    if isinstance(_pid, str) and _pid:
+        _parent = next((e for e in entries if e.get("id") == _pid), None)
+        if isinstance(_parent, dict) and not _parent.get("completed_at"):
+            cascade_held[_pid] = resolve_promise_evidence(_parent, cwd=_parent.get("cwd"), query=_gh_query)
+            _pv = cascade_held[_pid]
+            if not _pv.satisfied and _pv.reason:
+                first = _pv.reason.splitlines()[0]
+                typer.echo(f"warning: parent {_pid} stays open: {first}", err=True)
+
     # Resolve pr_url + ledger rollup outside the mutator so subprocess / disk
     # I/O stays out of the graph lock.
     pr_url_to_write: Optional[str] = None
@@ -702,7 +717,7 @@ def done_command(
         if repo is not None and not is_repo_slug(repo):
             typer.echo(
                 f"fno backlog done: --repo {repo!r} is not an owner/name slug "
-                "(expected <owner>/<repo>, e.g. bllshttng/footnote)",
+                "(expected <owner>/<repo>, e.g. bllshttng/fno)",
                 err=True,
             )
             raise typer.Exit(code=2)
@@ -827,7 +842,9 @@ def done_command(
                 from fno.graph.cli import _cascade_close_parents
 
                 reparented_box.extend(_reparent_live_children(entries_inner, node_id))
-                cascade_closed.extend(_cascade_close_parents(entries_inner, node_id))
+                cascade_closed.extend(
+                    _cascade_close_parents(entries_inner, node_id, held=cascade_held)
+                )
             break
         return entries_inner
 
@@ -896,11 +913,11 @@ def done_command(
     tag_bits.extend(rollup_tags)
     typer.echo(f"fno backlog done: {node_id} -> done  " + "  ".join(tag_bits))
 
-    # Superuser-authority matrix (LD3/LD29): the top-level `fno done` verb is an
+    # Superuser-authority matrix (LD3/LD29): the top-level `fno done` command is an
     # allowed action during a drive window, but audit-tag it so the trail
     # attributes the completion to the operator rather than the LLM. Mirrors
-    # `graph/cli.py::cmd_done` exactly so both done verbs emit the identical
-    # event kind, source, and envelope -- the audit trail must not fork by verb.
+    # `graph/cli.py::cmd_done` exactly so both done commands emit the identical
+    # event kind, source, and envelope -- the audit trail must not fork by command.
     # Reached only on a fresh completion: the collision path returns above and
     # `--backfill` returns before the normal flow, so no guard on
     # `collision_state["detected"]` is needed here. Best-effort: a write failure

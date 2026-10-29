@@ -1,7 +1,7 @@
 //! Parallel execution-wave validation and worktree lifecycle.
 //!
 //! `fno-agents wave check|fork|join` is a transport-only door used by plan
-//! validation and `/execute waves`; it is not an advertised `fno` verb.
+//! validation and `/execute waves`; it is not an advertised `fno` command.
 
 use serde_yaml_ng::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -473,7 +473,7 @@ fn missing_verify_path(command: &str, surfaces: &[String], root: &Path) -> Optio
     None
 }
 
-fn check_plan(plan: &Path, root: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn check_plan(plan: &Path, root: &Path) -> Result<Vec<String>, String> {
     let strategy = parse_strategy(plan)?;
     let files = repository_files(root)?;
     let mut lines = Vec::new();
@@ -580,6 +580,7 @@ fn check_plan(plan: &Path, root: &Path) -> Result<Vec<String>, String> {
     if lines.is_empty() {
         lines.push("O\twave strategy checks passed".to_string());
     }
+    lines.extend(crate::plan_doc::stamp::pr_ceiling_line(plan, root));
     Ok(lines)
 }
 
@@ -1252,6 +1253,42 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "E\tparallel tasks share surface 'src/fold.py': 1.1, 1.2"));
+    }
+
+    #[test]
+    fn a_plan_over_the_pr_ceiling_is_named() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(repo.join(".fno")).unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        let config = repo.join(".fno/config.toml");
+        fs::write(&config, "[blueprint]\nmax_prs_per_epic = 4\n").unwrap();
+        let file = repo.join("plan.md");
+        let body = plan("execution_mode: sequential\nwaves:\n  - wave: 1\n    mode: sequential\n    tasks: ['1.1']\ntasks:\n  - id: '1.1'\n    surface: ['a.py']\n    verify: 'cargo test'");
+        fs::write(
+            &file,
+            body.replacen("kind: quick-plan", "kind: quick-plan\nmax_prs: 25", 1),
+        )
+        .unwrap();
+        let lines = check_plan(&file, &repo).unwrap();
+        let warning = lines
+            .iter()
+            .find(|line| line.starts_with("W\tplan declares 25 PRs (max_prs)"))
+            .expect("the plan over the ceiling is named");
+        assert!(warning.contains("ceiling 4 (config.blueprint.max_prs_per_epic = 4)"));
+        assert!(warning.contains("raise the ceiling with config.blueprint.max_prs_per_epic"));
+        // The pass receipt still prints beside the warning.
+        assert!(lines
+            .iter()
+            .any(|line| line == "O\twave strategy checks passed"));
+        // A project ceiling of 25 lets the same plan through.
+        fs::write(&config, "[blueprint]\nmax_prs_per_epic = 25\n").unwrap();
+        let lines = check_plan(&file, &repo).unwrap();
+        assert!(lines.iter().all(|line| !line.starts_with('W')), "{lines:?}");
     }
 
     #[test]

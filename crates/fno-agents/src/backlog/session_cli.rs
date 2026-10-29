@@ -23,7 +23,7 @@ pub fn run(tail: &[String]) -> i32 {
     let sub = tail.first().map(String::as_str).unwrap_or("");
     if sub != "-h" && sub != "--help" && !sub.is_empty() {
         // The external-backend guard the Python surface carried: session
-        // verbs own graph state, so under any other tracker backend they
+        // commands own graph state, so under any other tracker backend they
         // refuse before any read or write.
         let backend = std::env::var("FNO_TRACKER_BACKEND")
             .ok()
@@ -31,7 +31,7 @@ pub fn run(tail: &[String]) -> i32 {
             .unwrap_or_else(|| "graph".to_string());
         if backend != "graph" {
             eprintln!(
-                "fno backlog session {sub}: this verb owns graph state; under \
+                "fno backlog session {sub}: this command owns graph state; under \
 the {backend} tracker backend it is refused. Track the item in the tracker \
 by its id."
             );
@@ -66,9 +66,9 @@ fn run_backfill(args: &[String]) -> i32 {
     super::super::session_backfill::run(&argv)
 }
 
-/// The identity a session verb acts as: the explicit `--harness`/`--session-id`
+/// The identity a session command acts as: the explicit `--harness`/`--session-id`
 /// overrides, else the ambient walk. Either half empty refuses (the caller
-/// prints its own verb-specific line).
+/// prints its own command-specific line).
 fn eff_identity(harness: Option<&str>, session_id: Option<&str>) -> Option<(String, String)> {
     let (ambient_session, ambient_harness) = crate::claims::resolve_identity();
     let h = harness
@@ -297,7 +297,10 @@ fn run_open(args: &[String]) -> i32 {
         eprintln!("session open: node:{node_id} is already open for this session ({holder}).");
         return 1;
     }
-    if let Some(own) = own_handover_holder(&s) {
+    // A claim this session already holds - the spawn handover, or the
+    // session's own target claim on an unplanned node - is planned under.
+    let own_target = format!("target-session:{s}");
+    for own in own_handover_holder(&s).into_iter().chain([own_target]) {
         let own_held = rec.as_ref().map(|r| r.holder == own).unwrap_or(false);
         if own_held
             && matches!(
@@ -305,7 +308,6 @@ fn run_open(args: &[String]) -> i32 {
                 crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
             )
         {
-            // fno agents spawn claimed the node for this worker: plan under it.
             if json_out {
                 println!(
                     "{}",
@@ -550,24 +552,25 @@ pass --harness/--session-id or run inside a session."
         "harness": h, "session_id": s, "summary": summary, "launch": launch,
         "ended_at": ended_at, "claim_released": false,
     }));
-    let launch_verb = launch.split_whitespace().next().unwrap_or("");
-    let parsed = crate::provider::parse_verb_token(launch_verb);
+    let launch_command = launch.split_whitespace().next().unwrap_or("");
+    let parsed = crate::provider::parse_command_token(launch_command);
     if parsed
         .as_ref()
         .map(|(_, namespaced)| *namespaced)
         .unwrap_or(false)
     {
-        let stored_verb = format!("/fno:{}", parsed.unwrap().0);
-        let verb_row = stored_verb.clone();
-        let _ = crate::backlog::mutate_single_row(&graph, "session_close_verb", |rows| {
+        let stored_command = format!("/fno:{}", parsed.unwrap().0);
+        let command_row = stored_command.clone();
+        let _ = crate::backlog::mutate_single_row(&graph, "session_close_command", |rows| {
             for entry in rows.iter_mut() {
                 if entry.get("id").and_then(Value::as_str) == Some(node_id.as_str())
-                    && entry.get("dispatch_verb").and_then(Value::as_str) != Some(verb_row.as_str())
+                    && entry.get("dispatch_command").and_then(Value::as_str)
+                        != Some(command_row.as_str())
                 {
-                    entry
-                        .as_object_mut()
-                        .expect("row is an object")
-                        .insert("dispatch_verb".into(), Value::String(verb_row.clone()));
+                    entry.as_object_mut().expect("row is an object").insert(
+                        "dispatch_command".into(),
+                        Value::String(command_row.clone()),
+                    );
                     break;
                 }
             }
@@ -575,8 +578,8 @@ pass --harness/--session-id or run inside a session."
         });
     } else {
         eprintln!(
-            "session close: dispatch_verb not written: launch token \
-'{launch_verb}' is not a plugin-qualified verb."
+            "session close: dispatch_command not written: launch token \
+'{launch_command}' is not a plugin-qualified command."
         );
     }
     let env_holder = std::env::var("FNO_NODE_CLAIM_HOLDER")
@@ -1260,7 +1263,7 @@ fn run_reap_open(args: &[String]) -> i32 {
         return 0;
     }
     let node_id = resolved.unwrap();
-    // Read back and verify the settlement, exactly like the Python verb.
+    // Read back and verify the settlement, exactly like the Python command.
     let rows = match read_graph(&graph) {
         Ok(r) => r,
         Err(e) => {

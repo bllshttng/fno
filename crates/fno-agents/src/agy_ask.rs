@@ -558,32 +558,6 @@ fn run_agy(
     })
 }
 
-/// Spawn `agy -p ...` in `cwd` and return the plain-text reply.
-pub fn agy_create(
-    cwd: &Path,
-    prompt: &str,
-    from_name: &str,
-    model: Option<&str>,
-    output_path: &Path,
-    timeout: Option<Duration>,
-    agent_self: Option<&str>,
-    add_dir: Option<&str>,
-    harness_args: &[String],
-) -> Result<AgyResult, AgyAskError> {
-    agy_create_with_effort(
-        cwd,
-        prompt,
-        from_name,
-        model,
-        None,
-        output_path,
-        timeout,
-        agent_self,
-        add_dir,
-        harness_args,
-    )
-}
-
 /// Spawn `agy -p ...` with an optional reasoning effort.
 #[allow(clippy::too_many_arguments)]
 pub fn agy_create_with_effort(
@@ -763,7 +737,7 @@ pub fn dispatch_agy_once_with_effort(
     }
 }
 
-/// Client interceptor for the `ask` (resume-by-name) verb on an agy target.
+/// Client interceptor for the `ask` (resume-by-name) command on an agy target.
 ///
 /// agy is STATELESS here (plain text, no session id), so a stateful `ask` resume
 /// is not supported. Returns `None` for non-agy targets (fall through), or a

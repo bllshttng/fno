@@ -1,4 +1,4 @@
-<!-- prescribed-verbs: describe -->
+<!-- prescribed-commands: describe -->
 
 # Do-Roadmap: Multi-Session Task Orchestration
 

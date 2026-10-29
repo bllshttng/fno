@@ -11,8 +11,8 @@ use super::merge_evidence::node_pr_refs;
 use super::supersession::normalize_surface;
 use crate::backlog::workflows::{
     apply_completion_fields, auto_closed_note, children_all_closed, is_live, pr_ref_set,
-    release_contained_row, reopen_outranks_child_closes, reopen_outranks_merge,
-    reparent_live_children, text_at,
+    release_contained_row, reopen_holds_epic_children, reopen_outranks_child_closes,
+    reopen_outranks_merge, reparent_live_children, text_at,
 };
 use crate::graph_store::has_own_plan_work;
 
@@ -37,7 +37,7 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
             continue;
         }
         if children_all_closed(parent, &kids)
-            && !reopen_outranks_child_closes(parent, &kids)
+            && !reopen_holds_epic_children(parent, &kids)
             && !has_own_plan_work(parent)
         {
             out.insert(pid.to_string());
@@ -47,7 +47,14 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
 }
 
 /// Close every open epic whose children are all done (self-heal/migration).
-pub(crate) fn sweep_close_done_epics(entries: &mut [Value]) -> Vec<String> {
+/// `promise_held` carries the pre-lock rollup verdicts: a plan plus a
+/// merged PR clears `has_own_plan_work`, and without the hold such an epic
+/// closed on its children's closes with the plan's ships unverified.
+/// Absent = held (fail closed), like the cascade.
+pub(crate) fn sweep_close_done_epics(
+    entries: &mut [Value],
+    promise_held: &super::promise::RollupVerdicts,
+) -> Vec<String> {
     let mut closed: Vec<String> = Vec::new();
     for _ in 0..64 {
         // fixpoint, depth-capped against a malformed cycle
@@ -62,6 +69,9 @@ pub(crate) fn sweep_close_done_epics(entries: &mut [Value]) -> Vec<String> {
             else {
                 continue;
             };
+            if super::promise::rollup_holds(&entries[index], promise_held) {
+                continue;
+            }
             let parent = &mut entries[index];
             if parent
                 .get("completed_at")
@@ -393,11 +403,47 @@ mod tests {
             seed("x-epic", Some("x-mission")),
             json!({"id": "x-cccc", "parent": "x-epic", "status": "done", "completed_at": "2026-10-01T00:00:00Z"}),
         ];
-        let closed = sweep_close_done_epics(&mut entries);
+        let closed = sweep_close_done_epics(&mut entries, &Default::default());
         assert_eq!(closed, vec!["x-epic".to_string(), "x-mission".to_string()]);
         assert_eq!(entries[0]["status"], "done");
         let note = entries[0]["completion_note"].as_str().unwrap_or_default();
         assert!(note.contains("all children complete"), "{note}");
+    }
+
+    #[test]
+    fn a_child_filed_after_the_reopen_never_re_arms_the_epic_close() {
+        // The epic was reopened with every filed child done, so the owed
+        // leaves were not yet filed. A child filed after the reopen closes:
+        // the sweep and the cascade both leave the epic open.
+        let rows = |kid_filed: &str| {
+            vec![
+                json!({"id": "x-epic", "reopened_at": "2026-10-25T13:51:00Z"}),
+                json!({"id": "x-old", "parent": "x-epic", "status": "done",
+                       "created_at": "2026-10-20T00:00:00Z",
+                       "completed_at": "2026-10-24T00:00:00Z"}),
+                json!({"id": "x-new", "parent": "x-epic", "status": "done",
+                       "created_at": kid_filed,
+                       "completed_at": "2026-10-26T08:22:00Z"}),
+            ]
+        };
+        let mut entries = rows("2026-10-25T20:00:00Z");
+        assert!(strandable_epic_ids(&entries).is_empty());
+        assert_eq!(
+            sweep_close_done_epics(&mut entries, &Default::default()),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            cascade_close_parents(&mut entries, "x-new", &Default::default()),
+            Vec::<String>::new()
+        );
+        assert!(entries[0].get("completed_at").is_none());
+        // Positive control: a child filed before the reopen that closes after
+        // it is evidence the reopened work finished.
+        let mut entries = rows("2026-10-25T10:00:00Z");
+        assert_eq!(
+            cascade_close_parents(&mut entries, "x-new", &Default::default()),
+            vec!["x-epic".to_string()]
+        );
     }
 
     #[test]
@@ -415,16 +461,61 @@ mod tests {
             strandable_epic_ids(&entries).is_empty(),
             "the self-heal sweep does not strand-close a plan-having parent"
         );
-        assert_eq!(sweep_close_done_epics(&mut entries), Vec::<String>::new());
-        assert_eq!(entries[0]["status"], "ready");
-        assert!(entries[0].get("completed_at").is_none());
         assert_eq!(
-            cascade_close_parents(&mut entries, "x-kid"),
+            sweep_close_done_epics(&mut entries, &Default::default()),
+            Vec::<String>::new()
+        );
+        assert!(entries[0].get("completed_at").is_none());
+        assert_eq!(entries[0]["status"], "ready");
+        assert_eq!(
+            cascade_close_parents(&mut entries, "x-kid", &Default::default()),
             Vec::<String>::new(),
             "the done cascade leaves the plan-having parent open"
         );
         assert!(entries[0].get("completed_at").is_none());
         assert_eq!(entries[0]["status"], "ready");
+    }
+
+    #[test]
+    fn a_plan_plus_pr_parent_with_an_unmet_promise_holds_the_rollup() {
+        // The multi-slice shape: plan expected_url_count 4, one slice PR merged
+        // on the parent itself, every child done. has_own_plan_work reads
+        // false (the PR clears it), so only the pre-lock rollup hold keeps
+        // the parent open; without it the epic sweep closed a 4-slice node
+        // on its one child's close.
+        let mut entries = vec![
+            json!({
+                "id": "x-multi", "plan_path": "plans/multi-slice.md",
+                "pr_number": 3606, "status": "in_progress",
+            }),
+            json!({
+                "id": "x-slice2", "parent": "x-multi", "status": "done",
+                "completed_at": "2026-10-01T00:00:00Z",
+            }),
+        ];
+        assert!(
+            strandable_epic_ids(&entries).contains("x-multi"),
+            "the plan+PR parent is a rollup candidate: its own hold is cleared"
+        );
+        let verdict = |outcome, reason: &str| super::super::promise::PromiseVerdict {
+            outcome,
+            reason: (!reason.is_empty()).then(|| reason.to_string()),
+            warning: None,
+        };
+        let held: super::super::promise::RollupVerdicts = [(
+            "x-multi".to_string(),
+            verdict(
+                super::super::promise::PromiseOutcome::Unmet,
+                "promised 4 ships; only 1 merged",
+            ),
+        )]
+        .into();
+        assert_eq!(
+            sweep_close_done_epics(&mut entries, &held),
+            Vec::<String>::new()
+        );
+        assert!(entries[0].get("completed_at").is_none());
+        assert_eq!(entries[0]["status"], "in_progress");
     }
 
     #[test]

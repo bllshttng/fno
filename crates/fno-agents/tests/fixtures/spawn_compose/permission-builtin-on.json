@@ -11,65 +11,38 @@
   "expect": {
     "argv": [
       "spawn",
-      "--permission-mode",
-      "bypassPermissions",
       "--name",
       "w25",
       "/fno:target x-23"
     ],
     "exit": 0,
     "journal": {
-      "applied": [
-        [
-          "permission_mode",
-          "bypassPermissions",
-          "builtin.autonomous.permission_mode"
-        ]
-      ],
-      "fingerprint": "",
-      "kind": "spawn_defaults_applied",
-      "name": "w25",
-      "resolved": {
-        "account": {
-          "rung": null,
-          "value": ""
+      "data": {
+        "name": "w25",
+        "verb": "target",
+        "seed": "/fno:target x-23",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
         },
-        "effort": {
-          "rung": null,
-          "value": ""
-        },
-        "model": {
-          "rung": null,
-          "value": ""
-        },
-        "pane_group": {
-          "rung": null,
-          "value": ""
-        },
-        "permission_mode": {
-          "rung": "builtin.autonomous",
-          "value": "bypassPermissions"
-        },
-        "provider": {
-          "rung": null,
-          "value": ""
-        },
-        "route": {
-          "rung": null,
-          "value": ""
-        },
-        "substrate": {
-          "rung": null,
-          "value": ""
-        }
+        "applied": [],
+        "suppressed": []
       },
-      "seed": "/fno:target x-23",
-      "suppressed": [],
-      "verb": "target"
+      "type": "spawn_defaults_applied",
+      "source": "agents"
     },
-    "stderr": [
-      "fno agents spawn: applied permission_mode=bypassPermissions (builtin.autonomous.permission_mode)"
-    ],
+    "stderr": [],
     "stdout": null
   },
   "facts": {
@@ -78,7 +51,7 @@
   },
   "node": null,
   "node_row": null,
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

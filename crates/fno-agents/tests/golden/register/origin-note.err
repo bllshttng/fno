@@ -1,0 +1,1 @@
+note: origin stays 'spawn'; it records what created this row and is written once. Mail escalation reads it, so this session is still treated as 'spawn'.

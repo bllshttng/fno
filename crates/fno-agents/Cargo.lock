@@ -1270,6 +1270,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2",
  "shlex",
  "strsim",
@@ -1313,6 +1314,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "toml",
+ "toml_edit",
  "tracing",
 ]
 

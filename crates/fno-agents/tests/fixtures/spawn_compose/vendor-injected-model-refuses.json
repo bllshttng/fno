@@ -15,12 +15,34 @@
       "w30",
       "/fno:target x-28"
     ],
-    "exit": 2,
-    "journal": null,
-    "stderr": [
-      "fno agents spawn: applied model=gpt-inject-x (agents.defaults.model), permission_mode=bypassPermissions (builtin.autonomous.permission_mode)",
-      "fno agents spawn: refusing to spawn. agents.defaults.model supplies --model gpt-inject-x, which implies vendor openai, but this spawn resolves the anthropic lane. Set a model for the anthropic lane at agents.defaults.model, or pass -H codex."
-    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w30",
+        "verb": "target",
+        "seed": "/fno:target x-28",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [],
     "stdout": null
   },
   "facts": {
@@ -29,7 +51,7 @@
   },
   "node": null,
   "node_row": null,
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": null,

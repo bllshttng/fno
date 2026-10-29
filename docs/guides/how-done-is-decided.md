@@ -14,7 +14,7 @@ Three external facts decide done:
 3. Every required reviewer has approved it.
 
 The agent cannot vouch for any of these.
-It reads them from GitHub through one decision verb.
+It reads them from GitHub through one decision command.
 
 ## Watch a run that is still going
 
@@ -37,7 +37,7 @@ A red is named for the kind of row that failed. Once a real check-run reaches a 
 
 A review that is still RUNNING blocks too. It carries its own names, apart from every other review signal. `review_coverage` answers what verdicts EXIST for a head. A review still writing its fixes has produced none, so it stayed invisible. When a review registers a hold on the PR's branch, `ready_blockers` carries `review_in_flight`. When that hold will not read, it carries `review_hold_unreadable`. When the local worktree on the branch says the merged code is not the code someone is editing, it carries `worktree_dirty`, `worktree_head_mismatch` or `worktree_probe_failed`. The whole reading rides in `review_activity` whether or not it blocked. So a clear answer shows up as a probe that ran, never as a silence. This conjunct is deliberately config-independent. A running review blocks whether or not the project requires any review. See [review-lanes](../architecture/review-lanes.md#the-in-flight-review-hold).
 
-The answer can come from the coalescing cache. That cache keys one row per repo, PR and head, so a verdict never answers for a commit it was not computed at. A served answer says so in `cached`. It says how second-hand it is in `cached_at` and `cached_age_seconds`. The `head` field names the commit the verdict was computed at. To refuse the cache for one read, pass `--refresh` (`--no-cache` is the same flag). When a verdict looks wrong, use that flag by hand. Do not put it in a poll loop: the fleet's GitHub request budget admits every gh call against the shared secondary limit. `fno-agents fleet-incident gh-budget status` reads its ledger.
+The answer can come from the coalescing cache. That cache keys one row per repo, PR and head, so a verdict never answers for a commit it was not computed at. A served answer says so in `cached`. It says how second-hand it is in `cached_at` and `cached_age_seconds`. The `head` field names the commit the verdict was computed at. To refuse the cache for one read, pass `--refresh` (`--no-cache` is the same flag). When a verdict looks wrong, use that flag by hand. Do not put it in a poll loop: the fleet's GitHub request budget admits every gh call against the shared secondary limit. `fno-agents fleet-incident gh-budget status` reads its ledger and names the last hour's top core spenders. `fno-agents fleet-incident gh-budget spend` prints the full per-caller and per-shape report.
 
 Read the run's manifest:
 
@@ -69,7 +69,7 @@ It is waiting because the world has not caught up.
 
 The agent's own text is not evidence.
 "Almost done" in the transcript does not move the gate.
-The decision verb reads GitHub, not the transcript.
+The decision command reads GitHub, not the transcript.
 Trust `fno do pr status` for CI, not the agent's self-report.
 
 ## Stop it yourself
@@ -85,8 +85,8 @@ This is the supported off switch. The author and reason are echoed in the run's 
 Do not edit `.fno/target-state.md`.
 It is an immutable manifest.
 
-## The decision verb
+## The decision command
 
-The verb behind all of this is `fno-agents loop-check`.
+The command behind all of this is `fno-agents loop-check`.
 It runs inside the session at the stop hook and reads only external truth.
 The full mechanism (the manifest, the shim, the done reads, the budget cap) is in [the control plane loop](../architecture/control-plane-loop.md).

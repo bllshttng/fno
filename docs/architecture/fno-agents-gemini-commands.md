@@ -20,7 +20,7 @@ fno agents mail ask worker-bootstrap --harness gemini --yolo "scaffold a Next.js
 fno agents mail ask gemini-helper --harness gemini --from-name orchestrator-main "review the migration"
 ```
 
-No new top-level verbs. The `--harness gemini` value is the only user-visible delta from the codex provider.
+No new top-level commands. The `--harness gemini` value is the only user-visible delta from the codex provider.
 
 ## Module layout
 
@@ -154,7 +154,7 @@ The gemini integration was developed against gemini CLI 0.42.0 and the following
 
 ## Lifecycle parity
 
-| Verb | Behavior | Notes |
+| Command | Behavior | Notes |
 |------|----------|-------|
 | stop | no-op between asks; emits `agent_stopped` event | Mirror of codex; PTY signal-the-pgid is not yet wired |
 | rm | deletes registry row; preserves on-disk session files | Mirror of codex; gemini owns `~/.gemini/tmp/` |
@@ -163,7 +163,7 @@ The gemini integration was developed against gemini CLI 0.42.0 and the following
 
 ## Forward compatibility
 
-Adding a fourth provider (e.g. `opencode`) requires zero `base.py` edits — the lifted `ReachabilityProbeError`, `with_agent_lock_and_entry`, and batched `reconcile_agents` already absorb a new provider's tri-state probe + lifecycle verbs. The `dispatch.py` routing extends by one elif clause.
+Adding a fourth provider (e.g. `opencode`) requires zero `base.py` edits — the lifted `ReachabilityProbeError`, `with_agent_lock_and_entry`, and batched `reconcile_agents` already absorb a new provider's tri-state probe + lifecycle commands. The `dispatch.py` routing extends by one elif clause.
 
 The deprecated alias removal is a separate follow-up. New code imports `ReachabilityProbeError` from `fno.agents.harnesses.base` rather than using the legacy class names.
 

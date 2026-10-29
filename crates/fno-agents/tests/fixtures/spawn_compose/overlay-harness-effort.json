@@ -13,10 +13,6 @@
   "expect": {
     "argv": [
       "spawn",
-      "--effort",
-      "high",
-      "--permission-mode",
-      "bypassPermissions",
       "--name",
       "w18",
       "-H",
@@ -25,62 +21,32 @@
     ],
     "exit": 0,
     "journal": {
-      "applied": [
-        [
-          "effort",
-          "high",
-          "agents.profiles.target.harness.codex.effort"
-        ],
-        [
-          "permission_mode",
-          "bypassPermissions",
-          "builtin.autonomous.permission_mode"
-        ]
-      ],
-      "fingerprint": "",
-      "kind": "spawn_defaults_applied",
-      "name": "w18",
-      "resolved": {
-        "account": {
-          "rung": null,
-          "value": ""
+      "data": {
+        "name": "w18",
+        "verb": "target",
+        "seed": "/fno:target x-16",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
         },
-        "effort": {
-          "rung": "agents.profiles.target.harness.codex",
-          "value": "high"
-        },
-        "model": {
-          "rung": null,
-          "value": ""
-        },
-        "pane_group": {
-          "rung": null,
-          "value": ""
-        },
-        "permission_mode": {
-          "rung": "builtin.autonomous",
-          "value": "bypassPermissions"
-        },
-        "provider": {
-          "rung": null,
-          "value": ""
-        },
-        "route": {
-          "rung": null,
-          "value": ""
-        },
-        "substrate": {
-          "rung": null,
-          "value": ""
-        }
+        "applied": [],
+        "suppressed": []
       },
-      "seed": "/fno:target x-16",
-      "suppressed": [],
-      "verb": "target"
+      "type": "spawn_defaults_applied",
+      "source": "agents"
     },
-    "stderr": [
-      "fno agents spawn: applied effort=high (agents.profiles.target.harness.codex.effort), permission_mode=bypassPermissions (builtin.autonomous.permission_mode)"
-    ],
+    "stderr": [],
     "stdout": null
   },
   "facts": {
@@ -89,7 +55,7 @@
   },
   "node": null,
   "node_row": null,
-  "node_verb": null,
+  "node_command": null,
   "scan": {
     "account_flag_present": false,
     "explicit_harness": "codex",

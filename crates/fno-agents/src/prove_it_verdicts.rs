@@ -4,7 +4,7 @@
 //! the graph and plan artifact files; it is a filesystem read, not an
 //! agent-lifecycle operation.
 //!
-//! The census this verb answers : `/fno:review prove-it` ends every
+//! The census this command answers : `/fno:review prove-it` ends every
 //! report with the machine line `fno-prove-it: {"verdict":"...","claim":"..."}`,
 //! and nothing read it after it was written. The PR 1599 coverage audit sat in
 //! a plan artifacts directory with verdict FAIL while three sessions worked the
@@ -23,7 +23,7 @@
 //! whose `text` names the report (read from the machine-wide decision
 //! index). Every unretired FAIL surfaces: a narrow re-run PASS cannot mute a
 //! broader claim it did not answer. The newest PASS/FAIL record is
-//! also emitted as the node's headline verdict. The verb never changes a
+//! also emitted as the node's headline verdict. The command never changes a
 //! node's status: an unverified auditor must not move doneness, a lead
 //! rules. `--route` writes the one progress note that surfaces an open,
 //! unrouted FAIL on the node.
@@ -46,7 +46,7 @@ const MAX_FILES_PER_NODE: usize = 200;
 /// (`coverage-audit-20260908/REPORT.md`); deeper nesting is not a report home.
 const MAX_DEPTH: usize = 3;
 
-/// The verdict rows the promise gate reads, assembled the same way the verb
+/// The verdict rows the promise gate reads, assembled the same way the command
 /// assembles them (graph rows + readiness overlay + rulings + journal), so
 /// the gate and the operator surface can never disagree about what is open.
 pub(crate) fn prove_it_verdict_rows() -> Result<Vec<Value>, String> {
@@ -89,7 +89,7 @@ pub fn run_prove_it_verdicts(args: &[String]) -> i32 {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            // JSON is the verb's only output shape; the flag is accepted (and
+            // JSON is the command's only output shape; the flag is accepted (and
             // spelled in every caller) so the read stays explicit.
             "--json" | "-J" => {}
             "--route" => route = true,
@@ -285,7 +285,7 @@ fn build_rows(
 }
 
 /// `<plan>.artifacts/`: the plan file's name with `.artifacts` appended, the
-/// sidecar layout `cli/src/fno/retro/cli.py` reads and the target stop hook
+/// sidecar layout `crates/fno-agents/src/retro/cli.rs` reads and the target stop hook
 /// writes. A `#fragment` plan_path is stripped before resolving; a relative
 /// path belongs to the node's own checkout, not the caller's CWD.
 fn artifacts_dir(plan_clean: &str, entry: &Value) -> Result<PathBuf, String> {
@@ -491,7 +491,7 @@ fn note_exit(node: &str, body: &str, quiet: bool) -> Option<i32> {
     child.wait().ok().and_then(|s| s.code())
 }
 
-/// One note per open, unrouted FAIL. The note verb refuses BEFORE the append
+/// One note per open, unrouted FAIL. The note command refuses BEFORE the append
 /// when nobody is bound (exit 3); the `--quiet` retry still writes the note.
 /// Exit 4 means the note landed and the mail leg did not confirm -- the note
 /// is the delivery this route owes, so that counts as written.

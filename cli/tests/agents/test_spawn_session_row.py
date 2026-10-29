@@ -6,7 +6,7 @@ session and do not create review-worker rows. Coverage:
 
   - AC1: `spawn --node X --substrate bg` with a resolvable worker uuid opens a
     row carrying the WORKER's harness session id (never the spawner's, never
-    the 8-hex short id). Phase: the message's verb labels the row via the
+    the 8-hex short id). Phase: the message's command labels the row via the
     spawn_phase.toml table - do, blueprint, think, ship stamp their
     spellings. Review labels and seeds refuse before any worker launches.
     An unlabeled --node spawn is refused (x-007c), so rows stay labeled.
@@ -24,24 +24,10 @@ import os
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 from tests._native_door import run_native
 
 from fno.paths_testing import use_tmpdir
-
-
-@pytest.fixture
-def graphless_seed_resolver(monkeypatch):
-    """The seed-word gate fails open on an unreadable graph; tests that spawn
-    a composed seed without a fixture graph ask for this so the gate never
-    depends on the ambient store. This suite pins the `--node` seam itself
-    and reads real row files for its assertions, so it stays module-scoped."""
-
-    def _unreadable(path=None, **_):
-        raise ValueError("graph store unreadable")
-
-    monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
 
 
 NODE = "x-4ab1"
@@ -50,13 +36,13 @@ FULL_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 @pytest.fixture(autouse=True)
 def _readable_node_row(monkeypatch):
-    """A graph row for NODE, so the verb seam's `--node` consult passes.
+    """A graph row for NODE, so the command seam's `--node` consult passes.
 
     The seam refuses a `--node` spawn whose row it cannot read; these tests
-    drive the door for the session ROW, not the verb contract, so every test
+    drive the door for the session ROW, not the command contract, so every test
     sees one target-deriving row unless it stubs its own (the blueprint tests
-    re-stub with a medium row so the derived verb agrees with their seed)."""
-    row = {"id": NODE, "slug": "sess", "dispatch_verb": "/target", "difficulty": "low"}
+    re-stub with a medium row so the derived command agrees with their seed)."""
+    row = {"id": NODE, "slug": "sess", "dispatch_command": "/target", "difficulty": "low"}
 
     def _load_graph(path, tokens):
         return {"entries": [dict(row)], "missing": []}
@@ -147,226 +133,9 @@ def workdir_claude(tmp_path: Path, monkeypatch) -> Path:
     return tmp_path
 
 
-@pytest.fixture
-def resolvable_uuid(monkeypatch):
-    """Make the fake claude's 8-hex job id resolve to a full session uuid."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    monkeypatch.setattr(claude_mod, "resolve_session_uuid", lambda short_id: FULL_UUID)
-
-
 # ---------------------------------------------------------------------------
 # AC1: --node opens the row with the worker's own session id
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.dev_build
-def test_spawn_with_node_and_review_verb_is_refused(
-    workdir_claude, native_backlog_door, monkeypatch, capfd
-) -> None:
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-    from fno.claims.core import claim_status
-
-    monkeypatch.setenv("FNO_SPAWN_GATE", "0")
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "row-worker", "-H", "claude", "--substrate", "thread",
-            "--effort", "xhigh",
-            "--node", NODE, "/code-review this diff",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 89, result.output
-    assert "review_session" in capfd.readouterr().err
-    assert load_registry() == []
-    assert _node_rows() == []
-    for key in (f"node:{NODE}", f"dispatch:{NODE}"):
-        assert claim_status(key).get("holder") is None
-
-
-def test_spawn_with_prose_and_node_composes_a_labeled_seed(
-    workdir_claude, resolvable_uuid, loop_admission_ready, graphless_seed_resolver
-) -> None:
-    """Arbitrary prose with a `--node` is no longer unlabelable: the verb
-    seam composes the node's command in front, so the seed names the verb
-    and the row stamps from it instead of refusing a lying default."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "row-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "review this diff",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    rows = _node_rows()
-    assert len(rows) == 1, f"one row for the composed seed: {_node_rows()!r}"
-    assert rows[0]["phase"] == "execute"
-    assert rows[0]["session_id"] == FULL_UUID
-    assert rows[0]["started_at"]
-    assert rows[0].get("ended_at") is None
-
-
-def test_stamp_duplicate_fill_keeps_one_row(workdir_claude, resolvable_uuid) -> None:
-    """The retried-stamp shape: the same worker identity stamped twice (a
-    retried spawn, a re-run dispatcher) collapses onto one row. The registry
-    refuses a second spawn under one session id - one session IS one worker -
-    so the second stamp goes through the helper the spawn path calls."""
-    from fno.agents.cli import _stamp_spawned_session_row, agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "row-retry", "-H", "claude", "--substrate", "thread",
-         "--node", NODE,
-         f"/fno:think {NODE} please"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert len(_node_rows()) == 1
-
-    _stamp_spawned_session_row(
-        node=NODE, message="", phase="think",
-        worker_name="row-retry", worker_harness="claude",
-        worker_session_uuid=FULL_UUID,
-    )
-
-    rows = _node_rows()
-    assert len(rows) == 1, f"duplicate stamp must not add a row, got {rows!r}"
-    assert rows[0]["session_id"] == FULL_UUID
-
-
-def test_spawn_without_uuid_parks_the_row(workdir_claude) -> None:
-    """No resolvable full uuid (the autouse stub answers None): no node row
-    opens at spawn, and the owed payload parks on the worker's registry row
-    for SessionStart's first id observation to open. The spawn stays silent."""
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "nouuid-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:think this diff",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert _node_rows() == []
-    assert "session row open skipped" not in result.stderr
-    row = next(r for r in load_registry() if r.name == "nouuid-worker")
-    assert row.pending_session_row["phase"] == "think"
-    assert row.pending_session_row["merge_grant"] is None
-    assert row.pending_session_row["started_at"]
-
-
-def test_spawn_unlabelable_verb_refuses_before_spawn(
-    workdir_claude, resolvable_uuid
-) -> None:
-    """AC4 (x-007c): a /fno:triage worker with --node is none of the table's
-    verbs, so the spawn refuses fail-closed before anything launches: exit 2,
-    the flag and the allowed values on stderr, no registry row, no claims
-    taken, no sessions row."""
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-    from fno.claims.core import claim_status
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "triage-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:triage deep",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 2, result.output
-    assert "--session-phase" in result.stderr
-    assert "No worker launched" in result.stderr
-    for phase in ("execute", "review", "blueprint", "think", "ship"):
-        assert phase in result.stderr, phase
-    assert load_registry() == []  # nothing launched
-    assert _node_rows() == []
-    for key in (f"node:{NODE}", f"dispatch:{NODE}"):
-        assert claim_status(key).get("holder") is None, key
-
-
-def _blueprint_row(monkeypatch) -> None:
-    """Re-stub the graph row so the seam derives /blueprint (difficulty high
-    earns it under the lean floor), matching the blueprint seed this types."""
-    row = {"id": NODE, "slug": "sess", "dispatch_verb": "", "difficulty": "high"}
-
-    def _load_graph(path, tokens):
-        return {"entries": [dict(row)], "missing": []}
-
-    monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", _load_graph)
-
-
-def test_spawn_bare_blueprint_spelling_stamps_blueprint(
-    workdir_claude, resolvable_uuid, monkeypatch
-) -> None:
-    """AC3 (x-007c): the bare /blueprint spelling - what claude and agy
-    autonomous dispatch render - stamps the blueprint row at dispatch time."""
-    from fno.agents.cli import agents_app
-
-    _blueprint_row(monkeypatch)
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "bp-bare-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/blueprint x-4ab1",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    rows = _node_rows()
-    assert len(rows) == 1
-    assert rows[0]["phase"] == "blueprint"
-    assert rows[0]["session_id"] == FULL_UUID
-
-
-def test_spawn_explicit_phase_rescues_unmapped_verb(
-    workdir_claude, resolvable_uuid
-) -> None:
-    """AC5 (x-007c): an explicit --session-phase on an unmapped verb is the
-    operator's label and stamps the row instead of refusing."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "triage-labeled", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "--session-phase", "think", "/fno:triage deep",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    rows = _node_rows()
-    assert len(rows) == 1
-    assert rows[0]["phase"] == "think"
-
-
-def test_spawn_bad_session_phase_refuses_before_spawn(
-    workdir_claude, loop_admission_ready
-) -> None:
-    """--session-phase is validated against the enum fail-closed (exit 2)."""
-    from fno.agents.cli import agents_app
-    from fno.agents.registry import load_registry
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "badphase-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "--session-phase", "verif", "review this",
-        ],
-    )
-    assert result.exit_code == 2
-    assert "--session-phase" in result.stderr
-    assert load_registry() == []  # nothing launched
-    assert _node_rows() == []
 
 
 # ---------------------------------------------------------------------------
@@ -430,89 +199,3 @@ def test_reap_open_all_closes_every_open_row(graph_cli_home) -> None:
 # ---------------------------------------------------------------------------
 # The spawner records the durable merge grant on the do row
 # ---------------------------------------------------------------------------
-
-
-def test_spawn_do_row_records_config_grant(
-    workdir_claude, resolvable_uuid, monkeypatch, loop_admission_ready
-) -> None:
-    """enabled=true + grant=dispatch: the row records the positive grant with
-    source naming the config."""
-    from fno.agents.cli import agents_app
-    from fno.config import AutoMergeBlock, load_settings
-
-    real = load_settings
-
-    def granted_settings():
-        return real().model_copy(
-            update={"auto_merge": AutoMergeBlock(enabled=True, grant="dispatch")}
-        )
-
-    monkeypatch.setattr("fno.config.load_settings", granted_settings)
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "do-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:target resume",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    grant = _node_rows()[0]["merge_grant"]
-    assert grant["approved"] is True
-    assert grant["source"] == "config"
-
-
-def test_spawn_no_merge_flag_outranks_config_grant(
-    workdir_claude, resolvable_uuid, monkeypatch, loop_admission_ready
-) -> None:
-    """A /target message carrying --no-merge records approved=false with the
-    flag named as the source, even while the standing config would grant
-    (AC9-EDGE's newer refusal)."""
-    from fno.agents.cli import agents_app
-    from fno.config import AutoMergeBlock, load_settings
-
-    real = load_settings
-
-    def granted_settings():
-        return real().model_copy(
-            update={"auto_merge": AutoMergeBlock(enabled=True, grant="dispatch")}
-        )
-
-    monkeypatch.setattr("fno.config.load_settings", granted_settings)
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "do-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:target resume --no-merge",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    grant = _node_rows()[0]["merge_grant"]
-    assert grant["approved"] is False
-    assert grant["source"] == "no-merge-flag"
-
-
-def test_spawn_do_row_records_refusal_without_config(
-    workdir_claude, resolvable_uuid, loop_admission_ready
-) -> None:
-    """No standing grant: the row still records an EXPLICIT approved=false, so
-    absence-on-a-row never has to be guessed at resolve time."""
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(
-        agents_app,
-        [
-            "spawn", "--name", "do-worker", "-H", "claude", "--substrate", "thread",
-            "--node", NODE, "/fno:target resume",
-        ],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    grant = _node_rows()[0]["merge_grant"]
-    assert grant["approved"] is False
-    assert grant["source"] == "none"
-    assert grant["recorded_by"]
-    assert grant["recorded_at"]

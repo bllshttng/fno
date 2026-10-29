@@ -48,13 +48,8 @@ pub fn resolved_config_root(account: Option<&str>) -> PathBuf {
 /// project-local accounts block never reaches it, and the preflight that
 /// predicts the pinned dir must not read one either.
 fn account_record_config_dir(id: &str) -> Option<PathBuf> {
-    let content = std::fs::read_to_string(crate::agents_config::global_config_path()?).ok()?;
-    let table = crate::agents_config::parse_config(&content)?;
-    let records = table
-        .get("accounts")
-        .or_else(|| table.get("providers"))?
-        .get("records")?
-        .as_array()?;
+    let records =
+        crate::accounts::records::layer_records(&crate::agents_config::global_config_path()?);
     for record in records.iter().rev() {
         // Last wins, matching Python's by_id dict on a duplicate id.
         if record.get("id").and_then(|v| v.as_str()) == Some(id) {
@@ -238,6 +233,11 @@ mod tests {
 
     #[test]
     fn resolved_config_root_ordering() {
+        // FNO_GLOBAL_SETTINGS_PATH is process-global: hold the crate-wide env
+        // lock so the pin below never answers a parallel test's config read.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         // The account record's own config_dir wins; an account without one
         // and a bare spawn fall through to the ambient root.
         let root = std::env::temp_dir().join("claude-trust-root-ordering");

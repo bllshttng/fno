@@ -4,7 +4,7 @@ An operator edits a config file and wants one answer. Did the edit take effect?
 
 `fno config get <leaf>` answers it one leaf at a time. Its `source:` line names the deciding file and the files it overrode, and that line is the only place precedence is visible. It requires already knowing which leaf to ask about.
 
-`fno config doctor` is the verb an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `cli/src/fno/config_readback.py` close that gap. `cli/src/fno/setup/doctor.py` only prints them.
+`fno config doctor` is the command an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `cli/src/fno/config/_readback.py` (moved there from `cli/src/fno/config_readback.py` when the config-cli family ported) close that gap. `cli/src/fno/setup/doctor.py` only prints them.
 
 ## The parse the doctor can see
 
@@ -40,7 +40,7 @@ The node's own acceptance asked for every leaf name appearing in more than one s
 
 ## Naming the decider
 
-When a config file decides `key`, `source_note(key)` returns `set in <file>`. Otherwise it returns `None`. It is the one renderer, reading `resolve_source`'s answer rather than re-deriving one. `_state_root_selector` in `config_cli.py` and the doctor's accessor loop both call it.
+When a config file decides `key`, `source_note(key)` returns `set in <file>`. Otherwise it returns `None`. It is the one renderer, reading `resolve_source`'s answer rather than re-deriving one. `_state_root_selector` in `cli/src/fno/setup/config_doctor.py` and the doctor's accessor loop both call it.
 
 The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers`, in precedence order. It named the highest-priority file PRESENT before, so an unreadable project config was printed as the source of values the global file decided.
 
@@ -56,7 +56,7 @@ The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers
 
 ## The module loads fno.config by importlib
 
-`config_readback.py` reaches `fno.config` through `_cfg()`, which calls `importlib.import_module`. A plain import puts `fno.config` in a mypy strongly-connected component. There the lazy `__getattr__` re-exports in `graph/_constants.py` degrade to `Optional[Path]`, and two files this feature never touches fail.
+`config/_readback.py` reaches `fno.config` through `_cfg()`, which calls `importlib.import_module`. A plain import puts `fno.config` in a mypy strongly-connected component. There the lazy `__getattr__` re-exports in `graph/_constants.py` degrade to `Optional[Path]`, and two files this feature never touches fail.
 
 The number came from a measurement, not from reasoning. `origin/main` is clean at 567 files. The branch reported three errors at 568. Hiding the module made them vanish, which named the cause. Removing the doctor's import edge did not, and neither did moving the module out of the package.
 

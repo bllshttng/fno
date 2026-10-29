@@ -317,15 +317,19 @@ row_claude_marketplace() {
   # The plugin install clones the marketplace repo through git; a fresh
   # machine has no SSH keys, so rewrite the remote to HTTPS for this row.
   git config --global url."https://github.com/".insteadOf "git@github.com:"
-  run_capture claude plugin marketplace add bllshttng/footnote#stable
+  run_capture claude plugin marketplace add bllshttng/fno#stable
   if [ "$RC" -ne 0 ]; then
     miss "marketplace-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
   fi
   pass "marketplace-add" "marketplace added"
-  run_capture claude plugin install fno@footnote
+  run_capture claude plugin install fno@fno
   if [ "$RC" -eq 0 ]; then
     pass "install" "plugin installed"
+  elif run_capture claude plugin install fno@footnote && [ "$RC" -eq 0 ]; then
+    # The stable branch serves the marketplace under its old name until the
+    # next stable promotion carries the rename to fno.
+    pass "install" "plugin installed as fno@footnote (stable predates the fno rename)"
   else
     miss "install" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
   fi
@@ -401,7 +405,7 @@ row_codex_plugin_session() {
     miss "marketplace-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
   fi
-  run_capture codex plugin add fno@footnote
+  run_capture codex plugin add fno@fno
   if [ "$RC" -ne 0 ]; then
     miss "plugin-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
@@ -458,16 +462,16 @@ row_fno_sh_head() {
 # the served rows above already prove installability.
 row_fno_sh_fresh() {
   local tag
-  tag="$(git ls-remote --tags --refs https://github.com/bllshttng/footnote 'refs/tags/v*' \
+  tag="$(git ls-remote --tags --refs https://github.com/bllshttng/fno 'refs/tags/v*' \
     | awk -F'refs/tags/' '{print $2}' \
     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
   if [ -z "$tag" ]; then
-    miss "fresh" "could not read the newest stable tag from bllshttng/footnote"
+    miss "fresh" "could not read the newest stable tag from bllshttng/fno"
     return 0
   fi
   curl -fsSL https://fno.sh > "$BASE/served.out" 2>/dev/null
   _served_rc=$?
-  curl -fsSL "https://raw.githubusercontent.com/bllshttng/footnote/$tag/scripts/install/fno.sh" > "$BASE/released.out" 2>/dev/null
+  curl -fsSL "https://raw.githubusercontent.com/bllshttng/fno/$tag/scripts/install/fno.sh" > "$BASE/released.out" 2>/dev/null
   _released_rc=$?
   if [ "$_served_rc" -ne 0 ] || [ ! -s "$BASE/served.out" ]; then
     miss "fresh" "fno.sh fetch failed (curl rc=$_served_rc; worker unreachable or 502); the worker fails closed, check its deploy"
@@ -561,7 +565,7 @@ row_cargo() {
     miss "cargo-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
     return 0
   fi
-  # cargo install lands the front door here; its first forwarded verb
+  # cargo install lands the front door here; its first forwarded command
   # bootstraps the wheel, whose data scripts carry fno-agents into the uv
   # tool bin ($HOME/.local/bin). `fno backlog` never provisions, so warm up
   # once, and keep the tool bin on PATH for the front door's bare-name
@@ -608,7 +612,7 @@ row_fno_sh_nightly() {
     miss "platform" "no wheel platform pattern for $(uname -s)/$(uname -m)"
     return 0
   fi
-  wheel_asset="$(curl -fsSL "https://api.github.com/repos/bllshttng/footnote/releases/tags/nightly" \
+  wheel_asset="$(curl -fsSL "https://api.github.com/repos/bllshttng/fno/releases/tags/nightly" \
     | FNO_WHEEL_PLATFORM="$plat" python3 -c '
 import json, os, re, sys
 plat = os.environ["FNO_WHEEL_PLATFORM"]
@@ -664,10 +668,10 @@ row_clone_setup() {
   shared_smoke "$HOME/.local/bin"
 }
 
-# setup-scratch-home: the setup verb's three report modes plus the wizard's
+# setup-scratch-home: the setup command's three report modes plus the wizard's
 # unattended refusal, scored on the fresh HOME the harness already scrubbed
 # to. The binary is built from THIS tree, not a published wheel: the wizard
-# verb ships in no release yet, so the PyPI and script channels cannot serve
+# command ships in no release yet, so the PyPI and script channels cannot serve
 # this row.
 row_setup_scratch_home() {
   assert_clean_machine

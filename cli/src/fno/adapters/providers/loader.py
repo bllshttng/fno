@@ -6,13 +6,10 @@ precedence, mirroring cli/src/fno/cli.py::_load_v2_config_flag.
 """
 from __future__ import annotations
 
-import dataclasses
-import fcntl
 import logging
 import os
-import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import tomli_w
 import pydantic
@@ -26,12 +23,41 @@ from fno.adapters.providers.model import (
     ProvidersConfig,
     QuotaConfig,
 )
-from fno.state.io import atomic_write
 
 if TYPE_CHECKING:
     from fno.adapters.providers.rotation import Combo
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """The lock-then-tempfile-then-os.replace write, inlined from the
+    state-io helper at the family port: that module dies with the
+    port. The lock prevents interleaved writers; os.replace is atomic on
+    POSIX."""
+    import tempfile
+
+    import filelock
+
+    path = Path(path)
+    with filelock.FileLock(str(path) + ".lock", timeout=10):
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, path)
+            tmp_path = None
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
 
 def _global_settings_path() -> Path:
@@ -141,71 +167,6 @@ def _extract_accounts_block(data: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def mutable_accounts_block(data: dict[str, Any]) -> dict[str, Any]:
-    """Return the accounts block of a raw settings dict, ready for in-place edit.
-
-    The mutator counterpart to :func:`_extract_accounts_block`, for the callers
-    that edit the parsed dict directly under ``atomic_mutate_settings`` (combo
-    add/remove/use/update, failover's active-flip) rather than going through
-    ``save_providers``.
-
-    Every such caller used to do ``data.setdefault("providers", {})``. Left
-    alone after the rename that would create a SECOND, empty block beside the
-    real ``accounts`` one and silently split the state in two - the combo would
-    land somewhere nothing reads. Routing them all through here means the
-    pre-rename block is migrated (moved, not copied) on first mutation, exactly
-    as ``save_providers`` does, and there is one place that knows both spellings.
-    """
-    config = data.get("config")
-    config = config if isinstance(config, dict) else None
-
-    # Drain the three non-canonical locations UNCONDITIONALLY, even when the
-    # canonical top-level block is already present. Popping only when it is
-    # absent leaves a competitor behind, and a competitor is not inert:
-    #   - a surviving `config.accounts` is merged OVER the edited top-level
-    #     block by `_flatten_config`, so a combo write or failover's active-flip
-    #     reports success against a file that never changed;
-    #   - a surviving `providers` keeps the file readable under both names and
-    #     splits the state, which is exactly what this helper exists to prevent.
-    # Draining is also what the READER already does in effect: it returns the
-    # first match in this precedence order and ignores the rest, so the blocks
-    # removed here were never being read.
-    drained: list[tuple[str, dict[str, Any]]] = []
-    for source, key in (
-        (config, "accounts"),
-        (data, "providers"),
-        (config, "providers"),
-    ):
-        if source is None:
-            continue
-        found = source.pop(key, None)
-        if isinstance(found, dict):
-            drained.append((key, found))
-
-    block = data.get("accounts")
-    if not isinstance(block, dict):
-        # Adopt (never copy) the highest-precedence survivor, so the pre-rename
-        # block is MOVED onto the canonical key rather than duplicated.
-        block = drained[0][1] if drained else {}
-
-    # Everything drained but not adopted loses to a higher-precedence block and
-    # is therefore already unreadable - every reader is first-match-wins in this
-    # same order. Dropping it is correct; dropping it SILENTLY is not, since the
-    # pre-rename shape at least sat visibly on disk. The sharp case is an EMPTY
-    # canonical block shadowing a populated duplicate: it wins on precedence and
-    # the records go with no receipt.
-    for key, discarded in drained:
-        if discarded and discarded is not block:
-            logger.warning(
-                "discarding shadowed account block %r (%d key(s)); a "
-                "higher-precedence block already provides config.accounts",
-                key,
-                len(discarded),
-            )
-    data["accounts"] = block
-    return block
-
-
 def _extract_agents_block(data: dict[str, Any]) -> dict[str, Any] | None:
     """Return the agents dict (flat ``agents`` or legacy ``config.agents``); None
     if absent/invalid. Callers treat None as an empty agents map."""
@@ -270,6 +231,7 @@ _AGENTS_RESERVED_KEYS = frozenset(
         "pane_group_max",
         "min_free_gb",
         "max_swap_pct",
+        "naming",
         "orphan_reap_after_seconds",
         "profiles",
         "provider_limits",
@@ -780,7 +742,7 @@ def effective_active(
 def load_scope_config(scope: "Literal['project', 'global']") -> ProvidersConfig:
     """The accounts config as stored in ONE scope's own file.
 
-    Read-modify-write verbs (add/register/use/pin) mutate one file's own
+    Read-modify-write commands (add/register/use/pin) mutate one file's own
     block; loading the merged view here copies other layers' records into
     the target file, where the frozen copies shadow later edits by id.
     Mirrors save_providers' target selection so the read and the write hit
@@ -812,7 +774,7 @@ def save_providers(
 ) -> None:
     """Write config back to settings.yaml at the requested scope.
 
-    Atomic write (temp-file + rename) via fno.state.io.atomic_write.
+    Atomic write (temp-file + rename) via the module's _atomic_write.
     Preserves all existing top-level keys and other config.* sub-keys.
     """
     if scope == "project":
@@ -879,180 +841,4 @@ def save_providers(
     existing["accounts"] = providers_block
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(target, tomli_w.dumps(_strip_none(existing)))
-
-
-# ---------------------------------------------------------------------------
-# Atomic mutate / atomic read helpers
-#
-# Phase 01 of provider rotation failover. The failover
-# controller swaps the active provider by mutating settings.yaml from
-# multiple sessions concurrently. atomic_mutate_settings holds an exclusive
-# fcntl lock for the entire read+mutate+write cycle so concurrent mutators
-# serialize and no update is lost. Cross-serializes with fno.state.io
-# .atomic_write because both use the same `<settings_path>.lock` sidecar
-# (filelock 3.x on Unix dispatches to fcntl.flock under the hood).
-# ---------------------------------------------------------------------------
-
-
-def _settings_lock_path(settings_path: Path) -> Path:
-    """Return the lock-file path for a given settings.yaml path.
-
-    We standardize on `<settings_path>.lock` because that's what
-    fno.state.io.atomic_write already uses; sharing the same lock
-    file means raw fcntl.flock here serializes against filelock-based
-    writers in atomic_write without a second lock domain.
-    """
-    return Path(str(settings_path) + ".lock")
-
-
-def atomic_mutate_settings(
-    mutator: Callable[[dict[str, Any]], dict[str, Any]],
-    *,
-    settings_path: Path,
-) -> None:
-    """Read, mutate, and write settings.yaml atomically under an exclusive lock.
-
-    The full read-mutate-write cycle is held under fcntl.LOCK_EX so two
-    concurrent mutators never lose updates. The write itself is tempfile
-    + os.replace so non-locking readers never observe a partial-byte file.
-
-    Args:
-        mutator: function ``(dict) -> dict`` that takes the parsed
-            settings.yaml content (as a plain dict) and returns the new
-            content. May mutate in place and return the same dict, or
-            return a fresh dict.
-        settings_path: absolute path to settings.yaml. Required (no
-            default) to avoid masking config-resolution bugs upstream.
-
-    Raises:
-        Whatever ``mutator`` raises - settings.yaml is left unchanged on
-        disk and the lock is released. ``ProviderConfigError`` if the
-        existing file is unparseable.
-    """
-    settings_path = Path(settings_path)
-    lock_path = _settings_lock_path(settings_path)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Open in "a" mode so the lock file is created on demand without
-    # truncating any existing content, and the fd has write semantics so
-    # flock LOCK_EX is allowed on Linux (some kernels reject EX on read-only
-    # fds even though POSIX permits it).
-    with open(lock_path, "a") as lock_f:
-        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-        try:
-            current = _read_parsed_strict(settings_path)
-            updated = mutator(current)
-            if not isinstance(updated, dict):
-                raise TypeError(
-                    "atomic_mutate_settings: mutator must return a dict, "
-                    f"got {type(updated).__name__}"
-                )
-            migrated = _strip_none(_flatten_config(updated))
-            content = tomli_w.dumps(migrated) if settings_path.suffix == ".toml" else yaml.safe_dump(migrated, sort_keys=False)
-            tmp_path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    dir=settings_path.parent,
-                    prefix=f".{settings_path.name}.",
-                    suffix=".tmp",
-                    delete=False,
-                    encoding="utf-8",
-                ) as tmp:
-                    tmp.write(content)
-                    tmp_path = Path(tmp.name)
-                os.replace(tmp_path, settings_path)
-                tmp_path = None
-            finally:
-                if tmp_path is not None and tmp_path.exists():
-                    tmp_path.unlink(missing_ok=True)
-        finally:
-            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-
-
-class MissingActiveProvider(ProviderConfigError):
-    """Raised when settings.yaml's `active` field references a missing or
-    null provider record. Used by ``read_active_provider_atomic`` to give
-    callers a typed exception they can catch instead of a generic KeyError.
-    """
-
-
-@dataclasses.dataclass(frozen=True)
-class ActiveProviderSnapshot:
-    """Frozen snapshot of the active provider's record, taken under shared
-    lock so all fields belong to the same logical record at one instant.
-
-    Cites what-if finding #6: a swap-in-progress without lock can return
-    new ``id`` paired with old ``auth`` (auth-mismatch cascade). The
-    shared lock + frozen dataclass prevents this at the read side.
-    """
-
-    id: str
-    harness: str
-    auth: str
-    credential_ref: str | None
-    base_url: str | None
-    pricing: dict[str, Any] | None
-
-
-def read_active_provider_atomic(*, settings_path: Path) -> ActiveProviderSnapshot:
-    """Atomically read the active provider record under a shared lock.
-
-    LOCK_SH lets multiple concurrent readers proceed in parallel while
-    excluding writers. ``atomic_mutate_settings`` uses LOCK_EX which
-    blocks both other writers and readers. Together they prevent the
-    auth-mismatch cascade.
-
-    Args:
-        settings_path: absolute path to settings.yaml. Required (no
-            default) - same rationale as atomic_mutate_settings.
-
-    Returns:
-        Frozen ``ActiveProviderSnapshot`` with id, harness, auth, optional
-        credential_ref/base_url/pricing.
-
-    Raises:
-        MissingActiveProvider: if active is None or names a record that
-            doesn't exist in records.
-        ProviderConfigError: on unparseable settings.yaml.
-    """
-    settings_path = Path(settings_path)
-    lock_path = _settings_lock_path(settings_path)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(lock_path, "a") as lock_f:
-        fcntl.flock(lock_f.fileno(), fcntl.LOCK_SH)
-        try:
-            settings = _read_parsed_strict(settings_path)
-        finally:
-            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-
-    block = _extract_accounts_block(settings)
-    if block is None:
-        raise MissingActiveProvider(
-            "config.accounts block is absent or invalid"
-        )
-    active_id = block.get("active")
-    if not active_id:
-        raise MissingActiveProvider(
-            "config.accounts.active is unset (None or empty)"
-        )
-    raw_records = block.get("records") or []
-    record = next((r for r in raw_records if isinstance(r, dict) and r.get("id") == active_id), None)
-    if record is None:
-        raise MissingActiveProvider(
-            f"active provider id '{active_id}' is not in records"
-        )
-
-    return ActiveProviderSnapshot(
-        id=str(active_id),
-        # Read both spellings: `harness` is canonical, `cli` is the pre-rename
-        # key that an unmigrated config.toml still carries. A plain get("cli")
-        # would silently yield "" for every migrated record.
-        harness=str(record.get("harness") or record.get("cli") or ""),
-        auth=str(record.get("auth", "")),
-        credential_ref=record.get("credential_ref") if isinstance(record.get("credential_ref"), str) else None,
-        base_url=record.get("base_url") if isinstance(record.get("base_url"), str) else None,
-        pricing=record.get("pricing") if isinstance(record.get("pricing"), dict) else None,
-    )
+    _atomic_write(target, tomli_w.dumps(_strip_none(existing)))

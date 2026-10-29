@@ -1,0 +1,38 @@
+{
+  "config": {
+    "keys": null,
+    "layer": "fno_config",
+    "toml": "[model_routing.providers.myproxy]\nbase_url = \"https://gw.example.com/v1\"\napi_key_env = \"MP_KEY\"\n"
+  },
+  "ctx": {
+    "kind": "role",
+    "name": "build"
+  },
+  "env": {
+    "MP_KEY": "mpk"
+  },
+  "expected": {
+    "notices": [
+      "model-routing: refusing model 'opus' for provider 'myproxy': a bare tier alias resolves against the endpoint the worker is pointed at, and https://gw.example.com/v1 is not Anthropic's; name a model id this provider serves"
+    ],
+    "route": null
+  },
+  "expected_providers": {
+    "myproxy": {
+      "api_key_env": "MP_KEY",
+      "api_key_file": null,
+      "base_url": "https://gw.example.com/v1",
+      "key": {
+        "checked": [
+          "MP_KEY"
+        ],
+        "satisfying": "MP_KEY"
+      },
+      "protocol": "anthropic",
+      "tier_models": {}
+    }
+  },
+  "model": "opus",
+  "name": "tier-alias-foreign-host",
+  "provider": "myproxy"
+}

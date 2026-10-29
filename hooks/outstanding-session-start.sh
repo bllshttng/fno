@@ -2,7 +2,7 @@
 # fno hook: SessionStart - outstanding session start
 # SessionStart hook: what is waiting on a human - the session's own open
 # questions plus one count line, read from the daemon's projection cache
-# (~/.fno/attention/items.json, rewritten every beat) instead of the 3s
+# (~/.fno/state/attention/items.json, rewritten every beat) instead of the 3s
 # `fno inbox outstanding` fold that exits 124 under a session-start budget.
 # A cache that is missing or stale falls back to the full fold, which is
 # also what a harness without the attention arm reads.
@@ -21,7 +21,12 @@ have_jq=1
 command -v jq >/dev/null 2>&1 || have_jq=0
 
 CACHE_MAX_AGE_SECS=120
-cache="${FNO_HOME:-$HOME/.fno}/attention/items.json"
+# The daemon writes the cache under state/attention/; a pre-fold cache at
+# the legacy spelling answers until the daemon-start pass folds it.
+cache="${FNO_HOME:-$HOME/.fno}/state/attention/items.json"
+if [[ ! -s "$cache" ]]; then
+    cache="${FNO_HOME:-$HOME/.fno}/attention/items.json"
+fi
 
 if [[ $have_jq -eq 1 && -s "$cache" ]]; then
     now=$(date +%s)
@@ -33,7 +38,7 @@ if [[ $have_jq -eq 1 && -s "$cache" ]]; then
         # This session's own questions: the asker's session id is the target
         # manifest id the session already carries. No manifest means a session
         # asked nothing.
-        session_id="$(fno do state show 2>/dev/null | awk '/^session_id:/ {print $2}')"
+        session_id="$("${FNO_AGENTS_BIN:-fno-agents}" state-cli show --type target --field session_id 2>/dev/null | head -1)"
         if [[ -n "$session_id" ]]; then
             own=$(jq -r --arg s "$session_id" \
                 '[.items[] | select(.kind != "mine" and .ready == true and .asker.session_id == $s)] | .[] | "- \(.kind): \(.title)"' \
@@ -51,7 +56,7 @@ if [[ $have_jq -eq 1 && -s "$cache" ]]; then
         if [[ "${FNO_SESSION_ROLE:-}" != "worker" ]]; then
             printf '%s open across the fleet.\n' "${total:-0}"
         fi
-        printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead.\n'
+        printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease.\n'
         exit 0
     fi
 fi
@@ -61,12 +66,12 @@ fi
 # the fold below is the fleet-wide list the worker's role omits.
 if [[ "${FNO_SESSION_ROLE:-}" == "worker" ]]; then
     printf '## Outstanding for you\n\nNo open questions from this session.\n'
-    printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead.\n'
+    printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease.\n'
     exit 0
 fi
 
 # Fallback: the full fold. A non-zero exit is NOT silence: collapsing a failed
-# read into an empty string is the absence-as-success trap this verb exists to
+# read into an empty string is the absence-as-success trap this command exists to
 # close. But exit 2 is Typer's "no such command", which a DEPLOYED fno older
 # than this feature returns on EVERY session until someone runs
 # `fno doctor update`. Nagging forever is noise, so the loud path is reserved
@@ -86,5 +91,5 @@ rc=${rc:-0}
 [[ $rc -eq 2 ]] && exit 0
 
 printf '## Outstanding for you\n\ncould not be read (fno inbox outstanding exit %s). Run it directly.\n' "$rc"
-printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead.\n'
+printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease.\n'
 exit 0

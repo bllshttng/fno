@@ -5,19 +5,17 @@
 //! (`compose_spawn_argv`). Split in two: [`gather`] reads the world into
 //! [`Inputs`]; [`compose`] is pure, so the characterization goldens
 //! (`tests/fixtures/spawn_compose/`) feed it parsed TOML and never touch the
-//! environment. Reached as payload kind `compose` on the spawn-overlay verb.
+//! environment. Reached as payload kind `compose` on the spawn-overlay command.
 
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
-const ROLE_VERBS: [&str; 3] = ["lead", "term", "fno-me"];
+const ROLE_COMMANDS: [&str; 3] = ["lead", "term", "fno-me"];
 /// Keep the old spelling on the canonical profile key for one release.
-const VERB_ALIASES: [(&str, &str); 1] = [("do", "execute")];
+const COMMAND_ALIASES: [(&str, &str); 1] = [("do", "execute")];
 /// A lane is a COMPLETE coordinate: route/model stop at the lane.
 const LANE_EXCLUSIVE: [&str; 2] = ["route", "model"];
-const SUBSTRATES: [&str; 4] = ["pane", "thread", "headless", "bg"];
 /// The one built-in answer for an unattended worker's permission mode.
-const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
 
 /// The pure compose's world: everything `gather` read, so the goldens can
 /// hand it over pre-parsed.
@@ -27,11 +25,11 @@ pub struct Inputs {
     pub defaults: toml::Value,
     /// `agents.profiles` (empty table when unset).
     pub profiles: toml::Value,
-    /// `dispatch.verbs` registry (empty table when unset).
-    pub dispatch_verbs: toml::Value,
-    /// The shipped footnote verb roster.
+    /// `dispatch.commands` registry (empty table when unset).
+    pub dispatch_commands: toml::Value,
+    /// The shipped footnote command roster.
     pub roster: Vec<String>,
-    pub node_verb: Option<String>,
+    pub node_command: Option<String>,
     pub env_node: Option<String>,
     /// The resolved ambient harness (Python's `resolve_dispatch_harness`
     /// builtin default is claude).
@@ -90,17 +88,23 @@ pub fn gather(ask: &Value, cwd: &Path) -> Inputs {
             .unwrap_or(true),
         argv,
         defaults: cfg(&["agents", "defaults"]),
-        dispatch_verbs: cfg(&["dispatch", "verbs"]),
+        // The registered-command table. The leg this ports read a
+        // dispatch key no config model defines, so it never fired.
+        dispatch_commands: crate::agents_config::config_value_deep(
+            cwd,
+            &["dispatch", "command_registry"],
+        )
+        .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new())),
         env_node,
         facts: ask.get("facts").cloned().unwrap_or_else(|| json!({})),
         node,
         node_row,
-        node_verb: ask
-            .get("node_verb")
+        node_command: ask
+            .get("node_command")
             .and_then(Value::as_str)
             .map(str::to_string),
         profiles: cfg(&["agents", "profiles"]),
-        roster: crate::provider::footnote_verbs().into_iter().collect(),
+        roster: crate::provider::footnote_commands().into_iter().collect(),
         scan,
         verbose: ask.get("verbose").and_then(Value::as_bool).unwrap_or(false),
     }
@@ -152,19 +156,19 @@ pub(crate) fn graph_row_for(node_id: &str) -> Option<Value> {
     crate::graph_get::find_entry(&rows, node_id).cloned()
 }
 
-/// The first verb-shaped token anywhere in the seed, sigil and namespace
-/// stripped (Python `_verb_token`).
-fn verb_token(seed: Option<&str>) -> Option<String> {
+/// The first command-shaped token anywhere in the seed, sigil and namespace
+/// stripped.
+fn command_token(seed: Option<&str>) -> Option<String> {
     let seed = seed?;
     for tok in seed.split_whitespace() {
-        if let Some((verb, _)) = crate::provider::parse_verb_token(tok) {
-            return Some(verb.to_string());
+        if let Some((command, _)) = crate::provider::parse_command_token(tok) {
+            return Some(command.to_string());
         }
     }
     None
 }
 
-/// Whether the seed's verb token carried the `fno:` namespace - the one
+/// Whether the seed's command token carried the `fno:` namespace - the one
 /// marker that PROVES the seed names a footnote stage (Python
 /// `_carries_fno_namespace`).
 fn carries_namespace(seed: Option<&str>, tok: &str) -> bool {
@@ -172,10 +176,10 @@ fn carries_namespace(seed: Option<&str>, tok: &str) -> bool {
         return false;
     };
     seed.split_whitespace()
-        .any(|t| matches!(crate::provider::parse_verb_token(t), Some((v, true)) if v == tok))
+        .any(|t| matches!(crate::provider::parse_command_token(t), Some((v, true)) if v == tok))
 }
 
-fn known_verb_keys(inputs: &Inputs) -> (Vec<String>, bool) {
+fn known_command_keys(inputs: &Inputs) -> (Vec<String>, bool) {
     let mut known: Vec<String> = inputs
         .profiles
         .as_table()
@@ -183,9 +187,9 @@ fn known_verb_keys(inputs: &Inputs) -> (Vec<String>, bool) {
         .unwrap_or_default();
     let roster_ok = !inputs.roster.is_empty();
     known.extend(inputs.roster.iter().cloned());
-    if let Some(registry) = inputs.dispatch_verbs.as_table() {
+    if let Some(registry) = inputs.dispatch_commands.as_table() {
         for key in registry.keys() {
-            let canon = crate::backlog::fields::canonical_verb_key(key);
+            let canon = crate::backlog::fields::canonical_command_key(key);
             let canon = canon.trim_start_matches('/').to_string();
             if !canon.is_empty() && !known.iter().any(|k| k == &canon) {
                 known.push(canon);
@@ -195,19 +199,19 @@ fn known_verb_keys(inputs: &Inputs) -> (Vec<String>, bool) {
     (known, roster_ok)
 }
 
-/// The seed's profile key (Python `_profile_key`): a resolvable verb token
-/// names its canonical profile; a lead verb or no token names `role`; an
+/// The seed's profile key: a resolvable command token
+/// names its canonical profile; a lead command or no token names `role`; an
 /// unknown `fno:`-namespaced token refuses (None).
 fn profile_key(seed: Option<&str>, known: Option<&[String]>) -> Option<String> {
-    let Some(tok) = verb_token(seed) else {
+    let Some(tok) = command_token(seed) else {
         return Some("role".to_string());
     };
-    let key = VERB_ALIASES
+    let key = COMMAND_ALIASES
         .iter()
         .find(|(old, _)| *old == tok)
         .map(|(_, new)| new.to_string())
         .unwrap_or_else(|| tok.clone());
-    if ROLE_VERBS.contains(&key.as_str()) {
+    if ROLE_COMMANDS.contains(&key.as_str()) {
         return Some("role".to_string());
     }
     match known {
@@ -231,16 +235,13 @@ pub(crate) struct Axes {
     pub has_harness: bool,
     pub explicit_harness: Option<String>,
     pub has_model: bool,
-    pub has_effort: bool,
     pub explicit_vendor: Option<String>,
     pub explicit_vendor_present: bool,
     pub explicit_route: bool,
     pub route_value: Option<String>,
     pub model_value: Option<String>,
-    pub role: Option<String>,
     pub explicit_substrate: Option<String>,
     pub permission_value: Option<String>,
-    pub has_permission: bool,
     pub flag_node: Option<String>,
     pub seed: Option<String>,
     pub account_flag_present: bool,
@@ -261,7 +262,6 @@ fn scan_of(scan: &Value) -> Axes {
         has_harness: b("has_harness"),
         explicit_harness: s("explicit_harness"),
         has_model: b("has_model"),
-        has_effort: b("has_effort"),
         explicit_vendor_present: scan
             .get("explicit_vendor")
             .and_then(Value::as_str)
@@ -270,10 +270,8 @@ fn scan_of(scan: &Value) -> Axes {
         explicit_route: b("explicit_route"),
         route_value: s("route_value"),
         model_value: s("model_value"),
-        role: s("role"),
         explicit_substrate: s("explicit_substrate"),
         permission_value: s("permission_value"),
-        has_permission: b("has_permission"),
         flag_node: s("flag_node"),
         seed: s("seed"),
         account_flag_present: b("account_flag_present"),
@@ -283,16 +281,16 @@ fn scan_of(scan: &Value) -> Axes {
     }
 }
 
-fn profile_table<'a>(inputs: &'a Inputs, verb: &str) -> Option<(&'a toml::Table, String)> {
+fn profile_table<'a>(inputs: &'a Inputs, command: &str) -> Option<(&'a toml::Table, String)> {
     let profiles = inputs.profiles.as_table()?;
-    let direct = profiles.get(verb);
+    let direct = profiles.get(command);
     if let Some(t) = direct.and_then(toml::Value::as_table) {
-        return Some((t, verb.to_string()));
+        return Some((t, command.to_string()));
     }
-    // The legacy alias: the canonical verb keeps the old spelling's row.
-    let legacy = VERB_ALIASES
+    // The legacy alias: the canonical command keeps the old spelling's row.
+    let legacy = COMMAND_ALIASES
         .iter()
-        .find(|(_, new)| *new == verb)
+        .find(|(_, new)| *new == command)
         .map(|(old, _)| old.to_string());
     let old = legacy?;
     let table = profiles.get(&old)?.as_table()?;
@@ -317,7 +315,7 @@ fn field_read(
     lane: Option<&Value>,
     lane_index: Option<usize>,
     profile: Option<&toml::Table>,
-    profile_verb: &str,
+    profile_command: &str,
     defaults: &toml::Table,
     name: &str,
 ) -> Field {
@@ -326,7 +324,7 @@ fn field_read(
         if !value.is_empty() {
             return Field(
                 value,
-                Some(format!("agents.profiles.{profile_verb}.lanes[{index}]")),
+                Some(format!("agents.profiles.{profile_command}.lanes[{index}]")),
             );
         }
         if LANE_EXCLUSIVE.contains(&name) {
@@ -335,7 +333,7 @@ fn field_read(
     }
     let pv = cfg_str(profile, name);
     if !pv.is_empty() {
-        return Field(pv, Some(format!("agents.profiles.{profile_verb}")));
+        return Field(pv, Some(format!("agents.profiles.{profile_command}")));
     }
     let dv = cfg_str(Some(defaults), name);
     if !dv.is_empty() {
@@ -361,6 +359,10 @@ pub struct Answer {
     pub stdout: Option<Value>,
     pub events: Vec<Value>,
     pub injected: bool,
+    /// The take-over reason the compose consumed from the argv, carried in
+    /// the answer to the in-process seam - never the environment, which a
+    /// child inherits and any process can set.
+    pub take_over: String,
     /// The billing gate needs `facts.role_resolves` and the ask carried no
     /// answer: nothing applied, nothing journaled; the transport resolves
     /// the role once and asks again.
@@ -376,6 +378,7 @@ impl Answer {
             "stdout": self.stdout.clone().unwrap_or(Value::Null),
             "events": self.events,
             "injected": self.injected,
+            "take_over": self.take_over,
             "role_gate_needed": self.role_gate_needed,
         })
     }
@@ -389,12 +392,16 @@ struct Seam {
     suppressed: Vec<Value>,
     inject: Vec<String>,
     bundle: Vec<String>,
+    /// A pick's model with no route: it rides the harness argv behind the
+    /// `--` fence, after any lane bundle.
+    harness_model: Option<String>,
     events: Vec<Value>,
     exit: Option<i32>,
     stdout: Option<Value>,
     argv: Option<Vec<String>>,
     injected: bool,
     role_gate_needed: bool,
+    take_over: String,
 }
 
 impl Seam {
@@ -416,8 +423,8 @@ impl Seam {
 struct Stage<'a> {
     inputs: &'a Inputs,
     scan: Axes,
-    verb: String,
-    profile_verb: String,
+    command: String,
+    profile_command: String,
     profile: Option<&'a toml::Table>,
     defaults: toml::Table,
     lane: Option<Value>,
@@ -427,15 +434,8 @@ struct Stage<'a> {
     fingerprint: String,
     grid_account_injected: bool,
     node_id_present: bool,
-    harness_done: bool,
-    harness: Option<String>,
     overlay_answer: Option<Value>,
-    injected_substrate: Option<String>,
-    out_tail_empty: bool,
     fields: Option<Fields>,
-    has_harness: bool,
-    has_model: bool,
-    has_effort: bool,
 }
 
 impl<'a> Stage<'a> {
@@ -490,6 +490,7 @@ pub fn compose(inputs: &Inputs) -> Answer {
         stdout: seam.stdout.take(),
         events: seam.events,
         injected: seam.injected,
+        take_over: std::mem::take(&mut seam.take_over),
         role_gate_needed: seam.role_gate_needed,
     }
 }
@@ -506,7 +507,82 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
     if inputs.argv.first().map(String::as_str) != Some("spawn") || help_rides {
         return;
     }
-    let (verb, profile_verb, profile) = match resolve_profile(inputs, &scan) {
+    // The take-over reason travels inside the answer, in process. A value
+    // in the environment is a forgery or a stale leak: nothing sets it, so
+    // any spawn under one refuses.
+    if std::env::var_os("FNO_SPAWN_TAKE_OVER").is_some() {
+        seam.refuse(
+            "spawn: FNO_SPAWN_TAKE_OVER is set in this process's environment. The \
+             take-over reason travels inside the compose answer, never the \
+             environment; a child must never inherit it. Clear it and re-run."
+                .to_string(),
+        );
+        return;
+    }
+    // The take-over front door: the ask is only legal shaped as
+    // `spawn --promote <scope> --take-over "<why>"`. Refusing here keeps
+    // the shape check in Rust. On the legal shape the flag is CONSUMED
+    // here and its reason rides the answer to the in-process seam, so the
+    // Python flag surface stays at net zero (lead ruling 2026-10-16):
+    // typer never declares --take-over.
+    if argv_has_take_over(&inputs.argv) {
+        if !argv_has_team(&inputs.argv) || argv_has_hand_off(&inputs.argv) {
+            seam.refuse(
+                "--take-over moves a sub-team to the new colleague and needs --promote <scope>; \
+                 it cannot be combined with --hand-off."
+                    .to_string(),
+            );
+            return;
+        }
+        if let Some(argv) = seam.argv.as_mut() {
+            let mut reason = String::new();
+            loop {
+                let cut = argv
+                    .iter()
+                    .position(|t| t.as_str() == "--argv" || t.as_str() == "--")
+                    .unwrap_or(argv.len());
+                match argv[1..cut]
+                    .iter()
+                    .position(|t| t == "--take-over" || t.starts_with("--take-over="))
+                {
+                    Some(at) => {
+                        let i = at + 1;
+                        if argv[i].starts_with("--take-over=") {
+                            reason = argv[i]["--take-over=".len()..].to_string();
+                            argv.remove(i);
+                        } else {
+                            // A separate value must sit inside the fence: with
+                            // --take-over last, the next token is the --argv
+                            // fence or a payload word, and neither is a reason.
+                            // A flag-shaped token is never a reason either:
+                            // eating one would silently rewrite the ask.
+                            if i + 1 < cut && !argv[i + 1].starts_with('-') {
+                                reason = argv[i + 1].clone();
+                                argv.remove(i);
+                                argv.remove(i);
+                            } else {
+                                argv.remove(i);
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+            seam.take_over = reason.trim().to_string();
+        }
+        if seam.take_over.is_empty() {
+            // The flag without a usable value must not degrade to a plain
+            // promote: the settle's own refusal would never see the ask,
+            // and the colleague would launch unjournaled.
+            seam.refuse(
+                "--take-over needs a reason: --take-over \"why the \
+                 paused lead is unreachable\""
+                    .to_string(),
+            );
+            return;
+        }
+    }
+    let (command, profile_command, profile) = match resolve_profile(inputs, &scan) {
         Ok(found) => found,
         Err(lines) => {
             for line in lines {
@@ -518,14 +594,11 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
     let defaults = inputs.defaults.as_table().cloned().unwrap_or_default();
     let node_id_present =
         scan.flag_node.is_some() || inputs.env_node.is_some() || inputs.node.is_some();
-    let has_harness = scan.has_harness;
-    let has_model = scan.has_model;
-    let has_effort = scan.has_effort;
     let mut stage = Stage {
         inputs,
         scan,
-        verb,
-        profile_verb,
+        command,
+        profile_command,
         profile: profile.as_ref(),
         defaults,
         lane: None,
@@ -535,15 +608,8 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
         fingerprint: String::new(),
         grid_account_injected: false,
         node_id_present,
-        harness_done: false,
-        harness: None,
         overlay_answer: None,
-        injected_substrate: None,
-        out_tail_empty: false,
         fields: None,
-        has_harness,
-        has_model,
-        has_effort,
     };
     walk_stage(&mut stage, seam);
     if seam.exit.is_some() {
@@ -561,52 +627,27 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
         }
     }
     grid_inject(&mut stage, seam);
-    harness_rung(&mut stage, seam);
-    if seam.exit.is_some() {
-        return;
-    }
-    // Python's seam resolved the role ONLY when the billing model branch
-    // needed it (config model, axis free, a role named): a bare role spawn
-    // resolved zero times at the seam, and cmd_spawn's own single resolve
-    // is the one the role-wiring contract pins. When the gate fires and
-    // the ask carries no answer, stop before any side effect: the
-    // transport resolves and asks again.
-    {
-        let fields = stage.fields.as_ref().expect("fields were read");
-        let needs_role =
-            !fields.model.0.is_empty() && !stage.has_model && stage.scan.role.is_some();
-        let answered = stage
-            .inputs
-            .facts
-            .get("role_resolves")
-            .and_then(Value::as_bool)
-            .is_some();
-        if needs_role && !answered {
-            seam.role_gate_needed = true;
-            return;
-        }
-    }
+    lane_model_pin(&stage, seam);
     billing_axes(&mut stage, seam);
     overlay_stage(&mut stage, seam);
     if seam.exit.is_some() {
         return;
     }
-    mechanical_axes(&mut stage, seam);
     pane_bundle_stage(&mut stage, seam);
     assemble(&mut stage, seam);
 }
 
-/// Profile-key resolution: the seed's verb names the profile; an unknown
+/// Profile-key resolution: the seed's command names the profile; an unknown
 /// `fno:`-namespaced token refuses with the two lines Python printed.
 fn resolve_profile(
     inputs: &Inputs,
     scan: &Axes,
 ) -> Result<(String, String, Option<toml::Table>), Vec<String>> {
-    let (known, roster_ok) = known_verb_keys(inputs);
+    let (known, roster_ok) = known_command_keys(inputs);
     let mut profile_seed = scan.seed.clone();
     if profile_seed.is_none() {
-        if let Some(node_verb) = &inputs.node_verb {
-            profile_seed = Some(format!("/{node_verb}"));
+        if let Some(node_command) = &inputs.node_command {
+            profile_seed = Some(format!("/{node_command}"));
         }
     }
     let known_ref = if roster_ok {
@@ -614,34 +655,34 @@ fn resolve_profile(
     } else {
         None
     };
-    let verb = profile_key(profile_seed.as_deref(), known_ref).ok_or_else(|| {
-        let tok = verb_token(scan.seed.as_deref()).unwrap_or_default();
+    let command = profile_key(profile_seed.as_deref(), known_ref).ok_or_else(|| {
+        let tok = command_token(scan.seed.as_deref()).unwrap_or_default();
         vec![
             format!(
-                "fno agents spawn: seed {} names verb-shaped token {} but no \
-                 shipped footnote verb or configured profile answers it",
+                "fno agents spawn: seed {} names command-shaped token {} but no \
+                 shipped footnote command or configured profile answers it",
                 crate::spawn_axes::repr(scan.seed.as_deref().unwrap_or("")),
                 crate::spawn_axes::repr(&tok)
             ),
             "fno agents spawn: refusing; no worker launched".to_string(),
         ]
     })?;
-    let (profile, profile_verb) = match profile_table(inputs, &verb) {
+    let (profile, profile_command) = match profile_table(inputs, &command) {
         Some((table, name)) => (Some(table.clone()), name),
-        None => (None, verb.clone()),
+        None => (None, command.clone()),
     };
-    Ok((verb, profile_verb, profile))
+    Ok((command, profile_command, profile))
 }
 
 /// Where a scalar field's value would come from with no lane in play.
 fn scalar_rung(
     profile: Option<&toml::Table>,
-    profile_verb: &str,
+    profile_command: &str,
     defaults: &toml::Table,
     name: &str,
 ) -> Option<String> {
     if !cfg_str(profile, name).is_empty() {
-        return Some(format!("agents.profiles.{profile_verb}"));
+        return Some(format!("agents.profiles.{profile_command}"));
     }
     if !cfg_str(Some(defaults), name).is_empty() {
         return Some("agents.defaults".to_string());
@@ -666,8 +707,18 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
                 .and_then(toml::Value::as_table)
                 .is_some_and(|t| !t.is_empty())
     });
-    let model_rung = scalar_rung(stage.profile, &stage.profile_verb, &stage.defaults, "model");
-    let route_rung = scalar_rung(stage.profile, &stage.profile_verb, &stage.defaults, "route");
+    let model_rung = scalar_rung(
+        stage.profile,
+        &stage.profile_command,
+        &stage.defaults,
+        "model",
+    );
+    let route_rung = scalar_rung(
+        stage.profile,
+        &stage.profile_command,
+        &stage.defaults,
+        "route",
+    );
     let model_occupied = scan.has_model
         || scan.explicit_vendor_present
         || scan.explicit_route
@@ -696,7 +747,7 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
     if !(lanes_present || grid_node_entry.is_some() || enforced) {
         return;
     }
-    let grid_role = if stage.verb == "blueprint" || stage.verb == "think" {
+    let grid_role = if stage.command == "blueprint" || stage.command == "think" {
         Some("planning".to_string())
     } else {
         None
@@ -707,7 +758,7 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
         .or_else(|| Some(cfg_str(stage.profile, "provider")))
         .filter(|v| !v.trim().is_empty());
     let ask = json!({
-        "rung_base": format!("agents.profiles.{}", stage.profile_verb),
+        "rung_base": format!("agents.profiles.{}", stage.profile_command),
         "lanes_raw": lanes_payload(stage.profile),
         "profile": crate::route_gather::profile_fields_for(stage.profile),
         "node": grid_node_entry,
@@ -719,7 +770,7 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
         "role": grid_role,
         "protected_role": stage.inputs.facts.get("role_protected"),
         "model_occupied": model_occupied,
-        "work_verb": stage.verb,
+        "work_command": stage.command,
         "explicit_model_value": if scan.has_model { scan.model_value.clone() } else { None },
         "explicit_route_value": if scan.explicit_route { scan.route_value.clone() } else { None },
         "explicit_vendor_value": if scan.explicit_vendor_present {
@@ -827,11 +878,6 @@ fn lanes_payload(profile: Option<&toml::Table>) -> Value {
 
 /// The field() reads: lane > profile > defaults, one per config field.
 pub(crate) struct Fields {
-    pub harness: Field,
-    pub model: Field,
-    pub effort: Field,
-    pub substrate: Field,
-    pub permission: Field,
     pub route: Field,
     pub account: Field,
     pub pane_group: Field,
@@ -844,57 +890,44 @@ fn read_fields(stage: &Stage) -> Fields {
             view.0,
             view.1,
             view.2,
-            &stage.profile_verb,
+            &stage.profile_command,
             &stage.defaults,
             name,
         )
     };
-    let mut permission = f("permission_mode");
-    if permission.0.is_empty()
-        && stage.inputs.apply_permission_builtin
-        && is_seed_verb(&stage.scan.seed)
-    {
-        permission = Field(
-            SPAWN_PERMISSION_BUILTIN.to_string(),
-            Some("builtin.autonomous".to_string()),
-        );
-    }
     Fields {
-        harness: f("provider"),
-        model: f("model"),
-        effort: f("effort"),
-        substrate: f("substrate"),
-        permission,
         route: f("route"),
         account: f("account"),
         pane_group: f("pane_group"),
     }
 }
 
-/// Whether the seed's FIRST token is verb-shaped (Python `is_verb_seed`).
-fn is_seed_verb(seed: &Option<String>) -> bool {
-    seed.as_deref()
-        .and_then(|s| s.split_whitespace().next())
-        .is_some_and(|tok| crate::provider::parse_verb_token(tok).is_some())
-}
-
-/// Whether the argv names a role (`-k` in all three Click spellings, or
-/// `--promote`) before the `--argv` boundary or a bare `--` fence (fenced
-/// tokens are prompt text) - the same boundary rule Python's
-/// `_has_permission_mode` applies, and the same short-form spellings the
-/// Python routing detector accepts.
-fn argv_has_team(argv: &[String]) -> bool {
+/// Whether the argv names a team (`--promote`) before the `--argv` boundary
+/// or a bare `--` fence (fenced tokens are prompt text) - the same boundary
+/// rule Python's `_has_permission_mode` applies.
+pub(crate) fn argv_has_team(argv: &[String]) -> bool {
     argv.iter()
         .skip(1)
         .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
-        .any(|t| {
-            // retired-ok: the daemon accepts the retired alias for one release
-            t == "--promote"
-                || t.starts_with("--promote=")
-                || t == "-k"
-                || t.starts_with("-k=")
-                || (t.starts_with("-k") && t.len() > 2 && !t.starts_with("--"))
-        })
+        .any(|t| t == "--promote" || t.starts_with("--promote="))
+}
+
+/// Whether the argv carries `--take-over` (or `--take-over=...`) before the
+/// `--argv` boundary or a `--` fence.
+fn argv_has_take_over(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| t == "--take-over" || t.starts_with("--take-over="))
+}
+
+/// Whether the argv carries `--hand-off` before the boundary. The retired
+/// `--succeed` spelling dies at the tombstone, before compose runs.
+fn argv_has_hand_off(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| t == "--hand-off" || t.starts_with("--hand-off="))
 }
 
 /// An overlay table (or lane args) can carry the ONLY value this spawn
@@ -923,19 +956,13 @@ fn overlays_present(stage: &Stage) -> bool {
 /// receipts, no overlays - any `--model` here was typed, so only the vendor
 /// check and the journal run.
 fn early_return(stage: &Stage, fields: &Fields, seam: &mut Seam) -> bool {
-    let any_field = !fields.harness.0.is_empty()
-        || !fields.model.0.is_empty()
-        || !fields.effort.0.is_empty()
-        || !fields.substrate.0.is_empty()
-        || !fields.permission.0.is_empty()
-        || !fields.route.0.is_empty()
+    let any_field = !fields.route.0.is_empty()
         || !fields.account.0.is_empty()
         || !fields.pane_group.0.is_empty();
     let grid_candidate = grid_candidate(stage).is_some();
     if any_field || grid_candidate || !seam.applied.is_empty() || overlays_present(stage) {
         return false;
     }
-    vendor_check(stage, seam, None);
     journal(stage, seam, "");
     true
 }
@@ -950,62 +977,20 @@ fn grid_candidate(stage: &Stage) -> Option<Value> {
     Some(candidate.clone())
 }
 
-/// The resolved-target harness, lazily: explicit -H, then the merged config
-/// `provider`, then the ambient inference (builtin claude).
-fn resolved_harness(stage: &mut Stage) -> Option<String> {
-    if !stage.harness_done {
-        stage.harness_done = true;
-        let cfg = stage.fields().harness.0.clone();
-        stage.harness = if let Some(explicit) = stage
-            .scan
-            .explicit_harness
-            .clone()
-            .filter(|h| !h.trim().is_empty())
-        {
-            Some(explicit)
-        } else if !cfg.is_empty() {
-            Some(cfg)
-        } else {
-            Some(stage.inputs.ambient_harness.clone())
-        };
-    }
-    stage.harness.clone()
+/// The resolved-target harness: the explicit spelling, else the ambient
+/// inference (builtin claude). The config-provider rung died with the
+/// harness axis; the lane owns the choice now.
+fn resolved_harness(stage: &Stage) -> Option<String> {
+    stage
+        .scan
+        .explicit_harness
+        .clone()
+        .filter(|h| !h.trim().is_empty())
+        .or_else(|| Some(stage.inputs.ambient_harness.clone()))
 }
 
 fn fields_of<'a>(stage: &'a Stage<'a>) -> &'a Fields {
     stage.fields()
-}
-
-/// Lane first (a lane is a complete coordinate), then the harness-keyed
-/// answer, then the harness-blind scalars: field()'s order with the two
-/// harness rungs spliced in above it.
-fn seamed_read(stage: &Stage, name: &str, blind: Field) -> Field {
-    if let (Some(lane), Some(index)) = (stage.lane.as_ref(), stage.lane_index) {
-        let value = lane_value(lane, name);
-        if !value.is_empty() {
-            return Field(
-                value,
-                Some(format!(
-                    "agents.profiles.{}.lanes[{index}]",
-                    stage.profile_verb
-                )),
-            );
-        }
-    }
-    if let Some(answer) = &stage.overlay_answer {
-        if let Some(entry) = answer
-            .get("effective")
-            .and_then(|e| e.get(name))
-            .filter(|e| !e.is_null())
-        {
-            let value = entry.get("value").and_then(Value::as_str).unwrap_or("");
-            let rung = entry.get("rung").and_then(Value::as_str).unwrap_or("");
-            if !value.is_empty() {
-                return Field(value.to_string(), Some(rung.to_string()));
-            }
-        }
-    }
-    blind
 }
 
 /// The grid triple's injections: the pin's model is already on the argv, so
@@ -1030,43 +1015,21 @@ fn grid_inject(stage: &mut Stage, seam: &mut Seam) {
     };
     let harness = s("harness");
     let model = s("model");
-    let mut inject = vec!["--harness".to_string(), harness.clone()];
-    if !stage.scan.has_model {
-        inject.extend(["--model".to_string(), model.clone()]);
-    }
-    if !pin_row.is_empty() {
-        seam.applied.push(json!(["harness", harness, src]));
-    } else {
-        seam.applied
-            .push(json!(["grid", format!("{harness}/{model}"), src]));
-    }
-    stage.has_harness = true;
-    stage.has_model = true;
-    let effort = s("effort");
-    let effort_occupied = stage.scan.has_effort
-        || above_defaults(&scalar_rung(
-            stage.profile,
-            &stage.profile_verb,
-            &stage.defaults,
-            "effort",
-        ))
-        || stage.lane.is_some();
-    if !effort.is_empty() && !effort_occupied {
-        inject.extend(["--effort".to_string(), effort.clone()]);
-        seam.applied.push(json!(["effort", effort, src]));
-        stage.has_effort = true;
-    }
+    let mut applied_any = false;
     let route = s("route");
-    if !route.is_empty() && !stage.scan.explicit_route && !stage.scan.explicit_vendor_present {
-        inject.extend(["--route".to_string(), route.clone()]);
+    if !route.is_empty() && !stage.scan.explicit_route {
+        seam.inject.extend(["--route".to_string(), route.clone()]);
         seam.applied.push(json!(["route", route, src]));
+        applied_any = true;
     }
     let account = s("account");
     if !account.is_empty() && !stage.scan.account_flag_present {
         if harness == "claude" {
-            inject.extend(["--account".to_string(), account.clone()]);
+            seam.inject
+                .extend(["--account".to_string(), account.clone()]);
             seam.applied.push(json!(["account", account, src]));
             stage.grid_account_injected = true;
+            applied_any = true;
         } else {
             seam.note(format!(
                 "fno agents spawn: account skipped (claude-only, grid harness {}); {} ignored",
@@ -1075,186 +1038,98 @@ fn grid_inject(stage: &mut Stage, seam: &mut Seam) {
             ));
         }
     }
-    seam.inject.extend(inject);
-    // Python pre-seeds the resolved-harness cache with the candidate's
-    // harness, so the effort/substrate/permission checks read the grid's
-    // coordinate, never the ambient default.
-    stage.harness = Some(harness);
-    stage.harness_done = true;
+    // The spawn's --model flag is retired, the harness's is not: a pick
+    // whose route did not apply puts its model on the harness argv, or the
+    // harness launches its own default whatever the band picked.
+    if route.is_empty() && !stage.scan.explicit_route {
+        applied_any |= pin_harness_model(stage, seam, &harness, &model, &src);
+    }
+    // The receipt names a pick that applied, and always an operator pin row.
+    if applied_any || !pin_row.is_empty() {
+        seam.applied
+            .push(json!(["grid", format!("{harness}/{model}"), src]));
+    }
 }
 
-/// The harness rung: the config `provider` fills the HARNESS axis only when
-/// nothing on the argv set it; an unknown harness refuses, and a route only
-/// claude can carry collides with a non-claude profile harness.
-fn harness_rung(stage: &mut Stage, seam: &mut Seam) {
-    let cfg_harness = stage.fields().harness.0.clone();
-    let provider_rung = stage.fields().harness.1.clone().unwrap_or_default();
-    if cfg_harness.is_empty() || stage.has_harness {
-        return;
+/// Pin `model` on the harness argv when the pick is for the harness this
+/// spawn launches. A model for another harness never rides: its flag value
+/// would mean nothing to this CLI.
+fn pin_harness_model(
+    stage: &Stage,
+    seam: &mut Seam,
+    harness: &str,
+    model: &str,
+    src: &str,
+) -> bool {
+    if model.is_empty() || stage.scan.has_model {
+        return false;
     }
-    if !crate::provider::KNOWN_PROVIDERS.contains(&cfg_harness.as_str()) {
-        let valid = crate::provider::KNOWN_PROVIDERS.join(", ");
-        seam.refuse(format!(
-            "fno agents spawn: config.{provider_rung}.provider = {} is not a \
-             known harness; valid: {valid}",
-            crate::spawn_axes::repr(&cfg_harness),
+    let launched = resolved_harness(stage).unwrap_or_default();
+    if !harness.is_empty() && harness != launched {
+        seam.note(format!(
+            "fno agents spawn: model skipped (pick is for harness {}, spawn launches {}); {} ignored",
+            crate::spawn_axes::repr(harness),
+            crate::spawn_axes::repr(&launched),
+            crate::spawn_axes::repr(model),
         ));
-        return;
+        return false;
     }
-    let route_shaped =
-        stage.scan.explicit_route || (stage.scan.explicit_vendor_present && stage.scan.has_model);
-    if route_shaped && cfg_harness != "claude" {
-        let caller_spelling = if stage.scan.explicit_route {
-            format!(
-                "--route {}",
-                stage.scan.route_value.clone().unwrap_or_default()
-            )
-        } else {
-            format!(
-                "-P {} --model {}",
-                stage.scan.explicit_vendor.clone().unwrap_or_default(),
-                stage.scan.model_value.clone().unwrap_or_default(),
-            )
-        };
-        seam.refuse(format!(
-            "fno agents spawn: config.{provider_rung}.provider = {} sets the \
-             HARNESS axis,\nand a route only the claude harness can carry is \
-             already on your command line\n({caller_spelling}).\nNothing you \
-             passed set the harness: -P names the model vendor, a different \
-             axis,\nso the profile filled it.\nPass -H claude to keep your \
-             route, or clear {provider_rung}.provider.",
-            crate::spawn_axes::repr(&cfg_harness),
-        ));
-        return;
-    }
-    seam.inject
-        .extend(["--harness".to_string(), cfg_harness.clone()]);
-    seam.applied.push(json!([
-        "harness",
-        cfg_harness,
-        format!("{provider_rung}.provider")
-    ]));
-    stage.has_harness = true;
+    seam.harness_model = Some(model.to_string());
+    seam.applied.push(json!(["model", model, src]));
+    true
 }
 
-/// The vendor-mismatch judgment over the FINAL argv: a typed mismatch warns
-/// and proceeds, an injected one refuses; an explicit route suppresses both.
-fn vendor_check(stage: &Stage, seam: &mut Seam, model_source: Option<&str>) {
-    // Python's fast path: no --model on the final argv (typed or injected)
-    // leaves nothing to judge. The lane's harness is the final argv's first
-    // --harness: an injected one is the only kind the head can add, because
-    // injection is suppressed when the operator typed one.
-    let model_on_argv = stage.scan.has_model || seam.inject.iter().any(|t| t == "--model");
-    if !model_on_argv {
+/// A lane pick (`agents.profiles.<command>.lanes`) with a model and no route
+/// pins that model the same way a grid pick does.
+fn lane_model_pin(stage: &Stage, seam: &mut Seam) {
+    let Some(candidate) = stage.slot_candidate.as_ref() else {
         return;
-    }
-    let harness_typed = stage
-        .scan
-        .explicit_harness
-        .as_deref()
-        .map(|h| !h.trim().is_empty())
-        .unwrap_or(false);
-    let harness = seam
-        .inject
-        .iter()
-        .position(|t| t == "--harness")
-        .and_then(|i| seam.inject.get(i + 1))
-        .cloned()
-        .or_else(|| stage.scan.explicit_harness.clone());
-    let argv_tail: Vec<String> = seam
-        .argv
-        .as_ref()
-        .map(|a| a.iter().skip(1).cloned().collect())
-        .unwrap_or_default();
-    let ask = json!({
-        "kind": "model-vendor",
-        "argv_tail": argv_tail,
-        "argv_head": "spawn",
-        "harness": harness,
-        "env_harness": stage.inputs.ambient_harness,
-        "model_source": model_source,
-        "harness_typed": harness_typed,
-    });
-    let answer = match crate::spawn_overlay::resolve(ask) {
-        Ok(answer) => answer,
-        Err(exc) => {
-            seam.note(format!("fno agents spawn: vendor check skipped ({exc})"));
-            return;
-        }
     };
-    if let Some(event) = answer
-        .get("event")
-        .filter(|e| e.is_object() && !e.is_null())
+    if candidate.get("lane_rung").is_none()
+        || stage.scan.explicit_route
+        || !stage.fields().route.0.is_empty()
     {
-        seam.events.push(event.clone());
+        return;
     }
-    match answer.get("verdict").and_then(Value::as_str) {
-        Some("refuse") => {
-            let message = answer.get("message").and_then(Value::as_str).unwrap_or("");
-            seam.refuse(message.to_string());
-        }
-        Some("warn") => {
-            let message = answer.get("message").and_then(Value::as_str).unwrap_or("");
-            seam.note(message.to_string());
-        }
-        _ => {}
-    }
+    // An inline lane carries its harness as `provider` in its fields, not
+    // on a row; read both so a codex lane's model never pins onto claude.
+    let s = |key: &str, field: &str| {
+        [
+            candidate.get(key),
+            candidate.get("lane_fields").and_then(|f| f.get(field)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find(|v| !v.is_empty())
+        .unwrap_or("")
+        .to_string()
+    };
+    let src = format!("lane {}", s("lane", "lane"));
+    pin_harness_model(
+        stage,
+        seam,
+        &s("harness", "provider"),
+        &s("model", "model"),
+        &src,
+    );
 }
 
 /// The billing axes (route/account/model, ruling 4) through the one Rust
 /// owner, in process; the model-target pre-read runs here first.
 fn billing_axes(stage: &mut Stage, seam: &mut Seam) {
-    // Python's prov here is resolved_harness(): explicit -H, the grid's
-    // seeded pick, the config field rung, then ambient - the cached chain,
-    // never the ambient default directly. Resolved before `fields` borrows
-    // the stage immutably.
+    // Python's prov here is resolved_harness(): the grid's seeded pick, the
+    // config field rung, then ambient - the cached chain, never the ambient
+    // default directly. Resolved before `fields` borrows the stage immutably.
     let prov = resolved_harness(stage).unwrap_or_default();
     let fields = stage.fields();
-    if fields.route.0.is_empty() && fields.account.0.is_empty() && fields.model.0.is_empty() {
+    if fields.route.0.is_empty() && fields.account.0.is_empty() {
         return;
-    }
-    let role = stage.scan.role.clone();
-    let mut role_resolves = false;
-    if !fields.model.0.is_empty() && !stage.has_model && role.is_some() {
-        role_resolves = stage
-            .inputs
-            .facts
-            .get("role_resolves")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-    }
-    let mut harness_target: Option<String> = None;
-    // Python set this only when its dispatch-harness probe threw; the
-    // in-process read cannot fail, so the ask always carries false.
-    let harness_target_failed = false;
-    if !fields.model.0.is_empty()
-        && !stage.has_model
-        && !stage.scan.explicit_route
-        && !stage.scan.explicit_vendor_present
-        && !role_resolves
-    {
-        harness_target = if let Some(explicit) = stage
-            .scan
-            .explicit_harness
-            .clone()
-            .filter(|h| !h.trim().is_empty())
-        {
-            Some(explicit)
-        } else if !fields.harness.0.is_empty() {
-            Some(fields.harness.0.clone())
-        } else {
-            Some(stage.inputs.ambient_harness.clone())
-        };
     }
     let ask = json!({
         "route": {"value": fields.route.0.clone(), "rung": fields.route.1.clone().unwrap_or_default()},
         "account": {"value": fields.account.0.clone(), "rung": fields.account.1.clone().unwrap_or_default()},
-        "model": {"value": fields.model.0.clone(), "rung": fields.model.1.clone().unwrap_or_default()},
         "explicit_route": stage.scan.explicit_route,
-        "explicit_vendor_present": stage.scan.explicit_vendor_present,
-        "explicit_vendor": stage.scan.explicit_vendor.clone().unwrap_or_default(),
-        "explicit_model_present": stage.has_model,
-        "has_model": stage.has_model,
         "grid_candidate_present": grid_candidate(stage).is_some(),
         "slot_chain": stage.slot_chain,
         "grid_account_injected": stage.grid_account_injected,
@@ -1264,11 +1139,6 @@ fn billing_axes(stage: &mut Stage, seam: &mut Seam) {
         } else {
             json!("")
         },
-        "role": role,
-        "role_resolves": role_resolves,
-        "cfg_harness": fields.harness.0.clone(),
-        "harness_target": harness_target,
-        "harness_target_failed": harness_target_failed,
     });
     let answer = crate::spawn_axes::decide(&ask);
     for line in answer
@@ -1300,107 +1170,7 @@ fn billing_axes(stage: &mut Stage, seam: &mut Seam) {
     }
 }
 
-/// The mechanical axes: effort/substrate/permission re-read through the
-/// harness rungs, pre-checked in process, decided by the one owner.
-fn mechanical_axes(stage: &mut Stage, seam: &mut Seam) {
-    let mut effort = fields_of(stage).effort.clone();
-    if !stage.scan.has_effort {
-        effort = seamed_read(stage, "effort", effort);
-    }
-    let mut effort_reason = String::new();
-    if !effort.0.is_empty() {
-        let prov = resolved_harness(stage).unwrap_or_default();
-        if let Err(exc) = crate::effort_surface::effort_tokens(&prov, &effort.0) {
-            effort_reason = exc;
-        }
-    }
-    let explicit_substrate = stage.scan.explicit_substrate.clone();
-    let mut substrate = fields_of(stage).substrate.clone();
-    if explicit_substrate.is_none() {
-        substrate = seamed_read(stage, "substrate", substrate);
-    } else {
-        substrate = Field(String::new(), None);
-    }
-    let has_permission = stage.scan.has_permission;
-    let mut permission = fields_of(stage).permission.clone();
-    if !has_permission {
-        let re_read = seamed_read(stage, "permission_mode", permission.clone());
-        if !re_read.0.is_empty() {
-            permission = re_read;
-        }
-    }
-    // Python's prov: explicit -H, then the config field read, then ambient
-    // inference - the cached resolved_harness, never the grid pick.
-    let prov = resolved_harness(stage).unwrap_or_default();
-    // A promoted codex spawn is a lead, and a lead must write the state root
-    // (~/.fno) to spawn, claim and journal. The builtin and the config rungs
-    // name claude words codex maps to workspace-write, so the role widens
-    // the default to yolo; a promoted codex spawn that names a bounded mode
-    // refuses before launch.
-    if prov == "codex" && argv_has_team(&stage.inputs.argv) {
-        if !has_permission {
-            let full = crate::codex_posture::resolve_thread_posture(None, Some(&permission.0))
-                .map(|p| p.is_full_access())
-                .unwrap_or(false);
-            if !full {
-                permission = Field("yolo".into(), Some("builtin.role".into()));
-            }
-        } else if let Some(mode) = stage.scan.permission_value.as_deref() {
-            if let Ok(posture) = crate::codex_posture::resolve_thread_posture(None, Some(mode)) {
-                if !posture.is_full_access() {
-                    seam.refuse(format!(
-                        "fno agents spawn: a codex lead needs danger-full-access: a promoted \
-                         session must write the state root (~/.fno) to spawn, claim and \
-                         journal, and {mode} cannot. Pass -Y/--yolo or drop --permission-mode."
-                    ));
-                    set_fields(stage, effort, substrate, permission);
-                    return;
-                }
-            }
-        }
-    }
-    let substrate_unknown = !substrate.0.is_empty() && !SUBSTRATES.contains(&substrate.0.as_str());
-    let substrate_ok = !prov.is_empty()
-        && !substrate.0.is_empty()
-        && crate::effort_surface::substrate_compatible(&substrate.0, &prov);
-    let mut pane_tokens_ok = false;
-    let mut thread_tokens_ok = false;
-    if !permission.0.is_empty() && !prov.is_empty() && !has_permission {
-        pane_tokens_ok = crate::codex_posture::permission_mappable(&prov, &permission.0, "pane")
-            .unwrap_or(false);
-        thread_tokens_ok =
-            crate::codex_posture::permission_mappable(&prov, &permission.0, "thread")
-                .unwrap_or(false);
-    }
-    if effort.0.is_empty() && substrate.0.is_empty() && permission.0.is_empty() {
-        set_fields(stage, effort, substrate, permission);
-        return;
-    }
-    let ask = json!({
-        "effort": {"value": effort.0, "rung": effort.1.clone().unwrap_or_default()},
-        "has_effort": stage.has_effort,
-        "effort_reason": effort_reason,
-        "substrate": {"value": substrate.0, "rung": substrate.1.clone().unwrap_or_default()},
-        "explicit_substrate": explicit_substrate.clone().unwrap_or_default(),
-        "substrate_unknown": substrate_unknown,
-        "substrate_ok": substrate_ok,
-        "substrate_valid_list": "pane, thread, headless, bg",
-        "permission_mode": {"value": permission.0, "rung": permission.1.clone().unwrap_or_default()},
-        "has_permission": has_permission,
-        "pane_tokens_ok": pane_tokens_ok,
-        "thread_tokens_ok": thread_tokens_ok,
-        "prov": prov,
-    });
-    let answer = crate::spawn_axes::decide(&ask);
-    apply_axes_answer(seam, &answer);
-    stage.injected_substrate = answer
-        .get("injected_substrate")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    set_fields(stage, effort, substrate, permission);
-}
-
-/// The pane group and the harness bundle: the verb's placement judgment,
+/// The pane group and the harness bundle: the command's placement judgment,
 /// then the axes answer that lands the bundle behind the `--` fence at the
 /// argv TAIL (a boundary the caller already typed displaces it).
 fn pane_bundle_stage(stage: &mut Stage, seam: &mut Seam) {
@@ -1421,17 +1191,11 @@ fn pane_bundle_stage(stage: &mut Stage, seam: &mut Seam) {
     let mut pg_answer: Option<Value> = None;
     let mut pg_unavailable = String::new();
     if !pane_group.0.is_empty() && !stage.scan.tab_flag_present {
-        let effective = stage
-            .scan
-            .explicit_substrate
-            .clone()
-            .or_else(|| stage.injected_substrate.clone())
-            .unwrap_or_else(|| "pane".to_string());
         let ask = json!({
             "kind": "pane-group",
             "group": pane_group.0,
             "rung": pg_rung,
-            "eff_substrate": effective,
+            "eff_substrate": "pane",
             "argv_tail": stage.spawn_token_tail(),
         });
         match crate::spawn_overlay::resolve(ask) {
@@ -1462,13 +1226,6 @@ fn pane_bundle_stage(stage: &mut Stage, seam: &mut Seam) {
                     .push(token.as_str().unwrap_or_default().to_string());
             }
         }
-    }
-    if answer
-        .get("out_tail_append_empty")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        stage.out_tail_empty = true;
     }
 }
 
@@ -1528,32 +1285,48 @@ fn assemble(stage: &mut Stage, seam: &mut Seam) {
         argv = next;
         seam.injected = true;
     }
+    if let Some(model) = seam.harness_model.take() {
+        fence_model(&argv, &mut seam.bundle, model, &mut seam.stderr);
+    }
     if !seam.bundle.is_empty() {
+        // typer fills MESSAGE first, so a spawn with no prompt keeps the
+        // slot with an explicit empty, or the first fenced token becomes it.
+        if !stage.scan.positional_present && seam.bundle.first().is_some_and(|t| t == "--") {
+            argv.push(String::new());
+        }
         argv.extend(seam.bundle.iter().cloned());
         seam.injected = true;
     }
     seam.argv = Some(argv);
-    let model_source = seam
-        .applied
-        .iter()
-        .filter_map(|entry| {
-            let entry = entry.as_array()?;
-            if entry.first()?.as_str()? == "model" {
-                entry.get(2)?.as_str().map(str::to_string)
-            } else {
-                None
-            }
-        })
-        .next();
-    vendor_check(stage, seam, model_source.as_deref());
-    if seam.exit.is_some() {
-        return;
-    }
     journal(stage, seam, &stage.fingerprint);
 }
 
+/// Add `--model <model>` to the harness tokens. The typed passthrough wins:
+/// a fenced `--model`/`-m` keeps the operator's value. An `--argv` payload is
+/// a whole harness command, so nothing joins it.
+fn fence_model(argv: &[String], bundle: &mut Vec<String>, model: String, stderr: &mut Vec<String>) {
+    if argv.iter().any(|t| t == "--argv") {
+        stderr.push(format!(
+            "fno agents spawn: model skipped (argv already carries an --argv payload); {model} ignored"
+        ));
+        return;
+    }
+    let typed = argv.iter().position(|t| t == "--").map(|i| &argv[i + 1..]);
+    let typed_model = typed.is_some_and(|tail| {
+        tail.iter()
+            .any(|t| t == "--model" || t == "-m" || t.starts_with("--model="))
+    });
+    if typed_model {
+        return;
+    }
+    if typed.is_none() && bundle.is_empty() {
+        bundle.push("--".to_string());
+    }
+    bundle.extend(["--model".to_string(), model]);
+}
+
 /// The spawn_defaults_applied receipt, through the journal op (the WRITE
-/// belongs to the verb; the caller passes the resolved path). Never fails
+/// belongs to the command; the caller passes the resolved path). Never fails
 /// the spawn.
 fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
     let path = match non_empty_env("FNO_EVENTS_PATH") {
@@ -1563,12 +1336,9 @@ fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
             None => return,
         },
     };
+    // The retired axes (provider/model/effort/substrate/permission) left
+    // the receipt: the lane owns those choices and no flag can carry them.
     let axes = [
-        ("provider", stage.fields().harness.clone()),
-        ("model", stage.fields().model.clone()),
-        ("effort", stage.fields().effort.clone()),
-        ("substrate", stage.fields().substrate.clone()),
-        ("permission_mode", stage.fields().permission.clone()),
         ("route", stage.fields().route.clone()),
         ("account", stage.fields().account.clone()),
         ("pane_group", stage.fields().pane_group.clone()),
@@ -1582,7 +1352,7 @@ fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
         "path": path,
         "event": {
             "name": stage.scan.name,
-            "verb": stage.profile_verb,
+            "verb": stage.profile_command,
             // A preview, not the text: the receipt's readers key on name and
             // fingerprint, and one full seed once made a 500 KB row.
             "seed": stage.scan.seed.as_deref().map(|s| s.chars().take(200).collect::<String>()),
@@ -1605,16 +1375,7 @@ fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// Store the re-read fields back on the stage for the journal.
-fn set_fields(stage: &mut Stage, effort: Field, substrate: Field, permission: Field) {
-    if let Some(fields) = stage.fields.as_mut() {
-        fields.effort = effort;
-        fields.substrate = substrate;
-        fields.permission = permission;
-    }
-}
-
-/// One spawn-defaults block as the overlay verb's JSON view (Python
+/// One spawn-defaults block as the overlay command's JSON view (Python
 /// `_overlay_payload`): the typed dump carries every scalar plus the harness
 /// table.
 fn overlay_payload(table: &toml::Table) -> Value {
@@ -1695,7 +1456,7 @@ fn overlay_stage(stage: &mut Stage, seam: &mut Seam) {
     let harness = resolved_harness(stage).unwrap_or_default();
     let ask = json!({
         "kind": "overlay",
-        "verb": stage.profile_verb,
+        "verb": stage.profile_command,
         "harness": harness,
         "defaults": overlay_payload(&stage.defaults),
         "profile": stage.profile.map(overlay_payload),
@@ -1837,6 +1598,41 @@ pub fn fill_values(payload: &Value) -> std::collections::BTreeMap<String, String
 mod tests {
     use super::*;
 
+    /// A pick's model rides behind the fence: it opens a fence when none
+    /// exists, joins a lane bundle, yields to a typed `--model`, and refuses
+    /// to join an `--argv` payload with a named line instead of dropping.
+    #[test]
+    fn a_pick_model_rides_the_harness_argv() {
+        fn argv(t: &[&str]) -> Vec<String> {
+            t.iter().map(|s| s.to_string()).collect()
+        }
+        fn pin(a: &[String], mut bundle: Vec<String>) -> (Vec<String>, Vec<String>) {
+            let mut stderr = Vec::new();
+            fence_model(a, &mut bundle, "claude-haiku-5-5".into(), &mut stderr);
+            (bundle, stderr)
+        }
+        let seed = argv(&["spawn", "--name", "w", "/fno:target x-1"]);
+        assert_eq!(
+            pin(&seed, vec![]).0,
+            argv(&["--", "--model", "claude-haiku-5-5"])
+        );
+        let lane = argv(&["--", "--verbose"]);
+        assert_eq!(
+            pin(&seed, lane).0,
+            argv(&["--", "--verbose", "--model", "claude-haiku-5-5"])
+        );
+        let typed = argv(&["spawn", "go", "--", "-m", "sonnet"]);
+        assert!(pin(&typed, vec![]).0.is_empty(), "the typed model wins");
+        let fenced = argv(&["spawn", "go", "--", "--verbose"]);
+        assert_eq!(
+            pin(&fenced, vec![]).0,
+            argv(&["--model", "claude-haiku-5-5"])
+        );
+        let (bundle, stderr) = pin(&argv(&["spawn", "--argv", "claude"]), vec![]);
+        assert!(bundle.is_empty());
+        assert!(stderr[0].contains("model skipped"), "{stderr:?}");
+    }
+
     type Saved = Vec<(&'static str, Option<std::ffi::OsString>)>;
 
     /// The per-process fake world the CLAIMS root pins to, for the whole
@@ -1893,36 +1689,163 @@ mod tests {
         }
     }
 
-    /// The role gate: a config model, a free axis and a role with no
-    /// `facts.role_resolves` answer stops before any side effect and asks
-    /// the transport to resolve. Python's seam resolved the role only
-    /// under this same gate, so a bare role spawn's single cmd_spawn
-    /// resolve is the one the role-wiring contract pins.
+    /// AC7-ERR: the take-over front door refuses `--take-over` without
+    /// `--promote` or combined with `--hand-off`/`--succeed` (exit 2, the
+    /// front-door line), and lets the legal shape compose through.
     #[test]
-    fn a_missing_role_answer_gates_the_composition() {
+    fn the_take_over_front_door_refuses_the_illegal_shapes() {
         let (guard, root, saved) = hermetic();
+        let make_inputs = |tokens: &[&str]| -> Inputs {
+            Inputs {
+                argv: std::iter::once("spawn".to_string())
+                    .chain(tokens.iter().map(|t| t.to_string()))
+                    .collect(),
+                defaults: toml::Value::Table(toml::map::Map::new()),
+                profiles: toml::Value::Table(toml::map::Map::new()),
+                dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+                roster: vec!["target".to_string()],
+                node_command: None,
+                env_node: None,
+                ambient_harness: "claude".to_string(),
+                apply_permission_builtin: true,
+                scan: serde_json::json!({
+                    "has_harness": false, "explicit_harness": null,
+                    "has_model": false, "has_effort": false,
+                    "explicit_route": false, "role": null,
+                    "has_permission": false, "seed": null,
+                    "name": "Maya", "positional_present": false
+                }),
+                facts: serde_json::json!({"role_resolves": null}),
+                node: None,
+                node_row: None,
+                verbose: false,
+            }
+        };
+        let front_door_line =
+            "--take-over moves a sub-team to the new colleague and needs --promote <scope>;";
+        let refused = compose(&make_inputs(&["--take-over", "why", "--name", "Maya"]));
+        assert_eq!(refused.exit, 2, "{:?}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .iter()
+                .any(|line| line.contains(front_door_line)),
+            "{:?}",
+            refused.stderr
+        );
+        let refused = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "why",
+            "--hand-off",
+            "--name",
+            "Maya",
+        ]));
+        assert_eq!(refused.exit, 2, "{:?}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .iter()
+                .any(|line| line.contains(front_door_line)),
+            "{:?}",
+            refused.stderr
+        );
+        let ok = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "why",
+            "--name",
+            "Maya",
+        ]));
+        assert_ne!(ok.exit, 2, "{:?}", ok.stderr);
+        assert!(
+            !ok.stderr.iter().any(|line| line.contains(front_door_line)),
+            "{:?}",
+            ok.stderr
+        );
+        // The flag is carried here: the answer argv drops it and the
+        // reason rides the answer to the in-process seam.
+        assert!(!ok.argv.iter().any(|t| t == "--take-over"), "{:?}", ok.argv);
+        assert_eq!(ok.take_over, "why");
+        // With the flag last before the fence, the ask refuses: the answer
+        // carries the input argv untouched (the fence and the payload were
+        // never eaten) and the door names the missing reason instead of
+        // silently degrading to a plain promote.
+        let fenced = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "--",
+            "review the ledger",
+        ]));
+        assert_eq!(fenced.exit, 2, "{:?}", fenced.stderr);
+        assert!(
+            fenced.argv.iter().any(|t| t == "--"),
+            "fence rewritten: {:?}",
+            fenced.argv
+        );
+        assert!(
+            fenced.argv.iter().any(|t| t == "review the ledger"),
+            "payload rewritten: {:?}",
+            fenced.argv
+        );
+        assert!(
+            fenced
+                .stderr
+                .iter()
+                .any(|line| line.contains("needs a reason")),
+            "{:?}",
+            fenced.stderr
+        );
+        // A flag-shaped token after --take-over is never the reason: the ask
+        // refuses instead of eating --name and launching nameless.
+        let eaten = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "--name",
+            "Maya",
+        ]));
+        assert_eq!(eaten.exit, 2, "{:?}", eaten.stderr);
+        assert!(
+            eaten.argv.iter().any(|t| t == "--name") && eaten.argv.iter().any(|t| t == "Maya"),
+            "name eaten: {:?}",
+            eaten.argv
+        );
+        // Held to the end: every compose above reads the process env, which
+        // the sibling test rewrites the moment the lock frees.
+        drop(guard);
+        clear_hermetic(&root, saved);
+    }
+
+    /// A take-over reason in the environment is a forgery or a stale
+    /// leak: nothing sets it, so any spawn under one refuses.
+    #[test]
+    fn an_inherited_take_over_var_refuses_the_spawn() {
+        let (guard, root, saved) = hermetic();
+        std::env::set_var("FNO_SPAWN_TAKE_OVER", "forged");
         let inputs = Inputs {
             argv: vec![
                 "spawn".to_string(),
                 "--name".to_string(),
                 "w".to_string(),
-                "--role".to_string(),
-                "tidy".to_string(),
                 "work".to_string(),
             ],
             defaults: toml::Value::Table(toml::map::Map::new()),
-            profiles: "[target]\nmodel = \"cfg-m\"\n".parse().unwrap(),
-            dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
+            profiles: toml::Value::Table(toml::map::Map::new()),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
             roster: vec!["target".to_string()],
-            node_verb: None,
+            node_command: None,
             env_node: None,
             ambient_harness: "claude".to_string(),
             apply_permission_builtin: true,
             scan: serde_json::json!({
                 "has_harness": false, "explicit_harness": null,
                 "has_model": false, "has_effort": false,
-                "explicit_route": false, "role": "tidy",
-                "has_permission": false, "seed": "/fno:target work",
+                "explicit_route": false, "role": null,
+                "has_permission": false, "seed": null,
                 "name": "w", "positional_present": true
             }),
             facts: serde_json::json!({"role_resolves": null}),
@@ -1931,57 +1854,17 @@ mod tests {
             verbose: false,
         };
         let answer = compose(&inputs);
+        std::env::remove_var("FNO_SPAWN_TAKE_OVER");
         drop(guard);
         clear_hermetic(&root, saved);
-        assert!(answer.role_gate_needed, "the gate declares the need");
-        assert_eq!(answer.exit, 0, "no refusal");
-        assert!(answer.stderr.is_empty(), "no lines printed");
-        assert!(!answer.injected, "nothing applied");
-        assert_eq!(answer.argv, inputs.argv, "argv unchanged");
-    }
-
-    /// A carried answer composes straight through: false composes with the
-    /// config model injecting (the billing ask receives it), true skips
-    /// the model injection. Either way no gate fires.
-    #[test]
-    fn a_carried_role_answer_composes_through() {
-        let (guard, root, saved) = hermetic();
-        let inputs = Inputs {
-            argv: vec![
-                "spawn".to_string(),
-                "--name".to_string(),
-                "w".to_string(),
-                "--role".to_string(),
-                "tidy".to_string(),
-                "work".to_string(),
-            ],
-            defaults: toml::Value::Table(toml::map::Map::new()),
-            profiles: "[target]\nmodel = \"cfg-m\"\n".parse().unwrap(),
-            dispatch_verbs: toml::Value::Table(toml::map::Map::new()),
-            roster: vec!["target".to_string()],
-            node_verb: None,
-            env_node: None,
-            ambient_harness: "claude".to_string(),
-            apply_permission_builtin: true,
-            scan: serde_json::json!({
-                "has_harness": false, "explicit_harness": null,
-                "has_model": false, "has_effort": false,
-                "explicit_route": false, "role": "tidy",
-                "has_permission": false, "seed": "/fno:target work",
-                "name": "w", "positional_present": true
-            }),
-            facts: serde_json::json!({"role_resolves": false}),
-            node: None,
-            node_row: None,
-            verbose: false,
-        };
-        let answer = compose(&inputs);
-        drop(guard);
-        clear_hermetic(&root, saved);
-        assert!(!answer.role_gate_needed, "the carried answer composes");
+        assert_eq!(answer.exit, 2, "{:?}", answer.stderr);
         assert!(
-            answer.argv.iter().any(|t| t == "--model"),
-            "an unresolved role lets the config model inject"
+            answer
+                .stderr
+                .iter()
+                .any(|line| line.contains("FNO_SPAWN_TAKE_OVER is set")),
+            "{:?}",
+            answer.stderr
         );
     }
 }

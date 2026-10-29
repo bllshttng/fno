@@ -491,3 +491,64 @@ fn list_labeled_keeps_only_both_label_issues_and_refuses_before_gh() {
         .list_labeled("o/r", "fno-request", "fno-approved", 100)
         .is_err());
 }
+
+#[test]
+fn sidecar_save_round_trips_and_merges() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut first = serde_json::Map::new();
+    first.insert("cwd".into(), json!("/tmp/x"));
+    let path = sidecar::save(tmp.path(), "o/r#1", &first).unwrap();
+    assert!(path.starts_with(tmp.path()));
+    let mut second = serde_json::Map::new();
+    second.insert("plan_path".into(), json!("/tmp/p.md"));
+    sidecar::save(tmp.path(), "o/r#1", &second).unwrap();
+    let got = sidecar::load(tmp.path(), "o/r#1").unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!(got["cwd"], json!("/tmp/x"));
+    assert_eq!(got["plan_path"], json!("/tmp/p.md"));
+}
+
+#[test]
+fn sidecar_save_refuses_a_tracker_owned_key_before_any_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut fields = serde_json::Map::new();
+    fields.insert("title".into(), json!("x"));
+    let err = sidecar::save(tmp.path(), "o/r#1", &fields).unwrap_err();
+    assert!(err.to_string().contains("\"title\""), "{err}");
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn sidecar_load_coerces_a_numeric_string_like_the_old_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut fields = serde_json::Map::new();
+    fields.insert("pr_number".into(), json!("7"));
+    fields.insert("cost_usd".into(), json!("1.5"));
+    sidecar::save(tmp.path(), "o/r#1", &fields).unwrap();
+    let got = sidecar::load(tmp.path(), "o/r#1").unwrap();
+    assert_eq!(got["pr_number"], json!(7));
+    assert_eq!(got["cost_usd"], json!(1.5));
+}
+
+#[test]
+fn sidecar_load_refuses_a_wrong_typed_field_loud() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut fields = serde_json::Map::new();
+    fields.insert("pr_number".into(), json!("not-a-number"));
+    sidecar::save(tmp.path(), "o/r#1", &fields).unwrap();
+    let err = sidecar::load(tmp.path(), "o/r#1").unwrap_err();
+    assert!(err.to_string().contains("sidecar invalid"), "{err}");
+}
+
+#[test]
+fn sidecar_load_refuses_a_tracker_owned_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let name = format!("{}.json", crate::claims::encode_key("o/r#1"));
+    std::fs::write(
+        tmp.path().join(name),
+        r#"{"id":"o/r#1","title":"tracker-owned"}"#,
+    )
+    .unwrap();
+    let err = sidecar::load(tmp.path(), "o/r#1").unwrap_err();
+    assert!(err.to_string().contains("title"), "{err}");
+}

@@ -1,6 +1,6 @@
 //! `fno doctor event signals`: read the store for patterns that point at a
 //! fault. One row of telemetry is noise; the shape of many rows is the
-//! signal. The verb flags four shapes over a window (24h by default):
+//! signal. The command flags five shapes over a window (24h by default):
 //!
 //! - `burst`: one event type wrote at least `burst_rows` rows in one minute.
 //! - `spike`: a type wrote at least `spike_rows` rows in the window and at
@@ -11,6 +11,9 @@
 //!   carrying `failed:`, `=failed`, `error:` or `os error`.
 //! - `daemon_restarts`: the daemon started (`keeper_sweep_done` or
 //!   `keeper_sweep_failed`) more than `restarts` times.
+//! - `legacy_journal`: at least one `legacy_journal_retired` receipt in the
+//!   window carries `repeat: true`, the mark of a writer recreating the
+//!   retired root journal family after its import-and-park pass.
 //!
 //! Read only: it opens the store read-only and never creates or prunes it.
 //! Every query seeks the `(type, ts_ms)` index, one type at a time, so the
@@ -185,6 +188,37 @@ pub(crate) fn read_signals(
             detail: "daemon starts in the window".to_string(),
         });
     }
+    // A retired root journal family that reappeared: the migrate pass
+    // re-imports and re-parks it on its next pass and stamps the receipt
+    // with repeat: true, so this shape never reads while the writer is
+    // quiescent.
+    let repeats: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM events WHERE type = 'legacy_journal_retired' \
+             AND ts_ms >= ?1 AND json_extract(line, '$.data.repeat') = 1 \
+             AND reject_reason IS NULL",
+            params![since],
+            |r| r.get(0),
+        )
+        .map_err(named)?;
+    if repeats > 0 {
+        let journal: String = conn
+            .query_row(
+                "SELECT coalesce(json_extract(line, '$.data.journal'), 'events.jsonl') \
+                 FROM events WHERE type = 'legacy_journal_retired' AND ts_ms >= ?1 \
+                 AND json_extract(line, '$.data.repeat') = 1 AND reject_reason IS NULL \
+                 ORDER BY seq DESC LIMIT 1",
+                params![since],
+                |r| r.get(0),
+            )
+            .map_err(named)?;
+        out.push(Signal {
+            signal: "legacy_journal",
+            subject: journal,
+            count: repeats,
+            detail: "retired journal reappeared and re-parked".to_string(),
+        });
+    }
     Ok(out)
 }
 
@@ -335,6 +369,11 @@ mod tests {
             );
             insert("keeper_sweep_done", now - HOUR_MS, serde_json::json!({}));
         }
+        insert(
+            "legacy_journal_retired",
+            now - HOUR_MS,
+            serde_json::json!({"journal": "events.jsonl", "repeat": true, "bytes": 1, "ingested": 1, "parked_to": "backups/x"}),
+        );
         let shapes: Vec<(&str, String)> = read_signals(&store, now, &limits)
             .unwrap()
             .into_iter()
@@ -345,6 +384,7 @@ mod tests {
             ("spike", "store_seat_lock_unlinked"),
             ("arm_errors", "merge_close"),
             ("daemon_restarts", "daemon"),
+            ("legacy_journal", "events.jsonl"),
         ] {
             assert!(
                 shapes.contains(&(want.0, want.1.to_string())),

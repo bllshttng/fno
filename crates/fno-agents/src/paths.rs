@@ -291,19 +291,6 @@ impl AgentsHome {
         self.root.join("team_names.json")
     }
 
-    /// The append-only name history (`name_history.json`), beside
-    /// `team_names.json`: every name ever drawn or bound on this host, so a
-    /// retired lead's name never comes back. See [`crate::team_names`].
-    pub fn name_history_json(&self) -> PathBuf {
-        self.root.join("name_history.json")
-    }
-
-    /// Per-provider injection gate record (`injection-gate.json`), stored next
-    /// to `registry.json` in the agents root.
-    pub fn injection_gate_json(&self) -> PathBuf {
-        self.root.join("injection-gate.json")
-    }
-
     /// Machine-wide fleet incident breaker (`fleet-stop.json`), next
     /// to `registry.json`. Written by `fleet-incident stop|clear`, read by
     /// every admission gate before its bypass branches; see
@@ -388,6 +375,13 @@ impl AgentsHome {
     /// worker. Filename = the claude session uuid; content = the reason.
     pub fn terminal_stop_dir(&self) -> PathBuf {
         self.root.join("terminal-stop")
+    }
+
+    /// Directory of terminal-run receipts (one file per released session;
+    /// the spawn gate's lead_share count skips rows they name).
+    /// `terminal_run.rs` owns the format.
+    pub fn terminal_runs_dir(&self) -> PathBuf {
+        self.root.join("terminal-runs")
     }
 
     /// Directory of per-session keep marks (one JSON file per harness
@@ -561,8 +555,8 @@ pub fn is_file_mode_0600(path: &Path) -> bool {
 /// `--separate-git-dir` mis-report both resolve to None here, so callers fall
 /// back to the caller cwd -- the safe side (Failure Modes > Boundaries). From a
 /// linked worktree this returns the main checkout; from the main checkout it
-/// returns itself (so a `--fresh`-style redirect is a no-op there). Mirrors the
-/// Python `resolve_canonical_worktree` in `cli/src/fno/paths.py` so the two
+/// returns itself (so a `--fresh`-style redirect is a no-op there). The
+/// `cli/src/fno/paths.py` leg spells it too, so the two
 /// layers cannot drift (; review HIGH). Shared by the client `--fresh`
 /// dispatch (`bin/client.rs`).
 ///
@@ -916,7 +910,7 @@ pub(crate) fn resolve_loose(path: &Path) -> PathBuf {
 }
 
 /// `$HOME`, or `/` when the environment lost it. Shared by the install and
-/// reclaim verbs, which both place state under the user's home.
+/// reclaim commands, which both place state under the user's home.
 pub(crate) fn dirs_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -987,20 +981,20 @@ fn repo_root_of(path: &Path) -> Option<PathBuf> {
 /// canonicalize the deepest existing ancestor and re-append the missing tail,
 /// so a symlinked root (/var vs /private/var) compares equal even when the
 /// destination's own directory is created only by the move itself.
-fn canonical_best_effort(path: &Path) -> PathBuf {
+pub(crate) fn canonical_best_effort(path: &Path) -> PathBuf {
     let mut missing: Vec<std::ffi::OsString> = Vec::new();
     let mut probe = path.to_path_buf();
     loop {
-        match probe.parent() {
-            Some(parent) if probe.file_name().is_some() => {
-                if let Ok(canonical) = std::fs::canonicalize(parent) {
-                    let mut out = canonical;
-                    for component in missing.iter().rev() {
-                        out.push(component);
-                    }
-                    return out;
-                }
-                missing.push(probe.file_name().unwrap().to_os_string());
+        if let Ok(canonical) = std::fs::canonicalize(&probe) {
+            let mut out = canonical;
+            for component in missing.iter().rev() {
+                out.push(component);
+            }
+            return out;
+        }
+        match (probe.file_name(), probe.parent()) {
+            (Some(name), Some(parent)) => {
+                missing.push(name.to_os_string());
                 probe = parent.to_path_buf();
             }
             _ => return path.to_path_buf(),
@@ -1099,6 +1093,22 @@ pub fn worktree_space_dir_opt(cwd: &Path) -> Option<PathBuf> {
 /// `<checkout>/.fno/events.jsonl` once on first resolve so appenders never
 /// split the file across the two locations; one contract for every reader
 /// and `fno-agents state path events`.
+/// The project journal as Python `paths.project_events_json` reads it: the
+/// `FNO_EVENTS_PATH` pin a harness sets, else the space journal of
+/// `$FNO_REPO_ROOT`, else of the cwd's repository. A caller that already
+/// holds its own root uses [`events_path`] instead.
+pub fn project_events_path() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_EVENTS_PATH").filter(|v| !v.is_empty()) {
+        return PathBuf::from(pin);
+    }
+    let anchor = std::env::var_os("FNO_REPO_ROOT")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    events_path(&anchor)
+}
+
 pub fn events_path(cwd: &Path) -> PathBuf {
     let path = space_dir(cwd).join("events.jsonl");
     migrate_from_checkout(

@@ -1,9 +1,9 @@
 # CLONE_ONLY_SCRIPTS - the allowlist for `fno doctor lint shellout-drift` (US4).
 #
-# Every repo-root script that a `cli/src/fno/` verb still shells out to MUST be
-# listed here, and each entry's verb MUST degrade on a bare `pip install fno`
+# Every repo-root script that a `cli/src/fno/` command still shells out to MUST be
+# listed here, and each entry's command MUST degrade on a bare `pip install fno`
 # (exit non-zero with a non-empty actionable message, never a 127, a panic, or
-# a silent exit). The guard PROVES the degrade by invoking the verb in a
+# a silent exit). The guard PROVES the degrade by invoking the command in a
 # no-script environment - so adding a line here without a real degrade path
 # fails CI (AC4-EDGE), and removing the elimination of a shell-out (or adding a
 # new one) without listing it here fails CI (AC4-ERR).
@@ -14,24 +14,27 @@
 # the guard.
 #
 # Format, one per line:
-#   <repo-relative script path> :: <fno verb + args used to prove it degrades>
-# Blank lines and lines starting with # are ignored. The verb args are passed
+#   <repo-relative script path> :: <fno command + args used to prove it degrades>
+# Blank lines and lines starting with # are ignored. The command args are passed
 # verbatim to the `fno` CLI in a no-script env (FNO_REPO_ROOT -> empty dir,
 # CLAUDE_PLUGIN_ROOT unset, cwd outside any repo).
 #
 # Scope note: the guard scans for shell-outs whose script path is rooted at the
 # SHARED resolvers `resolve_repo_root()` / `resolve_plugin_script()` (the idiom
-# every plugin-script call site uses). A verb that roots a shell-out via a
+# every plugin-script call site uses). A command that roots a shell-out via a
 # private `git rev-parse` helper instead is invisible to the guard; the correct
 # fix is to re-root it on the shared resolver and add a degrade branch + an
 # allowlist entry below (as `fno doctor lint flock-pattern` now does), not to leave it
 # private and unlisted.
 
 
-# fno doctor bundle {build,check,lint} - operate on the plugin's skills/ source tree.
-scripts/generate-skill-bundles.sh :: bundle
-scripts/lint/check-skill-bundles-fresh.sh :: bundle check
-scripts/lint/no-cross-skill-runtime-calls.sh :: bundle lint
+# The bundle shell-outs (scripts/generate-skill-bundles.sh,
+# scripts/lint/check-skill-bundles-fresh.sh,
+# scripts/lint/no-cross-skill-runtime-calls.sh) dropped from this list in
+# the PR that deleted the Python bundle CLI: the guard scans cli/src/fno,
+# and the caller there is gone (the native `fno doctor bundle` resolves the
+# same scripts from the Rust side, outside this guard's scope). INTERNALIZED
+# for the Python tree the same way the pr-*.sh entries below were.
 
 
 # fno doctor lint flock-pattern - repository linting script remains clone-only and
@@ -40,13 +43,9 @@ scripts/lint-flock-pattern.sh :: lint flock-pattern
 
 # fno do pr {merge,verify,rebase} - INTERNALIZED. The four pr-*.sh
 # were ported to in-package Python (fno/pr/_merge.py, _verify.py, _rebase.py)
-# shelling to gh/git, so these verbs run from a bare pip install with no
+# shelling to gh/git, so these commands run from a bare pip install with no
 # repo-root script. No allowlist entry remains; the drift guard now passes
 # without flagging the pr paths.
-
-# fno workspace worktree {status,cleanup,archive} - git worktree lifecycle bookkeeping
-# over the repo's worktree-lifecycle script.
-scripts/lib/worktree-lifecycle.sh :: worktree status
 
 # fno doctor lint stale-skill-refs - the stale-skill-reference audit gate; operates on
 # the repo's skills/ source tree (re-homed from `fno consolidation audit`).
@@ -67,7 +66,7 @@ scripts/ci/check-preamble-budget.sh :: lint preamble-budget
 scripts/ci/check-no-internal-refs.sh :: lint internal-refs
 
 # fno do plan fidelity - a plan with `carveouts: forbidden` runs the PR body through
-# the one body parser. The probe verb refuses on its missing plan. The absent-script
+# the one body parser. The probe command refuses on its missing plan. The absent-script
 # refusal ("carve-out check unreadable") is proven by a unit test in
 # cli/tests/scoreboard/test_plan_fidelity.py.
 scripts/ci/check-oos-tracked.sh :: plan fidelity drift-probe.md

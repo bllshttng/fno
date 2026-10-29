@@ -17,14 +17,13 @@ supersedes the drift-check).
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
-from tests._init_space import STUB, install_state_path_stub
+from tests._init_space import install_state_path_stub
 
 _REPO_ROOT = Path(__file__).parent.parent.parent.parent
 _INIT_SCRIPT = _REPO_ROOT / "hooks" / "helpers" / "init-target-state.sh"
@@ -72,13 +71,13 @@ _FNO_STUB = """\
 # Test stub: answers the fno round-trips hooks/helpers/init-target-state.sh makes
 # in a bare env (no graph, no config), so this hook test pays ~0s/round-trip
 # instead of ~0.45s of real CLI startup - the load-sensitive cost behind the
-# flake (a different size profile blew the timeout each full-suite run). Per-verb
+# flake (a different size profile blew the timeout each full-suite run). Per-command
 # exit status below was captured from ONE real bare-env run (HOME=tmp, no graph),
 # not guessed. NOT a blanket exit: the hook branches on fno's exit code (claim
 # acquire sets _NODE_OWNED), so a flipped code changes the manifest path. stdout
 # is empty everywhere; the hook's degrade paths (|| true, sanctioned-empty
 # _SESSION_PID at init-target-state.sh:1044) handle it byte-for-byte as today's
-# real-fno runs. Unknown verbs exit nonzero = conservative bare-env behavior
+# real-fno runs. Unknown commands exit nonzero = conservative bare-env behavior
 # (real fno fails without a graph).
 printf '%s\\n' "$*" >> "${FNO_CALLS_LOG:-./fno-calls.log}"
 case "$1" in
@@ -362,15 +361,15 @@ def _run_without_fno(tmp_path: Path, target_input: str) -> subprocess.CompletedP
     home_dir = tmp_path / "home"
     home_dir.mkdir(exist_ok=True)
     (home_dir / ".fno").mkdir(exist_ok=True)
-    # The run-id mint rides the fno-agents test double: `fno` itself stays
-    # absent, which is the degraded hold-gate leg under test, while the mint
-    # still answers (a binary-less init refuses before the mint's own error).
-    # No FNO_TEST_SPACE: the legacy $REPO_ROOT/.fno fallback stays pinned.
+    # The target-family port moved the hold doors onto fno-agents, the same
+    # binary the run-id mint rides, so the python-era fiction that split them
+    # (fno absent while fno-agents answers) no longer exists: with the door
+    # binary present the hold state IS checkable, and proceeding is correct.
+    # The degraded refusal under test is the true binary-less one - no fno and
+    # no fno-agents - and it fires before the mint is ever reached. No
+    # FNO_TEST_SPACE: the legacy $REPO_ROOT/.fno fallback stays pinned.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    stub_copy = bin_dir / "fno-agents"
-    shutil.copyfile(STUB, stub_copy)
-    stub_copy.chmod(0o755)
     env = {
         "HOME": str(home_dir),
         "PATH": f"{bin_dir}:/usr/bin:/bin",
@@ -400,7 +399,7 @@ def test_fno_absent_refuses_named_node_hold_lookup(tmp_path):
 
 def test_env_grant_honored_on_operator_origin_run(tmp_path):
     """AC-HP: TARGET_AUTO_MERGE=1 on an attended, agent-free run folds to the
-    env grant. This is the documented per-run arm the merge verb and finalize
+    env grant. This is the documented per-run arm the merge command and finalize
     honor; the role's own origin bar (no FNO_AGENT_SELF) decides who holds
     it."""
     proc = _run_init_script(

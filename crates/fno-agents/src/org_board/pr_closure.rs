@@ -1,6 +1,6 @@
 //! The one parser and renderer for the PR-body closure line.
 //!
-//! The line format lives here and nowhere else: the Python `closure.py`
+//! The line format lives here and nowhere else:
 //! readers forward to this module through `fno-agents pr closure parse|render`,
 //! so Python and Rust can never disagree about what a body claims. Writers
 //! emit only the `Fixes` spelling; readers also accept the retired
@@ -93,7 +93,7 @@ pub(crate) fn parse(body: &str) -> Vec<String> {
 
 /// One approved hand-off of a PR from the branch's node to the right one:
 /// `Retarget <from> <to> <approval>` on its own line, where approval is a
-/// mail id (`msg-...`) or a ruling id (`d-...`).
+/// mail id (`fmail-...`, or the older `msg-...`) or a ruling id (`d-...`).
 pub(crate) struct Retarget {
     pub from: String,
     pub to: String,
@@ -125,7 +125,7 @@ fn retarget_line_rest(line: &str) -> Option<&str> {
 pub(crate) fn retarget(body: &str) -> Option<Retarget> {
     let id_re = regex::Regex::new(&format!("^{NODE_ID_BODY}$")).expect("static regex");
     let approval_re =
-        regex::Regex::new(r"^(msg-[0-9a-f]{6,}|d-[0-9a-f]{8})$").expect("static regex");
+        regex::Regex::new(r"^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$").expect("static regex");
     let mut last: Option<Retarget> = None;
     for line in body.lines() {
         let Some(rest) = retarget_line_rest(line) else {
@@ -196,7 +196,7 @@ where
 
 /// `fno-agents pr-closure-parse|pr-closure-render`: the Python forwarders'
 /// door. One JSON payload on stdin, one JSON answer on stdout (the house
-/// transport `fno.rust_binary.verb_call` speaks). Parse reads `{"body": s}`
+/// transport `fno.rust_binary.command_call` speaks). Parse reads `{"body": s}`
 /// and answers `{"ids": [...]}`; render reads `{"ids": [...]}` and answers
 /// `{"line": s}` (empty when nothing well-formed remains).
 pub fn run(args: &[String]) -> i32 {
@@ -253,11 +253,11 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-/// The whole `pr-closure-*` verb door. parse/render stay on the JSON
-/// forwarder transport above; the produce verbs (branch-ids, ensure,
+/// The whole `pr-closure-*` command door. parse/render stay on the JSON
+/// forwarder transport above; the produce commands (branch-ids, ensure,
 /// trailer, bind-created, context) live in [`super::pr_closure_produce`].
 /// The trailer leg is argv-driven and must never block on stdin.
-pub fn run_verb(args: &[String]) -> i32 {
+pub fn run_command(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("pr-closure-parse" | "pr-closure-render") => run(args),
         _ => super::pr_closure_produce::run(args),

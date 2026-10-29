@@ -1,0 +1,1 @@
+{"args": ["alt", "--config-dir", "alt"], "now": 1800000000.0, "expect": {"code": 1, "stdout": "", "stderr": "error: --config-dir must be absolute (got 'alt')\n", "global": null, "project": null, "store": {}}}

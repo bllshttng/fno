@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -153,11 +154,11 @@ def resolve_binary() -> Optional[Path]:
 
 
 def call_binary_json(
-    verb: str, args: Sequence[str] = (), *, timeout: Optional[float] = 60,
+    command: str, args: Sequence[str] = (), *, timeout: Optional[float] = 60,
     binary: Optional[Path] = None,
     input_text: Optional[str] = None,
 ) -> tuple[Optional[str], Any]:
-    """Run one direct ``fno-agents`` client verb and parse its JSON stdout.
+    """Run one direct ``fno-agents`` client command and parse its JSON stdout.
 
     ``input_text`` feeds the child's stdin when given, so a large payload
     rides stdin instead of an argv entry (the OS per-argument cap would
@@ -169,7 +170,7 @@ def call_binary_json(
     closed, raise, or exit) - this seam only standardizes the door.
 
     ``binary`` pre-resolves the door; the dev build outranks the stale
-    installed copy (the rule :func:`verb_call` states).
+    installed copy (the rule :func:`command_call` states).
     """
     import json
     import subprocess
@@ -179,7 +180,7 @@ def call_binary_json(
         return ("fno-agents binary not found", None)
     try:
         proc = subprocess.run(
-            [str(binary), verb, *args], capture_output=True, text=True, timeout=timeout,
+            [str(binary), command, *args], capture_output=True, text=True, timeout=timeout,
             input=input_text,
         )
     except subprocess.TimeoutExpired:
@@ -188,7 +189,7 @@ def call_binary_json(
     except OSError as exc:
         return (str(exc)[:200], None)
     if proc.returncode != 0:
-        return ((proc.stderr or "verb failed").strip()[:200], None)
+        return ((proc.stderr or "command failed").strip()[:200], None)
     try:
         return (None, json.loads(proc.stdout or "null"))
     except ValueError:
@@ -211,16 +212,44 @@ def style_receipt(
     return call_binary_json("style-check", argv, input_text=text)
 
 
+def style_receipt_advisory(text: str) -> Optional[dict]:
+    """The style receipt for an advisory read: None on a door failure.
+
+    ``word_cap`` rides the receipt (the configured ``style.word_cap.encounter``
+    or the model's 80 default), so an advisory learns cap and count in one
+    spawn instead of its own config read.
+    """
+    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
+    if err or not isinstance(receipt, dict):
+        return None
+    return receipt
+
+
 def style_word_count(text: str) -> int:
     """Masked word count through the style door; 0 when the door fails.
 
     The counting sites are advisory (a ledger row, a long-note nudge), so a
     door failure counts zero rather than blocking the send.
     """
-    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
-    if err or not isinstance(receipt, dict):
-        return 0
+    receipt = style_receipt_advisory(text) or {}
     return int(receipt.get("word_count") or 0)
+
+
+def settings_read(detect: Optional[str] = None) -> Optional[dict]:
+    """One settings fact-set read through the door; None when it fails.
+
+    The receipt carries the node-id knobs (``prefix``, ``hex_width``), the
+    config ``candidates``, the work-map ``projects`` pairs, and the optional
+    cwd -> project ``project`` answer. Callers are fail-open resolvers, so a
+    door failure reads as None and the caller keeps its legacy default.
+    """
+    import json
+
+    request = json.dumps({"detect": detect}) if detect is not None else "{}"
+    err, receipt = call_binary_json("settings-read", [], input_text=request)
+    if err or not isinstance(receipt, dict):
+        return None
+    return receipt
 
 
 def style_word_count_checked(text: str) -> int:
@@ -241,20 +270,20 @@ def style_word_count_checked(text: str) -> int:
 def mint_fno_id() -> str:
     """Footnote's one session-id mint lives in Rust: `fno-agents state mint-id`.
 
-    Raises VerbUnavailable when the binary is missing or answers nothing; no
+    Raises CommandUnavailable when the binary is missing or answers nothing; no
     Python-side fallback exists, by the rule that keeps the mint single.
     """
     import subprocess
 
     binary = resolve_binary()
     if binary is None:
-        raise VerbUnavailable("fno-agents binary not found; run `fno doctor update`")
+        raise CommandUnavailable("fno-agents binary not found; run `fno doctor update`")
     proc = subprocess.run(
         [str(binary), "state", "mint-id"], capture_output=True, text=True, timeout=10
     )
     minted = proc.stdout.strip()
     if proc.returncode != 0 or not minted:
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             (proc.stderr or "fno-agents state mint-id answered nothing").strip()[:200]
         )
     return minted
@@ -269,24 +298,62 @@ def delivered_terminals() -> frozenset:
     The set counts a run DELIVERED for telemetry: DonePRGreen, DoneAdvisory,
     DoneDelivery, DoneBatched. DoneAwaitingMerge and DoneUnreviewed are
     deliberately absent (complete-but-unmerged and waiting are not landed).
-    Raises VerbUnavailable when the binary is missing or answers nothing; no
+    Raises CommandUnavailable when the binary is missing or answers nothing; no
     Python-side fallback exists, by the rule that keeps the vocabulary single.
     """
     error, payload = call_binary_json(
         "terminals", timeout=15, binary=find_dev_binary() or resolve_binary()
     )
     if error is not None:
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             "the delivered-terminal vocabulary lives in the fno-agents binary"
             " (loopcheck.rs TerminationReason::is_delivered) and the read"
             f" failed: {error}; run `fno doctor update --rust` or set FNO_AGENTS_BIN"
         )
     names = payload.get("delivered") if isinstance(payload, dict) else None
     if not names or not all(isinstance(n, str) and n for n in names):
-        raise VerbUnavailable(
+        raise CommandUnavailable(
             f"fno-agents terminals answered no usable delivered list: {payload!r}"[:200]
         )
     return frozenset(names)
+
+
+def sidecar_get(id: str) -> dict:
+    """One id's sidecar fields through the native tracker door.
+
+    Answers a plain dict (sparse: nulls dropped, the list fields defaulted
+    to ``[]``). A missing row or file answers the empty shape (``id`` plus
+    the list defaults) - the "no sidecar yet" case, never an error. A file
+    that fails the sidecar validation raises, the way the old model's
+    ValidationError did. The backend is the door's own resolution; the
+    guard helper lives in ``fno.graph.api``.
+    """
+    out = command_call(["backlog", "get"], {"tracker": "sidecar-get", "id": id})
+    if out.get("error"):
+        raise CommandUnavailable(f"sidecar read refused: {out['error']}")
+    return out["sidecar"]
+
+
+def sidecar_all() -> dict:
+    """Every id's sidecar fields in one native read (the scan primitive).
+
+    Graph mode projects the store's rows (archived residents excluded,
+    invalid projections skipped); an external backend decodes the per-id
+    files. Values are plain JSON - ``sc.get("cwd")`` style access.
+    """
+    return command_call(["backlog", "get"], {"tracker": "sidecar-all"})["sidecars"]
+
+
+def sidecar_set(id: str, fields: dict) -> Path:
+    """Merge ``fields`` into the id's sidecar under the selected backend's
+    own store: the graph row under the store's optimistic write cycle, the
+    per-id file otherwise. Returns the physical path written. A key outside
+    the sidecar set refuses - the tracker owns it.
+    """
+    out = command_call(["backlog", "get"], {"tracker": "sidecar-set", "id": id, "fields": fields})
+    if out.get("error"):
+        raise CommandUnavailable(f"sidecar write refused: {out['error']}")
+    return Path(out["saved"])
 
 
 def resolve_installed_binary() -> Optional[Path]:
@@ -331,7 +398,7 @@ def find_dev_binary() -> Optional[Path]:
     return newest_runnable([base / p / BINARY_NAME for p in ("release", "debug")])
 
 
-class VerbUnavailable(RuntimeError):
+class CommandUnavailable(RuntimeError):
     """The fno-agents binary is missing, failed, or answered malformed JSON."""
 
     # Structured exit code for the non-zero-exit failure; None on the other
@@ -341,10 +408,10 @@ class VerbUnavailable(RuntimeError):
     returncode: Optional[int] = None
 
 
-def verb_call(
-    verb: "str | list[str]",
+def command_call(
+    command: "str | list[str]",
     payload: dict,
-    unavailable: type = VerbUnavailable,
+    unavailable: type = CommandUnavailable,
     *,
     timeout: float = 30,
     passthrough_stderr: bool = False,
@@ -354,7 +421,7 @@ def verb_call(
     installed copy. Raises the caller's ``unavailable`` exception - a named
     refusal, never a silent fallback.
 
-    ``timeout`` defaults to the 30s a pure local resolver needs. A verb that
+    ``timeout`` defaults to the 30s a pure local resolver needs. A command that
     makes its own network round trips must raise it, or the door reports the
     owner unreachable for a decision that was merely still running - and an
     unread authorization refuses the merge.
@@ -374,10 +441,10 @@ def verb_call(
             "the fno-agents binary was not found; reinstall fno,"
             " run `fno doctor update --rust`, or set FNO_AGENTS_BIN"
         )
-    verb_display = verb if isinstance(verb, str) else " ".join(verb)
+    command_display = command if isinstance(command, str) else " ".join(command)
     try:
         proc = subprocess.run(
-            [str(binary), *(verb if isinstance(verb, list) else [verb])],
+            [str(binary), *(command if isinstance(command, list) else [command])],
             input=json.dumps(payload),
             stdout=subprocess.PIPE,
             stderr=None if passthrough_stderr else subprocess.PIPE,
@@ -385,11 +452,11 @@ def verb_call(
             timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise unavailable(f"fno-agents {verb_display} failed: {exc}") from exc
+        raise unavailable(f"fno-agents {command_display} failed: {exc}") from exc
     if proc.returncode != 0:
         # With passthrough_stderr the child owns the real stderr (None here),
         # so name where it went instead of crashing on strip().
-        detail = f"fno-agents {verb_display} exited {proc.returncode}"
+        detail = f"fno-agents {command_display} exited {proc.returncode}"
         if passthrough_stderr:
             detail += " (its stderr went to your terminal)"
         else:
@@ -400,14 +467,14 @@ def verb_call(
     try:
         return json.loads(proc.stdout)
     except ValueError as exc:
-        raise unavailable(f"fno-agents {verb_display} bad output: {exc}") from exc
+        raise unavailable(f"fno-agents {command_display} bad output: {exc}") from exc
     finally:
         if os.environ.get("FNO_ROUTE_SLOT_DEBUG"):
             print(json.dumps({"payload": payload}), flush=True)
 
 
-def chats_verb(args: "list[str]", payload: dict) -> dict:
-    return verb_call(["chats", *args], payload, timeout=30)
+def chats_command(args: "list[str]", payload: dict) -> dict:
+    return command_call(["chats", *args], payload, timeout=30)
 
 
 def resolve_front_binary() -> Optional[Path]:
@@ -420,7 +487,21 @@ def resolve_front_binary() -> Optional[Path]:
             return root / profile / "fno"
     return Path(found) if (found := shutil.which("fno")) else None
 
-class FrontTimeout(VerbUnavailable):
+
+def _update_signpost() -> None:
+    """The no-front-door spelling: the updater is native to the Rust front
+    door, so this leaf only names the one command that installs it."""
+    # Lazy: this module is imported by crates-side integration tests whose
+    # interpreter has no typer, and this leaf is its only user.
+    import typer
+
+    typer.echo(
+        "fno: the updater is native to the Rust front door; install it from the source checkout with "
+        "`cargo install --locked --path <src>/crates/fno`, then re-run `fno doctor update`."
+    )
+    raise typer.Exit(code=2)
+
+class FrontTimeout(CommandUnavailable):
     """The law door gave no answer in time. A retry meets the same wait."""
 
 
@@ -441,7 +522,7 @@ def _law_door_timeout() -> float:
 
 
 def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
-    """One round-trip with the front's law door, fail-closed like verb_call."""
+    """One round-trip with the front's law door, fail-closed like command_call."""
     import json
     import subprocess
 
@@ -450,7 +531,7 @@ def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
 
     binary = resolve_front_binary()
     if binary is None:
-        raise VerbUnavailable("the native fno binary was not found")
+        raise CommandUnavailable("the native fno binary was not found")
     try:
         done = subprocess.run([str(binary), "inbox", "law", "match"],
             input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
@@ -465,5 +546,64 @@ def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
             f"`fno inbox law match` gave no answer in {timeout:g}s (machine load {load})"
         ) from None
     if done.returncode != 0:
-        raise VerbUnavailable(f"fno inbox law match exited {done.returncode}: {done.stderr.strip()}")
+        raise CommandUnavailable(f"fno inbox law match exited {done.returncode}: {done.stderr.strip()}")
     return json.loads(done.stdout)
+
+
+def find_transcript(session_id: str) -> Optional[Path]:
+    """The native doctor op door's transcript-by-uuid answer; None when absent.
+
+    The deleted Python leg's own walk and the door share one resolver, so the
+    confirm target for `_mux_recipient_transcript` reads through the same
+    surface the self-diagnostic uses: a missing binary, non-zero exit,
+    timeout, or a null path all fail the confirm closed.
+    """
+    import json
+    import subprocess
+
+    binary = resolve_front_binary()
+    if binary is None:
+        return None
+    try:
+        done = subprocess.run(
+            [str(binary), "doctor", "--find-transcript", session_id],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        payload = json.loads(done.stdout)
+    except ValueError:
+        return None
+    found = payload.get("path")
+    return Path(found) if isinstance(found, str) and found else None
+
+
+def notify_operator(title: str, body: str, pointer: str = "") -> tuple[int, str]:
+    """One operator notice through the native front door: ``(code, err)``.
+
+    The dispatch (mux clients, OS toast, sink lane) answers in-process in the
+    Rust command; this Python seam only carries the argv, so the notify decision
+    table has one owner. ``err`` is the command's one-line degrade message when
+    the code is non-zero, else empty.
+    """
+    import subprocess
+
+    binary = resolve_front_binary()
+    if binary is None:
+        return 1, "fno inbox notify: the native fno binary was not found"
+    argv = [str(binary), "inbox", "notify"]
+    if pointer:
+        argv += ["--pointer", pointer]
+    argv += ["--", title, body]
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=15.0)
+    except subprocess.TimeoutExpired:
+        return 1, "fno inbox notify: no answer in 15s"
+    except OSError as exc:
+        return 1, str(exc)[:200]
+    return done.returncode, (done.stderr or "").strip()

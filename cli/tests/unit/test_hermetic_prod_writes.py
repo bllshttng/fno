@@ -13,10 +13,10 @@ The cause was a private path builder: ``spawn_think._events_path`` composed
 ``.fno/events.jsonl`` is a symlink to the canonical journal, so a worker
 running the suite inside a worktree reached the operator's file.
 
-These tests pin the fix at both altitudes: the caller that had the bug, and the
-shared seam that stops the next hand-built path instead of letting it land in
-production. The notification pair covers the same class on the other
-surface a test can reach the operator through.
+The caller that had the bug is now Rust, whose events path reads the journal
+pin first. These tests pin the shared seam that stops the next hand-built path
+instead of letting it land in production. The notification pair covers the
+same class on the other surface a test can reach the operator through.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from pathlib import Path
 import pytest
 
 from fno.events import HermeticEscapeError, _build, append_event
-from fno.provenance import spawn_think as st
 
 _DATA = {
     "node_id": "x-2222aaaa",
@@ -39,24 +38,6 @@ _DATA = {
 
 def _event() -> dict:
     return _build("think_offered", "backlog", dict(_DATA))
-
-
-# ---------------------------------------------------------------------------
-# The caller that had the bug
-# ---------------------------------------------------------------------------
-
-
-def test_unpathed_events_path_ignores_the_process_cwd(monkeypatch, tmp_path):
-    """The specific regression: chdir must not steer the journal."""
-    from fno.paths import project_events_json
-
-    pinned = tmp_path / "sandbox" / "events.jsonl"
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(pinned))
-    decoy = tmp_path / "decoy"
-    decoy.mkdir()
-    monkeypatch.chdir(decoy)
-    assert st._events_path(None) != decoy / ".fno" / "events.jsonl"
-    assert st._events_path(None) == project_events_json()
 
 
 # ---------------------------------------------------------------------------
@@ -129,30 +110,6 @@ def test_gate_escape_failure_log_respects_the_sandbox(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The operator's screen
-# ---------------------------------------------------------------------------
-
-
-def test_notification_is_suppressed_in_a_hermetic_run(monkeypatch):
-    """No test may reach the operator's screen, on either notifier.
-
-    Reported as delivered because a caller that branches on a non-zero code
-    (``fno.mail.cli`` escalates on one) would otherwise take a path the test
-    never asked for.
-    """
-    import fno.notify._impl as impl
-
-    def _boom(*a, **k):  # noqa: ANN002, ANN003
-        raise AssertionError("a hermetic run dispatched a real OS notification")
-
-    monkeypatch.setattr(impl.subprocess, "run", _boom)
-    monkeypatch.setattr(impl.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(impl.shutil, "which", lambda _n: "/usr/bin/notify-send")
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    assert impl.send_notification("t", "m") == (0, "")
-
-
-# ---------------------------------------------------------------------------
 # The third declaration state: no pin at all, under a test runner (x-3d21)
 # ---------------------------------------------------------------------------
 #
@@ -189,21 +146,3 @@ def test_no_pin_outside_a_test_process_is_production(monkeypatch):
     monkeypatch.delenv("FNO_TEST_HERMETIC", raising=False)
     monkeypatch.delitem(sys.modules, "pytest")
     assert declared_root(_OUTSIDE) == _OUTSIDE
-
-
-def test_doctor_test_build_dir_stays_under_the_sandbox():
-    """The child CARGO_BUILD_BUILD_DIR must live in the sandbox, never operator state.
-
-    The first CI run after the build-dir feature shipped wrote 1298 cargo
-    intermediates into the runner's real ``~/.fno/cargo-build``: the child env
-    computed the value from the PARENT's state root, and the state canary
-    refused the whole shard. This pins the value under the sandbox the child
-    actually runs in.
-    """
-    from fno import test_cmd
-
-    env = test_cmd._child_env(Path(__file__).resolve().parents[2])
-    value = env["CARGO_BUILD_BUILD_DIR"]
-    base = Path(value.split("{workspace-path-hash}")[0])
-    assert base.is_relative_to(test_cmd._sandbox()), value
-    assert value.endswith(".fno/cargo-build/{workspace-path-hash}")

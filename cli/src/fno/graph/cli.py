@@ -22,10 +22,10 @@ from typing import Any, List, Literal, Optional
 import typer
 
 from fno.tombstones import tombstone_group_cls
-# the external-backend verb classification lives beside its data
-from fno.graph._verb_classification import (
+# the external-backend command classification lives beside its data
+from fno.graph._command_classification import (
     _NO_GRAIN_ON_EXTERNAL_BACKEND,
-    classify_backlog_verbs,
+    classify_backlog_commands,
 )
 from fno.graph.api import wire_rows  # noqa: F401 - re-export for lazy importers
 from fno.graph.node_builder import (  # noqa: F401 - re-export for lazy importers
@@ -50,17 +50,20 @@ cli = typer.Typer(
     name="graph",
     help="Feature graph management",
     no_args_is_help=True,
-    # Removed verbs under `backlog` refuse by name and say what replaced them,
+    # Removed commands under `backlog` refuse by name and say what replaced them,
     # instead of failing with the same message a typo gets.
     cls=tombstone_group_cls("backlog"),
     # The curated menu below is nouns; this line is the answer to "can I take
     # that back". It sits on the group help because that is the surface someone
-    # deciding what is possible actually reads - a correction verb nobody can
+    # deciding what is possible actually reads - a correction command nobody can
     # find is, for decision-making purposes, a correction that does not exist.
     epilog=(
         "Corrections: reopen (undo done) | remove (hard delete) | unarchive | "
         "undefer | unqueue | unsupersede | unclaim. All hidden; "
-        "`fno help backlog --all` lists every verb."
+        "`fno-py help backlog --all` lists every command. "
+        "JSON contract: `-J` sits before the command (`fno backlog -J get <id>`), "
+        "and `get` prints one JSON document on stdout - the node object on a "
+        "hit, `{\"ok\": false, \"error\": ...}` with rc 1 on a miss."
     ),
 )
 
@@ -70,7 +73,7 @@ from fno.graph.triage_forward import register_triage_forward  # noqa: E402
 register_triage_forward(cli)
 from fno.graph.native_forward import register_native_forward  # noqa: E402
 
-# The create/epic verbs whose bodies ported to the dispatcher; the wheel
+# The create/epic commands whose bodies ported to the dispatcher; the wheel
 # keeps the route (hidden, whole-argv forward) so this wheel still serves them.
 register_native_forward(cli, "intake")
 register_native_forward(cli, "decompose")
@@ -83,16 +86,14 @@ cli.command("worked", hidden=True)(_cmd_worked)
 
 
 # Node-lifecycle sub-apps folded under backlog (unit 6 of the  reorg):
-# annotate findings, carve-out records, and the retro harvest are all node
-# metadata operations. The old top-level spellings stay one-release shims
-# (fno.verb_moves); the mounts below are the canonical homes.
+# annotate findings and carve-out records are node metadata operations. The
+# retro harvest is native (`fno backlog retro`). The old top-level spellings stay one-release shims
+# retired at the front door (command-names.tsv); the mounts below are the canonical homes.
 from fno.annotate.cli import annotate_app as _annotate_app  # noqa: E402
 from fno.carveout.cli import carveout_app as _carveout_app  # noqa: E402
-from fno.retro.cli import retro_app as _retro_app  # noqa: E402
 
 cli.add_typer(_annotate_app, name="annotate", hidden=True)
 cli.add_typer(_carveout_app, name="carveout", hidden=True)
-cli.add_typer(_retro_app, name="retro", hidden=True)
 
 
 # Selection-time enforcement (): a node another session is actively
@@ -105,7 +106,7 @@ from fno.graph.statuses import live_claimed_node_ids as _live_claimed_node_ids  
 
 def _has_unmerged_open_pr(e: dict) -> bool:
     """True when a node already carries a PR but is not yet closed (done) -
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     if e.get("completed_at"):
         return False  # already done; status derivation bucketed it out of ready
@@ -143,7 +144,7 @@ def _needs_design(e: dict) -> bool:
 
 def _container_ids(entries: list[dict]) -> set[str]:
     """Ids of nodes that are some other node's ``parent`` - i.e. epics/containers.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     return {
         p
@@ -164,9 +165,11 @@ def _graph_callback(
         help="Output structured JSON to stdout. Diagnostics go to stderr.",
     ),
 ) -> None:
-    from fno.handoff.output import merge_json_flag
-
-    merge_json_flag(ctx, json_output)
+    # merge_json_flag's 3-line merge, inlined: the handoff module
+    # dies with the family port and this caller survives it.
+    ctx.ensure_object(dict)
+    if json_output:
+        ctx.obj["json"] = True
 
 
 def _graph_path() -> Path:
@@ -188,7 +191,7 @@ def _display_entries(reader: str, *, strict: bool = False) -> list[dict]:
     Mutation paths keep ``read_graph`` and get the shared external refusal
     from task 4.2 instead.
     """
-    from fno.tracker.metadata import ExternalMetadataUnavailable, read_entries
+    from fno.graph.api import ExternalMetadataUnavailable, read_entries
 
     try:
         return read_entries(reader, strict=strict)
@@ -217,7 +220,7 @@ GRAPH_UNREADABLE_EXIT = 3
 
 
 def _resolve_entries_or_exit(id: str):
-    """Read the graph strictly for a resolution verb.
+    """Read the graph strictly for a resolution command.
 
     Returns the entries on a clean read (populated or empty). On an unreadable
     graph, prints a message that names the read failure and the path -- never
@@ -239,7 +242,7 @@ def _resolve_entries_or_exit(id: str):
 def _live_worker(node_id: str) -> Optional[str]:
     """The holder of a live/suspect ``node:<id>`` claim, else None.
 
-    Retained for the decompose surface's adopt guard; the contain verb's
+    Retained for the decompose surface's adopt guard; the contain command's
     probe moved to the native leg, which reads the same lockfiles.
     """
     from fno.claims.core import claim_status
@@ -289,7 +292,7 @@ def _resolve_asserted_id(
 
 
 def _refuse_create_on_external_backend() -> None:
-    """Refuse node-creation verbs on a non-default backend.
+    """Refuse node-creation commands on a non-default backend.
 
     On an external backend, item creation lives in the tracker (GitHub Issues,
     Linear, ...); minting an ab- entry in graph.json would create a phantom item
@@ -297,9 +300,9 @@ def _refuse_create_on_external_backend() -> None:
     point (cmd_tree, and the native decompose/intake doors; add, idea and the new word
     answer natively and carry their own guard) so the guard is not decorative. A guard on only some reachable
     paths is the pitfall this exists to prevent; the parametrized test exercises
-    each path so a future creation verb that bypasses it fails loudly.
+    each path so a future creation command that bypasses it fails loudly.
     """
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     backend = active_backend_name()
     if backend != "graph":
@@ -347,7 +350,7 @@ def _validate_priority_or_exit(priority: str, *, blocks_everything: bool = False
 
 
 def _require_node_id(task_id: str) -> None:
-    """The shared node-id gate: one refusal text for every verb that takes one."""
+    """The shared node-id gate: one refusal text for every command that takes one."""
     from fno.graph._constants import has_node_id_prefix
 
     if has_node_id_prefix(task_id):
@@ -359,7 +362,7 @@ def _require_node_id(task_id: str) -> None:
 
 
 def _require_nodes(entries: "list[dict]", ids: "list[str]") -> None:
-    """The shared missing-node gate for the multi-id verbs."""
+    """The shared missing-node gate for the multi-id commands."""
     from fno.graph._intake import _find_node
 
     missing = [tid for tid in ids if _find_node(entries, tid) is None]
@@ -397,16 +400,47 @@ def _external_open_status(*, pr_number: Optional[int], plan_path: Optional[str])
     return "ready" if plan_path else "idea"
 
 
+class _TrackerNodeNotFound(RuntimeError):
+    """The native door answered ``not_found`` for one exact id."""
+
+
+class _TrackerDoorError(RuntimeError):
+    """The door answered a refusal payload (``{"error": ...}``) - the
+    backend op did not happen. The payload rides exit 0 by door contract,
+    and the old tracker client raised the same failures, so this raises
+    before a caller can read the dict as success."""
+
+
+def _tracker_door(payload: dict, *, timeout: float = 30) -> dict:
+    """One round-trip with the native tracker door (the read, close,
+    list-open and snapshot ops ride it). Refusals ride in the payload with
+    exit 0, so an ``{"error"}`` payload raises :class:`_TrackerDoorError` -
+    the close retry, the cascade and selection all key on the exception;
+    ``{"not_found": true}`` still rides for the caller's own message.
+    Transport failures raise CommandUnavailable. A backend op that
+    makes its own network round trips raises the timeout - a door reporting
+    the owner unreachable for a decision that was merely still running is
+    the wrong answer."""
+    from fno import rust_binary
+
+    out = rust_binary.command_call(["backlog", "get"], payload, timeout=timeout)
+    if out.get("error"):
+        raise _TrackerDoorError(str(out["error"]))
+    return out
+
+
 def _read_external_node_and_sidecar(id: str):
     """Exact-id tracker read plus sidecar load, shared by every external-backend
-    single-node renderer. Raises the tracker's ``NodeNotFound`` unchanged so
-    each caller keeps its own not-found message and exit code."""
-    from fno.tracker import get_tracker
-    from fno.tracker import sidecar as sidecar_store
+    single-node renderer. Raises :class:`_TrackerNodeNotFound` so each caller
+    keeps its own not-found message and exit code."""
+    from fno import rust_binary
 
-    node = get_tracker().read(id)
-    sc = sidecar_store.load(id)
-    return node, sc
+    # The door's read can make its own network round trips on an external
+    # backend; the old seam client raised this above the local 30s default.
+    node = _tracker_door({"tracker": "read", "id": id}, timeout=120)
+    if node.get("not_found"):
+        raise _TrackerNodeNotFound(id)
+    return node["node"], rust_binary.sidecar_get(id)
 
 
 class _ExternalSelectionError(RuntimeError):
@@ -420,15 +454,18 @@ class _ExternalSelectionError(RuntimeError):
 
 def _joined_open_candidates() -> list[dict]:
     """The transient joined selection model: the Rust snapshot exactly once.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
-    from fno.tracker import get_tracker
+    from fno.graph.api import active_backend_name
 
-    tracker = get_tracker()
+    backend = active_backend_name()
     try:
-        entries = tracker._call("snapshot")["entries"]  # type: ignore[attr-defined]
+        # The snapshot chains several backend round trips on an external
+        # tracker; the local 30s door default is not its budget.
+        out = _tracker_door({"tracker": "snapshot"}, timeout=120)
+        entries = out["entries"]
     except Exception as exc:  # noqa: BLE001 - name the backend, fail closed
-        raise _ExternalSelectionError(f"tracker {tracker.name!r} snapshot failed: {exc}") from exc
+        raise _ExternalSelectionError(f"tracker {backend!r} snapshot failed: {exc}") from exc
     return [e for e in entries if e.get("state") == "open"]
 
 
@@ -442,7 +479,7 @@ def _dispatch_node_summary(e) -> dict:
     `next` and `ready` both feed autonomous dispatch, so the two summaries
     are one thing spelled twice: the union of every field either surface
     carried, no filtering, no ordering. A key dropped here is dropped from
-    every dispatch decision - the silent `dispatch_verb` loss this exists
+    every dispatch decision - the silent `dispatch_command` loss this exists
     to prevent. Consumers read by key, so additions are safe.
     """
     return {
@@ -465,9 +502,9 @@ def _dispatch_node_summary(e) -> dict:
         # prefer it over cfg.model.
         "model": e.get("model"),
         # The per-node dispatch overrides must ride so the resolver's
-        # verb/brief routing fires for real graph nodes, not only for
+        # command/brief routing fires for real graph nodes, not only for
         # tests that inject them.
-        "dispatch_verb": e.get("dispatch_verb"),
+        "dispatch_command": e.get("dispatch_command"),
         "dispatch_brief": e.get("dispatch_brief"),
         "mission_id": e.get("mission_id"),
         "mission_wave": e.get("mission_wave"),
@@ -518,7 +555,7 @@ def cmd_next(
         descendants_of,
         _find_node,
     )
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     result: list = [None]
     project_filter = project
@@ -640,9 +677,9 @@ def cmd_next(
     ) -> list[dict]:
         by_id = {entry.get("id"): entry for entry in source_entries}
         container_ids = _container_ids(source_entries)
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
-        guards = verb_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": source_entries})["guards"]
+        guards = command_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": source_entries})["guards"]
         safe_rows = []
         for row in current_observer["rows"]:
             entry = by_id.get(row.get("id"))
@@ -718,7 +755,7 @@ def cmd_next(
     # failure never breaks dispatch. Under an external backend the receipts
     # explain the ACTUAL joined denominator, never the local graph.
     try:
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import command_call
 
         recv_entries = pre_entries or []
         scope_ids = (
@@ -733,7 +770,7 @@ def cmd_next(
             scope_ids,
             selection_claimed[0],
             datetime.now(timezone.utc),
-            verb_call(["backlog", "advance", "--stdin"], {"op": "staleness"})["days"],
+            command_call(["backlog", "advance", "--stdin"], {"op": "staleness"})["days"],
             mission=mission,
             roadmap_id=roadmap_id,
         )
@@ -770,7 +807,7 @@ def cmd_undispatched(
     """
     del all_, json_output  # the observer is JSON by contract and all-scoped by default
     from fno.backlog.undispatched import ObserverReadError, read_planned_unclaimed_from_entries
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() == "graph":
         typer.echo(
@@ -845,33 +882,34 @@ def _read_time_status_external(
     return _external_open_status(pr_number=pr_number, plan_path=plan_path)
 
 
-def _render_external_get(id: str, field: Optional[str]) -> None:
+def _render_external_get(id: str, field: Optional[str], ctx: typer.Context) -> None:
     """`backlog get` under an external backend: exact-id tracker read plus the
     sidecar, joined FOR DISPLAY ONLY (a render, not a stored convenience
     record). Byte-compatibility binds the graph mode above, not this branch."""
-    from fno.tracker.types import NodeNotFound
-
     try:
         node, sc = _read_external_node_and_sidecar(id)
-    except NodeNotFound:
-        typer.echo(
+    except _TrackerNodeNotFound:
+        message = (
             f"fno backlog get: no node matches '{id}' "
             "(an external backend resolves exact ids; slug/bare-hex are "
-            "footnote-minted)",
-            err=True,
+            "footnote-minted)"
         )
+        if bool(ctx.obj and ctx.obj.get("json", False)):
+            typer.echo(json.dumps({"ok": False, "error": message}))
+        else:
+            typer.echo(message, err=True)
         raise typer.Exit(code=1)
-    state = str(node.state.value)
+    state = str(node.get("state") or "open")
     joined: dict = {
-        "id": node.id,
-        "title": node.title,
+        "id": node.get("id"),
+        "title": node.get("title"),
         "state": state,
-        "status": _read_time_status_external(state, sc.pr_number, sc.plan_path),
-        "parent": node.parent,
-        "blocked_by": list(node.blocked_by),
+        "status": _read_time_status_external(state, sc.get("pr_number"), sc.get("plan_path")),
+        "parent": node.get("parent"),
+        "blocked_by": list(node.get("blocked_by") or []),
     }
-    joined.update(sc.model_dump(exclude_unset=True, exclude={"id"}))
-    joined["_resolved_cwd"] = sc.cwd
+    joined.update({k: v for k, v in sc.items() if k != "id"})
+    joined["_resolved_cwd"] = sc.get("cwd")
 
     if field:
         _echo_node_entry(joined, field, False)
@@ -895,6 +933,7 @@ def _echo_node_entry(e: dict, field: Optional[str], grouped: bool) -> None:
 
 @cli.command("get")
 def cmd_get(
+    ctx: typer.Context,
     ids: List[str] = typer.Argument(
         ..., help="One or more node ab-id, slug, or bare 8-hex (e.g.  | dashless-spawn | ff6f96e0)"
     ),
@@ -908,7 +947,7 @@ def cmd_get(
         help="Exact-only resolution (id/slug/bare-hex); never fuzzy. The stable surface the /think router seeds a design from - a miss exits 1 so a typo'd token can never silently seed.",
     ),
 ) -> None:
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     from fno.graph.get_batch import resolve_or_dispatch
     id = resolve_or_dispatch(ids, field=field, grouped=grouped, strict=strict)
@@ -922,7 +961,7 @@ def cmd_get(
     # tracker fields plus the sidecar. Slug/bare-hex tiers are footnote-minted
     # metadata and refuse with the backend named rather than reporting absent.
     if active_backend_name() != "graph":
-        _render_external_get(id, field)
+        _render_external_get(id, field, ctx)
         return
 
 
@@ -990,14 +1029,12 @@ def _render_external_provenance(id: str, spawned: bool, json_out: bool) -> None:
     from stale local rows."""
     import dataclasses
 
+    from fno import rust_binary
     from fno.provenance.resolver import resolve_transcript, _DEFAULT_PROJECTS_ROOT
-    from fno.tracker import get_tracker
-    from fno.tracker import sidecar as sidecar_store
-    from fno.tracker.types import NodeNotFound
 
     try:
         node, sc = _read_external_node_and_sidecar(id)
-    except NodeNotFound:
+    except _TrackerNodeNotFound:
         typer.echo(f"No node matching '{id}' (external backend; exact ids)", err=True)
         raise typer.Exit(code=1)
 
@@ -1005,28 +1042,29 @@ def _render_external_provenance(id: str, spawned: bool, json_out: bool) -> None:
         if not nid:
             return None
         try:
-            return get_tracker().read(nid).title
+            out = rust_binary.command_call(["backlog", "get"], {"tracker": "read", "id": nid})
+            return (out.get("node") or {}).get("title")
         except Exception:  # noqa: BLE001 - advisory title; absent is honest
             return None
 
     birth_result = (
         resolve_transcript(
-            sc.source_harness,
-            sc.source_session_id,
-            sc.source_cwd or sc.cwd,
+            sc.get("source_harness"),
+            sc.get("source_session_id"),
+            sc.get("source_cwd") or sc.get("cwd"),
             projects_root=_DEFAULT_PROJECTS_ROOT,
         )
-        if sc.source_session_id
+        if sc.get("source_session_id")
         else None
     )
     spawn_result = (
         resolve_transcript(
-            sc.spawned_by_harness,
-            sc.spawned_by_session,
-            sc.spawned_by_cwd,
+            sc.get("spawned_by_harness"),
+            sc.get("spawned_by_session"),
+            sc.get("spawned_by_cwd"),
             projects_root=_DEFAULT_PROJECTS_ROOT,
         )
-        if sc.spawned_by_session
+        if sc.get("spawned_by_session")
         else None
     )
 
@@ -1035,11 +1073,11 @@ def _render_external_provenance(id: str, spawned: bool, json_out: bool) -> None:
     walk_rows: list = []
     if spawned:
         by_source: dict = {}
-        for nid, other in sidecar_store.load_all().items():
-            if other.source_node_id:
-                by_source.setdefault(other.source_node_id, []).append(nid)
-        seen = {node.id}
-        frontier = [node.id]
+        for nid, other in rust_binary.sidecar_all().items():
+            if other.get("source_node_id"):
+                by_source.setdefault(other["source_node_id"], []).append(nid)
+        seen = {node["id"]}
+        frontier = [node["id"]]
         depth = 0
         while frontier and depth < _SPAWNED_MAX_DEPTH:
             depth += 1
@@ -1062,15 +1100,15 @@ def _render_external_provenance(id: str, spawned: bool, json_out: bool) -> None:
 
     if json_out:
         output: dict[str, Any] = {
-            "node_id": node.id,
-            "title": node.title,
+            "node_id": node["id"],
+            "title": node.get("title"),
             "edges": [_edge("node_birth", birth_result), _edge("spawn", spawn_result)],
             "pr": pr_block(sc),
-            "sessions": sc.sessions,
+            "sessions": sc.get("sessions") or [],
             "lifecycle": None,  # roster derives from sc.sessions; kept for shape parity
-            "source_node_id": sc.source_node_id,
-            "source_node_title": _title_of(sc.source_node_id),
-            "source_plan_path": sc.source_plan_path,
+            "source_node_id": sc.get("source_node_id"),
+            "source_node_title": _title_of(sc.get("source_node_id")),
+            "source_plan_path": sc.get("source_plan_path"),
             "related": [],  # footnote-minted; unavailable under an external backend
         }
         if spawned:
@@ -1081,11 +1119,11 @@ def _render_external_provenance(id: str, spawned: bool, json_out: bool) -> None:
             }
         typer.echo(json.dumps(output, indent=2))
         return
-    typer.echo(f"provenance for {node.id}: {node.title or ''}")
-    typer.echo(f"  node_birth: {sc.source_session_id or '(none)'}")
-    typer.echo(f"  spawn: {sc.spawned_by_session or '(none)'}")
+    typer.echo(f"provenance for {node['id']}: {node.get('title') or ''}")
+    typer.echo(f"  node_birth: {sc.get('source_session_id') or '(none)'}")
+    typer.echo(f"  spawn: {sc.get('spawned_by_session') or '(none)'}")
     typer.echo(render_pr_line(pr_block(sc)))
-    typer.echo(f"  sessions: {len(sc.sessions)} row(s)")
+    typer.echo(f"  sessions: {len(sc.get('sessions') or [])} row(s)")
     if spawned:
         for d, nid in walk_rows:
             typer.echo(f"  spawned d{d}: {nid} ({_title_of(nid) or ''})")
@@ -1118,7 +1156,7 @@ def cmd_provenance(
     """
     from fno.graph.fuzzy import resolve_node
     from fno.provenance.resolver import resolve_transcript, _DEFAULT_PROJECTS_ROOT
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() != "graph":
         _render_external_provenance(id, spawned, json_out)
@@ -1130,7 +1168,11 @@ def cmd_provenance(
     match = resolve_node(id, entries)
     if match.kind != "exact":
         from fno.graph.store import served_store_path
-        typer.echo(f"No node matching '{id}' in {served_store_path(_graph_path())}", err=True)
+        message = f"No node matching '{id}' in {served_store_path(_graph_path())}"
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "error": message}))
+        else:
+            typer.echo(message, err=True)
         raise typer.Exit(code=1)
 
     e = match.candidates[0]
@@ -1254,7 +1296,7 @@ def cmd_provenance(
             lines.append(f"    transcript: (unresolved - {reason})")
 
     _fmt_edge("node-birth", birth_result, birth_session, birth_harness)
-    # Rendered even when null: an omitted line reads as "this verb does not
+    # Rendered even when null: an omitted line reads as "this command does not
     # report origins", which is how the field stayed invisible for a month.
     lines.append(f"  origin: {_titled(origin_id) if origin_id else '(none)'}")
     if e.get("source_plan_path"):
@@ -1308,7 +1350,7 @@ def cmd_provenance(
     typer.echo("\n".join(lines))
 
 
-# Session lifecycle verbs (add/open/close/backfill/reap-open) went native:
+# Session lifecycle commands (add/open/close/backfill/reap-open) went native:
 # crates/fno-agents/src/backlog/session_cli.rs answers `fno backlog session`
 # at the door, and the Python surface no longer mounts a twin.
 
@@ -1321,7 +1363,7 @@ def cmd_provenance(
 
 def _expand_valid_ids(task_ids: list[str]) -> list[str]:
     """Expand one-or-many id args; refuse an empty set and non-node ids
-    (the shared prologue of every batch-mutating verb)."""
+    (the shared prologue of every batch-mutating command)."""
 
     ids = _expand_id_args(task_ids)
     if not ids:
@@ -1376,7 +1418,7 @@ def cmd_queued(
 @cli.command(
     "queue",
     hidden=True,
-    epilog="Paired verb: `fno backlog unqueue <id>...` reverses this (hidden; run its own --help).",
+    epilog="Paired command: `fno backlog unqueue <id>...` reverses this (hidden; run its own --help).",
 )
 def cmd_queue(
     task_ids: List[str] = typer.Argument(
@@ -1435,7 +1477,7 @@ def cmd_unqueue(
 @cli.command(
     "contain",
     hidden=True,
-    epilog="Inverse: `fno backlog update <id> parent=null` un-contains a node - a verb the native binary serves after the python update leg retired.",
+    epilog="Inverse: `fno backlog update <id> parent=null` un-contains a node - a command the native binary serves after the python update leg retired.",
 )
 def cmd_contain(
     ctx: typer.Context,
@@ -1499,7 +1541,7 @@ def _project_plans_from_graph(
         # plan sync): guarded metadata read, degrades to a no-op under an
         # external selection rather than painting stale local rows.
         from fno.plan._project import project_graph_nodes
-        from fno.tracker.metadata import read_entries
+        from fno.graph.api import read_entries
 
         entries = read_entries("plan.project")
     except Exception as e:  # noqa: BLE001 - additive; never wedge the mutation
@@ -1550,9 +1592,15 @@ def _auto_closed_note(_entry: dict) -> str:
     return "auto-closed: all children complete"
 
 
-def _cascade_close_parents(entries: list[dict], node_id: str) -> list[str]:
+def _cascade_close_parents(
+    entries: list[dict], node_id: str, held: Optional[dict] = None
+) -> list[str]:
     """Close ancestor epics whose children are now all complete .
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
+
+    ``held`` carries pre-lock close-gate verdicts: a plan-having parent
+    with an unmet or unwarmed verdict holds, and absent ``held`` reads
+    fail closed like the native close's warm map.
     """
     from fno.graph._reconcile import cascade_close_should_stop
     id_to_entry = {
@@ -1575,6 +1623,10 @@ def _cascade_close_parents(entries: list[dict], node_id: str) -> list[str]:
         kids = children_by_parent.get(pid) or []
         if cascade_close_should_stop(parent, kids, cur):
             break  # already closed, or a child still open -> stop this branch
+        if parent.get("plan_path") and (
+            held is None or not (verdict := held.get(pid)) or not verdict.satisfied
+        ):
+            break  # unmet or unwarmed close gate: the gated paths close it
         _apply_completion_fields(parent)
         if not parent.get("completion_note"):
             parent["completion_note"] = _auto_closed_note(parent)
@@ -1661,7 +1713,7 @@ def _stamp_and_graduate_plan(
     session_id: Optional[str] = None,
 ) -> bool:
     """Best-effort: stamp a plan ``shipped`` (when a ship URL is known) then graduate.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.plan._project import plan_docs
 
@@ -1688,7 +1740,7 @@ SetExpectedStatus = Literal["ok", "skipped", "failed"]
 
 def _set_expected_count(plan_path: str, count: int) -> tuple[SetExpectedStatus, str]:
     """Authoritatively write expected_url_count=count onto a plan's frontmatter.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.plan._project import plan_docs
 
@@ -1843,36 +1895,36 @@ def _done_gate_pipeline(
     return evidence_pr_url
 
 
-def _cascade_close_external_parents(tracker, child_id: str) -> list[str]:
+def _cascade_close_external_parents(child_id: str) -> list[str]:
     """Close ancestor containers whose children are now ALL closed - the
     external twin of ``_cascade_close_parents``: sibling state from ONE
     list_open, the chain from tracker reads, each close best-effort."""
     closed: list[str] = []
     try:
         open_children: dict[str, list[str]] = {}
-        for cand in tracker.list_open():
-            if cand.parent:
-                open_children.setdefault(cand.parent, []).append(cand.id)
-        cur = tracker.read(child_id).parent
+        for cand in _tracker_door({"tracker": "list-open"}).get("candidates") or []:
+            if cand.get("parent"):
+                open_children.setdefault(cand["parent"], []).append(cand["id"])
+        cur = (_tracker_door({"tracker": "read", "id": child_id}).get("node") or {}).get("parent")
         seen: set[str] = set()
         while cur and cur not in seen:
             seen.add(cur)
             if open_children.get(cur):
                 break  # still has open children
             try:
-                parent_node = tracker.read(cur)
+                parent_node = _tracker_door({"tracker": "read", "id": cur}).get("node") or {}
             except Exception:  # noqa: BLE001 - unknown ancestor ends the walk
                 break
-            if str(parent_node.state.value) == "closed":
-                cur = parent_node.parent
+            if str(parent_node.get("state") or "open") == "closed":
+                cur = parent_node.get("parent")
                 continue
             try:
-                tracker.close(cur)
+                _tracker_door({"tracker": "close", "id": cur})
                 closed.append(cur)
             except Exception as exc:  # noqa: BLE001 - cascade is best-effort
                 typer.echo(f"warning: cascade close failed for {cur}: {exc}", err=True)
                 break
-            cur = parent_node.parent
+            cur = parent_node.get("parent")
     except Exception as exc:  # noqa: BLE001 - cascade never fails the close
         typer.echo(f"warning: cascade evaluation failed: {exc}", err=True)
     return closed
@@ -1887,33 +1939,32 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
     after it returns. A failed external close is loud and retryable - the
     item stays open. Plan stamping and the ancestor cascade ride the same
     seam (tracker parent edges, sidecar plan_path)."""
+    from fno import rust_binary
     from fno.graph._reconcile import node_pr_refs
-    from fno.tracker import get_tracker
-    from fno.tracker import sidecar as sidecar_store
-    from fno.tracker.types import NodeNotFound
+    from fno.graph.api import active_backend_name
 
     try:
         tnode, sc = _read_external_node_and_sidecar(task_id)
-    except NodeNotFound:
+    except _TrackerNodeNotFound:
         typer.echo(f"Error: feature {task_id} not found", err=True)
         raise typer.Exit(code=1)
-    if str(tnode.state.value) == "closed":
+    if str(tnode.get("state") or "open") == "closed":
         typer.echo(f"{task_id} is already done", err=True)
         return
 
-    tracker = get_tracker()
+    backend = active_backend_name()
     row = {
         "id": task_id,
-        "title": tnode.title,
-        "cwd": sc.cwd,
-        "plan_path": sc.plan_path,
-        "pr_number": sc.pr_number,
-        "pr_url": sc.pr_url,
-        "additional_prs": sc.additional_prs,
-        "sessions": sc.sessions,
+        "title": tnode.get("title"),
+        "cwd": sc.get("cwd"),
+        "plan_path": sc.get("plan_path"),
+        "pr_number": sc.get("pr_number"),
+        "pr_url": sc.get("pr_url"),
+        "additional_prs": sc.get("additional_prs") or [],
+        "sessions": sc.get("sessions") or [],
         # The rollup reads containment off the node (a contained child claims
         # no cost); dropping it here would double-count the delivery unit.
-        "contained_in": sc.contained_in,
+        "contained_in": sc.get("contained_in"),
     }
     refs = node_pr_refs(row)
     evidence_pr_url = _done_gate_pipeline(task_id, row, refs, force=force, reason=reason)
@@ -1925,27 +1976,27 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
         rollup = _rollup_from_ledger(row)
     except Exception:  # noqa: BLE001 - rollup is fill-only, never blocks
         rollup = {}
-    if rollup.get("cost_usd") is not None and sc.cost_usd is None:
-        sc.cost_usd = rollup["cost_usd"]
-    if rollup.get("cost_sessions") and not sc.cost_sessions:
-        sc.cost_sessions = list(rollup["cost_sessions"])
-    if evidence_pr_url and sc.pr_url is None:
-        sc.pr_url = evidence_pr_url
-    sidecar_store.save(sc)
+    if rollup.get("cost_usd") is not None and sc.get("cost_usd") is None:
+        sc["cost_usd"] = rollup["cost_usd"]
+    if rollup.get("cost_sessions") and not sc.get("cost_sessions"):
+        sc["cost_sessions"] = list(rollup["cost_sessions"])
+    if evidence_pr_url and sc.get("pr_url") is None:
+        sc["pr_url"] = evidence_pr_url
+    rust_binary.sidecar_set(task_id, sc)
 
     # The one close. Failure keeps the item open and retryable (AC8-ERR).
     try:
-        tracker.close(task_id)
+        _tracker_door({"tracker": "close", "id": task_id})
     except Exception as exc:  # noqa: BLE001 - name backend + id, fail loud
         typer.echo(
             f"Error: external close failed for {task_id} on backend "
-            f"{tracker.name!r}: {exc}\n"
+            f"{backend!r}: {exc}\n"
             "The item stays open; retry once the backend is available.",
             err=True,
         )
         raise typer.Exit(code=1)
 
-    _cascade_close_external_parents(tracker, task_id)
+    _cascade_close_external_parents(task_id)
     typer.echo(f"Marked {task_id} done")
 
     # Closure releases the node claim at the SEAM, right after the one close,
@@ -1957,15 +2008,15 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
 
     release_node_claim_at_closure(task_id, rung="done")
 
-    if sc.plan_path and not skip_stamp:
-        _stamp_and_graduate_plan(sc.plan_path, url=evidence_pr_url, session_id=None)
+    if sc.get("plan_path") and not skip_stamp:
+        _stamp_and_graduate_plan(sc["plan_path"], url=evidence_pr_url, session_id=None)
 
 
 @cli.command(
     "done",
-    epilog="Paired verb: `fno backlog reopen <id> --reason ...` reverses this "
+    epilog="Paired command: `fno backlog reopen <id> --reason ...` reverses this "
     "(hidden; run its own --help). Related: `fno backlog reconcile` closes nodes "
-    "whose PR merged outside the gate (hidden). Correction is reopen, a verb "
+    "whose PR merged outside the gate (hidden). Correction is reopen, a command "
     "the native binary serves after the python leg retired.",
 )
 def cmd_done(
@@ -2034,7 +2085,7 @@ def cmd_done(
     ),
 ) -> None:
     """Mark a node complete.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno.graph._constants import has_node_id_prefix
 
@@ -2069,7 +2120,7 @@ def cmd_done(
         and task_id is not None
         and not has_node_id_prefix(task_id)
     ):
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() == "graph":
             from fno.done.cli import _current_branch
@@ -2118,7 +2169,7 @@ def cmd_done(
     # External backend (task 4.1): the shared gates then exactly one
     # tracker.close. The local <prefix>-<hex> grammar guard does not apply to
     # an opaque external id - resolution is the tracker's exact read.
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() != "graph":
         _done_via_seam(task_id, skip_stamp=skip_stamp, force=force, reason=reason)
@@ -2174,65 +2225,8 @@ def _canonical_post_close(
 
 # -- reconcile (close merged-PR drift) --
 # `done` and `reopen` are a deliberate gate inversion (`done` refuses when no
-# referenced PR is merged, `reopen` refuses when one IS); both verbs are
+# referenced PR is merged, `reopen` refuses when one IS); both commands are
 # native now, owned by the door's lifecycle module.
-
-
-@cli.command("reconcile-findings", hidden=True)
-def cmd_reconcile_findings(
-    apply: bool = typer.Option(
-        False,
-        "--apply",
-        help="Close the addressed nodes (default: dry-run, mutate nothing).",
-    ),
-) -> None:
-    """Close phantom retro-triage nodes a later commit already addressed.
-
-    Retro files a node from a reviewer comment; on an autonomously-merged,
-    bot-reviewed PR the fix often lands after the comment without the thread
-    being resolved or replied to, so the node is filed for work already done
-    (). This re-runs the harvest addressed-detection against each open
-    retro node's source PR and closes the ones now addressed - the
-    reconciliation counterpart to the harvest-side suppression. Dry-run by
-    default; ``--apply`` closes via ``fno backlog done --note``. A PR whose
-    review state can't be read is skipped, never closed on uncertainty.
-    """
-    import subprocess
-
-    from fno.retro.reconcile_findings import scan_addressed_findings
-
-    entries = wire_rows(path=_graph_path())
-    warnings: list = []
-    findings = scan_addressed_findings(entries, warnings=warnings)
-    for w in warnings:
-        typer.echo(w, err=True)
-
-    if not findings:
-        typer.echo("reconcile-findings: no addressed phantom retro nodes found")
-        return
-
-    for f in findings:
-        typer.echo(f"{f.node_id}  PR #{f.pr_number}  comment {f.comment_id}  ({f.signal})")
-
-    if not apply:
-        typer.echo(f"\n{len(findings)} node(s) would close. Re-run with --apply to close them.")
-        return
-
-    closed = 0
-    for f in findings:
-        reason = (
-            f"addressed on PR #{f.pr_number} ({f.signal}); retro reconcile-findings "
-            f"re-check - fix landed without the thread being resolved/replied"
-        )
-        proc = subprocess.run(["fno", "backlog", "done", f.node_id, "--note", reason])
-        if proc.returncode == 0:
-            closed += 1
-        else:
-            typer.echo(
-                f"reconcile-findings: close of {f.node_id} failed (rc={proc.returncode})",
-                err=True,
-            )
-    typer.echo(f"reconcile-findings: closed {closed}/{len(findings)} node(s)")
 
 
 # -- reprioritize --
@@ -2354,36 +2348,36 @@ def _exec_liveness(state: str) -> str:
     }.get(state, "")
 
 
-# -- the external-backend verb classification (the sets are imported at the
-# top of this module from _verb_classification.py, beside the data)
+# -- the external-backend command classification (the sets are imported at the
+# top of this module from _command_classification.py, beside the data)
 
 
 def _refuse_tracker_owned_on_external_backend(label: str) -> None:
-    """The shared external-backend refusal for a tracker-owned backlog verb.
+    """The shared external-backend refusal for a tracker-owned backlog command.
 
     One guard at every reachable tracker-owned entry point (the wrapper below
     installs it on the registered callback), firing before any graph read or
-    write. The message names the verb and the backend."""
-    from fno.tracker import active_backend_name
+    write. The message names the command and the backend."""
+    from fno.graph.api import active_backend_name
 
     backend = active_backend_name()
     if backend != "graph":
         typer.echo(
-            f"fno backlog {label}: this verb owns graph state; under the "
+            f"fno backlog {label}: this command owns graph state; under the "
             f"{backend} tracker backend it is refused. Track the item in the "
             f"tracker by its id.",
             err=True,
         )
         if label in _NO_GRAIN_ON_EXTERNAL_BACKEND:
-            # Exit 6: the shared no-task-grain shape (the native task verb
+            # Exit 6: the shared no-task-grain shape (the native task command
             # answers with the same code).
             raise typer.Exit(code=6)
         raise typer.Exit(code=1)
 
 
 def iter_backlog_registry():
-    """The (group-label, typer-app) pairs carrying every backlog verb.
-    The ONE structural list: the verb classifier, the census, and the
+    """The (group-label, typer-app) pairs carrying every backlog command.
+    The ONE structural list: the command classifier, the census, and the
     classification tests all walk it; register a new sub-app beside its
     add_typer call.
     """
@@ -2394,9 +2388,9 @@ def iter_backlog_registry():
 
 from fno.graph import note_cli  # noqa: E402,F401
 
-# The node-lifecycle reversal verbs (defer, undefer, retract, unsupersede)
+# The node-lifecycle reversal commands (defer, undefer, retract, unsupersede)
 # answer natively from the grouped dispatcher; the Python registration
 # retired with their bodies.
 
 # The root loader runs this before Click builds the tree.
-_fno_pre_dispatch = classify_backlog_verbs
+_fno_pre_dispatch = classify_backlog_commands

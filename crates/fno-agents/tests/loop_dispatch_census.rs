@@ -7,7 +7,7 @@
 //! higher, and a health read must separate fixture titles from real ones -
 //! a journal of only fixture rows reports ZERO real dispatches, never 756.
 
-use fno_agents::loop_runtime::{census_loop_unit_dispatches, is_fixture_dispatch_title};
+use fno_agents::loop_runtime::census_loop_unit_dispatches;
 
 fn row(title: &str, iteration: u64) -> String {
     format!(
@@ -26,13 +26,15 @@ fn a_journal_of_only_fixture_rows_reports_zero_real_dispatches() {
         "real driver test",
         "happy path mission",
         "env test",
+        // A blank title is a fixture too, never a real scope.
+        "  ",
     ]
     .iter()
     .enumerate()
     .map(|(i, t)| format!("{}\n", row(t, (i % 5 + 1) as u64)))
     .collect();
     let census = census_loop_unit_dispatches(&journal);
-    assert_eq!(census.fixture, 6);
+    assert_eq!(census.fixture, 7);
     assert_eq!(census.real, 0);
     assert_eq!(census.real_at_iteration_two_or_later, 0);
 }
@@ -41,34 +43,16 @@ fn a_journal_of_only_fixture_rows_reports_zero_real_dispatches() {
 fn the_positive_marker_is_a_real_team_scope_at_iteration_two_or_later() {
     // AC5-HP's shape: `lead lead over fno` at iteration 2 clears the bar;
     // the same title at iteration 1 does not (AC5-EDGE - iteration 1 already
-    // happened once under a board that could not be read twice).
+    // happened once under a board that could not be read twice). Malformed
+    // lines and other event types are skipped, not counted.
     let journal = format!(
-        "{}\n{}\n",
+        "not json at all\n{}\n{}\n{}\n",
         row("lead lead over fno", 1),
-        row("lead lead over fno", 2)
-    );
-    let census = census_loop_unit_dispatches(&journal);
-    assert_eq!(census.real, 2);
-    assert_eq!(census.real_at_iteration_two_or_later, 1);
-}
-
-#[test]
-fn malformed_lines_and_other_events_are_skipped_not_counted() {
-    let journal = format!(
-        "not json at all\n{}\n{}\n",
-        row("lead lead over fno", 3),
+        row("lead lead over fno", 2),
         r#"{"ts":"2026-09-02T22:00:01Z","type":"loop_terminated","source":"loop","data":{"reason":"DonePRGreen"}}"#
     );
     let census = census_loop_unit_dispatches(&journal);
-    assert_eq!(census.real, 1);
+    assert_eq!(census.real, 2);
     assert_eq!(census.fixture, 0);
-}
-
-#[test]
-fn fixture_titles_answer_true_and_real_scopes_answer_false() {
-    assert!(is_fixture_dispatch_title("lead lead over epic-x"));
-    assert!(is_fixture_dispatch_title(""));
-    assert!(is_fixture_dispatch_title("  "));
-    assert!(!is_fixture_dispatch_title("lead lead over fno"));
-    assert!(!is_fixture_dispatch_title("lead lead over epic-9f2a"));
+    assert_eq!(census.real_at_iteration_two_or_later, 1);
 }

@@ -1,7 +1,7 @@
 """Supersession verdicts and PR merge-state queries over the surviving reconcile defs.
 
 Split out of the retired test_pr_closure_producer.py: the closure producer
-module is gone (superseded by the fno-agents binary verbs), but the
+module is gone (superseded by the fno-agents binary commands), but the
 reconcile-side defs these tests cover live on in fno.graph._reconcile.
 """
 from __future__ import annotations
@@ -55,46 +55,20 @@ def test_truncated_evidence_blames_the_truncation_not_the_surface():
     assert entries[0]["supersession"]["verified_at"] is None
 
 
-def test_query_runner_guard_sees_only_routed_rest_argv():
-    from fno.graph._reconcile import query_pr_merge_state
-    from fno.pr._proc import Result
-
-    calls: list[list[str]] = []
-    pull = {
-        "number": 5,
-        "html_url": "https://github.com/o/r/pull/5",
-        "state": "closed",
-        "merged": True,
-        "merged_at": "2026-08-25T12:00:00Z",
-        "merge_commit_sha": "merge",
-        "head": {"sha": "head", "ref": "feature/test"},
-        "base": {"ref": "main"},
-    }
-
-    def runner(cmd, **kwargs):
-        calls.append(list(cmd))
-        assert cmd[:2] == ["gh", "api"], f"unrouted PR read: {cmd}"
-        if "/files?" in cmd[-1]:
-            return Result(0, '[{"filename":"cli/a.py"}]', "")
-        return Result(0, json.dumps(pull), "")
-
-    state = query_pr_merge_state(5, repo="o/r", runner=runner, include_files=True)
-
-    assert state.state == "MERGED"
-    assert state.changed_files == ["cli/a.py"]
-    assert all(cmd[:3] != ["gh", "pr", "view"] for cmd in calls)
-
-
-def test_query_rest_timeout_is_retryable_availability_failure():
-    import subprocess
+def test_query_rest_timeout_is_retryable_availability_failure(monkeypatch):
+    from fno.rust_binary import CommandUnavailable
 
     from fno.graph._reconcile import ReconcileError, query_pr_merge_state
 
-    def runner(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, 30)
+    def _door(command, payload, timeout=None):
+        raise CommandUnavailable(
+            "fno-agents authorized-merge status-pr-info failed: "
+            "timed out after 30.0s"
+        )
 
+    monkeypatch.setattr("fno.rust_binary.command_call", _door)
     with pytest.raises(ReconcileError) as raised:
-        query_pr_merge_state(5, repo="o/r", runner=runner)
+        query_pr_merge_state(5, repo="o/r")
 
     assert raised.value.kind == "availability"
     assert raised.value.retryable is True
@@ -191,11 +165,13 @@ def test_supersede_keeps_the_human_reason(tmp_path, monkeypatch):
     code, out = _native_supersede(graph,
         "x-1a2b", "--replaces", "x-9f0c",
         "--cause", "owned the parser", "--surface", "cli/p.py",
-        "--reason", "folded into the rewrite",
+        "--reason", "folded into the rewrite", "--covers", "the rewrite owns the parser",
     )
     assert code == 0, out
     rows = {e["id"]: e for e in read_graph_strict(graph)}
-    assert rows["x-9f0c"]["supersession"]["reason"] == "folded into the rewrite"
+    assert rows["x-9f0c"]["supersession"]["reason"] == (
+        "folded into the rewrite; covers: the rewrite owns the parser"
+    )
 
 
 def test_supersede_without_surface_names_a_runnable_example():

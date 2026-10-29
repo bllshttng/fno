@@ -1,0 +1,11 @@
+{
+  "detail": null,
+  "reason": "missing_context",
+  "reference": "brief:company-brief",
+  "role": {
+    "function_id": "marketing",
+    "id": "owner"
+  },
+  "source_id": "company/owner.json",
+  "source_layer": "company"
+}

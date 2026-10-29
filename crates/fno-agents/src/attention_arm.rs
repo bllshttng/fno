@@ -12,7 +12,7 @@ use crate::attention_file::{
 use crate::attention_route::{Router, Routing};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +24,13 @@ pub const ATTENTION_INTERVAL_S: u64 = 30;
 /// editor and the arm share the page; the wait is insurance against reading
 /// a half-settled edit.
 pub const DEFAULT_SETTLE_SECS: u64 = 120;
+
+/// The close receipt for a page whose question no store holds any more.
+pub const LOST_REASON: &str = "lost, no question row in the stores";
+
+/// `recorded_by` on a lost close. A lost page in `done/` never blocks a
+/// redelivery: if the question reads open again, its page comes back.
+pub const LOST_BY: &str = "attention_lost";
 
 /// How many times one recorded answer retries its failed clear before the
 /// arm gives up and leaves the durable row for a human to finish.
@@ -67,6 +74,14 @@ pub trait SinkIo {
     /// clear's posture line (the last stderr line, e.g. `... delivered
     /// (hosted) ...` / `... queued (durable)`), the ladder's mail-rung read.
     fn clear(&mut self, id: &str, answer_text: &str) -> Result<String, String>;
+    /// Remove one file: the bounded drain of duplicate lost copies.
+    fn remove(&mut self, path: &Path) -> std::io::Result<()>;
+    /// The identity stamped into pages this arm delivers: 16 hex over the
+    /// machine id and the agents home. `None` leaves pages unstamped, and
+    /// an unstamped page closes as lost only once.
+    fn arm_id(&mut self) -> Option<String> {
+        None
+    }
     fn notify(&mut self, title: &str, body: &str);
 }
 
@@ -140,6 +155,7 @@ fn page_file_name(item: &AttentionItem) -> String {
 pub fn tick_pages(
     items: &[AttentionItem],
     closes: &HashMap<String, crate::attention::Closed>,
+    asked: &HashSet<String>,
     dir: &Path,
     state: &mut HashMap<String, BlockState>,
     now: u64,
@@ -153,6 +169,11 @@ pub fn tick_pages(
         // knows question ids and no-ops on unknown ones), so note items stay
         // on the projection and the mux until the note-closing path ships.
         .filter(|i| !i.id.starts_with("note-"))
+        // A copy of another machine's question gets no page here: the asking
+        // machine writes and settles that page in the synced folder, and a
+        // second writer would race it. It stays in all_open below, so its page
+        // is never closed as gone.
+        .filter(|i| i.host.is_none())
         .collect();
     let all_open: std::collections::HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
     let mut tick = SinkTick::default();
@@ -190,7 +211,7 @@ pub fn tick_pages(
         }
     }
     // Closed pages live in done/ under their id (or <id>-2 when taken).
-    let (done_ids, _) = list_done(dir, io);
+    let (done_ids, done_pages) = list_done(dir, io);
 
     // Prune state for ids no longer open (keeps the file bounded).
     state.retain(|id, _| all_open.contains(id.as_str()));
@@ -211,7 +232,10 @@ pub fn tick_pages(
         }
         match io.route(item) {
             Ok(routing) => {
-                let rendered = render_page(item, &routing);
+                let mut rendered = render_page(item, &routing);
+                if let Some(arm) = io.arm_id() {
+                    rendered = attention_file::stamp_arm(&rendered, &arm);
+                }
                 let name = page_file_name(item);
                 let path = dir.join(&name);
                 match io.create_new(&path, &rendered) {
@@ -247,11 +271,11 @@ pub fn tick_pages(
         let id = page.front.question_id.clone();
         if page.front.status != "open" {
             // Heals a failed move: write nothing, just finish the rename.
-            move_to_done(dir, &page.path, &id, io, &mut tick, false);
+            move_to_done(dir, &page.path, &id, io, &mut tick, false, None);
             continue;
         }
         if !all_open.contains(id.as_str()) {
-            close_elsewhere(closes, page, dir, io, &mut tick);
+            close_elsewhere(closes, asked, page, dir, &done_pages, io, &mut tick);
             continue;
         }
         let Some(item) = open_by_id.get(id.as_str()) else {
@@ -304,6 +328,7 @@ pub fn tick_pages(
     // 7. The index and the done listing are rebuilt after the settle pass:
     // a page this beat closed must not linger under Open (AC5-HP).
     let (done_ids_now, done_pages) = list_done(dir, io);
+    let done_pages = drain_duplicate_lost(done_pages, io, &mut tick);
     let mut open_entries: Vec<IndexEntry> = Vec::new();
     for page in &pages {
         if page.front.status == "open"
@@ -421,6 +446,7 @@ fn settle_page(
                         io,
                         tick,
                         true,
+                        None,
                     );
                     state.remove(&id);
                 }
@@ -486,6 +512,7 @@ fn settle_page(
                                 io,
                                 tick,
                                 true,
+                                None,
                             );
                             state.remove(&id);
                         }
@@ -519,18 +546,67 @@ fn settle_page(
 }
 
 /// Close a page whose question closed away from the folder (step 5): the
-/// fold's answer, else the reason, is the answer text.
+/// fold's answer, else the reason, is the answer text. A close row names
+/// the close for every page. The lost branch is owner-scoped: only a page
+/// this arm delivered may read as lost.
+#[allow(clippy::too_many_arguments)]
 fn close_elsewhere(
     closes: &HashMap<String, crate::attention::Closed>,
+    asked: &HashSet<String>,
     page: &FoundPage,
     dir: &Path,
+    done_pages: &[(PathBuf, PageFront)],
     io: &mut dyn SinkIo,
     tick: &mut SinkTick,
 ) {
     let id = page.front.question_id.clone();
     let Some(row) = closes.get(&id) else {
-        // No fold row (withdrawn, or closed before the journal held it):
-        // leave the page for a beat that can name the close.
+        if asked.is_empty() || asked.contains(&id) {
+            // Asked but not open and not closed: leave the page for a beat
+            // that can name the close. A read that holds no ask row at all
+            // proves no loss: an empty store reads clean too.
+            return;
+        }
+        // The stores read clean and hold no row for this id, open or
+        // closed: no beat can ever name its close. Without this the page
+        // reads open forever in the Base. Close it as lost, answering
+        // nothing for the user - but only a page this arm delivered. Two
+        // machines on one synced vault each ran an arm whose stores read
+        // clean for the other's pages, and the flap lost-closed live
+        // questions once a minute. A page stamped by another arm stays
+        // open; the arm that owns the stamp names its close. A page with
+        // no stamp (delivered before the stamp existed) closes as lost
+        // once: done/ already holding its lost copy stays the arm's hand.
+        let mine = io.arm_id();
+        // The id's one lost copy in done/, if any: an unstamped page with a
+        // copy already there stays open, and the close below reuses the
+        // copy instead of minting `<id>-N`.
+        let lost_copy = done_pages.iter().find_map(|(path, front)| {
+            (front.question_id == id && front.recorded_by.as_deref() == Some(LOST_BY))
+                .then(|| path.clone())
+        });
+        if let Some(other) = page.front.arm.as_deref() {
+            if mine.as_deref() != Some(other) {
+                tick.detail
+                    .push(format!("foreign page {} (arm {other})", page.stem));
+                return;
+            }
+        } else if lost_copy.is_some() {
+            return;
+        }
+        close_and_move(
+            page,
+            dir,
+            "closed",
+            "",
+            "",
+            LOST_BY,
+            &format!("Recorded: {LOST_REASON} ({LOST_BY})"),
+            io,
+            tick,
+            true,
+            lost_copy.as_deref(),
+        );
         return;
     };
     let answer = if row.answer.is_empty() {
@@ -566,11 +642,14 @@ fn close_elsewhere(
         io,
         tick,
         true,
+        None,
     );
 }
 
 /// The close write (step 6): re-read and compare, write the closed text
 /// atomically, then rename into `done/` (or `done/<id>-2.md` when taken).
+/// `onto` renames onto an exact existing copy instead (the lost close
+/// reuses its one copy).
 #[allow(clippy::too_many_arguments)]
 fn close_and_move(
     page: &FoundPage,
@@ -583,6 +662,7 @@ fn close_and_move(
     io: &mut dyn SinkIo,
     tick: &mut SinkTick,
     count: bool,
+    onto: Option<&Path>,
 ) {
     let stamp = if answered_at.is_empty() {
         chrono::Utc::now().to_rfc3339()
@@ -606,11 +686,21 @@ fn close_and_move(
             .push(format!("{}: close write failed: {e}", page.path.display()));
         return;
     }
-    move_to_done(dir, &page.path, &page.front.question_id, io, tick, count);
+    move_to_done(
+        dir,
+        &page.path,
+        &page.front.question_id,
+        io,
+        tick,
+        count,
+        onto,
+    );
 }
 
 /// Read `done/`: the closed ids and their parsed pages, so the delivery
-/// dedup and the index agree on what a closed page is.
+/// dedup and the index agree on what a closed page is. A lost close lists
+/// as a page but not as a closed id, so a question that reads open again
+/// redelivers.
 fn list_done(
     dir: &Path,
     io: &mut dyn SinkIo,
@@ -624,14 +714,17 @@ fn list_done(
         let Some((front, _)) = parse_page(&text) else {
             continue;
         };
-        ids.insert(front.question_id.clone());
+        if front.recorded_by.as_deref() != Some(LOST_BY) {
+            ids.insert(front.question_id.clone());
+        }
         pages.push((path, front));
     }
     (ids, pages)
 }
 
 /// Rename a closed page into `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when
-/// taken).
+/// taken). `onto` renames onto that exact existing copy instead, replacing
+/// it in one rename: the lost close reuses its one copy per id.
 fn move_to_done(
     dir: &Path,
     path: &Path,
@@ -639,14 +732,21 @@ fn move_to_done(
     io: &mut dyn SinkIo,
     tick: &mut SinkTick,
     count: bool,
+    onto: Option<&Path>,
 ) {
     let done_dir = dir.join("done");
-    let mut target = done_dir.join(format!("{id}.md"));
-    let mut n = 2;
-    while io.path_exists(&target) {
-        target = done_dir.join(format!("{id}-{n}.md"));
-        n += 1;
-    }
+    let target = match onto {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let mut target = done_dir.join(format!("{id}.md"));
+            let mut n = 2;
+            while io.path_exists(&target) {
+                target = done_dir.join(format!("{id}-{n}.md"));
+                n += 1;
+            }
+            target
+        }
+    };
     if let Err(e) = io.rename(path, &target) {
         eprintln!("fno-agents attention: move to done failed: {e}");
         tick.skip = Some("error".to_string());
@@ -657,6 +757,65 @@ fn move_to_done(
     if count {
         tick.closed += 1;
     }
+}
+
+/// One beat removes at most this many duplicate lost copies. `done/` held
+/// 2354 numbered copies after the 2026-10-22 flap; the cap keeps each beat
+/// short.
+pub const DRAIN_DUPLICATE_LOST_CAP: usize = 200;
+
+/// Step 7's drain: one lost copy per question id stays, the newest by
+/// `answered_at` (ties keep one deterministically); an answered or
+/// closed-elsewhere copy is never touched. Returns the surviving pages so
+/// the index lists what is actually on disk.
+fn drain_duplicate_lost(
+    pages: Vec<(PathBuf, PageFront)>,
+    io: &mut dyn SinkIo,
+    tick: &mut SinkTick,
+) -> Vec<(PathBuf, PageFront)> {
+    let victims: Vec<usize> = {
+        let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, (_, front)) in pages.iter().enumerate() {
+            if front.recorded_by.as_deref() == Some(LOST_BY) {
+                by_id.entry(front.question_id.as_str()).or_default().push(i);
+            }
+        }
+        let mut victims: Vec<usize> = Vec::new();
+        for idxs in by_id.values() {
+            if idxs.len() < 2 {
+                continue;
+            }
+            // Newest answered_at stays; ties fall to the path order.
+            let mut order = idxs.clone();
+            order.sort_by(|a, b| {
+                pages[*a]
+                    .1
+                    .answered_at
+                    .cmp(&pages[*b].1.answered_at)
+                    .then(pages[*a].0.cmp(&pages[*b].0))
+            });
+            victims.extend_from_slice(&order[..order.len() - 1]);
+        }
+        victims.sort_unstable();
+        victims
+    };
+    if victims.is_empty() {
+        return pages;
+    }
+    let doomed: std::collections::HashSet<usize> =
+        victims.into_iter().take(DRAIN_DUPLICATE_LOST_CAP).collect();
+    let mut kept = Vec::with_capacity(pages.len() - doomed.len());
+    let mut removed = 0usize;
+    for (i, entry) in pages.into_iter().enumerate() {
+        if doomed.contains(&i) && io.remove(&entry.0).is_ok() {
+            removed += 1;
+        } else {
+            kept.push(entry);
+        }
+    }
+    tick.detail
+        .push(format!("done: removed {removed} duplicate lost copies"));
+    kept
 }
 
 fn short_answer(answer: &str) -> String {
@@ -720,7 +879,7 @@ fn answer_text_of(item: &AttentionItem, answer: &FileAnswer) -> String {
 }
 
 /// The settle state for one delivered page, persisted at
-/// `~/.fno/attention/questions.json`.
+/// `~/.fno/state/attention/questions.json`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockState {
     hash: u64,
@@ -761,7 +920,7 @@ fn attention_enabled(cwd: &Path) -> bool {
         != Some(false)
 }
 
-/// Load the settle state from `~/.fno/attention/questions.json`.
+/// Load the settle state from `~/.fno/state/attention/questions.json`.
 fn load_state(path: &Path) -> HashMap<String, BlockState> {
     std::fs::read_to_string(path)
         .ok()
@@ -784,13 +943,14 @@ fn save_state(path: &Path, state: &HashMap<String, BlockState>) {
     }
 }
 
-/// `~/.fno/attention/`, beside `~/.fno` like `questions.jsonl`.
+/// `~/.fno/state/attention/`, folded under `state/` like `notice-route`.
 pub fn attention_dir() -> Result<PathBuf, std::io::Error> {
     let home = crate::paths::AgentsHome::from_env();
-    home.root()
+    let parent = home
+        .root()
         .parent()
-        .map(|p| p.join("attention"))
-        .ok_or_else(|| std::io::Error::other("no agents home parent"))
+        .ok_or_else(|| std::io::Error::other("no agents home parent"))?;
+    Ok(crate::state_layout::place(parent, "attention"))
 }
 
 /// The question folder the arm wrote on its last beat, from items.json's
@@ -1016,7 +1176,7 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             return;
         }
         mark("read_items");
-        let (items, unreadable, journals_raw) = read_items(&cwd);
+        let (items, unreadable, stores) = read_items(&cwd);
         if !unreadable.is_empty() {
             // An incomplete projection must never drive delivery or the
             // close-elsewhere close: absent ids would read as closed and
@@ -1064,10 +1224,12 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         mark("settle");
         let state_path = state_dir.join("questions.json");
         let mut state = load_state(&state_path);
-        let closes = crate::attention::closes(&journals_raw);
+        let closes = crate::attention::closes(&stores.concat());
+        let asked = crate::attention::asked_ids(&stores);
         let t = tick_pages(
             &items,
             &closes,
+            &asked,
             &dir,
             &mut state,
             now_secs(),
@@ -1100,6 +1262,43 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             skip = http.skip.clone();
         }
         detail.extend(http.detail);
+        // The chat lane: post, close and read replies on the chat rows this
+        // machine owns. A reply lands as an attention_answer row, so the
+        // answers stage below clears it in this same beat.
+        mark("chat");
+        let (chat_sinks, chat_refused, chat_skipped) = crate::attention_chat::load_chat_sinks(&cwd);
+        for r in &chat_refused {
+            detail.push(format!("chat: refused sink {}: {}", r.name, r.reason));
+        }
+        detail.extend(chat_skipped);
+        let mut http_seams: Vec<crate::attention_chat::CurlHttp> = chat_sinks
+            .iter()
+            .map(|_| crate::attention_chat::CurlHttp)
+            .collect();
+        let mut transports: Vec<Box<dyn crate::attention_chat::ChatTransport + '_>> = chat_sinks
+            .iter()
+            .zip(http_seams.iter_mut())
+            .map(|(s, h)| crate::attention_chat::transport_for(s, h))
+            .collect();
+        let mut lanes: Vec<(
+            &crate::attention_chat::ChatSink,
+            &mut dyn crate::attention_chat::ChatTransport,
+        )> = chat_sinks
+            .iter()
+            .zip(transports.iter_mut())
+            .map(|(s, t)| (s, &mut **t as &mut dyn crate::attention_chat::ChatTransport))
+            .collect();
+        let chat = crate::attention_chat::tick_chat(
+            &items,
+            &mut lanes,
+            &attention_dir().unwrap_or_else(|_| dir.join(".state")),
+            started + std::time::Duration::from_secs(ATTENTION_TICK_BUDGET_S),
+        );
+        acted += chat.acted();
+        if skip.is_none() {
+            skip = chat.skip.clone();
+        }
+        detail.extend(chat.detail);
         // The mux pass: every unsuperseded attention_answer row, whatever its
         // sink, drives one reply ladder (clear while open, mail, resume,
         // team). Runs with no sinks configured - the answer rows are the
@@ -1157,31 +1356,133 @@ fn now_secs() -> u64 {
 /// the names of stores that exist but could not be read (an unreadable store
 /// means an INCOMPLETE projection, and the caller must not treat its absent
 /// ids as closed), and the raw journal text the `closes` fold reads.
-fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, String) {
+fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
     let fno_dir = crate::paths::AgentsHome::from_env()
         .root()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    read_items_at(&fno_dir, cwd)
+    let mark = inputs_mark(&fno_dir, cwd);
+    let mut cache = PROJECTION.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut items, unreadable, stores) = match (&mark, cache.as_ref()) {
+        (Some(mark), Some((held, items, stores))) if mark == held => {
+            (items.clone(), Vec::new(), stores.clone())
+        }
+        _ => {
+            let read = project_items(&fno_dir, cwd);
+            // Only a complete projection is reused.
+            *cache = match (&mark, read.1.is_empty()) {
+                (Some(mark), true) => Some((mark.clone(), read.0.clone(), read.2.clone())),
+                _ => None,
+            };
+            read
+        }
+    };
+    drop(cache);
+    attach_registry_reach(&mut items);
+    (items, unreadable, stores)
+}
+
+/// The last complete projection and the input mark it was read at. The
+/// projection is pure in its inputs, so an unchanged mark reuses it; reach
+/// still reads a fresh registry every tick.
+static PROJECTION: Mutex<Option<(Vec<String>, Vec<AttentionItem>, Vec<String>)>> = Mutex::new(None);
+
+/// One line per projection input: each question store's committed seq, each
+/// escalation note's mtime, the operator lane's length and mtime. `None`
+/// when a journal holds bytes its store has not ingested, or a store cannot
+/// be read: then only a full read answers.
+fn inputs_mark(fno_dir: &Path, cwd: &Path) -> Option<Vec<String>> {
+    let stamp = |path: &Path| {
+        std::fs::metadata(path).ok().map(|m| {
+            let mtime = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{}:{}", m.len(), mtime)
+        })
+    };
+    let mut mark = Vec::new();
+    for journal in crate::needs::question_journals(fno_dir, cwd) {
+        let live = crate::event_store::live_journal(&journal);
+        let store = crate::event_store::store_path(&live);
+        if !live.exists() && !store.exists() {
+            mark.push(format!("j:{}:absent", live.display()));
+            continue;
+        }
+        // A store with no raw journal beside it has no bytes left to ingest.
+        if live.exists() && crate::event_store::stray_has_uningested_bytes(&live, &store) {
+            return None;
+        }
+        let seq = crate::event_store::max_seq(&live).ok()?;
+        mark.push(format!("j:{}:{seq}", live.display()));
+    }
+    let notes = crate::escalation::dir(cwd);
+    if let Ok(entries) = std::fs::read_dir(&notes) {
+        let mut names: Vec<String> = entries
+            .flatten()
+            .map(|e| {
+                let path = e.path();
+                format!("n:{}:{}", path.display(), stamp(&path).unwrap_or_default())
+            })
+            .collect();
+        names.sort();
+        mark.extend(names);
+    }
+    let lane = crate::org_board::scope::operator_lane_path(cwd);
+    mark.push(format!("l:{}", stamp(&lane).unwrap_or_default()));
+    Some(mark)
+}
+
+fn attach_registry_reach(items: &mut [AttentionItem]) {
+    if let Ok(registry) =
+        crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
+    {
+        crate::attention::attach_reach(items, &registry);
+    }
 }
 
 pub(crate) fn read_items_at(
     fno_dir: &Path,
     cwd: &Path,
-) -> (Vec<AttentionItem>, Vec<String>, String) {
-    let mut journals_raw = String::new();
+) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
+    let (mut items, unreadable, stores) = project_items(fno_dir, cwd);
+    attach_registry_reach(&mut items);
+    (items, unreadable, stores)
+}
+
+/// The uncached projection, before reach: the read `read_items_at` and
+/// the arm's cache miss share.
+fn project_items(fno_dir: &Path, cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
+    let mut stores: Vec<String> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     for path in crate::needs::question_journals(fno_dir, cwd) {
         match crate::event_store::journal_text_checked(
             &path,
             &crate::event_store::EventQuery::of_types(crate::needs::PROJECTION_TYPES),
         ) {
-            Ok(content) => {
-                journals_raw.push_str(&content);
-                if !content.ends_with('\n') {
-                    journals_raw.push('\n');
+            Ok(mut content) => {
+                // A store that holds rows but no question rows never carries
+                // asks (the global events store), so it must not read as a
+                // lost store to `asked_ids`. A store with no row at all still
+                // does.
+                if content.trim().is_empty()
+                    && crate::event_store::journal_text_checked(
+                        &path,
+                        &crate::event_store::EventQuery {
+                            limit: Some(1),
+                            ..Default::default()
+                        },
+                    )
+                    .is_ok_and(|any| !any.trim().is_empty())
+                {
+                    continue;
                 }
+                if !content.ends_with('\n') {
+                    content.push('\n');
+                }
+                stores.push(content);
             }
             Err(e) => unreadable.push(format!(
                 "{}: {e}",
@@ -1194,13 +1495,8 @@ pub(crate) fn read_items_at(
     let notes = read_notes(cwd);
     let lane_path = crate::org_board::scope::operator_lane_path(cwd);
     let lane_text = std::fs::read_to_string(lane_path).unwrap_or_default();
-    let mut items = crate::attention::project(&journals_raw, &notes, &lane_text, now_secs());
-    if let Ok(registry) =
-        crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
-    {
-        crate::attention::attach_reach(&mut items, &registry);
-    }
-    (items, unreadable, journals_raw)
+    let items = crate::attention::project(&stores.concat(), &notes, &lane_text, now_secs());
+    (items, unreadable, stores)
 }
 
 /// Escalation notes as (slug, text) pairs.
@@ -1352,6 +1648,23 @@ impl SinkIo for RealIo {
         std::fs::rename(from, to)
     }
 
+    fn remove(&mut self, path: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(path)
+    }
+
+    fn arm_id(&mut self) -> Option<String> {
+        let machine = crate::claims::machine_id();
+        if machine.is_empty() {
+            return None;
+        }
+        let root = crate::paths::AgentsHome::from_env().root().to_path_buf();
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        Some(format!(
+            "{:016x}",
+            fnv1a(&format!("{machine}\0{}", root.display()))
+        ))
+    }
+
     fn list_md(&mut self, dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1386,6 +1699,7 @@ impl SinkIo for RealIo {
             sink_name,
             answer,
             "file_edit",
+            "attention_arm",
             &format!("file:{}", item.id),
         )?;
         Ok(receipt)
@@ -1432,6 +1746,7 @@ pub(crate) fn append_answer_row(
     sink: &str,
     answer: &crate::attention_file::FileAnswer,
     authority: &str,
+    mapped_by: &str,
     attested_by: &str,
 ) -> Result<(String, bool), String> {
     let (option, words, done) = match answer {
@@ -1495,42 +1810,108 @@ pub(crate) fn append_answer_row(
         ) => String::new(),
         (_, true) => "Recorded: superseded by an earlier answer".to_string(),
     };
-    let mapped_by = if authority == "file_edit" {
-        "attention_arm"
-    } else {
-        "needs_door"
-    };
-    let row = json!({
-        "ts": answered_at,
-        "type": "attention_answer",
-        "source": "daemon",
-        "data": {
-            "item_id": item_id,
-            "sink": sink,
-            "option": option,
-            "words": words,
-            "done": done,
-            "answered_at": answered_at,
-            "authority": authority,
-            "attested_by": attested_by,
-            "mapped_by": mapped_by,
-            "superseded": already_won,
-            "delegate": matches!(answer, crate::attention_file::FileAnswer::Delegate),
-            "decision_id": null,
-        }
-    });
-    // The row is the durable half of the contract: an append that fails
-    // must fail the record so the settle state never marks it recorded.
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    crate::day::append_row(&path, &format!("{row}\n"))?;
+    let mut fields = serde_json::Map::new();
+    fields.insert("item_id".into(), serde_json::Value::from(item_id));
+    fields.insert("sink".into(), serde_json::Value::from(sink));
+    fields.insert("option".into(), serde_json::Value::from(option));
+    fields.insert("words".into(), serde_json::Value::from(words));
+    fields.insert("done".into(), serde_json::Value::from(done));
+    fields.insert("answered_at".into(), serde_json::Value::from(answered_at));
+    fields.insert("authority".into(), serde_json::Value::from(authority));
+    fields.insert("attested_by".into(), serde_json::Value::from(attested_by));
+    fields.insert("mapped_by".into(), serde_json::Value::from(mapped_by));
+    fields.insert("superseded".into(), serde_json::Value::from(already_won));
+    fields.insert(
+        "delegate".into(),
+        serde_json::Value::from(matches!(
+            answer,
+            crate::attention_file::FileAnswer::Delegate
+        )),
+    );
+    fields.insert("decision_id".into(), serde_json::Value::Null);
+    // The row is the durable half of the contract: a commit that fails must
+    // fail the record so the settle state never marks it recorded.
+    crate::events::EventEmitter::new(&path, "daemon")
+        .emit_fields("attention_answer", fields)
+        .map_err(|e| format!("answer row for {item_id}: {e}"))?;
     Ok((receipt, already_won))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_items_carries_a_store_committed_question() {
+        // AC11-ARM: a store-only operator_question reaches the projection.
+        let _root = crate::paths::DeclaredRoot::declare("attention_store_questio");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        let ask = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-arm-1", "question": "ship?", "blocks": []}
+        });
+        crate::event_store::append_envelope(&space, &ask.to_string(), None).unwrap();
+        // The global events store holds rows but never a question row; the
+        // questions store holds the other asks.
+        let tick = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "control_plane_tick", "source": "test",
+            "data": {"arm": "attention", "scheduler": "daemon", "acted": 0, "interval_s": 60}
+        });
+        crate::event_store::append_envelope(
+            &dir.path().join("events.jsonl"),
+            &tick.to_string(),
+            None,
+        )
+        .unwrap();
+        let ask2 = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-arm-2", "question": "ship?", "blocks": []}
+        });
+        crate::event_store::append_envelope(
+            &dir.path().join("questions.jsonl"),
+            &ask2.to_string(),
+            None,
+        )
+        .unwrap();
+        let (items, unreadable, stores) = read_items_at(dir.path(), &cwd);
+        assert!(unreadable.is_empty(), "{unreadable:?}");
+        assert!(
+            items.iter().any(|i| i.id.contains("q-arm-1")),
+            "the store-only question projects: {items:?}"
+        );
+        let asked = crate::attention::asked_ids(&stores);
+        assert!(
+            asked.contains("q-arm-1") && asked.contains("q-arm-2"),
+            "a store that carries no questions does not block the asks: {asked:?}"
+        );
+    }
+
+    /// AC6: unchanged stores, notes and lane keep the input mark, so the
+    /// arm reuses its projection; a new question row moves the mark.
+    #[test]
+    fn the_input_mark_moves_only_when_a_projection_input_moves() {
+        let _root = crate::paths::DeclaredRoot::declare("attention_input_mark");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        let ask = |id: &str| {
+            serde_json::json!({
+                "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+                "data": {"question_id": id, "question": "ship?", "blocks": []}
+            })
+            .to_string()
+        };
+        crate::event_store::append_envelope(&space, &ask("q-mark-1"), None).unwrap();
+        let first = inputs_mark(dir.path(), &cwd).expect("a settled store marks");
+        assert_eq!(inputs_mark(dir.path(), &cwd), Some(first.clone()));
+        crate::event_store::append_envelope(&space, &ask("q-mark-2"), None).unwrap();
+        let second = inputs_mark(dir.path(), &cwd).expect("still settled");
+        assert_ne!(first, second, "a new question row moves the mark");
+    }
 
     #[test]
     fn read_items_names_an_unreadable_store() {
@@ -1620,6 +2001,7 @@ mod tests {
     struct MemIo {
         files: std::collections::BTreeMap<PathBuf, String>,
         broken_routing: bool,
+        arm: Option<String>,
     }
 
     impl Default for MemIo {
@@ -1627,6 +2009,7 @@ mod tests {
             MemIo {
                 files: std::collections::BTreeMap::new(),
                 broken_routing: false,
+                arm: None,
             }
         }
     }
@@ -1666,6 +2049,15 @@ mod tests {
             self.files.insert(to.to_path_buf(), content);
             Ok(())
         }
+
+        fn remove(&mut self, path: &Path) -> std::io::Result<()> {
+            self.files.remove(path);
+            Ok(())
+        }
+
+        fn arm_id(&mut self) -> Option<String> {
+            self.arm.clone()
+        }
         fn list_md(&mut self, dir: &Path) -> Vec<PathBuf> {
             self.files
                 .keys()
@@ -1699,6 +2091,191 @@ mod tests {
         fn notify(&mut self, _title: &str, _body: &str) {}
     }
 
+    #[test]
+    fn a_lost_close_is_owner_scoped_and_keeps_one_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        io.arm = Some("aaaa1111aaaa1111".to_string());
+        let items = vec![
+            ready_item("q-lost", "question"),
+            ready_item("q-kept", "question"),
+        ];
+        let mut state = HashMap::new();
+        let mut beat = |items: &[AttentionItem], asked: &[&str], now: u64, io: &mut MemIo| {
+            let asked: HashSet<String> = asked.iter().map(|s| s.to_string()).collect();
+            tick_pages(
+                items,
+                &HashMap::new(),
+                &asked,
+                dir.path(),
+                &mut state,
+                now,
+                120,
+                io,
+            )
+        };
+        beat(&items, &[], 1000, &mut io);
+        let stamped = io.files[&io.path_of("q-lost").unwrap()].clone();
+        let (front, _) = parse_page(&stamped).unwrap();
+        assert_eq!(
+            front.arm.as_deref(),
+            Some("aaaa1111aaaa1111"),
+            "delivery stamps the owner"
+        );
+        // A read with no ask row at all proves no loss: nothing closes.
+        assert_eq!(beat(&[], &[], 1030, &mut io).closed, 0);
+        // Only q-kept still has an ask row: q-lost closes, q-kept waits.
+        assert_eq!(beat(&[], &["q-kept"], 1060, &mut io).closed, 1);
+        let done = io.path_of("done/q-lost").expect("the lost page moved");
+        let text = io.files[&done].clone();
+        let (front, _) = parse_page(&text).unwrap();
+        assert_eq!(front.status, "closed");
+        assert_eq!(front.answer, None, "a lost close answers nothing");
+        assert_eq!(front.recorded_by.as_deref(), Some(LOST_BY));
+        assert_eq!(
+            front.arm.as_deref(),
+            Some("aaaa1111aaaa1111"),
+            "the stamp survives the close"
+        );
+        assert!(text.contains(LOST_REASON), "{text}");
+        assert!(!text.contains("Recorded: Recorded:"), "{text}");
+        let kept = io.path_of("q-kept").expect("the asked page stays");
+        assert!(!kept.to_string_lossy().contains("done/"));
+        // The question reads open again: its page comes back.
+        let back = beat(&items[..1], &["q-lost", "q-kept"], 1090, &mut io);
+        assert_eq!(back.delivered, 1, "a lost close never blocks redelivery");
+        // It reads lost again: the close reuses the one lost copy in done/
+        // instead of minting <id>-2 (AC2-HP).
+        assert_eq!(beat(&[], &["q-kept"], 1120, &mut io).closed, 1);
+        let lost_copies = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-lost"))
+            .count();
+        assert_eq!(lost_copies, 1, "one lost copy per id");
+
+        // Two arms, one folder. Arm B delivers its own page and sees arm
+        // A's open page as foreign: it closes neither (AC1-ERR, AC4-HP).
+        io.arm = Some("bbbb2222bbbb2222".to_string());
+        let own_b = vec![ready_item("q-own", "question")];
+        let kept_a = vec![ready_item("q-kept", "question")];
+        let t = beat(&own_b, &["q-own"], 1150, &mut io);
+        assert_eq!(t.closed, 0, "arm B closes nothing of arm A's");
+        assert!(io.path_of("q-own").is_some(), "B delivers its own page");
+        for (arm, items, asked, now) in [
+            ("aaaa1111aaaa1111", kept_a.as_slice(), &["q-kept"][..], 1180),
+            ("bbbb2222bbbb2222", own_b.as_slice(), &["q-own"][..], 1210),
+            ("aaaa1111aaaa1111", kept_a.as_slice(), &["q-kept"][..], 1240),
+            ("bbbb2222bbbb2222", own_b.as_slice(), &["q-own"][..], 1270),
+            ("aaaa1111aaaa1111", kept_a.as_slice(), &["q-kept"][..], 1300),
+        ] {
+            io.arm = Some(arm.to_string());
+            let t = beat(items, asked, now, &mut io);
+            assert_eq!(t.closed, 0, "no arm closes the other's pages: {t:?}");
+            assert!(
+                t.detail.iter().any(|d| d.starts_with("foreign page ")),
+                "the beat names the foreign page: {t:?}"
+            );
+        }
+        assert!(io.path_of("q-kept").is_some(), "arm A's page stays open");
+        assert!(io.path_of("q-own").is_some(), "arm B's page stays open");
+        let lost_copies = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-lost"))
+            .count();
+        assert_eq!(lost_copies, 1, "still one lost copy per id");
+    }
+
+    #[test]
+    fn ac3_drain_removes_duplicate_lost_copies_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        let done = dir.path().join("done");
+        // 250 lost copies of one id plus an answered neighbour: the shape
+        // done/ held after the 2026-10-22 flap.
+        let lost_item = ready_item("q-x", "question");
+        let kept_item = ready_item("q-y", "question");
+        for n in 1..=250u32 {
+            let name = if n == 1 {
+                "q-x.md".to_string()
+            } else {
+                format!("q-x-{n}.md")
+            };
+            let ts = format!("2026-10-22T{:02}:{:02}:00Z", 5 + n / 60, n % 60);
+            let page = close_page(
+                &render_page(&lost_item, &Routing::default()),
+                "closed",
+                "",
+                &ts,
+                LOST_BY,
+                "Recorded: lost, no question row in the stores (attention_lost)",
+            );
+            io.files.insert(done.join(name), page);
+        }
+        let answered = close_page(
+            &render_page(&kept_item, &Routing::default()),
+            "answered",
+            "narrow",
+            "2026-10-22T06:00:00Z",
+            "file_edit",
+            "Recorded: option 1 (file)",
+        );
+        io.files.insert(done.join("q-y.md"), answered);
+
+        let mut state = HashMap::new();
+        let t = tick_pages(
+            &[],
+            &HashMap::new(),
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1000,
+            120,
+            &mut io,
+        );
+        assert_eq!(t.closed, 0, "the drain never counts as a close");
+        assert!(
+            t.detail
+                .iter()
+                .any(|d| d.contains("removed 200 duplicate lost copies")),
+            "the cap names the removal: {t:?}"
+        );
+        let left = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-x"))
+            .count();
+        assert_eq!(left, 50, "250 copies lose 200 (AC3-ERR)");
+        assert!(
+            io.files.contains_key(&done.join("q-y.md")),
+            "the answered neighbour is untouched (AC3-HP)"
+        );
+        // The next beat removes the rest.
+        let t2 = tick_pages(
+            &[],
+            &HashMap::new(),
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1030,
+            120,
+            &mut io,
+        );
+        assert!(
+            t2.detail
+                .iter()
+                .any(|d| d.contains("removed 49 duplicate lost copies")),
+            "the tail removes next beat: {t2:?}"
+        );
+        let left2 = io
+            .files
+            .keys()
+            .filter(|p| p.to_string_lossy().contains("done/q-x"))
+            .count();
+        assert_eq!(left2, 1, "one lost copy per id");
+    }
+
     fn ready_item(id: &str, kind: &str) -> AttentionItem {
         let mut item = not_ready_items().remove(0);
         item.id = id.to_string();
@@ -1720,6 +2297,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1735,6 +2313,7 @@ mod tests {
         let t2 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1030,
@@ -1757,6 +2336,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1777,6 +2357,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1791,6 +2372,7 @@ mod tests {
         let t2 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1050,
@@ -1803,6 +2385,7 @@ mod tests {
         let t3 = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1300,
@@ -1833,6 +2416,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1862,6 +2446,7 @@ mod tests {
             let tick = tick_pages(
                 &items,
                 &HashMap::new(),
+                &HashSet::new(),
                 dir.path(),
                 &mut state,
                 now,
@@ -1883,6 +2468,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1400,
@@ -1892,6 +2478,7 @@ mod tests {
         let tick = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1500,
@@ -1905,6 +2492,7 @@ mod tests {
         let repeated = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1600,
@@ -1923,6 +2511,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1940,7 +2529,16 @@ mod tests {
                 reason: String::new(),
             },
         );
-        let t = tick_pages(&[], &closes, dir.path(), &mut state, 1300, 120, &mut io);
+        let t = tick_pages(
+            &[],
+            &closes,
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1300,
+            120,
+            &mut io,
+        );
         assert_eq!(t.closed, 1, "AC6-HP");
         let done_path = io.path_of("done/q-a1").unwrap();
         let (front, _) = parse_page(&io.files[&done_path]).unwrap();
@@ -1958,6 +2556,7 @@ mod tests {
         tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1000,
@@ -1970,6 +2569,7 @@ mod tests {
         let t = tick_pages(
             &items,
             &HashMap::new(),
+            &HashSet::new(),
             dir.path(),
             &mut state,
             1030,

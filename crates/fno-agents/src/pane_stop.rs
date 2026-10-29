@@ -145,8 +145,10 @@ fn resolve_stop_target(e: &RegistryEntry, seams: &PaneStopSeams) -> StopTarget {
     let Some(pid) = e.pid else {
         // A pid-less row is a proven stop only when the sweep itself
         // proved the row's process dead; anything else is a gap no probe
-        // recorded.
-        let proven = e.status == crate::AgentStatus::Exited && e.exited_at.is_some();
+        // recorded. The footnote reader is its own proof: its NotHeld is the
+        // session's own heartbeat pid probed gone.
+        let proven = (e.status == crate::AgentStatus::Exited && e.exited_at.is_some())
+            || e.harness_name() == "footnote";
         return ask_holder(e, seams, "pane row carries no verified pid", proven);
     };
     if (seams.pid_gone)(pid) {
@@ -469,7 +471,7 @@ fn holder_from_lsof(reads: &[(std::path::PathBuf, LsofRead)]) -> SessionHolder {
                 .map(|p| p.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let (subject, verb) = if pids.len() == 1 {
+            let (subject, command) = if pids.len() == 1 {
                 (format!("pid {names}"), "holds")
             } else {
                 (format!("pids {names}"), "hold")
@@ -477,7 +479,7 @@ fn holder_from_lsof(reads: &[(std::path::PathBuf, LsofRead)]) -> SessionHolder {
             return SessionHolder::Held {
                 pid: pids.first().copied().filter(|_| pids.len() == 1),
                 proven: false,
-                why: format!("{subject} {verb} codex rollout {file}"),
+                why: format!("{subject} {command} codex rollout {file}"),
             };
         }
     }
@@ -545,7 +547,55 @@ fn session_holder_live(e: &RegistryEntry) -> SessionHolder {
                 answer => answer,
             }
         }
+        "footnote" => {
+            let sid = e.harness_session_id.as_deref().unwrap_or("");
+            let root = crate::footnote_harness::transcript::sessions_root();
+            let record = crate::footnote_harness::transcript::find_session_dir(&root, sid)
+                .map(|dir| crate::footnote_harness::transcript::transcript_file(&dir, sid));
+            let beat = record
+                .as_deref()
+                .and_then(crate::footnote_harness::transcript::newest_heartbeat);
+            let now = crate::daemon::now_epoch_secs().max(0) as u64;
+            footnote_holder(sid, beat, now, &crate::daemon::pid_is_gone)
+        }
         other => SessionHolder::Unmeasured(format!("no session-holder reader for harness {other}")),
+    }
+}
+
+/// The footnote harness answers from its own record: a live session writes
+/// a heartbeat every 30 s and names its pid in it. A stale heartbeat whose
+/// pid reads gone (ESRCH) proves the session ended; a fresh one names the
+/// holder, unproven, so only a pane that hosts it is ever signalled.
+fn footnote_holder(
+    sid: &str,
+    beat: Option<(u64, Option<u32>)>,
+    now: u64,
+    pid_gone: &dyn Fn(u32) -> bool,
+) -> SessionHolder {
+    let Some((at, pid)) = beat else {
+        return SessionHolder::Unmeasured(format!(
+            "no footnote heartbeat located for session {sid}"
+        ));
+    };
+    let age = now.saturating_sub(at);
+    let Some(pid) = pid else {
+        return SessionHolder::Unmeasured(format!("footnote heartbeat {age}s old names no pid"));
+    };
+    if age < crate::footnote_transcript::HEARTBEAT_STALE_SECS {
+        return SessionHolder::Held {
+            pid: Some(pid),
+            proven: false,
+            why: format!("footnote heartbeat {age}s old names pid {pid}"),
+        };
+    }
+    if pid_gone(pid) {
+        SessionHolder::NotHeld(format!(
+            "footnote heartbeat stale {age}s and its pid {pid} is gone"
+        ))
+    } else {
+        SessionHolder::Unmeasured(format!(
+            "footnote heartbeat stale {age}s but pid {pid} still answers"
+        ))
     }
 }
 
@@ -590,7 +640,7 @@ pub(crate) struct FnoRun {
 /// in-process path replace every caller at once.
 ///
 /// A launch failure is an Err. A nonzero exit is `ok: false` with the
-/// stderr, because several callers treat "the verb refused" as data rather
+/// stderr, because several callers treat "the command refused" as data rather
 /// than as a failure of their own.
 pub(crate) fn run_fno(args: &[&str]) -> Result<FnoRun, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
@@ -735,6 +785,36 @@ mod tests {
     use crate::state::RegistryEntry;
     use std::cell::RefCell;
 
+    /// The footnote reader: a fresh heartbeat names an unproven holder, a
+    /// stale one with its pid gone proves the end, and a stale one whose pid
+    /// still answers (or no heartbeat at all) proves nothing.
+    #[test]
+    fn the_footnote_reader_answers_from_its_heartbeat() {
+        let gone = |_: u32| true;
+        let alive = |_: u32| false;
+        let now = 10_000;
+        assert!(matches!(
+            footnote_holder("s", Some((now - 10, Some(7))), now, &gone),
+            SessionHolder::Held {
+                pid: Some(7),
+                proven: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            footnote_holder("s", Some((now - 3600, Some(7))), now, &gone),
+            SessionHolder::NotHeld(_)
+        ));
+        assert!(matches!(
+            footnote_holder("s", Some((now - 3600, Some(7))), now, &alive),
+            SessionHolder::Unmeasured(_)
+        ));
+        assert!(matches!(
+            footnote_holder("s", None, now, &gone),
+            SessionHolder::Unmeasured(_)
+        ));
+    }
+
     /// A pane row with no live identity beyond what the test sets.
     fn pane_row(pid: Option<u32>, session: Option<(&str, u64)>) -> RegistryEntry {
         let mut e = RegistryEntry::default();
@@ -834,29 +914,6 @@ mod tests {
             "detail: {}",
             stop.detail
         );
-    }
-
-    /// AC1-STALE: the stored pane id names no live pane; the pane found by
-    /// child pid is killed and the stale id is never read as already absent.
-    #[test]
-    fn ac1_stale_kills_the_pane_found_by_child_pid_never_the_stored_id() {
-        let log = Shared::new(RefCell::new(Log::default()));
-        let seams = seams(
-            log.clone(),
-            vec![PaneSighting {
-                session: "main".into(),
-                pane_id: 2034,
-                child_pid: Some(22287),
-            }],
-            Ok(true),
-            true,
-            true,
-            true,
-        );
-        let stop = stop_pane_process_confirmed_with(&test_row(), &seams);
-        assert!(stop.confirmed);
-        // The row's stored id is 1991; the kill went to the live 2034.
-        assert_eq!(log.borrow().kills, vec![("main".into(), 2034)]);
     }
 
     /// AC1-ESC: a pid that survives the pane kill gets SIGTERM, and the

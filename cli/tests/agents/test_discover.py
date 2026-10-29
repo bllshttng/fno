@@ -999,7 +999,7 @@ def test_daemon_probe_shapes_valid_rows_and_skips_bad_entries(monkeypatch):
     ]
 
 
-def test_daemon_probe_argv_rides_list_not_a_hidden_verb(monkeypatch):
+def test_daemon_probe_argv_rides_list_not_a_hidden_command(monkeypatch):
     from fno import rust_binary
 
     seen: dict = {}
@@ -1264,9 +1264,9 @@ def test_ac1_edge_source_overlap_dedups(tmp_path, monkeypatch):
 
 
 def test_opencode_row_without_captured_id_yields_no_live_recipient(tmp_path, monkeypatch):
-    """AC3-EDGE: opencode joining HARNESS_SESSION_ID_FIELDS must not widen discovery.
+    """AC3-EDGE: an id-less opencode row must not widen discovery.
 
-    The harness gate now admits opencode rows, so an id-less one (backfill
+    The roster gate admits opencode rows, so an id-less one (backfill
     missed, or a pane spawned before capture existed) reaches the `if not sid`
     guard instead of the harness guard. It must still contribute nothing, or
     mail would queue to a handle nobody drains.

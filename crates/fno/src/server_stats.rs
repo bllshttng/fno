@@ -5,7 +5,7 @@
 //! as an all-time fact. Reading never resets the counter.
 
 use crate::mux_cli::{control_roundtrip, env_server, resolve_session, EXIT_ERROR, EXIT_OK};
-use crate::proto::{self, ControlVerb, ServerMsg};
+use crate::proto::{self, ControlCommand, ServerMsg};
 
 /// Current time as a `YYYY-MM-DDThh:mm:ssZ` UTC stamp (same shape the squad
 /// store writes).
@@ -27,6 +27,31 @@ pub fn answer(touch_emit_failures: u64, started_at: &str) -> ServerMsg {
     }
 }
 
+/// The stats snapshot as one JSON string for the native scoreboard handoff
+/// (`fno whoami scoreboard` passes it to the fno-agents door as
+/// `FNO_MUX_STATS_JSON`, so the door reads the counter without a nested
+/// `fno` spawn). None when no live server answers; the door then reports
+/// Unknown, never zero.
+pub fn snapshot_for_scoreboard() -> Option<String> {
+    let session = resolve_session(None, env_server().as_deref());
+    let sock = proto::socket_path(&session).ok()?;
+    match control_roundtrip(&sock, &session, ControlCommand::ServerStats) {
+        Ok(ServerMsg::ServerStats {
+            touch_emit_failures,
+            started_at,
+            measured_at,
+        }) => Some(
+            serde_json::json!({
+                "touch_emit_failures": touch_emit_failures,
+                "started_at": started_at,
+                "measured_at": measured_at,
+            })
+            .to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// `fno mux stats [--json]`: server-instance telemetry over one control
 /// roundtrip. Read-only; the counter is never reset by reading it.
 pub fn cli(json: bool) -> i32 {
@@ -38,7 +63,7 @@ pub fn cli(json: bool) -> i32 {
             return EXIT_ERROR;
         }
     };
-    match control_roundtrip(&sock, &session, ControlVerb::ServerStats) {
+    match control_roundtrip(&sock, &session, ControlCommand::ServerStats) {
         Ok(ServerMsg::ServerStats {
             touch_emit_failures,
             started_at,

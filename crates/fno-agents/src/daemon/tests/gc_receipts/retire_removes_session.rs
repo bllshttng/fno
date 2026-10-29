@@ -203,6 +203,11 @@ fn stage_kept_row(
 /// surface and mux-member functions. Only the transcript store and the age
 /// read are staged - they locate the quiet, they touch no harness.
 fn production_sweep(home: &AgentsHome, quiet: std::path::PathBuf) -> GcSummary {
+    production_sweep_aged(home, quiet, 2 * 3600)
+}
+
+/// [`production_sweep`] with the age seam's answer named by the caller.
+fn production_sweep_aged(home: &AgentsHome, quiet: std::path::PathBuf, age_s: i64) -> GcSummary {
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let stop_home = home.clone();
     gc_sweep::run(
@@ -213,7 +218,7 @@ fn production_sweep(home: &AgentsHome, quiet: std::path::PathBuf) -> GcSummary {
         7,
         &crate::gc_sweep::read_graph_entries,
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        &uniform_ages(age_s),
         &move |e| gc_sweep::stop_row_process(&stop_home, e),
         &crate::gc_native::apply_active_surface_removal,
         &crate::gc_native::apply_mux_member_retirement,
@@ -469,7 +474,7 @@ fn stage_stopped_row(
         e.created_at = "2026-09-01T00:00:00Z".into();
         if with_stop {
             e.stop = Some(state::StopRecord {
-                by: "stop-verb".into(),
+                by: "stop-command".into(),
                 at: "2026-09-15T00:00:00Z".into(),
                 reason: None,
             });
@@ -502,8 +507,10 @@ fn a_row_fno_stopped_keeps_for_open_work() {
     let _swap = EnvSwap::to(&fake.bin_dir(), &fake.daemon_dir(), home.root(), None);
     let store_dir = home.root().join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
-    let quiet = quiet_transcript(&store_dir, "q.jsonl", 2 * 3600);
-    let summary = production_sweep(&home, quiet);
+    // Inside the origin ruling's one idle hour: past it, open work no
+    // longer keeps and the row takes the idle gate instead.
+    let quiet = quiet_transcript(&store_dir, "q.jsonl", 1800);
+    let summary = production_sweep_aged(&home, quiet, 1800);
 
     assert!(
         summary.retired.is_empty(),
@@ -568,8 +575,9 @@ fn a_planner_fno_stopped_holds_as_unclosed() {
     let _swap = EnvSwap::to(&fake.bin_dir(), &fake.daemon_dir(), home.root(), None);
     let store_dir = home.root().join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
-    let quiet = quiet_transcript(&store_dir, "q.jsonl", 2 * 3600);
-    let summary = production_sweep(&home, quiet);
+    // Inside the idle hour, so the unfinished-plan keep holds.
+    let quiet = quiet_transcript(&store_dir, "q.jsonl", 1800);
+    let summary = production_sweep_aged(&home, quiet, 1800);
 
     assert!(
         summary.retired.is_empty(),

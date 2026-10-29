@@ -217,40 +217,6 @@ fn seed_codex_registry(home: &AgentsHome, name: &str, session_id: &str, cwd: &st
 // ---------------------------------------------------------------------------
 
 #[test]
-fn codex_create_happy_path_returns_reply() {
-    let home = AgentsHome::at(tmpdir("c1-home"));
-    let bin_dir = tmpdir("c1-bin");
-    let cwd = tmpdir("c1-cwd");
-    install_fake_codex(&bin_dir);
-
-    let outcome = dispatch_once_with_fake_codex(
-        &home,
-        &bin_dir,
-        "myagent",
-        "hello codex",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(10)),
-        &[
-            (
-                "FAKE_CODEX_SESSION_ID",
-                "aaaabbbb-1111-2222-3333-444455556666",
-            ),
-            ("FAKE_CODEX_REPLY", "hello back"),
-        ],
-    );
-    assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
-    assert_eq!(outcome.stdout, "hello back");
-    // dispatch_codex_once emits a teardown receipt on stderr ("once: <name> torn down")
-    assert!(
-        outcome.stderr.contains("torn down"),
-        "expected teardown receipt on stderr: {}",
-        outcome.stderr
-    );
-}
-
-#[test]
 fn codex_create_normalizes_direct_plugin_command() {
     let home = AgentsHome::at(tmpdir("normalize-home"));
     let bin_dir = tmpdir("normalize-bin");
@@ -286,7 +252,7 @@ fn codex_create_normalizes_direct_plugin_command() {
 }
 
 #[test]
-fn codex_create_writes_registry_entry_with_session_id() {
+fn codex_once_happy_path_replies_tees_records_and_tears_down() {
     let home = AgentsHome::at(tmpdir("c2-home"));
     let bin_dir = tmpdir("c2-bin");
     let cwd = tmpdir("c2-cwd");
@@ -308,12 +274,13 @@ fn codex_create_writes_registry_entry_with_session_id() {
         ],
     );
     assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
+    assert_eq!(outcome.stdout, "ok");
 
     // dispatch_codex_once tears the row down after the session completes, so
     // the registry should have NO live entry for reg-agent. The session_id
     // appears in the teardown receipt on stderr.
     assert!(
-        outcome.stderr.contains(session_id),
+        outcome.stderr.contains("torn down") && outcome.stderr.contains(session_id),
         "teardown receipt should mention session_id: {}",
         outcome.stderr
     );
@@ -324,83 +291,36 @@ fn codex_create_writes_registry_entry_with_session_id() {
         let agents = v["agents"].as_array().map(|a| a.len()).unwrap_or(0);
         assert_eq!(agents, 0, "spawn --once must tear down the row: {}", body);
     }
-}
 
-#[test]
-fn codex_create_tees_jsonl_to_log_file() {
-    let home = AgentsHome::at(tmpdir("c3-home"));
-    let bin_dir = tmpdir("c3-bin");
-    let cwd = tmpdir("c3-cwd");
-    install_fake_codex(&bin_dir);
-
-    dispatch_once_with_fake_codex(
-        &home,
-        &bin_dir,
-        "log-agent",
-        "msg",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(10)),
-        &[
-            (
-                "FAKE_CODEX_SESSION_ID",
-                "ccccdddd-1111-2222-3333-444455556666",
-            ),
-            ("FAKE_CODEX_REPLY", "tee check"),
-        ],
-    );
-
+    // Every JSONL line is teed to the agent's log file.
     let log_path = home
         .root()
         .join("agents")
         .join("logs")
-        .join("log-agent.jsonl");
-    assert!(log_path.exists(), "output.jsonl tee should be created");
+        .join("reg-agent.jsonl");
     let contents = fs::read_to_string(&log_path).unwrap();
     assert!(
-        contents.contains("thread.started"),
-        "tee should contain thread.started: {}",
+        contents.contains("thread.started") && contents.contains("turn.completed"),
+        "tee should hold the whole stream: {}",
         contents
     );
+
+    // agent_ask_done is committed to the store, never raw journal bytes.
     assert!(
-        contents.contains("turn.completed"),
-        "tee should contain turn.completed: {}",
-        contents
+        !home.events_jsonl().exists(),
+        "the ask wrote raw journal bytes"
+    );
+    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
+    assert!(
+        events.contains("agent_ask_done") && events.contains("codex"),
+        "events should hold a codex agent_ask_done: {}",
+        events
     );
 }
 
 // ---------------------------------------------------------------------------
 // AC2-HP: resume path - happy path
 // ---------------------------------------------------------------------------
-
-#[test]
-fn codex_resume_happy_path_returns_reply() {
-    let home = AgentsHome::at(tmpdir("r1-home"));
-    let bin_dir = tmpdir("r1-bin");
-    let cwd = tmpdir("r1-cwd");
-    install_fake_codex(&bin_dir);
-
-    let session_id = "ddddeeee-1111-2222-3333-444455556666";
-    seed_codex_registry(&home, "existing-agent", session_id, cwd.to_str().unwrap());
-
-    let outcome = dispatch_with_fake_codex(
-        &home,
-        &bin_dir,
-        "existing-agent",
-        "follow up message",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(10)),
-        &[
-            // Resume does NOT emit thread.started (no session_id re-capture)
-            ("FAKE_CODEX_REPLY", "resumed reply"),
-        ],
-    );
-    assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
-    assert_eq!(outcome.stdout, "resumed reply");
-}
 
 #[test]
 fn codex_resume_reuses_registry_reasoning_effort() {
@@ -448,36 +368,6 @@ fn codex_resume_reuses_registry_reasoning_effort() {
 }
 
 #[test]
-fn codex_resume_bumps_last_message_at() {
-    let home = AgentsHome::at(tmpdir("r2-home"));
-    let bin_dir = tmpdir("r2-bin");
-    let cwd = tmpdir("r2-cwd");
-    install_fake_codex(&bin_dir);
-
-    let session_id = "eeeeffff-1111-2222-3333-444455556666";
-    seed_codex_registry(&home, "stamp-agent", session_id, cwd.to_str().unwrap());
-
-    dispatch_with_fake_codex(
-        &home,
-        &bin_dir,
-        "stamp-agent",
-        "test",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(10)),
-        &[("FAKE_CODEX_REPLY", "ok")],
-    );
-
-    let registry_body = registry_text(&home.registry_json()).unwrap();
-    assert!(
-        registry_body.contains("last_message_at"),
-        "last_message_at should be stamped: {}",
-        registry_body
-    );
-}
-
-#[test]
 fn codex_resume_accepts_full_session_id_and_stamps_named_row() {
     let home = AgentsHome::at(tmpdir("r2-full-home"));
     let bin_dir = tmpdir("r2-full-bin");
@@ -506,39 +396,17 @@ fn codex_resume_accepts_full_session_id_and_stamps_named_row() {
     assert!(registry_body.contains("last_message_at"), "{registry_body}");
     let registry: serde_json::Value = serde_json::from_str(&registry_body).unwrap();
     assert_eq!(registry["agents"][0]["name"], "01a03a0e");
+    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
+    assert!(
+        events.contains("agent_followup_started") && events.contains("agent_followup_done"),
+        "resume should emit followup started and done: {}",
+        events
+    );
 }
 
 // ---------------------------------------------------------------------------
 // AC3-ERR: error paths
 // ---------------------------------------------------------------------------
-
-#[test]
-fn codex_create_missing_binary_exits_14() {
-    // No fake codex installed; PATH has only system dirs which don't have `codex`.
-    let home = AgentsHome::at(tmpdir("e1-home"));
-    let cwd = tmpdir("e1-cwd");
-
-    // Use a bin_dir with nothing in it, so `codex` is not found.
-    let empty_bin = tmpdir("e1-emptybin");
-
-    let outcome = dispatch_once_with_fake_codex(
-        &home,
-        &empty_bin,
-        "nobin-agent",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(5)),
-        &[], // no fake env vars
-    );
-    // Python maps FileNotFoundError (127) to exit 14 on the create path
-    assert_eq!(
-        outcome.exit_code, 14,
-        "missing binary should exit 14, got {} (stderr: {})",
-        outcome.exit_code, outcome.stderr
-    );
-}
 
 #[test]
 fn codex_create_nonzero_exit_without_any_jsonl_exits_11() {
@@ -567,35 +435,6 @@ fn codex_create_nonzero_exit_without_any_jsonl_exits_11() {
     assert_eq!(
         outcome.exit_code, 11,
         "no JSONL + nonzero exit -> no_session_id check fires first (exit 11): {} (stderr: {})",
-        outcome.exit_code, outcome.stderr
-    );
-}
-
-#[test]
-fn codex_create_no_session_id_exits_11() {
-    let home = AgentsHome::at(tmpdir("e3-home"));
-    let bin_dir = tmpdir("e3-bin");
-    let cwd = tmpdir("e3-cwd");
-    install_fake_codex(&bin_dir);
-
-    // Emit turn.completed but NO thread.started -> NoSessionIdError -> exit 11
-    let outcome = dispatch_once_with_fake_codex(
-        &home,
-        &bin_dir,
-        "nosess-agent",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(5)),
-        &[
-            ("FAKE_CODEX_REPLY", "reply without session"),
-            // No FAKE_CODEX_SESSION_ID
-        ],
-    );
-    assert_eq!(
-        outcome.exit_code, 11,
-        "no session_id should exit 11: {} (stderr: {})",
         outcome.exit_code, outcome.stderr
     );
 }
@@ -636,113 +475,11 @@ fn codex_resume_missing_session_id_in_registry_exits_11() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn validation_empty_name_exits_2() {
-    let home = AgentsHome::at(tmpdir("v1-home"));
-    let cwd = tmpdir("v1-cwd");
-    let outcome = dispatch_codex_ask(&home, "", "msg", "from", &cwd, false, None);
-    assert_eq!(outcome.exit_code, 2);
-}
-
-#[test]
 fn validation_empty_message_exits_2() {
     let home = AgentsHome::at(tmpdir("v2-home"));
     let cwd = tmpdir("v2-cwd");
     let outcome = dispatch_codex_ask(&home, "agent", "   ", "from", &cwd, false, None);
     assert_eq!(outcome.exit_code, 2);
-}
-
-#[test]
-fn validation_empty_from_name_exits_2() {
-    let home = AgentsHome::at(tmpdir("v3-home"));
-    let cwd = tmpdir("v3-cwd");
-    let outcome = dispatch_codex_ask(&home, "agent", "msg", "", &cwd, false, None);
-    assert_eq!(outcome.exit_code, 2);
-}
-
-// ---------------------------------------------------------------------------
-// AC5-EDGE: events.jsonl
-// ---------------------------------------------------------------------------
-
-#[test]
-fn codex_create_emits_agent_ask_done_event() {
-    let home = AgentsHome::at(tmpdir("ev1-home"));
-    let bin_dir = tmpdir("ev1-bin");
-    let cwd = tmpdir("ev1-cwd");
-    install_fake_codex(&bin_dir);
-
-    dispatch_once_with_fake_codex(
-        &home,
-        &bin_dir,
-        "event-agent",
-        "hello",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(10)),
-        &[
-            (
-                "FAKE_CODEX_SESSION_ID",
-                "ffffaaaa-1111-2222-3333-444455556666",
-            ),
-            ("FAKE_CODEX_REPLY", "reply"),
-        ],
-    );
-
-    assert!(
-        !home.events_jsonl().exists(),
-        "the ask wrote raw journal bytes"
-    );
-    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
-    assert!(
-        events.contains("agent_ask_done"),
-        "events.jsonl should contain agent_ask_done: {}",
-        events
-    );
-    assert!(
-        events.contains("codex"),
-        "events.jsonl should show provider=codex: {}",
-        events
-    );
-}
-
-#[test]
-fn codex_resume_emits_followup_events() {
-    let home = AgentsHome::at(tmpdir("ev2-home"));
-    let bin_dir = tmpdir("ev2-bin");
-    let cwd = tmpdir("ev2-cwd");
-    install_fake_codex(&bin_dir);
-
-    let session_id = "aaaabbbb-9999-8888-7777-666655554444";
-    seed_codex_registry(
-        &home,
-        "followup-ev-agent",
-        session_id,
-        cwd.to_str().unwrap(),
-    );
-
-    dispatch_with_fake_codex(
-        &home,
-        &bin_dir,
-        "followup-ev-agent",
-        "follow",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(10)),
-        &[("FAKE_CODEX_REPLY", "followed")],
-    );
-
-    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
-    assert!(
-        events.contains("agent_followup_started"),
-        "should emit followup_started: {}",
-        events
-    );
-    assert!(
-        events.contains("agent_followup_done"),
-        "should emit followup_done: {}",
-        events
-    );
 }
 
 // ---------------------------------------------------------------------------

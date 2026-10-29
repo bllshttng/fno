@@ -4,7 +4,7 @@
 #
 #   AC8  promoted + live spawned workers + shape: team -> no orphan nudge, no
 #        lead_orphan_block event
-#   AC9  shape: pass -> the nudge fires and option 1 names the verb
+#   AC9  shape: pass -> the nudge fires and option 1 names the command
 #   AC10 no manifest (or one without a shape) -> the nudge fires
 #   AC11 the manifest sits only in the role ROW's cwd space -> no nudge
 #
@@ -138,7 +138,7 @@ reset_events() {
 # keys the row, so the fixture computes the same root the resolver makes,
 # with the same shim + env rather than re-deriving the slug here.
 space_leads() {  # space_leads <dir> - the leads dir of <dir>'s space
-  (cd "$SBX" && SBX="$1" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'import os; from pathlib import Path; from fno.lead.state import lead_state_root; print(lead_state_root(Path(os.environ["SBX"])) / "leads")')
+  (cd "$SBX" && SBX="$1" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'import os; from pathlib import Path; from fno.paths import space_dir; print(space_dir(Path(os.environ["SBX"])) / "leads")')
 }
 LEADS_DIR="$(space_leads "$SBX")"
 mkdir -p "$LEADS_DIR"
@@ -152,12 +152,12 @@ write_shape() {  # write_shape <shape|none|garbage>
   esac
 }
 
-# === AC9: shape pass -> the nudge fires, option 1 names the verb ==============
+# === AC9: shape pass -> the nudge fires, option 1 names the command ==============
 reset_events
 write_shape pass
 run_hook "$(payload)"
 assert_contains "AC9: orphan nudge fires on shape: pass" "$OUT" "2 worker(s) you spawned are still alive"
-assert_contains "AC9: option 1 names the shape verb" "$OUT" "fno agents org chart shape team"
+assert_contains "AC9: option 1 names the shape command" "$OUT" "fno agents org chart shape team"
 events_has lead_orphan_block && ok "AC9: lead_orphan_block event written" || bad "AC9: no lead_orphan_block event"
 
 # === AC10: no manifest -> the nudge fires (read failure never clears) =========

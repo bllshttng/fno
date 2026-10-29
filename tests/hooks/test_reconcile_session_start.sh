@@ -47,7 +47,7 @@ if [[ "${1:-}" == "backlog" && "${2:-}" == "reconcile" ]]; then
 fi
 # `retro run` optionally fails when the harness asks (FNO_RETRO_FAIL=1) so the
 # isolation test can prove a failed harvest never aborts the chained job.
-if [[ "${1:-}" == "retro" && "${2:-}" == "run" ]]; then
+if [[ "${1:-}" == "backlog" && "${2:-}" == "retro" && "${3:-}" == "run" ]]; then
     [[ "${FNO_RETRO_FAIL:-0}" == "1" ]] && exit 1
     echo "(no retro-pending sentinels to triage)"
 fi
@@ -92,7 +92,7 @@ STAMP1="$REPO1/.fno/.reconcile-stamp"
 RECONCILE_THROTTLE_SECONDS=900 reconcile_maybe_fire "$REPO1"
 [[ -f "$STAMP1" ]] || fail "fire: throttle stamp was not written"
 wait_for_file "$RESULT1" || fail "fire: result json never published by bg reconcile"
-wait_for_log_line "^retro drain-postmortems$" \
+wait_for_log_line "^backlog retro drain-postmortems$" \
     || fail "fire: detached reconcile chain never completed"
 grep -q "backlog reconcile --json" "$FNO_CALL_LOG" \
     || fail "fire: fno not invoked with 'backlog reconcile --json' (got: $(cat "$FNO_CALL_LOG"))"
@@ -104,10 +104,10 @@ pass "fire: absent stamp fires mutate reconcile, publishes result, writes stamp"
 # AC3-HP: the same fired job chains `fno backlog retro run` AFTER reconcile (the
 # web-merge harvest backstop), so a merge that dropped no local event still gets
 # its retro/carveout harvest within one throttle window.
-grep -q "^retro run$" "$FNO_CALL_LOG" \
+grep -q "^backlog retro run$" "$FNO_CALL_LOG" \
     || fail "chain: 'retro run' was not invoked in the fired job (got: $(cat "$FNO_CALL_LOG"))"
 recon_line=$(grep -n "backlog reconcile --json" "$FNO_CALL_LOG" | head -1 | cut -d: -f1)
-retro_line=$(grep -n "^retro run$" "$FNO_CALL_LOG" | head -1 | cut -d: -f1)
+retro_line=$(grep -n "^backlog retro run$" "$FNO_CALL_LOG" | head -1 | cut -d: -f1)
 [[ -n "$recon_line" && -n "$retro_line" && "$retro_line" -gt "$recon_line" ]] \
     || fail "chain: 'retro run' did not run AFTER reconcile (recon@$recon_line retro@$retro_line)"
 pass "chain: retro run fires after reconcile in the same throttled job"
@@ -439,9 +439,9 @@ RESULT_RF="$REPO_RF/.fno/.reconcile-result.json"
 : > "$FNO_CALL_LOG"
 FNO_RETRO_FAIL=1 RECONCILE_THROTTLE_SECONDS=0 reconcile_maybe_fire "$REPO_RF"
 wait_for_file "$RESULT_RF" || fail "chain-fail: result json not published despite retro failing"
-wait_for_log_line "^retro drain-postmortems$" \
+wait_for_log_line "^backlog retro drain-postmortems$" \
     || fail "chain-fail: detached chain never completed after retro failure"
-grep -q "^retro run$" "$FNO_CALL_LOG" || fail "chain-fail: retro run not attempted"
+grep -q "^backlog retro run$" "$FNO_CALL_LOG" || fail "chain-fail: retro run not attempted"
 grep -q "backlog capture tidy" "$FNO_CALL_LOG" \
     || fail "chain-fail: tidy skipped after retro failure (job aborted early)"
 pass "chain: failed retro run is isolated; reconcile publish + tidy still run"

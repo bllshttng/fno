@@ -300,7 +300,7 @@ pub(crate) fn stored_token(path: &Path, key: &str) -> Option<String> {
 // The notify_watch arm
 // ---------------------------------------------------------------------------
 
-/// Board queues the arm subscribes to: key -> (pointer verb, count label).
+/// Board queues the arm subscribes to: key -> (pointer command, count label).
 const BOARD_QUEUES: [(&str, &str, &str); 4] = [
     (
         "operator_question",
@@ -448,6 +448,14 @@ pub fn run_notify_watch(
         }
     }
 
+    // Release lane: the newest finished release.yml run per repo. A failure
+    // pages once per run and mails the head lead; a pass clears the signal.
+    if signals.iter().any(|s| s == "release_run") {
+        for root in roots {
+            acted += crate::release_watch::pass(root, &path, now, min_interval_s, &mut notes);
+        }
+    }
+
     WatchOutcome {
         acted,
         skip_reason: skip,
@@ -461,7 +469,7 @@ pub struct WatchOutcome {
     pub detail: String,
 }
 
-fn verdict_label(v: Verdict) -> &'static str {
+pub(crate) fn verdict_label(v: Verdict) -> &'static str {
     match v {
         Verdict::Sent => "sent",
         Verdict::Deduped => "deduped",
@@ -642,7 +650,7 @@ fn head_commit_age_s(root: &Path, slug: &str, ref_enc: &str) -> Option<u64> {
 }
 
 /// `owner/repo` from an https or scp-form git remote url, empty when unclear.
-fn slug_from_remote(url: &str) -> String {
+pub(crate) fn slug_from_remote(url: &str) -> String {
     let mut u = url.trim().trim_end_matches(".git").trim().to_string();
     if let Some(pos) = u.find("://") {
         u = u[pos + 3..].to_string();
@@ -683,7 +691,12 @@ fn percent_encode_ref(s: &str) -> String {
 /// Run one capture command inside `cwd`, bounded by `timeout`, stdout
 /// drained on its own thread so a chatty child cannot deadlock the wait.
 /// Returns stdout regardless of exit status; the caller judges the content.
-fn run_captured(bin: &str, args: &[&str], cwd: &Path, timeout: Duration) -> Option<String> {
+pub(crate) fn run_captured(
+    bin: &str,
+    args: &[&str],
+    cwd: &Path,
+    timeout: Duration,
+) -> Option<String> {
     // The fleet budget admits before the spawn: a refused gh read takes the
     // caller's unreadable branch instead of sending the request.
     if crate::gh_budget::admit_spawn(OsStr::new(bin), args).is_some() {
@@ -715,14 +728,14 @@ fn run_captured(bin: &str, args: &[&str], cwd: &Path, timeout: Duration) -> Opti
 }
 
 // ---------------------------------------------------------------------------
-// The verb
+// The command
 // ---------------------------------------------------------------------------
 
 /// `fno-agents notify-watch --json [--root PATH]...`: run one pass, print the
 /// receipt, exit 0 - an honest skip is the tick row's business, never an
-/// error. Not a routable `fno agents` verb (matched with `==` beside `board`),
-/// so the routable-verb parity guard sees no new advertised verb.
-pub fn run_notify_watch_verb(args: &[String]) -> i32 {
+/// error. Not a routable `fno agents` command (matched with `==` beside `board`),
+/// so the routable-command parity guard sees no new advertised command.
+pub fn run_notify_watch_command(args: &[String]) -> i32 {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -914,8 +927,12 @@ mod tests {
     fn wait_argv(path: &Path, timeout: Duration) -> Vec<String> {
         let deadline = Instant::now() + timeout;
         loop {
+            // The stub's redirect creates the file before printf writes it,
+            // so an empty read is a write still in flight, not the argv.
             if let Ok(text) = std::fs::read_to_string(path) {
-                return text.lines().map(|l| l.to_string()).collect();
+                if text.ends_with('\n') {
+                    return text.lines().map(|l| l.to_string()).collect();
+                }
             }
             if Instant::now() >= deadline {
                 panic!("argv file never appeared: {}", path.display());

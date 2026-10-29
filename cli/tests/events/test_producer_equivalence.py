@@ -146,9 +146,9 @@ _NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None
 
 def _hook_env() -> dict:
     """The hook classifies through `$FNO do review classify`, and since the
-    Python leaf retired that verb answers only through the Rust front, which
+    Python leaf retired that command answers only through the Rust front, which
     execs the findings door. Point FNO at the checkout's front with the door
-    pinned beside it; the front forwards the hook's Python verbs to the wheel
+    pinned beside it; the front forwards the hook's Python commands to the wheel
     unchanged. Without a front the positive hook tests skip rather than score
     a silent no-event pass."""
     env = _base_env()

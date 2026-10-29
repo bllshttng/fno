@@ -11,7 +11,7 @@
 #
 # Defaults:
 #   window: 30 days (or since watermark, whichever is more recent)
-#   severity filter: S1,S2 (monthly review). Pass --severity S0 to filter to S0 only.
+#   severity filter: S1,S2 (weekly review). Pass --severity S0 to filter to S0 only.
 #   format: yaml
 
 set -euo pipefail
@@ -216,8 +216,8 @@ while IFS= read -r line; do
 done < "$FILTERED_EVENTS"
 
 # -------------------------------------------------------------------
-# The SOURCE field names the verb its postmortem rows came from
-# (target-postmortem -> target). Resolve that verb's SKILL.md into the
+# The SOURCE field names the command its postmortem rows came from
+# (target-postmortem -> target). Resolve that command's SKILL.md into the
 # implicated set with its full text, so the review can propose a diff to
 # the skill itself. A source that is not *-postmortem, or whose resolved
 # path does not exist, adds nothing.
@@ -227,11 +227,11 @@ SKILL_LIST="$TMPDIR_PACK/skills.txt"
 while IFS= read -r line; do
   src="$(printf '%s' "$line" | awk -F' \\| ' '{print $3}')"
   case "$src" in
-    *-postmortem) verb="${src%-postmortem}" ;;
+    *-postmortem) command="${src%-postmortem}" ;;
     *) continue ;;
   esac
-  [[ -z "$verb" ]] && continue
-  skill_file="$REPO_ROOT_PACK/skills/$verb/SKILL.md"
+  [[ -z "$command" ]] && continue
+  skill_file="$REPO_ROOT_PACK/skills/$command/SKILL.md"
   [[ -f "$skill_file" ]] && printf '%s\n' "$skill_file" >> "$SKILL_LIST"
 done < "$FILTERED_EVENTS"
 UNIQ_IMPLICATED="$TMPDIR_PACK/implicated-uniq.txt"

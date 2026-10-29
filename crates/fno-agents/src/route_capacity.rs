@@ -4,49 +4,29 @@
 //! Port of the Python `route_resolve.runtime_capacity` + `runtime_state.headrooms`
 //! (both deleted there, law d-b6cc1a2a): one headroom implementation lives in
 //! `fallback_chain::headroom`, one state-file reader here, and one probe path
-//! through the existing `fno config accounts usage --refresh --json` verb.
+//! through `accounts::usage::refreshed`, the `usage --refresh --json` report.
 //! The refresh is fail-open: a failed probe leaves the readings as they were
 //! and the walk judges on the stale evidence, naming it in the chain.
 
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-use crate::fallback_chain::{
-    headroom, health_from_map, parse_provider_health, parse_usage, snapshot_from_map, Snapshot,
-    Verdict,
-};
+use crate::accounts::state::{parse_health, parse_usage};
+use crate::fallback_chain::headroom;
 
 /// The harnesses the Python default named, plus every inventory row's harness.
 pub(crate) const DEFAULT_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
 
-/// How long the one refresh subprocess may run: the verb probes every
+/// How long the one refresh subprocess may run: the command probes every
 /// account record, each network probe bounded at 10s, so the walk pays this
 /// at most once per call.
 pub(crate) const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The provider runtime-state payload: `$FNO_RUNTIME_STATE_PATH`, else the
-/// configured state root's `state/provider-runtime-state.json`, reading the
-/// legacy root spelling while it exists (the Python writer renames it on its
-/// first resolve). An unreadable file is an empty payload (unlocked),
-/// matching the Python reader's None arm.
+/// The provider runtime-state payload at `provider_cap::runtime_state_path`.
+/// An unreadable file is an empty payload (unlocked), matching the Python
+/// reader's None arm.
 pub(crate) fn runtime_state_payload(config_cwd: &Path) -> Value {
-    let path: PathBuf = match std::env::var_os("FNO_RUNTIME_STATE_PATH") {
-        Some(override_) => PathBuf::from(override_),
-        None => {
-            let root =
-                crate::agents_config::state_dir(config_cwd).unwrap_or_else(default_state_dir);
-            let new = root.join("state").join("provider-runtime-state.json");
-            let legacy = root.join("provider-runtime-state.json");
-            if !new.exists() && legacy.exists() {
-                legacy
-            } else {
-                new
-            }
-        }
-    };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+    crate::accounts::state::read_raw(&crate::provider_cap::runtime_state_path(config_cwd))
         .unwrap_or(Value::Null)
 }
 
@@ -69,7 +49,7 @@ fn providers_root(cwd: &Path) -> PathBuf {
 /// first, then `[[accounts.records]]` bound to it, de-duplicated in that
 /// order. A row's `route` names a vendor, never an account id, and
 /// contributes nothing (the Python row.accounts() rule verbatim).
-fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String> {
+fn harness_accounts(harness: &str, inventory: &Value, records: &[toml::Value]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |a: &str| {
         let a = a.trim();
@@ -87,21 +67,17 @@ fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String>
             }
         }
     }
-    if let Some(records) = crate::agents_config::config_lookup(cwd, &["accounts", "records"])
-        .and_then(|v| v.as_array().cloned())
-    {
-        for rec in &records {
-            let bound = rec
-                .get("harness")
-                .or_else(|| rec.get("cli"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if bound != harness {
-                continue;
-            }
-            if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
-                push(id);
-            }
+    for rec in records {
+        let bound = rec
+            .get("harness")
+            .or_else(|| rec.get("cli"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if bound != harness {
+            continue;
+        }
+        if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
+            push(id);
         }
     }
     out
@@ -112,40 +88,76 @@ fn harness_accounts(harness: &str, inventory: &Value, cwd: &Path) -> Vec<String>
 /// attribution owner alone answers, never credentials.
 fn identity_evidence(harness: &str, accounts: &[String], root: &Path) -> Map<String, Value> {
     let mut out = Map::new();
-    let text = std::fs::read_to_string(root.join(format!(".active-{harness}"))).ok();
-    let tainted = root.join(format!(".active-{harness}.tainted")).exists();
-    let Some(active) = text
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .filter(|_| !tainted)
+    let active = crate::accounts::slot::active_slot_id(harness, Some(root), root)
+        .ok()
+        .flatten();
+    let Some(active) = active.filter(|_| !crate::accounts::store::slot_tainted(root, harness))
     else {
         return out;
     };
     for a in accounts {
         out.insert(
             a.clone(),
-            json!(if a == active { "proven" } else { "mismatch" }),
+            json!(if *a == active { "proven" } else { "mismatch" }),
         );
     }
     out
 }
 
-/// Run the existing probe verb once and parse its one JSON object. Returns
-/// None on spawn failure, timeout, AC4-EDGE, or bad JSON: fail-open, the
-/// readings stay as they were.
+/// Probe every account once, in process, and return the `usage --refresh
+/// --json` map. Returns None on an unreadable config or past `timeout`:
+/// fail-open, the readings stay as they were. A probe still running at the
+/// deadline finishes on its thread; its cache write is atomic.
+#[cfg(not(test))]
 pub(crate) fn refresh_usage_readings(
     cwd: &Path,
     timeout: std::time::Duration,
 ) -> Option<Map<String, Value>> {
-    let stdout = crate::provider_cap_verbs::run_fno_output(
-        &["config", "accounts", "usage", "--refresh", "--json"],
-        Some(cwd),
-        timeout,
-    )?;
-    match serde_json::from_str::<Value>(&stdout) {
-        Ok(Value::Object(m)) => Some(m),
-        _ => None,
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cwd = cwd.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::accounts::usage::refreshed(&cwd));
+    });
+    rx.recv_timeout(timeout).ok().flatten()
+}
+
+/// A test never probes the live machine: the installed stub answers.
+#[cfg(test)]
+pub(crate) fn refresh_usage_readings(
+    _cwd: &Path,
+    _timeout: std::time::Duration,
+) -> Option<Map<String, Value>> {
+    REFRESH_STUB
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|answer| answer())
+}
+
+#[cfg(test)]
+type RefreshAnswer = Box<dyn Fn() -> Option<Map<String, Value>> + Send>;
+
+#[cfg(test)]
+static REFRESH_STUB: std::sync::Mutex<Option<RefreshAnswer>> = std::sync::Mutex::new(None);
+
+/// The refresh answer a test installs; it is removed again on drop.
+#[cfg(test)]
+pub(crate) struct RefreshStub;
+
+#[cfg(test)]
+impl RefreshStub {
+    pub(crate) fn install(
+        answer: impl Fn() -> Option<Map<String, Value>> + Send + 'static,
+    ) -> Self {
+        *REFRESH_STUB.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(answer));
+        RefreshStub
+    }
+}
+
+#[cfg(test)]
+impl Drop for RefreshStub {
+    fn drop(&mut self) {
+        *REFRESH_STUB.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -157,15 +169,6 @@ fn rank(state: &str) -> i32 {
         "low" => 2,
         "exhausted" | "blocked" => 0,
         _ => 1,
-    }
-}
-
-fn word(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Exhausted => "exhausted",
-        Verdict::Low => "low",
-        Verdict::Ok => "ok",
-        _ => "unknown",
     }
 }
 
@@ -190,12 +193,13 @@ pub(crate) fn capacity(
         }
     }
     let raw = runtime_state_payload(cwd);
-    let health = parse_provider_health(&raw);
+    let health = parse_health(&raw);
     let usage = parse_usage(&raw);
     let roots = providers_root(cwd);
+    let records = crate::accounts::records::raw_records(None, cwd);
     let mut out = Map::new();
     for harness in &harnesses {
-        let accounts = harness_accounts(harness, inventory, cwd);
+        let accounts = harness_accounts(harness, inventory, &records);
         let evidence = identity_evidence(harness, &accounts, &roots);
         let mut detail: Map<String, Value> = Map::new();
         let mut sources: Map<String, Value> = Map::new();
@@ -208,10 +212,10 @@ pub(crate) fn capacity(
                 match refreshed.and_then(|m| m.get(account)) {
                     // The in-memory observation wins over the disk read.
                     Some(row) if row.get("windows").is_some() => {
-                        let snap = Snapshot::from_refresh_row(row);
+                        let snap = crate::accounts::state::parse_snapshot(row);
                         let hv = headroom(None, snap.as_ref(), now);
                         (
-                            word(hv.verdict).to_string(),
+                            hv.verdict.as_str().to_string(),
                             hv.source.to_string(),
                             hv.observed_at,
                             hv.resets_at,
@@ -232,13 +236,9 @@ pub(crate) fn capacity(
                         )
                     }
                     None => {
-                        let hv = headroom(
-                            health_from_map(health.get(account)).as_ref(),
-                            snapshot_from_map(usage.get(account)).as_ref(),
-                            now,
-                        );
+                        let hv = headroom(health.get(account), usage.get(account), now);
                         (
-                            word(hv.verdict).to_string(),
+                            hv.verdict.as_str().to_string(),
                             hv.source.to_string(),
                             hv.observed_at,
                             hv.resets_at,
@@ -285,7 +285,7 @@ pub(crate) fn capacity(
 }
 
 /// The `{harness: state}` summary the walk answer carries: the one piece the
-/// Python `explain` renderer built, now read straight off the verb's answer.
+/// renderer built, now read straight off the command's answer.
 pub(crate) fn capacity_summary(capacity: &Value) -> Value {
     Value::Object(
         capacity
@@ -456,9 +456,10 @@ mod tests {
             {"name": "opus-x", "harness": "claude", "model": "o", "route": "zai/glm-5.3"},
             {"name": "flash-x", "harness": "claude", "model": "f", "account": "paid-lane"},
         ]));
-        let accounts = harness_accounts("claude", &inventory, env.dir.path());
+        let records = crate::accounts::records::raw_records(None, env.dir.path());
+        let accounts = harness_accounts("claude", &inventory, &records);
         assert_eq!(accounts, vec!["paid-lane".to_string(), "rec-a".to_string()]);
-        let accounts = harness_accounts("codex", &inventory, env.dir.path());
+        let accounts = harness_accounts("codex", &inventory, &records);
         assert_eq!(accounts, vec!["rec-b".to_string()]);
     }
 }

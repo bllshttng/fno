@@ -14,8 +14,8 @@
 #
 # Compared per reviewer: the invocation string, whether it is a self-cert
 # (Python `asserts == "self-cert"`, Rust's third tuple element), and the
-# per-harness verb overrides (Python `invocations` map, Rust's fourth element
-# encoded `"harness=verb;..."`).
+# per-harness command overrides (Python `invocations` map, Rust's fourth element
+# encoded `"harness=command;..."`).
 #
 # A name added on one side is a reviewer the other cannot explain. A drifted
 # invocation is worse: the blocked reason then tells a wedged session to run a
@@ -80,7 +80,7 @@ def read(path, label):
 
 
 def _normalize_per_harness(value):
-    """Coerce a per-harness map to a plain {harness: verb} dict, {} if absent."""
+    """Coerce a per-harness map to a plain {harness: command} dict, {} if absent."""
     if not isinstance(value, dict):
         return {}
     return {str(k): str(v) for k, v in value.items()}
@@ -113,25 +113,26 @@ def extract_python(src, path):
                 fail(f"reviewer {key.value!r} in {path} is not a ReviewerDescriptor(...)")
             fields = {}
             for kw in val.keywords:
-                if kw.arg in ("invocation", "asserts", "invocations"):
+                if kw.arg in ("invocation", "asserts", "invocations", "requires"):
                     try:
                         fields[kw.arg] = ast.literal_eval(kw.value)
                     except ValueError:
                         fail(f"reviewer {key.value!r} in {path} has a non-literal {kw.arg}")
             invocation = fields.get("invocation")
             asserts = fields.get("asserts")
+            requires = fields.get("requires")
             if not isinstance(invocation, str) or not invocation:
                 fail(f"reviewer {key.value!r} in {path} declares no invocation")
             if asserts not in ("review-evidence", "self-cert"):
                 fail(f"reviewer {key.value!r} in {path} declares no valid asserts")
             per = _normalize_per_harness(fields.get("invocations"))
-            out[key.value] = (invocation, asserts == "self-cert", per)
+            out[key.value] = (invocation, asserts == "self-cert", per, requires)
         return out
     fail(f"_RESOLVABLE_REVIEWERS not found in {path}")
 
 
 def _parse_per_harness(s):
-    """Parse Rust's `"harness=verb;harness=verb"` encoding to a {harness: verb} dict."""
+    """Parse Rust's `"harness=command;harness=command"` encoding to a {harness: command} dict."""
     out = {}
     for pair in s.split(";"):
         pair = pair.strip()
@@ -187,8 +188,43 @@ def extract_rust(src, path):
     return out
 
 
+def extract_rust_requires(src, path):
+    """{name: requires} from REVIEWER_BUILTIN_REQUIRES in the same Rust file.
+
+    The `requires` capability column the review gate's descriptor union
+    reads. A reviewer in REVIEWER_INVOCATIONS with no requires row here is a
+    name the gate cannot compose a descriptor for, and is flagged like any
+    other one-sided declaration.
+    """
+    m = re.search(
+        r"const\s+REVIEWER_BUILTIN_REQUIRES\s*:\s*&\[\(&str,\s*&str\)\]\s*=\s*&\[(.*?)\n\];",
+        src,
+        re.S,
+    )
+    if not m:
+        fail(f"REVIEWER_BUILTIN_REQUIRES not found in {path}")
+    entries = re.findall(
+        r'\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)',
+        m.group(1),
+        re.S,
+    )
+    if not entries:
+        fail(f"REVIEWER_BUILTIN_REQUIRES in {path} did not extract as (name, requires)")
+    opened = len(re.findall(r'\(\s*"', m.group(1)))
+    if opened != len(entries):
+        fail(
+            f"REVIEWER_BUILTIN_REQUIRES in {path}: {opened} entries present but only "
+            f"{len(entries)} parsed; an unmatched entry would be compared as absent"
+        )
+    return {
+        name.encode().decode("unicode_escape"): req.encode().decode("unicode_escape")
+        for name, req in entries
+    }
+
+
 py = extract_python(read(python_path, "Python"), python_path)
 rs = extract_rust(read(rust_path, "Rust"), rust_path)
+rs_req = extract_rust_requires(read(rust_path, "Rust"), rust_path)
 
 if not py:
     fail(f"no reviewers extracted from {python_path}")
@@ -213,9 +249,15 @@ for name in sorted(set(py) | set(rs)):
         )
     elif py[name][2] != rs[name][2]:
         problems.append(
-            f"  {name}: per-harness verbs differ\n"
+            f"  {name}: per-harness commands differ\n"
             f"    Python: {py[name][2]!r}\n"
             f"    Rust  : {rs[name][2]!r}"
+        )
+    elif py[name][3] != rs_req.get(name):
+        problems.append(
+            f"  {name}: requires capability differs\n"
+            f"    Python: {py[name][3]!r}\n"
+            f"    Rust  : {rs_req.get(name)!r}"
         )
 
 if problems:
@@ -223,7 +265,7 @@ if problems:
     print("\n".join(problems), file=sys.stderr)
     print(
         f"  Python: _RESOLVABLE_REVIEWERS in {python_path}\n"
-        f"  Rust  : REVIEWER_INVOCATIONS in {rust_path}\n"
+        f"  Rust  : REVIEWER_INVOCATIONS + REVIEWER_BUILTIN_REQUIRES in {rust_path}\n"
         "  A drifted invocation makes the stop gate name a command that does "
         "not satisfy the gate.",
         file=sys.stderr,
@@ -253,6 +295,10 @@ const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
         ${3:-true},
         "",
     ),
+];
+const REVIEWER_BUILTIN_REQUIRES: &[(&str, &str)] = &[
+    ("sigma", "subagent-dispatch"),
+    ("declare", "none"),
 ];
 EOF
     }
@@ -333,7 +379,7 @@ EOF
     printf '# no table here\n' > "$tmp/nopy.py"
     _case "missing Python table rejected" 1 "$tmp/nopy.rs" "$tmp/nopy.py"
 
-    # Case 6: per-harness verbs declared on one side only -> reject. A
+    # Case 6: per-harness commands declared on one side only -> reject. A
     # positional literal-pairing extractor would never see the map at all.
     _rust "$tmp/per.rs" "/fno:review sigma"
     cat > "$tmp/per.py" <<'EOF'
@@ -353,7 +399,34 @@ _RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
     ),
 }
 EOF
-    _case "drifted per-harness verbs rejected" 1 "$tmp/per.rs" "$tmp/per.py"
+    _case "drifted per-harness commands rejected" 1 "$tmp/per.rs" "$tmp/per.py"
+
+    # Case 7: the requires capability drifts on one side -> reject. A drifted
+    # requires flips the verdict class the gate reports: sigma resolves
+    # "unavailable (retired)" instead of "needs subagent-dispatch", so the
+    # init refusal names the wrong remedy.
+    _rust "$tmp/requires.rs" "/fno:review sigma"
+    _python "$tmp/requires.py" "sigma"
+    _case "matching tables accepted with requires" 0 "$tmp/requires.rs" "$tmp/requires.py"
+
+    _rust "$tmp/requires_drift.rs" "/fno:review sigma"
+    cat > "$tmp/requires_drift.py" <<'EOF'
+_RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
+    "sigma": ReviewerDescriptor(
+        kind="local-attestation",
+        requires="none",
+        invocation="/fno:review sigma",
+        asserts="review-evidence",
+    ),
+    "declare": ReviewerDescriptor(
+        kind="local-attestation",
+        requires="none",
+        invocation="/fno:review declare",
+        asserts="self-cert",
+    ),
+}
+EOF
+    _case "drifted requires rejected" 1 "$tmp/requires_drift.rs" "$tmp/requires_drift.py"
 
     if [[ "$fails" -gt 0 ]]; then
         echo "reviewer-descriptor-parity selftest: $fails failure(s)" >&2

@@ -31,12 +31,12 @@ classifiers = [
 dependencies = ["typer>=0.12", "click>=8.1", "rich>=13", "pydantic>=2", "filelock>=3.12", "pyyaml>=6", "tomli-w>=1.0", "psutil>=5.9", "packaging>=23.1"]
 
 [project.urls]
-Homepage = "https://github.com/bllshttng/footnote"
-Repository = "https://github.com/bllshttng/footnote"
-Issues = "https://github.com/bllshttng/footnote/issues"
+Homepage = "https://github.com/bllshttng/fno"
+Repository = "https://github.com/bllshttng/fno"
+Issues = "https://github.com/bllshttng/fno/issues"
 
 # The Python control-plane CLI ships as `fno-py`, NOT `fno`: the Rust mux binary
-# (crates/fno) owns `fno` on PATH and forwards every non-mux verb here by
+# (crates/fno) owns `fno` on PATH and forwards every non-mux command here by
 # absolute path (`<uv tool dir>/fno/bin/fno-py`). Naming this `fno` too would
 # make the two fight for the name on PATH (whichever `~/.local/bin` vs
 # `~/.cargo/bin` wins), silently breaking `fno mux`. `fno-py` slots into the
@@ -44,16 +44,12 @@ Issues = "https://github.com/bllshttng/footnote/issues"
 # user - they type `fno`, which routes. See crates/fno/src/bootstrap.rs::forward.
 [project.scripts]
 fno-py = "fno.cli:main"
-fno-gh-loopcheck = "fno.pr._internal_gh:discretionary_main"
-fno-gh-coverage = "fno.pr._internal_gh:coverage_main"
-fno-gh-proxy = "fno.pr.gh_proxy:main"
-fno-footprint-cause = "fno.doctor_footprint:cause_main"
 
 [tool.hatch.version]
 path = "src/fno/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fno", "src/fno_routing_sample"]
+packages = ["src/fno"]
 
 # The canonical events schema ships INSIDE the wheel as `fno/events/schema.yaml`
 # - ordinary package data under `src/fno`, so both the wheel and the sdist carry

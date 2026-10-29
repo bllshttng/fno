@@ -1,0 +1,11 @@
+{
+ "args": [
+  "show"
+ ],
+ "snapshot": "{\n  \"fetched_at\": \"{OLD}\",\n  \"source\": \"https://openrouter.ai/api/v1/benchmarks\",\n  \"models\": [\n    {\n      \"name\": \"claude-haiku\",\n      \"coding_percentile\": 52\n    }\n  ]\n}",
+ "expect": {
+  "exit": 0,
+  "stdout": "source: https://openrouter.ai/api/v1/benchmarks  fetched_at: {OLD}\n  claude-haiku             coding=52     -> claude:haiku\n",
+  "stderr": "WARNING: benchmark snapshot is 20 days old (>14); run `fno config accounts benchmarks refresh`\n"
+ }
+}

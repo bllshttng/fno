@@ -47,11 +47,11 @@ def _run(root: Path, findings, monkeypatch=None, captured=None):
     if monkeypatch is not None:
         import fno.rust_binary
 
-        def fake_verb_call(verb, payload, *args, **kwargs):
+        def fake_command_call(command, payload, *args, **kwargs):
             # The stub folds like the Rust door, deriving its state from the
             # shared capture list so it survives across _run calls: the same
             # (lane, key) twice reads duplicate, an empty set reads none.
-            assert verb == "fleet-task", verb
+            assert command == "fleet-task", command
             if captured is not None:
                 captured.append(payload)
             earlier = captured[:-1] if captured else []
@@ -68,7 +68,7 @@ def _run(root: Path, findings, monkeypatch=None, captured=None):
                 outcome, id_out = ("duplicate", "ft-watchd00") if prior else ("asked", "ft-watchd00")
             return {"outcome": outcome, "id": id_out}
 
-        monkeypatch.setattr(fno.rust_binary, "verb_call", fake_verb_call)
+        monkeypatch.setattr(fno.rust_binary, "command_call", fake_command_call)
     return _subject().escalate_unfinished(
         findings,
         root=root,
@@ -93,7 +93,7 @@ def test_same_finding_set_keys_on_identity(tmp_path: Path, monkeypatch) -> None:
     assert captured[0]["lane"] == subject.MARKER
 
 
-def test_question_names_the_clearing_verbs_not_session_rows() -> None:
+def test_question_names_the_clearing_commands_not_session_rows() -> None:
     subject = _subject()
     findings = [_finding("x-7d02"), _finding("x-3b05")]
     key = subject.dedupe_key(

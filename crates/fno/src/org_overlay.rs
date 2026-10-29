@@ -31,11 +31,11 @@ pub const ORG_TTL: Duration = Duration::from_secs(60);
 /// Ten seconds, and the number is MEASURED rather than reasoned.
 ///
 /// `time fno doctor lanes --json` on this machine at 1-minute load 107:
-/// **8.07s**. The verb's own `macmon` sample is bounded at 5.0s, so a read
+/// **8.07s**. The command's own `macmon` sample is bounded at 5.0s, so a read
 /// over five seconds is its designed worst case, not a fault. A budget under
 /// that guarantees a degrade exactly when the machine is busy, which is the
 /// only time a person opens this panel. The plan for this change proposed
-/// 2500ms on reasoning, and it failed against the live verb on the first
+/// 2500ms on reasoning, and it failed against the live command on the first
 /// run. Setting a budget against a read nobody timed is the defect this
 /// whole change was filed about.
 ///
@@ -762,11 +762,17 @@ impl Panel {
                     mem.get("used_fraction").and_then(|v| v.as_f64()),
                     mem.get("total_gb").and_then(|v| v.as_f64()),
                 ) {
+                    // Free is RAM left, so a swapping machine reads near
+                    // zero; the percent folds swap in with RAM.
+                    let used = mem
+                        .get("ram_used_gb")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(fraction * total);
                     return format!(
                         "  memory    {} {:.0}% used, {:.1} GB free",
                         spark(&self.mem_history),
                         fraction * 100.0,
-                        ((1.0 - fraction) * total).max(0.0)
+                        (total - used).max(0.0)
                     );
                 }
             }
@@ -939,11 +945,13 @@ impl Panel {
         // tree and the rows already in hand. No I/O; the halves landed.
         lines.extend(self.team_section(agents, text_w, team_budget.saturating_sub(lines.len())));
         // The reap hint survives the all-rows line that used to carry it:
-        // dead rows are a backlog, whatever line answered the census.
+        // dead rows are a backlog, whatever line answered the census. The
+        // count is age alone and the daemon's sweep reaps on its own tick, so
+        // the hint names the read that answers why each one still stands.
         let all_split = census_split(&ages);
         if all_split.dead > 0 {
             lines.push(format!(
-                "            {} dead: run `fno agents reap --apply`",
+                "            {} dead: `fno agents registry reap --dry-run` names each keep",
                 all_split.dead
             ));
         }
@@ -1155,7 +1163,7 @@ pub async fn fold_now() -> Option<Org> {
     parse(&output.stdout)
 }
 
-/// Parse the verb's JSON payload. Fails quiet (returns `None`) on
+/// Parse the command's JSON payload. Fails quiet (returns `None`) on
 /// unparseable output so a torn stdout degrades the overlay, not crashes it.
 fn parse(stdout: &[u8]) -> Option<Org> {
     serde_json::from_slice(stdout).ok()
@@ -1643,7 +1651,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("1 dead: run `fno agents reap --apply`"),
+            text.contains("1 dead: `fno agents registry reap --dry-run` names each keep"),
             "{text}"
         );
         // The lanes workers count is never rendered: the split replaced it.

@@ -170,8 +170,8 @@ def _tier3_tokens(
     decision the pane funnel uses (:func:`fno.agents.writable_dirs.add_dir_tokens`)
     rather than a second copy of it here: a claude worker with no grant for the
     state root fails to write the claim store exactly as a codex one does. The
-    repository ships no ``.claude/settings.json``, so a fresh user's claude
-    worker has no ``permissions.additionalDirectories`` to mask it."""
+    repository's ``.claude/settings.json`` carries no permissions, so a fresh
+    user's claude worker has no ``permissions.additionalDirectories`` to mask it."""
     from fno.agents.writable_dirs import add_dir_tokens
 
     def _unreachable(flag: str) -> object:  # pragma: no cover - claude maps every cell
@@ -412,9 +412,10 @@ def headless_create(
     if output_format:
         argv += ["--output-format", output_format]
     if passthrough:
-        from fno.agents.mux_spawn import pane_passthrough_tokens
+        from fno.agents.mux_spawn import refuse_passthrough_collision
 
-        argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
+        refuse_passthrough_collision(passthrough, argv)
+        argv = [*argv, *passthrough]
     # Behind `--` like every other claude seed: a leading-flag seed must be
     # the prompt positional, not a claude flag.
     argv += ["--", message or "hello"]
@@ -424,7 +425,7 @@ def headless_create(
     # claude prefers an env credential over the settings file, so a routed
     # headless spawn from a logged-in shell would authenticate with the primary
     # Claude account instead of the selected provider (routing failure / wrong
-    # billing). compose_worker_credentials scrubs the inherited auth vars
+    # billing). The credentials compose scrubs the inherited auth vars
     # whenever we route or pin an account and applies the same scrub/account/
     # route precedence as every other seam, belt-and-suspenders with
     # --settings. Without either overlay, inherit the parent env untouched.
@@ -465,11 +466,9 @@ def headless_create(
             spawn_env, routed=_restores_model
         )
         if account_env or route_env:
-            from fno.agents.account_env import compose_worker_credentials
+            from fno.agents.spawn_overlay_client import compose_credentials
 
-            spawn_env, _ = compose_worker_credentials(
-                account_env, route_env, spawn_env
-            )
+            spawn_env = compose_credentials(account_env, route_env, spawn_env)["env"]
     from fno.setup.github_cli import worker_environment
 
     proxy_env = worker_environment(spawn_env or os.environ)
@@ -618,6 +617,14 @@ def bg_create(
         from fno.agents.model_routing import materialize_model_scrub_settings
 
         settings_path = materialize_model_scrub_settings(_floor_keys)
+    # The mux pins the Claude theme for its panes (FNO_CLAUDE_THEME); the
+    # settings door writes it into every settings file, so a plain spawn with
+    # no file yet takes an env-less one. `claude attach` ignores --settings,
+    # so the attached view only wears the theme this launch carries.
+    if settings_path is None and os.environ.get("FNO_CLAUDE_THEME"):
+        from fno.agents.model_routing import _write_settings_env_file
+
+        settings_path = _write_settings_env_file({})
     argv = _build_argv(
         name=name,
         message=message,
@@ -634,9 +641,13 @@ def bg_create(
         cwd=cwd,
     )
     if passthrough:
-        from fno.agents.mux_spawn import pane_passthrough_tokens
+        from fno.agents.mux_spawn import refuse_passthrough_collision
 
-        argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
+        refuse_passthrough_collision(passthrough, argv)
+        # Harness flags go before the seed's `--`: after it, claude reads
+        # `--model sonnet` as prompt text and runs its default model.
+        cut = argv.index("--") if "--" in argv else len(argv)
+        argv = [*argv[:cut], *passthrough, *argv[cut:]]
 
     # Inject FNO_AGENT_* env vars so nested `fno agents ask` calls
     # from inside the spawned agent attribute back to this parent.
@@ -667,7 +678,7 @@ def bg_create(
     )
     if not route_env:
         # Set-or-clear: an unrouted child must not wear its parent's provider.
-        # A route re-supplies the stamp through compose_worker_credentials below.
+        # A route re-supplies the stamp through the credentials compose below.
         from fno.agents.model_routing import ROUTE_PROVIDER_ENV
 
         spawn_env.pop(ROUTE_PROVIDER_ENV, None)
@@ -687,9 +698,9 @@ def bg_create(
     # changing within one launch.
     route: Optional[dict[str, str]] = dict(route_env) if route_env else None
     if account_env or route:
-        from fno.agents.account_env import compose_worker_credentials
+        from fno.agents.spawn_overlay_client import compose_credentials
 
-        spawn_env, _ = compose_worker_credentials(account_env, route, spawn_env)
+        spawn_env = compose_credentials(account_env, route, spawn_env)["env"]
 
     from fno.setup.github_cli import worker_environment
 
@@ -760,7 +771,7 @@ def bg_create(
     exit_code = result.returncode
 
     if exit_code != 0:
-        stderr += " Run `fno doctor update`." if "unknown verb: claude-birth-exec" in stderr else ""
+        stderr += " Run `fno doctor update`." if "unknown command: claude-birth-exec" in stderr else ""
         raise ProviderSubprocessError(exit_code=exit_code, stderr=stderr)
 
     short_id = parse_short_id(stdout)
@@ -1308,10 +1319,10 @@ def claude_agents_json(
 
 # ---------------------------------------------------------------------------
 # US4-lifecycle shellouts: claude stop / rm / attach + reconcile reachability
-# probe. Each helper is a thin wrapper around ``claude <verb> <short_id>``
+# probe. Each helper is a thin wrapper around ``claude <command> <short_id>``
 # with a timeout. They live here so the fno ``dispatch`` layer can stay
 # provider-agnostic and so the per-provider quirks (capture vs inherit-stdio
-# for the interactive attach verb) sit alongside the ``claude_agents_json``
+# for the interactive attach command) sit alongside the ``claude_agents_json``
 # adapter.
 # ---------------------------------------------------------------------------
 
@@ -1517,6 +1528,24 @@ def release_session_writer_claim(
 # liveness scan.
 
 
+def _mcp_status_argv(timeout: float) -> list[str]:
+    """Argv for the native sidecar status door: the fno-agents-worker
+    binary beside the resolved fno-agents binary, else PATH. The probe's
+    one subprocess (the claims-forward shape); the caller's budget rides
+    through as --timeout-secs so a wedged sidecar cannot stretch a
+    250 ms probe into five seconds.
+    """
+    from fno import rust_binary
+
+    argv_tail = ["--mcp-exec", "status", "--timeout-secs", repr(timeout)]
+    agents_bin = rust_binary.resolve_binary()
+    if agents_bin is not None:
+        worker = agents_bin.parent / "fno-agents-worker"
+        if worker.is_file() and os.access(worker, os.X_OK):
+            return [str(worker)] + argv_tail
+    return ["fno-agents-worker", *argv_tail]
+
+
 def mcp_channel_reachable(
     mcp_channel_id: str,
     *,
@@ -1541,12 +1570,28 @@ def mcp_channel_reachable(
     Spec: LD10 — ``ReachabilityProbeError`` is the lifted base class
     from US4-gemini Wave 1.1; ``reason="mcp_channel_disconnected"`` is
     the discriminator for this probe.
-    """
-    from fno.mcp import client as _mcp_client
 
+    The probe rides the native sidecar door (`fno-agents-worker
+    --mcp-exec status`): exit 0 parses the status JSON, exit 1 (the
+    sidecar unreachable) raises the probe error, so the tri-state
+    contract holds with no Python sidecar client left.
+    """
+    import subprocess
+
+    completed = subprocess.run(
+        _mcp_status_argv(timeout),
+        capture_output=True,
+        text=True,
+        timeout=timeout + 5.0,
+    )
+    if completed.returncode != 0:
+        raise ReachabilityProbeError(
+            provider="claude",
+            reason="mcp_channel_disconnected",
+        )
     try:
-        resp = _mcp_client.status(timeout=timeout)
-    except _mcp_client.MCPSidecarUnreachable as exc:
+        resp = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
         raise ReachabilityProbeError(
             provider="claude",
             reason="mcp_channel_disconnected",

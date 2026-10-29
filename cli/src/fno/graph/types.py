@@ -9,7 +9,7 @@ import math
 from enum import Enum
 from typing import Optional, Self
 
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, computed_field, field_validator, model_validator
 
 from fno.company.contracts import CompanyWorkRefs, validate_company_work_for_node
 
@@ -50,23 +50,6 @@ class Priority(str, Enum):
     p1 = "p1"
     p2 = "p2"
     p3 = "p3"
-
-
-# Lifecycle phases stamped into a node's append-only `sessions` list.
-# `review` joined at (operator ruling 2026-08-23): a spawned reviewer
-# session that never holds the claim crossed no stamping chokepoint, so its
-# provenance row had no honest label. The single source of truth for phase
-# validation in store.append_session_record and the `session add` CLI.
-SESSION_PHASES: frozenset[str] = frozenset({"think", "blueprint", "execute", "review", "ship"})
-
-# One-release input alias: "do" names this phase no more (2026-09-25 ruling).
-# Normalize on input; remove to make --phase do refuse naming execute.
-PHASE_INPUT_ALIASES: dict[str, str] = {"do": "execute"}
-
-
-def normalize_phase(value: str) -> str:
-    """Map a retired phase spelling to its live name before validation."""
-    return PHASE_INPUT_ALIASES.get(value, value)
 
 
 # Re-export the canonical PRIORITY_ORDER from _constants so this module
@@ -158,7 +141,7 @@ class NodeClaim(BaseModel):
 class Dispatch(BaseModel):
     """Typed view over a node's flat dispatch fields (Linear-aligned)."""
 
-    verb: Optional[str] = None
+    command: Optional[str] = None
     brief: Optional[str] = None
     model: Optional[str] = None
 
@@ -280,11 +263,14 @@ class Node(BaseModel):
     # protected pydantic namespace).
     model: Optional[str] = None
     batch: Optional[str] = None
-    # Per-node dispatch overrides (US3). dispatch_verb picks the worker command
-    # (`<verb> {id}`, allowlist-validated at resolve, not write); dispatch_brief
+    # Per-node dispatch overrides (US3). dispatch_command picks the worker command
+    # (`<command> {id}`, allowlist-validated at resolve, not write); dispatch_brief
     # rides TARGET_BRIEF env into cold-start. Both null = the built-in
     # `/target --no-merge {id}` default. Old graph.json entries parse without them.
-    dispatch_verb: Optional[str] = None
+    # Rows written before the rename carry the old key; it still reads here.
+    dispatch_command: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("dispatch_command", "dispatch_verb")  # verb-wording: allow
+    )
     dispatch_brief: Optional[str] = None
     plan_path: Optional[str] = None
     company_work: Optional[CompanyWorkRefs] = None
@@ -350,7 +336,7 @@ class Node(BaseModel):
 
     # The status the STORE holds, planted by _check_status_drift from the
     # wire's `status` key. `status` above stays the single-entry derived
-    # view; wedge verbs (requeue, hold, dispatch) read this one.
+    # view; wedge commands (requeue, hold, dispatch) read this one.
     persisted_status: Optional[str] = None
 
     # Archive residency stamp. Non-null means the node answers only
@@ -364,7 +350,7 @@ class Node(BaseModel):
     def _validate_rank(cls, v: object) -> Optional[float]:
         """Reject bool / inf / NaN ranks at the model boundary.
 
-        Live render/verb paths already guard these (``_rank_band`` finite-check
+        Live render/command paths already guard these (``_rank_band`` finite-check
         + bool exclusion, ``_is_ranked`` bool exclusion) and the raw-dict path
         dominates, so this is defensive hardening for the cases that *do*
         construct a ``Node``: a non-finite or bool rank fails loudly here
@@ -404,7 +390,7 @@ class Node(BaseModel):
         if persisted is None:
             persisted = legacy
         # The store's own status is kept beside the derived one: the Rust
-        # typed model carries the stored status, and verbs that settle wedges
+        # typed model carries the stored status, and commands that settle wedges
         # (requeue, hold) must read what the store holds, never the
         # single-entry approximation this model computes on `status`.
         if persisted is not None:
@@ -481,7 +467,7 @@ class Node(BaseModel):
 
     @property
     def dispatch(self) -> Dispatch:
-        return Dispatch(verb=self.dispatch_verb, brief=self.dispatch_brief, model=self.model)
+        return Dispatch(command=self.dispatch_command, brief=self.dispatch_brief, model=self.model)
 
     @property
     def pull_requests(self) -> list[PullRequest]:

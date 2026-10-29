@@ -1,10 +1,10 @@
 //! Probe the sandbox a codex worker is about to run under: the worker's own
 //! requested posture (never a hardcoded `workspace-write`), a harmless canary
 //! write inside the grant, and the negative control the old probe lacked: a
-//! write OUTSIDE the granted roots must fail. Ported from
-//! `cli/src/fno/agents/sandbox_probe.py`, which shrinks to a bridge over the
-//! hidden `sandbox-probe` verb; exit 85 and the `sandbox-probe:` marker stay
-//! Python-side (rust_runtime.py, backlog/advance.py).
+//! write OUTSIDE the granted roots must fail. The spawn seam
+//! (`spawn_seam.rs`) calls it in process and owns exit 85 and the
+//! `sandbox-probe:` marker; the hidden `sandbox-probe` command answers the
+//! same verdict over a stdin payload.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -51,11 +51,11 @@ fn sandbox_argv(sandbox: &str, approval: &str, roots: Vec<String>) -> Vec<String
 }
 
 /// The roots the probe grants: the same grant the worker gets - state dirs
-/// (fno's own writable set) plus the repo's git common dir, the identical
+/// (fno's own writable set) plus the repo's git write roots, the identical
 /// resolver the exec lane grants with.
 fn probe_roots(cwd: &Path, state_dirs: &[String]) -> Vec<String> {
     let mut roots = state_dirs.to_vec();
-    if let Some(git_dir) = crate::provider::git_common_dir(cwd) {
+    for git_dir in crate::provider::git_write_roots(cwd) {
         if !roots.iter().any(|root| root == &git_dir) {
             roots.push(git_dir);
         }
@@ -390,9 +390,9 @@ pub fn probe_codex_sandbox(
     }
 }
 
-/// The hidden client verb: one JSON payload in
+/// The hidden client command: one JSON payload in
 /// (`{"cwd", "mode"?, "state_dirs"?}`), the verdict out. Exit 85 stays the
-/// Python spawn gate's decision (rust_runtime.py), never the verb's.
+/// Python spawn gate's decision (rust_runtime.py), never the command's.
 pub fn run_sandbox_probe(args: &[String]) -> i32 {
     use std::io::Read;
     let mut payload = String::new();

@@ -26,7 +26,7 @@ Both sides carry `id` as the join key, never as a synced value.
 
 ## The interface
 
-The interface lives in Rust, on `TrackerNode` and `Candidate` in `crates/fno-agents/src/tracker/mod.rs`. The Python `fno.tracker` package is the exec client: it shells `fno-agents backlog get` and parses the pydantic models in `cli/src/fno/tracker/types.py`.
+The interface lives in Rust, on `TrackerNode` and `Candidate` in `crates/fno-agents/src/tracker/mod.rs`. The Python seam package is deleted. Python callers ride the native door (`fno-agents backlog get`'s stdin form) through the small client helpers in `cli/src/fno/rust_binary.py`. The helpers are the backend name plus sidecar get, all, and set. The guarded default-backend read lives in `fno/graph/api.py` as `read_entries`. The sidecar graph projection, the per-id file store, and the backend resolution all answer in Rust. The goldens under `crates/fno-agents/tests/golden/tracker/` characterize them.
 
 Read from the tracker, five fields plus the display-only reads.
 
@@ -145,3 +145,42 @@ Every adapter field needs a test asserting a read at a named consumer.
 A test that asserts the write landed is not enough.
 A generic `--field` fetch is not enough either.
 The `artifact_url` reader and writer asymmetry is the standing proof this system can carry a write-only field for its whole life.
+
+## Binding an external item
+
+The sidecar has one writer, `tracker::sidecar::save` in Rust. The Python `_save_to_file` calls it through the tracker door's `sidecar-set` op. The writer refuses any key outside the sidecar list, so a tracker-owned field never lands in the file.
+
+Under an external backend, `fno backlog update <id> cwd=<checkout> plan_path=<plan>` binds the checkout and the plan. It also takes `pr_number` and `pr_url`. Every other field refuses and names the four keys that bind. The command reads the id through the tracker first, so a missing issue refuses with `not found`.
+
+`fno do pr bind-created --url <pr> --node <id>` records the PR on the sidecar. An external id is never inferred from a branch name, so the command refuses without `--node`. The merge-time close finds the item by that `pr_number`.
+
+## Live gate
+
+`crates/fno-agents/tests/tracker_live.rs` holds two ignored tests, `github_journey` and `linear_journey`. Each drives the public `fno` commands through one disposable issue. The steps are read, list next, bind, target start and PR bind. Then come a bad-credential refusal, merge and close, board refresh, and a no-mirror check. Run them on purpose:
+
+```bash
+cargo test --manifest-path crates/fno-agents/Cargo.toml --test tracker_live -- --ignored --nocapture
+```
+
+The gate needs a scratch repo and a scratch team that hold no real work. Create them once:
+
+1. A new, empty, private GitHub repo with a README, no branch protection, and a label named `fno-live-gate`.
+2. A fine-grained GitHub token limited to that one repo, with Contents, Issues and Pull requests read and write. Give it a short expiry.
+3. A Linear team used only by the gate, with the default workflow. A separate free workspace is best, so the key cannot reach real work.
+4. A Linear personal API key. If the form offers a team limit, limit it to that team.
+
+The gate reads its own env names. It never reads `FNO_TRACKER_*` from the shell, so a tracker env already set can never point it at a real repo.
+
+| Name | Meaning |
+|------|---------|
+| `FNO_LIVE_GITHUB_REPO` | `owner/repo` of the scratch repo. Both journeys need it: the Linear journey opens its PR there. |
+| `FNO_LIVE_GITHUB_TOKEN` | The fine-grained token. It reaches child processes as `GH_TOKEN` and git as `GIT_ASKPASS`, never argv or a remote URL. |
+| `FNO_LIVE_LINEAR_API_KEY` | The Linear key. It reaches curl through a mode 0600 header file. |
+| `FNO_LIVE_LINEAR_TEAM` | The scratch team key, for example `FNOGATE`. |
+| `FNO_LIVE_FNO` | The `fno` binary under test. The default is `fno` on PATH. |
+
+A journey with a var unset prints `skipped: <name> unset` and writes no receipt. The gate checks the scratch repo or team before any write. If it holds an open item without the `[fno-live-gate]` title prefix, the gate refuses. If it holds a gate item younger than 60 minutes, the gate refuses too. It closes older gate leftovers. Cleanup closes the PR, deletes the branch and closes the issue, and only for ids the run created.
+
+Each run writes `<state_dir>/live-gates/tracker-<backend>-<UTC ts>.json`. The receipt holds the backend, the scope, the issue and PR URLs, and the token kind (never the value). It names the Linear viewer and organization. It lists every step with its exit code and stderr tail, the failures, the cleanup actions, and `result`. One run spends about 40 GitHub REST calls.
+
+The `tracker-live` workflow runs the same tests on `workflow_dispatch` only. It reads the secrets `FNO_LIVE_GITHUB_TOKEN` and `FNO_LIVE_LINEAR_API_KEY` and the repo variables `FNO_LIVE_GITHUB_REPO` and `FNO_LIVE_LINEAR_TEAM`. Without the secrets it writes "not configured; skipped" and passes.

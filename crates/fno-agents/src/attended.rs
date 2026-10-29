@@ -3,17 +3,17 @@
 //! can read a live transcript quiet (an account store the probe misses, a
 //! resumed session id); the turn record itself is the witness that cannot
 //! miss, classified by the same provenance rules `fno-agents intel` folds
-//! with. A done ledger never overrides an attended session.
+//! with. Retirement itself is the origin rule in `gc.rs`: an fno-started
+//! row retires after one idle hour and a user-started row never does;
+//! these reads are the stop command's and the sweep's short-window witnesses.
 
 use crate::provenance::{
     classify_turn, is_user_turn, turn_text, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
 };
 use crate::state::RegistryEntry;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 /// How recent a typed turn must be to hold a session: 15 minutes.
 pub(crate) const WINDOW_SECS: i64 = 15 * 60;
@@ -42,14 +42,14 @@ fn xml_block<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
     Some(body.trim())
 }
 
-/// True when a CommandInvocation turn's text is the row's recorded spawn
-/// payload: the machine's seed, never a person's turn. Two shapes on the
-/// wire - the raw payload (harnesses that log the prompt verbatim) and
-/// claude's rendering of a seeded slash command, where the payload's first
-/// token becomes `<command-name>` and the remainder lands inside
-/// `<command-args>`. Compared on the reminder-stripped text the classifier
-/// reads; anything subtler fails open, keeping today's hold rather than
-/// exempting a turn a person typed.
+/// True when a typed turn's text is the row's recorded spawn payload: the
+/// machine's seed, never a person's turn. Two shapes on the wire - the raw
+/// payload (harnesses that log the prompt verbatim) and claude's rendering
+/// of a seeded slash command, where the payload's first token becomes
+/// `<command-name>` and the remainder lands inside `<command-args>`.
+/// Compared on the reminder-stripped text the classifier reads; anything
+/// subtler fails open, keeping today's hold rather than exempting a turn a
+/// person typed.
 fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
     let text = crate::provenance::system_reminder_re()
         .replace_all(text, "")
@@ -67,9 +67,9 @@ fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
     };
     let args = xml_block(text, "<command-args>", "</command-args>").unwrap_or("");
     let mut seed_parts = seed.splitn(2, char::is_whitespace);
-    let verb = seed_parts.next().unwrap_or("");
+    let command = seed_parts.next().unwrap_or("");
     let rest = seed_parts.next().unwrap_or("").trim();
-    name == verb && args == rest
+    name == command && args == rest
 }
 
 /// The bus index both arms classify with, read off the state root the way
@@ -82,7 +82,9 @@ fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
 
 /// The newest typed turn in ONE transcript, as an age in seconds; `None`
 /// when the file holds none. A row without a parseable timestamp cannot
-/// testify; a future stamp reads as now.
+/// testify; a future stamp reads as now. This is the RECENCY read the
+/// 15-minute window hold and the stop refusal use: a person spoke a
+/// moment ago, whatever machine turn followed.
 fn typed_age_in_file(
     path: &PathBuf,
     bus: &BusIndex,
@@ -103,12 +105,14 @@ fn typed_age_in_file(
             continue;
         }
         let prov = classify_turn(&obj, bus, session);
-        if matches!(prov, Provenance::Harness(HarnessKind::CommandInvocation))
-            && spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&turn_text(&obj), seed))
-        {
+        if !typed(prov) {
             continue;
         }
-        if !typed(prov) {
+        // The recorded seed exempts the machine's own turn on every typed
+        // shape: a prose brief classifies Unknown, not CommandInvocation, and
+        // the exact match below is what proves it the machine's, so the
+        // classified kind never gates the comparison.
+        if spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&turn_text(&obj), seed)) {
             continue;
         }
         let Some(ts) = turn_ts_epoch(&obj) else {
@@ -123,8 +127,8 @@ fn typed_age_in_file(
 /// Age in seconds of the newest typed user turn across `paths`, `None`
 /// when no transcript holds one. A row without a parseable timestamp
 /// cannot testify; a future stamp reads as now. `spawn_payload` is the
-/// row's recorded seed: a CommandInvocation turn matching it is the
-/// machine's spawn payload, never a person, and never holds.
+/// row's recorded seed: a typed turn matching it is the machine's spawn
+/// payload, never a person, and never holds.
 pub(crate) fn newest_typed_turn_age_s(
     paths: &[PathBuf],
     bus: &BusIndex,
@@ -147,72 +151,6 @@ pub(crate) fn newest_typed_turn_age_s(
         }
         if let Some(age) = typed_age_in_file(path, bus, session, now, spawn_payload) {
             newest = Some(newest.map_or(age, |n: i64| n.min(age)));
-        }
-    }
-    newest
-}
-
-/// The same read with NO window and NO mtime skip: the newest typed turn
-/// whenever it was written. This is the fact the retirement policy reads,
-/// and the mtime short-circuit cannot answer it - the incident row sat
-/// quiet 17 minutes when the sweep retired it, past every window here.
-/// The all-time read's one process-lifetime memo, keyed by the file's stat
-/// trio (path, len, mtime secs) PLUS the recorded seed the read exempts by:
-/// two rows can resolve to one transcript with different payloads, and a
-/// memo keyed without it would answer one row with another row's
-/// exemption. An appended transcript misses (new len or mtime) and
-/// rescans; an unchanged one never pays the full read twice in this
-/// process - without it, a kept-forever row's transcript is read
-/// end-to-end on every sweep pass.
-fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>> {
-    static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>>> =
-        OnceLock::new();
-    MEMO.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub(crate) fn newest_typed_turn_age_ever(
-    paths: &[PathBuf],
-    bus: &BusIndex,
-    session: &str,
-    now: i64,
-    spawn_payload: Option<&str>,
-) -> Option<i64> {
-    let mut newest: Option<i64> = None;
-    for path in paths {
-        // A file that cannot stat cannot form a key: it reads fresh and
-        // answers None on the open failure, never from a stale entry.
-        let stat = std::fs::metadata(path).and_then(|m| {
-            m.modified().map(|t| {
-                (
-                    m.len(),
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0) as i64,
-                )
-            })
-        });
-        let Ok((len, mtime)) = stat else {
-            continue;
-        };
-        let key = (path.clone(), len, mtime, spawn_payload.map(str::to_string));
-        if let Some(hit) = scan_memo()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-        {
-            if let Some(h) = *hit {
-                newest = Some(newest.map_or(h, |n| n.min(h)));
-            }
-            continue;
-        }
-        let age = typed_age_in_file(path, bus, session, now, spawn_payload);
-        let mut memo = scan_memo().lock().unwrap_or_else(|e| e.into_inner());
-        if memo.len() >= 1024 {
-            memo.clear();
-        }
-        memo.insert(key, age);
-        if let Some(age) = age {
-            newest = Some(newest.map_or(age, |n| n.min(age)));
         }
     }
     newest
@@ -247,22 +185,7 @@ pub(crate) fn sweep_hold(
     })
 }
 
-/// The all-time read a retirement sweep pays for: the row's store-resolved
-/// transcripts, keyed on the row's harness session id. `None` answers
-/// "no typed turn" AND "store unresolved" alike - the sweep treats both as
-/// no witness, and an unresolved store never invented quiet either.
-pub(crate) fn typed_turn_age_ever_for_row(
-    hits: Option<Vec<PathBuf>>,
-    home: &crate::paths::AgentsHome,
-    sid: &str,
-    now: i64,
-    spawn_payload: Option<&str>,
-) -> Option<i64> {
-    let hits = hits?;
-    newest_typed_turn_age_ever(&hits, &bus_for(home), sid, now, spawn_payload)
-}
-
-/// The stop-verb refusal: `Some(why)` when the row's store-resolved
+/// The stop-command refusal: `Some(why)` when the row's store-resolved
 /// transcript carries a typed turn inside the window. The bus join keys on
 /// the row's harness session id, the same key `fno-agents intel` joins on.
 /// The caller names its own error shape.
@@ -412,6 +335,43 @@ mod tests {
             newest_typed_turn_age_s(&[person_path], &bus, "w", now, Some(seed)),
             Some(30),
             "a hand-run command that is not the seed still counts as the operator"
+        );
+    }
+
+    #[test]
+    fn a_prose_seed_never_holds_once_the_row_records_it() {
+        // A thread worker seeded with a prose brief classifies Unknown, not
+        // CommandInvocation: the exemption must ride the recorded payload's
+        // exact match, not the classified kind. Unrecorded, the same turn
+        // keeps today's hold - the honest residual for a row that cannot
+        // prove which turns were the machine's.
+        let dir = tempfile::tempdir().unwrap();
+        let now = crate::daemon::now_epoch_secs();
+        let ts = |age: i64| {
+            chrono::DateTime::from_timestamp(now - age, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let seed = "Build the node from its details in one PR; report when blocked.";
+        let path = dir.path().join("seeded.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":seed}})
+            ),
+        )
+        .unwrap();
+        let bus = BusIndex::empty();
+        assert_eq!(
+            newest_typed_turn_age_s(&[path.clone()], &bus, "w", now, Some(seed)),
+            None,
+            "the recorded prose seed is the machine's own turn"
+        );
+        assert_eq!(
+            newest_typed_turn_age_s(&[path], &bus, "w", now, None),
+            Some(60),
+            "with no recorded seed the prose turn still holds"
         );
     }
 }

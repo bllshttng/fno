@@ -18,7 +18,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-/// The `fno board-render` verb: read the request from stdin
+/// The `fno board-render` command: read the request from stdin
 /// (`{"targets": [{"path", "scope"}], "vault"}`), gather once, write every
 /// target, print a JSON receipt. Exit 0 only when every target wrote; a
 /// failed target exits 1 so the keeper's render pass withholds its
@@ -296,7 +296,7 @@ fn render_one(
     let ids: Vec<String> = flat.iter().map(|c| c.id.clone()).collect();
     // A BTreeMap, not a HashMap: serde walks a HashMap in its randomized
     // order, so two renders of the same graph would embed the node views in
-    // different orders and the publish verb's unchanged check would never
+    // different orders and the publish command's unchanged check would never
     // fire. Sorted by id, unchanged rows give byte-identical pages.
     let mut nodes: BTreeMap<String, Value> = BTreeMap::new();
     for id in &ids {
@@ -386,7 +386,7 @@ fn agents_from_registry(raw: &str, now: u64) -> Vec<crate::proto::AgentRow> {
 
 /// The payload's top-level fields the public page may carry. `vault` is
 /// private-mode only, and `generated_at` is dropped so unchanged rows give
-/// byte-identical pages (the publish verb's unchanged check compares file
+/// byte-identical pages (the publish command's unchanged check compares file
 /// bytes).
 const PUBLIC_PAYLOAD_FIELDS: &[&str] = &[
     "schema", "public", "backend", "scope", "flow", "facets", "columns", "cards", "nodes",
@@ -764,15 +764,18 @@ fn percent_encode(text: &str, safe: &str) -> String {
     out
 }
 
-/// `fno board-render` claims its name lexically, beside the other native
-/// front verbs: the argv `board-render ...` never forwards to Python.
+/// `fno backlog publish --local-snapshot` claims lexically, before the
+/// backlog namespace hands over to the sibling binary: the stdin request
+/// protocol is the front binary's, and a sibling that predates the door
+/// refuses the flag as unknown.
 pub fn classify(args: &[std::ffi::OsString]) -> Option<Vec<String>> {
-    if args.first()?.to_str()? != "board-render" {
+    let head: Vec<&str> = args.iter().take(3).filter_map(|a| a.to_str()).collect();
+    if head != ["backlog", "publish", "--local-snapshot"] {
         return None;
     }
     Some(
         args.iter()
-            .skip(1)
+            .skip(3)
             .filter_map(|a| a.to_str().map(str::to_string))
             .collect(),
     )
@@ -932,13 +935,15 @@ mod tests {
         assert!(agents_from_registry("not json at all", 1000).is_empty());
     }
 
-    /// The lexical classifier: the verb name claims itself, every other
+    /// The lexical classifier: the command name claims itself, every other
     /// first word forwards.
     #[test]
     fn board_render_claims_its_name() {
         use std::ffi::OsString;
-        assert!(classify(&[OsString::from("board-render")]).is_some());
-        assert!(classify(&[OsString::from("board-render"), OsString::from("--x")]).is_some());
+        let door = ["backlog", "publish", "--local-snapshot"].map(OsString::from);
+        assert_eq!(classify(&door), Some(vec![]));
+        assert!(classify(&door[..2]).is_none());
+        assert!(classify(&[OsString::from("board-render")]).is_none());
         assert!(classify(&[OsString::from("mux")]).is_none());
     }
 
@@ -1032,8 +1037,7 @@ mod tests {
         let inputs = inputs_from_rows(&selected);
         let (private, _) = render_one(&inputs, None, None, None, false, None).unwrap();
         assert!(
-            private
-                .contains("fno agents adopt 9b1c2d3e-0000-4000-8000-00000000leak --cross-project"),
+            private.contains("fno agents adopt 9b1c2d3e-0000-4000-8000-00000000leak"),
             "the private page carries the recovery command"
         );
         let (page, count) = render_one(&inputs, None, None, None, true, None).unwrap();
@@ -1044,7 +1048,6 @@ mod tests {
             "ses-leak",
             "9b1c2d3e",
             "fno agents",
-            "--cross-project",
             "secret details",
             "secret note",
             "Linked private",

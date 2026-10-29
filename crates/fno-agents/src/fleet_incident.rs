@@ -30,7 +30,7 @@
 //! destroy the evidence; the operator removes the file by hand to start a
 //! fresh generation.
 //!
-//! Binary verb `fno-agents fleet-incident stop|clear|status|check|claim`, matched
+//! Binary command `fno-agents fleet-incident stop|clear|status|check|claim`, matched
 //! in `bin/client.rs` next to `test-run` (direct dispatch, no daemon RPC).
 //! The public surface is the thin Python adapter `fno agents incident`,
 //! which relays exit/stdout/stderr and decides nothing.
@@ -52,7 +52,7 @@ pub const SCOPES: &[&str] = &["spawns", "tests", "merges", "loops"];
 /// Their reach was spawns, tests, and loops; merges proceeded.
 pub const LEGACY_HOLDS: &[&str] = &["spawns", "tests", "loops"];
 
-/// Exit codes for the `check` verdict verb, distinct from every dispatch and
+/// Exit codes for the `check` verdict command, distinct from every dispatch and
 /// gate code in use - see the allocation table in
 /// `cli/src/fno/agents/spawn_gate.py` (gate band 75-77, 79, 82-84), plus the
 /// convention codes 2, 13-15, 18-19, 124, 127.
@@ -127,22 +127,6 @@ pub struct Subject<'a> {
 }
 
 impl Verdict {
-    /// True only for a genuine, readable stop. The one question every gate
-    /// asks, kept in one place so no gate re-derives it.
-    pub fn is_stopped(&self) -> bool {
-        matches!(self, Verdict::Stopped(_))
-    }
-
-    /// `(generation, reason)` when a record backs the verdict.
-    pub fn generation_reason(&self) -> (Option<u64>, Option<&str>) {
-        match self {
-            Verdict::Stopped(r) | Verdict::Clear(r) => {
-                (Some(r.generation), Some(r.reason.as_str()))
-            }
-            Verdict::Unavailable(_) => (None, None),
-        }
-    }
-
     /// How one scope's door reads this verdict: true when the door must
     /// refuse or wait. A stop that does not hold `scope` reads as no
     /// incident to that door; an unreadable record holds every scope, so no
@@ -202,7 +186,7 @@ fn scope_verdict(verdict: Verdict, scope: &str) -> Verdict {
     }
 }
 
-fn target_from_path(path: &Path) -> Option<String> {
+pub(crate) fn target_from_path(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?.strip_suffix(".json")?;
     let (kind, value) = if let Some(value) = name.strip_prefix("session-") {
         ("session", value.to_string())
@@ -418,7 +402,7 @@ fn print_machine_status(record: &IncidentRecord, state: &str, targets: &[TargetS
     }
 }
 
-fn target_matches(target: &str, subject: &Subject<'_>) -> Result<bool, String> {
+pub(crate) fn target_matches(target: &str, subject: &Subject<'_>) -> Result<bool, String> {
     let (kind, value) = target
         .split_once(':')
         .ok_or_else(|| format!("invalid target {target:?}"))?;
@@ -903,6 +887,33 @@ fn write_transition_locked(
     {
         return Err("a stop is already armed".into());
     }
+    // A reserve replaces only the machine arm's hold and an older reserve,
+    // and the daemon lifts only its own reserve.
+    if let Some(origin @ (crate::reserve::RESERVE_ORIGIN | crate::reserve::RESERVE_AUTO_ORIGIN)) =
+        metadata.origin.as_deref()
+    {
+        let current = match read_at(path) {
+            Verdict::Stopped(record) => Some(record),
+            Verdict::Clear(_) => None,
+            Verdict::Unavailable(detail) => {
+                return Err(format!("existing breaker is unreadable: {detail}"))
+            }
+        };
+        let owned = current
+            .as_ref()
+            .is_some_and(|r| r.origin.as_deref() == Some(crate::reserve::RESERVE_AUTO_ORIGIN));
+        if state == "clear" && !owned {
+            return Err("the daemon's reserve no longer holds the breaker".into());
+        }
+        if let Some(record) = current.filter(|_| state == "stopped") {
+            if !crate::reserve::may_replace(origin, record.origin.as_deref()) {
+                return Err(format!(
+                    "a stop is already armed (generation {}, reason: {}); a reserve never replaces it",
+                    record.generation, record.reason
+                ));
+            }
+        }
+    }
     let generation = current_generation(path)? + 1;
     let record = IncidentRecord {
         version: STATE_VERSION,
@@ -1010,7 +1021,7 @@ fn print_receipt(record: &IncidentRecord) {
 
 fn print_usage() {
     println!(
-        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
+        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | reserve stream|edit [--for <dur>, default 2h] [--reason <text>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
     );
 }
 
@@ -1105,13 +1116,20 @@ fn check_json(verdict: &Verdict, scope: &str) -> serde_json::Value {
     })
 }
 
-/// Binary entry: `fleet-incident stop|clear|status|check`.
+/// Binary entry: `fleet-incident stop|clear|reserve|status|check`.
 pub fn run_fleet_incident(args: &[String]) -> i32 {
     let Some(action) = args.first() else {
         print_usage();
         return 2;
     };
     let rest = &args[1..];
+    // The fleet-sweep watermark ops ride this action as arguments (law
+    // d-fe66560a allows no new client action; gh-budget and cutover are the
+    // precedent): `fleet-incident fleet-state <op> ...` (see fleet_state.rs).
+    // A watermark must be writable when the daemon itself is the thing wedged.
+    if action.as_str() == "fleet-state" {
+        return crate::fleet_state::run(rest);
+    }
     if matches!(action.as_str(), "-h" | "--help" | "help")
         || rest
             .iter()
@@ -1120,7 +1138,23 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
         print_usage();
         return 0;
     }
-    match action.as_str() {
+    // `reserve <preset>` is a stop with the preset's holds, a default time
+    // box and the reserve origin, parsed by the same flag loop.
+    let reserve = match action.as_str() {
+        "reserve" => match rest.first().and_then(|p| crate::reserve::preset_holds(p)) {
+            Some(holds) => Some((rest[0].clone(), holds)),
+            None => {
+                eprintln!("fleet-incident: reserve needs a preset: stream (holds spawns and tests) or edit (holds tests)");
+                return 2;
+            }
+        },
+        _ => None,
+    };
+    let (action, rest) = match reserve {
+        Some(_) => ("stop", &rest[1..]),
+        None => (action.as_str(), rest),
+    };
+    match action {
         "stop" | "clear" => {
             let mut reason: Option<String> = None;
             let mut by: Option<String> = None;
@@ -1184,7 +1218,7 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                         raw_target = Some((kind.to_string(), value.clone()));
                         i += 2;
                     }
-                    "--ttl" => {
+                    "--ttl" | "--for" => {
                         match rest.get(i + 1) {
                             Some(value) => match parse_ttl(value) {
                                 Ok(parsed) => ttl_ms = Some(parsed),
@@ -1217,6 +1251,21 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
             if action == "clear" && ttl_ms.is_some() {
                 eprintln!("fleet-incident: --ttl applies to stop only");
                 return 2;
+            }
+            if let Some((preset, preset_holds)) = &reserve {
+                if holds.is_some() || raw_target.is_some() {
+                    eprintln!(
+                        "fleet-incident: a reserve sets its own holds on the machine-wide record"
+                    );
+                    return 2;
+                }
+                holds = Some(preset_holds.clone());
+                ttl_ms = ttl_ms.or(Some(crate::reserve::DEFAULT_FOR_MS));
+                reason = reason.or_else(|| {
+                    Some(format!(
+                        "the user reserved the machine for {preset}; `fno agents incident clear` ends it early"
+                    ))
+                });
             }
             let home = crate::paths::AgentsHome::from_env();
             let cwd = match std::env::current_dir() {
@@ -1293,6 +1342,9 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                 RecordMetadata {
                     target,
                     expires_at,
+                    origin: reserve
+                        .as_ref()
+                        .map(|_| crate::reserve::RESERVE_ORIGIN.to_string()),
                     ..RecordMetadata::default()
                 },
             ) {
@@ -1686,4 +1738,27 @@ mod tests {
         }
         cleanup(&path);
     }
+}
+
+/// The `fleet-incident` client action's routing: the family body that used
+/// to live inline in bin/client.rs. gh-budget and cutover ride this action
+/// as its subcommands (law d-fe66560a allows no new client action), so the
+/// dispatch answers before every gh call even when the daemon is the thing
+/// wedged; the stdin door catches a bare admit.
+pub async fn run_dispatch(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("gh-budget") {
+        return crate::gh_budget::run_gh_budget(&args[1..]);
+    }
+    // `cutover` quiesces the writers and snapshots the stores for a machine
+    // move; it rides this action for the same reason.
+    if args.first().map(String::as_str) == Some("cutover") {
+        return crate::cutover::run_cutover(&args[1..]).await;
+    }
+    if args.is_empty() {
+        match crate::gh_budget::run_gh_budget_stdin_door() {
+            -1 => {}
+            code => return code,
+        }
+    }
+    run_fleet_incident(args)
 }

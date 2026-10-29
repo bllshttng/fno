@@ -13,7 +13,7 @@
 //! forward a browser byte upstream. The browser also never drives - it drops
 //! every inbound WS message and only picks which already-arriving frame to draw
 //! locally. The backlog board's writes are separate: guarded subprocess runs of
-//! the same `fno` verbs an agent runs (see `write_guard`), never socket input.
+//! the same `fno` commands an agent runs (see `write_guard`), never socket input.
 //!
 //! Data flow, one direction only:
 //!   vt::Pane --composite--> Frame --broadcast--> bridge --WS/JSON--> browser
@@ -45,6 +45,7 @@ pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// ([`crate::backlog_model`]) through `/backlog/model.json` and
 /// `/backlog/node.json` and computes nothing the model already answered.
 pub(crate) const BACKLOG_PAGE: &str = include_str!("web_backlog.html");
+pub(crate) const COMMAND_PAGE: &str = include_str!("web_command.html");
 /// The browser drives nothing, so anything it sends is dropped - but cap it so
 /// a hostile client cannot OOM the bridge with one giant frame.
 const INBOUND_WS_CAP: usize = 64 * 1024;
@@ -158,7 +159,7 @@ struct AppState {
     /// /rundown then never republishes through the fallback path, so a
     /// project-isolated bridge cannot overwrite the global page.
     rundown_republish: bool,
-    fleet_html: PathBuf,
+    command: Arc<crate::web_command::CommandCache>,
     /// True when the bound address is loopback, so the backlog page may act.
     /// Computed from the bound address, never from `--bind` text.
     writable: bool,
@@ -198,30 +199,16 @@ fn rundown_html_path() -> (PathBuf, bool) {
     }
 }
 
-fn fleet_html_path_from_state_root(state_root: &Path) -> PathBuf {
-    crate::state_layout::place(state_root, "fleet.html")
-}
-
-fn fleet_html_path() -> PathBuf {
-    #[cfg(not(test))]
-    {
-        fleet_html_path_from_state_root(&crate::proto::mux_sidecar_root())
-    }
-    #[cfg(test)]
-    {
-        let graph = crate::backlog_view::graph_path();
-        fleet_html_path_from_state_root(graph.parent().unwrap_or_else(|| Path::new(".")))
-    }
-}
-
 /// The bridge's live-state marker: `web-<session>.json` beside the
 /// session socket, holding the bind/port/token the bind-time print showed
 /// once. Written 0600 (the token is the only URL guard); removed by `Drop`
 /// on every exit path. A SIGKILLed bridge leaves it behind - the reader
-/// (`mux_cli::print_pane_url`) probes the TCP port, so a corpse file reads
-/// as "no bridge", never as a dead URL. `serve --web --stop` is the other
-/// reader: it kills the recorded pid, and the `started` token is what lets
-/// it refuse a recycled pid instead of signalling a stranger.
+/// (`web::print_pane_url`) trusts the URL only while the recorded pid is
+/// live AND the port answers, so a corpse file reads as "no bridge" and a
+/// stranger that took the dead bridge's port never reads as the bridge.
+/// `serve --web --stop` is the other reader: it kills the recorded pid, and
+/// the `started` token is what lets it refuse a recycled pid instead of
+/// signalling a stranger.
 struct WebStateFile(PathBuf);
 
 /// Path of the bridge's live-state marker beside a session socket. The one
@@ -243,66 +230,70 @@ pub(crate) fn web_state_path_for_session(session: &str) -> Option<PathBuf> {
     web_state_path(&proto::socket_path(session).ok()?)
 }
 
-/// Read a session's web-bridge state file and build the pasteable
-/// per-pane URL. The bridge writes `web-<session>.json` at bind; a file whose
-/// port no longer answers is a corpse, not a bridge, so the TCP probe - not
-/// the file's existence - decides liveness. Exit codes follow the mux verbs'
-/// (0 printed, 1 no usable bridge).
-pub(crate) fn print_pane_url(verb: &str, session: &str, pane: u64) -> i32 {
+/// A session's live web bridge, as its state file records it.
+pub(crate) struct LiveBridge {
+    /// `http://<host>:<port>`, the host this machine reaches it at.
+    pub(crate) base: String,
+    pub(crate) token: String,
+    /// True when the bridge listens on loopback only.
+    pub(crate) loopback: bool,
+}
+
+/// Read a session's web-bridge state file. The file's existence alone
+/// proves nothing, and neither does an answering port: the recorded pid
+/// must still be live and the port must answer. `Err` is the start hint.
+pub(crate) fn live_bridge(session: &str) -> Result<LiveBridge, String> {
     let hint = format!(
         "no web bridge for session {session}; start one with: fno mux serve --web --session {session}"
     );
-    let Some(path) = web_state_path_for_session(session) else {
-        eprintln!("{verb}: {hint}");
-        return 1;
-    };
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        eprintln!("{verb}: {hint}");
-        return 1;
-    };
-    let state: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("{verb}: {hint}");
-            return 1;
-        }
-    };
+    let state: serde_json::Value = web_state_path_for_session(session)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .ok_or_else(|| hint.clone())?;
     let bind = state
         .get("bind")
         .and_then(|v| v.as_str())
         .unwrap_or("127.0.0.1");
-    let port = match state.get("port").and_then(|v| v.as_u64()) {
-        Some(p) => p,
-        None => {
-            eprintln!("{verb}: {hint}");
-            return 1;
-        }
-    };
-    let token = state
-        .get("token")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    // A wide bind is reachable locally too; the pasteable URL says where THIS
-    // machine finds it, mirroring the bind-time print's host hint.
-    let host = if bind == "0.0.0.0" || bind == "::" {
-        "127.0.0.1"
-    } else {
-        bind
-    };
-    // Probe liveness for ANY spelling the operator may have bound (codex P2):
-    // a corpse file must not read as a bridge. Same probe --status uses.
-    if !tcp_answers(host, port as u16) {
-        eprintln!("{verb}: {hint}");
-        return 1;
+    let port = state
+        .get("port")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| hint.clone())?;
+    // A wide bind is reachable locally too; the URL says where THIS machine
+    // finds it, mirroring the bind-time print's host hint.
+    let wide = bind == "0.0.0.0" || bind == "::";
+    let host = if wide { "127.0.0.1" } else { bind };
+    // A bare TCP answer is not ownership - a dead bridge's port can be taken
+    // by a stranger - so the record's pid must still be live, the same
+    // identity --stop and --status already enforce.
+    if !recorded_pid_is_live(&state) || !tcp_answers(host, port as u16) {
+        return Err(hint);
     }
-    // Bracket a literal IPv6 host; a bare::1 in a URL truncates at the colon.
+    // Bracket a literal IPv6 host; a bare ::1 in a URL truncates at the colon.
     let url_host = if host.contains(':') {
         format!("[{host}]")
     } else {
         host.to_string()
     };
-    println!("http://{url_host}:{port}/?t={token}&pane={pane}");
-    0
+    Ok(LiveBridge {
+        base: format!("http://{url_host}:{port}"),
+        token: state["token"].as_str().unwrap_or_default().to_string(),
+        loopback: !wide && (host.starts_with("127.") || host == "::1" || host == "localhost"),
+    })
+}
+
+/// Print the pasteable per-pane URL. Exit codes follow the mux commands'
+/// (0 printed, 1 no usable bridge).
+pub(crate) fn print_pane_url(command: &str, session: &str, pane: u64) -> i32 {
+    match live_bridge(session) {
+        Ok(b) => {
+            println!("{}/?t={}&pane={pane}", b.base, b.token);
+            0
+        }
+        Err(hint) => {
+            eprintln!("{command}: {hint}");
+            1
+        }
+    }
 }
 
 impl WebStateFile {
@@ -478,8 +469,9 @@ fn launching_session_id() -> Option<String> {
 
 /// A state-file record whose pid is alive under its recorded start token.
 /// Dead, zombie, or a reused pid all read as not-live, so a corpse file never
-/// passes as a bridge.
-fn recorded_pid_is_live(v: &serde_json::Value) -> bool {
+/// passes as a bridge. The one liveness read for every state-file consumer
+/// (`--url`, `--stop`, `--status`, and the corpse sweep).
+pub(crate) fn recorded_pid_is_live(v: &serde_json::Value) -> bool {
     let Some(pid) = v
         .get("pid")
         .and_then(|p| p.as_u64())
@@ -506,7 +498,7 @@ fn tcp_answers(host: &str, port: u16) -> bool {
 }
 
 /// True when a bridge was built from a different, known crates/ rev than the
-/// binary this verb runs from, i.e. it is serving pre-deploy code. "unknown"
+/// binary this command runs from, i.e. it is serving pre-deploy code. "unknown"
 /// revs (a hand-built or stripped binary) are never called stale - we cannot
 /// know, so we do not claim to.
 fn rev_is_stale(recorded: &str) -> bool {
@@ -768,7 +760,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
         token,
         rundown_html,
         rundown_republish,
-        fleet_html: fleet_html_path(),
+        command: Default::default(),
         writable,
         model: Default::default(),
         shutdown: shutdown_rx,
@@ -813,7 +805,8 @@ fn router(state: AppState) -> Router {
         .route("/backlog/act", post(backlog_act))
         .route("/rundown", get(team))
         .route("/team", get(team))
-        .route("/fleet", get(fleet))
+        .route("/command", get(command))
+        .route("/command/model.json", get(command_model))
         .route("/ws", get(ws_handler))
         .with_state(state)
 }
@@ -1040,12 +1033,24 @@ async fn backlog(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respon
     } else {
         BACKLOG_PAGE.to_string()
     };
+    html_response(with_nav(&page, NavPage::Backlog))
+}
+
+/// `GET /command`: the command center page; it reads `/command/model.json`.
+async fn command(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    html_response(with_nav(COMMAND_PAGE, NavPage::Command))
+}
+
+fn html_response(body: String) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        with_nav(&page, NavPage::Backlog),
+        body,
     )
         .into_response()
 }
@@ -1083,15 +1088,31 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
     .await
 }
 
-async fn fleet(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
-    private_page_response(
-        &st.fleet_html,
-        q.t.as_deref(),
-        &st.token,
-        "the fno-agents daemon; its fleet_page arm writes fleet.html every 30 minutes, or run fno-agents intel --fleet --html",
-        NavPage::Fleet,
-    )
-    .await
+/// `GET /command/model.json`: the first read waits; later reads answer from the cache.
+async fn command_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    st.command
+        .first
+        .get_or_init(|| refresh_command(st.clone()))
+        .await;
+    if st.command.claim_refresh().await {
+        tokio::spawn(refresh_command(st.clone()));
+    }
+    json_response(&st.command.model().await)
+}
+
+async fn refresh_command(st: AppState) {
+    let inputs = model_inputs(&st).await;
+    let (fleet, questions) = tokio::join!(
+        crate::client::org_seats::read_fleet(),
+        crate::needs_overlay::questions_now()
+    );
+    let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
+    st.command
+        .record(fleet, questions, &inputs, measured_at)
+        .await;
 }
 
 /// `GET /backlog/model.json`: the whole board as JSON behind the token.
@@ -1259,8 +1280,8 @@ enum Act {
         id: String,
     },
     /// One encounter: the demand signal, POSTed with the operator's own
-    /// evidence. The verb refuses a repeat voter, so the page forwards the
-    /// verb's own answer.
+    /// evidence. The command refuses a repeat voter, so the page forwards the
+    /// command's own answer.
     Encounter {
         id: String,
         evidence: String,
@@ -1282,12 +1303,12 @@ fn act_id(act: &Act) -> &str {
     }
 }
 
-/// What a planned act runs: a backlog verb's argv through
-/// [`crate::backlog_write::run_verb`], or a launch through
+/// What a planned act runs: a backlog command's argv through
+/// [`crate::backlog_write::run_command`], or a launch through
 /// [`crate::server::agent_launch::run_dispatch_one`].
 #[derive(Debug)]
 enum Planned {
-    Verb(Vec<String>),
+    Command(Vec<String>),
     Dispatch { plan: bool },
 }
 
@@ -1321,7 +1342,7 @@ fn plan_act(inputs: &backlog_model::Inputs, act: &Act) -> Result<Planned, (Statu
             };
             crate::backlog_write::rank_argv(id, place, None)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))
-                .map(Planned::Verb)
+                .map(Planned::Command)
         }
         Act::Blueprint { .. } | Act::Target { .. } => {
             if view.card.claimed || view.card.live {
@@ -1342,7 +1363,7 @@ fn plan_act(inputs: &backlog_model::Inputs, act: &Act) -> Result<Planned, (Statu
                     "encounter: evidence is required; name what the node cost".into(),
                 ));
             }
-            Ok(Planned::Verb(vec![
+            Ok(Planned::Command(vec![
                 "backlog".into(),
                 "encounter".into(),
                 id.to_string(),
@@ -1354,13 +1375,13 @@ fn plan_act(inputs: &backlog_model::Inputs, act: &Act) -> Result<Planned, (Statu
     }
 }
 
-/// The effect half of `POST /backlog/act`: a planned verb argv runs through
+/// The effect half of `POST /backlog/act`: a planned command argv runs through
 /// the shared shell-out; a launch runs the mux's own dispatch door and
 /// carries its notice back. The launch arm's ok fact is `true`: the door
 /// reports refusals through its notice text.
 async fn run_planned(_st: &AppState, id: &str, planned: Planned) -> (bool, String) {
     match planned {
-        Planned::Verb(argv) => crate::backlog_write::run_verb(&argv, None).await,
+        Planned::Command(argv) => crate::backlog_write::run_command(&argv, None).await,
         Planned::Dispatch { plan } => {
             let notice = crate::server::agent_launch::run_dispatch_one(Some(id), None, plan).await;
             (true, notice)
@@ -1368,7 +1389,7 @@ async fn run_planned(_st: &AppState, id: &str, planned: Planned) -> (bool, Strin
     }
 }
 
-/// The 200 body: the verb's exit fact and its own last line.
+/// The 200 body: the command's exit fact and its own last line.
 fn act_response(ok: bool, notice: &str) -> Response {
     json_response(&serde_json::json!({ "ok": ok, "notice": notice }))
 }
@@ -1470,7 +1491,7 @@ enum NavPage {
     Live,
     Backlog,
     Team,
-    Fleet,
+    Command,
 }
 
 fn token_ok(supplied: Option<&str>, expected: &str) -> bool {
@@ -1581,7 +1602,7 @@ fn nav_fragment(current: NavPage) -> String {
         NavPage::Live => "live",
         NavPage::Backlog => "backlog",
         NavPage::Team => "rundown",
-        NavPage::Fleet => "fleet",
+        NavPage::Command => "command",
     };
     let link = |p: NavPage| {
         if p == current {
@@ -1627,7 +1648,7 @@ fn nav_fragment(current: NavPage) -> String {
         link(NavPage::Live),
         link(NavPage::Backlog),
         link(NavPage::Team),
-        link(NavPage::Fleet),
+        link(NavPage::Command),
     )
 }
 
@@ -1875,7 +1896,7 @@ mod tests {
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -1971,7 +1992,7 @@ mod tests {
         let socket = dir.join("t.sock");
         // pid names THIS live test process, but the recorded start token is
         // wrong: the identity check must read stale, and this process must
-        // survive the verb.
+        // survive the command.
         let own_start =
             proto::pid_start_time(std::process::id()).expect("start time on test platform");
         let state = web_state_path(&socket).unwrap();
@@ -2025,6 +2046,76 @@ mod tests {
         }
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pane_url_refuses_when_the_recorded_pid_is_gone_even_if_a_stranger_answers() {
+        // A dead bridge's port can be taken by another process; a bare TCP
+        // answer is not ownership. A dead or recycled pid in the state file
+        // must refuse the URL even though the port answers.
+        let stranger = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = stranger.local_addr().unwrap().port();
+        // A pid proven dead: spawned, reaped, gone.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        assert!(proto::pid_confirmed_dead(dead_pid as libc::pid_t));
+        assert!(
+            tcp_answers("127.0.0.1", port),
+            "repro premise: the stranger holds the port"
+        );
+        // The test mux dir is a cleaned path, not a created one: make it.
+        std::fs::create_dir_all(proto::mux_dir()).unwrap();
+        let state = proto::mux_dir().join("web-turldead.json");
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "bind": "127.0.0.1", "port": port, "token": "tok",
+                "pid": dead_pid, "started": 1
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(print_pane_url("fno mux pane url", "turldead", 0), 1);
+        // A recycled pid reads the same: this live process, wrong start token.
+        let own_start =
+            proto::pid_start_time(std::process::id()).expect("start time on test platform");
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "bind": "127.0.0.1", "port": port, "token": "tok",
+                "pid": std::process::id(), "started": own_start.wrapping_add(1)
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(print_pane_url("fno mux pane url", "turldead", 0), 1);
+        let _ = std::fs::remove_file(&state);
+        drop(stranger);
+    }
+
+    #[test]
+    fn pane_url_prints_when_the_recorded_bridge_is_live() {
+        // The identity gate must not over-refuse: live pid, matching start
+        // token, answering port -> the URL prints and the command exits 0.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let own_start =
+            proto::pid_start_time(std::process::id()).expect("start time on test platform");
+        std::fs::create_dir_all(proto::mux_dir()).unwrap();
+        let state = proto::mux_dir().join("web-turllive.json");
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "bind": "127.0.0.1", "port": port, "token": "tok",
+                "pid": std::process::id(), "started": own_start
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(print_pane_url("fno mux pane url", "turllive", 3), 0);
+        let _ = std::fs::remove_file(&state);
+        drop(listener);
     }
 
     #[test]
@@ -2090,7 +2181,7 @@ mod tests {
 
         assert!(!PAGE.contains("\"/backlog?t="));
         assert!(!PAGE.contains("\"/team?t="));
-        assert!(!PAGE.contains("\"/fleet?t="));
+        assert!(!PAGE.contains("\"/command?t="));
         assert!(!PAGE.contains("${location.host}/ws"));
         assert!(PAGE.contains("<!--fno-nav-->"));
         assert!(PAGE.contains("const base = document.querySelector(\"nav.fno-nav\").dataset.base;"));
@@ -2287,7 +2378,7 @@ console.log("evictedRowCount: 18 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -2777,7 +2868,7 @@ console.log("recent searches: 12 cases ok");
             (NavPage::Live, "live"),
             (NavPage::Backlog, "backlog"),
             (NavPage::Team, "rundown"),
-            (NavPage::Fleet, "fleet"),
+            (NavPage::Command, "command"),
         ] {
             let frag = nav_fragment(page);
             // The CSS selector also names the attribute; count the link tags.
@@ -2803,7 +2894,6 @@ console.log("recent searches: 12 cases ok");
         assert!(nav_fragment(NavPage::Backlog).contains(".controls{top:var(--fno-nav-h)}"));
         assert!(!nav_fragment(NavPage::Live).contains(".controls"));
         assert!(!nav_fragment(NavPage::Team).contains(".controls"));
-        assert!(!nav_fragment(NavPage::Fleet).contains(".controls"));
     }
 
     #[tokio::test]
@@ -2930,7 +3020,7 @@ console.log("recent searches: 12 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: false,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -2963,55 +3053,25 @@ console.log("recent searches: 12 cases ok");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn fleet_html_follows_state_root_beside_graph_json() {
-        let state = Path::new("/configured/state");
-        assert_eq!(
-            fleet_html_path_from_state_root(state),
-            PathBuf::from("/configured/state/cache/pages/fleet.html")
-        );
-    }
-
     #[tokio::test]
-    async fn missing_fleet_names_the_daemon_arm() {
-        let dir =
-            std::env::temp_dir().join(format!("fno-web-fleet-{}-missing", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let response = private_page_response(
-            &dir.join("fleet.html"),
-            Some("right"),
-            "right",
-            "the fno-agents daemon; its fleet_page arm writes fleet.html every 30 minutes",
-            NavPage::Fleet,
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("fleet_page"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn router_serves_fleet_with_token_and_shared_nav() {
+    async fn router_gates_command_model_on_the_token_and_drops_fleet() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let dir = std::env::temp_dir().join(format!("fno-web-fleet-{}-route", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let fleet_path = dir.join("fleet.html");
-        std::fs::write(&fleet_path, "<html><body>FLEET-MARKER</body></html>").unwrap();
         let (tx, _) = broadcast::channel(4);
         let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let command = Arc::new(crate::web_command::CommandCache::default());
+        // A recorded, spent first read: the route spawns no fleet read.
+        let fleet = serde_json::json!({"machines": [{"host": "bb16", "sessions": []}]});
+        let none = backlog_model::Inputs::default();
+        command.record(Ok(fleet), Err("x".into()), &none, 1).await;
+        command.first.set(()).unwrap();
         let state = AppState {
             tx,
             snap: Arc::new(Mutex::new(Snapshot::default())),
             token: Arc::<str>::from("right"),
-            rundown_html: dir.join("lead.html"),
-            rundown_republish: true,
-            fleet_html: fleet_path,
+            rundown_html: std::env::temp_dir().join("fno-web-command-lead.html"),
+            rundown_republish: false,
+            command,
             writable: true,
             model: Default::default(),
             shutdown,
@@ -3021,21 +3081,28 @@ console.log("recent searches: 12 cases ok");
         let server = tokio::spawn(async move {
             axum::serve(listener, router(state)).await.unwrap();
         });
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(
-                b"GET /fleet?t=right HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).await.unwrap();
+        let ask = |path: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+        let reply = ask("/command/model.json").await;
+        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+        let reply = ask("/command/model.json?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
-        assert!(reply.contains("data-current=\"fleet\""), "{reply}");
-        assert!(reply.contains("FLEET-MARKER"), "{reply}");
+        assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
+        assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
+        assert!(ask("/command").await.starts_with("HTTP/1.1 401"));
+        let reply = ask("/command?t=right").await;
+        assert!(reply.contains("data-current=\"command\""), "{reply}");
+        let reply = ask("/fleet?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
         server.abort();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn tiny_frame() -> proto::Frame {
@@ -3047,6 +3114,7 @@ console.log("recent searches: 12 cases ok");
             cursor_col: 0,
             cursor_visible: false,
             scroll_offset: 0,
+            history_lines: 0,
         }
     }
 
@@ -3389,7 +3457,7 @@ console.log("recent searches: 12 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -3481,7 +3549,7 @@ console.log("recent searches: 12 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,

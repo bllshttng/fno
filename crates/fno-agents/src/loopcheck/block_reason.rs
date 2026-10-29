@@ -6,12 +6,12 @@ use super::*;
 /// the native `review_capability` module - the same builder the parity
 /// goldens freeze and the single-source gate polices, so the invocation a
 /// held worker is told to run cannot drift from it. `--harness` rides from
-/// the SAME `resolve_harness` the gate uses, so the render names the verb
+/// the SAME `resolve_harness` the gate uses, so the render names the command
 /// for the harness that will actually run it.
 ///
 /// Fail-open on every error path: the hint is advisory text appended to
 /// refusal reasons, and a missing hint must never change a gate verdict -
-/// callers fall back to the levelless "run the review verb at HEAD" line.
+/// callers fall back to the levelless "run the review command at HEAD" line.
 pub(super) fn sized_self_review_hint(cwd: &Path, harness: Option<&str>) -> Option<String> {
     let (rendered, _) = crate::review_capability::render_self_review_invocation(
         harness,
@@ -85,7 +85,7 @@ pub(super) fn unattested_reviewers_reason(
                     } else {
                         inv
                     };
-                    // code-review is a native harness verb whose clean
+                    // code-review is a native harness command whose clean
                     // result normally reaches the shared attester. The
                     // helper remains the loud recovery path if that
                     // confirmed clean result did not produce evidence.
@@ -145,7 +145,7 @@ pub(super) fn build_block_reason(
     };
     if !pr.state.is_open_or_merged() {
         // `None` is the pre-ship state EVERY session sits in before the PR
-        // exists, not an error, so it gets the create verb. Sending it to
+        // exists, not an error, so it gets the create command. Sending it to
         // GitHub to "verify" a PR that was never opened is an errand with no
         // end. The catch-all keeps the verify wording, because it means gh
         // answered a state this build does not know.
@@ -154,7 +154,7 @@ pub(super) fn build_block_reason(
                 "PR is closed. Reopen with `gh pr reopen`, or create a new PR: `gh pr create`"
             }
             PrState::None => {
-                "No PR for HEAD yet. Create one: `/fno:ship pr create`, or `gh pr create`"
+                "No PR for HEAD yet. An unplanned node plans first (`/fno:blueprint <node>`) and commits; then create one: `/fno:ship pr create`, or `gh pr create`"
             }
             _ => "PR state is not open or merged - verify on GitHub and update locally",
         };
@@ -294,13 +294,13 @@ pub(super) fn build_block_reason(
             // file refuses to idle is the code contradicting itself, and a
             // session did comply with it roughly ten times.
             let head = short_sha(local_head);
-            // The verb a wedged session is told to run is harness-correct:
+            // The command a wedged session is told to run is harness-correct:
             // codex gets `/review`, claude `/code-review`. Resolved here from the
             // ambient author markers (the same `resolve_harness` the gate uses)
             // rather than threaded through every caller, so the 20+ build_block_reason
             // call sites stay single-arg.
             let author_harness = crate::claims::resolve_harness();
-            // The sized render for the code-review verb, resolved once for the
+            // The sized render for the code-review command, resolved once for the
             // whole list. The map value carries a `<level>` placeholder this
             // surface's reader has no renderer for; the render substitutes the
             // diff-sized level. None keeps the placeholder form (fail-open,

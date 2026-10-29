@@ -33,12 +33,108 @@ import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
-from fno.agents.orphans import REAP_MIN_AGE_S, iter_processes
+#: A named orphan younger than this is left alone by the orphan sweep, and the
+#: same bound is this lane's default reap grace: a worker that just launched
+#: something is not an orphan yet, it is a worker. (Ported here from
+#: ``orphans.py``, which moved to crates/fno-agents/src/orphans.rs.)
+REAP_MIN_AGE_S = 600
+
+#: The ppids that mean "this process lost its parent". A subreaper claims only
+#: its OWN descendants, and pid 1 stays the reaper of last resort, so a host
+#: with ``systemd --user`` has TWO such ppids live at once. Measuring one and
+#: filtering ``ppid != reaper`` dropped every orphan under the other.
+def _reaper_set(reaper: int) -> set[int]:
+    return {reaper, 1}
+
+
+def iter_processes(reaper: int = 1) -> Iterator[dict]:
+    """Every process this uid can read, as plain dicts.
+
+    One enumeration site for every process-table reader that still runs in
+    Python: this lane, the worktree-occupancy bridge and the pytest leak
+    census all walk through this function, so no two of them drift apart. The
+    native sweep walks the Rust census table instead
+    (crates/fno-agents/src/orphans.rs); this is the Python side's one table.
+
+    Accepts an injection seam for tests: a fabricated table exercises the
+    foreign-uid and reap-age arms the live probes cannot reach.
+    """
+    import psutil
+
+    reapers = _reaper_set(reaper)
+    attrs = ["pid", "ppid", "name", "cmdline", "uids", "create_time", "cpu_times"]
+    for proc in psutil.process_iter(attrs):
+        info = dict(proc.info)
+        info["cwd"] = None
+        # cwd() is a separate syscall and the common failure (AccessDenied on a
+        # process this uid cannot inspect) must not drop the row: a process
+        # with no readable cwd can still match the keeper argv join.
+        try:
+            if info.get("ppid") in reapers:
+                info["cwd"] = proc.cwd()
+        except Exception:  # noqa: BLE001 -- unreadable cwd is not a verdict
+            pass
+        yield info
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when the pid still exists.
+
+    EPERM means the process is there and this uid cannot signal it, which is
+    ALIVE. Reading a bare OSError as death makes the reap's liveness re-check
+    answer "killed" for a process still running.
+    """
+    import os
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+
+
+def _kill(pid: int) -> bool:
+    """SIGTERM, then SIGKILL if it is still there. Returns whether OUR signal
+    reached the process: a pid that exited on its own between the sweep and
+    the reap must not hand the caller a "reaped: 1" receipt for a signal
+    nobody sent, so the caller re-checks liveness too.
+
+    The SIGKILL grace at the tail is not decorative: a probe that ignored
+    SIGTERM for the full window once read `kill arm FAILED` microseconds
+    before it died, because the caller's re-check raced this window.
+    """
+    import os
+    import signal
+    import time as _time
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except Exception:  # noqa: BLE001
+        return False
+    for _ in range(20):
+        _time.sleep(0.1)
+        if not _pid_alive(pid):
+            return True
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        return True  # our SIGTERM landed; only the follow-up failed
+    for _ in range(20):
+        if not _pid_alive(pid):
+            return True
+        _time.sleep(0.05)
+    return True
+
 
 #: The keeper binary. argv[0] basename, matched exactly - the same discipline
-#: ``orphans.OWN_DAEMONS`` uses, so a renamed lookalike never matches.
+#: the orphan sweep's ``OWN_DAEMONS`` table uses, so a renamed lookalike never
+#: matches.
 KEEPER_BIN_NAME = "fno-agents-worker"
 
 #: The argv flag each lane is launched with (``dispatch.py`` pane spawns write
@@ -322,7 +418,7 @@ def discover(
     """Enumerate keepers, probe their sockets, join the registry, and decide.
 
     Read-only. The kill lives in :func:`reap_keepers`, behind ``--apply-all``
-    at the verb."""
+    at the command."""
     now_s = now_s if now_s is not None else time.time()
     iter_fn = iter_fn or iter_processes
     probe = sock_probe_fn or sock_state_of
@@ -479,14 +575,12 @@ def reap_keepers(
     the children first makes the keeper observe the child's death and exit on
     its own before its own signal lands, and the receipt then reads
     "reaped 0 keeper(s)" over a pid we did end - the died-on-its-own
-    miscredit ``orphans._kill`` exists to refuse. Any survivor of the group
+    miscredit ``_kill`` exists to refuse. Any survivor of the group
     signal falls back to the per-pid term-then-kill escalation. A broken lane
     reaps nothing: an instrument that cannot see its own ground has not
     earned a kill signal."""
     import os
     import signal
-
-    from fno.agents.orphans import _kill
 
     kill = kill_fn or _kill
     if result.broken:

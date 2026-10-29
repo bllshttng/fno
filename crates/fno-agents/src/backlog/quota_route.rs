@@ -43,54 +43,52 @@ impl Default for QuotaConfig {
 
 impl QuotaConfig {
     /// One invalid leaf degrades only that leaf; valid leaves survive, so a
-    /// bad global key never discards a healthy local setting.
-    pub fn from_block(block: &toml::Value) -> QuotaConfig {
+    /// bad global key never discards a healthy local setting. Each leaf takes
+    /// pydantic's lax coercion (`QuotaConfig.model_validate`).
+    pub fn from_block(block: &toml::Table) -> QuotaConfig {
+        use crate::accounts::records::{lax_bool, lax_float, lax_int};
         let mut cfg = QuotaConfig::default();
-        if let Some(v) = block.get("observe").and_then(|v| v.as_bool()) {
+        let leaf = |key: &str| block.get(key);
+        if let Some(v) = leaf("observe").and_then(lax_bool) {
             cfg.observe = v;
         }
-        if let Some(v) = block.get("defer_dispatch").and_then(|v| v.as_bool()) {
+        if let Some(v) = leaf("defer_dispatch").and_then(lax_bool) {
             cfg.defer_dispatch = v;
         }
-        if let Some(v) = block
-            .get("defer_threshold_pct")
-            .and_then(|v| v.as_float())
+        if let Some(v) = leaf("defer_threshold_pct")
+            .and_then(lax_float)
             .filter(|v| (0.0..=100.0).contains(v))
         {
             cfg.defer_threshold_pct = v;
         }
-        if let Some(v) = block
-            .get("probe_ttl_seconds")
-            .and_then(|v| v.as_integer())
+        if let Some(v) = leaf("probe_ttl_seconds")
+            .and_then(lax_int)
             .filter(|v| *v >= 1)
         {
             cfg.probe_ttl_seconds = v as f64;
         }
-        if let Some(v) = block
-            .get("defer_horizon_minutes")
-            .and_then(|v| v.as_integer())
+        if let Some(v) = leaf("defer_horizon_minutes")
+            .and_then(lax_int)
             .filter(|v| *v >= 0)
         {
             cfg.defer_horizon_minutes = v as f64;
         }
-        if let Some(v) = block.get("pick_on_launch").and_then(|v| v.as_bool()) {
+        if let Some(v) = leaf("pick_on_launch").and_then(lax_bool) {
             cfg.pick_on_launch = v;
         }
         cfg
     }
 }
 
-/// The quota config: `accounts.quota` merged across the config layers.
+/// The quota config: `accounts.quota` merged across the account layers
+/// (`loader.load_quota_config`).
 pub fn load_quota_config(node_cwd: Option<&str>) -> QuotaConfig {
     let cwd = node_cwd
         .map(Path::new)
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    match crate::agents_config::config_lookup(&cwd, &["accounts", "quota"]) {
-        Some(block) if block.is_table() => QuotaConfig::from_block(&block),
-        _ => QuotaConfig::default(),
-    }
+    QuotaConfig::from_block(&crate::accounts::records::quota_block(None, &cwd))
 }
 
 /// The headroom verdict: how much room the provider's account has.
@@ -140,201 +138,14 @@ pub struct AutonomousRoute {
     pub defer_fallback: bool,
 }
 
-/// One usage window read off the persisted snapshot.
-struct UsageWindow {
-    used_pct: f64,
-    resets_at: Option<f64>,
-}
-
-struct UsageSnapshot {
-    windows: Vec<UsageWindow>,
-    probed_at: f64,
-    partial: bool,
-}
-
-fn clamp_pct(v: f64) -> f64 {
-    v.clamp(0.0, 100.0)
-}
-
-/// The persisted runtime state: usage snapshots plus the provider locks,
-/// machine-wide (the file both languages answer).
-fn read_state_payload(node_cwd: Option<&str>) -> Option<Value> {
-    let cwd = node_cwd.map(Path::new).unwrap_or(Path::new("."));
-    let path = crate::provider_cap::runtime_state_path(cwd);
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-/// The cached usage snapshot for `provider_id`, or None when absent or older
-/// than the TTL (treated as absent: the snapshot only makes dispatch smarter,
-/// never gates it).
-fn read_usage(
-    provider_id: &str,
-    ttl_seconds: f64,
-    now: f64,
-    node_cwd: Option<&str>,
-) -> Option<UsageSnapshot> {
-    let raw = read_state_payload(node_cwd)?;
-    let entry = raw.get("usage")?.get(provider_id)?.as_object()?;
-    let raw_windows = entry.get("windows")?.as_array()?;
-    let mut windows = Vec::new();
-    for w in raw_windows {
-        let obj = w.as_object()?;
-        let used_pct = clamp_pct(obj.get("used_pct")?.as_f64()?);
-        let resets_at = match obj.get("resets_at") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_f64()?),
-        };
-        windows.push(UsageWindow {
-            used_pct,
-            resets_at,
-        });
-    }
-    let probed_at = entry.get("probed_at")?.as_f64()?;
-    if probed_at < now - ttl_seconds {
-        return None;
-    }
-    let partial = entry
-        .get("partial")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Some(UsageSnapshot {
-        windows,
-        probed_at,
-        partial,
-    })
-}
-
-/// The provider-level lock: `health.<id>.rate_limited_until`, plus the
-/// `last_error_at` that dates it.
-fn read_lock(provider_id: &str, node_cwd: Option<&str>) -> (Option<f64>, Option<f64>) {
-    let Some(raw) = read_state_payload(node_cwd) else {
-        return (None, None);
-    };
-    let Some(health) = raw
-        .get("health")
-        .and_then(|h| h.get(provider_id))
-        .and_then(Value::as_object)
-    else {
-        return (None, None);
-    };
-    let rlu = match health.get("rate_limited_until") {
-        None | Some(Value::Null) => None,
-        Some(v) => v.as_f64(),
-    };
-    let last_error_at = match health.get("last_error_at") {
-        None | Some(Value::Null) => None,
-        Some(v) => v.as_f64(),
-    };
-    (rlu, last_error_at)
-}
-
-struct Headroom {
-    state: HeadroomState,
-    resets_at: Option<f64>,
-}
-
-/// The headroom verdict from a snapshot and a lock. Fresh usage is the
-/// strongest account evidence; the lock is the fallback when no fresh usable
-/// usage window exists. A window whose reset is already past never binds.
-fn headroom_from(
-    snap: Option<&UsageSnapshot>,
-    rlu: Option<f64>,
-    lock_at: Option<f64>,
-    now: f64,
-    threshold_pct: f64,
-) -> Headroom {
-    if rlu.is_some() && lock_at.is_some() {
-        if let Some(snap) = snap {
-            if snap.probed_at <= lock_at.unwrap_or(f64::INFINITY) {
-                // A death recorded after the probe is the newer fact; the
-                // window cannot speak for it. The lock decides until a newer
-                // probe replaces it.
-                return Headroom {
-                    state: HeadroomState::Exhausted,
-                    resets_at: rlu,
-                };
-            }
-        }
-    }
-    let Some(snap) = snap else {
-        if rlu.is_some() {
-            return Headroom {
-                state: HeadroomState::Exhausted,
-                resets_at: rlu,
-            };
-        }
-        return Headroom {
-            state: HeadroomState::Unknown,
-            resets_at: None,
-        };
-    };
-    let binding: Vec<&UsageWindow> = snap
-        .windows
-        .iter()
-        .filter(|w| w.resets_at.map_or(true, |r| r > now))
-        .collect();
-    let exhausted: Vec<&&UsageWindow> = binding.iter().filter(|w| w.used_pct >= 100.0).collect();
-    if !snap.windows.is_empty() {
-        if !exhausted.is_empty() {
-            let resets: Vec<Option<f64>> = exhausted.iter().map(|w| w.resets_at).collect();
-            return Headroom {
-                state: HeadroomState::Exhausted,
-                resets_at: resets
-                    .into_iter()
-                    .flatten()
-                    .fold(None, |acc: Option<f64>, r| {
-                        Some(acc.map_or(r, |a| a.min(r)))
-                    }),
-            };
-        }
-        if snap.partial {
-            // A partial response has a missing window, so never answer OK
-            // from it; the reset is the soonest one actually observed.
-            let soonest: Vec<Option<f64>> = binding.iter().map(|w| w.resets_at).collect();
-            return Headroom {
-                state: HeadroomState::Low,
-                resets_at: soonest
-                    .into_iter()
-                    .flatten()
-                    .fold(None, |acc: Option<f64>, r| {
-                        Some(acc.map_or(r, |a| a.min(r)))
-                    }),
-            };
-        }
-        if binding.is_empty() {
-            return Headroom {
-                state: HeadroomState::Ok,
-                resets_at: None,
-            };
-        }
-        if let Some(worst) = binding.iter().max_by(|a, b| {
-            a.used_pct
-                .partial_cmp(&b.used_pct)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            if worst.used_pct >= threshold_pct {
-                return Headroom {
-                    state: HeadroomState::Low,
-                    resets_at: worst.resets_at,
-                };
-            }
-        }
-        return Headroom {
-            state: HeadroomState::Ok,
-            resets_at: None,
-        };
-    }
-    if rlu.is_some() {
-        return Headroom {
-            state: HeadroomState::Exhausted,
-            resets_at: rlu,
-        };
-    }
-    // A snapshot that reported no windows is not evidence of headroom.
-    Headroom {
-        state: HeadroomState::Unknown,
-        resets_at: None,
+/// The verdict word the route speaks, from the one headroom verdict.
+fn state_of(v: crate::fallback_chain::Verdict) -> HeadroomState {
+    use crate::fallback_chain::Verdict;
+    match v {
+        Verdict::Ok => HeadroomState::Ok,
+        Verdict::Low => HeadroomState::Low,
+        Verdict::Exhausted => HeadroomState::Exhausted,
+        Verdict::Unknown => HeadroomState::Unknown,
     }
 }
 
@@ -378,8 +189,10 @@ pub fn evaluate_quota_signal(
     }
     // Probe-on-stale is the Python leg: a stale snapshot reads as absent
     // here, and absent is UNKNOWN - which proceeds.
-    let snap = read_usage(provider_id, quota.probe_ttl_seconds, now, node_cwd);
-    let Some(snap) = snap else {
+    use crate::accounts::state;
+    let path = crate::provider_cap::runtime_state_path(node_cwd.map_or(Path::new("."), Path::new));
+    let ttl = quota.probe_ttl_seconds;
+    let Some(snap) = state::read_usage(&path, provider_id, ttl, now) else {
         return signal(
             HeadroomState::Unknown,
             None,
@@ -388,24 +201,25 @@ pub fn evaluate_quota_signal(
             "probe-unavailable-native",
         );
     };
-    let (rlu, _lock_at) = read_lock(provider_id, node_cwd);
-    let mut h = headroom_from(Some(&snap), rlu, _lock_at, now, quota.defer_threshold_pct);
-    if h.state == HeadroomState::Unknown && !snap.windows.is_empty() {
+    let threshold = quota.defer_threshold_pct;
+    let mut hv = state::headroom(&path, provider_id, now, ttl, threshold);
+    if hv.verdict == crate::fallback_chain::Verdict::Unknown && !snap.windows.is_empty() {
         // The probe SAW the provider but the read-back did not bind: trust
         // the in-hand observation over the disk that failed to keep it.
-        h = headroom_from(Some(&snap), None, None, now, quota.defer_threshold_pct);
+        hv = crate::fallback_chain::headroom_at(None, Some(&snap), now, ttl, threshold);
     }
+    let (h_state, h_resets) = (state_of(hv.verdict), hv.resets_at);
     if !quota.defer_dispatch {
         // Observation-only: neither verdict fires.
-        return signal(h.state, h.resets_at, false, false, "observed");
+        return signal(h_state, h_resets, false, false, "observed");
     }
     let defer;
     let cutover;
-    if h.state == HeadroomState::Exhausted {
+    if h_state == HeadroomState::Exhausted {
         defer = true;
         cutover = true;
-    } else if h.state == HeadroomState::Low {
-        if let Some(resets_at) = h.resets_at {
+    } else if h_state == HeadroomState::Low {
+        if let Some(resets_at) = h_resets {
             let horizon = quota.defer_horizon_minutes * 60.0;
             defer = horizon > 0.0 && resets_at <= now + horizon;
             let after = cutover_low_after_minutes * 60.0;
@@ -418,7 +232,7 @@ pub fn evaluate_quota_signal(
         defer = false;
         cutover = false;
     }
-    signal(h.state, h.resets_at, defer, cutover, "probed")
+    signal(h_state, h_resets, defer, cutover, "probed")
 }
 
 /// Whether any explicit launch intent pins the route: a provider or model
@@ -465,20 +279,17 @@ pub fn select_destination(
     if on_exhaustion != "failover" {
         return None;
     }
-    // The active combo by name; a bare active PROVIDER is not a combo (the
-    // walk has nothing to do, and defer is the floor).
-    let combo_name = crate::agents_config::config_lookup(cwd, &["providers", "active"])
-        .and_then(|v| v.as_str().map(str::to_string))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())?;
-    let combos = crate::agents_config::config_lookup(cwd, &["providers", "combos"])?;
-    let combo = combos.get(combo_name.as_str())?.as_table()?;
-    let members = combo.get("providers")?.as_array()?;
-    let records = crate::agents_config::config_lookup(cwd, &["providers", "records"])?;
-    for member in members {
-        let Some(pid) = member.as_str() else {
-            continue;
-        };
+    // The active combo by name (`accounts.active_combo`, the settings_combo
+    // rung); a bare active account is not a combo, and defer is the floor.
+    use crate::accounts::records;
+    let root = node_cwd.map(Path::new);
+    let combo_name = records::load_active_combo(root, cwd)?;
+    let combo = records::load_combos(root, cwd)
+        .ok()?
+        .into_iter()
+        .find(|c| c.name == combo_name)?;
+    let accounts = records::load(root, cwd).ok()?;
+    for pid in &combo.providers {
         if pid == exhausted_provider {
             continue;
         }
@@ -488,27 +299,14 @@ pub fn select_destination(
         if sig.state == HeadroomState::Exhausted {
             continue;
         }
-        let record = record_by_id(&records, pid)?;
-        let harness = record
-            .get("cli")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())?;
+        let harness = accounts.by_id(pid)?.harness.trim();
         // A record with no harness cannot pick a --provider.
-        return Some((pid.to_string(), harness.to_string()));
+        if harness.is_empty() {
+            return None;
+        }
+        return Some((pid.clone(), harness.to_string()));
     }
     None
-}
-
-/// One provider record by id, from a records list (array of rows) or a map.
-fn record_by_id<'a>(records: &'a toml::Value, pid: &str) -> Option<&'a toml::Table> {
-    if let Some(rows) = records.as_array() {
-        return rows
-            .iter()
-            .find(|r| r.get("id").and_then(|v| v.as_str()) == Some(pid))
-            .and_then(toml::Value::as_table);
-    }
-    records.get(pid).and_then(toml::Value::as_table)
 }
 
 /// Whether launch-time account picking is armed AND has a live account.
@@ -530,18 +328,12 @@ fn healthy_alternate_exists(node_cwd: Option<&str>) -> bool {
         return false;
     }
     let cwd = node_cwd.map(Path::new).unwrap_or(Path::new("."));
-    let Some(raw) = crate::agents_config::config_lookup(cwd, &["accounts", "records"]) else {
-        return false;
-    };
-    let Some(records) = raw.as_array() else {
+    let Ok(accounts) = crate::accounts::records::load(None, cwd) else {
         return false;
     };
     let now = now_secs();
-    records.iter().any(|rec| {
-        let Some(id) = rec.get("id").and_then(|v| v.as_str()) else {
-            return false;
-        };
-        let sig = evaluate_quota_signal(id, None, 0.0, node_cwd, now);
+    accounts.records.iter().any(|rec| {
+        let sig = evaluate_quota_signal(&rec.id, None, 0.0, node_cwd, now);
         sig.state != HeadroomState::Exhausted
     })
 }
@@ -562,14 +354,15 @@ pub fn select_autonomous_route(
     _node_id: Option<&str>,
     now: f64,
 ) -> AutonomousRoute {
-    let cfg = load_quota_config(node_cwd);
+    // `dispatch.cutover_low_after_minutes`; a non-integer or negative value
+    // degrades to 0 (off).
     let cutover_low = {
         let cwd = node_cwd.map(Path::new).unwrap_or(Path::new("."));
-        crate::agents_config::config_lookup(cwd, &["accounts", "cutover_low_after_minutes"])
+        crate::agents_config::config_lookup(cwd, &["dispatch", "cutover_low_after_minutes"])
             .and_then(|v| v.as_integer())
+            .filter(|v| *v >= 0)
             .unwrap_or(0) as f64
     };
-    let _ = cfg;
     let sig = evaluate_quota_signal(provider_id, priority, cutover_low, node_cwd, now);
     let window = sig.state.as_str().to_string();
     if sig.cutover && !pinned {
@@ -637,5 +430,176 @@ pub fn select_autonomous_route(
         retry_at: None,
         window: Some(window),
         defer_fallback: false,
+    }
+}
+
+#[cfg(test)]
+mod quota_signal_tests {
+    //! The observe/defer split, pinned where it now lives. The deleted Python
+    //! suite held these six shapes; the verdicts are read off ONE probe here
+    //! exactly as there: looking is `observe`, acting is `defer_dispatch`,
+    //! and neither may fire the other's behavior.
+
+    use super::*;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// The env pins are process-global, so the config-gated tests serialize.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const NOW: f64 = 1_789_400_000.0;
+
+    struct EnvPin {
+        /// The config file's home; owned so the directory outlives the read.
+        _config_dir: Option<tempfile::TempDir>,
+        saved_config: Option<OsString>,
+        saved_state: Option<OsString>,
+    }
+
+    impl EnvPin {
+        fn pin(config: &str, state: Option<&Path>) -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let config_path = dir.path().join("config.toml");
+            fs::write(&config_path, config).expect("write config");
+            let saved_config = std::env::var_os("FNO_CONFIG");
+            let saved_state = std::env::var_os("FNO_RUNTIME_STATE_PATH");
+            std::env::set_var("FNO_CONFIG", &config_path);
+            if let Some(path) = state {
+                std::env::set_var("FNO_RUNTIME_STATE_PATH", path);
+            }
+            Self {
+                _config_dir: Some(dir),
+                saved_config,
+                saved_state,
+            }
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            match &self.saved_config {
+                Some(v) => std::env::set_var("FNO_CONFIG", v),
+                None => std::env::remove_var("FNO_CONFIG"),
+            }
+            match &self.saved_state {
+                Some(v) => std::env::set_var("FNO_RUNTIME_STATE_PATH", v),
+                None => std::env::remove_var("FNO_RUNTIME_STATE_PATH"),
+            }
+        }
+    }
+
+    fn quota_config(observe: bool, defer_dispatch: bool) -> String {
+        format!(
+            "[providers.quota]\nobserve = {observe}\ndefer_dispatch = {defer_dispatch}\n\
+             defer_threshold_pct = 90.0\nprobe_ttl_seconds = 300.0\n\
+             defer_horizon_minutes = 10.0\n"
+        )
+    }
+
+    /// One fresh usage row for `p1`, as the runtime-state writer leaves it.
+    fn state_file(dir: &Path, used_pct: f64, resets_at: f64) -> PathBuf {
+        let path = dir.join("runtime-state.json");
+        let body = format!(
+            r#"{{"schema_version": 2, "usage": {{"p1": {{"probed_at": {}, "source": "t", "windows": [{{"label": "5h", "used_pct": {}, "resets_at": {}}}]}}}}}}"#,
+            NOW - 10.0,
+            used_pct,
+            resets_at
+        );
+        fs::write(&path, body).expect("write state");
+        path
+    }
+
+    #[test]
+    fn observation_off_short_circuits_before_any_probe() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvPin::pin(&quota_config(false, false), None);
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "quota-observation-off");
+    }
+
+    #[test]
+    fn p0_is_exempt_when_observation_is_armed() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvPin::pin(&quota_config(true, true), None);
+        let sig = evaluate_quota_signal("p1", Some("p0"), 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "p0-exempt");
+    }
+
+    #[test]
+    fn observe_only_without_a_snapshot_stays_unknown_and_does_not_act() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvPin::pin(&quota_config(true, false), None);
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "probe-unavailable-native");
+    }
+
+    #[test]
+    fn observe_only_reports_the_verdict_a_fresh_snapshot_gives() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 32.0, NOW + 3600.0);
+        let _env = EnvPin::pin(&quota_config(true, false), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Ok);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "observed");
+    }
+
+    #[test]
+    fn exhaustion_defers_and_cutovers() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 100.0, NOW + 3600.0);
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Exhausted);
+        assert!(sig.defer && sig.cutover);
+        assert_eq!(sig.reason, "probed");
+    }
+
+    #[test]
+    fn low_near_reset_defers_without_cutover() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 95.0, NOW + 60.0);
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 30.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Low);
+        assert!(sig.defer);
+        assert!(!sig.cutover);
+    }
+
+    #[test]
+    fn low_far_reset_cutovers_when_the_knob_is_on() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 95.0, NOW + 7200.0);
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 30.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Low);
+        assert!(!sig.defer);
+        assert!(sig.cutover);
+    }
+
+    #[test]
+    fn unreadable_state_stays_unknown_and_eligible() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("absent.json");
+        // Observation is opt-in: without a pinned config the gate answers
+        // quota-observation-off before any state probe runs.
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&missing));
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "probe-unavailable-native");
     }
 }

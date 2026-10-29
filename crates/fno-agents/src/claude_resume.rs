@@ -129,7 +129,7 @@ where
         Ok((argv, None))
     } else if dead && has_uuid {
         // this arm RELAUNCHES (the live arm above only attaches), so it
-        // is the one door on this verb that can lose a route. A row that records
+        // is the one door on this command that can lose a route. A row that records
         // one gets it re-applied through `--settings`, the same mechanism the
         // original spawn used; a recorded file that is gone refuses rather than
         // relaunching on the default Anthropic account, which works, bills the
@@ -217,7 +217,7 @@ where
 /// dead-ending in claude's own "session not found". `None` when the row is live
 /// (fall through to a normal attach) or carries no revivable uuid (nothing to
 /// point at - never print an unusable command). Probes reality (locate_session +
-/// socket), never the registry `status` field, matching the resume smart verb.
+/// socket), never the registry `status` field, matching the resume smart command.
 pub(crate) fn claude_attach_pointer(
     claude_home: &ClaudeHome,
     entry: &Value,
@@ -265,6 +265,6 @@ where
     }
     Some(format!(
         "{name} has exited - fno agents resume {name} (continue it in your terminal)\n\
-         or: fno agents spawn {name} --resume {uuid} --substrate thread (detached worker)"
+         or: claude --bg --name {name} --resume {uuid} (detached worker)"
     ))
 }

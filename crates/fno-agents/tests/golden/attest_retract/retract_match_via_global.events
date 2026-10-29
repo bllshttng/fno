@@ -1,0 +1,1 @@
+{"ts":"<TS>","type":"review_attestation","source":"test","data":{"reviewer":"code-review","head_sha":"<SHA40>","verdict":"fail","session_id":"","retracts_attester":"s9","attester_session_id":"","attester_witness":"env_only","retraction_reason":"forged pass","branch":"main"}}

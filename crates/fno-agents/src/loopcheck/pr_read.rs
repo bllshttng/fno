@@ -150,10 +150,199 @@ pub(super) struct PrInfo {
     /// the no-PR early return and on callers without settings context.
     pub(super) posture: Option<PostureVerdict>,
     /// The attestation-chain range tiling computed for this read, carried so
-    /// the standalone verb's stdout payload equals the row read_pr_info
+    /// the standalone command's stdout payload equals the row read_pr_info
     /// emitted, field for field (payload parity). Default on every early
     /// return and test fixture: no chain, no rescue.
     pub(super) range_tiling: RangeTiling,
+}
+
+/// The node's numbered PR rows: (number, merge_status, history-marked). The
+/// one collection every store-side PR row rule reads, so the live/terminal
+/// and reopen-age rules cannot drift between them.
+fn numbered_pr_rows(node: &crate::backlog::model::Node) -> Vec<(i64, Option<&str>, bool)> {
+    node.primary_pr
+        .iter()
+        .chain(node.additional_prs.iter().flatten())
+        .filter_map(|pr| {
+            pr.number.filter(|number| *number > 0).map(|n| {
+                (
+                    n,
+                    pr.merge_status.as_deref(),
+                    pr.extras.get("history").and_then(Value::as_bool) == Some(true),
+                )
+            })
+        })
+        .collect()
+}
+
+/// A merge_status stamp that settles the row's PR: merged or closed, in any
+/// writer spelling (compare case-insensitively on purpose).
+fn terminal_stamp(status: &Option<&str>) -> bool {
+    status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
+}
+
+/// The session manifest node's PR number, as a gh selector string.
+///
+/// The terminal read pins the PR the manifest's own node shipped instead of
+/// asking gh to resolve the checkout branch: a merged, deleted or detached
+/// head has no branch-to-PR answer, and the branch-resolved read then fails
+/// (under load, as a signal-killed child with empty stderr), which the gate
+/// renders as a causeless block on a PR that in fact merged. With the number
+/// the same read answers MERGED and retires the fire. Read-only against the
+/// graph store, the same door `node_is_done` uses, and fail-open: no node in
+/// the manifest, an unreadable store, or a node with no PR keeps the
+/// branch-resolved read, which is exactly the pre-existing behavior - and the
+/// only correct one before the session's PR exists at all.
+///
+/// A node can carry several PRs (`pull_request_attach` files every PR after
+/// the first under additional_prs, and the reconcile passes stamp the row
+/// they settle as merged or closed). The selector prefers a row the store
+/// does not stamp terminal - the live one - and among equals takes the
+/// newest number, so a closed or earlier merged primary never pins the gate
+/// to a dead PR.
+///
+/// The lift is age-gated: an unstamped row OLDER than every stamped row is
+/// reopen history, never live work. Rows the reopen demotion writes carry
+/// the explicit `history: true` mark and sink whatever their number; the
+/// age rule remains for rows written before the mark existed.
+pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
+    let node_id = node_id?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    let mut rows = numbered_pr_rows(&node);
+    // Newest first, then a stable pass that lifts non-terminal rows above
+    // stamped ones. The stamps ride the writers' own spelling, which is
+    // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
+    // case-insensitive on purpose. `merge_status` is None on every attached
+    // row, so an untracked live PR beats a stamped dead one, and a node
+    // whose only PR is merged still pins it. An unstamped row at or below
+    // the newest stamp shares the stamped rows' key: it predates them, and
+    // a row the reopen marked history sinks whatever its number.
+    let terminal = terminal_stamp;
+    let max_terminal = rows
+        .iter()
+        .filter(|(_, status, _)| terminal(status))
+        .map(|(number, _, _)| *number)
+        .max();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    // Key 0 = live, 1 = settled (stamped, or age-gated history), 2 = an
+    // explicitly marked history row. A marked row sinks below even the
+    // stamped rows: state, not number order, decides for it.
+    rows.sort_by_key(|(number, status, history)| {
+        if *history {
+            2
+        } else if terminal(status) || max_terminal.is_some_and(|bound| *number <= bound) {
+            1
+        } else {
+            0
+        }
+    });
+    rows.first().map(|(number, _, _)| number.to_string())
+}
+
+/// The manifest node's work reads finished in the graph store alone: the node
+/// is done (or superseded), at least one of its recorded PRs is stamped
+/// merged, and no live row is left open. Returns the newest merged PR number
+/// so the caller can name its evidence.
+///
+/// This is the done-worker early allow: once the store records the merge, the
+/// gate's REST read can only re-learn a fact it already knows, and under a
+/// loaded machine that read is the one thing that can still fail - each
+/// timeout re-blocking a finished session that never goes idle, so queued
+/// mail never lands. An unreadable store, a missing row, an open node, or an
+/// unstamped live row keeps the REST read exactly as before (fail-open); the
+/// live-row rule is the selector's own (an unstamped row at or below the
+/// newest terminal stamp is reopen history, a marked `history` row sinks
+/// regardless), so a replacement PR in flight holds the gate.
+pub(super) fn node_done_pr_merged(cwd: &Path, node_id: Option<&str>) -> Option<i64> {
+    use crate::backlog::model::Status;
+    let node_id = node_id?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    if !matches!(node.status, Status::Done | Status::Superseded) {
+        return None;
+    }
+    let rows = numbered_pr_rows(&node);
+    let terminal = terminal_stamp;
+    let max_terminal = rows
+        .iter()
+        .filter(|(_, status, _)| terminal(status))
+        .map(|(number, _, _)| *number)
+        .max();
+    let has_live = rows.iter().any(|(number, status, history)| {
+        !history && !terminal(status) && !max_terminal.is_some_and(|bound| *number <= bound)
+    });
+    if has_live {
+        return None;
+    }
+    rows.iter()
+        .filter(|(_, status, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
+        .map(|(number, _, _)| *number)
+        .max()
+}
+
+/// The node's live replacement PR when the bound one reads CLOSED: the
+/// manifest is write-once and a replacement on another branch never reaches
+/// the node row, so the gate asks GitHub for the newest open or merged PR
+/// whose closure line names the node. REST search keeps the read off the
+/// shared GraphQL quota. Any failed read answers None and the gate keeps the
+/// closed PR's verdict.
+pub(super) fn live_fixes_pr(
+    gh_bin: &str,
+    cwd: &Path,
+    repo_slug: &str,
+    node_id: &str,
+    closed: i64,
+) -> Option<String> {
+    if repo_slug.is_empty() || node_id.is_empty() {
+        return None;
+    }
+    // Quoted: search splits a bare hyphenated id into separate terms.
+    let query = format!("q=\"{node_id}\" in:body type:pr repo:{repo_slug}");
+    let out = bounded_read(
+        gh_bin.as_ref(),
+        &["api", "-X", "GET", "search/issues", "-f", &query],
+        cwd,
+        "pr_fixes_search",
+        stopgate_read_timeout(),
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let found: Value = serde_json::from_slice(&out.stdout).ok()?;
+    pick_live_fixes_pr(&found, node_id, closed).map(|n| n.to_string())
+}
+
+/// The newest open or merged search hit, other than the closed PR, whose
+/// `Fixes` line names the node. A merely mentioned node never binds.
+pub(super) fn pick_live_fixes_pr(found: &Value, node_id: &str, closed: i64) -> Option<i64> {
+    found
+        .get("items")?
+        .as_array()?
+        .iter()
+        .filter(|item| {
+            let merged = item
+                .get("pull_request")
+                .and_then(|pr| pr.get("merged_at"))
+                .is_some_and(|at| !at.is_null());
+            item.get("state").and_then(Value::as_str) == Some("open") || merged
+        })
+        .filter(|item| {
+            let body = item.get("body").and_then(Value::as_str).unwrap_or("");
+            crate::org_board::pr_closure::parse(body)
+                .iter()
+                .any(|id| id == node_id)
+        })
+        .filter_map(|item| item.get("number").and_then(Value::as_i64))
+        .filter(|number| *number != closed)
+        .max()
 }
 
 /// Run done() reads. Returns Ok(PrInfo) or Err((read_name, stderr_tail)) on gh failure.
@@ -357,7 +546,7 @@ pub(super) fn read_pr_info(
         if !checks_out.status.success() {
             return Err(GhReadError::failed(
                 checks_read,
-                stderr_tail(&checks_out.stderr_tail),
+                failed_read_tail(&checks_out),
             ));
         }
 
@@ -472,7 +661,7 @@ pub(super) fn read_pr_info(
         // reached the external arm's refresh, so rounds the connector posted
         // read 0 here and the cap could not fire on exactly the lane that
         // spun (PR #1225: five real rounds, counter 0/2). The read mirrors
-        // the Python merge gate's own gating (_coverage_gate._pr_reviews):
+        // the merge gate's own review read:
         // pay it only where it can change the answer - the row is uncovered,
         // or findings are in play - never on a healthy covered PR. A
         // no_external session reads nothing, whatever the gate says. A
@@ -531,7 +720,7 @@ pub(super) fn read_pr_info(
                 }
                 Ok(out) => log_bounded_read_error(
                     "round-budget reviews read",
-                    &GhReadError::failed("pr_reviews", stderr_tail(&out.stderr_tail)),
+                    &GhReadError::failed("pr_reviews", failed_read_tail(&out)),
                 ),
                 Err(e) => log_bounded_read_error("round-budget reviews read", &e),
             }
@@ -562,7 +751,7 @@ pub(super) fn read_pr_info(
         if !reviews_out.status.success() {
             return Err(GhReadError::failed(
                 "pr_reviews",
-                stderr_tail(&reviews_out.stderr_tail),
+                failed_read_tail(&reviews_out),
             ));
         }
 
@@ -639,7 +828,7 @@ pub(super) fn read_pr_info(
         if !comments_out.status.success() {
             return Err(GhReadError::failed(
                 "pulls_comments",
-                stderr_tail(&comments_out.stderr_tail),
+                failed_read_tail(&comments_out),
             ));
         }
 
@@ -673,7 +862,7 @@ pub(super) fn read_pr_info(
             if !commits_out.status.success() {
                 return Err(GhReadError::failed(
                     "pr_commits",
-                    stderr_tail(&commits_out.stderr_tail),
+                    failed_read_tail(&commits_out),
                 ));
             }
             let commits_json: Value = serde_json::from_slice(&commits_out.stdout)

@@ -10,6 +10,7 @@
 //! are non-terminal?
 
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// The gate re-derives blocking from the primitive's own fields with the
 /// ONE shipped allowlist, shared with the producer side
@@ -96,19 +97,32 @@ fn row_head(row: &Value) -> &str {
 /// chain (the caller that parsed the events once passes the same chain to
 /// every predicate).
 ///
+/// `verify_invocations` names the invocation ids whose `review_invocation`
+/// row carried `--verify-fixes`. A finding disposed `fixed` by one of those
+/// rows is terminal at the disposing round's own head: a scoped
+/// fix-verification re-read the finding's site there, so no later commit is
+/// owed - and when the fix landed before the first attested head, the fix
+/// delta is empty and no later head can ever exist to witness it. A caller
+/// that holds only the chain passes an empty set and keeps the head-move
+/// requirement: fail closed.
+///
 /// Terminal means: fixed (and a LATER round reviewed a head the finding's
-/// last raise did not sit on), non-blocking by the gate's own re-derivation,
-/// or declined WITH a recorded reason. Origin never gates: whoever attested
+/// last raise did not sit on, or the disposing round carried --verify-fixes),
+/// non-blocking by the gate's own re-derivation, or declined WITH a recorded
+/// reason. Origin never gates: whoever attested
 /// the disposition, the terminality is the same. Pure: no IO. An empty chain
 /// has no findings and blocks nothing.
-pub fn disposition_blockers_on_chain(chain: &[Value]) -> Vec<DispositionBlocker> {
+pub fn disposition_blockers_on_chain(
+    chain: &[Value],
+    verify_invocations: &HashSet<String>,
+) -> Vec<DispositionBlocker> {
     if chain.is_empty() {
         return Vec::new();
     }
 
     let mut findings: Vec<(String, &Value, usize, String)> = Vec::new(); // key, primitive, raised round, raised head
-    let mut dispositions: std::collections::HashMap<String, (&str, &str)> =
-        std::collections::HashMap::new(); // key -> (disposition, reason)
+    let mut dispositions: std::collections::HashMap<String, (&str, &str, Option<&str>)> =
+        std::collections::HashMap::new(); // key -> (disposition, reason, disposing row's invocation_id)
     let mut truncated = false;
     for (index, val) in chain.iter().enumerate() {
         if val
@@ -152,8 +166,12 @@ pub fn disposition_blockers_on_chain(chain: &[Value]) -> Vec<DispositionBlocker>
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let reason = entry.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            let invocation = val
+                .pointer("/data/invocation_id")
+                .and_then(|v| v.as_str())
+                .filter(|id| !id.is_empty() && *id != "UNJOINED");
             if !key.is_empty() {
-                dispositions.insert(key.to_string(), (disposition, reason));
+                dispositions.insert(key.to_string(), (disposition, reason, invocation));
             }
         }
     }
@@ -176,16 +194,25 @@ pub fn disposition_blockers_on_chain(chain: &[Value]) -> Vec<DispositionBlocker>
                 axis: "open",
                 hard: hard_finding(primitive),
             }),
-            Some(("fixed", _)) => {
-                // Terminal when a LATER round reviewed the fix delta. The
-                // delta witness reads the rows AFTER the last raise, not
-                // the disposition entry: the disposition rides one event,
-                // so a last-wins copy of its head pinned the gate to a
-                // stale same-head dispose forever when the real fix's
-                // round re-emitted nothing.
-                let delta_witnessed = chain[*raised + 1..]
-                    .iter()
-                    .any(|row| row_head(row) != raised_head.as_str());
+            Some(("fixed", _, disposed_by)) => {
+                // Terminal when a LATER round reviewed the fix delta, or the
+                // disposing round itself carried --verify-fixes: the scoped
+                // fix-verification re-read the finding's site at the head it
+                // attested, which is the witness when the fix delta is empty
+                // (a fix that landed before the first attested head can never
+                // produce a later head to review). The delta witness reads the
+                // rows AFTER the last raise, not the disposition entry: the
+                // disposition rides one event, so a last-wins copy of its
+                // head pinned the gate to a stale same-head dispose forever
+                // when the real fix's round re-emitted nothing.
+                let verify_witnessed = match disposed_by {
+                    Some(id) => verify_invocations.contains(*id),
+                    None => false,
+                };
+                let delta_witnessed = verify_witnessed
+                    || chain[*raised + 1..]
+                        .iter()
+                        .any(|row| row_head(row) != raised_head.as_str());
                 if !delta_witnessed {
                     blockers.push(DispositionBlocker {
                         finding_key: key.clone(),
@@ -194,7 +221,7 @@ pub fn disposition_blockers_on_chain(chain: &[Value]) -> Vec<DispositionBlocker>
                     });
                 }
             }
-            Some(("declined", reason)) => {
+            Some(("declined", reason, _)) => {
                 if reason.trim().is_empty() {
                     blockers.push(DispositionBlocker {
                         finding_key: key.clone(),
@@ -218,6 +245,7 @@ pub fn disposition_blockers_on_chain(chain: &[Value]) -> Vec<DispositionBlocker>
 #[cfg(test)]
 mod tests {
     use super::{blockers_withhold, disposition_blockers_on_chain};
+    use std::collections::HashSet;
 
     #[test]
     fn same_head_rerun_never_clears_a_fixed_finding() {
@@ -258,7 +286,7 @@ mod tests {
             row("h1", "fail", vec![finding.clone()], vec![]),
             row("h1", "pass", vec![], vec![fixed_disp.clone()]),
         ];
-        let blockers = disposition_blockers_on_chain(&chain);
+        let blockers = disposition_blockers_on_chain(&chain, &HashSet::new());
         assert_eq!(blockers.len(), 1);
         assert_eq!(blockers[0].axis, "fixed-unreviewed");
 
@@ -267,7 +295,57 @@ mod tests {
             row("h1", "fail", vec![finding], vec![]),
             row("h2", "pass", vec![], vec![fixed_disp]),
         ];
-        assert!(disposition_blockers_on_chain(&chain).is_empty());
+        assert!(disposition_blockers_on_chain(&chain, &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn a_verify_fixes_disposition_is_terminal_at_the_head_it_reviewed() {
+        // The fix landed before the first attested head: round 1 raises at
+        // h1 with the fix already in it, and the --verify-fixes round
+        // re-attests h1 recording the fixed disposition. The fix delta is
+        // empty, so no later row can ever sit on a different head; the
+        // scoped verification itself is the witness. The same chain with no
+        // verify invocation in evidence stays blocked (fail closed).
+        use serde_json::json;
+        let finding = json!({
+            "finding_key": "s.rs:82:security",
+            "category": "security",
+            "verdict": null,
+            "has_required_fields": true,
+        });
+        let row = |head: &str,
+                   verdict: &str,
+                   invocation: &str,
+                   findings: Vec<serde_json::Value>,
+                   dispositions: Vec<serde_json::Value>| {
+            json!({
+                "type": "review_attestation",
+                "data": {
+                    "head_sha": head,
+                    "verdict": verdict,
+                    "branch": "feature/x",
+                    "invocation_id": invocation,
+                    "findings": findings,
+                    "dispositions": dispositions,
+                }
+            })
+        };
+        let fixed_disp = json!({
+            "finding_key": "s.rs:82:security",
+            "disposition": "fixed",
+            "reason": "verified at h1 by the scoped pass",
+        });
+        let chain = vec![
+            row("h1", "fail", "v1", vec![finding], vec![]),
+            row("h1", "pass", "v2", vec![], vec![fixed_disp]),
+        ];
+        let mut verify = HashSet::new();
+        verify.insert("v2".to_string());
+        assert!(disposition_blockers_on_chain(&chain, &verify).is_empty());
+        assert_eq!(
+            disposition_blockers_on_chain(&chain, &HashSet::new()).len(),
+            1
+        );
     }
 
     #[test]
@@ -289,7 +367,7 @@ mod tests {
                               "disposition": "declined",
                               "reason": "not applicable here"}],
         }})];
-        assert!(disposition_blockers_on_chain(&chain).is_empty());
+        assert!(disposition_blockers_on_chain(&chain, &HashSet::new()).is_empty());
 
         // A reason-less decline stays non-terminal.
         let chain = vec![json!({"type": "review_attestation", "data": {
@@ -299,7 +377,10 @@ mod tests {
                               "disposition": "declined",
                               "reason": "  "}],
         }})];
-        assert_eq!(disposition_blockers_on_chain(&chain).len(), 1);
+        assert_eq!(
+            disposition_blockers_on_chain(&chain, &HashSet::new()).len(),
+            1
+        );
     }
 
     #[test]

@@ -66,7 +66,7 @@ MAPPINGS = [
 # Catch-all for unmapped direct invocations (flag for human review).
 # The pattern is idempotent by construction: it only matches the legacy
 # `bash scripts/lib/...` / `python3 scripts/...` forms, so already-migrated
-# `fno <verb>` lines never appear in the inventory. No line-level
+# `fno <command>` lines never appear in the inventory. No line-level
 # "already migrated" guard is needed and would be unsound: a line that
 # carries both a migrated and an unmigrated call (rare but possible in
 # diff hunks or before/after docs) must still flag the unmigrated half.
@@ -117,7 +117,7 @@ def scan_file(rel_path: Path) -> list[dict]:
         # which also matches the legacy form, does not double-flag the
         # same callsite as both mapped and unmapped.
         mapped_spans: list[tuple[int, int]] = []
-        for pattern, fno_verb in MAPPINGS:
+        for pattern, fno_command in MAPPINGS:
             for m in re.finditer(pattern, line):
                 mapped_spans.append(m.span())
                 entries.append({
@@ -125,7 +125,7 @@ def scan_file(rel_path: Path) -> list[dict]:
                     "line": lineno,
                     "current": line.rstrip(),
                     "match": m.group(0),
-                    "proposed": fno_verb,
+                    "proposed": fno_command,
                     "kind": file_kind(rel_path),
                 })
         # Catch unmapped direct invocations for human review. Iterate

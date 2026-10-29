@@ -66,7 +66,8 @@ _TX_ATTEMPTS = 5
 # Full-jitter backoff between retries. An immediate `continue` made N
 # concurrent writers re-ship the whole graph in lockstep and collide again
 # (the 2026-09-09 write livelock). Full jitter, not a shared floor: a common
-# floor is its own herd.
+# floor is its own herd. The daemon's settle loops in
+# crates/fno-agents/src/gc_sweep.rs share this policy; a Rust test pins it.
 _TX_BACKOFF_BASE_S = 0.05
 _TX_BACKOFF_CAP_S = 2.0
 
@@ -103,7 +104,7 @@ STATE_SPAWN_FAILED = "spawn_failed"
 STATE_UNREACHABLE = "unreachable"
 STATE_SILENT = "silent"
 STATE_UNCONFIRMED = "unconfirmed"
-# The keeper answered but does not know the verb: it predates the client
+# The keeper answered but does not know the command: it predates the client
 # (an installed worker behind the source). Remedied by restarting that
 # keeper on a current binary.
 STATE_STALE_KEEPER = "stale_keeper"
@@ -502,7 +503,7 @@ class _Keeper:
         carries the matched rows (readiness overlay applied server-side, the
         blockers' list is server-side knowledge) plus the unmatched tokens.
         The single-graph keeper, so no path; a stale keeper that predates
-        the verb raises through ``request`` and every caller falls back."""
+        the command raises through ``request`` and every caller falls back."""
         return self.request("read_ids", {"ids": list(ids)})
 
     def _control(self, tag: int, expected: int) -> bytes:
@@ -899,6 +900,29 @@ def request_scoreboard_classify(
     )
 
 
+def request_scoreboard_plan_fidelity(
+    rows: list[dict],
+    entries: list[dict],
+    since_days: int,
+    now=None,
+    unmeasurable: str = "refuse",
+) -> dict:
+    """The plan-fidelity join (scoreboard::plan_join in fno-agents) over
+    client-shipped rows. The gate ships its pre-filtered rows + entries and
+    its ``unmeasurable`` disposition; ``now`` rides as ISO. One join, two
+    readers: the scoreboard view and this gate both consume its answer."""
+    return _client_for(GRAPH_JSON).request(
+        "scoreboard_plan_fidelity",
+        {
+            "rows": rows,
+            "entries": entries,
+            "since_days": since_days,
+            "now": now.isoformat() if now is not None else None,
+            "unmeasurable": unmeasurable,
+        },
+    )
+
+
 def _plan_rung_map(entries: list[dict]) -> "dict[str, str]":
     """Node id -> the rung of the node's linked plan, computed client-side.
 
@@ -942,7 +966,7 @@ class ReadyParentMissingError(ValueError):
 def ready(
     *,
     project: str | None = None,
-    all: bool = False,  # noqa: A002 - the verb flag's own name
+    all: bool = False,  # noqa: A002 - the command flag's own name
     roadmap_id: str | None = None,
     parent: str | None = None,
     mission: str | None = None,
@@ -956,9 +980,9 @@ def ready(
     """The dispatch admission decision, answered by the native leg.
 
     One call into ``backlog_ready::select`` through the keeper's ``ready``
-    verb: survivors (dispatch summaries in selection order) plus per-node
-    drops. `next` takes ``rows[0]`` of the same call its sibling verb makes,
-    so the two surfaces cannot drift. When `entries` is given the verb
+    command: survivors (dispatch summaries in selection order) plus per-node
+    drops. `next` takes ``rows[0]`` of the same call its sibling command makes,
+    so the two surfaces cannot drift. When `entries` is given the command
     filters that list instead of reading the graph (the external-tracker
     backend's joined candidates); otherwise the keeper reads the graph it
     owns. An unreachable keeper raises ``StoreUnavailable`` - selection
@@ -1011,13 +1035,13 @@ def ready(
         if "ready filter: " in text:
             raise ValueError(text[text.index("ready filter: ") :]) from None
         if "no such node" in text:
-            # The verb's own refusal wording, without the store-error prefix
+            # The command's own refusal wording, without the store-error prefix
             # the transport wraps it in.
             raise ReadyParentMissingError(text[text.index("no such node") :]) from None
         if "unknown store method" in text:
             raise StoreUnavailable(
                 STATE_STALE_KEEPER,
-                "the running store keeper predates this verb; restart it on a "
+                "the running store keeper predates this command; restart it on a "
                 "current fno-agents-worker (`fno doctor` names binary lag)",
             ) from None
         raise
@@ -1053,22 +1077,6 @@ def read_file_bytes(path: Path) -> bytes:
 
 def _read_json(path: Path) -> list[dict]:
     return _read_snapshot(_client_for(Path(path)))[1]
-
-
-def _graph_lock_path(path: Path) -> Path:
-    """The keeper's lockfile for a graph file: ``<canonical path>.lock``.
-
-    Mirrors `graph_store.rs graph_lock_path` (a path formula, not store
-    logic): resolved so two spellings of one graph share one inode, and a
-    resolve failure (a symlink loop, a hostile tree) degrades to the raw
-    spelling rather than raising.
-    """
-    path = Path(path)
-    try:
-        base = path.resolve()
-    except (OSError, RuntimeError):
-        base = path
-    return base.with_name(base.name + ".lock")
 
 
 # ---------------------------------------------------------------------------
@@ -1245,15 +1253,8 @@ def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
 
     # The derived views (graph.md, the board targets) are the keeper's
     # settled render pass, the same for every writer: a write never waits on
-    # a render.
-    # Wake the active-backlog drain daemon: best-effort, never
-    # wedges the mutation.
-    try:
-        from fno.active_backlog import touch_nudge
-
-        touch_nudge()
-    except Exception:
-        pass
+    # a render. The keeper's publish touches the wake-nudge sentinel itself,
+    # so the Python side has no wake call to make.
     return outcome["entries"]
 
 
@@ -1405,7 +1406,7 @@ def append_progress_note(
     note`` and the status-fanout backlog-progress adapter.
 
     ``entries_out`` is filled with the begin snapshot this call already read, so
-    a caller that needs the graph next (the note verb, to resolve who to tell)
+    a caller that needs the graph next (the note command, to resolve who to tell)
     reuses it instead of paying a second full read.
     """
     resolved = _resolve_node_id(Path(path), node_id, entries_out=entries_out)
@@ -1440,7 +1441,7 @@ def _confirm_note_landed(
     """Read the target back and confirm the appended note is in the row.
 
     The op's word is not the world's: a layer that reports found=true and
-    loses the publish would let the verb print a fold receipt over a no-op
+    loses the publish would let the command print a fold receipt over a no-op
 . A read-back that cannot answer (store read failed) refuses
     with the uncertainty named rather than asserting the note is absent.
     """

@@ -74,6 +74,14 @@ set -e
 [[ "$RC" -eq 2 ]] || { echo "FAIL: expected Codex block rc=2, got $RC: $OUT" >&2; exit 1; }
 echo "$OUT" | grep -q "continue working" || {
   echo "FAIL: expected the decision's continue block, got: $OUT" >&2
+  # Name the resolution inputs: the binary the hook answered with, whether
+  # the quota helper family sits beside it, and any probe rows the gate
+  # managed to journal. Each read is guarded: an unmatched grep exits 1,
+  # and under pipefail that would abort the block before the later
+  # diagnostics print.
+  echo "BIN=$BIN" >&2
+  ls "$(dirname "$BIN")" | grep "^fno-gh" >&2 || true
+  grep -rh "gh_probe" "$EVENTS" "$HOME_DIR" 2>/dev/null | tail -3 >&2 || true
   exit 1
 }
 

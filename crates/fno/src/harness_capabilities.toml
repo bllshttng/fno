@@ -3,7 +3,7 @@
 # (Python package data) and crates/fno/src/harness_capabilities.toml (include_str!ed by
 # the fno mux). Edit the canonical and rebuild; the rust-ci generated-copies dirty-tree
 # step fails on a hand-edited copy.
-map_version = 24
+map_version = 25
 
 [harness.claude]
 # THE DELIVERED-MAIL HEADER FORM. Every delivered mail opens with one
@@ -137,6 +137,10 @@ session_binding = { strategy = "preassigned-or-session-start", required = true, 
 pane = "argv-add-dir"
 thread = "argv-add-dir"
 headless = "argv-add-dir"
+# The VM cannot reach the operator's state root at all: coordination stays
+# lead-side, and the row records that truth rather than pretending a grant
+# travels. The gate accepts any DECLARED stance; this value is the honest one.
+cloud = "remote-unreachable"
 
 # The thread lane's carrier row (spawn flag passthrough). `carries` names the
 # keeper LAUNCH_AXES axes this lane takes in its native form; `passthrough`
@@ -157,6 +161,22 @@ passthrough = ["*"]
 [harness.claude.launch]
 argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "{permission_mode}", "--name", "{name}", "{payload}"]
 optional = ["settings", "model", "effort", "permission_mode"]
+
+# THE CLOUD LINE. Measured on the installed CLI (the 2026-10-18 probes):
+# `claude --cloud` refuses a non-interactive invocation outright, so the
+# create runs under a locally held pty; it prints the minted session id
+# ("Created cloud session: <title>" / "Resume with: claude --teleport
+# session_<id>") and exits at once - the session runs remotely and survives
+# client death. The follow-up form is queued delivery ("Sent to cloud
+# session.", exit 0); the reply never returns on stdout. Teleport is the
+# interactive pull-down form. The VM's branch is minted at create as
+# claude/<slugified-title>-<suffix> and exists on the remote only once the
+# session commits and pushes.
+[harness.claude.cloud]
+launch = ["claude", "--cloud", "{payload}"]
+followup = ["claude", "-p", "{message}", "--cloud", "{session_id}"]
+teleport = ["claude", "--teleport", "{session_id}"]
+session_id_prefix = "session_"
 
 [harness.claude.permission_response.allow_once]
 supported = true
@@ -295,6 +315,7 @@ ready_rule_ids = ["idle_prompt"]
 manifest_rules = [
   { id = "idle_prompt", state = "idle" },
   { id = "approval_prompt", state = "blocked" },
+  { id = "question_prompt", state = "blocked" },
 ]
 # Measured 2026-08-23 on a live mux pane: floor 0. Every D in
 # {0,100,200,400,800} ms, 3 trials each, submitted both idle and mid-turn,
@@ -308,6 +329,19 @@ submit_keys = ["enter"]
 stop_strategy = "registry-noop"
 remove_strategy = "codex-session-index"
 session_binding = { strategy = "rollout-fd-or-daemon", required = true, timeout_ms = 60000 }
+
+# THE COMPOSER READ-BACK (pane send --harness codex). After the submit key
+# the verb reads the pane and drives the measured recovery: `tab to queue
+# message` beside the payload means the composer still holds it, and one Tab
+# queues it (one slot only); `queued` near the payload reports the queue;
+# anything else resident after one deciding key reads unconfirmed, never a
+# claimed submit. Measured 2026-08-25 on panes 211, 212 and 202: a 1221-char
+# payload printed submitted and stranded; a busy pane refused submit with the
+# affordance; a 470-char multi-line payload stranded with no placeholder.
+queue_affordance_marker = "tab to queue message"
+queued_markers = ["queued"]
+composer_clear_keys = ["\u0001", "\u000b"]
+composer_empty_marker = "Ask Codex to do anything"
 
 [harness.codex.state_root_grant]
 # pane/headless spend `--add-dir` (writable_dirs.ADD_DIR_PROVIDERS). The thread
@@ -326,9 +360,12 @@ headless = "argv-add-dir"
 # add-dir natively, and maps the fenced -c/--config/--add-dir spellings onto
 # thread/start config + state_dirs. role and the subagent selectors have no
 # spelling a shared daemon can see, so those demote to the pane.
+# No [harness.codex.launch]: the daemon-hosted app-server thread lane is the
+# one wrapper that stays (ruling d-5422710d, D2); codex has no native
+# paneless start.
 [harness.codex.thread]
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir"]
-passthrough = ["-c", "--config", "--add-dir"]
+passthrough = ["-c", "--config", "--add-dir", "-m", "--model"]
 
 [harness.codex.permission_response.allow_once]
 supported = true
@@ -407,6 +444,10 @@ tokens = ["/model", "{model}", "{effort_label}"]
 effort_labels = { low = "Low", medium = "Medium (default)", high = "High", xhigh = "Extra high", max = "More reasoning…" }
 status_command = "/status"
 status_pattern = 'Model:\s+(?P<model>\S+).*?reasoning\s+(?P<effort>minimal|low|medium|high|xhigh|max)'
+# A narrow pane truncates the /status line (measured across four panes:
+# `Model: gpt-5.6` and nothing more, which reads like a failed switch). The
+# status bar carries the same pair and survives the truncation.
+status_bar_pattern = '(?P<model>gpt-[0-9.]+-[a-z]+)\s+(?P<effort>minimal|low|medium|high|xhigh|max)'
 
 # FEATURES. All three states are measured. spawn: the second journey-proven
 # thread lane. review: `review_verbs` above map onto the app-server daemon's
@@ -439,13 +480,13 @@ autonomous_pane = false
 route_on_pane = false
 # gemini, measured 2026-08-28, and the old "native" was WRONG. Nothing in this
 # tree wires a gemini stop boundary. `fno config setup cli-hooks` installs
-# exactly one gemini hook, `install_gemini_hook` in cli/src/fno/setup/cli_hooks.py,
+# exactly one gemini hook, `install_gemini` in crates/fno/src/cli_hooks.rs,
 # and it merges a SessionStart group only. hooks/hooks-gemini.json, named in
 # docs/architecture/multi-cli-hooks.md, does not exist on disk. docs/harnesses/gemini.md
 # lists the SessionStart context hook and no other. No file in hooks/ reaches
 # loop-check under a gemini lifecycle event. The searches: every `loop-check`
 # caller in hooks/ and scripts/ (five files, none gemini), and every gemini
-# installer in cli/src/fno/setup/ (SessionStart only). The CLI is deprecated
+# installer in crates/fno/src/cli_hooks.rs (SessionStart only). The CLI is deprecated
 # upstream and `command_surface` already reads "refused", so this is a coherent
 # result rather than a regression; it is recorded plainly instead of inherited.
 loop_participation = "none"
@@ -624,12 +665,13 @@ supported = false
 rule_ids = []
 keys = []
 
-# Create and resume are the SAME launch once the id exists: the print-mode turn
-# mints it, every later process rejoins it. Bare `agy` would open a conversation
-# fno cannot name, which is the one thing a keeper thread may never do.
+# Create is a bare launch: agy mints its own conversation id, so a spawn
+# carries none and pays no launch-time mint turn. The session report promotes
+# the harness's own id onto the row (callee-minted-read-back); until it lands
+# the row's id is fno's provisional uuid. Resume rejoins by the row's id.
 [harness.agy.resume_strategy.forms.interactive_create]
-kind = "session_flag"
-tokens = ["agy", "--conversation", "{session_id}"]
+kind = "flag"
+tokens = ["agy"]
 
 # `--conversation <id>` resumes the conversation from any process state,
 # the same primitive the headless_resume row below records. Measured
@@ -681,7 +723,7 @@ once_refusal = "--once is not supported on the agy thread lane (it is persistent
 carries = ["model", "yolo", "permission_mode", "add_dir", "effort", "resume_session_id"]
 passthrough = ["*"]
 ready_marker = "? for shortcuts"
-headless_refusal = "agy's headless lane is unmeasured: `agy -p` prints and exits, and nothing has run it as an fno worker. Use --substrate thread for a persistent worker or --substrate pane for an attended one."
+headless_refusal = "agy's headless lane is unmeasured: `agy -p` prints and exits, and nothing has run it as an fno worker. Use a bare spawn for a persistent thread worker or a pane placement (--split right) for an attended one."
 bypass_flag = "--dangerously-skip-permissions"
 # bypass_always is the LANE DEFAULT, not a mandate: an explicit
 # --permission-mode replaces it (agy_launch.keeper_posture), and every launch
@@ -785,8 +827,15 @@ headless = "unmeasured"
 # attach writer, and the journey names the evidence for this seat.
 [harness.opencode.thread]
 carries = ["model", "effort"]
-passthrough = []
+passthrough = ["-m", "--model"]
 
+# THE NATIVE BG LINE for the serve lane: opencode creates its own session
+# (the title names it), the turn runs on the shared serve, and the row binds
+# at the worker's session report - the same posture the claude native lane
+# holds. The {payload} hole marks the slot; the tail owns the tokens
+# (opencode_run_tail at dispatch). {serve_url} never drops.
+[harness.opencode.launch]
+argv = ["opencode", "run", "--attach", "{serve_url}", "--title", "{name}", "--dangerously-skip-permissions", "-m", "{model}", "{payload}"]
 [harness.opencode.permission_response.allow_once]
 supported = false
 rule_ids = ["permission_required"]
@@ -1401,7 +1450,7 @@ reader = "live rubric: row-removal check"
 # names the launch axes this lane has a measured spelling for; every other
 # axis is refused BY NAME, so one list answers both questions.
 [harness.cursor-agent.keeper]
-once_refusal = "cursor-agent has no headless lane: --print is output-only (no --input-format, no rpc), so there is no one-shot form. Use the thread substrate for a persistent worker or --substrate pane for an attended one."
+once_refusal = "cursor-agent has no headless lane: --print is output-only (no --input-format, no rpc), so there is no one-shot form. Use the thread lane (a bare spawn) for a persistent worker or a pane placement (--split right) for an attended one."
 once_and_headless_together = true
 carries = ["model", "yolo", "permission_mode", "add_dir", "resume_session_id"]
 passthrough = ["*"]
@@ -1756,7 +1805,7 @@ tokens = []
 # The verbs a user types; the client turns each into a footnote child.
 [harness.footnote.resume_strategy.forms.headless_create]
 kind = "flag"
-tokens = ["fno-agents", "spawn", "-H", "footnote", "--substrate", "headless"]
+tokens = ["fno-agents", "spawn", "-H", "footnote", "--once"]
 
 [harness.footnote.resume_strategy.forms.headless_resume]
 kind = "flag"
@@ -1777,6 +1826,109 @@ thread = "unmeasured"
 headless = "unsandboxed"
 
 [harness.footnote.features.spawn]
+state = "capable"
+
+# muse: Muse Code 1.4.12. A thread is `muse serve` (MSP, NDJSON JSON-RPC over
+# stdio) held by an fno host (muse/host.rs); headless is `muse exec --json`.
+# Every value below was read from `muse --help`, `muse serve --help`,
+# `muse exec --help`, the exported MSP schema, or an echo-provider probe
+# (2026-10-24, no model spend).
+[harness.muse]
+# A text part reads `@relative/path` as a file mention (schema TurnInputPart),
+# so the mail header names the sender plainly.
+mail_header_at = false
+# exec takes --yolo; the thread host maps it to `serve --disable-sandbox
+# --trust-workspace` plus approvalMode allowAll, since serve has no --yolo.
+permission_bypass = ["--yolo"]
+efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+# exec's --approval-mode names. The thread host selects the wire mode:
+# untrusted -> promptUnmatched, on-request -> onRequest, never -> allowAll.
+# session/start accepted all four wire modes and read each back (echo probe).
+permission_modes = ["untrusted", "on-request", "never"]
+resume = "native-session"
+autonomous_pane = false
+route_on_pane = false
+# Muse has a stop hook event (schema HookEventName), but fno installs no Muse
+# hook, so looping dispatch refuses until one exists.
+loop_participation = "extension"
+loop_extension = ""
+command_surface = "slash"
+slash_prefix = ""
+ready_marker = "unsupported"
+ready_rule_ids = []
+manifest_rules = []
+send_keys_enter_delay_ms = 0
+submit_keys = ["enter"]
+stop_strategy = "registry-noop"
+remove_strategy = "registry-only"
+# session/start takes the caller's sessionId and exec takes --session-id.
+session_binding = { strategy = "preassigned", required = true, timeout_ms = 5000 }
+
+[harness.muse.permission_response.allow_once]
+supported = false
+rule_ids = []
+keys = []
+
+[harness.muse.permission_response.allow_always]
+supported = false
+rule_ids = []
+keys = []
+
+[harness.muse.permission_response.deny]
+supported = false
+rule_ids = []
+keys = []
+
+# The TUI takes no caller session id, so fno cannot bind a TUI it launches.
+[harness.muse.resume_strategy.forms.interactive_create]
+kind = "unsupported"
+tokens = []
+
+[harness.muse.resume_strategy.forms.interactive_resume]
+kind = "flag"
+tokens = ["muse", "resume", "{session_id}"]
+
+# A second host refuses a session another host holds: session/resume answered
+# -32021 sessionInUse while the first host lived.
+[harness.muse.resume_strategy.forms.interactive_attach]
+kind = "unsupported"
+tokens = []
+
+# Measured: the first call with an id creates the session, the second
+# continues it (session/read turnCount 2).
+[harness.muse.resume_strategy.forms.headless_create]
+kind = "flag"
+tokens = ["muse", "exec", "--json", "--session-id", "{session_id}"]
+
+[harness.muse.resume_strategy.forms.headless_resume]
+kind = "flag"
+tokens = ["muse", "exec", "--json", "--session-id", "{session_id}"]
+
+# session/setModel exists on the wire; no row kind fits an RPC switch yet.
+[harness.muse.model_switch_strategy]
+kind = "unsupported"
+tokens = []
+effort_labels = {}
+status_command = ""
+status_pattern = ""
+
+# The default sandbox refuses `touch ~/.fno/...` ("Operation not permitted"),
+# and adding ~/.fno to workspaceRoots did not lift it. Of the four permission
+# profiles (permissionProfile/list), only :unrestricted wrote there, and that
+# is the sandbox off. So the one carrier is `--yolo`: the thread host maps it
+# to `serve --disable-sandbox` (a userShell touch of ~/.fno then succeeded),
+# and exec takes it as "Disable approval and sandbox" (`muse exec --help`).
+# A spawn without it runs sandboxed and cannot write the state root.
+[harness.muse.state_root_grant]
+pane = "unmeasured"
+thread = "yolo-disable-sandbox"
+headless = "yolo-disable-sandbox"
+
+# spawn: `capable`, footnote's stance. The echo-provider journey passed on
+# 2026-10-24 with an explicit `--as thread|headless`, which the Rust client
+# serves. `native` would seat a spawn with no `--as` on the Python door,
+# which has no muse leg.
+[harness.muse.features.spawn]
 state = "capable"
 
 # PANE-TO-THREAD CONVERSION (`fno agents resume <name> --substrate thread`).
@@ -1944,6 +2096,14 @@ reason = "no fno hook registration for zcode (no plugin hook file and no capabil
 state = "missing"
 reason = "no fno hook registration for zcode (no plugin hook file and no capability install lane)"
 
+[harness.muse.hooks.lead_guard]
+state = "missing"
+reason = "no fno hook registration for muse (no plugin hook file and no capability install lane)"
+
+[harness.muse.hooks.lead_reinject]
+state = "missing"
+reason = "no fno hook registration for muse (no plugin hook file and no capability install lane)"
+
 [harness.claude.hooks.session_state]
 state = "supported"
 via = ["hooks/session-state.sh", "hooks/hooks.json", "crates/fno-agents/src/hook/session_state.rs"]
@@ -1959,7 +2119,11 @@ via = ["hooks/session-state.sh", "hooks/codex-hooks.json", "crates/fno-agents/sr
 # PreToolUse is the load-bearing entry: a goal-mode continuation is a
 # user-role row, so UserPromptSubmit never fires and the goal leg is only
 # visible through its tool calls. PermissionRequest is NOT wired: the
-# payload shape was never captured, so `blocked` stays "none" until one is.
+# payload shape was never captured, so this row names no blocked producer.
+# `blocked = "none"` is the screen-rung hand-off: the daemon sweep reads it
+# and scrapes rows this harness reports hooks for, because the manifest
+# carries the blocked rules (auth_wall, trust_prompt, approval_prompt,
+# question_prompt) the hook lane cannot state.
 [harness.codex.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
 blocked = "none"
@@ -1973,10 +2137,7 @@ via = ["crates/fno-agents/src/footnote_harness/mod.rs"]
 # shims (agy-session-state-pre-invocation.sh, agy-session-state-stop.sh)
 # feed the entry, so the row reads inside-leg state instead of the screen
 # scrape. agy exposes no permission-prompt event, so blocked stays "none"
-# and the screen backstop keeps the row. opencode and pi push presence
-# only: one `fno-agents report --kind session` at session start, so the
-# registry knows the session id and transcript, and their rows still read
-# their turn state from the screen scrape.
+# and the screen backstop keeps the row.
 [harness.agy.hooks.session_state]
 state = "supported"
 via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh", "hooks/agy-session-state-stop.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/adapter/agy.rs", "crates/fno-agents/src/hook/session_state.rs"]
@@ -1989,15 +2150,25 @@ via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh
 events = { PreInvocation = "working", Stop = "done" }
 blocked = "none"
 
+# opencode and pi plugins pipe a claude-shaped payload per turn, so the row
+# reads inside-leg state and a verified `provider/model`, not the scrape.
 [harness.opencode.hooks.session_state]
 state = "supported"
-via = ["cli/src/fno/setup/assets/opencode/footnote.js"]
-reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
+via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/hook/adapter/opencode.rs", "crates/fno-agents/src/hook/session_state.rs"]
+
+# A permission prompt rides as a Notification, so the row reads blocked.
+[harness.opencode.hooks.session_state.wiring]
+events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
+blocked = "Notification"
 
 [harness.pi.hooks.session_state]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts"]
-reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/hook/adapter/pi.rs", "crates/fno-agents/src/hook/session_state.rs"]
+
+# pi exposes no permission-prompt event, so blocked stays "none".
+[harness.pi.hooks.session_state.wiring]
+events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
+blocked = "none"
 
 [harness.gemini.hooks.session_state]
 state = "missing"
@@ -2014,6 +2185,10 @@ reason = "no session-state push for grok (no fno hook registration; the per-harn
 [harness.zcode.hooks.session_state]
 state = "missing"
 reason = "no session-state push for zcode (no fno hook registration; the per-harness report adapters land with the session-state push work)"
+
+[harness.muse.hooks.session_state]
+state = "missing"
+reason = "no session-state push for muse (no fno hook registration; the per-harness report adapters land with the session-state push work)"
 
 # ── event_rules ────────────────────────────────────────────────────────────────
 # The Stop-boundary rule table (docs/architecture/event-rules.md). claude and
@@ -2060,3 +2235,7 @@ reason = "no fno hook registration for grok (no plugin hook file and no capabili
 [harness.zcode.hooks.event_rules]
 state = "impossible"
 reason = "no fno hook registration for zcode (no plugin hook file and no capability install lane), so its Stop never reaches the rule engine"
+
+[harness.muse.hooks.event_rules]
+state = "impossible"
+reason = "no fno hook registration for muse (no plugin hook file and no capability install lane), so its Stop never reaches the rule engine"

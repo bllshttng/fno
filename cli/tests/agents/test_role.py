@@ -20,10 +20,25 @@ from typer.testing import CliRunner
 from fno.paths_testing import use_tmpdir
 
 
+def _read_manifest(path) -> dict:
+    """The manifest's fields through the native lead `read` op."""
+    from fno.agents.role import lead_manifest_call
+
+    return lead_manifest_call("read", path=str(path))["fields"]
+
+
+def _write_manifest(path, **fields) -> None:
+    """Write one manifest through the native spawn-team `manifest` op."""
+    from fno.agents.spawn_overlay_client import spawn_overlay_call
+
+    answer = spawn_overlay_call({"kind": "spawn-team", "op": "manifest", "path": str(path), **fields})
+    assert not answer.get("error"), answer
+
+
 # --- the stored scope encoding ----------------------------------------------
 #
 # There is no `--promote` spec parser any more. The flag takes scopes directly and
-# the rung is derived (see test_role_level_derivation), so what remains to pin
+# the rung is derived (see crates/fno-agents/tests/role_ladder_parity.rs), so what remains to pin
 # here is the ENCODING: a portfolio has to reduce to one canonical string,
 # because the one-live-role guard compares scopes by equality and would
 # otherwise miss a duplicate spelled in a different order.
@@ -38,42 +53,6 @@ def test_a_portfolio_canonicalizes_regardless_of_spelling() -> None:
     assert split_scope(canonical_scope(["web", "etl"])) == ["etl", "web"]
     # A corrupted row's non-string scope degrades instead of crashing a read.
     assert split_scope(5) == []  # type: ignore[arg-type]
-
-
-def test_scope_contains_canonicalizes_an_alias_project(monkeypatch, tmp_path) -> None:
-    """scope_contains must canonicalize the graph node's project field before
-    comparing it to the canonicalized role scope. Graph intake stores the
-    project field RAW (the short_name alias a node was filed under), so without
-    canonicalization a lead over 'alpha' is falsely refused an epic filed as
-    'a' - a legitimate delegation blocked."""
-    import fno.projects.resolve as proj_resolve
-
-    cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        '[work.workspaces.ws1]\nprojects = [{ name = "alpha", short_name = "a" }]\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
-
-    from fno.agents import role
-
-    # An epic filed under the alias 'a' (the raw spelling intake stores).
-    # The containment resolves the index once, so the stub sits there.
-    monkeypatch.setattr(
-        role,
-        "_graph_index",
-        lambda: {"epic-1": {"id": "epic-1", "type": "epic", "project": "a"}},
-    )
-    assert role.scope_contains("alpha", "epic-1") is True
-
-    # A genuinely different project is still not contained.
-    monkeypatch.setattr(
-        role,
-        "_graph_index",
-        lambda: {"epic-1": {"id": "epic-1", "type": "epic", "project": "beta"}},
-    )
-    assert role.scope_contains("alpha", "epic-1") is False
 
 
 # --- spawn stamps the role, grantor is provenance not self-declared ---------
@@ -139,11 +118,12 @@ def _spawn_promoted(monkeypatch, tmp_path, *, grantor_env: Optional[str], **role
     )
 
 
+@pytest.mark.dev_build
 def test_role_stamped_grantor_is_the_spawning_session(
     tmp_path: Path, monkeypatch, native_backlog_door
 ) -> None:
     from fno.agents.registry import AgentEntry, load_registry, update_registry
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
@@ -181,7 +161,7 @@ def test_role_stamped_grantor_is_the_spawning_session(
     assert successor.role_grantor == "parent-sess-abc"
     assert successor.role_label == "L1 epic-x"
     manifest = _space_manifest(tmp_path, "epic-x")
-    assert lead_state.parse_manifest(manifest)["harness_session_id"] == successor.harness_session_id
+    assert _read_manifest(manifest)["harness_session_id"] == successor.harness_session_id
 
 
 def _role_row(name: str, *, status: str = "busy", scope="epic-x"):
@@ -260,6 +240,21 @@ def test_settle_spawn_role_outcomes(tmp_path: Path, monkeypatch, native_backlog_
     )
     assert outcome == "declined"
     assert rows[0].role_scope == "epic-x", "a declined spawn leaves the holder alone"
+
+    # AC8: a take-over ask rides the payload as take_over.reason and the
+    # plan answer carries it back with the acting caller and the old
+    # holder's row fields at the moment of the move.
+    alder = _role_row("alder")
+    update_registry(lambda _: [alder])
+    refusal, plan = plan_spawn_role("epic-x", None, False, proposed_name="Maya", take_over="Alder paused since 10:00")
+    assert refusal is None
+    assert plan is not None
+    assert plan["outcome"] == "succeeded"
+    assert plan["vacate"] == ["alder"]
+    assert plan["take_over"]["by"] == "the user"
+    assert plan["take_over"]["reason"] == "Alder paused since 10:00"
+    assert [p["name"] for p in plan["take_over"]["predecessors"]] == ["alder"]
+    assert plan["take_over"]["predecessors"][0]["harness_session_id"] == "alder-sess"
     assert rows[1].spawn_provenance["owner"]["session_id"] == "caller-sess", (
         "a declined succession re-homes nobody"
     )
@@ -354,7 +349,6 @@ def _seed(monkeypatch, tmp_path, rows) -> None:
 
 def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     from fno.harness_identity import AMBIENT_IDENTITY_ENV
-    from fno.projects import resolve as proj_resolve
 
     # The lock-time identity match runs through Rust's role-identity kind
     # (the lock-time identity match runs through Rust now), so pin this
@@ -372,14 +366,31 @@ def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     _seed(monkeypatch, tmp_path, [replace(row, cwd=str(tmp_path)) for row in rows])
     for name in AMBIENT_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = tmp_path / "config.toml"
-    config.write_text(
-        '[work.workspaces.ws1]\n'
-        'projects = [{ name = "alpha", short_name = "a" }, { name = "beta" }]\n',
+    # The project resolver is native (the project-family port): _canonical_project
+    # answers through one fno-agents round trip, so the fixture registry
+    # rides a stub binary pinned over FNO_AGENTS_BIN (env outranks the dev
+    # build) instead of a pinned settings path. $4 is the name to resolve;
+    # every other spawn-overlay shape execs the real binary (the ladder
+    # door rides the same env pin).
+    stub = tmp_path / "agents-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{\"alpha\":\"alpha\",\"a\":\"alpha\",\"beta\":\"beta\"}'\n"
+        "    exit 0\n"
+        "  fi\n"
+        '  case "$4" in\n'
+        "    alpha|a) echo alpha; exit 0;;\n"
+        "    beta) echo beta; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n"
+        f'exec "{binary}" "$@"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", config)
-    proj_resolve._clear_cache()
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
 
 
 def _invoke_role(*args: str):
@@ -390,7 +401,7 @@ def _invoke_role(*args: str):
 
 def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypatch) -> None:
     from fno.agents.registry import load_registry
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     _prepare_role_cli(
         monkeypatch,
@@ -411,7 +422,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
     # here so this exact-dict assertion stays about the role fields. The
     # team-name carry line is the same shape of advisory receipt data.
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: "msg-t delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: "msg-t delivered (hosted)"
     )
     monkeypatch.setattr(role_mod, "_carry_team_name", lambda *args: "carried")
     result = _invoke_role("worker", "--scope", "alpha")
@@ -437,7 +448,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
         "human",
     )
     # The manifest is the durable role record: the same triple lands there.
-    manifest = lead_state.parse_manifest(_space_manifest(tmp_path, "alpha"))
+    manifest = _read_manifest(_space_manifest(tmp_path, "alpha"))
     assert manifest["harness_session_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     assert (manifest["role_scope"], manifest["role_grantor"], int(manifest["role_level"])) == (
         "alpha",
@@ -449,7 +460,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
 def test_in_place_role_aborts_before_registry_publish_when_manifest_write_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
     from fno.agents.role import RolePromotionError, promote_existing_session
     from fno.agents.registry import load_registry
 
@@ -648,7 +659,7 @@ def test_in_place_role_rescopes_an_already_promoted_target(
     tmp_path: Path, monkeypatch
 ) -> None:
     from fno.agents.registry import load_registry
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     _prepare_role_cli(
         monkeypatch,
@@ -666,7 +677,7 @@ def test_in_place_role_rescopes_an_already_promoted_target(
     )
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
     old_manifest = _space_manifest(tmp_path, "beta")
-    lead_state.write_manifest(
+    _write_manifest(
         old_manifest, scope="beta", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     )
     from fno.agents import spawn_overlay_client
@@ -859,7 +870,6 @@ def test_a_lead_cannot_role_itself_even_to_a_strict_subset(
         "beta": {"id": "beta", "type": "epic", "status": "ready"},
     }
     monkeypatch.setattr(role_mod, "_graph_index", lambda: rows)
-    monkeypatch.setattr(role_mod, "_graph_entry", lambda node_id: rows.get(node_id))
     before = [asdict(row) for row in load_registry()]
     monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
 
@@ -964,7 +974,11 @@ def test_a_self_widen_fails_closed_without_the_binary(
     _widen_graph(monkeypatch, created_by=WIDEN_LEAD_SESSION)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
 
+    real_call = spawn_overlay_client.spawn_overlay_call
+
     def _unavailable(payload):
+        if payload.get("kind") in ("role-resolve", "role-grant"):
+            return real_call(payload)
         raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", _unavailable)
@@ -1002,7 +1016,6 @@ def test_a_lead_drops_a_done_epic_and_keeps_the_prior_grantor(
         "e-2": {"id": "e-2", "type": "epic", "status": "done"},
     }
     monkeypatch.setattr(role_mod, "_graph_index", lambda: rows)
-    monkeypatch.setattr(role_mod, "_graph_entry", lambda node_id: rows.get(node_id))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
 
     result = _invoke_role("lead-a", "--scope", "e-1")
@@ -1079,7 +1092,11 @@ def test_a_self_add_answer_without_a_grantor_refuses_fail_closed(
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
     before = [asdict(row) for row in load_registry()]
 
+    real_call = spawn_overlay_client.spawn_overlay_call
+
     def _old_binary(payload):
+        if payload.get("kind") in ("role-resolve", "role-grant"):
+            return real_call(payload)
         return {"widen": True, "added": ["e-2"], "hint": None}
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", _old_binary)
@@ -1095,7 +1112,7 @@ def test_succession_by_an_agent_caller_is_refused_with_a_reachable_remedy(
     tmp_path: Path, monkeypatch
 ) -> None:
     """AC6-EDGE: grant_error's succession branch accepts an equal scope because
-    SPAWN succession is legal there. This verb only stamps the target, so it
+    SPAWN succession is legal there. This command only stamps the target, so it
     must refuse - and the refusal has to name a remedy the caller can act on.
     Falling through to the live-holder scan named the caller's OWN row as the
     blocker and offered three remedies that all contradict the refusal: re-scope
@@ -1222,7 +1239,11 @@ def test_in_place_role_refuses_when_the_identity_check_is_unavailable(
         ],
     )
 
-    def unavailable(*args, **kwargs):
+    real_call = spawn_overlay_client.spawn_overlay_call
+
+    def unavailable(payload, *args, **kwargs):
+        if payload.get("kind") in ("role-resolve", "role-grant"):
+            return real_call(payload, *args, **kwargs)
         raise spawn_overlay_client.SpawnOverlayUnavailable("not built")
 
     monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", unavailable)
@@ -1270,10 +1291,10 @@ def test_spawn_role_refuses_before_launch_when_scope_already_occupied(
     assert not _space_manifest(tmp_path, "epic-x").exists()
 
 
-# --- the role types the verb (x-7b36 change 11): raw mail names the delivery
+# --- the role types the command (x-7b36 change 11): raw mail names the delivery
 
 
-def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
+def test_in_place_role_mails_the_term_command_and_names_the_delivery(
     tmp_path: Path, monkeypatch
 ) -> None:
     import fno.agents.role as role_mod
@@ -1286,13 +1307,13 @@ def test_in_place_role_mails_the_term_verb_and_names_the_delivery(
     )
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        role_mod, "_send_term_verb", lambda address, verb: sent.append((address, verb)) or "msg-1 delivered (hosted)"
+        role_mod, "_send_term_command", lambda address, command: sent.append((address, command)) or "msg-1 delivered (hosted)"
     )
 
     receipt = promote_existing_session("worker", ["alpha"])
 
     assert receipt["term_delivery"] == "msg-1 delivered (hosted)"
-    # AC28: the holder receives the plugin-qualified verb by raw mail,
+    # AC28: the holder receives the plugin-qualified command by raw mail,
     # addressed by the full session id (the ADDRESS, never the spawn label).
     assert sent == [("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "/fno:lead alpha")]
 
@@ -1399,7 +1420,7 @@ def _promoted_row(tmp_path, monkeypatch, name="successor", **kw):
 
 
 def _arm_enabled(monkeypatch):
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
 
@@ -1410,11 +1431,11 @@ def _scope_manifest(tmp_path):
     return space_dir(tmp_path) / "leads" / "x-epic.md"
 
 
+@pytest.mark.dev_build
 def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     tmp_path, monkeypatch
 ) -> None:
     from fno.agents.registry import record_session_observation
-    from fno.lead.state import parse_manifest
 
     _promoted_row(tmp_path, monkeypatch, harness_session_id="")
     _arm_enabled(monkeypatch)
@@ -1426,7 +1447,7 @@ def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     assert outcome == "primary"
     manifest = _scope_manifest(tmp_path)
     assert manifest.exists(), "the successor's first id must arm the wake gate"
-    assert parse_manifest(manifest)["harness_session_id"] == SUCCESSOR_ID
+    assert _read_manifest(manifest)["harness_session_id"] == SUCCESSOR_ID
 
 
 def test_grantor_that_becomes_terminal_mid_grant_is_refused_under_the_lock(

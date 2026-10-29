@@ -6,10 +6,10 @@
 // driven with a stub context and a stub fno-agents binary on PATH so the
 // real node:child_process path is exercised hermetically. The shell fake
 // dispatches on the command it sees: `state path target-state` (the
-// space-resolved manifest verb), `loop-check`, and `distress-scan`.
+// space-resolved manifest command), `loop-check`, and `distress-scan`.
 
 import { describe, test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import footnote, { resolveHookRoot, FOREIGN_SESSION_MARKERS } from "../../src/fno/setup/assets/opencode/footnote.js"
@@ -243,8 +243,8 @@ describe("opencode native stop-hook bridge", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  test("manifest verb path is used when it prints an existing file; legacy path is the fallback", async () => {
-    // (a) verb prints an existing file -> that path is the gate's --state.
+  test("manifest command path is used when it prints an existing file; legacy path is the fallback", async () => {
+    // (a) command prints an existing file -> that path is the gate's --state.
     const dirA = makeProject()
     const existing = join(dirA, "space-manifest.md")
     writeFileSync(existing, `session_id: "${FNO_SESSION_ID}"\n`)
@@ -259,7 +259,7 @@ describe("opencode native stop-hook bridge", () => {
     expect(gateA).toContain(`--state ${existing} `)
     rmSync(dirA, { recursive: true, force: true })
 
-    // (b) verb prints nothing -> the legacy in-repo path is the fallback.
+    // (b) command prints nothing -> the legacy in-repo path is the fallback.
     const dirB = makeProject()
     const clientB = fakeClient([assistantMsg("x")])
     const b = fakeShell({
@@ -403,14 +403,15 @@ describe("opencode native stop-hook bridge", () => {
     }
     const hooks = await FootnotePlugin({ directory: dir, client, $ })
     const first = hooks.event({ event: idleEvent })
-    await new Promise((r) => setTimeout(r, 5))
+    // The gate spawns the rules entry first, a real process, so wait for the
+    // gate call itself rather than a fixed sleep.
+    await until(() => gateCalls === 1)
     await hooks.event({ event: idleEvent }) // concurrent same-session idle -> rerun marker
     expect(gateCalls).toBe(1)
     release()
     await first
     // The pending recheck runs once after the running gate finishes.
-    await new Promise((r) => setTimeout(r, 10))
-    expect(gateCalls).toBe(2)
+    await until(() => gateCalls === 2)
     expect(client.prompts.length).toBe(2)
     rmSync(dir, { recursive: true, force: true })
   })
@@ -707,7 +708,7 @@ describe("opencode 2 setup arm", () => {
     await withEnv({ FNO_AGENTS_BIN: bin }, async () => {
       const cleanup = await setupV2(ctx)
       stream.push(V2_IDLE("ses_fail"))
-      await new Promise((r) => setTimeout(r, 80))
+      await until(() => errors.some((e) => e.includes("readAssistantTexts")))
       cleanup()
       console.error = orig
       expect(prompts.length).toBe(0) // no re-drive, no fabricated termination
@@ -917,6 +918,47 @@ describe("opencode hooks.json host", () => {
       await hooks.event({ event: { type: "session.created", properties: { sessionID: "ses_A" } } })
       expect(client.logs.some((l) => l.startsWith("session.created"))).toBe(true)
     })
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe("opencode per-turn session-state push", () => {
+  // The stub writes each `hook session-state` fire to its own file, named by
+  // pid and event ($5), so concurrent fires never interleave in one log.
+  const PUSH_STUB = `if [ "$1" = "hook" ] && [ "$2" = "session-state" ]; then cat > "$FNO_STUB_DIR/$$.$5.json"; fi`
+  const fires = (out) => readdirSync(out).filter((f) => f.endsWith(".json"))
+
+  test("1.x: prompt, tool, permission and idle each push their state with the served model", async () => {
+    const dir = makeProject()
+    const out = join(dir, "pushes")
+    mkdirSync(out)
+    const bin = stubBin(PUSH_STUB)
+    await withEnv(
+      { FNO_AGENTS_BIN: bin, FNO_STUB_DIR: out, FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
+      async () => {
+        const hooks = await FootnotePlugin({ directory: dir, client: fakeClient([]), $: fakeShell().shell })
+        await hooks["chat.message"]({
+          sessionID: "ses_P",
+          model: { providerID: "zai", modelID: "glm-5.3" },
+          message: { parts: [] },
+        })
+        await hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_P" }, { args: { command: "ls" } })
+        await hooks.event({
+          event: { type: "permission.updated", properties: { sessionID: "ses_P", title: "Run rm -rf build" } },
+        })
+        await hooks.event({ event: { type: "permission.replied", properties: { sessionID: "ses_P" } } })
+        await hooks.event({ event: { type: "session.idle", properties: { sessionID: "ses_P" } } })
+        await until(() => fires(out).length >= 5)
+        // A file exists before its payload is flushed; wait for every body.
+        await until(() => fires(out).every((f) => readFileSync(join(out, f), "utf8").endsWith("}")))
+      },
+    )
+    const text = fires(out).map((f) => readFileSync(join(out, f), "utf8")).join("\n")
+    const events = fires(out).map((f) => f.split(".")[1]).sort()
+    expect(events).toEqual(["Notification", "PreToolUse", "PreToolUse", "Stop", "UserPromptSubmit"])
+    expect(text).toContain('"model":"zai/glm-5.3"')
+    expect(text).toContain('"message":"Run rm -rf build"')
+    expect(text).toContain('"tool_name":"Bash"')
     rmSync(dir, { recursive: true, force: true })
   })
 })

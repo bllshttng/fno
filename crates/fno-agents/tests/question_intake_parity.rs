@@ -87,11 +87,16 @@ fn request(question: &str, root: &Path) -> IntakeRequest {
         cwd: Some("/repo/fno".to_string()),
         asker: Some("worker-parity".to_string()),
         laws: vec![],
+        rung: None,
         storage_root: root.to_path_buf(),
         index_path: None,
         journal_path: None,
         display_name: None,
         render_cap: None,
+        op: None,
+        event: None,
+        images: Vec::new(),
+        screens_dir: None,
     }
 }
 

@@ -21,7 +21,7 @@ pub const DEFAULT_ATTENTION_PORT: u16 = 8724;
 /// multi-store read.
 const ITEMS_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The clear's budget, needs_overlay's WRITE_TIMEOUT for the same verb.
+/// The clear's budget, needs_overlay's WRITE_TIMEOUT for the same command.
 const CLEAR_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// One configured sink's answer credential. The token identifies the sink;
@@ -422,10 +422,22 @@ pub fn load_sink_auth() -> Vec<SinkAuth> {
             let Some(name) = row.get("name").and_then(|n| n.as_str()) else {
                 continue;
             };
+            // A chat row's secret is a bot token or a server password, never
+            // a bearer for this door.
+            if row
+                .get("type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| matches!(t, "telegram" | "discord" | "bluebubbles"))
+            {
+                continue;
+            }
             let Some(env_name) = row.get("token_env").and_then(|t| t.as_str()) else {
                 continue;
             };
-            let Ok(token) = std::env::var(env_name) else {
+            // The arm reads the same file, so a button it posts always
+            // carries a token this door accepts.
+            let Some(token) = crate::provider_key::resolve_key(env_name, Some("~/.fno/.env"))
+            else {
                 continue;
             };
             if token.is_empty() || out.iter().any(|s| s.name == name) {
@@ -485,7 +497,7 @@ fn run_bounded(bin: PathBuf, args: &[&str], bound: Duration) -> Result<(bool, St
 }
 
 /// The real IO: the items fold shells `fno-agents needs --items --json`, the
-/// journal is `questions.jsonl`, the clear shells the same verb the mux
+/// journal is `questions.jsonl`, the clear shells the same command the mux
 /// overlay runs.
 #[derive(Default)]
 pub struct RealIo;
@@ -516,6 +528,7 @@ impl ApiIo for RealIo {
     }
 
     fn journal_text(&mut self) -> Result<String, String> {
+        // events-discipline:allow: the questions journal reader, not an event journal
         std::fs::read_to_string(journal_path()).map_err(|e| format!("questions.jsonl: {e}"))
     }
 

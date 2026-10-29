@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 def _naming_real(cmd, **kw):
-    """The name verbs execute in the fno-agents binary: a blanket stub would
+    """The name commands execute in the fno-agents binary: a blanket stub would
     answer the mint with a spawn-shaped SimpleNamespace lacking .stdout. Ride
     the real binary for them; _REAL_RUN is captured at module import, before
     any test patches the subprocess module."""
@@ -482,44 +482,49 @@ class TestMaterializeManagedSwitch:
         return ProviderRecord(id="claude-secondary", name="B", harness="claude", auth="managed")
 
     def test_auto_switch_off_returns_false_without_touching_slot(self, monkeypatch):
+        from fno import rust_binary
         from fno.adapters.providers import loader as loader_mod
-        from fno.adapters.providers import managed as managed_mod
 
         rec = self._managed_record()
         monkeypatch.setattr(loader_mod, "load_providers",
                             lambda *a, **k: self._fake_config(False, rec))
         switched = {"called": False}
-        monkeypatch.setattr(managed_mod, "switch",
+        monkeypatch.setattr(rust_binary, "command_call",
                             lambda *a, **k: switched.__setitem__("called", True))
         assert recovery._materialize_managed_switch("claude-secondary") is False
         assert switched["called"] is False   # disarmed: slot never mutated
 
     def test_auto_switch_on_materializes(self, monkeypatch):
+        from fno import rust_binary
         from fno.adapters.providers import loader as loader_mod
-        from fno.adapters.providers import managed as managed_mod
 
         rec = self._managed_record()
         monkeypatch.setattr(loader_mod, "load_providers",
                             lambda *a, **k: self._fake_config(True, rec))
         seen: dict = {}
-        monkeypatch.setattr(managed_mod, "switch",
-                            lambda r, **k: seen.update(id=r.id, by_id=k.get("by_id"),
-                                                       pin_policy=k.get("pin_policy")))
-        assert recovery._materialize_managed_switch("claude-secondary") is True
-        assert seen["id"] == "claude-secondary"
-        assert seen["pin_policy"] == "defer"  # recovery must never swap under live pins
+
+        def _switch(command, payload, *a, **k):
+            seen.update(command=command, payload=payload)
+            return {"active": payload["id"], "slot_changed": True}
+        monkeypatch.setattr(rust_binary, "command_call", _switch)
+        assert recovery._materialize_managed_switch("claude-secondary", "/repo") is True
+        # The switch op defers under live pins and writes no routing pointer.
+        assert seen["command"] == ["spawn-overlay", "accounts", "switch"]
+        assert seen["payload"] == {"id": "claude-secondary", "repo_root": "/repo"}
 
     def test_switch_deferred_returns_false(self, monkeypatch):
+        from fno import rust_binary
         from fno.adapters.providers import loader as loader_mod
-        from fno.adapters.providers import managed as managed_mod
 
         rec = self._managed_record()
         monkeypatch.setattr(loader_mod, "load_providers",
                             lambda *a, **k: self._fake_config(True, rec))
 
         def _defer(*a, **k):
-            raise managed_mod.SwitchDeferred("slot pinned by pid 42")
-        monkeypatch.setattr(managed_mod, "switch", _defer)
+            raise rust_binary.CommandUnavailable(
+                "fno-agents spawn-overlay accounts switch exited 2: switch deferred: slot pinned by pid 42"
+            )
+        monkeypatch.setattr(rust_binary, "command_call", _defer)
         assert recovery._materialize_managed_switch("claude-secondary") is False
 
 
@@ -650,7 +655,7 @@ class TestMissionComplete:
         assert recovery.mission_complete(cand) is False
 
     def test_think_name_ignores_a_foreign_manifest(self, monkeypatch, tmp_path):
-        # spawn_think dispatches with --cwd on the node's CANONICAL root, where
+        # The think dispatch spawns with --cwd on the node's CANONICAL root, where
         # an unrelated /target session's manifest can sit; a think worker writes
         # none of its own. Reading that manifest would answer about x-1111 and
         # nudge a design pass that actually finished.
@@ -813,7 +818,7 @@ class TestRedispatch:
 
     def test_pane_refusal_runs_the_named_pane_kill_then_rotates(self, monkeypatch):
         # The daemon refuses `agents stop` on a pane row and NAMES the pane-kill
-        # verb with the row's own ref. The printed `main:10` selector is the
+        # command with the row's own ref. The printed `main:10` selector is the
         # mux parser's own grammar, so a human can paste it as-is; the failover
         # still translates it to the flag form, which predates the selector and
         # parses identically. Treating the refusal as "may still be live" would
@@ -831,7 +836,7 @@ class TestRedispatch:
         kill = self._index_of(
             calls, ["fno-py", "mux", "pane", "kill", "--server", "main", "10"]
         )
-        assert kill is not None, "the named pane-kill verb ran"
+        assert kill is not None, "the named pane-kill command ran"
         fr = self._index_of(calls, ["fno-py", "agents", "claim", "release", "--force"])
         spawn = self._index_of(calls, ["fno-py", "agents", "spawn"])
         assert fr is not None and spawn is not None
@@ -1056,10 +1061,10 @@ class TestNotifyManualResume:
 
     def test_notify_sends_os_notification_with_command(self, monkeypatch):
         from types import SimpleNamespace
-        from fno.notify import _impl as notify_impl
+        import fno.rust_binary as rust_binary
         sent: dict = {}
-        monkeypatch.setattr(notify_impl, "send_notification",
-                            lambda title, body: sent.update(title=title, body=body) or (0, ""))
+        monkeypatch.setattr(rust_binary, "notify_operator",
+                            lambda title, body, pointer="": sent.update(title=title, body=body) or (0, ""))
         monkeypatch.setattr(recovery, "_resume_command", lambda *a: "claude --resume U-1")
         recovery._notify_manual_resume(self._cand(),
                                        SimpleNamespace(id="claude-secondary"), "U-1")

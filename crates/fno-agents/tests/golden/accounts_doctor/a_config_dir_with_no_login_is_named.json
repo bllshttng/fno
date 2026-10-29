@@ -1,0 +1,1 @@
+{"records": [{"id": "alt", "harness": "claude", "auth": "managed", "config_dir": "{TMP}/alt"}], "now": 1800000000.0, "expect": {"findings": [{"record": "alt", "problem": "no-login-in-config-dir", "detail": "config_dir <TMP>/alt holds no claude login (run: CLAUDE_CONFIG_DIR=<TMP>/alt claude /login)"}], "store": {}}}

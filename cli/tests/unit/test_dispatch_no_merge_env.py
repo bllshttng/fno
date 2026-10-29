@@ -16,11 +16,10 @@ crates/fno-agents/src/merge_posture.rs pin the same semantics from the same
 table.
 """
 
-import os
 
 import pytest
 
-from fno.agents.harness_map import apply_merge_posture_env, resolve_dispatch
+from fno.agents.harness_map import resolve_dispatch
 
 
 def test_legacy_bare_token_is_rewritten_and_carries_env():
@@ -45,14 +44,6 @@ def test_legacy_bare_token_is_rewritten_and_carries_env():
 @pytest.fixture(autouse=True)
 def _clean_carrier(monkeypatch):
     monkeypatch.delenv("TARGET_NO_MERGE", raising=False)
-
-
-def test_flagless_family_message_clears_inherited_carrier_loudly(monkeypatch, capsys):
-    monkeypatch.setenv("TARGET_NO_MERGE", "1")
-    prior = apply_merge_posture_env("/target x-1")
-    assert prior == "1"
-    assert "TARGET_NO_MERGE" not in os.environ
-    assert "inherited TARGET_NO_MERGE cleared" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #

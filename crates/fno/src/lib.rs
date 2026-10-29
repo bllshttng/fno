@@ -8,7 +8,9 @@
 // away at every site.
 #![allow(clippy::doc_lazy_continuation)]
 
+pub mod accounts_route;
 pub mod agents_history;
+pub mod agents_mcp_route;
 pub mod agents_menu;
 pub mod agents_view;
 pub mod argv_witness;
@@ -20,14 +22,19 @@ pub mod backlog_snapshot;
 pub mod backlog_view;
 pub mod backlog_write;
 pub(crate) mod band_remap;
+pub mod blocked_rung;
 pub mod board_reader;
 pub mod bootstrap;
 pub mod build_drift;
 pub mod chrome;
 pub mod cli_args;
+pub mod cli_hooks;
 pub mod client;
 pub mod clipboard;
+pub mod command_names;
+pub mod config_cli;
 pub mod config_defaults;
+pub mod config_schema;
 pub mod connections_view;
 pub mod context_used;
 pub mod digest_overlay;
@@ -42,27 +49,34 @@ mod event_signals;
 pub mod event_store;
 pub mod feed_overlay;
 pub(crate) mod first_check;
+pub mod fleet_route;
 pub mod footnote_transcript;
 pub mod frame_ansi;
 pub mod frame_html;
 pub mod git_paths;
+pub mod inbox_user;
+pub mod join_marker;
 pub mod keys;
 pub mod lane_colors_panel;
 pub(crate) mod lattice;
 pub mod law_cli;
+pub mod lead_refresh_canon;
+pub mod lead_route;
 pub mod link;
 pub mod lint_cli;
 pub mod live_store_fence;
 pub mod menu_caps;
 pub mod messages_model;
+pub mod modal_select;
 pub mod model_catalog;
 pub mod mouse;
 pub mod mux_cli;
 pub mod mux_rows;
 pub mod needs_overlay;
 pub mod notify;
-#[path = "mux_cli/notify_verb.rs"]
-pub mod notify_verb;
+#[path = "mux_cli/notify_command.rs"]
+pub mod notify_command;
+pub mod notify_dispatch;
 pub mod observe;
 pub mod open_router;
 pub mod org_model;
@@ -100,11 +114,14 @@ pub mod setup_autowire;
 #[cfg(test)]
 #[path = "setup_autowire_tests.rs"]
 mod setup_autowire_tests;
+pub mod setup_cmds;
 pub mod setup_detect;
+pub mod setup_messaging;
 pub mod setup_profile;
 pub mod setup_run;
 pub mod setup_services;
 pub mod share;
+pub mod shim_check;
 pub mod sideline_color;
 pub mod spawn_floor;
 pub mod spawn_journal;
@@ -134,10 +151,14 @@ pub mod version;
 pub mod view_store;
 pub mod vt;
 pub mod web;
+pub(crate) mod web_command;
 pub mod wizard;
 pub mod wizard_term;
 pub mod wordmark;
+pub mod worktree_door;
 pub mod yard_overlay;
 
+pub mod doctor;
 pub mod doctor_cost;
 pub mod otel_read;
+pub mod whoami_seam;

@@ -181,15 +181,18 @@ fn staged_sweep(
 /// done node and owns a clean linked worktree: it retires with its basis,
 /// its tree is pruned, and the branch-shaped protections (transcript on
 /// disk, no graph mutation) hold. Row B is named on one done and one
-/// open node: kept, naming the open node. Row C is named nowhere: kept,
-/// no provenance.
+/// open node: kept, naming the open node. Row C is named nowhere and
+/// exited: the registry's terminal stamp is its finished marker, so it
+/// retires past the idle hour like a reported-done row.
 #[test]
 fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
     let home = tmp_home("gc-ac4");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
     let a_path = quiet_transcript(transcripts.path(), "a.jsonl", 2 * 3600);
-    let b_path = quiet_transcript(transcripts.path(), "b.jsonl", 2 * 3600);
+    // B is kept as open-work stale: its age must sit inside the origin
+    // ruling's one idle hour, not merely past the old grace.
+    let b_path = quiet_transcript(transcripts.path(), "b.jsonl", 1800);
     let c_path = quiet_transcript(transcripts.path(), "c.jsonl", 2 * 3600);
     state::update_registry(&home.registry_json(), |r| {
         let mut a = ask_row("row-a", None);
@@ -245,10 +248,13 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
 
     assert_eq!(
         summary.retired,
-        vec![(
-            "rowa".to_string(),
-            "every named node done: N1 (via sessions; merge_status: N1:unrecorded)".to_string()
-        )],
+        vec![
+            (
+                "rowa".to_string(),
+                "every named node done: N1 (via sessions; merge_status: N1:unrecorded)".to_string()
+            ),
+            ("rowc".to_string(), "done".to_string()),
+        ],
         "{:?}",
         summary.retired
     );
@@ -262,7 +268,11 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
             "sessions".to_string()
         )]
     );
-    assert_eq!(summary.kept_no_provenance, vec!["rowc".to_string()]);
+    assert!(
+        summary.kept_no_provenance.is_empty(),
+        "{:?}",
+        summary.kept_no_provenance
+    );
     // The retired vocabulary: none of the exit-stamp words appears.
     let rendered = format!("{summary:?}");
     for word in [
@@ -279,11 +289,19 @@ fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
     let reg = state::load_registry(&home.registry_json()).unwrap();
     assert!(reg.entries.iter().all(|e| e.name != "row-a"));
     assert!(reg.entries.iter().any(|e| e.name == "row-b"));
-    assert!(reg.entries.iter().any(|e| e.name == "row-c"));
+    assert!(reg.entries.iter().all(|e| e.name != "row-c"));
     let receipts = home.root().join("reap-receipts");
     assert!(
         receipts.join("claude-sess-a.json").exists(),
         "the resume handle must be durable before the row leaves"
+    );
+    assert!(
+        !summary
+            .kept_no_receipt
+            .iter()
+            .any(|(_, reason)| reason.contains("registry write refused")),
+        "{:?}",
+        summary.kept_no_receipt
     );
 
     // AC4-EDGE: touch A's transcript and rerun as a fresh home - the same
@@ -427,7 +445,17 @@ fn a_shared_worktree_survives_while_the_other_row_is_live() {
         7,
         &move |_| graph.clone(),
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        // The ruling's hour splits the pair: the done row is past it, the
+        // live row sits inside it, so only the done row retires.
+        &|entries| {
+            entries
+                .iter()
+                .map(|e| {
+                    let age = if e.short_id == "rowy" { 1800 } else { 2 * 3600 };
+                    (crate::gc::row_handle(e), Some(age))
+                })
+                .collect()
+        },
         &|_| true,
         &|_| crate::daemon::CascadeOutcome::NotApplicable,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -568,7 +596,16 @@ fn ac4_err_graph_unreadable_and_stop_refusal_keep_every_row() {
         &|_| (Some(true), Some(true)),
         &|_| None,
     );
-    assert!(summary.retired.is_empty());
+    // row-b names no node and sits idle past the hour, so it retires under
+    // the origin ruling; row-a's refused stop keeps it.
+    assert_eq!(
+        summary
+            .retired
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["row-b"]
+    );
     assert_eq!(
         summary
             .stop_refused
@@ -594,7 +631,9 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
         let home = tmp_home("gc-open-do");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
         let transcripts = tempfile::tempdir().unwrap();
-        let quiet = quiet_transcript(transcripts.path(), "d.jsonl", 2 * 3600);
+        // A held row sits inside the idle hour; past it a spawn row retires.
+        let age = if expect_retired { 2 * 3600 } else { 1800 };
+        let quiet = quiet_transcript(transcripts.path(), "d.jsonl", age);
         state::update_registry(&home.registry_json(), |r| {
             let mut e = ask_row("row-d", None);
             e.short_id = "rowd".into();
@@ -612,7 +651,7 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
             7,
             &move |_| graph.clone(),
             &move |_| Some(vec![quiet.clone()]),
-            &uniform_ages(2 * 3600),
+            &uniform_ages(age),
             &|_| true,
             &|_| crate::daemon::CascadeOutcome::NotApplicable,
             &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -645,6 +684,8 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
 }
 
 /// The origin and team protections, and the tree buckets on a retired row.
+/// The operator row sits on open work: on done work quiet past the hour the
+/// done rule retires it.
 #[test]
 fn operator_and_teamed_rows_never_retire_and_tree_buckets_only_keep_trees() {
     let home = tmp_home("gc-protect");
@@ -679,7 +720,7 @@ fn operator_and_teamed_rows_never_retire_and_tree_buckets_only_keep_trees() {
     .unwrap();
     let graph = graph_read(
         &[
-            ("sess-o", "N1", "done"),
+            ("sess-o", "N2", "in_progress"),
             ("sess-k", "N1", "done"),
             ("sess-t", "N1", "done"),
         ],
@@ -1081,7 +1122,20 @@ fn a_planner_retires_only_on_its_own_closed_assignment() {
         7,
         &crate::gc_sweep::read_graph_entries,
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        // The unclosed planner sits inside the idle hour, so its keep holds.
+        &|entries: &[&state::RegistryEntry]| {
+            entries
+                .iter()
+                .map(|e| {
+                    let age = if e.name == "bp-x-4hp-a" {
+                        1800
+                    } else {
+                        2 * 3600
+                    };
+                    (crate::gc::row_handle(e), Some(age))
+                })
+                .collect()
+        },
         &|_| true,
         &|_| CascadeOutcome::Removed,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -1156,7 +1210,8 @@ fn a_planner_whose_plan_file_is_missing_keeps_and_holds() {
         7,
         &crate::gc_sweep::read_graph_entries,
         &move |_| Some(vec![quiet.clone()]),
-        &uniform_ages(2 * 3600),
+        // Inside the idle hour, so the unfinished-plan keep holds.
+        &uniform_ages(1800),
         &|_| true,
         &|_| CascadeOutcome::Removed,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
@@ -1258,6 +1313,47 @@ fn a_row_reaps_only_after_its_receipt_is_durable() {
     );
     let reg = state::load_registry(&home.registry_json()).unwrap();
     assert!(reg.entries.iter().any(|e| e.name == "undeliverable"));
+}
+
+/// A retirement whose registry write refuses names every row it staged in
+/// `kept_no_receipt`, so the real sweep reports what the dry run reports.
+#[test]
+fn a_refused_retirement_write_names_every_staged_row() {
+    let home = tmp_home("gc-write-refused");
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let transcripts = tempfile::tempdir().unwrap();
+    let quiet = quiet_transcript(transcripts.path(), "refused.jsonl", 2 * 3600);
+    state::update_registry(&home.registry_json(), |r| {
+        let mut e = ask_row("refused", None);
+        e.short_id = "refusd".into();
+        e.origin = Some("spawn".into());
+        r.entries.push(e);
+    })
+    .unwrap();
+    // A newer writer floor: reads still serve, every write refuses.
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&crate::registry_store::read_raw(&home.registry_json())).unwrap();
+    doc["min_writer_version"] = serde_json::json!(state::REGISTRY_SCHEMA_VERSION + 1);
+    crate::registry_store::seed_raw(home.registry_json(), doc.to_string());
+
+    let summary = staged_sweep(
+        &home,
+        &emitter,
+        900,
+        graph_read(&[("refused-sess", "N1", "done")], &[]),
+        &move |_| Some(vec![quiet.clone()]),
+        &|_| (Some(true), Some(true)),
+    );
+
+    assert!(summary.retired.is_empty(), "{summary:?}");
+    assert!(
+        summary
+            .kept_no_receipt
+            .iter()
+            .any(|(id, reason)| id == "refusd" && reason.starts_with("registry write refused: ")),
+        "{:?}",
+        summary.kept_no_receipt
+    );
 }
 
 #[test]
@@ -1483,7 +1579,6 @@ async fn lifecycle_name_resolution_never_falls_back_on_ambiguity() {
         &reg,
         "deadbeef",
         std::path::Path::new("/nonexistent/registry.json"),
-        false,
         false,
     )
     .await
@@ -2409,6 +2504,7 @@ fn the_commit_gate_drops_an_order_whose_obligation_opened() {
         tree: crate::gc::TreeAction::None,
         worktree: None,
         released: false,
+        idle_hour_past: false,
     };
     let mut to_retire = std::collections::BTreeMap::new();
     to_retire.insert(entry.name.clone(), order);
@@ -2720,6 +2816,7 @@ fn stage_direct(
         None,
         crate::gc_sweep::RetireMode::Apply,
         crate::gc_sweep::StopObservation::Unproven,
+        false,
         false,
         stop,
         kill,

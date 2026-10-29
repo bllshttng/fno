@@ -1,7 +1,7 @@
 //! Characterization for the dispatch admission decision (protocol steps 3-4,
 //! docs/architecture/dual-implementation-inventory.md). The Rust leg is
 //! `fno_agents::backlog_ready::select`, served over the keeper's `ready`
-//! verb. The goldens under `tests/golden/backlog_ready/` were captured from
+//! command. The goldens under `tests/golden/backlog_ready/` were captured from
 //! the PYTHON leg while both legs lived: the differential stage asserted
 //! Rust==Python byte-for-byte (modulo the volatile stamps and paths named in
 //! `normalize_volatile`) on survivor JSON, drop attribution, and survivor
@@ -78,7 +78,7 @@ struct Case {
     plans: &'static [PlanDoc],
     /// Node ids the materializer holds LIVE claims for.
     claims: &'static [&'static str],
-    /// --parent resolves to nothing: the verb refuses (exit 1).
+    /// --parent resolves to nothing: the command refuses (exit 1).
     expect_err: bool,
 }
 
@@ -358,7 +358,7 @@ fn cases() -> Vec<Case> {
         // A plan-less idea is cold-dispatchable: admitted without --ideas.
         // Carries an intake difficulty now: the no-difficulty guard drops an
         // underivable row on the cold path, so the characterization case
-        // pins admission WITH a derivable verb.
+        // pins admission WITH a derivable command.
         Case {
             name: "plan_less_idea",
             flags: &["-A"],
@@ -712,7 +712,7 @@ fn normalize_volatile(v: &Value) -> Value {
             let mut out = serde_json::Map::new();
             for (k, val) in map {
                 let volatile = match k.as_str() {
-                    "created_at" | "touched_at" => val.is_string(),
+                    "created_at" | "touched_at" | "parented_at" => val.is_string(),
                     "plan_path" | "cwd" => val.is_string(),
                     _ => false,
                 };

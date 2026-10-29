@@ -1,0 +1,4 @@
+Usage: fno config plugins verify [OPTIONS] PATH
+Try 'fno config plugins verify --help' for help.
+
+Error: Missing argument 'PATH'.

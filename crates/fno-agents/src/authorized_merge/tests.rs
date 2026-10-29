@@ -11,6 +11,7 @@ struct Fake {
     dispatch_hold: Option<ProbeOutcome>,
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
+    merge_freeze: Option<ProbeOutcome>,
     review_posted: Option<ProbeOutcome>,
     /// The `reviewed_head` argument review_posted_gate last passed in, so a
     /// test can prove it threaded the attestation's own head, not a guess.
@@ -20,6 +21,7 @@ struct Fake {
     merge_result: Option<ProbeOutcome>,
     ci_base: Option<ProbeOutcome>,
     fresh_ci: Option<bool>,
+    live_lanes: usize,
     ci_base_calls: RefCell<u32>,
     checks: Option<String>,
     /// GitHub's ruleset hold for the PR under decision; `None` (the
@@ -30,7 +32,8 @@ struct Fake {
     optional_unresolved: Option<Option<i64>>,
     /// Rerun-recovery answer for the PR under decision.
     rerun_recovered: Option<bool>,
-    /// The coverage verb's exit for the PR under decision; None reads 0.
+    /// The coverage verdict's exit for the PR under decision, armed into
+    /// `coverage_verdict`; None reads 0.
     coverage_exit: Option<i32>,
     /// The plan-fidelity gate's verdict for a test-armable refusal.
     plan_fidelity_refused: bool,
@@ -42,6 +45,8 @@ struct Fake {
     /// read asked for.
     fno_calls: RefCell<Vec<Vec<String>>>,
     covered_head: Option<String>,
+    /// The merge queue's answer; `None` (the default) reads no queue.
+    merge_queue: Option<Result<Option<String>, String>>,
     enabled: bool,
     floor: Option<String>,
     gh_ok: bool,
@@ -274,6 +279,9 @@ impl Probes for Fake {
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.pr_hold.clone().unwrap_or(ProbeOutcome::Clear)
     }
+    fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        self.merge_freeze.clone().unwrap_or(ProbeOutcome::Clear)
+    }
     fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
         *self.review_posted_head_seen.borrow_mut() = Some(reviewed_head.to_string());
         self.review_posted.clone().unwrap_or(ProbeOutcome::Clear)
@@ -296,6 +304,9 @@ impl Probes for Fake {
     }
     fn require_fresh_ci(&self, _cwd: &Path) -> bool {
         self.fresh_ci.unwrap_or(true)
+    }
+    fn live_lanes(&self, _cwd: &Path) -> usize {
+        self.live_lanes
     }
     fn slot_holder(&self, _cwd: &Path, _base_ref: &str) -> Result<Option<u64>, String> {
         if self.slot_holder_err {
@@ -373,6 +384,14 @@ impl Probes for Fake {
     fn main_repair_hold(&self, _cwd: &Path, _facts: &PrFacts) -> Option<String> {
         self.main_repair.clone().flatten()
     }
+    fn merge_queue(
+        &self,
+        _cwd: &Path,
+        _facts: &PrFacts,
+        _head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        self.merge_queue.clone()
+    }
     fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
         self.gh_calls.borrow_mut().push(args.to_vec());
         if args.first().map(String::as_str) == Some("api") {
@@ -397,23 +416,37 @@ impl Probes for Fake {
                 Vec::new(),
             ));
         }
+        // The only other fno-shell ask in these tests is the plan-fidelity
+        // probe: the verdict answer reads `refused` from the test arm.
         let covered = if self.plan_fidelity_refused {
             br#"{"refused": true, "reason": "test"}"#.to_vec()
         } else {
             br#"{"refused": false}"#.to_vec()
         };
-        // The coverage ask is the `do pr coverage-check` shell; any other
-        // fno-shell call is a fidelity ask in these tests.
-        let is_coverage = args.len() >= 3 && args[2] == "coverage-check";
-        Ok((
-            if is_coverage {
-                self.coverage_exit.or(Some(0))
-            } else {
-                Some(0)
-            },
-            if is_coverage { Vec::new() } else { covered },
-            Vec::new(),
-        ))
+        Ok((Some(0), covered, Vec::new()))
+    }
+
+    fn coverage_verdict(
+        &self,
+        _cwd: &Path,
+        _pr: u64,
+    ) -> crate::loopcheck::coverage_gate::GateVerdict {
+        use crate::loopcheck::coverage_gate::{GateState, GateVerdict};
+        let (state, refusal, note) = match self.coverage_exit {
+            None | Some(0) => (GateState::Covered, "", ""),
+            Some(3) => (
+                GateState::Refused,
+                "no review coverage row at this head",
+                "",
+            ),
+            _ => (GateState::Unanswered, "", "coverage read unavailable"),
+        };
+        GateVerdict {
+            state,
+            refusal: refusal.to_string(),
+            covered_head: String::new(),
+            note: note.to_string(),
+        }
     }
 }
 
@@ -871,7 +904,7 @@ fn the_retest_cap_binds_in_the_legacy_slot_window() {
 
 #[test]
 fn a_proven_or_retested_stale_preview_reads_no_ci_base_stale_blocker() {
-    // Preview parity: the merge verb merges both shapes, so pr status may
+    // Preview parity: the merge command merges both shapes, so pr status may
     // not hold them behind a fold that never runs.
     let proven = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
@@ -908,15 +941,31 @@ fn ci_base_freshness_gates_the_chain() {
     assert!(outcome.detail().contains("retry later"));
     assert!(fake.gh_calls.borrow().is_empty());
     assert!(fake.take_slot_calls.borrow().is_empty());
+    // Off by default, the base_overlap hold rides the same key: live lanes
+    // never read the base move, so a mergeable PR merges as it is.
+    let reads_refs = |fake: &Fake| {
+        fake.gh_calls
+            .borrow()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "baseRefName,headRefName"))
+    };
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: old".to_string())),
         fresh_ci: Some(false),
+        live_lanes: 2,
         ..clean()
     };
     let mut req = request(Effect::Merge);
     req.require_checks = true;
     assert_eq!(run(&fake, &req).word(), "merged");
     assert_eq!(*fake.ci_base_calls.borrow(), 0);
+    assert!(!reads_refs(&fake));
+    let armed = Fake {
+        live_lanes: 2,
+        ..clean()
+    };
+    run(&armed, &req);
+    assert!(reads_refs(&armed));
 }
 
 #[test]
@@ -1101,6 +1150,7 @@ fn an_arm_receipt_names_the_head_and_is_never_merged() {
         Outcome::Armed {
             head: "abc123".to_string(),
             merge_grant: None,
+            queued: false,
         }
     );
     let calls = fake.gh_calls.borrow();
@@ -1124,6 +1174,33 @@ fn an_arm_receipt_names_the_head_and_is_never_merged() {
 }
 
 #[test]
+fn an_unreadable_optional_review_count_never_holds_a_merge() {
+    // Specimen 2026-10-22: the gh helpers went missing, the optional count
+    // read unknown, and the old fail-closed gate held every merge.
+    let fake = Fake {
+        optional_unresolved: Some(None),
+        ..clean()
+    };
+    assert!(preview_blockers(&fake, &preview_request(7)).is_empty());
+    assert!(matches!(
+        run(&fake, &request(Effect::Merge)),
+        Outcome::Merged { .. }
+    ));
+    // No count at all means the status read itself failed: that still holds.
+    let unread = Fake {
+        optional_unresolved: None,
+        ..clean()
+    };
+    let blockers = preview_blockers(&unread, &preview_request(7));
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.code == "optional_reviews_unknown"),
+        "{blockers:?}"
+    );
+}
+
+#[test]
 fn an_immediate_merge_never_passes_auto() {
     let journal = crate::merge_provenance::TestJournal::opt_in();
     let fake = clean();
@@ -1141,7 +1218,7 @@ fn an_immediate_merge_never_passes_auto() {
     assert!(!calls[0].contains(&"--auto".to_string()));
     assert!(calls[0].contains(&"--match-head-commit".to_string()));
     // The owner's record: one merge_landed span for the run, naming the
-    // verb lane and the merged PR.
+    // command lane and the merged PR.
     let spans: Vec<_> = journal
         .rows()
         .into_iter()
@@ -1152,6 +1229,32 @@ fn an_immediate_merge_never_passes_auto() {
     assert_eq!(spans[0]["data"]["pr"], 7);
     assert_eq!(spans[0]["data"]["repo"], "o/r");
     assert_eq!(spans[0]["data"]["head"], "abc123");
+}
+
+#[test]
+fn a_queued_merge_runs_no_gh_merge_and_an_ejected_head_holds() {
+    let mut fake = clean();
+    fake.merge_queue = Some(Ok(None));
+    let outcome = run(&fake, &request(Effect::Merge));
+    assert_eq!(
+        outcome,
+        Outcome::Armed {
+            head: "abc123".to_string(),
+            merge_grant: None,
+            queued: true,
+        }
+    );
+    assert!(outcome.detail().contains("fno merge queue"));
+    assert!(!fake
+        .gh_calls
+        .borrow()
+        .iter()
+        .any(|call| call.get(1).map(String::as_str) == Some("merge")));
+    fake.merge_queue = Some(Ok(Some("the merge queue ejected head abc123".to_string())));
+    assert!(matches!(
+        run(&fake, &request(Effect::Merge)),
+        Outcome::Held { .. }
+    ));
 }
 
 #[test]
@@ -1299,6 +1402,67 @@ fn a_secondary_rate_limit_behind_a_config_warning_reads_retryable_not_merge_meth
 }
 
 #[test]
+fn a_gh_proxy_admit_banner_ahead_of_a_real_refusal_reads_the_refusal_not_the_banner() {
+    // Specimen 2026-10-19: the gh proxy prints its admit banner to stderr
+    // right before os.execve hands off to the real gh, so both land in one
+    // combined stream and the banner is line one. Three merge attempts on a
+    // green, mergeable PR all surfaced the generic fallback reason with the
+    // banner instead of gh's own refusal.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh proxy: draft guard unavailable; admitting\n\
+                    gh: GraphQL: Pull request is not in a mergeable state"
+            .to_string(),
+        ..clean()
+    };
+    let authorized = Authorized {
+        facts: open_facts(),
+        head: "abc123".to_string(),
+        strategy: "squash".to_string(),
+        merge_grant: None,
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "failed");
+    let detail = outcome.detail();
+    assert!(
+        detail.contains("Pull request is not in a mergeable state"),
+        "{detail}"
+    );
+    assert!(!detail.contains("draft guard unavailable"), "{detail}");
+}
+
+#[test]
+fn a_gh_proxy_refusal_behind_its_own_admit_banner_is_never_skipped_as_noise() {
+    // Review finding on this fix's own first draft: when the proxy admits
+    // the draft-guard RPC (prints the "admitting" banner) and then re-enters
+    // itself on the execve (a `resolve_real_gh()` failure, see gh_proxy.py's
+    // ProxyIdentityError), both lines share the "gh proxy:" prefix and the
+    // SAME stderr stream, but only the first is noise. The proxy's own
+    // refusal is the entire story here - nothing real ever ran - so
+    // skipping every "gh proxy:" line by prefix alone would report "no
+    // error output" instead of the refusal.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh proxy: draft guard unavailable; admitting\n\
+                    gh proxy: re-entered itself. resolve_real_gh() gave back \
+                    the proxy shim instead of a real gh binary. Refusing to loop."
+            .to_string(),
+        ..clean()
+    };
+    let authorized = Authorized {
+        facts: open_facts(),
+        head: "abc123".to_string(),
+        strategy: "squash".to_string(),
+        merge_grant: None,
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "failed");
+    let detail = outcome.detail();
+    assert!(detail.contains("re-entered itself"), "{detail}");
+    assert!(!detail.contains("draft guard unavailable"), "{detail}");
+}
+
+#[test]
 fn a_worktree_held_branch_recovers_through_the_rest_endpoint_with_the_pin() {
     let fake = Fake {
         gh_ok: false,
@@ -1386,7 +1550,7 @@ fn hold_probe_fails_closed_on_every_non_success() {
 }
 
 #[test]
-fn the_verb_refuses_a_payload_that_names_no_effect() {
+fn the_command_refuses_a_payload_that_names_no_effect() {
     assert!(parse_request(&json!({"cwd": "/tmp"})).is_err());
     assert!(parse_request(&json!({"effect": "arm"})).is_err());
     assert!(parse_request(&json!({"cwd": "/tmp", "effect": "sideways"})).is_err());
@@ -1472,6 +1636,15 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
             Fake {
                 pr_hold: Some(ProbeOutcome::Refused(
                     "pr_hold: the owner holds PR #7 (d-1); release it to clear".to_string(),
+                )),
+                ..base()
+            },
+        ),
+        (
+            "merge_freeze",
+            Fake {
+                merge_freeze: Some(ProbeOutcome::Refused(
+                    "merge_freeze: PR #7 is off the pin merge-freeze:o/r@prs:6".to_string(),
                 )),
                 ..base()
             },
@@ -1563,20 +1736,37 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
         )),
         ..base()
     };
+    let frozen = Fake {
+        merge_freeze: Some(ProbeOutcome::Refused(
+            "merge_freeze: PR #7 is off the pin".to_string(),
+        )),
+        ..base()
+    };
+    // An unreadable freeze fails closed on both effects.
+    let unreadable = Fake {
+        merge_freeze: Some(ProbeOutcome::Inconclusive(
+            "merge_freeze: the freeze is unreadable".to_string(),
+        )),
+        ..base()
+    };
     for (code, fake, word) in [
         ("outside_pr", outside, "refused"),
         ("pr_hold", held, "held"),
+        ("merge_freeze", frozen, "held"),
+        ("merge_freeze_unreadable", unreadable, "held"),
     ] {
-        let req_arm = Request {
-            require_checks: true,
-            ..request(Effect::Arm)
-        };
-        let outcome = run(&fake, &req_arm);
-        assert_eq!(
-            outcome.word(),
-            word,
-            "{code}: the arm did not answer {word}: {outcome:?}"
-        );
+        for effect in [Effect::Arm, Effect::Merge] {
+            let req = Request {
+                require_checks: true,
+                ..request(effect)
+            };
+            let outcome = run(&fake, &req);
+            assert_eq!(
+                outcome.word(),
+                word,
+                "{code}: the {effect:?} did not answer {word}: {outcome:?}"
+            );
+        }
     }
 }
 
@@ -1771,13 +1961,42 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     )
     .unwrap();
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
-    // The page answers, the hold clears.
-    std::fs::write(
-        &page,
-        "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n---\nbody\n",
-    )
-    .unwrap();
+    // An answer that rejects, or picks no option, keeps the hold.
+    for answer in [
+        "2. Hold for changes",
+        "Hold for changes",
+        "none of these",
+        "''",
+    ] {
+        std::fs::write(
+            &page,
+            format!(
+                "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
+                 answer: {answer}\n---\nbody\n"
+            ),
+        )
+        .unwrap();
+        assert!(
+            crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some(),
+            "answer {answer:?} must not clear"
+        );
+    }
+    // An approve answer on a page that names no head keeps the hold: the
+    // user's look binds to the head they saw.
+    let approved = |body: &str| {
+        format!(
+            "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
+             answer: 1. Merge as painted\n---\n{body}\n"
+        )
+    };
+    std::fs::write(&page, approved("body")).unwrap();
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    // The page answers with the approve option at this head, the hold clears.
+    std::fs::write(&page, approved(&format!("PR 7 at head {head}"))).unwrap();
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
+    // A push after the user looked holds again.
+    let pushed: String = "b".repeat(40);
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
     // The page archives into done/; the approval must not lapse.
     let donedir = qdir.join("done");
     std::fs::create_dir_all(&donedir).unwrap();
@@ -1852,14 +2071,24 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     .unwrap();
     let head: String = "a".repeat(40);
     let pushed: String = "b".repeat(40);
-    let row = |decision: &str, rationale: &str, authority: &str, lifecycle: &str| {
+    let row_at = |subject: &str,
+                  decision: &str,
+                  rationale: &str,
+                  authority: &str,
+                  lifecycle: &str| {
         format!(
-            r#"{{"decisions":[{{"decision_id":"d-xc39f","authority_source":"{authority}","lifecycle":"{lifecycle}","decision":"{decision}","rationale":"{rationale}"}}]}}"#
+            r#"{{"decisions":[{{"decision_id":"d-xc39f","subject":"{subject}","authority_source":"{authority}","lifecycle":"{lifecycle}","decision":"{decision}","rationale":"{rationale}"}}]}}"#
         )
+    };
+    let row = |decision: &str, rationale: &str, authority: &str, lifecycle: &str| {
+        row_at("x-paint", decision, rationale, authority, lifecycle)
     };
     let mut fake = clean();
     fake.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
-    // The lead's transcription, head-scoped: clears.
+    let clears = |fake: &Fake, head: &str| {
+        crate::merge_gates::role_chat_clears_pr(fake, &tmp, 7, head, "x-paint")
+    };
+    // The lead's transcription at the PR's node, head-scoped: clears.
     fake.decisions_stdout = Some(
         row(
             "Approved: PR 7 at <head> as built",
@@ -1870,12 +2099,30 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
-    // A head push invalidates the approval: held again.
+    assert!(clears(&fake, &head));
+    // A head push invalidates the approval.
     assert!(
-        crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some(),
+        !clears(&fake, &pushed),
         "an approval recorded for head a..a must not clear head b..b"
     );
+    // With no node bound to the PR, even that row holds: the subject rule
+    // has no node to match.
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    // A role row on another subject never clears: the door scopes the role
+    // to the lead whose territory covers the subject, so only the PR's own
+    // node carries that scope.
+    fake.decisions_stdout = Some(
+        row_at(
+            "release-cadence",
+            "Approved: PR 7 at <head> as built",
+            "user in chat: approved",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    assert!(!clears(&fake, &head));
     // No chat attestation in the rationale: held.
     fake.decisions_stdout = Some(
         row(
@@ -1887,7 +2134,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // The row's authority is not role: held.
     fake.decisions_stdout = Some(
         row(
@@ -1899,7 +2146,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // A retracted approval never clears: held.
     fake.decisions_stdout = Some(
         row(
@@ -1911,7 +2158,42 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
+    // A board answer: the rationale cites the answered page instead of chat.
+    // The page names the PR and no head; the row carries the head.
+    fake.decisions_stdout = Some(
+        row(
+            "Approved: PR 7 at <head> as built",
+            "user answered q-board7 on the board",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    let qdir = crate::escalation::questions_dir(&tmp);
+    std::fs::create_dir_all(&qdir).unwrap();
+    let page = |status: &str, answer: &str| {
+        format!(
+            "---\nquestion_id: q-board7\nstatus: {status}\ntitle: May PR 7 merge?\n\
+             answer: {answer}\n---\nbody\n"
+        )
+    };
+    // No page, an open page, or a rejecting answer: held.
+    assert!(!clears(&fake, &head));
+    for (status, answer) in [("open", "''"), ("answered", "2. Hold for changes")] {
+        std::fs::write(qdir.join("q-board7.md"), page(status, answer)).unwrap();
+        assert!(!clears(&fake, &head), "{status} {answer} must hold");
+    }
+    // The approving answer clears, at the row's head only.
+    std::fs::write(
+        qdir.join("q-board7.md"),
+        page("answered", "Approve as shown"),
+    )
+    .unwrap();
+    assert!(clears(&fake, &head));
+    assert!(!clears(&fake, &pushed));
+    std::fs::remove_file(qdir.join("q-board7.md")).unwrap();
     // The gate is closed again with the empty index the Fake serves by
     // default; the head-scoped grant text stays out of a held detail.
     fake.decisions_stdout = None;
@@ -1921,5 +2203,57 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         "{}",
         held.detail
     );
+    // A split: the node holds PR 6 and lists PR 7 in additional_prs. PR 7
+    // binds to it, so the approval recorded on that node clears PR 7. A row
+    // whose own pr_number is the PR still wins over a row that only lists it.
+    crate::graph_store::seed_rows(
+        &crate::org_board::scope::graph_json_path(&tmp),
+        &[
+            json!({"id": "x-lists", "status": "in_review", "additional_prs": [{"number": 6}]}),
+            json!({"id": "x-paint", "status": "in_review", "pr_number": 6,
+                   "additional_prs": [{"number": 7}]}),
+        ],
+    )
+    .unwrap();
+    let bound = |pr| {
+        crate::authorized_merge::pr_bound_entry(&tmp, pr)
+            .and_then(|e| e.get("id").and_then(Value::as_str).map(str::to_owned))
+    };
+    assert_eq!(bound(7).as_deref(), Some("x-paint"));
+    assert_eq!(bound(6).as_deref(), Some("x-paint"));
+    assert_eq!(bound(8), None);
+    // PR numbers collide across repositories: a ref whose URL names another
+    // repository never binds, primary or additional; a ref with no URL does.
+    let rows = [
+        json!({"id": "x-foreign", "pr_number": 7,
+               "pr_url": "https://github.com/o/other/pull/7"}),
+        json!({"id": "x-also-foreign", "additional_prs": [
+               {"number": 7, "url": "https://github.com/o/other/pull/7"}]}),
+        json!({"id": "x-here", "additional_prs": [
+               {"number": 7, "url": "https://github.com/O/Here/pull/7"}]}),
+    ];
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 7, Some("o/here")),
+        Some(2)
+    );
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows[..2], 7, Some("o/here")),
+        None
+    );
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 7, None),
+        Some(0)
+    );
+    fake.decisions_stdout = Some(
+        row(
+            "Approved: PR 7 at <head> as built",
+            "user in chat: approved",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
     std::fs::remove_dir_all(&tmp).ok();
 }

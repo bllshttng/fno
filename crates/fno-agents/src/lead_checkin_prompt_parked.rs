@@ -38,13 +38,22 @@ pub(crate) struct ParkedRow {
 }
 
 impl ParkedRow {
-    /// The check-in line: the finding and the remedy in one sentence.
+    /// The check-in line: the finding and the remedy in one sentence. A codex
+    /// folder-trust row names the daemon as the answerer: it auto-answers
+    /// within its interval, so a lead pressing 1 after it lands would inject
+    /// a stray digit into the idle composer.
     pub(crate) fn line(&self) -> String {
         let head = if self.prompt_head.is_empty() {
             self.rule_id.as_str()
         } else {
             self.prompt_head.as_str()
         };
+        if self.rule_id == "trust_prompt" && self.harness == "codex" && self.answer_key.is_some() {
+            return format!(
+                "WAITING ON APPROVAL: {} ({}) pane {} {} - the daemon answers this itself",
+                self.holder, self.harness, self.pane_id, head
+            );
+        }
         match &self.answer_key {
             Some(key) => format!(
                 "WAITING ON APPROVAL: {} ({}) pane {} {} - answer with: fno mux pane send {} --raw {}",
@@ -112,11 +121,44 @@ fn row_terminal(status: &crate::AgentStatus) -> bool {
 /// The reading: every joined pane read once, the parked rows returned. The
 /// lead's own session is a worker like any other - a lead parked on its own
 /// prompt cannot run this reading anyway, so no self-exclusion exists.
-pub(super) fn reading() -> Result<Value, String> {
+/// `pub(crate)`: the daemon's trust-answer sweep replays it, so the pinned
+/// classifier (not a second join) answers the pane.
+pub(crate) fn reading() -> Result<Value, String> {
     let home = crate::paths::AgentsHome::from_env();
     let reg = crate::state::load_registry(&home.registry_json())
         .map_err(|e| format!("registry unreadable: {e}"))?;
-    reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))
+    let mut value = reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))?;
+    let now = crate::claims::now_ms();
+    let snapshot = crate::claude_roster::read_all_agents_union();
+    // A failed thread read never hides the pane rows already read.
+    match crate::prompt_wait::observe(&home, now, &snapshot) {
+        Ok(waiting) => add_thread_rows(&mut value, &waiting, now),
+        Err(e) => eprintln!("prompt_parked: thread prompt read failed: {e}"),
+    }
+    Ok(value)
+}
+
+/// Fold in the native thread workers past the prompt-wait bound. They have
+/// no pane, so the mux scrape never sees them. A worker the scrape already
+/// named keeps its pane row, which carries the answering key.
+fn add_thread_rows(value: &mut Value, waiting: &[crate::prompt_wait::Waiting], now: i64) {
+    let Some(rows) = value.get_mut("rows").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let named: HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r.get("holder").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    for w in waiting
+        .iter()
+        .filter(|w| w.overdue(now) && !named.contains(&w.name))
+    {
+        let (holder, line) = (&w.name, w.line(now));
+        rows.push(
+            json!({"holder": holder, "harness": "claude", "short_id": w.short_id, "line": line}),
+        );
+    }
 }
 
 /// The injected core of [`reading`], so the composition is testable without
@@ -315,6 +357,31 @@ mod tests {
             Press enter to confirm or esc to cancel";
         let row = classify_pane("t-xd55-cx", "codex", 7, &codex, screen).expect("parked");
         assert_eq!(row.rule_id, "approval_prompt");
+        assert_eq!(row.answer_key.as_deref(), Some("1"));
+        // Codex 1.x reworded the trust modal ("Folder access / Trust this
+        // folder?" over "› 1. Trust and continue"); the pane still parks
+        // under trust_prompt with the pinned digit.
+        let screen = "Folder access\n\
+            /tmp\n\
+            Trust this folder?\n\
+            \n\
+            \u{203a} 1. Trust and continue\n\
+              2. Back to Agent Command Center";
+        let row = classify_pane("t-trust-cx", "codex", 9, &codex, screen).expect("parked");
+        assert_eq!(row.rule_id, "trust_prompt");
+        assert_eq!(row.answer_key.as_deref(), Some("1"));
+        assert!(
+            row.line().contains("the daemon answers this itself"),
+            "{}",
+            row.line()
+        );
+        // The old wording still classifies: the question arm keeps both
+        // spellings.
+        let screen = "Do you trust the files in this folder?\n\
+            \u{203a} 1. Yes, continue\n\
+              2. No, quit";
+        let row = classify_pane("t-trust-old", "codex", 11, &codex, screen).expect("parked");
+        assert_eq!(row.rule_id, "trust_prompt");
         assert_eq!(row.answer_key.as_deref(), Some("1"));
         // Working and idle panes never classify.
         assert!(classify_pane(

@@ -1,14 +1,14 @@
 //! `fno backlog session backfill`: fill a session row's missing
 //! `started_at` or `ended_at` from a recorded fact (user ruling 2026-09-24).
 //! A dry run by default; `--apply` writes. It never overwrites a stamp, and
-//! a row with no transcript on disk keeps its gap. It is its own verb, never
+//! a row with no transcript on disk keeps its gap. It is its own command, never
 //! part of the schema-4 migration, because the migration invents no time.
 //!
-//! The start is the first invocation of the phase's verb in the session's
+//! The start is the first invocation of the phase's command in the session's
 //! transcript whose arguments name the node (its id or its plan file): a
-//! typed `/fno:<verb>` or `$fno:<verb>` that opens a user message, or a
-//! Skill tool call naming `fno:<verb>`. A session that holds the phase for
-//! one node only takes the verb's first invocation, named or not. A session
+//! typed `/fno:<command>` or `$fno:<command>` that opens a user message, or a
+//! Skill tool call naming `fno:<command>`. A session that holds the phase for
+//! one node only takes the command's first invocation, named or not. A session
 //! that holds it for several nodes stamps only a node its own call names;
 //! the rest keep their gap and count as unmatched. The end is the last
 //! event before a later call of another phase, or of the same phase for
@@ -29,9 +29,9 @@ use crate::graph_store::entry_id;
 /// A transcript quiet this long is a finished session.
 const IDLE_SECS: u64 = 86_400;
 
-/// The phase an fno verb opens.
-fn phase_of(verb: &str) -> Option<&'static str> {
-    match verb {
+/// The phase an fno command opens.
+fn phase_of(command: &str) -> Option<&'static str> {
+    match command {
         "think" => Some("think"),
         "blueprint" => Some("blueprint"),
         "target" | "execute" | "do" => Some("execute"),
@@ -41,8 +41,8 @@ fn phase_of(verb: &str) -> Option<&'static str> {
     }
 }
 
-/// One transcript event: its UTC time and, when it invokes an fno verb, the
-/// phase that verb opens and the call's argument text.
+/// One transcript event: its UTC time and, when it invokes an fno command, the
+/// phase that command opens and the call's argument text.
 type Event = (String, Option<(&'static str, String)>);
 
 /// A session's transcript events and whether it is idle; None when no
@@ -338,7 +338,7 @@ fn read_transcript(path: &Path, now: u64) -> Option<Transcript> {
         else {
             continue;
         };
-        let call = invocation(&event).and_then(|(verb, args)| Some((phase_of(verb)?, args)));
+        let call = invocation(&event).and_then(|(command, args)| Some((phase_of(command)?, args)));
         events.push((ts, call));
     }
     Some(Transcript {
@@ -347,9 +347,9 @@ fn read_transcript(path: &Path, now: u64) -> Option<Transcript> {
     })
 }
 
-/// The fno verb an event invokes and the call's argument text: a typed
-/// command, a message that opens with the verb, or a Skill tool call. Text
-/// that only mentions a verb (injected context, a quoted launch line)
+/// The fno command an event invokes and the call's argument text: a typed
+/// command, a message that opens with the command, or a Skill tool call. Text
+/// that only mentions a command (injected context, a quoted launch line)
 /// invokes nothing.
 fn invocation(event: &Value) -> Option<(&str, String)> {
     let message = event.get("message");
@@ -361,9 +361,9 @@ fn invocation(event: &Value) -> Option<(&str, String)> {
                     .split_once("<command-args>")
                     .and_then(|(_, tail)| tail.split_once("</command-args>"))
                     .map_or("", |(args, _)| args);
-                return Some((verb_token(rest), args.to_string()));
+                return Some((command_token(rest), args.to_string()));
             }
-            leading_verb(text).map(split_call)
+            leading_command(text).map(split_call)
         }
         "assistant" => message?
             .get("content")?
@@ -372,12 +372,12 @@ fn invocation(event: &Value) -> Option<(&str, String)> {
             .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
             .filter(|item| item.get("name").and_then(Value::as_str) == Some("Skill"))
             .find_map(|item| {
-                let verb = item
+                let command = item
                     .pointer("/input/skill")?
                     .as_str()?
                     .strip_prefix("fno:")?;
                 let args = item.pointer("/input/args").and_then(Value::as_str);
-                Some((verb_token(verb), args.unwrap_or_default().to_string()))
+                Some((command_token(command), args.unwrap_or_default().to_string()))
             }),
         "response_item" => {
             let payload = event.get("payload")?;
@@ -389,33 +389,80 @@ fn invocation(event: &Value) -> Option<(&str, String)> {
                 .as_array()?
                 .iter()
                 .find_map(|c| c.get("text").and_then(Value::as_str))?;
-            leading_verb(text).map(split_call)
+            leading_command(text).map(split_call)
         }
         _ => None,
     }
 }
 
-fn leading_verb(text: &str) -> Option<&str> {
+fn leading_command(text: &str) -> Option<&str> {
     let text = text.trim_start();
     text.strip_prefix("/fno:")
         .or_else(|| text.strip_prefix("$fno:"))
 }
 
-fn verb_token(rest: &str) -> &str {
+/// Does this claude session's transcript carry a real fno skill invocation
+/// (typed `<command-name>/fno:`, a leading `/fno:` call, or a Skill tool
+/// call)? The 2026-10-24 bg-adoption ruling: a claude bg row fno never
+/// stamped with an origin is still fno's own work when its transcript shows
+/// one, so the reaper may judge it like a spawn row.
+///
+/// `using-fno` never counts. The preamble is injected as context after the
+/// session already joined - a join needs a real fno skill or command - and
+/// [`invocation`] reads injected prose as a mention, not a call. `fno-me`
+/// counts like any other command.
+pub(crate) fn bg_fno_invocation(session_id: &str, account: Option<&str>) -> bool {
+    // An isolated-account row keeps its transcript under that account's
+    // config root, so the ambient scan alone would miss it.
+    let path = crate::claude_drive::find_transcript_for_account(session_id, account)
+        .or_else(|| crate::claude_drive::find_transcript(session_id));
+    let Some(path) = path else {
+        return false;
+    };
+    bg_fno_invocation_in(&path)
+}
+
+/// [`bg_fno_invocation`] against an explicit transcript file, so the scan
+/// is testable without a session on disk.
+pub(crate) fn bg_fno_invocation_in(path: &std::path::Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        // Every invocation form carries `fno:` - `/fno:` on a typed or
+        // leading call, `"skill":"fno:` on a Skill tool call - and a sweep
+        // rescans negative rows each pass, so most lines must skip the
+        // serde parse, not pay it.
+        if !line.contains("fno:") {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if let Some((command, _)) = invocation(&event) {
+            if command != "using-fno" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn command_token(rest: &str) -> &str {
     let end = rest
         .find(|c: char| !(c.is_ascii_lowercase() || c == '-'))
         .unwrap_or(rest.len());
     &rest[..end]
 }
 
-/// A leading call split into its verb and the text after it.
+/// A leading call split into its command and the text after it.
 fn split_call(rest: &str) -> (&str, String) {
-    let verb = verb_token(rest);
-    (verb, rest[verb.len()..].to_string())
+    let command = command_token(rest);
+    (command, rest[command.len()..].to_string())
 }
 
 /// Codex rollout files by lowercased session id, one store walk.
-fn codex_rollouts() -> HashMap<String, PathBuf> {
+pub(crate) fn codex_rollouts() -> HashMap<String, PathBuf> {
     let Some(root) = crate::codex_store::codex_home().map(|h| h.join("sessions")) else {
         return HashMap::new();
     };
@@ -484,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn invocations_are_typed_commands_leading_verbs_and_skill_calls() {
+    fn invocations_are_typed_commands_leading_commands_and_skill_calls() {
         let typed = json!({"type": "user", "message": {"content": "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>x-7</command-args>"}});
         let codex = json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"text": "$fno:blueprint x-1"}]}});
         let skill = json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Skill", "input": {"skill": "fno:think", "args": "x-2"}}]}});
@@ -495,6 +542,40 @@ mod tests {
         assert_eq!(invocation(&skill), Some(("think", "x-2".to_string())));
         assert_eq!(invocation(&mention), None);
         assert_eq!(invocation(&injected), None);
+    }
+
+    #[test]
+    fn the_using_fno_preamble_never_reads_as_an_invocation() {
+        // The injected preamble names commands in prose and wraps them in
+        // harness framing; neither form invokes anything. A real
+        // /fno:using-fno typed call reads as the command it is, and the
+        // adoption scan excludes it by name.
+        let preamble = json!({"type": "user", "message": {"content": "<EXTREMELY_IMPORTANT>\nBelow is the full content of the 'using-fno' skill - Claude/opencode use /fno:command, codex uses $fno:command.\n</EXTREMELY_IMPORTANT>"}});
+        let command_frame = json!({"type": "user", "message": {"content": "<command-message>using-fno</command-message>\n<command-name>/fno:using-fno</command-name>"}});
+        let fno_me = json!({"type": "user", "message": {"content": "<command-message>fno-me</command-message>\n<command-name>/fno:fno-me</command-name>"}});
+        assert_eq!(invocation(&preamble), None);
+        assert_eq!(
+            invocation(&command_frame),
+            Some(("using-fno", "".to_string()))
+        );
+        assert_eq!(invocation(&fno_me), Some(("fno-me", "".to_string())));
+    }
+
+    #[test]
+    fn the_scan_reads_a_skill_call_line_and_skips_preamble_only_files() {
+        let dir = std::env::temp_dir().join("fno-bg-scan-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A Skill tool call stores `fno:think` with no slash: the scan's
+        // cheap token filter must still admit the line.
+        let skill_call = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"fno:think","args":"x-2"}}]}}"#;
+        let path = dir.join("skill-call.jsonl");
+        std::fs::write(&path, format!("{skill_call}\n")).unwrap();
+        assert!(bg_fno_invocation_in(&path));
+        // The injected preamble alone is never an invocation.
+        let preamble_only = r#"{"type":"user","message":{"content":"<EXTREMELY_IMPORTANT>using-fno: run /fno:target or $fno:review</EXTREMELY_IMPORTANT>"}}"#;
+        let path = dir.join("preamble.jsonl");
+        std::fs::write(&path, format!("{preamble_only}\n")).unwrap();
+        assert!(!bg_fno_invocation_in(&path));
     }
 
     #[test]

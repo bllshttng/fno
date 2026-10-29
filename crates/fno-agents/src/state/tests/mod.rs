@@ -519,14 +519,24 @@ fn launch_account_from_env_is_three_valued() {
     std::env::set_var(LAUNCH_ACCOUNT_ENV_KEY, "makers");
     std::env::set_var("CLAUDE_CONFIG_DIR", "/unrelated");
     let a = launch_account_from_env();
+    let stamped = crate::accounts::launch::pane_stamp();
 
     std::env::remove_var(LAUNCH_ACCOUNT_ENV_KEY);
     let b = launch_account_from_env();
 
     std::env::remove_var("CLAUDE_CONFIG_DIR");
     let c = launch_account_from_env();
+    let unstamped = crate::accounts::launch::pane_stamp();
 
     restore(saved_launch, saved_dir);
+
+    // A pane carries the stamp only when an account was applied; the
+    // fallback "default" never rides a wrapper.
+    assert_eq!(
+        stamped.first(),
+        Some(&(LAUNCH_ACCOUNT_ENV_KEY.to_string(), "makers".to_string()))
+    );
+    assert_eq!(unstamped, Vec::new());
 
     assert_eq!(a.as_deref(), Some("makers"), "seam id outranks ambient dir");
     assert_eq!(b, None, "an ambient config dir is unknown, never default");
@@ -706,7 +716,7 @@ fn update_registry_accounts_for_a_removed_row() {
     let receipt: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&receipt_path).unwrap()).unwrap();
     assert_eq!(receipt["row_name"], "dropped");
-    // The receipt names its writer (the argv verb); the event's
+    // The receipt names its writer (the argv command); the event's
     // `remover` answers the separate process-name question it always did.
     assert!(
         receipt["removed_by"]
@@ -959,7 +969,7 @@ fn a_deployed_binary_under_a_git_managed_home_still_writes() {
 #[test]
 fn update_registry_refuses_a_source_ahead_bump_of_the_shared_registry() {
     // AC8-CON: `registry.json` has writers in two languages, so a guard on
-    // one leaves the daemon, mux, and every client verb still able to
+    // one leaves the daemon, mux, and every client command still able to
     // poison the file. This test binary genuinely runs from
     // `<checkout>/target/...`, so it IS the source-run case; pointing
     // FNO_AGENTS_HOME at a tmp dir outside the checkout makes that dir the

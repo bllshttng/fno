@@ -1,9 +1,14 @@
 name: cli-ci
 
 # PR re-pushes share a group keyed by head_ref and cancel their own running
-# run. Main pushes share a group keyed by ref with cancel-in-progress false,
-# so a new main push supersedes only the queued main run and never cancels the
-# running one (concurrency keeps one running and one pending).
+# run. Main pushes share one group keyed by ref. The running main run always
+# finishes, and the newest push replaces the pending one, so a burst of merges
+# queues at most two runs and the tip is the commit that tests. A group keyed
+# by sha ran every merge in full: the runs piled up against the PR runs and
+# main never settled. Cancelling the running main run instead starves main:
+# merges land faster than the suite finishes, so no main run ever completes.
+# The repo is user-owned, so GitHub has no merge queue for it: this coalesced
+# main run and the fno merge queue are the batch that runs every lane.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -62,41 +67,45 @@ on:
   schedule:
     - cron: '17 9 * * *'
 
+# Every workflow's Linux jobs pin ubuntu-24.04. On 2026-10-25 ubuntu-latest
+# moved to 26.04, and its runners hit "Disk quota exceeded" under this
+# suite's /tmp load: the mux heal and server-start tests and the persistence
+# stress build failed there and passed on 24.04 at the same code.
 jobs:
   real-codex-0145:
-    runs-on: ubuntu-latest
-    # Widest of 40 passing runs sampled 2026-09-24: 0.5m.
-    timeout-minutes: 5
+    needs: [pr-affected]
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
+    runs-on: ubuntu-24.04
+    # The codex converge engine is Rust now: this builds the fno-agents
+    # library and one integration test, a cold compile the old 0.5m Python
+    # job never paid. Sized like hook-latency's cold build.
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
         with:
-          python-version: "3.12"
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
       - name: Install Codex 0.145
         run: npm install -g @openai/codex@0.145.0
-
-      - name: Sync CLI
-        working-directory: cli
-        run: uv sync
 
       - name: Real Codex 0.145 plugin boundary
         env:
           FNO_REAL_CODEX_PLUGIN_TEST: "1"
-        run: cli/.venv/bin/fno-py doctor test -q cli/tests/integration/test_codex_plugin_real_boundary.py
+        run: cargo test --locked --manifest-path crates/fno-agents/Cargo.toml --test codex_converge_real -- --nocapture
 
   # Sizes the changed-smoke ceiling from the packet the selector maps. The
   # packet scales with the diff, so a fixed cap either starves a large rebase
@@ -106,8 +115,11 @@ jobs:
   # the raw estimate and the ceiling applied.
   changed-packet-size:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    # The sizer builds fno-agents from a cold cache when the fleet loads the
+    # runners; 5 minutes cut that build off mid-compile and read as a
+    # selector regression.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -124,13 +136,16 @@ jobs:
         with:
           version: "latest"
 
+      - name: Provision the native test command
+        uses: ./.github/actions/smoke-setup
+
       - name: Estimate the packet
         id: estimate
         env:
           CHANGED_BASE: ${{ github.event.pull_request.base.sha }}
           CHANGED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          est="$(uv run --project cli fno-py doctor test smoke --changed \
+          est="$("$FNO_AGENTS_FRONT" test-run doctor smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" --list 2>/dev/null \
             | sed -n 's/.*changed-estimate minutes=\([0-9][0-9]*\).*/\1/p' \
             | tail -1)"
@@ -160,13 +175,8 @@ jobs:
           # split left the heaviest slice dying 7 more times while its
           # siblings stayed green, so the packet spreads thinner still: a leg
           # prices roughly est/10 (eight legs at est 72; a packet at est 10
-          # or under keeps today's single-leg shape). 13 legs is the full
-          # lane's ceiling.
+          # or under keeps today's single-leg shape). 13 legs is the ceiling.
           shards=$(( (est + 9) / 10 ))
-          # TEMPORARY bisect probe (revert before merge): this PR's leg 5 died
-          # 3x at a fixed point, the 2026-10-05 volume signature. Force the
-          # full lane's 13-leg ceiling to test volume-not-content in one run.
-          shards=13
           [ "$shards" -gt 13 ] && shards=13
           [ "$shards" -lt 1 ] && shards=1
           shard_array="$(python3 -c "print('[' + ','.join(str(i) for i in range(1, $shards + 1)) + ']')")"
@@ -183,15 +193,19 @@ jobs:
       shard_count: ${{ steps.estimate.outputs.shard_count }}
       shard_array: ${{ steps.estimate.outputs.shard_array }}
 
-  # The Rust selector owns lane routing. A PR selects every full lane main
-  # runs; only the PR-only bundle freshness job depends on the diff.
+  # The Rust selector owns lane routing. Main, the nightly and an unreadable
+  # diff select every lane. A PR diff confined to crates/ selects its cargo
+  # lanes (fno-agents only skips the mux lanes) and the smoke-seam leg in
+  # place of the full Python shards.
   pr-affected:
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      cargo: ${{ steps.select.outputs.cargo }}
+      cargo_agents: ${{ steps.select.outputs.cargo_agents }}
+      cargo_mux: ${{ steps.select.outputs.cargo_mux }}
       python_full: ${{ steps.select.outputs.python_full }}
+      python_seam: ${{ steps.select.outputs.python_seam }}
       skill_bundles: ${{ steps.select.outputs.skill_bundles }}
     steps:
       - name: Checkout
@@ -222,8 +236,8 @@ jobs:
     name: Skill bundles freshness
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.skill_bundles == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -231,18 +245,32 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # uv is the generator's fallback route to PyYAML.
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: "0.12.20"
       - name: Install PyYAML
         run: python3 -m pip install --quiet "pyyaml>=6"
-      # The generator fail-closes when it cannot verify pack manifests through
-      # the in-tree fno-py (`uv run --project cli`); without uv the job dies
-      # refusing every pack, never green.
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      # Pack verify is native (`fno-agents spawn-overlay plugins verify`), so
+      # the generator needs a binary built from this checkout. Without one
+      # every pack refuses.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Build fno-agents
+        run: cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
       - name: Run the bundle freshness check
+        env:
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
         run: bash scripts/lint/check-skill-bundles-fresh.sh
 
   # Early, explicitly partial feedback. It runs BESIDE the canonical smoke job,
@@ -257,7 +285,7 @@ jobs:
   changed-smoke:
     if: github.event_name == 'pull_request'
     needs: [changed-packet-size]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Each leg is a fresh runner carrying 1/N of the packet (see the sizer's
     # shard sizing). fail-fast false: one leg's kill must not cancel its
     # siblings - rerunning only the dead leg is the cheap recovery.
@@ -327,7 +355,7 @@ jobs:
             exit 0
           fi
           set +e
-          uv run --project cli fno-py doctor test smoke --changed \
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" \
             --shard "${{ matrix.shard }}/${{ needs.changed-packet-size.outputs.shard_count }}"
           rc=$?
@@ -408,9 +436,13 @@ jobs:
   # true. `Sync + build` deliberately runs in every leg: it costs about 3s and
   # removes any question of whether pytest can rely on `uv build`.
   #
-  # The 10-way run hit the 12-minute step cap at 724s with tests at 86%. Split
-  # to thirteen; keep both caps fixed. The rest lane stays at four because its
-  # measured legs finish below the cap.
+  # The 10-way run hit the 12-minute step cap at 724s with tests at 86%, so the
+  # lane went to thirteen legs. The suite then shrank: on 2026-10-22 the
+  # thirteen pytest steps ran 46 to 119s each (about 1000s in all), behind
+  # about 310s of provisioning and front build per leg. Every leg also holds
+  # a runner while the fleet queues, so the lane came back to four legs. A leg
+  # count pays its setup once per leg: split again only when a leg's step
+  # nears the cap, and merge legs when the steps fall far below it.
   # If a shard approaches the step cap below, split again or cut work. Do not
   # raise either cap.
   # A hang must stay cheap: the per-test ceiling and every timeout marker stay
@@ -422,10 +454,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-    runs-on: ubuntu-latest
-    # The latest two-leg main run measured 27m35s for pytest. Eight legs were not
-    # enough for the current tree, so thirteen matrix legs share the work.
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-24.04
     # Keep the 12-minute shard cap and 15-minute job backstop.
     timeout-minutes: 15
     steps:
@@ -445,7 +475,7 @@ jobs:
         # relink seconds.
         run: cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
 
-      - name: "Smoke shard: pytest (${{ matrix.shard }}/13)"
+      - name: "Smoke shard: pytest (${{ matrix.shard }}/4)"
         # The step carries its own cap so a hang dies on the clock that can
         # name it: a step-level timeout-minutes kill reports `failure`, where a
         # job-level kill reports `cancelled` - the same word a superseding push
@@ -466,7 +496,7 @@ jobs:
         # pass it here.
         #
         # The test/lint steps live in the code-owned `fno doctor test smoke`
-        # runner (cli/src/fno/test_cmd.py) so "run what CI runs" is one command
+        # runner (crates/fno-agents/src/test_smoke_registry.rs) so "run what CI runs" is one command
         # and local/CI parity is structural. A bare `fno doctor test smoke` with
         # no selector still runs every step; the shards are a CI concern only.
         #
@@ -491,11 +521,11 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-pytest-${{ matrix.shard }} "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          uv run --project cli fno-py doctor test smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/13
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
 
   slow-e2e:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The real-pane test rebuilds both native binaries; its separate 144s cap
     # names the slow step while this bounds setup and the Cargo work around it.
     timeout-minutes: 15
@@ -509,7 +539,7 @@ jobs:
       - name: Run the slow pane lane
         env:
           FNO_PYTEST_SHARD: "1/1"
-        run: uv run --project cli fno-py doctor test --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
+        run: $FNO_AGENTS_FRONT test-run doctor --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
 
   smoke-rest:
     needs: [pr-affected]
@@ -518,7 +548,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 15 killed the heaviest shard at 15m15s on four consecutive 2026-09-09
     # runs, and 25 was still not enough, when a Rust-source change put a
     # workspace cargo rebuild in the shard's path; the other three shards
@@ -532,6 +562,16 @@ jobs:
 
       - name: Provision the smoke runner
         uses: ./.github/actions/smoke-setup
+
+      # Positive probe over the checked-in graduation registry. Every decision
+      # in REGISTERED_GRADUATION_PROBES claims a shipped enforcement artifact;
+      # this re-measures that claim, so deleting the enforcement a retired
+      # ruling rests on turns red here instead of silently un-retiring it.
+      # BEFORE the smoke shard: the probe's pytest drives the dev fno-agents
+      # binary, and the shard's pytest lane scrubs that binary by design - a
+      # post-smoke placement probed a dead path and red every shard.
+      - name: Decision graduation probes
+        run: uv run --project cli python scripts/ci/check-decision-graduation.py
 
       - name: "Smoke shard: everything except pytest (${{ matrix.shard }}/4)"
         # Same trap, same reason as the pytest shard above.
@@ -556,7 +596,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-rest-${{ matrix.shard }} "$(( SECONDS - start ))" 30 || true' EXIT
           : "$start"
-          uv run --project cli fno-py doctor test smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
 
       # Static dead-import guard: a module move down a layer can leave
       # test-only callers on the old `from fno.agents import moved` path that
@@ -567,12 +607,30 @@ jobs:
       - name: Dead import paths (module-move guard)
         run: bash scripts/ci/check-import-paths.sh
 
-      # Positive probe over the checked-in graduation registry. Every decision
-      # in REGISTERED_GRADUATION_PROBES claims a shipped enforcement artifact;
-      # this re-measures that claim, so deleting the enforcement a retired
-      # ruling rests on turns red here instead of silently un-retiring it.
-      - name: Decision graduation probes
-        run: uv run --project cli python scripts/ci/check-decision-graduation.py
+  # A crates-only PR skips the full Python shards, but the Python suite
+  # reaches Rust through the native doors. This leg runs the registry's seam
+  # steps (the @requires_rust parity suites, the keyless smoke, the heal
+  # harness) with the binaries built. Main still runs the full shards.
+  smoke-seam:
+    needs: [pr-affected]
+    if: ${{ !cancelled() && needs.pr-affected.outputs.python_seam == 'true' }}
+    runs-on: ubuntu-24.04
+    # Same 12-minute step cap and 15-minute backstop as a pytest shard.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Provision the smoke runner
+        uses: ./.github/actions/smoke-setup
+
+      - name: "Smoke seam: Rust/Python seam steps"
+        timeout-minutes: 12
+        run: |
+          start=$SECONDS
+          trap 'bash scripts/ci/smoke-duration-report.sh smoke-seam "$(( SECONDS - start ))" 12 || true' EXIT
+          : "$start"
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Build fno-agents debug binary*,Build the fno front door*,Scoped @requires_rust*,Keyless*,registry-miss heal*'
 
   # Keeps the required check named `smoke`. Branch protection and the review
   # gate key on that exact name, so publishing only `smoke-pytest` and
@@ -590,11 +648,12 @@ jobs:
   # does not make the run cancelled, so the gate still runs and still blocks.
   #
   # Each shard must pass unless the PR selector deliberately skipped the full
-  # Python lane. Cancelled and unexpected skipped results still block.
+  # Python lane. smoke-seam must pass whenever the selector chose it. Cancelled
+  # and unexpected skipped results still block.
   smoke:
-    needs: [pr-affected, smoke-pytest, smoke-rest]
+    needs: [pr-affected, smoke-pytest, smoke-rest, smoke-seam]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # These result checks stay in a short aggregator. A cap this tight is a
     # real alarm on a job that can
     # only ever hang, and this whole change exists because a job outran its
@@ -618,23 +677,36 @@ jobs:
             echo "$1 outran the job-level timeout-minutes cap; the run was never cancelled."
             echo "Read the shard's smoke-duration line: the EXIT trap prints it on every exit, with seconds and verdict."
           }
-          echo "smoke-pytest=${{ needs.smoke-pytest.result }} smoke-rest=${{ needs.smoke-rest.result }}"
+          echo "pr-affected=${{ needs.pr-affected.result }} smoke-pytest=${{ needs.smoke-pytest.result }} smoke-rest=${{ needs.smoke-rest.result }} smoke-seam=${{ needs.smoke-seam.result }}"
           capped smoke-pytest "${{ needs.smoke-pytest.result }}"
           capped smoke-rest "${{ needs.smoke-rest.result }}"
+          # A cancelled selector (queue-storm cancellation, or its own job
+          # cap) leaves every output empty: the shards skip on `== 'true'`,
+          # and this aggregator used to read that as red with zero real
+          # failures. An empty output alongside a cancelled pr-affected now
+          # reads as lane-off. A FAILED selector stays red on purpose: it
+          # broke, so nobody measured anything.
           [ "${{ needs.smoke-pytest.result }}" = "success" ] || {
             [ "${{ needs.smoke-pytest.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.smoke-rest.result }}" = "success" ] || {
             [ "${{ needs.smoke-rest.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+          } || exit 1
+          [ "${{ needs.smoke-seam.result }}" = "success" ] || {
+            [ "${{ needs.smoke-seam.result }}" = "skipped" ] \
+              && { [ "${{ needs.pr-affected.outputs.python_seam }}" != "true" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 
   # TODO: graduate to blocking in the next release - remove continue-on-error
   prompt-drift:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Widest of 40 passing runs sampled 2026-09-24: 0.2m.
     timeout-minutes: 5
     continue-on-error: true
@@ -666,8 +738,8 @@ jobs:
   hook-latency:
     name: per-turn hook latency budgets
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
+    runs-on: ubuntu-24.04
     # Widest of 14 passing runs sampled 2026-09-24: 6.9m. The release build
     # of fno-agents outgrew the 10m cap on cold runners once the crate grew
     # the native decisions listing, and the job died inside cargo before any
@@ -718,7 +790,7 @@ jobs:
           enable-cache: true
       - name: Build native fno (Python guard rows)
         # The Python guards commit their guard_decision rows through the
-        # native `fno doctor event emit-envelope` verb. Without this binary
+        # native `fno doctor event emit-envelope` command. Without this binary
         # the rows are dropped (best-effort by contract) and the dispatch
         # fixture sees only the Rust guards' rows. The compiled deps come
         # from the cached build base, so this pays mostly the final link.
@@ -726,7 +798,7 @@ jobs:
       - name: Generated copies match their sources
         run: |
           (cd cli && uv run fno-py doctor harness-matrix --write)
-          awk -F'\t' '!/^#/ && ($3 ~ /^cargo build --manifest-path crates\/fno-agents/ || $3 ~ /harness-matrix --write/) && $1 != "docs/harnesses/verb-matrix.md" { print $1 }' \
+          awk -F'\t' '!/^#/ && ($3 ~ /^cargo build --manifest-path crates\/fno-agents/ || $3 ~ /harness-matrix --write/) && $1 != "docs/harnesses/command-matrix.md" { print $1 }' \
             generated-artifacts.tsv > "$RUNNER_TEMP/generated-paths.txt"
           cat "$RUNNER_TEMP/generated-paths.txt"
           xargs git diff --exit-code -- < "$RUNNER_TEMP/generated-paths.txt"
@@ -749,8 +821,8 @@ jobs:
   test-agents:
     name: cargo test (fno-agents) + schema parity
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
+    runs-on: ubuntu-24.04
     # This job once held the whole cargo suite, and on 2026-09-17 two runs
     # (main at 37da45e9, PR 2137) that could pass were cancelled at its cap.
     # So the suite shards by crate, as the smoke lane does, instead of
@@ -904,7 +976,7 @@ jobs:
         # regenerates the capability copies, the merge-posture copy,
         # events_limits.toml, and the registry-schema copy on every build;
         # `fno doctor harness-matrix --write` renders the capability doc (and
-        # the verb doc, whose own cheap freshness step lives in guards.yml
+        # the command doc, whose own cheap freshness step lives in guards.yml
         # because it also reads skills/*/SKILL.md). A committed copy that
         # drifted from its source (a hand edit, a forgotten rebuild) shows up
         # here as a dirty tree - which is the wrong-merge class the retired
@@ -918,7 +990,6 @@ jobs:
             crates/fno/src/harness_capabilities.toml \
             cli/src/fno/agents/merge_posture.toml \
             cli/src/fno/graph/page_reload.js \
-            cli/src/fno/agents/spawn_phase.toml \
             cli/src/fno/agents/slot_lanes.toml \
             crates/fno-agents/src/events_limits.toml \
             cli/src/fno/agents/registry_schema.toml \
@@ -993,7 +1064,14 @@ jobs:
           cargo test --test hook_latency hook_sources_stay_small
           cargo test --test test_owned_keeper_reap every_triad_spawning_test_file_declares_its_owner
 
-      - name: cargo test --lib --bins (fno-agents)
+      - name: Install cargo-nextest
+        # One process per test: the fno-agents lib suite's PATH and FNO_HOME mutations become process-local, so the cross-test env races that keep reddening clean branches are structurally impossible instead of lock-guarded. nextest never runs doctests, but plain `cargo test --lib --bins` never ran them either.
+        timeout-minutes: 3
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: cargo nextest --lib --bins (fno-agents)
         id: lib
         working-directory: crates/fno-agents
         env:
@@ -1001,7 +1079,8 @@ jobs:
           CARGO_HOME: /home/runner/.cargo
           RUSTUP_HOME: /home/runner/.rustup
           FNO_TEST_HERMETIC: "0"
-        run: cargo test --lib --bins --no-fail-fast
+        # --no-fail-fast keeps the old contract: nextest stops scheduling new tests after a failure by default, and the suite must run whole.
+        run: cargo nextest run --lib --bins --no-fail-fast
 
       - name: Write-gate shell test (relay + state-root policy)
         # The Rust unit tests cover refuse_for's verdicts; this runs the real
@@ -1020,13 +1099,13 @@ jobs:
 
   test-agents-integration:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
     name: cargo test integration (fno-agents) ${{ matrix.shard }}/4
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The real-process integration tests run apart from test-agents, in
     # four shards split by test name (scripts/ci/cargo-test-shard.sh). One
     # job used to run them all serially, and one binary, tests/loop_check.rs,
@@ -1037,12 +1116,22 @@ jobs:
     # and tests/common spawn bare python3 (yaml, psutil), the claim parity
     # harness imports through cli/.venv, blueprint_judge shells rg, and the
     # real-process tests spawn both built binaries. The aggregator reads
-    # the matrix as one verdict. On a slow runner image a shard's quarter
-    # of the tests plus the build lands near 20 minutes; the cap leaves
+    # the matrix as one verdict. On 2026-10-24 shard 1 ran 22 minutes of
+    # tests after a 2.5 minute disk step, and the cache save after them
+    # pushed it past a 30 minute cap with every test green. The cap leaves
     # room above that.
-    timeout-minutes: 30
+    timeout-minutes: 40
+    # On 2026-10-27 shards still ran out of disk after the disk step, and
+    # the runner died before its log uploaded, so the size is unmeasured.
+    # Cut the two large parts of a debug target dir: full debug info and
+    # the incremental cache. cargo-test-shard.sh prints df after the build.
+    # Line tables keep file:line in a panic backtrace. DEV and TEST must
+    # match, or cargo builds every dependency twice.
     env:
       FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
     steps:
       - name: Checkout
@@ -1055,9 +1144,20 @@ jobs:
           echo "FNO_HOME=$RUNNER_TEMP/fno" >> "$GITHUB_ENV"
           echo "FNO_AGENTS_HOME=$RUNNER_TEMP/fno-agents" >> "$GITHUB_ENV"
 
+      # Every shard links every tests/*.rs binary, and on 2026-10-24 two
+      # shards on two PRs died with "No space left on device" before a
+      # test failed. The image's unused toolchains are about 25 GB.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium
+          df -h /
+
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Its own key: the other cargo jobs cache full debug artifacts, and a
+      # restore of those would sit beside this job's rebuilt ones.
       - name: Cache Cargo registry + build artifacts
         uses: actions/cache@v5
         with:
@@ -1067,9 +1167,9 @@ jobs:
             ~/.cargo/build
             crates/fno-agents/target
             crates/fno/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-itest-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-itest-
 
       - name: Install ripgrep (gather_context's sibling-caller grep)
         timeout-minutes: 3
@@ -1110,6 +1210,10 @@ jobs:
         run: cargo build --bin fno-agents
 
       - name: cargo test --test '*' --test-threads=1 (fno-agents real-process integration)
+        # Under the job's own cap: a job cancelled at its cap keeps no log,
+        # while a step that times out keeps it, and with one test thread
+        # the last "test <name> ..." line names the test that hung.
+        timeout-minutes: 28
         env:
           HOME: ${{ runner.temp }}/fno-test-home
           CARGO_HOME: /home/runner/.cargo
@@ -1119,9 +1223,9 @@ jobs:
 
   test-mux:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_mux == 'true' }}
     name: cargo test (fno mux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Three recent green runs put the combined job at 885s, 889s, and 891s.
     # Its lib/bin step was 109-116s and serial integration 612-620s. Split the
     # 38 integration test binaries by observed runtime. The 15m cap died at
@@ -1202,48 +1306,11 @@ jobs:
           --test board_menu_keys_e2e --test squad_prune_live_pane
           --test server_axis_alias_e2e --test server_spine -- --test-threads=1
 
-  test-mux-workspace:
-    needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
-    name: workspace standalone journey
-    runs-on: ubuntu-latest
-    # Keep the real-binary conformance journey separate from the serial mux
-    # suite; both retain explicit bounds and the aggregate requires both.
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo registry + build artifacts
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/build
-            crates/fno-agents/target
-            crates/fno/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Clean cached Rust package artifacts
-        run: |
-          cargo clean -p fno --manifest-path crates/fno/Cargo.toml
-          cargo clean -p fno-agents --manifest-path crates/fno-agents/Cargo.toml
-
-      - name: Workspace standalone journey
-        run: bash tests/mux-workspace-standalone.sh
-
   test-mux-integration:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_mux == 'true' }}
     name: cargo test integration (fno mux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Companion half of the measured test-binary split. A 15m cap cancelled
     # the job at 15m17s on two consecutive main runs with every finished test
     # passing, so the full serial suite needs more than 15. 25 keeps headroom
@@ -1301,9 +1368,9 @@ jobs:
 
   test:
     name: cargo test + schema parity
-    needs: [pr-affected, test-agents, test-agents-integration, test-mux, test-mux-integration, test-mux-workspace]
+    needs: [pr-affected, test-agents, test-agents-integration, test-mux, test-mux-integration]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The check name this workflow has always reported, now an aggregator over
     # the crate shards (the x-5b73 smoke shape: shards carry the work and
     # their own caps; this job exists so the world still reads one cargo
@@ -1313,31 +1380,36 @@ jobs:
     steps:
       - name: All shards passed
         run: |
-          echo "test-agents=${{ needs.test-agents.result }} test-agents-integration=${{ needs.test-agents-integration.result }} test-mux=${{ needs.test-mux.result }} test-mux-integration=${{ needs.test-mux-integration.result }} test-mux-workspace=${{ needs.test-mux-workspace.result }}"
+          echo "pr-affected=${{ needs.pr-affected.result }} test-agents=${{ needs.test-agents.result }} test-agents-integration=${{ needs.test-agents-integration.result }} test-mux=${{ needs.test-mux.result }} test-mux-integration=${{ needs.test-mux-integration.result }}"
+          # A cancelled selector (queue-storm cancellation, or its own job
+          # cap) leaves every output empty: the shards skip on `== 'true'`,
+          # and this aggregator used to read that as red with zero real
+          # failures. An empty output alongside a cancelled pr-affected now
+          # reads as lane-off. A FAILED selector stays red on purpose: it
+          # broke, so nobody measured anything.
           [ "${{ needs.test-agents.result }}" = "success" ] || {
             [ "${{ needs.test-agents.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-agents-integration.result }}" = "success" ] || {
             [ "${{ needs.test-agents-integration.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux.result }}" = "success" ] || {
             [ "${{ needs.test-mux.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux-integration.result }}" = "success" ] || {
             [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
-          } || exit 1
-          [ "${{ needs.test-mux-workspace.result }}" = "success" ] || {
-            [ "${{ needs.test-mux-workspace.result }}" = "skipped" ] \
-              && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 
   # Selection half of the paint-artifact pair. Runs the same read the merge
@@ -1350,7 +1422,7 @@ jobs:
   # explicit lever for that case.
   paint-paths:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read

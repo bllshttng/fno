@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # footnote Plugin - API Reference
 
 The **footnote** plugin is an autonomous development workflow for Claude Code that takes features from idea to shipped PR. It provides 24 skills, 17 agents, and a hook system that work together as a pipeline: think, plan, execute, review, ship.
@@ -145,7 +145,7 @@ Configuration, analysis, and operational tools.
 | `setup` | `/fno:setup` | Interactive config.toml configuration wizard |
 | `ship-docs` | `/fno:ship-docs` | Architecture documentation generation |
 
-Two former skills are now CLI verbs: `fno doctor codemap` (AST-based structural analysis with PageRank: god nodes, orphans, module boundaries) and `fno agents workspace worktree` (worktree lifecycle: status, cleanup, archive).
+Two former skills are now CLI commands: `fno doctor codemap` (AST-based structural analysis with PageRank: god nodes, orphans, module boundaries) and `fno agents workspace worktree` (worktree lifecycle: status, cleanup, archive).
 
 #### Multi-repo features
 
@@ -382,7 +382,7 @@ For the full field list see [architecture/control-plane-loop.md](architecture/co
 
 #### Completion (external truth, not gates)
 
-There are no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees: a PR exists, CI is green, every required bot has reviewed, plus a budget ceiling. That decision is made by the read-only `fno-agents loop-check` verb (see [architecture/control-plane-loop.md](architecture/control-plane-loop.md)); terminal side effects (ledger record, plan stamp/graduate, handoff) are written by `fno-agents finalize`. The `<promise>` tag signals the agent's belief that work is complete; the loop only terminates when `loop-check` confirms it against the world.
+There are no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees: a PR exists, CI is green, every required bot has reviewed, plus a budget ceiling. That decision is made by the read-only `fno-agents loop-check` command (see [architecture/control-plane-loop.md](architecture/control-plane-loop.md)); terminal side effects (ledger record, plan stamp/graduate, handoff) are written by `fno-agents finalize`. The `<promise>` tag signals the agent's belief that work is complete; the loop only terminates when `loop-check` confirms it against the world.
 
 ### STATE.md
 
@@ -516,7 +516,7 @@ When execution agents encounter issues not covered by the plan:
 
 ## Installation
 
-Release installs (marketplace plugin, `fno.sh`, `uv`, Homebrew) are covered in the [README](../README.md) and [getting started](getting-started.md). The forms below are for developing footnote from a clone - they are not the supported release channels.
+Release installs (marketplace plugin, `fno.sh`, `uv`, Homebrew) are covered in the [README](../README.md) and [install](install.md). The forms below are for developing footnote from a clone - they are not the supported release channels.
 
 ### Development Mode (recommended)
 
