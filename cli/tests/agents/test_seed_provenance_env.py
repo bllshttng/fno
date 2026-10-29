@@ -65,7 +65,7 @@ def test_an_absent_sidecar_is_cleared_not_merely_omitted():
 def test_the_env_floor_clears_an_inherited_sidecar():
     """The clear lives at the shared floor every adapter's child env crosses, so
     an adapter cannot decline it and the next one cannot forget it."""
-    from fno.setup.github_cli import worker_environment
+    from fno.harness_identity import worker_environment
 
     out = worker_environment(_sidecar())
     assert not any(k in out for k in SEED_PROVENANCE_KEYS)

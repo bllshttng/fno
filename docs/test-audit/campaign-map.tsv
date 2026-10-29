@@ -15,7 +15,6 @@ K1	cli/tests/hooks/test_operator_capture_nudge.py	py	5
 K1	cli/tests/hooks/test_recursive_grep_guard.py	py	12
 K1	cli/tests/hooks/test_register_session_start.py	py	6
 K1	cli/tests/hooks/test_session_start_plugin_root.py	py	3
-K1	cli/tests/integration/test_doctor.py	py	14
 K1	cli/tests/integration/test_doctor_reads_back.py	py	22
 K1	cli/tests/integration/test_install_frontdoor_journey.py	py	1
 K1	cli/tests/integration/test_law_skill_contract.py	py	2
@@ -69,8 +68,6 @@ K1	cli/tests/unit/test_config_agents_gate.py	py	9
 K1	cli/tests/unit/test_config_agents_single_flight.py	py	2
 K1	cli/tests/unit/test_config_chain.py	py	2
 K1	cli/tests/unit/test_config_doctor_deprecated.py	py	6
-K1	cli/tests/unit/test_config_doctor_routing.py	py	6
-K1	cli/tests/unit/test_config_doctor_state_roots.py	py	3
 K1	cli/tests/unit/test_config_get.py	py	10
 K1	cli/tests/unit/test_config_handoff.py	py	3
 K1	cli/tests/unit/test_config_lead_trigger.py	py	3
@@ -948,7 +945,6 @@ K6	cli/tests/unit/test_cli_wrappers_review_fixes.py	py	4
 K6	cli/tests/unit/test_config_auto_merge.py	py	10
 K6	cli/tests/unit/test_config_deep_merge.py	py	11
 K6	cli/tests/unit/test_config_post_merge.py	py	18
-K6	cli/tests/unit/test_config_post_merge_activity.py	py	2
 K6	cli/tests/unit/test_config_review.py	py	70
 K6	cli/tests/unit/test_config_reviewers.py	py	28
 K6	cli/tests/unit/test_decisions_in_db.py	py	1
@@ -999,7 +995,6 @@ K6	cli/tests/unit/test_outstanding.py	py	102
 K6	cli/tests/unit/test_outstanding_day.py	py	4
 K6	cli/tests/unit/test_outstanding_mine.py	py	9
 K6	cli/tests/unit/test_post_merge_inbox_idempotency.py	py	9
-K6	cli/tests/unit/test_post_merge_readiness.py	py	18
 K6	cli/tests/unit/test_pr_attestation.py	py	11
 K6	cli/tests/unit/test_pr_base_check.py	py	10
 K6	cli/tests/unit/test_pr_cli.py	py	24

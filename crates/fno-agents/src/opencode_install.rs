@@ -7,7 +7,7 @@
 //! nothing outside the manifest is ever removed, and a file the user edited
 //! is kept and named, never destroyed.
 //!
-//! Python's opencode arm (`cli/src/fno/setup/integration.py`) was ported
+//! The Python opencode arm, now deleted, was ported
 //! here; the setup wizard and `fno doctor` read this module's JSON receipts
 //! through the fno-agents door.
 
