@@ -13,12 +13,10 @@ Coverage:
 from __future__ import annotations
 
 import pytest
-from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
 from fno.agents.harnesses import claude as claude_mod
 from fno.agents.harnesses.claude import resolve_session_uuid_at_spawn
-from fno.agents.registry import load_registry
 
 
 # ---------------------------------------------------------------------------
@@ -68,29 +66,3 @@ def workdir_claude(tmp_path, monkeypatch):
     install_fake_claude(bin_dir)
     monkeypatch.setenv("PATH", str(bin_dir))
     return tmp_path
-
-
-def test_spawn_claude_persists_resolved_uuid(workdir_claude, monkeypatch) -> None:
-    """AC1-HP: a claude spawn whose jobId resolves persists both the short-id
-    and the full claude_session_uuid on the registry row."""
-    from fno.agents.cli import agents_app
-
-    # Override the autouse stub: resolve the fake's jobId to a full UUID. The
-    # file-layout read itself is unit-tested in _claude_session_registry's own
-    # suite; here we prove the create path persists whatever it resolves.
-    full_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    monkeypatch.setattr(claude_mod, "resolve_session_uuid", lambda short_id: full_uuid)
-
-    result = CliRunner().invoke(
-        agents_app,
-        ["spawn", "--name", "uuid-agent", "-H", "claude", "hello"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    entry = next((e for e in load_registry() if e.name == "uuid-agent"), None)
-    assert entry is not None, "registry row must exist after claude spawn"
-    assert entry.short_id == "7c5dcf5d"
-    assert entry.harness_session_id == full_uuid
-
-

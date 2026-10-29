@@ -1,9 +1,8 @@
 """Spawn gate : global concurrency cap + free-RAM floor + queue loop.
 
-Called at the top of ``cmd_spawn`` before the substrate fan-out. Mirrors
-``crates/fno-agents/src/spawn_gate.rs`` — the two gates sit on mutually
-exclusive execution paths (the front door execs the binary for bg/headless;
-the Rust ``pane`` arm re-execs this CLI), so every spawn passes exactly one.
+Called by ``dispatch_spawn`` (mail wake) before it launches. Mirrors
+``crates/fno-agents/src/spawn_gate.rs``, which gates every ``fno agents spawn``;
+the two sit on separate paths, so every spawn passes exactly one.
 
 The gate is READ-ONLY: the ``max_live`` slot cap counts fno registry rows
 (worker provenance) and the RAM floor reads real system RAM. The claude daemon
@@ -16,7 +15,6 @@ refuses, never assumes zero.
 from __future__ import annotations
 
 import contextvars
-import json
 import os
 import sys
 import time
@@ -68,29 +66,7 @@ EXIT_GATE_UNAVAILABLE = 87
 EXIT_NODE_OCCUPIED = 92
 
 
-#: The refusal reasons a caller may outlast by retrying (spawn --wait). Owned
-#: HERE because these tokens are the gate's vocabulary; the CLI imports this
-#: set rather than re-spelling it. no_wait/no_wait_mutex_held surface only
-#: when an attempt runs no_wait (spawn --wait forces that), so the CLI
-#: deadline - not this gate's 600s queue - bounds the wait.
-WAITABLE_REFUSAL_REASONS = frozenset(
-    {
-        "ram_floor", "swap_pressure",
-        "cpu_instrument_unreadable",
-        "cpu_share_undecidable", "fleet_cpu_share", "provider_cap",
-        "max_live", "no_wait", "no_wait_mutex_held",
-    }
-)
-
-QUEUE_POLL_S = 2.0
-QUEUE_PROGRESS_EVERY_S = 30.0
 QUEUE_TIMEOUT_S = 600.0
-#: LD4: hold re-sample gap and admission debounce (the macOS `ps`
-#: CPU column is a decaying average; two reads 2s apart are one sample).
-CPU_HOLD_POLL_S = 15.0
-CPU_ADMIT_SAMPLES = 2
-#: : a slow bg-socket census names its own wait instead of silence.
-SLOW_SCAN_WARN_S = 5.0
 #: The mutex claim key. Prefixed so the native leg routes it to the global
 #: root the gate writes; the old colon-less `spawn-gate` key unrouted, so
 #: `claim status`/`release --force` read `<space>/claims/spawn-gate.lock`
@@ -114,16 +90,6 @@ def _warn(msg: str) -> None:
 # ---------------------------------------------------------------------------
 # Layer 2: available RAM
 # ---------------------------------------------------------------------------
-
-def available_ram_gb() -> Optional[float]:
-    """Available system RAM in GB, or None when unreadable (guard skipped)."""
-    try:
-        import psutil
-
-        return psutil.virtual_memory().available / (1024.0**3)
-    except Exception:
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Layer 1: the union live-count
@@ -733,55 +699,3 @@ def qos_wrap(argv: list[str]) -> list[str]:
         return ["/usr/bin/nice", "-n", "10"] + argv
     return argv
 
-
-def qos_demote_pid(pid: int) -> None:
-    """Best-effort post-hoc demotion of an already-running pid. Non-fatal."""
-    if not _qos_enabled():
-        return
-    import subprocess
-
-    if sys.platform == "darwin":
-        cmd = ["/usr/sbin/taskpolicy", "-b", "-p", str(pid)]
-    elif sys.platform.startswith("linux"):
-        cmd = ["/usr/bin/renice", "10", "-p", str(pid)]
-    else:
-        return
-    try:
-        rc = subprocess.run(
-            cmd, capture_output=True, timeout=10, check=False
-        ).returncode
-        if rc != 0:
-            raise RuntimeError(f"exit {rc}")
-    except Exception:
-        _warn(f"spawn-gate note: QoS demotion of pid {pid} failed (non-fatal)")
-
-
-def qos_demote_bg_worker(job_id: str, *, poll_s: float = 10.0) -> None:
-    """After a ``--substrate thread`` dispatch, poll the roster briefly for the
-    new worker's pid and demote it post-hoc. ``job_id`` is the claude bg jobId
-    (the registry ``short_id``). Bounded; one warning on miss."""
-    if not job_id or not _qos_enabled():
-        return
-    deadline = time.monotonic() + poll_s
-    while True:
-        try:
-            raw = json.loads(_roster_path().read_text(encoding="utf-8"))
-            workers = raw.get("workers", {}) if isinstance(raw, dict) else {}
-            for w in workers.values():
-                if not isinstance(w, dict):
-                    continue
-                sid = str(w.get("sessionId") or "")
-                if sid.split("-")[0] == job_id and isinstance(
-                    w.get("pid"), int
-                ):
-                    qos_demote_pid(w["pid"])
-                    return
-        except Exception:
-            pass
-        if time.monotonic() >= deadline:
-            _warn(
-                f"spawn-gate note: bg worker {job_id} pid not in roster "
-                f"within {int(poll_s)}s; QoS demotion skipped (non-fatal)"
-            )
-            return
-        time.sleep(0.5)

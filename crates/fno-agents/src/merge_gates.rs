@@ -121,38 +121,53 @@ pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64) -> Option<String>
 }
 
 /// Every PR number a graph row carries: the persisted `pr_number` field plus
-/// the `additional_prs` entries (typed rows carry `{number}` or `{url}`
-/// objects; legacy rows carry bare ints or `/pull/<n>` URL strings). A
-/// contract dependent whose PR is recorded only in `additional_prs` must
-/// still be found or the gate is bypassed.
+/// the `additional_prs` entries. A contract dependent whose PR is recorded
+/// only in `additional_prs` must still be found or the gate is bypassed.
 fn pr_numbers_of(entry: &Value) -> Vec<u64> {
+    pr_refs_of(entry).into_iter().map(|r| r.number).collect()
+}
+
+/// One PR a graph row records, with the URL it names when it names one.
+pub(crate) struct PrRef {
+    pub(crate) number: u64,
+    pub(crate) url: Option<String>,
+    pub(crate) primary: bool,
+}
+
+/// Every PR ref a graph row carries: `pr_number` with its `pr_url`, then the
+/// `additional_prs` entries (typed rows carry `{number}` or `{url}` objects;
+/// legacy rows carry bare ints or `/pull/<n>` URL strings).
+pub(crate) fn pr_refs_of(entry: &Value) -> Vec<PrRef> {
     let mut out = Vec::new();
+    let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_owned);
     if let Some(n) = entry.get("pr_number").and_then(Value::as_u64) {
-        out.push(n);
+        out.push(PrRef {
+            number: n,
+            url: text(entry.get("pr_url")),
+            primary: true,
+        });
     }
     if let Some(list) = entry.get("additional_prs").and_then(Value::as_array) {
         for raw in list {
-            match raw {
-                Value::Number(n) => {
-                    if let Some(n) = n.as_u64() {
-                        out.push(n);
-                    }
-                }
+            let (number, url) = match raw {
+                Value::Number(n) => (n.as_u64(), None),
                 Value::Object(o) => {
-                    if let Some(n) = o.get("number").and_then(Value::as_u64) {
-                        out.push(n);
-                    } else if let Some(url) = o.get("url").and_then(Value::as_str) {
-                        if let Some(n) = pull_number_from_url(url) {
-                            out.push(n);
-                        }
-                    }
+                    let url = text(o.get("url"));
+                    let number = o.get("number").and_then(Value::as_u64);
+                    (
+                        number.or_else(|| url.as_deref().and_then(pull_number_from_url)),
+                        url,
+                    )
                 }
-                Value::String(url) => {
-                    if let Some(n) = pull_number_from_url(url) {
-                        out.push(n);
-                    }
-                }
-                _ => {}
+                Value::String(url) => (pull_number_from_url(url), Some(url.clone())),
+                _ => (None, None),
+            };
+            if let Some(number) = number {
+                out.push(PrRef {
+                    number,
+                    url,
+                    primary: false,
+                });
             }
         }
     }
@@ -642,8 +657,9 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         .map(|n| mux_shots(&root, home.as_deref(), n))
         .unwrap_or_default();
     let mut detail = format!(
-        "PR {pr} touches the paint surface the config lists ({}); the user's look is \
-         the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
+        "PR {pr} touches the paint surface the config lists ({}); full CI is held at \
+         this head, and the daemon cancels every run but rust-ci (the shots) until the \
+         look clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
          decision whose rationale attests the chat and whose text names the PR and \
          its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
          --authority role --rationale 'user in chat: <the user's words>'`). Ask via \
@@ -657,8 +673,8 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
              re-read status - the gate files no empty page"
         )),
         (None, _) => detail.push_str(
-            "; no node is bound to this PR (by pr_number), so the page has no shots \
-             key: bind the node, then re-read status",
+            "; no node is bound to this PR (by pr_number or additional_prs), so the \
+             page has no shots key: bind the node, then re-read status",
         ),
         (Some(node), shots) => {
             let short = head.chars().take(8).collect::<String>();
@@ -835,7 +851,7 @@ fn file_visual_question(
 /// Does one changed file match the paint-path list? Two pattern shapes: a
 /// `dir/**` subtree and a bare file name (any directory). `ponytail:` no glob
 /// engine; a mid-pattern `**` or `*` wildcard is added when a config needs it.
-fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
+pub(crate) fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| {
         let p = p.trim();
         if let Some(prefix) = p.strip_suffix("/**") {

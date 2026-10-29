@@ -1421,3 +1421,26 @@ fn reset_filters_returns_every_filter_to_any_and_clears_the_memory() {
     assert_eq!(remembered.sets.len(), 0);
     assert_eq!(remembered.q, None);
 }
+
+#[test]
+fn w_opens_the_command_page_only_where_the_browser_can_reach_it() {
+    use crate::client::org_board::command_url;
+    use crate::web::LiveBridge;
+    let bridge = |base: &str, loopback| {
+        Ok(LiveBridge {
+            base: base.into(),
+            token: "tok".into(),
+            loopback,
+        })
+    };
+    let local = command_url(bridge("http://127.0.0.1:7681", true), false, "bb16");
+    assert_eq!(local.unwrap(), "http://127.0.0.1:7681/command?t=tok");
+    let none = command_url(Err("no web bridge for session s".into()), false, "bb16");
+    assert_eq!(none.unwrap_err(), "no web bridge for session s");
+    let ssh = command_url(bridge("http://127.0.0.1:7681", true), true, "iMac2D2");
+    assert!(ssh
+        .unwrap_err()
+        .contains("loopback of iMac2D2; restart it with --bind 0.0.0.0"));
+    let wide = command_url(bridge("http://127.0.0.1:7681", false), true, "iMac2D2");
+    assert_eq!(wide.unwrap(), "http://iMac2D2:7681/command?t=tok");
+}

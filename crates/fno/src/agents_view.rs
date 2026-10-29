@@ -87,6 +87,8 @@ pub struct RegistryAgent {
     /// overlay, never by `derive_rows` (the registry doc carries no such
     /// fact); absent on every hand-built row.
     pub held_conversation: bool,
+    /// The user pinned this session; only the render-path overlay stamps it.
+    pub pinned: bool,
     /// In-TTL inside-leg badge; `None` = liveness-only. Never a scraped guess.
     pub badge: Option<AgentBadge>,
     pub reason: Option<String>,
@@ -2103,6 +2105,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             exited,
             dnd,
             held_conversation: false,
+            pinned: false,
             badge,
             reason,
             mux,
@@ -2417,6 +2420,7 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             exited: false,
             dnd: false,
             held_conversation: false,
+            pinned: false,
             badge: None,
             reason: None,
             mux: None,
@@ -2512,6 +2516,7 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             exited: false,
             dnd: false,
             held_conversation: false,
+            pinned: false,
             badge: None,
             reason: None,
             mux: None,
@@ -2705,6 +2710,11 @@ mod hold_marks;
 pub(crate) use hold_marks::overlay_hold_marks;
 #[cfg(test)]
 pub(crate) use hold_marks::overlay_hold_marks_at;
+
+mod keep_marks;
+pub(crate) use keep_marks::overlay_keep_marks;
+#[cfg(test)]
+pub(crate) use keep_marks::overlay_keep_marks_at;
 
 #[cfg(test)]
 mod tests {
@@ -4227,6 +4237,7 @@ config_dir = "~/.claude-alt"
             exited,
             dnd: false,
             held_conversation: false,
+            pinned: false,
             badge,
             reason: None,
             mux: None,

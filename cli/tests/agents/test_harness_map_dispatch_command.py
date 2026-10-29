@@ -17,16 +17,6 @@ from fno.agents.harness_map import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _installed_loop_extensions(monkeypatch):
-    """Command-normalization tests are not about the loop gate's install
-    state, which is machine environment: the gate itself is exercised in
-    test_harness_loop_participation.py."""
-    import fno.agents.harness_map as harness_map
-
-    monkeypatch.setattr(harness_map, "_loop_gate_answer", lambda h, c: {"refusal": None})
-
-
 @pytest.mark.parametrize(
     "harness,expected_prefix",
     [

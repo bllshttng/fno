@@ -1,9 +1,9 @@
 """Every ``fno agents spawn`` flag, who owns it, and how its value arrives.
 
 ``fno agents spawn`` carries 44 flags in one namespace, and nothing recorded which of them
-fno actually branches on. This table is that classification; ``fno doctor lint
-spawn-flag-owners`` introspects the live parser against it, so a flag added without a row
-fails in the PR that adds it.
+fno actually branches on. This table is that classification. The parser it classified
+was the Python spawn command, now deleted: the Rust client parses spawn, and nothing yet
+checks its flags against these rows. The Rust front-door cap test still counts them.
 
 Three owners. The distinction is the ``--`` passthrough migration's own precondition: a
 flag fno only forwards is safe to move across the separator, a flag fno branches on is
