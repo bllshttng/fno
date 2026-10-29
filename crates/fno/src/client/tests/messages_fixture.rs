@@ -122,7 +122,15 @@ async fn messages_reply_board_contracts() {
     b.sort_mode = SortMode::Alpha;
     assert_eq!(
         agent_names(&b.tree_rows()),
-        ["candor", "first", "ivy", "maple", "oak", "quill"]
+        [
+            "claude 01a18820",
+            "candor",
+            "first",
+            "ivy",
+            "maple",
+            "oak",
+            "quill"
+        ]
     );
     b.sort_mode = SortMode::Last;
     // The Archive tab lists the reaped agent only (AC15-HP).

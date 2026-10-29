@@ -363,9 +363,6 @@ pub(crate) fn record_at(
     line: &Value,
 ) -> Result<Recorded, String> {
     ensure_ready_at(chats_dir, db, bus)?;
-    if let Some(stray_root) = bus.parent() {
-        fold_stray_chats(chats_dir, stray_root);
-    }
     let kind = line.get("kind").and_then(Value::as_str).unwrap_or("");
     let delivery = line
         .get("delivery")
@@ -521,7 +518,7 @@ fn chat_holds_message(chat_dir: &Path, id: &str) -> bool {
 /// lacks append under the chat lock; the stray dir then moves under
 /// `.folded-chats/`, kept, never deleted. Warn-only: a fold error never
 /// fails the record that triggered it.
-fn fold_stray_chats(chats_dir: &Path, stray_root: &Path) {
+pub(crate) fn fold_stray_chats(chats_dir: &Path, stray_root: &Path) {
     if stray_root == chats_dir {
         return;
     }
