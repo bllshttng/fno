@@ -801,7 +801,7 @@ mod tests {
         impossible.insert("created".into(), json!("2026-02-31"));
         assert!(difficulty_gate_error(&impossible, true)
             .unwrap()
-            .starts_with("cannot read created: 2026-02-31"));
+            .starts_with("cannot read created: '2026-02-31'"));
         assert_eq!(difficulty_gate_error(&impossible, false), None);
     }
 
