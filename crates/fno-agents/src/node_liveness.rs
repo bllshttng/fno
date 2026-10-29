@@ -260,10 +260,12 @@ pub fn run_pass(home: &AgentsHome) -> Result<Value, String> {
     .map_err(|e| e.to_string())?;
     let mut ids: Vec<String> = Vec::new();
     let mut terminal = std::collections::HashSet::new();
+    let mut known = std::collections::HashSet::new();
     for row in &rows {
         let Some(id) = crate::graph_store::entry_id(row) else {
             continue;
         };
+        known.insert(id.to_string());
         if crate::graph_store::is_terminal_entry(row) || row["deferred_at"].is_string() {
             terminal.insert(id.to_string());
         } else if row["status"].as_str() == Some("in_progress") {
@@ -274,7 +276,7 @@ pub fn run_pass(home: &AgentsHome) -> Result<Value, String> {
     ids.extend(reconcile.keys().cloned());
     ids.sort();
     ids.dedup();
-    ids.retain(|id| !terminal.contains(id));
+    ids.retain(|id| known.contains(id) && !terminal.contains(id));
 
     let (witness, _) = crate::claim_commands::default_session_witness();
     let witness: crate::claims::SessionWitness<'_> = &witness;
