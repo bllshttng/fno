@@ -26,9 +26,7 @@ Python is out of scope by the standing no-new-Python ruling, and `scripts/ci/che
 These Python commands still refuse `-J`. The list was regenerated 2026-09-15 with the AST census from the plan that created this doc. The census counts 65 no-flag rows and 2 registered `--format` commands. The third `--format` site is `decide/cli.py:559 backlog_decisions`. It carries no command decorator, so the census skips it. When a command ports to `crates/`, it adopts this contract.
 
 no-flag: cli/src/fno/agents/cli.py cmd_role
-no-flag: cli/src/fno/agents/cli.py cmd_spawn
 no-flag: cli/src/fno/agents/cli.py cmd_discovered_json
-no-flag: cli/src/fno/agents/cli.py cmd_heal_token
 no-flag: cli/src/fno/agents/distress_reads.py cmd_distress_verdicts
 no-flag: cli/src/fno/agents/gate_reads.py cmd_gate_status
 no-flag: cli/src/fno/backlog/capture.py cmd_add

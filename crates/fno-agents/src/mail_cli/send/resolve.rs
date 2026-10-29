@@ -119,7 +119,7 @@ pub(super) fn roster_path() -> PathBuf {
 
 /// Alias map inversion plus the registry rows'
 /// alias lists. `Err(())` reads degraded (a torn store is not a clean miss).
-pub(super) fn alias_to_session_ids(token: &str) -> Result<Vec<String>, ()> {
+pub(crate) fn alias_to_session_ids(token: &str) -> Result<Vec<String>, ()> {
     let path = AgentsHome::from_env().root().join("name-map.json");
     let mut hits: Vec<String> = Vec::new();
     if path.exists() {

@@ -1,8 +1,7 @@
 //! AC7 (x-007c): the spawn command-to-phase table's integrity.
 //!
 //! Every phase key is a SESSION_PHASES value and no command appears under two
-//! phases. The Python package-data copy's byte identity is the cli-ci
-//! "Generated copies match their sources" step, not a test here.
+//! phases.
 
 use std::collections::BTreeSet;
 

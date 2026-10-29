@@ -83,54 +83,6 @@ def captured_emits(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkeypatch):
-    """AC-HP: claude spawn -> registry row and agent_spawned event carry parent edge."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-session-abc123")
-    monkeypatch.setenv("PWD", "/parent/working/dir")
-    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
-    monkeypatch.delenv("GEMINI_SESSION_ID", raising=False)
-    monkeypatch.delenv("FNO_SPAWN_TRIGGER", raising=False)
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-parent-edge", "-H", "claude", "do something"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"expected exit 0, got {result.exit_code}\noutput: {result.output}"
-
-    # Registry row must carry all three fields.
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-parent-edge"), None)
-    assert entry is not None, "registry row must exist after claude spawn"
-    assert entry.spawned_by_session == "parent-session-abc123", (
-        f"expected spawned_by_session='parent-session-abc123', got {entry.spawned_by_session!r}"
-    )
-    assert entry.spawned_by_harness == "claude", (
-        f"expected spawned_by_harness='claude', got {entry.spawned_by_harness!r}"
-    )
-    assert entry.spawned_by_cwd == "/parent/working/dir", (
-        f"expected spawned_by_cwd='/parent/working/dir', got {entry.spawned_by_cwd!r}"
-    )
-    # A session that asked names no automated cause.
-    assert entry.spawn_trigger is None
-
-    # agent_spawned event must carry all three fields.
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1, (
-        f"expected exactly 1 agent_spawned event, got {len(spawned_events)}: {spawned_events}"
-    )
-    ev_data = spawned_events[0][1]
-    assert ev_data.get("spawned_by_session") == "parent-session-abc123"
-    assert ev_data.get("spawned_by_harness") == "claude"
-    assert ev_data.get("spawned_by_cwd") == "/parent/working/dir"
-    assert ev_data.get("name") == "test-parent-edge"
-
-
 # ---------------------------------------------------------------------------
 # AC-EDGE: codex session env (no claude var set)
 # ---------------------------------------------------------------------------
@@ -151,39 +103,6 @@ def test_spawn_records_parent_edge_claude(workdir_claude, captured_emits, monkey
 # ---------------------------------------------------------------------------
 
 
-def test_spawn_parent_edge_mixed_markers_attribute_nothing(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """AC-EDGE-multi (x-b57a): markers from two harness families attribute
-    NOTHING. Recording the precedence winner here would launder a foreign
-    inherited id - a claude parent carrying its codex parent's
-    CODEX_THREAD_ID recording its spawns as codex's."""
-    monkeypatch.setenv("CODEX_THREAD_ID", "thread-wins-session")
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-loses-session")
-    monkeypatch.setenv("CODEX_SESSION_ID", "codex-legacy-loses-session")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-mixed", "-H", "claude", "do something"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-mixed"), None)
-    assert entry is not None
-    assert entry.spawned_by_session is None
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1
-    assert spawned_events[0][1].get("spawned_by_session") is None
-
-
 # ---------------------------------------------------------------------------
 # AC-HP: exactly one agent_spawned emitted (not duplicated)
 # ---------------------------------------------------------------------------
@@ -192,34 +111,6 @@ def test_spawn_parent_edge_mixed_markers_attribute_nothing(
 # ---------------------------------------------------------------------------
 # x-42c5: spawn_trigger — the CAUSE of a spawn, distinct from the parent edge
 # ---------------------------------------------------------------------------
-
-
-def test_spawn_records_trigger_cause_when_dispatcher_sets_it(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """A dispatcher (e.g. think-spawn) sets FNO_SPAWN_TRIGGER before shelling
-    out to `fno agents spawn`; the registry row it writes records the cause,
-    answering "why was this spawned" as a field rather than a timestamp-gap
-    inference against the filing node's created_at."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-session-abc123")
-    monkeypatch.setenv("FNO_SPAWN_TRIGGER", "think_spawn:work-start")
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-spawn-trigger", "-H", "claude", "do something"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}"
-
-    entries = load_registry()
-    entry = next((e for e in entries if e.name == "test-spawn-trigger"), None)
-    assert entry is not None
-    assert entry.spawn_trigger == "think_spawn:work-start"
 
 
 def test_spawn_trigger_does_not_leak_into_this_process_environment(monkeypatch):
@@ -343,44 +234,6 @@ def test_register_self_registration_never_stamps_its_own_id(tmp_path, monkeypatc
 # ---------------------------------------------------------------------------
 # AC4-HP (x-5283): a birth with no recordable requester names WHY in the event
 # ---------------------------------------------------------------------------
-
-
-def test_spawn_with_no_requester_carries_lineage_reason_in_the_event(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """The event carries either a session id or a reason, never both empty.
-    An absent spawned_by_session has three explanations and only one of them
-    is "identity was genuinely ambiguous"; the positive marker is the reason
-    string itself, captured at spawn time into the durable journal."""
-    monkeypatch.delenv("OPENCODE_SESSION_ID", raising=False)
-    monkeypatch.setenv("PWD", "/parent/working/dir")
-    import fno.claims.session_pid as session_pid
-
-    monkeypatch.setattr(session_pid, "resolve_session_harness", lambda: None)
-
-    from fno.agents.cli import agents_app
-    from typer.testing import CliRunner
-
-    runner = CliRunner()
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "test-lineage-reason", "-H", "claude", "do something"],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, f"expected exit 0, got {result.exit_code}\noutput: {result.output}"
-
-    spawned_events = [(k, d) for k, d in captured_emits if k == "agent_spawned"]
-    assert len(spawned_events) == 1, (
-        f"expected exactly 1 agent_spawned event, got {len(spawned_events)}: {spawned_events}"
-    )
-    ev_data = spawned_events[0][1]
-    assert ev_data.get("spawned_by_session") is None
-    reason = ev_data.get("lineage_reason")
-    assert isinstance(reason, str) and reason.strip(), (
-        f"lineage_reason must be a non-empty reason, got {reason!r}"
-    )
-    assert "identity disposition=" in reason
 
 
 # ---------------------------------------------------------------------------

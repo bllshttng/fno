@@ -1,0 +1,1 @@
+refusing to repair <ROOT>/home-repair-low/registry.json: on-disk schema_version=43 is not above the requested --to 43. This command only rolls a version DOWN; raising one is the deployed writer's job.

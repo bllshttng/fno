@@ -1,10 +1,10 @@
 //! Probe the sandbox a codex worker is about to run under: the worker's own
 //! requested posture (never a hardcoded `workspace-write`), a harmless canary
 //! write inside the grant, and the negative control the old probe lacked: a
-//! write OUTSIDE the granted roots must fail. Ported from
-//! `cli/src/fno/agents/sandbox_probe.py`, which shrinks to a bridge over the
-//! hidden `sandbox-probe` command; exit 85 and the `sandbox-probe:` marker stay
-//! Python-side (rust_runtime.py, backlog/advance.py).
+//! write OUTSIDE the granted roots must fail. The spawn seam
+//! (`spawn_seam.rs`) calls it in process and owns exit 85 and the
+//! `sandbox-probe:` marker; the hidden `sandbox-probe` command answers the
+//! same verdict over a stdin payload.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};

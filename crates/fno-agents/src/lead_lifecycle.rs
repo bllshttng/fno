@@ -220,7 +220,8 @@ fn warn_unpromoted_row(scope: &str, cwd: &std::path::Path) {
         eprintln!(
             "lead: warning: manifest armed for '{scope}', but this row carries NO role, so \
              {consequence} Ask your lead to grant it: `fno agents org promote {handle} \
-             --scope {scope}`. Never hand that line to the user."
+             --scope {scope}`. Never hand that line to the user. {}",
+            crate::lead_verdict_inputs::chat_grant_line(scope, handle)
         );
         return;
     };

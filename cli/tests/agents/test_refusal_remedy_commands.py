@@ -12,7 +12,6 @@ import click
 import typer.main
 
 from fno.agents.cli import agents_app
-from fno.agents.spawn_defaults import SEEDLESS_THREAD_REFUSAL
 
 REPO = Path(__file__).resolve().parents[3]
 COMMAND_RE = re.compile(r"fno agents ([a-z][a-z0-9-]*)")
@@ -30,7 +29,7 @@ def _named_commands() -> set[str]:
     sources = [
         (REPO / "crates/fno-agents/src/daemon/rm_refusal_detail.rs").read_text(),
         (REPO / "cli/src/fno/agents/rm_notice.py").read_text(),
-        SEEDLESS_THREAD_REFUSAL,
+        (REPO / "crates/fno-agents/src/spawn_admission.rs").read_text(),
     ]
     return {m.group(1) for text in sources for m in COMMAND_RE.finditer(text)}
 

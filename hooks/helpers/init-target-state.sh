@@ -1624,7 +1624,7 @@ PYEOF
             # name export first, then the registry binding whoami exposes.
             _SELF_NAME="${FNO_WORKER_NAME:-}"
             if [[ -z "$_SELF_NAME" ]]; then
-              # `fno agents whoami` (the Python family command) emits the
+              # `fno agents whoami` (the native fno-agents door) emits the
               # canonical JSON shape whenever stdout is not a tty, which
               # command substitution always is. Top-level `fno whoami` is the
               # Rust front's native command: it ignores --json and prints

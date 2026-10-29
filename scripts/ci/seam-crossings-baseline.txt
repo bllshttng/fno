@@ -23,7 +23,6 @@ crossing	crates/fno-agents/src/backlog/projections.rs	let mut cmd = std::process
 crossing	crates/fno-agents/src/backlog/publish.rs	let mut child = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/backlog/reconcile_cli.rs	let py = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/bin/client.rs	let out = std::process::Command::new(fno_agents::scrape::fno_bin())
-crossing	crates/fno-agents/src/bin/client.rs	let err = std::process::Command::new(fno_agents::scrape::fno_bin())
 crossing	crates/fno-agents/src/blueprint_judge.rs	return match Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/blueprint_judge.rs	let child = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
@@ -50,7 +49,6 @@ crossing	crates/fno-agents/src/gc_native.rs	let mut child = std::process::Comman
 crossing	crates/fno-agents/src/lead_checkin.rs	let mut argv = vec![fno_bin()];
 crossing	crates/fno-agents/src/lead_checkin_prompt_parked.rs	let mut value = reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))?;
 crossing	crates/fno-agents/src/lead_wake_triggers.rs	let bin = crate::scrape::fno_bin();
-crossing	crates/fno-agents/src/lifecycle_child.rs	let mut command = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/list_render.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/loop_dispatch.rs	return Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/loop_target.rs	let fno_bin = crate::loopcheck::loopcheck_fno_bin();
