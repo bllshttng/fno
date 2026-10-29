@@ -10,6 +10,8 @@ stdin=
 IFS= read -r -d '' stdin || true
 event="${1:-pre-tool}"
 root="$(cd -- "${0%/*}/.." && pwd)"
+# shellcheck source=../scripts/lib/with-timeout.sh
+source "$root/scripts/lib/with-timeout.sh" 2>/dev/null || { printf '%s\n' '{}'; exit 0; }
 bins=()
 [[ -n "${FNO_AGENTS_BIN:-}" ]] && bins+=("$FNO_AGENTS_BIN")
 [[ -n "${FNO_AGENTS_FRONT:-}" ]] && bins+=("$FNO_AGENTS_FRONT")
@@ -20,7 +22,7 @@ for dir in "${path_dirs[@]}"; do
 done
 for bin in "${bins[@]}"; do
     [[ -x "$bin" ]] || continue
-    if out="$(FNO_REPO_ROOT="$root" "$bin" hook rules --event "$event" <<<"$stdin")"; then
+    if out="$(with_timeout 3 env FNO_REPO_ROOT="$root" "$bin" hook rules --event "$event" <<<"$stdin")"; then
         printf '%s\n' "$out"
         exit 0
     fi
