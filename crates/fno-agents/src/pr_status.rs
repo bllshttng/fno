@@ -1153,6 +1153,13 @@ pub(crate) fn status_payload<P: GhProbe>(
         Value::Null
     };
 
+    // The base name outlives the move below: the green memo write reads it
+    // after `pr_json` has gone into the compose inputs.
+    let base_ref_name = pr_json
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .unwrap_or("main")
+        .to_string();
     let inputs = compose::ComposeInputs {
         pr: pr.to_string(),
         pr_json,
@@ -1181,10 +1188,7 @@ pub(crate) fn status_payload<P: GhProbe>(
     // head whose code identity does not resolve - the carry only rides rows
     // with a recorded base and patch hash.
     if green && !is_terminal && !head_sha.is_empty() {
-        let base = pr_json
-            .get("baseRefName")
-            .and_then(Value::as_str)
-            .unwrap_or("main");
+        let base = base_ref_name.as_str();
         if let Some(identity) = crate::review_freshness::pr_code_diff_identity(
             "git",
             cwd,

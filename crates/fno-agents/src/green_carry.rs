@@ -45,7 +45,7 @@ fn green_rows(cwd: &Path, prefix: &str) -> Vec<(String, Value)> {
             // cost a skipped row, never a char-boundary panic in the merge
             // door.
             let Some(head) = file
-                .strip_prefix(prefix.as_str())
+                .strip_prefix(prefix)
                 .and_then(|f| f.strip_suffix(".json"))
                 .map(str::to_string)
             else {
