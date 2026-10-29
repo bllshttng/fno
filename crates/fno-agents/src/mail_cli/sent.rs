@@ -128,7 +128,16 @@ pub fn run_sent(args: &[String]) -> i32 {
             .iter()
             .map(|m| {
                 let id = str_field(m, "id", "?");
-                let delivery_state = newest_state(&all, &id);
+                let mut delivery_state = newest_state(&all, &id);
+                // A transcript hit is the turn record too, not only a landed row.
+                if !delivery_state.is_accepted() && landed_flag.get(&id) == Some(&Some(true)) {
+                    delivery_state = crate::mail_delivery_state::DeliveryState::AcceptedNewTurn {
+                        evidence: crate::mail_delivery_state::Evidence {
+                            record: "landed".into(),
+                            ..Default::default()
+                        },
+                    };
+                }
                 json!({
                     "id": id,
                     "state": delivery_state.word(),
