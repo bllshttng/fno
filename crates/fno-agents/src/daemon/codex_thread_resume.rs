@@ -217,6 +217,20 @@ pub(super) async fn recover_codex_threads(ctx: &Ctx) {
         };
         for entry in registry.entries {
             if !codex_thread_recovery_candidate(&entry, crate::claude_ask::now_epoch_secs()) {
+                // A row the freshness gate skips is never hosted by this
+                // pass, so leaving it non-terminal would read alive forever
+                // (the defect this gate closes). It takes the same settle a
+                // failed resume takes: Orphaned - resumable, never Live.
+                // Only a non-terminal row is stamped, the failed-resume rule.
+                let skipped = entry.name.clone();
+                let _ = update_registry_offloaded(ctx.home.registry_json(), move |registry| {
+                    if let Some(entry) = registry.find_mut(&skipped) {
+                        if is_non_terminal(entry.status) {
+                            entry.status = AgentStatus::Orphaned;
+                        }
+                    }
+                })
+                .await;
                 continue;
             }
             match ensure_codex_thread_handle(&ctx, &entry).await {

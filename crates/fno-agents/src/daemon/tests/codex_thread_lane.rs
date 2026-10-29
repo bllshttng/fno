@@ -605,10 +605,10 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
         "a young row mid-first-turn (fresh created_at, no turn stamps) resumes"
     );
     assert!(
-        candidate(&|e| {
+        !candidate(&|e| {
             e.last_message_at = Some("2026-09-01T00:00:00".into());
         }),
-        "an unparseable last_message_at fails closed even beside a parseable-looking value"
+        "an unparseable last_message_at fails closed: with no other fresh stamp the row is not a candidate"
     );
     assert!(
         !candidate(&|e| {
@@ -625,9 +625,9 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
 }
 
 /// Recovery skips a codex thread row whose last real turn is stale (x-a8ef):
-/// no resume frame leaves, no handle is hosted, and the row keeps its stored
-/// status instead of being stamped Live. The on-demand resume seam is
-/// untouched: the same row still resumes the moment someone actually asks.
+/// no resume frame leaves, no handle is hosted, and the row settles Orphaned
+/// instead of reading Live forever. The on-demand resume seam is untouched:
+/// the same row still resumes the moment someone actually asks.
 #[tokio::test(flavor = "current_thread")]
 async fn recovery_skips_a_codex_thread_row_whose_last_turn_is_stale() {
     let stale_id = "0198f313-0000-7000-8000-00000000c0de";
@@ -657,8 +657,8 @@ async fn recovery_skips_a_codex_thread_row_whose_last_turn_is_stale() {
         let entry = registry.find("t-stale").cloned().unwrap();
         assert_eq!(
             entry.status,
-            AgentStatus::Live,
-            "a skipped stale row keeps its stored status: recovery touched nothing"
+            AgentStatus::Orphaned,
+            "a skipped stale row settles Orphaned: resumable, never Live-forever"
         );
         assert!(
             !ctx.codex_threads.lock().await.contains_key("t-stale"),
