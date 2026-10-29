@@ -307,7 +307,7 @@ fn serve_loaded(
 
 /// The `--trace` arm: the fold over this node.
 fn trace_out(row: &Value) -> String {
-    let shared = super::trace::Shared::load();
+    let shared = super::trace::Shared::load(row);
     py_json_pretty(&super::trace::fold(row, &shared.gather(row)))
 }
 
