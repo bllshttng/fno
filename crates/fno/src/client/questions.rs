@@ -42,19 +42,21 @@ pub(super) struct Detail {
     pub(super) screen: Option<usize>,
     /// The picked screen fills the view.
     pub(super) expanded: bool,
-    /// The terminal shows images. Without them Enter hands the screen to the
-    /// open router (`mux.open_with`) instead.
-    pub(super) graphics: bool,
-    /// A screen for the loop to send through the open router.
+    /// A screen that does not decode, for the loop to send through the open
+    /// router (`mux.open_with`).
     pub(super) open_req: Option<std::path::PathBuf>,
     /// The strip (`None`) or one expanded screen, encoded for its last rect.
     cache: std::cell::RefCell<Option<ShotCache>>,
+    /// Where the last draw put the thumbnails, and the shot in each slot, so
+    /// a click on one opens it.
+    strip_at: std::cell::Cell<Option<image_layer::Rect>>,
+    strip_slots: std::cell::RefCell<Vec<usize>>,
 }
 
 type ShotCache = (
     image_layer::Rect,
     Option<usize>,
-    Option<image_layer::Rendered>,
+    Option<(image_layer::Rect, image_layer::Rendered)>,
 );
 
 pub(super) struct Shot {
@@ -74,7 +76,6 @@ impl Detail {
     /// Open on the question with `id`; None when the fold does not hold it.
     pub(super) fn open(fold: &crate::needs_overlay::QuestionsFold, id: &str) -> Option<Detail> {
         let item = fold.items.iter().find(|q| q.id == id).cloned()?;
-        let graphics = image_layer::graphics();
         let shots: Vec<Shot> = item
             .images
             .iter()
@@ -83,7 +84,9 @@ impl Detail {
             })
             .collect();
         let pixels = std::sync::Arc::new(std::sync::OnceLock::new());
-        if graphics && !shots.is_empty() {
+        // Half-block terminals decode too: the thumbnails and the expanded
+        // view paint as cells there, so every terminal shows the pixels.
+        if !shots.is_empty() {
             let paths: Vec<_> = shots.iter().map(|s| s.path.clone()).collect();
             let slot = pixels.clone();
             std::thread::spawn(move || {
@@ -108,10 +111,23 @@ impl Detail {
             pixels,
             screen: None,
             expanded: false,
-            graphics,
             open_req: None,
             cache: std::cell::RefCell::new(None),
+            strip_at: std::cell::Cell::new(None),
+            strip_slots: std::cell::RefCell::new(Vec::new()),
         })
+    }
+
+    /// Block until the decode thread lands, at most `bound`. A snapshot
+    /// composes once, so it waits for the pixels the live loop redraws for.
+    pub(super) fn wait_decoded(&self, bound: std::time::Duration) {
+        let end = std::time::Instant::now() + bound;
+        while !self.shots.is_empty()
+            && self.pixels.get().is_none()
+            && std::time::Instant::now() < end
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     /// Shot `i`'s pixels, once the decode thread has landed them.
@@ -311,6 +327,9 @@ pub(super) fn draw_detail(
     }
     let strip_h = strip_rows(d, rows);
     let panes_h = rows.saturating_sub(hint_h + strip_h);
+    // The frame sizes to the page, so blank the view first: a short
+    // question never shows the panes under it.
+    backlog_style::paint_panel(cells, rows, cols, 0, cols, panes_h, &[], None, &view.theme);
     if strip_h > 0 {
         draw_strip(d, cells, (panes_h, strip_h), cols, &view.theme);
     }
@@ -381,12 +400,16 @@ pub(super) fn draw_detail(
 }
 
 /// Rows the screens strip takes under the page: none without shots, one label
-/// row when the terminal shows no images (or is short), else a band of
-/// thumbnails above the label row.
+/// row when the view is short or no shot decodes, else a band of thumbnails
+/// above the label row.
 fn strip_rows(d: &Detail, rows: usize) -> usize {
+    let none_decode = d
+        .pixels
+        .get()
+        .is_some_and(|px| px.iter().all(Option::is_none));
     if d.shots.is_empty() {
         0
-    } else if !d.graphics || rows < 16 {
+    } else if rows < 16 || none_decode {
         1
     } else {
         (rows / 4).clamp(5, 10)
@@ -404,7 +427,10 @@ fn strip_label(d: &Detail) -> String {
             format!("{mark}{} {}", i + 1, s.name())
         })
         .collect();
-    format!("screens \u{2190}/\u{2192}  {}", names.join("  "))
+    format!(
+        "screens \u{2190}/\u{2192} \u{b7} click opens  {}",
+        names.join("  ")
+    )
 }
 
 /// The strip: thumbnails composed into one sheet (a frame carries one image
@@ -420,16 +446,20 @@ fn draw_strip(
     let mut lines = vec![backlog_style::BLine::meta(String::new()); h - 1];
     lines.push(backlog_style::BLine::meta(strip_label(d)));
     backlog_style::paint_panel(cells, rows, cols, top, cols, h, &lines, None, theme);
-    let shown: Vec<&image::DynamicImage> = (0..d.shots.len()).filter_map(|i| d.img(i)).collect();
+    let slots: Vec<usize> = (0..d.shots.len()).filter(|&i| d.img(i).is_some()).collect();
+    let shown: Vec<&image::DynamicImage> = slots.iter().filter_map(|&i| d.img(i)).collect();
     let rect = image_layer::Rect {
         row: top as u16,
         col: 1,
         w: cols.saturating_sub(2) as u16,
         h: (h - 1) as u16,
     };
+    d.strip_at.set(None);
     if shown.is_empty() || rect.h == 0 {
         return;
     }
+    d.strip_at.set(Some(rect));
+    *d.strip_slots.borrow_mut() = slots;
     paint_cached(d, rect, None, cells, cols, || {
         let (fw, fh) = image_layer::font_px();
         let px = (
@@ -441,16 +471,24 @@ fn draw_strip(
 }
 
 /// Thumbnails side by side on one transparent canvas of `px` pixels, each
-/// fit and centered in an equal slot.
+/// fit and centered in an equal slot. Fit scales up too, so one shot on a
+/// canvas the size of the view fills it.
 fn sheet(imgs: &[&image::DynamicImage], px: (u32, u32)) -> image::DynamicImage {
     let mut canvas = image::RgbaImage::new(px.0.max(1), px.1.max(1));
     let slot = px.0 / imgs.len().max(1) as u32;
     let pad = 8;
     for (i, img) in imgs.iter().enumerate() {
-        let thumb = img.thumbnail(
+        let (w, h) = (
             slot.saturating_sub(pad).max(1),
             px.1.saturating_sub(pad).max(1),
         );
+        // The fast integer thumbnail shrinks; only a shot smaller than its
+        // slot pays for a filtered resize up.
+        let thumb = if img.width() > w || img.height() > h {
+            img.thumbnail(w, h)
+        } else {
+            img.resize(w, h, image::imageops::FilterType::Triangle)
+        };
         let x = i as u32 * slot + (slot.saturating_sub(thumb.width())) / 2;
         let y = px.1.saturating_sub(thumb.height()) / 2;
         image::imageops::overlay(&mut canvas, &thumb.to_rgba8(), i64::from(x), i64::from(y));
@@ -481,7 +519,16 @@ fn draw_expanded(d: &Detail, cells: &mut [Cell], rows: usize, cols: usize, theme
         w: cols as u16,
         h: rows.saturating_sub(1) as u16,
     };
-    paint_cached(d, rect, Some(i), cells, cols, || img.clone());
+    // The encoder only shrinks to fit, so a small shot is first scaled up and
+    // centered on a canvas the size of the view.
+    paint_cached(d, rect, Some(i), cells, cols, || {
+        let (fw, fh) = image_layer::font_px();
+        let px = (
+            u32::from(rect.w) * u32::from(fw),
+            u32::from(rect.h) * u32::from(fh),
+        );
+        sheet(&[img], px)
+    });
 }
 
 /// Encode once per rect and screen, then paint the cached encoding. A stable
@@ -499,11 +546,45 @@ fn paint_cached(
         .as_ref()
         .is_none_or(|(at, k, _)| *at != rect || *k != key)
     {
-        *cache = Some((rect, key, image_layer::render(&img(), rect)));
+        let (img, at) = opaque_crop(&img(), rect);
+        *cache = Some((rect, key, image_layer::render(&img, at).map(|r| (at, r))));
     }
-    if let Some((_, _, Some(rendered))) = cache.as_ref() {
-        image_layer::paint(rendered, rect, cells, cols);
+    if let Some((_, _, Some((at, rendered)))) = cache.as_ref() {
+        image_layer::paint(rendered, *at, cells, cols);
     }
+}
+
+/// Crop a canvas of `rect` cells to the cells its opaque pixels cover.
+/// Half-blocks paint a transparent pixel black, so the empty canvas would
+/// draw a black band; cropped, the panel ground shows round the image.
+fn opaque_crop(
+    img: &image::DynamicImage,
+    rect: image_layer::Rect,
+) -> (image::DynamicImage, image_layer::Rect) {
+    let rgba = img.to_rgba8();
+    let (fw, fh) = (
+        rgba.width() / u32::from(rect.w.max(1)),
+        rgba.height() / u32::from(rect.h.max(1)),
+    );
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, p) in rgba.enumerate_pixels() {
+        if p[3] > 0 {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    if x0 >= x1 || fw == 0 || fh == 0 {
+        return (img.clone(), rect);
+    }
+    let (c0, r0) = (x0 / fw, y0 / fh);
+    let (c1, r1) = (x1.div_ceil(fw), y1.div_ceil(fh));
+    let at = image_layer::Rect {
+        row: rect.row + r0 as u16,
+        col: rect.col + c0 as u16,
+        w: (c1 - c0) as u16,
+        h: (r1 - r0) as u16,
+    };
+    let crop = img.crop_imm(c0 * fw, r0 * fh, (c1 - c0) * fw, (r1 - r0) * fh);
+    (crop, at)
 }
 
 /// The notes input: a small framed box over the popup's bottom center, the
@@ -888,7 +969,7 @@ pub(super) async fn detail_keys(
             continue;
         }
         if let Some(i) = d.screen.filter(|_| matches!(k, b'\r' | b'\n')) {
-            if d.graphics && d.img(i).is_some() {
+            if d.img(i).is_some() {
                 d.expanded = true;
             } else {
                 d.open_req = Some(d.shots[i].path.clone());
@@ -1007,6 +1088,29 @@ pub(super) async fn detail_keys(
         }
     }
     Ok(StdinFlow::Continue)
+}
+
+/// The questions view owns every pointer event while open. A left press on a
+/// thumbnail opens that shot over the whole view; Esc closes it again.
+pub(super) fn mouse(view: &mut View, rep: crate::mouse::MouseReport) {
+    let Some(d) = view.question_detail.as_mut() else {
+        return;
+    };
+    // The notes input owns the keyboard, so a click never hides it.
+    if d.expanded || d.free.is_some() || !matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+        return;
+    }
+    let Some(r) = d.strip_at.get() else {
+        return;
+    };
+    let inside = (r.row..r.row + r.h).contains(&rep.row) && (r.col..r.col + r.w).contains(&rep.col);
+    let slots = d.strip_slots.borrow().clone();
+    if !inside || slots.is_empty() {
+        return;
+    }
+    let k = usize::from(rep.col - r.col) * slots.len() / usize::from(r.w);
+    d.screen = slots.get(k).copied();
+    d.expanded = d.screen.is_some();
 }
 
 /// Move the highlighted option one step through the option list with none
@@ -1511,8 +1615,9 @@ mod tests {
         v.questions_fold = Some(fold_with(vec![q]));
         v.open_detail_on("q-s");
         let d = v.question_detail.as_mut().unwrap();
-        // The test picker is half-blocks: no graphics, so no decode.
-        assert!(!d.graphics && d.pixels.get().is_none());
+        // The paths do not exist: every decode fails, so Enter falls back to
+        // the open router and the strip is the label row alone.
+        d.pixels = std::sync::Arc::new(std::sync::OnceLock::from(vec![None, None]));
         detail_keys(&mut v, b"\x1b[D", &mut Vec::new())
             .await
             .unwrap();
@@ -1540,13 +1645,35 @@ mod tests {
             .collect();
         assert!(label.contains("\u{25b8}2 q-s-2-b.png"), "{label}");
 
-        // With graphics, Enter expands, arrows step, Esc goes back to the page.
+        // Decoded, the half-block test picker paints the thumbnails: a click
+        // on the second opens it. Enter expands, arrows step, Esc goes back.
         let d = v.question_detail.as_mut().unwrap();
-        d.graphics = true;
         d.pixels = std::sync::Arc::new(std::sync::OnceLock::from(vec![
             Some(red.clone()),
             Some(red.clone()),
         ]));
+        let mut cells = vec![Cell::default(); rows * cols];
+        draw_detail(&v, &mut cells, (rows, cols), (0, 0), (rows, cols));
+        let strip = v.question_detail.as_ref().unwrap().strip_at.get().unwrap();
+        let red = crate::proto::Color::Rgb(200, 30, 30);
+        let band = &cells[usize::from(strip.row) * cols..(usize::from(strip.row + strip.h)) * cols];
+        assert!(
+            band.iter().any(|c| c.fg == red || c.bg == red),
+            "half-block thumbnails paint"
+        );
+        mouse(
+            &mut v,
+            crate::mouse::MouseReport {
+                row: strip.row + 1,
+                col: strip.col + strip.w - 2,
+                kind: MouseKind::Press(MouseButton::Left),
+                shift: false,
+                alt: false,
+            },
+        );
+        let d = v.question_detail.as_mut().unwrap();
+        assert!(d.expanded && d.screen == Some(1), "a click opens the shot");
+        d.expanded = false;
         detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
         assert!(v.question_detail.as_ref().unwrap().expanded);
         detail_keys(&mut v, b"\x1b[C", &mut Vec::new())
@@ -1558,7 +1685,6 @@ mod tests {
         let title: String = cells[..cols].iter().map(|c| c.c).collect();
         assert!(title.contains("screen 1/2"), "{title}");
         // A solid image draws no `▀` (both halves match), so read its color.
-        let red = crate::proto::Color::Rgb(200, 30, 30);
         assert!(
             cells[cols..].iter().any(|c| c.fg == red || c.bg == red),
             "the image paints"

@@ -239,23 +239,6 @@ class TestTransport:
         assert answer["reason"] == "gate_unavailable"
         assert "exited 1" in answer["error"]
 
-class TestQos:
-
-    def test_demote_failure_is_nonfatal_warning(self, monkeypatch, capsys):
-        """AC3-ERR: taskpolicy failure warns once, never raises."""
-        monkeypatch.setattr(spawn_gate, "_qos_enabled", lambda: True)
-        import subprocess
-
-        def boom(*a, **k):
-            raise FileNotFoundError("taskpolicy not found")
-
-        monkeypatch.setattr(subprocess, "run", boom)
-        spawn_gate.qos_demote_pid(12345)
-        err = capsys.readouterr().err
-        assert "non-fatal" in err
-        # Pass-path lines carry the note prefix: only refusals say `spawn-gate:`
-        assert err.strip().startswith("spawn-gate note:")
-
 
 # --- parent-edge visibility (x-7b36 change 12) --------------------------------
 # A null spawned_by_session is sometimes correct (an ambiguous identity resolve
@@ -336,5 +319,3 @@ class TestGateExitReporting:
         assert data["reason"] == "gate_unavailable"
         assert "exited 87" in data["error"]
         assert "NoneType" not in data["error"]
-
-

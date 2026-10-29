@@ -19,7 +19,6 @@ _NON_STATE_CACHE_REASONS = {
     ("fno.agents.mux_spawn", "_codex_cli_version"): "cache key is tool version discovery, not fno state",
     ("fno.agents.harness_map", "_shipped_commands"): "cache key is the shipped plugin surface, not fno state",
     ("fno.agents.harness_map", "_carrier_vocab"): "cache key is the shipped package-data table, not fno state",
-    ("fno.agents.spawn_phase", "_command_phases"): "cache key is the shipped package-data table (spawn_phase.toml), not fno state",
     ("fno.agents.naming", "_codes"): "cache key is the binary-served vocabulary table (name-codes), not fno state",
     ("fno.rust_binary", "delivered_terminals"): "cache key is the binary-served delivered-terminal vocabulary, not fno state",
     ("fno.harness_identity", "_legacy_handle_re"): "cache key is the binary-served harness roster, not fno state",

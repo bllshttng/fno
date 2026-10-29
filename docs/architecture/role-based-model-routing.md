@@ -28,7 +28,7 @@ Claude Code internally requests opus/sonnet/haiku tiers (background tasks use ha
 ## Shape
 
 ```
-cmd_spawn --role  ->  dispatch_spawn  ->  _claude_create_path  ->  bg_create(role=...)
+dispatch_spawn(role=...)  ->  _claude_create_path  ->  bg_create(role=...)
                                                                        |
                                                             resolve_route(role)
                                                                        |
