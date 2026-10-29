@@ -1035,7 +1035,7 @@ mod tests {
         write_fake_bin(
             &fake_bin,
             &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\nprintf 'msg-1 delivered (hosted)\\n'\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\nprintf 'msg-1 accepted-new-turn\\n'\n",
                 argv_log.display()
             ),
         );
@@ -1043,7 +1043,7 @@ mod tests {
 
         let receipt = run_mail_send("worker", "mux-peek", "--reply-looking-body").await;
 
-        assert_eq!(receipt, "msg-1 delivered (hosted)");
+        assert_eq!(receipt, "msg-1 accepted-new-turn");
         let argv = std::fs::read_to_string(argv_log).unwrap();
         assert_eq!(
             argv.lines().collect::<Vec<_>>(),

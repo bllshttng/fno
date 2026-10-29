@@ -14,7 +14,6 @@ backlog	11461	11335	890	301	keep-as-root	backlog
 bundle	175	165	19	2	keep-and-fold	doctor bundle	
 carveout	555	551	42	16	keep-and-fold	backlog carveout	
 claim	771	764	162	55	keep-and-fold	agents claim	
-codemap	78	77	18	6	keep-and-fold	doctor codemap	
 config	936	929	267	99	keep-as-root	config	
 context	19	19	15	2	keep-and-fold	whoami context	
 cost	5	5	7	1	keep-and-fold	whoami cost	

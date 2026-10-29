@@ -186,7 +186,6 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 37 | test_runner | 110 | 1 | 3/- | 0 | 2 |
 | 38 | lint_seam_crossings | 419 | 1 | 4/- | 0 | 1 |
 | 39 | review_level (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 209 | 1 | 4/- | 0 | 4 |
-| 40 | codemap_cli | 1545 | 1 | 5/- | 0 | 3 |
 | 41 | post_merge_route | 740 | 1 | 5/- | 0 | 10 |
 | 42 | doctor_bash_census (pure transport; ported to Rust and deleted 2026-10, gone on next regen) | 33 | 1 | 6/- | 0 | 3 |
 | 43 | skill_diff | 1360 | 1 | 5/1 | 0 | 6 |
