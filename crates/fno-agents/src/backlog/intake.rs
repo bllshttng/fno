@@ -434,7 +434,6 @@ fn find_node_exact<'a>(entries: &'a [Value], node_id: &str) -> Option<&'a Value>
 // The difficulty gate (plan/schema.py: _parse_created + difficulty_gate_error)
 // ---------------------------------------------------------------------------
 
-
 /// `^\d{4}-\d{2}-\d{2}(?:[T ].*)?$` - extended-calendar forms only.
 pub(crate) fn iso_created(s: &str) -> bool {
     if s.len() < 10 {
@@ -499,7 +498,6 @@ pub(crate) fn parse_created(value: Option<&Value>) -> Option<(i32, u32, u32)> {
 fn difficulty_gate_error(fm: &Map<String, Value>) -> Option<String> {
     crate::plan_schema::difficulty_gate_error(fm, true)
 }
-
 
 /// The stderr rendering Python's `{value!r}` gives a frontmatter scalar.
 pub(crate) fn yaml_display(v: &Value) -> String {
