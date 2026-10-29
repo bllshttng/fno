@@ -2099,7 +2099,9 @@ mod tests {
         ];
         let out = top_consumers(&sustained, 2);
         assert_eq!(out[0]["name"], json!("cargo"));
-        assert_eq!(out[0]["procs"], json!(2));
+        // All three cargo rows count, the worktree-prefixed pair included;
+        // the name is argv[0]'s basename either way.
+        assert_eq!(out[0]["procs"], json!(3));
         assert_eq!(out[0]["worktree"], json!("/x/w/worktrees/x-1"));
         assert_eq!(out[0]["worktree_procs"], json!(2));
     }
