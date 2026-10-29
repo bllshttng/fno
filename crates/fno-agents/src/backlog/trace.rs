@@ -762,8 +762,13 @@ impl Shared {
             })
             .cloned()
             .collect();
+        // A stored plan_path can be `~/...` or relative to the node's repo.
+        let root = str_of(node, "project")
+            .and_then(super::settings::project_root)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| crate::paths::worktree_repo_root(Path::new(".")));
         let tasks = match str_of(node, "plan_path") {
-            Some(p) => plan_tasks(Path::new(p)),
+            Some(p) => plan_tasks(&super::collision::resolve_plan_path(p, &root)),
             None => Err("no plan".to_string()),
         };
         let mut scans = HashMap::new();
