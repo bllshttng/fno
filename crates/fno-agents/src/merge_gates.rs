@@ -970,15 +970,18 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     if head.is_empty() {
         return false;
     }
+    // Subject-scoped and uncapped: a capped newest-first read of the whole
+    // lane loses an approval once enough other rows land after it.
     let args: Vec<String> = [
         "backlog",
         "decisions",
+        node,
         "--lane",
         "unattributed",
         "--state",
         "all",
         "--limit",
-        "200",
+        "0",
         "--json",
     ]
     .iter()

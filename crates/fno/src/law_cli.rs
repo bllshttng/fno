@@ -14,7 +14,8 @@ use std::process::{Command, Stdio};
 
 /// The commands the native surface serves. The Python `fno inbox law` group
 /// forwards here instead of holding its own write path.
-pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &["set", "stage", "match", "retract", "history"];
+pub const NATIVE_LAW_SUBCOMMANDS: &[&str] =
+    &["set", "stage", "match", "retract", "restore", "history"];
 
 /// Classify `fno inbox law <sub> ...` for the front door: `Some(rest)` runs
 /// natively, `None` forwards to the Python CLI.
@@ -71,7 +72,7 @@ pub fn run(args: &[OsString]) -> i32 {
         .any(|a| a.to_str() == Some("-h") || a.to_str() == Some("--help"))
     {
         println!(
-            "usage: fno inbox law set <subject> [decision] [--global] [--paths g1,g2] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... | fno inbox law stage | fno inbox law match (one JSON request on stdin) | fno inbox law retract <subject-or-id> --reason <why> | fno inbox law history <subject-or-id>"
+            "usage: fno inbox law set <subject> [decision] [--global] [--paths g1,g2] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... | fno inbox law stage | fno inbox law match (one JSON request on stdin) | fno inbox law retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox law restore <decision-id> | fno inbox law history <subject-or-id>"
         );
         return 0;
     }
@@ -111,13 +112,13 @@ pub fn run(args: &[OsString]) -> i32 {
             }
             law_exec(&buf, Attended::No)
         }
-        "retract" => {
+        "retract" | "restore" => {
             let argv: Vec<String> = rest
                 .iter()
                 .filter_map(|a| a.to_str().map(str::to_owned))
                 .collect();
             let request = serde_json::json!({
-                "mode": "retract",
+                "mode": sub,
                 "argv": argv,
             })
             .to_string();
@@ -139,7 +140,9 @@ pub fn run(args: &[OsString]) -> i32 {
             law_exec(&request, Attended::No)
         }
         _ => {
-            eprintln!("error: expected a subcommand (set | stage | match | retract | history)");
+            eprintln!(
+                "error: expected a subcommand (set | stage | match | retract | restore | history)"
+            );
             2
         }
     }
@@ -293,6 +296,10 @@ mod tests {
         );
         assert_eq!(
             classify_inbox_law(&mk(&["inbox", "law", "history"])).map(|r| r.len()),
+            Some(1)
+        );
+        assert_eq!(
+            classify_inbox_law(&mk(&["inbox", "law", "restore"])).map(|r| r.len()),
             Some(1)
         );
         // Unknown subcommands still fall through to the Python group.
