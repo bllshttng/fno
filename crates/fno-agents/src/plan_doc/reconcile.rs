@@ -101,13 +101,11 @@ pub fn plan_link_id(fields: &Fields) -> Option<String> {
     None
 }
 
-/// Repair target for a file whose frontmatter cannot parse: resolve the
-/// node link (`node` / `claims` / `graph_node_id`) by regex, then project the
-/// node's status with the same forward-only projection the tiers use. A live
-/// node whose status writes no plan status (in_progress/blocked/deferred)
-/// holds; a resolvable closed status writes its terminal; no link or no node
-/// row returns None. Needing no frontmatter parse, it runs where
-/// `parse_frontmatter` just failed.
+/// Repair target for a file whose frontmatter cannot parse: resolve the node
+/// link (`node` / `claims` / `graph_node_id`) by regex, then project the node's
+/// status with the same forward-only projection the tiers use. A live node
+/// whose status writes no plan status holds; no link or node row is None.
+/// Needing no frontmatter parse, it runs where `parse_frontmatter` just failed.
 fn repair_target(text: &str, status_map: &HashMap<String, String>) -> Option<String> {
     let fm = front_re().captures(text)?["fm"].to_string();
     let mut link: Option<String> = None;

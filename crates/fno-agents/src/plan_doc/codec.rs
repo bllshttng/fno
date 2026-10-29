@@ -806,8 +806,7 @@ mod tests {
 
     #[test]
     fn corrupt_quoted_scalar_is_a_named_parse_error() {
-        // Regression: an interior quote inside a quoted scalar (the corrupt-specimen
-        // shape).
+        // Regression: an interior quote inside a quoted scalar (the corrupt-specimen shape).
         let err = parse_frontmatter("---\nstatus: \"in_\"in_review\"\n---\nbody\n").unwrap_err();
         assert!(err.contains("status"), "names the key: {err}");
         assert!(err.contains("unescaped quote"), "names the defect: {err}");
