@@ -132,9 +132,9 @@ pub(super) fn same_project(a: &str, b: &str) -> bool {
 /// strongest source to name a node answers for it. A name binds when it
 /// parses to a served node or to a node the join carries a pr for (a bare
 /// hex run matches by unique suffix) - the pr join outlived the
-/// served-card filter and must not regress. History rows
-/// bind unfiltered: a session's merged past is real even when no card for
-/// it is served.
+/// served-card filter and must not regress. History rows bind with no
+/// served-card filter (a session's merged past is real even when no card
+/// for it is served), but only from `execute` and `ship` phases.
 fn graph_bindings_for(
     join: &BacklogJoin,
     known: &HashMap<String, ()>,
@@ -164,49 +164,38 @@ fn graph_bindings_for(
             }
         }
     }
-    if let Some(node) = &a.node {
-        admit(GraphBinding {
-            node: node.clone(),
-            pr: join.pr.get(node).copied(),
+    let live = |node: String, source: &str| {
+        let meta = join.pr_meta.get(&node);
+        GraphBinding {
+            pr: join.pr.get(&node).copied(),
+            pr_url: meta.and_then(|m| m.0.clone()),
+            pr_count: meta.map_or(0, |m| m.1),
+            node,
             state: "open".into(),
-            source: "spawn".into(),
+            source: source.into(),
             ..Default::default()
-        });
+        }
+    };
+    if let Some(node) = &a.node {
+        admit(live(node.clone(), "spawn"));
     }
     if let Some(branch) = branch_by_cwd.get(&a.cwd) {
         if let Some(node) = agents_view::resolve_node_id(branch, known) {
-            let pr = join.pr.get(&node).copied();
-            admit(GraphBinding {
-                node,
-                pr,
-                state: "open".into(),
-                source: "branch".into(),
-                ..Default::default()
-            });
+            admit(live(node, "branch"));
         }
     }
     if let Some(node) = node_by_holder.get(&a.name) {
-        admit(GraphBinding {
-            node: node.clone(),
-            pr: join.pr.get(node).copied(),
-            state: "open".into(),
-            source: "claim".into(),
-            ..Default::default()
-        });
+        admit(live(node.clone(), "claim"));
     }
     if let Some(node) = agents_view::resolve_node_id(&a.name, known) {
-        let pr = join.pr.get(&node).copied();
-        admit(GraphBinding {
-            node,
-            pr,
-            state: "open".into(),
-            source: "name".into(),
-            ..Default::default()
-        });
+        admit(live(node, "name"));
     }
+    // History binds only the phases that write a node's code and PR. A
+    // lead files nodes (`think`) and plans them (`blueprint`); those rows
+    // must not put another session's PR on the lead's card.
     for sid in sids.iter().flatten() {
         for b in join.by_session.get(*sid).into_iter().flatten() {
-            if !b.explicit {
+            if !b.explicit && matches!(b.phase.as_str(), "execute" | "ship") {
                 let mut bound = b.clone();
                 bound.source = "history".into();
                 admit(bound);
@@ -255,6 +244,8 @@ fn wire_bindings(bindings: Vec<GraphBinding>) -> Vec<SessionBinding> {
             inferred: !(b.explicit || b.source == "claim"),
             node: b.node,
             pr: b.pr,
+            pr_url: b.pr_url,
+            pr_count: b.pr_count,
             source: b.source,
             state: b.state,
         })
@@ -1009,11 +1000,11 @@ mod tests {
         GraphBinding {
             node: node.into(),
             pr,
-            phase: String::new(),
+            phase: if explicit { "bind" } else { "execute" }.into(),
             ts: ts.map(Into::into),
             state: state.into(),
             explicit,
-            source: String::new(),
+            ..Default::default()
         }
     }
 
@@ -1093,6 +1084,13 @@ mod tests {
         assert_eq!(got[0].pr, Some(1));
         assert_eq!(got[0].state, "merged");
         assert_eq!(pick_current(&got).map(|b| b.node.as_str()), Some("x-cccc"));
+        // A lead that filed or planned a node holds a think or blueprint
+        // row on it. That row writes no PR, so it binds nothing.
+        for row in join.by_session.get_mut("s1").into_iter().flatten() {
+            row.phase = "think".into();
+        }
+        let got = graph_bindings_for(&join, &ids, &HashMap::new(), &HashMap::new(), &a);
+        assert!(got.is_empty(), "a lead's filing rows bind no node: {got:?}");
 
         let mut join = BacklogJoin::default();
         join.by_session.insert(

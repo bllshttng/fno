@@ -797,6 +797,10 @@ fn mark_head(cards: &mut [BacklogCard]) {
 pub struct GraphBinding {
     pub node: String,
     pub pr: Option<u64>,
+    /// The stored URL of `pr`, so a link opens the node's own repo.
+    pub pr_url: Option<String>,
+    /// Every PR the node records; `pr` is the newest of them.
+    pub pr_count: u32,
     pub phase: String,
     pub ts: Option<String>,
     pub state: String,
@@ -811,10 +815,13 @@ pub struct GraphBinding {
 /// a malformed document joins to an empty `BacklogJoin`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BacklogJoin {
-    /// node id -> `pr_number`. String/float/absent values are skipped
+    /// node id -> its newest PR number, across `pr_number` and
+    /// `additional_prs`. String/float/absent values are skipped
     /// (matching `AgentRow.pr: Option<u64>`); keyed by node id, so a
     /// pr_number shared across entries is irrelevant.
     pub pr: HashMap<String, u64>,
+    /// node id -> (the newest PR's stored URL, the node's PR count).
+    pub pr_meta: HashMap<String, (Option<String>, u32)>,
     /// node id -> the driving session's SHORT id (first 8 chars): the live
     /// claim holder's session when one holds, else the node's last
     /// do/ship session.
@@ -842,8 +849,33 @@ pub fn derive_join(raw: &str) -> BacklogJoin {
         let Some(id) = e.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
-        if let Some(pr) = e.get("pr_number").and_then(|v| v.as_u64()) {
-            join.pr.insert(id.to_string(), pr);
+        let mut prs: Vec<(u64, Option<String>)> = Vec::new();
+        if let Some(n) = e.get("pr_number").and_then(|v| v.as_u64()) {
+            prs.push((
+                n,
+                e.get("pr_url").and_then(|v| v.as_str()).map(str::to_string),
+            ));
+        }
+        for p in e
+            .get("additional_prs")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let Some(n) = p.get("number").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            let url = p.get("url").and_then(|v| v.as_str()).map(str::to_string);
+            match prs.iter_mut().find(|(m, _)| *m == n) {
+                Some(seen) => seen.1 = seen.1.take().or(url),
+                None => prs.push((n, url)),
+            }
+        }
+        // PR numbers grow with time, so the highest is the newest.
+        if let Some((n, url)) = prs.iter().max_by_key(|(n, _)| *n) {
+            join.pr.insert(id.to_string(), *n);
+            join.pr_meta
+                .insert(id.to_string(), (url.clone(), prs.len() as u32));
         }
         let state = match e.get("status").and_then(|v| v.as_str()).unwrap_or("") {
             "done" => "merged",
@@ -900,6 +932,8 @@ pub fn derive_join(raw: &str) -> BacklogJoin {
                 .push(GraphBinding {
                     node: id.to_string(),
                     pr: join.pr.get(id).copied(),
+                    pr_url: join.pr_meta.get(id).and_then(|m| m.0.clone()),
+                    pr_count: join.pr_meta.get(id).map_or(0, |m| m.1),
                     phase: phase.to_string(),
                     ts,
                     state: state.to_string(),
@@ -2231,6 +2265,20 @@ mod tests {
         assert_eq!(m.pr.get("x-a"), Some(&385));
         assert_eq!(m.pr.get("x-b"), None, "no pr_number -> absent");
         assert_eq!(m.pr.get("x-c"), None, "non-u64 pr_number -> skipped");
+        // The newest PR wins over the first one stored, and keeps its own
+        // repo's URL: a node in another repo never opens this repo's PR.
+        let raw = graph(
+            r#"{"id":"x-d","slug":"d","priority":"p1","status":"claimed","pr_number":41,
+                "pr_url":"https://github.com/acme/web/pull/41",
+                "additional_prs":[{"number":41,"url":"https://github.com/acme/web/pull/41"},
+                                  {"number":57,"url":"https://github.com/acme/web/pull/57"}]}"#,
+        );
+        let m = derive_join(&raw);
+        assert_eq!(m.pr.get("x-d"), Some(&57));
+        assert_eq!(
+            m.pr_meta.get("x-d"),
+            Some(&(Some("https://github.com/acme/web/pull/57".into()), 2))
+        );
         assert!(derive_join("not json").pr.is_empty());
         assert!(
             derive_join("not json").by_session.is_empty()
