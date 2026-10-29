@@ -1389,7 +1389,10 @@ if isinstance(node_id, str) and node_id.strip():
         # this is the only decision-id comparison in the codebase that is
         # not already casefolded (list_decisions itself casefolds
         # subject matches).
-        acked = {e.decision_id.casefold() for e in validated.decisions_acknowledged}
+        acked = {
+            str(e.get("decision_id") or "").casefold()
+            for e in (block.get("decisions_acknowledged") or [])
+        }
         for row in live:
             did = str(row.get("decision_id") or "")
             if did and did.casefold() not in acked:
