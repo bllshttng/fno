@@ -88,7 +88,7 @@ jobs:
             readme: []
           - id: fno-sh-fresh
             runs-on: ubuntu-24.04
-            expect: fail
+            expect: pass
             node: x-f867
             readme: []
           - id: install-sh-alias
