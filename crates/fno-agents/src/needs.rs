@@ -194,6 +194,10 @@ pub fn fold(events_raw: &str, ledger_raw: &str, since: u64, fires_floor: u64) ->
             let Some(qid) = str_field(&v, "question_id") else {
                 continue;
             };
+            if !crate::question_ladder::envelope_on_board(&v) {
+                questions.remove(qid);
+                continue;
+            }
             let question = str_field(&v, "question").unwrap_or("");
             let evidence = str_field(&v, "ask").unwrap_or(question);
             let node = str_field(&v, "node").map(str::to_string);
@@ -841,6 +845,12 @@ fn run_items(home: &AgentsHome, cwd: &Path) -> i32 {
         .map(|(id, _)| id)
         .collect();
     mark_settled(&mut items, &settled);
+    for item in items.iter_mut() {
+        if let Some(node) = item.node.clone() {
+            item.node_title = facts.titles.get(&node).cloned();
+            item.node_stage = facts.statuses.get(&node).cloned();
+        }
+    }
     let as_of = now_secs();
     let answered = crate::attention::answered(&journals_raw, as_of);
     let payload = json!({
@@ -2243,6 +2253,7 @@ mod tests {
                 .collect(),
             merged_prs,
             raw: String::new(),
+            ..Default::default()
         }
     }
 

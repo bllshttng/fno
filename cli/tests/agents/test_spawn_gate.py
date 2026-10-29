@@ -36,21 +36,32 @@ def _no_live_cpu_axis(monkeypatch):
 
     Since x-7783 every spawn takes the footprint reading, and that read is a
     ps snapshot against the real machine. Left unstubbed these tests refuse
-    or hold according to what the developer's box happens to be doing. The
-    prefetch is pinned too: run_gate takes the read before the decider, and
-    an unpinned read would price a real ps snapshot per pass.
+    or hold according to what the developer's box happens to be computing.
+    The prefetch is pinned too: run_gate takes the read before the decider,
+    and an unpinned read would price a real census run per pass. The census
+    owns the admission math (Rust tests pin it); the gate's mapping is what
+    these tests stub past.
     """
-    from fno import doctor_footprint
-    from fno.footprint import Admission, Footprint
-
-    idle = Footprint(0.0, 0.0, 0.1, 0, 0, 0, 0, 0.0, 0.2, [], 0, None)
+    idle_payload = {
+        "admission": {
+            "verdict": "admit",
+            "reason": "test admit",
+            "share_low": 0.1,
+            "share_high": 0.1,
+            "bound": "exact",
+            "fleet_cores": 1.2,
+            "machine_cores": 6.0,
+            "capacity_cores": 12.0,
+            "ceiling": 0.5,
+            "gap": None,
+        }
+    }
     monkeypatch.setattr(
-        spawn_gate, "_prefetch_fleet_reading", lambda: (idle, None)
+        spawn_gate, "_prefetch_fleet_reading", lambda: (idle_payload, None)
     )
-    monkeypatch.setattr(doctor_footprint, "_admission_config", lambda: 0.5)
-    admit = Admission(
+    admit = spawn_gate.Admission(
         verdict="admit",
-        axis="fleet_cpu_share",
+        axis="fleet_cpu",
         reason="test admit",
         share_low=0.1,
         share_high=0.1,

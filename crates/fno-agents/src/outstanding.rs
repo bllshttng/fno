@@ -379,6 +379,11 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
             continue;
         }
         match rec.get("type").and_then(Value::as_str) {
+            Some(QUESTION_EVENT)
+                if !crate::question_ladder::envelope_on_board(&Value::Object(rec.clone())) =>
+            {
+                asked.remove(&qid);
+            }
             Some(QUESTION_EVENT) => {
                 asked.insert(
                     qid.clone(),

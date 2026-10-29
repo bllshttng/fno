@@ -1327,7 +1327,7 @@ fn emit_warnings(warnings: &[String]) {
     }
 }
 
-fn with_commas(mut n: u64) -> String {
+pub(crate) fn with_commas(mut n: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
     loop {
         if n < 1000 {
@@ -1642,7 +1642,7 @@ fn transcript_tail_bytes(path: &Path, max_bytes: usize) -> Option<String> {
 }
 
 /// The registry rows, tolerant: a missing or malformed file reads as none.
-fn registry_rows(home: &AgentsHome) -> Vec<Value> {
+pub(crate) fn registry_rows(home: &AgentsHome) -> Vec<Value> {
     crate::registry_store::read(&home.registry_json())
         .ok()
         .and_then(|v| v.get("agents").and_then(Value::as_array).cloned())

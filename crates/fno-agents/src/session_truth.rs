@@ -43,11 +43,6 @@ pub(crate) fn watching_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r"<watching[>\s]").unwrap())
 }
 
-pub(crate) fn help_re() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"<help[>\s]").unwrap())
-}
-
 pub(crate) fn api_error_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"^API Error\b").unwrap())
@@ -91,10 +86,14 @@ pub(crate) enum Signal {
 
 impl Signal {
     pub(crate) fn of(text: &str) -> Self {
-        if watching_re().is_match(text) {
+        // One blank pass serves the two opener arms; the help arm blanks
+        // again inside the parser, which is idempotent on already-blanked
+        // text.
+        let blanked = crate::distress::blank_code_spans_and_fences(text);
+        if watching_re().is_match(&blanked) {
             return Signal::Watching;
         }
-        if promise_re().is_match(text) {
+        if promise_re().is_match(&blanked) {
             return Signal::Promise;
         }
         if api_error_re().is_match(text.trim_start()) {
@@ -102,7 +101,10 @@ impl Signal {
         }
         let stripped = text.trim_end();
         if stripped.ends_with('?')
-            || help_re().is_match(text)
+            // The shared distress parser, not a bare opener regex: a tag the
+            // turn merely quotes in code is prose, so truth and the loop
+            // runtime (which blanks before its own match) agree.
+            || crate::distress::extract_help_distress(text).is_some()
             || option_prompt_re().is_match(stripped)
         {
             return Signal::Question;
@@ -441,6 +443,19 @@ fn extract_text(content: Option<&Value>) -> String {
         }
         _ => String::new(),
     }
+}
+
+/// A record the harness or control plane injected, never the worker's own
+/// voice. A skill/command injection opens with the command-framing tags and
+/// carries the whole skill body, protocol tags quoted throughout; a
+/// `<local-command-stdout>` record is the harness's output, not the
+/// worker's. Tool-result blocks already drop in `extract_text`; this
+/// catches the injected record that DOES carry text.
+pub(crate) fn injected_record_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("<command-message>")
+        || t.starts_with("<command-name>")
+        || t.starts_with("<local-command-stdout>")
 }
 
 /// A claude transcript `user`/`assistant` line, else `None`.
@@ -1484,6 +1499,48 @@ mod tests {
     }
 
     const NOW: f64 = 1_791_460_800.0; // 2026-10-08T12:00:00Z
+
+    /// A command-framed record (the skill body rides one string) and a
+    /// local-command output are injections, never the worker's own report;
+    /// the worker's text is not.
+    #[test]
+    fn an_injected_command_record_is_not_worker_text() {
+        assert!(injected_record_text(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\nbody quoting <help class=\"stuck\" reason=\"ci\">"
+        ));
+        assert!(injected_record_text(
+            "<local-command-stdout>ok</local-command-stdout>"
+        ));
+        assert!(!injected_record_text("RESULT: SUCCESS shipped the fix"));
+    }
+
+    /// The question signal reads only a REAL help block: a turn quoting the
+    /// tag in inline code stays plain, a real block asks for the lead's move.
+    #[test]
+    fn a_quoted_help_tag_is_not_a_question_but_a_real_block_is() {
+        let quoted = "Re-arming; `<help class=\"held\">` only if this wedges";
+        assert_eq!(Signal::of(quoted), Signal::Plain);
+        let real =
+            "blocked on the ruling: <help class=\"question\" reason=\"grid\">which band?</help>";
+        assert_eq!(Signal::of(real), Signal::Question);
+    }
+
+    /// The done and watching signals also blank code spans first, exactly as
+    /// the loop runtime's intent match does: a quoted promise or watching
+    /// tag is prose, a real one still signals.
+    #[test]
+    fn a_quoted_promise_or_watching_tag_does_not_signal_but_a_real_one_does() {
+        let quoted = "the gate reads `<promise>MISSION COMPLETE</promise>` from external truth";
+        assert_ne!(Signal::of(quoted), Signal::Promise);
+        assert_eq!(
+            Signal::of("<promise>MISSION COMPLETE: shipped</promise>"),
+            Signal::Promise
+        );
+        assert_eq!(
+            Signal::of("<watching reason=\"ci\" pr=\"4081\">"),
+            Signal::Watching
+        );
+    }
 
     /// Until the warm pass rebuilds a session, truth answers `warming`, and
     /// the decoded probe is neither live nor dead. After the rebuild the same
