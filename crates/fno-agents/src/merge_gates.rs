@@ -872,28 +872,29 @@ pub(crate) fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
 /// changes" or "none of these" is an answer too, and it must keep the hold.
 /// Head-scoped like the role row: a push after the user looked holds again.
 fn answered_question_names_pr(root: &Path, pr: u64, head: &str) -> bool {
-    if head.is_empty() {
-        return false;
-    }
+    !head.is_empty()
+        && approving_pages(root, pr)
+            .iter()
+            .any(|(_, text)| text.contains(head))
+}
+
+/// Every ANSWERED question page that picks the approve option and names the
+/// PR, as `(question id, page text)`, at any head.
+fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
     let dir = crate::escalation::questions_dir(root);
     // Answered pages are archived into done/ after the fact; an approval
     // must not lapse because its page moved there.
-    let mut dirs = vec![dir.clone()];
-    dirs.push(dir.join("done"));
-    dirs.iter().any(|d| {
-        crate::lead_answers::read_question_pages(d).is_ok_and(|pages| {
-            pages.iter().any(|(_stem, text)| {
-                crate::attention_file::parse_page(text)
-                    .map(|(front, _)| {
-                        front.status == "answered"
-                            && front.answer.as_deref().is_some_and(answer_approves)
-                    })
-                    .unwrap_or(false)
-                    && page_names_pr(text, pr)
-                    && text.contains(head)
-            })
+    [dir.clone(), dir.join("done")]
+        .iter()
+        .flat_map(|d| crate::lead_answers::read_question_pages(d).unwrap_or_default())
+        .filter_map(|(_stem, text)| {
+            let (front, _) = crate::attention_file::parse_page(&text)?;
+            (front.status == "answered"
+                && front.answer.as_deref().is_some_and(answer_approves)
+                && page_names_pr(&text, pr))
+            .then_some((front.question_id, text))
         })
-    })
+        .collect()
 }
 
 /// Does a recorded answer pick the approve option? A numbered answer
@@ -969,11 +970,25 @@ fn row_is_chat_attested(row: &Value) -> bool {
         .is_some_and(|r| r.to_lowercase().contains("user in chat"))
 }
 
-/// True when a live role decision row transcribes the user's chat approval
-/// of this PR at this head: authority `role`, the PR's bound node as subject
+/// The rationale cites one of these question ids as a whole token. The
+/// user answered that page on the board, so the board is the channel and
+/// the lead need not write a chat attestation that would be false.
+fn row_cites_any(row: &Value, ids: &[String]) -> bool {
+    let Some(r) = row.get("rationale").and_then(Value::as_str) else {
+        return false;
+    };
+    let tokens: Vec<&str> = r
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .collect();
+    ids.iter().any(|id| tokens.contains(&id.as_str()))
+}
+
+/// True when a live role decision row transcribes the user's approval of
+/// this PR at this head: authority `role`, the PR's bound node as subject
 /// (the decide door lets only the lead whose territory covers that node mint
-/// it), a chat-attested rationale, and text naming both the PR and the exact
-/// head sha the user looked at. Head-scoped like the operator head grant: a
+/// it), a rationale that attests the user's chat words or cites an answered
+/// question page that approves this PR, and text naming both the PR and the
+/// exact head sha the lead re-pinned. Head-scoped like the operator head grant: a
 /// push invalidates the approval. An unreadable index never clears.
 pub(crate) fn role_chat_clears_pr<P: Probes>(
     probes: &P,
@@ -1005,6 +1020,11 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     let Ok(payload) = serde_json::from_slice::<Value>(&out) else {
         return false;
     };
+    let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)
+        .into_iter()
+        .map(|(id, _)| id)
+        .filter(|id| !id.is_empty())
+        .collect();
     payload
         .get("decisions")
         .and_then(Value::as_array)
@@ -1016,7 +1036,7 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
                         row.get("lifecycle").and_then(Value::as_str),
                         Some("live") | Some("unscoped")
                     )
-                    && row_is_chat_attested(row)
+                    && (row_is_chat_attested(row) || row_cites_any(row, &approved))
                     && {
                         let text = row_text(row);
                         text.contains(head) && page_names_pr(&text, pr)
