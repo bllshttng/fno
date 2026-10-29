@@ -6689,6 +6689,19 @@ event_types:
           type: string
           description: "Why that remedy was chosen, from the finding's signature."
 
+  - name: pr_heal_hold
+    description: "CI heal drive loop: one row per rerun held for a live Actions incident, keyed like the rerun ledger so the unchanged-PR skip opens for a held head and the next tick re-probes the incident. Rust-emitted into the global journal."
+    sources: [pr-heal, daemon]
+    data:
+      required: [key, run_id]
+      properties:
+        key:
+          type: string
+          description: "The (sha, run id) dedup key of the held rerun."
+        run_id:
+          type: string
+          description: "The CI run id the held rerun would have re-queued."
+
   - name: daemon_fleet_scope
     description: "Daemon startup scope declaration: whether this daemon owns a sandbox home or the operator's shared home. Readers key fleet gating and board routing off it instead of probing paths."
     sources: [daemon]

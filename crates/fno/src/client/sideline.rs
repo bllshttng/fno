@@ -24,6 +24,23 @@ const SIDELINE_RIGHT_SLOT_W: u16 = 6;
 /// card, theme-dim on a resting one.
 const CARD_EDGE_BAR: char = '\u{258e}';
 pub(super) const PIN_STAR: char = '\u{2605}';
+pub(super) const PIN_OUTLINE: char = '\u{2606}';
+/// The cell a row's pin star sits in: a card's line 2 under the status
+/// mark, else the list gutter. Paint and click both read it.
+fn pin_star_cell<'a>(
+    drow: &DisplayRow<'a>,
+    rects: &[RtRect],
+    card: bool,
+    density: Density,
+) -> Option<(usize, &'a AgentRow)> {
+    match *drow {
+        DisplayRow::CardDetail(a) if card => {
+            Some(((rects[0].x + rects[0].width).saturating_sub(1) as usize, a))
+        }
+        DisplayRow::Agent(a) if !card || density == Density::Slim => Some((0, a)),
+        _ => None,
+    }
+}
 const CARD_COLUMNS: [Constraint; 5] = [
     Constraint::Length(5),
     Constraint::Min(22),
@@ -114,6 +131,21 @@ impl View {
             .flex(Flex::Start)
             .spacing(1)
             .split(RtRect::new(gutter, 0, text_w.saturating_sub(gutter), 1))
+    }
+
+    /// The agent whose pin star sits under a sideline click, if any.
+    pub(super) fn pin_star_at(&self, row: u16, col: u16) -> Option<AgentRow> {
+        let i = self.sideline_row_at(row, col)?;
+        let rects = self.worker_column_rects(self.sideline_paint_w().checked_sub(1)? as u16);
+        let card = self.sideline_layout == sideline_color::SidelineLayout::Card;
+        let density = if self.sideline_full {
+            Density::Extended
+        } else {
+            self.density
+        };
+        let rows = self.painted_rows();
+        let (c, a) = pin_star_cell(rows.get(i)?, &rects, card, density)?;
+        (c == col as usize).then(|| a.clone())
     }
 
     /// A list row's column 0 is the pin gutter, so a pin never moves a name.
@@ -839,20 +871,20 @@ impl View {
                     }
                 }
             }
-            // The pin star, painted after every band: a card's line 2 under
-            // the status mark, else the gutter. Accent unless a band owns it.
-            let star_col = match drow {
-                DisplayRow::CardDetail(a) if card && a.pinned => {
-                    Some((rects[0].x + rects[0].width).saturating_sub(1) as usize)
-                }
-                DisplayRow::Agent(a) if (!card || density == Density::Slim) && a.pinned => Some(0),
-                _ => None,
-            };
-            if let Some(col) = star_col.filter(|c| *c < text_w) {
-                let cell = &mut cells[r * cols + col];
-                cell.c = PIN_STAR;
-                if cell.bg == Color::Default {
-                    cell.fg = self.theme.brand;
+            // The pin star, painted after every band: filled in the accent
+            // when pinned, an outline on any highlighted row or card (chosen,
+            // cursor, hover).
+            if let Some((col, a)) = pin_star_cell(drow, &rects, card, density) {
+                if col < text_w && (a.pinned || highlit || driven) {
+                    let cell = &mut cells[r * cols + col];
+                    cell.c = if a.pinned { PIN_STAR } else { PIN_OUTLINE };
+                    if cell.bg == Color::Default {
+                        cell.fg = if a.pinned {
+                            self.theme.brand
+                        } else {
+                            crate::theme::dim_fg(&self.theme)
+                        };
+                    }
                 }
             }
         }
