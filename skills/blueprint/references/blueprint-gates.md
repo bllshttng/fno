@@ -461,6 +461,16 @@ A declaration in any other shape (a multi-line inline list, say) refuses done as
 "probes undeterminable" rather than passing as if you had declared nothing -
 declaring a gate the loop cannot read must never read as no gate.
 
+**Portability refusals at plan validation.** The validator refuses three measured probe shapes outright.
+
+A `\b` boundary in a `grep -E` pattern matches nothing on macOS because BSD regex has none in ERE. Use a bracket boundary.
+
+A plain `grep -P` flag fails under `/usr/bin/grep` with exit 2 while interactive shells resolve ugrep.
+
+`grep -c` piped into a zero-count check reads as failure under the pipefail wrapper.
+
+Each refusal message names the portable rewrite.
+
 **Constraints.** At most 3 probes (a gate, not a test suite); each gets a 60s
 native timeout and its whole process group is killed past it; a missing binary
 (127), a non-zero exit, and a timeout all fail closed with the command and code

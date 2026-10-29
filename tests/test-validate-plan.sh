@@ -2308,6 +2308,15 @@ else
     fail "AC15e: clean probes should pass (exit $EXIT_CODE): $OUTPUT"
 fi
 
+PLAN_PROBE_INLINE="$TMPDIR_BASE/probe_inline.md"
+probe_fixture "$PLAN_PROBE_INLINE" $'done_probes: ["git grep -q -E \'\\\\bgoal\\\\b\' -- \'*.py\'"]'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_INLINE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "backslash-b" <<< "$OUTPUT"; then
+    pass "AC15f: the inline bracket list form is scanned with the same refusals"
+else
+    fail "AC15f: inline-form backslash-b probe should be refused (exit $EXIT_CODE): $OUTPUT"
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Test Results ==="
