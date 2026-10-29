@@ -30,7 +30,7 @@ The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `re
 
 ## Who asks: the ladder, by default
 
-A worker's question goes to its lead first, and only a lead files to the user's board, after it tries the answer itself (ruling d-69c529b9). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung. A lead-rung row shows there 10 minutes after it reached its holder with no answer. So nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
+A worker's question goes to its lead first, and only a lead files to the user's board, after it tries the answer itself (law d-0b7be63a). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung. A lead-rung row shows there 10 minutes after it reached its holder with no answer. So nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
 
 The knob is `questions.route` in `.fno/config.toml`:
 
