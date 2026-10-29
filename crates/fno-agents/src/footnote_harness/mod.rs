@@ -117,9 +117,7 @@ fn spawn(cwd: &Path) -> Result<Child, AskOutcome> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for name in crate::claims::AMBIENT_IDENTITY_NAMES {
-        cmd.env_remove(name);
-    }
+    crate::claims::scrub_identity_env(&mut cmd);
     // SAFETY: setpgid is async-signal-safe; it runs between fork and exec.
     unsafe {
         cmd.pre_exec(|| {

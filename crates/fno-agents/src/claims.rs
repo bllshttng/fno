@@ -1253,6 +1253,16 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("FNO_NODE_REASON", "fno"),
 ];
 
+/// Remove every ambient identity name from a child command's environment.
+/// The one scrub loop, so the capture and the child hygiene cannot drift:
+/// [`stamp_command_env`] calls it per worker, and the shared hosts the
+/// client boots (the daemon, the claude supervisor) call it at birth.
+pub(crate) fn scrub_identity_env(command: &mut std::process::Command) {
+    for name in AMBIENT_IDENTITY_NAMES {
+        command.env_remove(name);
+    }
+}
+
 /// Clear inherited session identity before stamping the values owned by this
 /// launcher. Routing and authentication variables remain untouched.
 pub(crate) fn stamp_command_env(
@@ -1261,9 +1271,7 @@ pub(crate) fn stamp_command_env(
     harness: &str,
     session_id: Option<&str>,
 ) {
-    for name in AMBIENT_IDENTITY_NAMES {
-        command.env_remove(name);
-    }
+    scrub_identity_env(command);
     // The child is a session, not a hook (crates/fno-agents/src/join_marker.rs).
     command.env_remove(crate::join_marker::HOOK_CONTEXT_ENV);
     if let Some(name) = agent_self {

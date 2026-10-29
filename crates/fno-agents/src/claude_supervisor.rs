@@ -259,6 +259,9 @@ fn supervisor_birth_command(config_dir: Option<&Path>) -> std::process::Command 
     for key in held_poison_keys() {
         cmd.env_remove(key);
     }
+    // The supervisor outlives the session that births it: an inherited
+    // claude/codex session marker would ride every later mint it makes.
+    crate::claims::scrub_identity_env(&mut cmd);
     if crate::agents_config::telemetry_claude_otel(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     ) {

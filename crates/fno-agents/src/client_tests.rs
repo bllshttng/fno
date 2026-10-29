@@ -812,6 +812,101 @@ fn parse_rows() {
 // an unflagged spawn takes the harness's default lane
 // -----------------------------------------------------------------------
 
+/// Saves one process env var and restores it on Drop, so a panicking test
+/// cannot leak the mutated environment to tests running after it. The lib's
+/// `EnvVarGuard` is cfg(test) of the lib crate, invisible to this bin test
+/// build.
+struct EdgeEnvGuard {
+    name: &'static str,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl EdgeEnvGuard {
+    fn unset(name: &'static str) -> Self {
+        let prev = std::env::var_os(name);
+        std::env::remove_var(name);
+        Self { name, prev }
+    }
+}
+
+impl Drop for EdgeEnvGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var(self.name, v),
+            None => std::env::remove_var(self.name),
+        }
+    }
+}
+
+/// The caller's ambient markers must reach the spawn request: the client
+/// runs as the spawning session's child, so the edge rides its env, and the
+/// daemon's scrubbed env can never recover it (node-provenance: capture is
+/// ambient).
+#[test]
+fn spawn_request_carries_the_callers_codex_edge() {
+    let _lock = resume_env_lock();
+    // A disagreeing family or a canonical stamp refuses the codex edge, so
+    // the test clears them before it speaks as a codex caller.
+    let cleared: Vec<EdgeEnvGuard> = [
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "CLAUDECODE",
+        "GEMINI_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+        "FNO_HARNESS_NAME",
+        "FNO_HARNESS_SESSION_ID",
+    ]
+    .iter()
+    .map(|name| EdgeEnvGuard::unset(name))
+    .collect();
+    let thread = EdgeEnvGuard::unset("CODEX_THREAD_ID");
+    let session = EdgeEnvGuard::unset("CODEX_SESSION_ID");
+    std::env::set_var("CODEX_THREAD_ID", "01a0bba2-parent");
+    std::env::set_var("CODEX_SESSION_ID", "01a0bba2-parent");
+    let args = vec![
+        "wk".to_string(),
+        "--harness".to_string(),
+        "codex".to_string(),
+    ];
+    let (_method, params) = build_request("spawn", &args).unwrap();
+    assert_eq!(params["spawned_by_session"], "01a0bba2-parent");
+    assert_eq!(params["spawned_by_harness"], "codex");
+    drop(thread);
+    drop(session);
+    drop(cleared);
+}
+
+/// No markers, no edge: the daemon stamps its honest null instead of a
+/// guessed parent. The guard clears every family first, so the test passes
+/// on a bare CI runner and inside a live session alike.
+#[test]
+fn spawn_request_without_markers_carries_no_edge() {
+    let _lock = resume_env_lock();
+    let cleared: Vec<EdgeEnvGuard> = [
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "CLAUDECODE",
+        "GEMINI_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+        "FNO_HARNESS_NAME",
+        "FNO_HARNESS_SESSION_ID",
+    ]
+    .iter()
+    .map(|name| EdgeEnvGuard::unset(name))
+    .collect();
+    let args = vec![
+        "wk".to_string(),
+        "--harness".to_string(),
+        "codex".to_string(),
+    ];
+    let (_method, params) = build_request("spawn", &args).unwrap();
+    assert!(params.get("spawned_by_session").is_none());
+    assert!(params.get("spawned_by_harness").is_none());
+    drop(cleared);
+}
+
 #[test]
 fn substrate_rows() {
     // A pane comes only from an explicit lane and gets the interactive

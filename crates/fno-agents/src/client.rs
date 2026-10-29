@@ -339,16 +339,14 @@ pub async fn ensure_daemon(
     // refuses a --home that disagrees with the env rather than silently
     // preferring one.
     cmd.arg("--home").arg(home.root());
-    // Scrub the ambient harness session markers from the daemon's environment.
+    // Scrub the ambient identity markers from the daemon's environment.
     // A daemon lazy-started from inside a session otherwise carries that
     // session's CLAUDE_CODE_SESSION_ID for its lifetime, and every
     // daemon-minted PTY worker row then records that stale session as its
     // parent (laundered lineage) while `resolve_harness` tags the daemon's own
     // claims with a harness it does not own - the exact leak the two-family
     // refusal exists to prevent, on the one path it could not see.
-    for (marker, _) in crate::claims::HARNESS_SESSION_MARKERS {
-        cmd.env_remove(marker);
-    }
+    crate::claims::scrub_identity_env(cmd.as_std_mut());
     // Inherit the worker/daemon bin overrides so a test harness's binaries are used.
     if let Some(v) = std::env::var_os("FNO_AGENTS_WORKER_BIN") {
         cmd.env("FNO_AGENTS_WORKER_BIN", v);

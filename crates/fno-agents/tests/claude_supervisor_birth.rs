@@ -78,6 +78,11 @@ fn birth_under_a_dirty_env_is_clean() {
         "ANTHROPIC_MODEL",
         "CLAUDE_PID",
         "CODEX_COMPANION_SESSION_ID",
+        // Ambient session markers are poison for a shared host too: the
+        // supervisor outlives the session that births it, and an inherited
+        // marker would ride every later mint it makes.
+        "CODEX_THREAD_ID",
+        "CLAUDE_CODE_SESSION_ID",
     ];
     let prior: Vec<_> = poison.iter().map(|k| (*k, std::env::var(k).ok())).collect();
     for k in poison {

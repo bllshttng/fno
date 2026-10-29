@@ -146,6 +146,33 @@ fn command_stamp_scrubs_all_identity_and_sets_only_bound_session() {
 }
 
 #[test]
+fn scrub_identity_env_clears_every_ambient_name_and_keeps_the_rest() {
+    let mut command = std::process::Command::new("sh");
+    command.env("PATH", "/usr/bin:/bin");
+    command.env("CODEX_THREAD_ID", "parent-thread");
+    command.env("CLAUDE_CODE_SESSION_ID", "parent-session");
+    command.env("FNO_AGENT_SUBSTRATE", "pane");
+    command.env("FNO_HARNESS_SESSION_ID", "parent-stamp");
+    scrub_identity_env(&mut command);
+    let values: std::collections::HashMap<_, _> = command
+        .get_envs()
+        .filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        })
+        .collect();
+    for name in AMBIENT_IDENTITY_NAMES {
+        assert!(!values.contains_key(*name), "{name} must be scrubbed");
+    }
+    // Routing and authentication variables are not identity: PATH stays.
+    assert_eq!(values.get("PATH").map(String::as_str), Some("/usr/bin:/bin"));
+}
+
+#[test]
 fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
     // Single claude marker: the VALUE is the parent session id.
     let claude = |k: &str| match k {

@@ -3,8 +3,11 @@
 //! node seed rewrite, normalization, the compose and the account pick), then
 //! the duties the Python front door ran around it before it exec'd this
 //! client: the codex git-grant refusal, the loop gate, the worker
-//! writable-dir export, the codex sandbox probe, the worktree-policy pin and
-//! the ambient identity scrub. A non-spawn argv passes through untouched.
+//! writable-dir export, the codex sandbox probe and the worktree-policy pin.
+//! The seam does NOT scrub the ambient identity markers: the parent-edge
+//! capture downstream (`build_request`'s spawn arm, the ask lanes' mints)
+//! reads them, and every child launch scrubs its own command instead. A
+//! non-spawn argv passes through untouched.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -64,15 +67,13 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     export_worker_dirs(&cwd);
     refuse_codex_unreachable_tools(&argv, &cwd)?;
     pin_worktree_policy(&argv, &here);
-    // The scrub below removes the markers the harness is inferred from, so
-    // the inferred harness rides the argv first, as the Python leg passed it.
+    // The ambient harness rides the argv explicitly, as the Python leg passed
+    // it: the row's harness is decided once here, not re-derived later from
+    // an env a child launch may have re-stamped.
     let mut argv = argv;
     if flag_value(&argv[1..], HARNESS_FLAGS).is_none() {
         let harness = spawn_harness(&argv);
         argv.splice(1..1, ["--harness".to_string(), harness]);
-    }
-    for name in crate::pane_spawn::env_wrap::AMBIENT_IDENTITY_ENV {
-        std::env::remove_var(name);
     }
     Ok(argv)
 }
@@ -385,5 +386,29 @@ mod tests {
             None
         );
         std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn admit_spawn_keeps_the_callers_identity_markers() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = std::env::temp_dir().join(format!("fno-seam-identity-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let _home = crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.to_str().unwrap());
+        let _thread = crate::claims::EnvVarGuard::set("CODEX_THREAD_ID", "01a0bba2-parent");
+        let _claude =
+            crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "seed-2222-3333");
+
+        let admitted =
+            admit_spawn(argv(&["spawn", "--name", "wk", "hi", "--harness", "claude"]));
+        // Read before the guards restore: the markers must survive admission,
+        // because the parent-edge capture reads them after the seam and every
+        // child launch scrubs its own command instead.
+        let thread = std::env::var("CODEX_THREAD_ID");
+        let claude = std::env::var("CLAUDE_CODE_SESSION_ID");
+        admitted.expect("a plain claude spawn admits");
+        assert_eq!(thread.as_deref(), Ok("01a0bba2-parent"));
+        assert_eq!(claude.as_deref(), Ok("seed-2222-3333"));
     }
 }
