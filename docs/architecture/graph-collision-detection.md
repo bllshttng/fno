@@ -115,9 +115,9 @@ Graph fields the mechanism reads and writes, all missing-field tolerant:
 
 | Field | Owner | Purpose |
 |-------|-------|---------|
-| `collisions_acknowledged: list[str]` | the update verb | ab-IDs of collisions the user knowingly proceeded past. The sentinel `__skipped_check__` records "I ran with `--no-collision-check`." |
-| `superseded_by: str \| None` | the supersede verb | The new node ID that replaced this one. |
-| `supersedes: list[str]` | the supersede verb | The old node IDs this node replaces. |
+| `collisions_acknowledged: list[str]` | the update command | ab-IDs of collisions the user knowingly proceeded past. The sentinel `__skipped_check__` records "I ran with `--no-collision-check`." |
+| `superseded_by: str \| None` | the supersede command | The new node ID that replaced this one. |
+| `supersedes: list[str]` | the supersede command | The old node IDs this node replaces. |
 
 Acknowledged collisions whose referenced nodes have since shipped surface
 as a "your acknowledged collision is now resolved - verify the conflict
@@ -135,7 +135,7 @@ done > superseded > deferred > blocked > claimed > idea > ready
 A superseded node never re-surfaces as ready or in `fno backlog next`.
 Reactivation requires explicit `unsupersede` (not just `undefer`) because
 the user must consciously revive a plan that another plan has already
-supplanted. The supersede verb refuses to mutate already-shipped or
+supplanted. The supersede command refuses to mutate already-shipped or
 already-superseded nodes so the operation is never a destructive write
 against ship history; the user opens a follow-up node instead.
 
