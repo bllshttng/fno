@@ -594,8 +594,8 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
 
 /// The visual-approval gate: a PR whose changed files touch a configured
 /// paint path holds until an ANSWERED question page names the PR, or a
-/// role-recorded decision row transcribes the user's chat approval of this
-/// exact head. The user's look is the only clear, mechanizing the prose
+/// role-recorded decision row transcribes the user's chat or board approval
+/// of this exact head. The user's look is the only clear, mechanizing the prose
 /// rulings this gate replaces (rebrand and splash PRs merged with no user
 /// look). `merge.visual_paint_paths` lists the lines the gate watches; an
 /// explicit empty list disarms it, and no key at all arms footnote's own mux
@@ -660,11 +660,12 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         "PR {pr} touches the paint surface the config lists ({}); full CI is held at \
          this head, and the daemon cancels every run but rust-ci (the shots) until the \
          look clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
-         decision whose rationale attests the chat and whose text names the PR and \
-         its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
-         --authority role --rationale 'user in chat: <the user's words>'`). Ask via \
+         decision whose text names the PR and its head sha (`fno backlog decide <node> \
+         'Approved: PR {pr} at {head}' --authority role --rationale 'user in chat: \
+         <the user's words>'`). For a board answer, cite the answered page that names \
+         the PR instead (`--rationale 'user answered <q-id> on the board'`). Ask via \
          `fno inbox outstanding ask`, then the user answers the page or the lead \
-         records the chat approval. Pass each shot with --image.",
+         records the approval. Pass each shot with --image.",
         touched.join(", ")
     );
     match (node_id.as_deref(), shots.as_slice()) {
