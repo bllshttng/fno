@@ -314,7 +314,7 @@ const TITLE_PUSH_STATUSES: &[crate::AgentStatus] = &[
 /// The harness-title push a completed rename owes the session: the native
 /// rename command when the row's harness declares one, the session is
 /// quiet-capable, and its reported title still differs. `None` names no
-/// push: no harness session, no delivery lane, no native verb, the title
+/// push: no harness session, no delivery lane, no native rename command, the title
 /// already matches, or the row is not quiet-capable.
 pub(crate) fn title_push(row: &RegistryEntry, new_name: &str) -> Option<String> {
     row.harness_session_id
@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn title_push_skips_a_harness_without_the_native_verb() {
+    fn title_push_skips_a_harness_without_the_native_rename_command() {
         let mut r = row("kestrel", "sess-1");
         r.harness = Some("codex".into());
         r.status = crate::AgentStatus::Live;
