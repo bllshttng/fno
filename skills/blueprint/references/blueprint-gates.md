@@ -448,11 +448,13 @@ lookup) so it can only pass if the thing ran recently.
 `... | grep -q x` exits on the grep; `... | tail -5` exits on the tail and
 masks the real status, so a broken command reads as a pass.
 
-**Emit stdout on success, never a silent flag.** A PASS with empty stdout
-reads as vacuous and is held to `SKIP`, which never satisfies this gate - so
-`grep -q`/`-s` and any other output-suppressing predicate silently blocks a
-probe that would otherwise pass forever. Use `grep -o` (or `grep -c`, or any
-predicate that prints the thing it matched) so a real pass carries evidence.
+**Emit stdout on success, never a silent flag.** A PASS with empty stdout reads as vacuous and is held to `SKIP`.
+
+`grep -q`/`-s` and any other output-suppressing predicate silently blocks a probe that can otherwise pass forever.
+
+Use `grep -o` (or a bare `grep -c` presence assert, or any predicate that prints the thing it matched) so a real pass carries evidence.
+
+Never pipe `grep -c` into a zero-count check: it exits 1 on zero and reads as failure under the pipefail wrapper.
 
 **Use the block form above, or a single-line inline list** (`done_probes: ["cmd"]`).
 A declaration in any other shape (a multi-line inline list, say) refuses done as
