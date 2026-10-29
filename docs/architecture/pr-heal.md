@@ -94,6 +94,8 @@ The daemon's `look_hold` arm closes that gap. Every 2 minutes it reads each open
 
 The user answers the head's page, or a role row records the chat approval, and the look clears at that head. The next pass then reruns the runs the arm cancelled at that head and writes one `look_hold_release` row. A run cancelled by hand or by other automation is never rerun. A gate that cannot answer neither cancels nor reruns. `fno do pr status` prints the hold in the `visual_approval` blocker, so no lead cancels runs by hand. A head's changed-file list is read once and cached, so a PR that touches no paint path costs one runs read per pass.
 
+An approval carries to a later head when the PR's own paint patch is unchanged. A main merge and a test-only commit both keep it. The gate takes the newest earlier commit of the PR that the user approved. It compares the paint files of the three-dot diff against the base, at that commit and at the head. Hunk headers do not count, so a merge that only moves line numbers still matches. Any other paint change holds. A merged PR that is not yet on main brings its own paint lines, so that merge holds until the other PR lands on main.
+
 ## The idle-PR alarm
 
 On 2026-10-16 the user found 37 open PRs. Several were green and mergeable for days, and nothing raised an alarm. The owning worker merges its own PR. The daemon's `pr_idle` arm is the backstop for a worker that left. Every 15 minutes it lists the open PRs of each registry repo. It reads each non-draft PR through the status door, so the read rides the shared status cache and the account poller. It reads the merge gate's `ready` verdict. A PR that is held, uncovered or waiting on the user's visual look never reads ready.
