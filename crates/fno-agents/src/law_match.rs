@@ -61,6 +61,11 @@ enum MatchRequest {
     /// exits 0, like `stage` and `match`.
     #[serde(rename = "history")]
     History(RecordDoorRequest),
+    /// The restore door: `argv` is the `fno inbox law restore` command line.
+    /// Same ownership as `retract`: stdout carries the new id, the exit code
+    /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
+    #[serde(rename = "restore")]
+    Restore(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -1117,7 +1122,7 @@ const COORDINATION_MARKERS: &[&str] = &[
 ];
 
 /// `^d-[0-9a-f]{8}$`, the shape `law.py` enforced on `--supersedes`.
-fn is_decision_id(s: &str) -> bool {
+pub(crate) fn is_decision_id(s: &str) -> bool {
     let Some(rest) = s.strip_prefix("d-") else {
         return false;
     };
@@ -1573,10 +1578,10 @@ pub(crate) fn attended_terminal() -> bool {
 /// derived from ONE identity resolution. Port of require_marked_caller +
 /// `_resolve_decider` composed, so the two can never disagree.
 pub(crate) struct Caller {
-    authority: String,
-    decided_by: String,
-    attested_by: Option<String>,
-    relayed_by: Option<String>,
+    pub(crate) authority: String,
+    pub(crate) decided_by: String,
+    pub(crate) attested_by: Option<String>,
+    pub(crate) relayed_by: Option<String>,
 }
 
 /// Resolve the caller from process truth: the ancestry prover first, the
@@ -1603,7 +1608,7 @@ pub(crate) fn resolve_caller() -> Result<Caller, String> {
 
 #[cfg(test)]
 impl Caller {
-    fn as_authority(authority: &str) -> Caller {
+    pub(crate) fn as_authority(authority: &str) -> Caller {
         Caller {
             authority: authority.to_string(),
             decided_by: if authority == "operator" {
@@ -1815,7 +1820,7 @@ pub(crate) fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-fn door_refuse(message: &str) -> i32 {
+pub(crate) fn door_refuse(message: &str) -> i32 {
     eprintln!("fno law: refused: {message}. Nothing was recorded.");
     3
 }
@@ -2066,34 +2071,8 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         crate::identity::stamp_person(map);
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
-    // Durability first: the project journal. A failed write here records
-    // nothing anywhere.
-    let journal = project_events_journal();
-    if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
-        return door_refuse(&format!("the project journal write failed ({e})"));
-    }
-    // Recall second: the machine-wide decision index. The event id names the
-    // recovery, because re-running would mint a second id for one ruling.
-    let index_path = decision_index::default_state_path("decisions.jsonl");
-    if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
-        eprintln!(
-            "fno law: recorded {decision_id} to the project journal, but the \
-             recall index write failed ({e}). Run `fno backlog decide-reindex`; \
-             do not re-run the law command."
-        );
-        return 1;
-    }
-    // The graph decisions table is the store `fno backlog decisions` reads
-    // first; a refusal degrades to the durable capture, never a lost ruling.
-    let graph_path = crate::graph_get::default_graph_path();
-    if let Err(e) = crate::backlog::api::decision_record(
-        &crate::backlog::api::Store::new(&graph_path),
-        envelope.clone(),
-    ) {
-        eprintln!(
-            "decide: recorded {decision_id}, but the graph store refused the \
-             ruling ({e:?}). The decision is durable in the journal and the index."
-        );
+    if let Err(code) = append_decision(&envelope, &decision_id) {
+        return code;
     }
     if matches_node_id_shape(&door.subject.to_lowercase()) {
         // The node-view projection (`_project`) is Python-side and not ported;
@@ -2130,6 +2109,41 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         eprintln!("{line}");
     }
     0
+}
+
+/// The three-store write of one `operator_decision` envelope: the project
+/// journal first (a failure records nothing, exit 3), then the recall index
+/// (a failure names the reindex, exit 1), then the graph table (a refusal
+/// degrades to the durable capture). `Err` carries the exit code.
+pub(crate) fn append_decision(envelope: &Value, decision_id: &str) -> Result<(), i32> {
+    let journal = project_events_journal();
+    if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
+        return Err(door_refuse(&format!(
+            "the project journal write failed ({e})"
+        )));
+    }
+    // The event id names the recovery, because re-running would mint a
+    // second id for one ruling.
+    let index_path = decision_index::default_state_path("decisions.jsonl");
+    if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
+        eprintln!(
+            "fno law: recorded {decision_id} to the project journal, but the \
+             recall index write failed ({e}). Run `fno backlog decide-reindex`; \
+             do not re-run the law command."
+        );
+        return Err(1);
+    }
+    let graph_path = crate::graph_get::default_graph_path();
+    if let Err(e) = crate::backlog::api::decision_record(
+        &crate::backlog::api::Store::new(&graph_path),
+        envelope.clone(),
+    ) {
+        eprintln!(
+            "decide: recorded {decision_id}, but the graph store refused the \
+             ruling ({e:?}). The decision is durable in the journal and the index."
+        );
+    }
+    Ok(())
 }
 
 /// Raw text cap: the first `cap` chars, Python `text[:cap]` semantics (no
@@ -2211,7 +2225,7 @@ fn parse_retract_door(
     Ok(door)
 }
 
-fn row_id(row: &Value) -> &str {
+pub(crate) fn row_id(row: &Value) -> &str {
     row.get("decision_id").and_then(Value::as_str).unwrap_or("")
 }
 
@@ -2223,7 +2237,7 @@ pub(crate) fn is_retraction_row(row: &Value) -> bool {
     row.get("_event_type").and_then(Value::as_str) == Some("decision_retracted")
 }
 
-fn row_subject(row: &Value) -> &str {
+pub(crate) fn row_subject(row: &Value) -> &str {
     row.get("subject").and_then(Value::as_str).unwrap_or("")
 }
 
@@ -2240,7 +2254,7 @@ pub(crate) fn all_decision_rows() -> Result<(Vec<Value>, usize), String> {
 /// The rows this caller's project may address: global plus the current
 /// project, the stage view. Unresolvable fails open, matching
 /// `retain_in_scope` semantics.
-fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
+pub(crate) fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
     match resolve_project(None, &settings_sources()) {
         Ok(slug) => rows
             .into_iter()
@@ -2622,6 +2636,9 @@ fn write_retraction(
                 "{label}: retracted {decision_id}. The original decision remains \
                  in the append-only history."
             );
+            if decision_index::is_law(target) {
+                eprintln!("undo: fno inbox law restore {decision_id}");
+            }
             0
         }
         RetractOutcome::Done => {
@@ -2630,6 +2647,9 @@ fn write_retraction(
                 "{label}: retracted {decision_id}. The original decision remains \
                  in the append-only history."
             );
+            if decision_index::is_law(target) {
+                eprintln!("undo: fno inbox law restore {decision_id}");
+            }
             0
         }
     }
@@ -2980,6 +3000,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         }
         MatchRequest::History(r) => {
             return run_history_read(&r.argv);
+        }
+        MatchRequest::Restore(r) => {
+            return crate::law_restore::run_restore(&r.argv);
         }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
