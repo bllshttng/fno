@@ -119,15 +119,13 @@ fn post_lines(home: &crate::paths::AgentsHome, session_id: &str, lines: &[String
     );
     matches!(
         block_on(crate::client::call_if_running(home, &req)),
-        Ok(Ok(_))
+        Some(Ok(resp)) if resp.error().is_none()
     )
 }
 
 /// A tiny block-on for hook processes: main() dispatches hooks before the
 /// tokio runtime builds, so the producer builds its own current-thread one.
-fn block_on<F: std::future::Future>(
-    fut: F,
-) -> Option<Result<crate::protocol::Response, crate::client::ClientError>> {
+fn block_on<F: std::future::Future>(fut: F) -> Option<F::Output> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -136,8 +134,12 @@ fn block_on<F: std::future::Future>(
 }
 
 /// The hook entry: parse the payload, push the delta, advance the cursor on
-/// ack. Always exit 0.
+/// ack. Always exit 0. Only a boxed session pushes: an unpinned session's
+/// transcript file is on the host, where every reader can open it.
 pub fn run(_args: &[String]) -> i32 {
+    if !crate::client::sock_pinned() {
+        return 0;
+    }
     let payload: Value = match serde_json::from_str(&crate::hook::read_stdin()) {
         Ok(v) => v,
         Err(_) => return 0,

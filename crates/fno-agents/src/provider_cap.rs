@@ -400,9 +400,9 @@ pub(crate) fn capped_tail_stored(
         }
         // Stored rows exist but the window missed: the file may hold the
         // newer rows the hook has not pushed yet, so fall through.
-        stored_fallback(journal, session_id, codex, fallback, unknown)
+        stored_fallback(codex, fallback, unknown)
     } else {
-        stored_fallback(journal, session_id, codex, fallback, None)
+        stored_fallback(codex, fallback, None)
     }
 }
 
@@ -410,8 +410,6 @@ pub(crate) fn capped_tail_stored(
 /// the harness dispatch rides `codex`. A missing or unreadable path reads
 /// the honest unknown: never idle, never parked.
 fn stored_fallback(
-    journal: &std::path::Path,
-    session_id: &str,
     codex: bool,
     fallback: Option<&std::path::Path>,
     unknown: Option<String>,
