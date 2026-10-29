@@ -377,7 +377,15 @@ fn strip_marker_bracket(line: &str) -> &str {
     if !kebab || key.is_empty() {
         return line;
     }
-    rest[close + 1..].trim_start()
+    let after = &rest[close + 1..];
+    match after.chars().next() {
+        // End of line: the marker-only line display_title falls through from.
+        None => after,
+        // The emitters write `] ` before the prose; a bracket followed by
+        // any other character is content the title keeps.
+        Some(ch) if ch.is_whitespace() => after.trim_start(),
+        Some(_) => line,
+    }
 }
 
 /// Build one item from an `operator_question` row (`data` fields read
@@ -1214,6 +1222,11 @@ mod tests {
             display_title("[a:b] keep me"),
             "[a:b] keep me",
             "a single-word token is not a marker"
+        );
+        assert_eq!(
+            display_title("[client-side:render]Which implementation?"),
+            "[client-side:render]Which implementation?",
+            "no delimiter after the bracket is content"
         );
         // No text: the row names its asker and node instead of a bare id.
         let silent = row("q-e", "", json!({"asker": "daemon", "node": "x-9f8e"}));

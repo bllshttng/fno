@@ -335,10 +335,19 @@ pub fn tick_pages(
             && all_open.contains(page.front.question_id.as_str())
             && !done_ids_now.contains(page.front.question_id.as_str())
         {
+            // A page rendered before the marker strip keeps the residue in
+            // its frontmatter; the live item's title is already clean, so
+            // the index serves it instead of the stored words.
+            let title = match open_by_id.get(page.front.question_id.as_str()) {
+                Some(item) if !item.title.trim().is_empty() => {
+                    attention_file::page_title(&item.title)
+                }
+                _ => attention_file::unescape_text(&page.front.title),
+            };
             open_entries.push(IndexEntry {
                 stem: page.stem.clone(),
                 id: page.front.question_id.clone(),
-                title: attention_file::unescape_text(&page.front.title),
+                title,
                 kind: page.front.kind.clone(),
                 blocks: page.front.blocks.clone(),
                 lead: page.front.lead.clone(),
@@ -2283,6 +2292,40 @@ mod tests {
         item.ready = true;
         item.missing.clear();
         item
+    }
+
+    #[test]
+    fn the_index_serves_the_live_title_over_a_pre_strip_page_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        let mut item = ready_item("q-old", "question");
+        item.title = "Branch f (opus) forked. Inherit or clean?".into();
+        // A page rendered before the marker strip: its frontmatter title
+        // kept the marker words the old formatter only unwrapped.
+        let rendered = render_page(&item, &Routing::default());
+        let stale = rendered.replace(
+            "title: Branch f (opus) forked. Inherit or clean?",
+            "title: session-transition-branch:t-opus:a:b Branch f (opus) forked. Inherit or clean?",
+        );
+        assert_ne!(stale, rendered, "fixture: the title line must exist");
+        io.files.insert(dir.path().join("q-old.md"), stale);
+        let mut state = HashMap::new();
+        let _ = tick_pages(
+            &[item],
+            &HashMap::new(),
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1000,
+            120,
+            &mut io,
+        );
+        let index = io
+            .files
+            .get(&dir.path().join("questions.md"))
+            .expect("the tick rewrites the index");
+        assert!(index.contains("Branch f (opus) forked"), "{index}");
+        assert!(!index.contains("session-transition-branch"), "{index}");
     }
 
     #[test]
