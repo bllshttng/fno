@@ -9,7 +9,6 @@
 use crate::client_commands::{py_repr_str, read_registry_entries, resolve_entry_with_heal};
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -60,34 +59,6 @@ pub fn render_frame(frame: &Value) -> Option<String> {
         "malformed" => Some("  · (skipped malformed frame)".to_string()),
         _ => None,
     }
-}
-
-/// One length-prefixed JSON RPC to a worker socket. `None` on any transport
-/// failure or error reply, like the Python `rpc_roundtrip` it replaces.
-fn worker_rpc(sock: &Path, method: &str, params: Value) -> Option<Value> {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-    // std has no connect timeout for a unix socket; a listener that never
-    // accepts still fails the bounded write or read below.
-    let mut stream = UnixStream::connect(sock).ok()?;
-    stream.set_read_timeout(Some(READ_TIMEOUT)).ok()?;
-    stream.set_write_timeout(Some(READ_TIMEOUT)).ok()?;
-    let body = serde_json::to_vec(&json!({ "id": 1, "method": method, "params": params })).ok()?;
-    stream.write_all(&(body.len() as u32).to_le_bytes()).ok()?;
-    stream.write_all(&body).ok()?;
-    let mut len = [0u8; 4];
-    stream.read_exact(&mut len).ok()?;
-    let len = u32::from_le_bytes(len);
-    if len > crate::protocol::MAX_FRAME_BYTES {
-        return None;
-    }
-    let mut reply = vec![0u8; len as usize];
-    stream.read_exact(&mut reply).ok()?;
-    let reply: Value = serde_json::from_slice(&reply).ok()?;
-    if reply.get("error").is_some() {
-        return None;
-    }
-    reply.get("result").filter(|r| !r.is_null()).cloned()
 }
 
 /// Poll the frame log and render turns until the thread exits.
@@ -212,7 +183,10 @@ pub fn run_watch(args: &[String]) -> i32 {
     }
     let pause = Duration::from_secs_f64(interval);
     watch_loop(
-        |cursor| worker_rpc(&sock, "stream.read_frames", json!({ "cursor": cursor })),
+        |cursor| {
+            let params = json!({ "cursor": cursor });
+            crate::protocol::blocking_call(&sock, "stream.read_frames", params, READ_TIMEOUT)
+        },
         || {
             // Sleep in short slices so a Ctrl-C ends the watch promptly.
             let slice = Duration::from_millis(50);
