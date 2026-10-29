@@ -212,8 +212,8 @@ set -euo pipefail
 # tradeable restatement existed to fund it.
 # 2026-10-29: 41256 -> 42279. The measured preamble on origin/main reads
 # 41279, 23 over a ceiling set before several landed raises followed their
-# own measurements, so main itself failed this gate at the x-e965 merge
-# ref. Set at measured + band/2 per the ratchet below; no trim was taken,
+# own measurements, so main itself failed this gate at a PR merge ref.
+# Set at measured + band/2 per the ratchet below; no trim was taken,
 # because every byte in the measured set is defended by an entry here.
 CEILING_BYTES=42279
 # The working band under the ceiling. Spare above this fails the gate and names
