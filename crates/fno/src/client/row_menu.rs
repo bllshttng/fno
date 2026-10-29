@@ -250,6 +250,15 @@ pub(super) fn build_row_menu_with(
     // Bound in menu scope now, so its hint is the live key.
     add(PopupRow::Rule, &[]);
     add(entry("±", "Diff"), &[MenuAction::Diff]);
+    // A pin is a session fact, so only a row with a session id offers it.
+    if agent.harness_session_id.is_some() {
+        let (glyph, label) = if agent.pinned {
+            ("\u{2606}", "Unpin")
+        } else {
+            ("\u{2605}", "Pin")
+        };
+        add(entry(glyph, label), &[MenuAction::TogglePin]);
+    }
     // The hold lift is common to every row state too: the mark rides the
     // row, not its pane, so a worker wearing [DND] or [HELD] can sit in any
     // of them. The label names the mark the row wears - the user's
@@ -1084,6 +1093,7 @@ pub(super) async fn execute_row_menu_action(
             // Enter with no edit lands on the command's same-label no-op.
             view.open_rename_seeded(RenameTarget::Agent(a.name.clone()), a.name.clone());
         }
+        MenuAction::TogglePin => super::agent_sort::pin_agent(view, &a),
         MenuAction::ReleaseHold => {
             // The by-session release command (mail_hold.rs `--release`): the
             // lift answers in microseconds; the held-mail delivery leg runs

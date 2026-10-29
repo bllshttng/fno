@@ -805,8 +805,9 @@ fn manual_sort_and_pins_reorder_the_run() {
     assert_eq!(agents, vec!["c", "a", "b"], "manual order holds");
 
     // A pin outranks the column: c stays first even on the status sort.
-    let mut v = wide_view(vec![mk("a", 4), mk("b", 5), mk("c", 6)]);
-    v.pinned_agents = vec!["c".into()];
+    let mut pinned = mk("c", 6);
+    pinned.pinned = true;
+    let mut v = wide_view(vec![mk("a", 4), mk("b", 5), pinned]);
     v.agent_sort = AgentSort::Attention;
     let agents: Vec<&str> = v
         .display_rows()
@@ -867,9 +868,20 @@ fn agents_tab_strip_counts_rows_that_need_input() {
 }
 
 #[tokio::test]
-async fn agents_tab_ctrl_t_pins_like_dot() {
+async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
     let mk = |name: &str, pane: u64| agent_row(name, pane, Some(AgentBadge::Working), false);
-    let mut v = wide_view(vec![mk("a", 4), mk("b", 5)]);
+    let mut b = mk("b", 5);
+    b.harness_session_id = Some("bbbb2222-1111-2222-3333-444444444444".into());
+    // The pin is the reapers' keep mark, flipped by session id.
+    assert_eq!(
+        agent_sort::pin_argv(&b).unwrap(),
+        vec!["reap", "--keep", "bbbb2222-1111-2222-3333-444444444444"]
+    );
+    let mut pinned_b = b.clone();
+    pinned_b.pinned = true;
+    assert_eq!(agent_sort::pin_argv(&pinned_b).unwrap()[1], "--unkeep");
+
+    let mut v = wide_view(vec![mk("a", 4), b]);
     let at = v
         .display_rows()
         .iter()
@@ -878,29 +890,67 @@ async fn agents_tab_ctrl_t_pins_like_dot() {
     v.selector = Some(at);
     let mut buf: Vec<u8> = Vec::new();
     selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
-    assert_eq!(v.pinned_agents, vec!["b".to_string()]);
+    assert!(v.notice.as_ref().is_some_and(|(n, _)| n == "pinning b"));
+
+    // A row with no session yet has nothing to pin, and says so.
     let at = v
         .display_rows()
         .iter()
-        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "b"))
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "a"))
         .unwrap();
     v.selector = Some(at);
     selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
-    assert!(v.pinned_agents.is_empty(), "a second ctrl+t unpins");
-
-    // A non-agent row notices why and persists nothing.
-    let band = v
-        .display_rows()
-        .iter()
-        .position(|r| !matches!(r, DisplayRow::Agent(_)))
-        .unwrap();
-    v.selector = Some(band);
-    selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
-    assert!(v.pinned_agents.is_empty());
     assert!(v
         .notice
         .as_ref()
-        .is_some_and(|(n, _)| n == "pin works on an agent row"));
+        .is_some_and(|(n, _)| n == "a has no session id to pin yet"));
+
+    // A pinned row wears one accent star; no row did before the pin. Its
+    // menu offers Unpin.
+    v.selector = None;
+    let stars = |v: &View| {
+        let f = v.compose();
+        f.cells
+            .iter()
+            .filter(|c| c.c == sideline::PIN_STAR)
+            .map(|c| c.fg)
+            .collect::<Vec<_>>()
+    };
+    assert!(stars(&v).is_empty(), "an unpinned row paints nothing");
+    v.layout.agents[1] = pinned_b.clone();
+    assert_eq!(
+        stars(&v),
+        vec![v.theme.brand],
+        "the pinned row shows its star"
+    );
+    let menu = row_menu::build_row_menu(&pinned_b, Anchor::Center);
+    assert!(menu.actions.contains(&MenuAction::TogglePin));
+}
+
+#[test]
+fn a_keep_marker_pins_its_session_and_the_sessions_it_resumed() {
+    // The pin reads the lineage the reapers read: the row's own id or a
+    // recorded predecessor. An unmarked row stays plain.
+    let dir = std::env::temp_dir().join(format!("keep-marks-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for sid in ["own-1", "old-2"] {
+        std::fs::write(dir.join(format!("{sid}.json")), "{}").unwrap();
+    }
+    let row = |sid: &str, pred: &[&str]| crate::agents_view::RegistryAgent {
+        harness_session_id: Some(sid.into()),
+        predecessor_session_ids: pred.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    let mut rows = vec![
+        row("own-1", &[]),
+        row("new-2", &["old-2"]),
+        row("plain-3", &[]),
+    ];
+    crate::agents_view::overlay_keep_marks_at(&mut rows, &dir);
+    let pinned: Vec<bool> = rows.iter().map(|r| r.pinned).collect();
+    assert_eq!(pinned, vec![true, true, false]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

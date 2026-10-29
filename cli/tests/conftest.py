@@ -933,50 +933,6 @@ HERMETIC_CACHED_STATE_CLEARERS: tuple[tuple[str, str], ...] = (
 )
 
 
-MINIMAL_TARGET_STATE = """\
----
-status: IN_PROGRESS
-iteration: 1
-session_id: 20260421T093631Z-97817-920dac
-graph_id: ab-eea09178
----
-# Target Session State
-
-Initialized for testing.
-"""
-
-MINIMAL_MEGAWALK_STATE = """\
----
-status: LOOPING
-roadmap_id: rm-20260421-920dac
-consecutive_failures: 0
-total_cost_usd: 0.0
-budget_cap_usd: 100.0
-avg_task_cost: 5.0
-tasks_completed_this_session: 0
----
-# Megawalk State
-
-Initialized for testing.
-"""
-
-
-@pytest.fixture
-def tmp_state_file(tmp_path: Path) -> Path:
-    """A temporary target-state.md with minimal valid content."""
-    state = tmp_path / "target-state.md"
-    state.write_text(MINIMAL_TARGET_STATE)
-    return state
-
-
-@pytest.fixture
-def tmp_megawalk_state_file(tmp_path: Path) -> Path:
-    """A temporary megawalk-state.md with minimal valid content."""
-    state = tmp_path / "megawalk-state.md"
-    state.write_text(MINIMAL_MEGAWALK_STATE)
-    return state
-
-
 @pytest.fixture
 def cwd_tmp(tmp_path: Path, monkeypatch):
     """Collapse both claims roots (global + cwd-local) onto one tmp dir.
@@ -991,20 +947,6 @@ def cwd_tmp(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     yield tmp_path
-
-
-@pytest.fixture
-def clean_lock_dir(tmp_path: Path) -> Path:
-    """A clean temp directory guaranteed to have no leftover .lock files."""
-    lock_dir = tmp_path / "lock_dir"
-    lock_dir.mkdir()
-    yield lock_dir
-    # Cleanup any leftover lock files after the test
-    for lock_file in lock_dir.glob("*.lock"):
-        try:
-            lock_file.unlink()
-        except OSError:
-            pass
 
 
 def run_native_create(
@@ -1180,26 +1122,6 @@ def _no_live_evidence_gate(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_loop_gate(monkeypatch):
-    """Hermetic default for the loop gate.
-
-    `fno.agents.harness_map.check_loop_participation` answers through the
-    `fno-agents status --target-family --harness` leaf, and in the test
-    environment that resolver can find a real installed binary whose grok
-    arm runs a bounded `grok inspect`. The default admits every looping
-    dispatch; tests of the refusals install their own responder on
-    `fno.agents.harness_map._loop_gate_answer`.
-    """
-
-    def _admit(harness, command):
-        return {"refusal": None}
-
-    import fno.agents.harness_map as harness_map
-
-    monkeypatch.setattr(harness_map, "_loop_gate_answer", _admit)
-
-
-@pytest.fixture(autouse=True)
 def _hermetic_resume_pin(monkeypatch):
     """Hermetic default for the resume-pin transport.
 
@@ -1288,39 +1210,6 @@ def _hermetic_reap_receipt(monkeypatch):
     import fno.agents.spawn_axes_client as spawn_axes_client_module
 
     monkeypatch.setattr(spawn_axes_client_module, "spawn_axes_call", _answer)
-
-
-@pytest.fixture
-def loop_admission_ready(monkeypatch):
-    """Stub native readiness for CLI tests focused on other spawn behavior."""
-    import fno.rust_binary as rust_binary
-
-    real_call = rust_binary.call_binary_json
-
-    def ready(command, args, *call_args, **call_kwargs):
-        if command == "loop" and args and args[0] == "readiness":
-            return None, {"ready": True}
-        return real_call(command, args, *call_args, **call_kwargs)
-
-    monkeypatch.setattr(rust_binary, "call_binary_json", ready)
-
-
-def checkout_fno_agents_binary():
-    """This checkout's own fno-agents binary: $FNO_AGENTS_BIN, else the cargo
-    dev build under crates/fno-agents/target. resolve_binary() would prefer a
-    stale installed binary on PATH, which cannot test this tree. The same pick
-    producer-equivalence makes; a test needing the binary at import time
-    (module-level skipif) keeps its own copy there."""
-    env = os.environ.get("FNO_AGENTS_BIN", "")
-    if env:
-        p = Path(env)
-        return p if p.exists() else None
-    repo_root = Path(__file__).resolve().parents[2]
-    for profile in ("debug", "release"):
-        p = repo_root / "crates" / "fno-agents" / "target" / profile / "fno-agents"
-        if p.exists():
-            return p
-    return None
 
 
 @pytest.fixture(autouse=True)

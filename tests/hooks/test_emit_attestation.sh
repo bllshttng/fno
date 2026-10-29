@@ -485,6 +485,117 @@ case "$RECEIPT" in
   *) fail "receipt unclear about the failed journal: $RECEIPT" ;;
 esac
 
+# 12d. The fix-verification carve-out: base == head (the raise row
+#      and the fix commit share one head) with a scoped --verify-fixes hold
+#      and a raise AT this head is an in-place verification - the disposition
+#      rides the classified pass and the emit proceeds, because the merge
+#      gate reads the fixed disposition terminal at the disposing round's own
+#      head. The witness is the WORD `raised` on stdout, never the exit code:
+#      a pre-raise-at-head binary ignores the flag, prints a round number,
+#      and exits 0, so an exit-code check would fail open on staleness.
+VERIFY_ATTEST="$TMP/verify-attest.json"
+VERIFY_INVOCATION="$TMP/verify-invocation.json"
+cat > "$TMP/fno-verify-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "metadata" ]]; then
+  printf '%s\n' '{"metadata":{"invocation_id":"ri-verify-inplace","verb":"/code-review","level":"medium","level_source":"explicit","flags":["--verify-fixes"]}}'
+  exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "round" ]]; then
+  for arg in "\$@"; do
+    if [[ "\$arg" == "--raise-at-head" ]]; then echo raised; exit 0; fi
+  done
+  echo 2; exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  type=""; data=""
+  while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+      -t) type="\$2"; shift 2 ;;
+      -d) data="\$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "\$type" == "review_invocation" ]]; then
+    printf '%s\n' "\$data" > "$VERIFY_INVOCATION"
+  elif [[ "\$type" == "review_attestation" ]]; then
+    printf '%s\n' "\$data" > "$VERIFY_ATTEST"
+  fi
+fi
+exit 0
+STUB
+chmod +x "$TMP/fno-verify-stub"
+rm -f "$VERIFY_ATTEST" "$VERIFY_INVOCATION"
+VERIFY_RC=0
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-verify-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1 || VERIFY_RC=$?
+[[ $VERIFY_RC -eq 0 ]] && pass "in-place fix-verification emits on an empty diff" \
+  || fail "carve-out did not fire (exit $VERIFY_RC)"
+[[ -s "$VERIFY_ATTEST" ]] && pass "carve-out writes the attestation" \
+  || fail "carve-out wrote no attestation"
+[[ -s "$VERIFY_INVOCATION" ]] && pass "carve-out writes the started invocation row" \
+  || fail "carve-out wrote no invocation row"
+if [[ -s "$VERIFY_INVOCATION" ]] \
+  && jq -e '.flags | index("--verify-fixes")' "$VERIFY_INVOCATION" >/dev/null 2>&1; then
+  pass "started row carries --verify-fixes (the gate's witness join)"
+else
+  fail "started row lost the verify flag: $(cat "$VERIFY_INVOCATION" 2>/dev/null)"
+fi
+if [[ -s "$VERIFY_ATTEST" ]] \
+  && jq -e '.verdict == "pass" and .reviewed_file_count == 0' "$VERIFY_ATTEST" >/dev/null 2>&1; then
+  pass "attestation reads pass over an honestly empty range"
+else
+  fail "attestation verdict or range wrong: $(cat "$VERIFY_ATTEST" 2>/dev/null)"
+fi
+
+# 12e. The carve-out is a witness, not a default: --verify-fixes flags with
+#      NO raise witness still refuse (the old-binary staleness shape), and a
+#      raise witness without --verify-fixes flags refuses too - a plain run
+#      over an empty diff is a review of nothing, carve-out or not.
+for case_word in raised silent; do
+  cat > "$TMP/fno-verify-neg-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "metadata" ]]; then
+  if [[ "\$CASE_FLAGS" == "plain" ]]; then
+    printf '%s\n' '{"metadata":{"invocation_id":"ri-noverify","verb":"/code-review","flags":["--comment"]}}'
+  else
+    printf '%s\n' '{"metadata":{"invocation_id":"ri-verify-unwitnessed","verb":"/code-review","flags":["--verify-fixes"]}}'
+  fi
+  exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "round" ]]; then
+  for arg in "\$@"; do
+    if [[ "\$arg" == "--raise-at-head" && "\$CASE_WORD" == "raised" ]]; then echo raised; exit 0; fi
+  done
+  exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  printf '%s\n' "\$@" >> "$TMP/neg-emit.log"
+fi
+exit 0
+STUB
+  chmod +x "$TMP/fno-verify-neg-stub"
+  if [[ "$case_word" == "raised" ]]; then
+    export CASE_WORD=raised CASE_FLAGS=plain
+    want="a raise witness without --verify-fixes flags refuses"
+  else
+    export CASE_WORD=silent CASE_FLAGS=verify
+    want="--verify-fixes flags without a raise witness refuse (staleness fail-closed)"
+  fi
+  : > "$TMP/neg-emit.log"
+  NEG_RC=0
+  (cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL -u CASE_WORD -u CASE_FLAGS \
+    CASE_WORD="$CASE_WORD" CASE_FLAGS="$CASE_FLAGS" \
+    FNO="$TMP/fno-verify-neg-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1 || NEG_RC=$?
+  if [[ $NEG_RC -ne 0 ]] && grep -q "review_invocation" "$TMP/neg-emit.log" \
+    && ! grep -q "review_attestation" "$TMP/neg-emit.log"; then
+    pass "$want"
+  else
+    fail "$want (exit $NEG_RC)"
+  fi
+  unset CASE_WORD CASE_FLAGS
+done
+
 # 12b. A binary-only diff is a real review: numstat prints "-" for binary
 #      files, so the LINE count is an honest 0 while a file genuinely changed.
 #      The emit must attest with lines=0 files=1 - a lines-only refusal would
