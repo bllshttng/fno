@@ -13,7 +13,6 @@
 //! Silence is the no-op: a non-commit command, a failed commit, no target
 //! manifest, no resolvable budget, or an empty branch diff (a commit on the
 //! base branch) all print nothing. Shell shim: `hooks/diff-budget-commit.sh`.
-//! The same fire records the commit's plan task boundary (task_boundary.rs).
 
 use serde_json::Value;
 use std::io::Write as _;
@@ -34,12 +33,8 @@ pub fn run(_args: &[String]) -> i32 {
                 stdout,
                 "{{\"hookSpecificOutput\":{{\"hookEventName\":\"PostToolUse\",\"additionalContext\":{context}}}}}"
             );
-            let _ = stdout.flush();
         }
     }
-    // After the line: a slow store write must not cost the model its budget
-    // reading.
-    super::task_boundary::record(&payload);
     0
 }
 
