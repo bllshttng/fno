@@ -1253,6 +1253,15 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("FNO_NODE_REASON", "fno"),
 ];
 
+/// Clear inherited session identity from a child's environment. A host this
+/// process boots lives past the caller (a supervisor, a serve, a daemon), so
+/// the caller's markers must not ride into it and name it as its own.
+pub(crate) fn scrub_identity_env(command: &mut std::process::Command) {
+    for name in AMBIENT_IDENTITY_NAMES {
+        command.env_remove(name);
+    }
+}
+
 /// Clear inherited session identity before stamping the values owned by this
 /// launcher. Routing and authentication variables remain untouched.
 pub(crate) fn stamp_command_env(
@@ -1261,9 +1270,7 @@ pub(crate) fn stamp_command_env(
     harness: &str,
     session_id: Option<&str>,
 ) {
-    for name in AMBIENT_IDENTITY_NAMES {
-        command.env_remove(name);
-    }
+    scrub_identity_env(command);
     // The child is a session, not a hook (crates/fno-agents/src/join_marker.rs).
     command.env_remove(crate::join_marker::HOOK_CONTEXT_ENV);
     if let Some(name) = agent_self {

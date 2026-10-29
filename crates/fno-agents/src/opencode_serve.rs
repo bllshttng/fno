@@ -403,9 +403,7 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
         // The serve is shared and long-lived: its plugin reports every later
         // session, so the booting session's identity must not ride into it.
         // With none, the plugin claims by session title.
-        for key in crate::claims::AMBIENT_IDENTITY_NAMES {
-            cmd.env_remove(key);
-        }
+        crate::claims::scrub_identity_env(&mut cmd);
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();
