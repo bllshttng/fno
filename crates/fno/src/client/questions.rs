@@ -56,7 +56,7 @@ pub(super) struct Detail {
 type ShotCache = (
     image_layer::Rect,
     Option<usize>,
-    Option<image_layer::Rendered>,
+    Option<(image_layer::Rect, image_layer::Rendered)>,
 );
 
 pub(super) struct Shot {
@@ -546,11 +546,45 @@ fn paint_cached(
         .as_ref()
         .is_none_or(|(at, k, _)| *at != rect || *k != key)
     {
-        *cache = Some((rect, key, image_layer::render(&img(), rect)));
+        let (img, at) = opaque_crop(&img(), rect);
+        *cache = Some((rect, key, image_layer::render(&img, at).map(|r| (at, r))));
     }
-    if let Some((_, _, Some(rendered))) = cache.as_ref() {
-        image_layer::paint(rendered, rect, cells, cols);
+    if let Some((_, _, Some((at, rendered)))) = cache.as_ref() {
+        image_layer::paint(rendered, *at, cells, cols);
     }
+}
+
+/// Crop a canvas of `rect` cells to the cells its opaque pixels cover.
+/// Half-blocks paint a transparent pixel black, so the empty canvas would
+/// draw a black band; cropped, the panel ground shows round the image.
+fn opaque_crop(
+    img: &image::DynamicImage,
+    rect: image_layer::Rect,
+) -> (image::DynamicImage, image_layer::Rect) {
+    let rgba = img.to_rgba8();
+    let (fw, fh) = (
+        rgba.width() / u32::from(rect.w.max(1)),
+        rgba.height() / u32::from(rect.h.max(1)),
+    );
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, p) in rgba.enumerate_pixels() {
+        if p[3] > 0 {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    if x0 >= x1 || fw == 0 || fh == 0 {
+        return (img.clone(), rect);
+    }
+    let (c0, r0) = (x0 / fw, y0 / fh);
+    let (c1, r1) = (x1.div_ceil(fw), y1.div_ceil(fh));
+    let at = image_layer::Rect {
+        row: rect.row + r0 as u16,
+        col: rect.col + c0 as u16,
+        w: (c1 - c0) as u16,
+        h: (r1 - r0) as u16,
+    };
+    let crop = img.crop_imm(c0 * fw, r0 * fh, (c1 - c0) * fw, (r1 - r0) * fh);
+    (crop, at)
 }
 
 /// The notes input: a small framed box over the popup's bottom center, the
