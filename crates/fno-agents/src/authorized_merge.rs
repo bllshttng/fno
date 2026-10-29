@@ -2051,7 +2051,14 @@ refusing to assume no review is running"
             "pr": pr,
         });
         let (_code, stdout, _stderr) = crate::pr_status::cache::run_door("status-read", &payload);
-        parse_checks_read(stdout.as_bytes())
+        let checks = parse_checks_read(stdout.as_bytes());
+        // The green carry (x-cd18): a pending read at a head that only
+        // merged main in since a recorded green consults that green. Every
+        // probe miss keeps the pending verdict.
+        let head = serde_json::from_slice::<Value>(stdout.as_bytes())
+            .ok()
+            .and_then(|v| v.get("head").and_then(Value::as_str).map(str::to_owned));
+        crate::green_carry::carried_checks(cwd, pr, head.as_deref(), checks)
     }
 
     fn fno_shell(
