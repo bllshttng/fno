@@ -659,7 +659,7 @@
     "type": "object"
    },
    "CollisionThresholdsBlock": {
-    "description": "Collision severity scoring thresholds (config.collision.severity_thresholds).\n\nDefaults lifted verbatim from the former\n``collision.py:DEFAULT_THRESHOLDS`` (US2 converges that private loader here).",
+    "description": "Collision severity scoring thresholds (config.collision.severity_thresholds).\n\nDefaults lifted verbatim from the collision module's original private\nloader; the native thresholds reader holds the same contract.",
     "properties": {
      "high_count": {
       "default": 3,
