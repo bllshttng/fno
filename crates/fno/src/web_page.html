@@ -581,7 +581,10 @@
       setBar("connecting", "connecting…", "waiting for first frame");
       if (SHARE) ws.send(JSON.stringify({ knock: { k: shareKey, name: shareName } }));
     };
-    ws.onmessage = (ev) => { try { onMsg(JSON.parse(ev.data)); } catch (_) {} };
+    ws.onmessage = (ev) => {
+      try { onMsg(JSON.parse(ev.data)); }
+      catch (e) { setBar("disconnected", "stale", "a frame did not parse: " + e.message + "; showing last frame"); }
+    };
     ws.onclose = (ev) => {
       if (SHARE && (ev.code === 1008 || ev.code === 1001)) {
         // A refusal (wrong link, declined, too many waiting) or the end of the

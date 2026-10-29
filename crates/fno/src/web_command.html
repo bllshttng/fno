@@ -420,7 +420,7 @@ function graph(model) {
   }
   setTargets();
   if (first) {
-    try { const l = localStorage.getItem("fnoCommandLayout"); if (LNOTE[l]) layout = l; } catch (e) {}
+    try { const l = localStorage.getItem("fnoCommandLayout"); if (LNOTE[l]) layout = l; } catch (e) { /* quiet-ok: no storage keeps the default layout */ }
     resize(); setLayout(layout);
     nodes.forEach((n) => { if (n.tx != null && (n.kind === "territory" || n.kind === "host")) { n.x = n.tx; n.y = n.ty; } });
     for (let i = 0; i < 320; i++) tick(1);
@@ -456,7 +456,7 @@ function setLayout(l) {
   layout = l; stage.dataset.layout = l; document.getElementById("lnote").textContent = LNOTE[l](); capBottom();
   setTargets(); born = performance.now() - 900; cam.tx = cam.ty = 0; cam.auto = true;
   stage.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.layout === l)));
-  try { localStorage.setItem("fnoCommandLayout", l); } catch (e) {}
+  try { localStorage.setItem("fnoCommandLayout", l); } catch (e) { /* quiet-ok: no storage only loses the saved layout */ }
 }
 stage.querySelectorAll("[data-layout]").forEach((b) => { b.onclick = () => setLayout(b.dataset.layout); });
 const radius = (n) => n.kind === "host" ? 24 : n.kind === "territory" ? 14 : n.kind === "epic" ? 7 : leadName(n.r) ? 11 : 8;

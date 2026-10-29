@@ -927,15 +927,20 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     if (t) p.set("t", t);
     p.set("keys", "1");
     fetch(base + "backlog/model.json?" + p.toString(), { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (j && j.search_keys) {
-          searchKeys = j.search_keys;
-          reparse();
-          drawSearchError();
-        }
+      .then((r) => {
+        if (!r.ok) throw new Error("the bridge answered " + r.status);
+        return r.json();
       })
-      .catch(() => {});
+      .then((j) => {
+        if (!j || !j.search_keys) throw new Error("the answer has no search keys");
+        searchKeys = j.search_keys;
+        reparse();
+        drawSearchError();
+      })
+      .catch((e) => {
+        state.searchError = "search is off: " + (e && e.message ? e.message : e);
+        drawSearchError();
+      });
   }
   // Re-parse the search text against the key table. A parse error names
   // itself on the error line and leaves the last good filter applied.
@@ -1612,7 +1617,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       const v = JSON.parse(text);
       ok = resp.ok && v.ok !== false;
       notice = v.notice || text;
-    } catch { }
+    } catch { /* quiet-ok: a plain-text answer is the notice as it stands */ }
     lastAct = { id: body.id, text: (resp.ok ? "" : resp.status + ": ") + notice };
     showActLine(lastAct.text);
     acting = false;
@@ -2438,7 +2443,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     try { return window.localStorage.getItem(k); } catch (e) { return null; }
   }
   function lsSet(k, v) {
-    try { window.localStorage.setItem(k, v); } catch (e) { }
+    try { window.localStorage.setItem(k, v); } catch (e) { /* quiet-ok: no storage only loses saved prefs */ }
   }
   function recentList() {
     return loadRecent(lsGet(RECENT_KEY));
