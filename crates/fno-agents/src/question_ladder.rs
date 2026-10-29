@@ -207,15 +207,10 @@ pub fn on_board(data: &Value, ts: &str, now_secs: i64) -> bool {
 /// and has not held the row yet, else the user (`None`).
 fn next_rung(cwd: &Path, node: Option<&str>, data: &Value) -> Option<Value> {
     use crate::owner_ladder::{resolve, world, Ask, Rung};
-    let held: Vec<&str> = std::iter::once(data.pointer("/rung/holder_session"))
-        .chain(
-            data.get("via")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .map(|hop| hop.get("holder_session")),
-        )
-        .filter_map(|s| s.and_then(Value::as_str))
+    let via = data["via"].as_array().into_iter().flatten();
+    let held: Vec<&str> = std::iter::once(&data["rung"])
+        .chain(via)
+        .filter_map(|hop| hop["holder_session"].as_str())
         .collect();
     let w = world(&crate::paths::AgentsHome::from_env(), cwd).ok()?;
     let owner = resolve(
@@ -242,11 +237,7 @@ pub fn climbed(row: &Value, next: Option<Value>, evidence: &str, ts: &str) -> Va
     hop["action"] = json!("climb");
     hop["evidence"] = json!(evidence.chars().take(2000).collect::<String>());
     hop["ts"] = json!(ts);
-    let mut via = data
-        .get("via")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let mut via = data["via"].as_array().cloned().unwrap_or_default();
     via.push(hop);
     data["via"] = json!(via);
     data["rung"] = next.unwrap_or_else(|| json!({"level": "user"}));
@@ -285,17 +276,11 @@ pub fn run_climb(args: &[String]) -> i32 {
         return refuse(format!("{qid} is not a question id this machine knows"));
     };
     let data = &row["data"];
-    let holder = data.pointer("/rung/holder_session").and_then(Value::as_str);
-    let Some(holder) =
-        holder.filter(|_| data.pointer("/rung/level").and_then(Value::as_str) != Some("user"))
-    else {
+    let Some(holder) = holder(data) else {
         return refuse(format!("{qid} is already on the user's board"));
     };
     if holder != session {
-        let name = data
-            .pointer("/rung/holder_name")
-            .and_then(Value::as_str)
-            .unwrap_or(holder);
+        let name = data["rung"]["holder_name"].as_str().unwrap_or(holder);
         return refuse(format!(
             "{qid} sits with {name}; only the rung holder climbs it"
         ));
@@ -308,27 +293,24 @@ pub fn run_climb(args: &[String]) -> i32 {
         &evidence,
         &crate::loopcheck::now_rfc3339_utc(),
     );
-    if let Err(e) = crate::question_intake::append_question_event(
-        &row,
-        &crate::paths::events_path(&cwd),
-        &index,
-    ) {
-        eprintln!("{}", e.1);
+    let journal = crate::paths::events_path(&cwd);
+    if let Err((_, e)) = crate::question_intake::append_question_event(&row, &journal, &index) {
+        eprintln!("{e}");
         return 1;
     }
-    match &next {
-        Some(rung) => {
-            let question = data.get("question").and_then(Value::as_str).unwrap_or("");
-            wake_holder(rung, &qid, node, question);
-            let name = rung
-                .get("holder_name")
-                .and_then(Value::as_str)
-                .unwrap_or("the next lead");
-            println!("{qid} climbed to {name}");
-        }
-        None => println!("{qid} climbed to the user's board"),
-    }
+    let to = next.as_ref().map_or("the user's board", |rung| {
+        wake_holder(rung, &qid, node, data["question"].as_str().unwrap_or(""));
+        rung["holder_name"].as_str().unwrap_or("the next lead")
+    });
+    println!("{qid} climbed to {to}");
     0
+}
+
+/// The session holding a ladder row below the user rung.
+pub fn holder(data: &Value) -> Option<&str> {
+    (data["rung"]["level"].as_str() != Some("user"))
+        .then(|| data["rung"]["holder_session"].as_str())
+        .flatten()
 }
 
 /// [`on_board`] over a whole `operator_question` envelope, at the wall clock.

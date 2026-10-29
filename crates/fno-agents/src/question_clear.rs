@@ -747,14 +747,6 @@ fn agent_handle(req: &ClearRequest, caller: &ClearCaller) -> Option<String> {
     caller.ancestry_handle.clone()
 }
 
-/// The session holding a ladder row below the user rung.
-fn rung_holder(question_event: &Value) -> Option<&str> {
-    let rung = question_event.get("data")?.get("rung")?;
-    (rung.get("level").and_then(Value::as_str) != Some("user"))
-        .then(|| rung.get("holder_session").and_then(Value::as_str))
-        .flatten()
-}
-
 /// Why an agent may not answer the row: its class (stored, else the class
 /// word why_user names) is in the asking project's questions.rules.deny,
 /// or those rules cannot be read. The rules come from the question's own
@@ -995,7 +987,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .is_some_and(|quote| !quote.trim().is_empty());
             // The rung holder answers the row the ladder placed on it, unless
             // the class is one only the user rules.
-            let holds_rung = rung_holder(question_event)
+            let holds_rung = crate::question_ladder::holder(&question_event["data"])
                 .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
             let denied = denied_class(question_event);
             if holds_rung && req.answer.is_some() {
