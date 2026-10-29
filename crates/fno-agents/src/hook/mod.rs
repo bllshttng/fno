@@ -22,6 +22,7 @@ pub mod send_message_guard;
 pub mod session_state;
 pub mod stop;
 pub mod subagent_worktree_guard;
+pub mod task_boundary;
 pub mod test_run_guard;
 pub mod worktree_relocation_allow;
 pub mod write_gate;

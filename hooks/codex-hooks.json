@@ -166,6 +166,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/diff-budget-commit.sh\"",
+            "statusMessage": "reading the diff budget and task boundary",
+            "timeout": 4
+          },
+          {
+            "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",
             "statusMessage": "recording the refusal streak",
             "timeout": 4

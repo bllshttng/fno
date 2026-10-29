@@ -13,6 +13,7 @@
 //! Silence is the no-op: a non-commit command, a failed commit, no target
 //! manifest, no resolvable budget, or an empty branch diff (a commit on the
 //! base branch) all print nothing. Shell shim: `hooks/diff-budget-commit.sh`.
+//! The same fire records the commit's plan task boundary (task_boundary.rs).
 
 use serde_json::Value;
 use std::io::Write as _;
@@ -33,8 +34,12 @@ pub fn run(_args: &[String]) -> i32 {
                 stdout,
                 "{{\"hookSpecificOutput\":{{\"hookEventName\":\"PostToolUse\",\"additionalContext\":{context}}}}}"
             );
+            let _ = stdout.flush();
         }
     }
+    // After the line: a slow store write must not cost the model its budget
+    // reading.
+    super::task_boundary::record(&payload);
     0
 }
 
@@ -85,7 +90,7 @@ fn build_message(added: u64, removed: u64, budget: u32, branch: &str) -> String 
 
 /// True when this Bash call was a `git commit` that succeeded. The word
 /// check reads the char after the phrase so `git commit-tree` never fires.
-fn committed(payload: &Value) -> bool {
+pub(super) fn committed(payload: &Value) -> bool {
     let Some(command) = payload
         .get("tool_input")
         .and_then(|ti| ti.get("command"))
@@ -122,7 +127,7 @@ fn is_commit_command(command: &str) -> bool {
 /// resolver (space worktree row, legacy in-tree fallback). The resolver
 /// answers even when no manifest exists; the reads downstream treat that as
 /// no budget.
-fn manifest_path(cwd: &Path) -> Option<PathBuf> {
+pub(super) fn manifest_path(cwd: &Path) -> Option<PathBuf> {
     crate::state_path::resolve("target-state", cwd)
 }
 
@@ -138,7 +143,7 @@ fn resolve_budget(manifest: &Path, cwd: &Path) -> Option<u32> {
 /// The manifest's `plan_path` value, unquoted; None while empty. A relative
 /// path resolves against the worktree root, where plans live (the `internal/`
 /// vault link is a checkout child), never against the space root.
-fn plan_path(manifest: &Path, cwd: &Path) -> Option<PathBuf> {
+pub(super) fn plan_path(manifest: &Path, cwd: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(manifest).ok()?;
     for line in text.lines() {
         let Some(value) = line.strip_prefix("plan_path:") else {
@@ -217,7 +222,7 @@ fn branch_numstat(cwd: &Path) -> Option<(u64, u64)> {
     Some((added, removed))
 }
 
-fn git_out(cwd: &Path, args: &[&str]) -> String {
+pub(super) fn git_out(cwd: &Path, args: &[&str]) -> String {
     Command::new("git")
         .args(args)
         .current_dir(cwd)
