@@ -39,7 +39,7 @@ The command prints the `d-` id on stdout. Report that id and the subject.
 
 This store is machine-local. A stranger who clones the repository must obey some rules. Those rules do not reach that person from here. Land them in the code, a doc, or a gate, in a PR. When the user wants the rule recalled by subject, record it here as well.
 
-Recording law from chat works. Retracting it does not. On a law-lane row, `retract_decision` requires `authority_source` to be exactly `operator`. So a chat-recorded law needs an attended terminal to withdraw. Supersession is retiring by another name: every reader that filters `--state live` stops seeing the old row. A chat recording can supersede another `chat_attested` row. It cannot supersede an `operator` row, which is what keeps the retract guard honest.
+Recording law from chat works, and so does retracting a chat-recorded law. When the user says to drop a `chat_attested` law, run `fno inbox law retract <id> --reason <why> --quote "<the user's words>"` from the session. The quote is required. An `operator` law stays the user's to retract: the session is refused, and the user answers on the question board. Supersession follows the same rule. A chat recording can supersede another `chat_attested` row. It cannot supersede an `operator` row.
 
 ## Refusals
 
