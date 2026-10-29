@@ -92,7 +92,7 @@ There is no new recording gate, and none is needed. `crates/fno-agents/src/loopc
 | Store | What it is for | Path |
 |---|---|---|
 | Project journal | Durability and the project audit trail | `<canonical-repo>/.fno/events.jsonl` |
-| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` via `paths.decisions_jsonl()` |
+| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` |
 | Graph projection | The node view, for anyone reading the node | the subject node's `decisions` array |
 
 Rust readers do not read the JSONL alone. `decision_index::default_store_live` reads graph.db decisions plus the JSONL rows the db lacks. The merge keys match `_read_index`, so a ruling the db holds is never invisible to a Rust reader.
