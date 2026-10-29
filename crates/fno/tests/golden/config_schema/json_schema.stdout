@@ -3259,7 +3259,7 @@
       "type": "object"
     },
     "UserBlock": {
-      "description": "How the machine addresses the human (nested under ``config.user``).\n\n``name`` is a form of address, never an identity and never an authority.\nEmpty is the unset state, and ``display_name`` falls back to\n``git config user.name`` so a fresh install already says something better\nthan a role noun.",
+      "description": "How the machine addresses the human (nested under ``config.user``).\n\n``name`` is a form of address, never an identity and never an authority.\nEmpty is the unset state; the native birth read (backlog/birth.rs\n``display_name``) falls back to ``git config user.name`` so a fresh\ninstall already says something better than a role noun.",
       "properties": {
         "name": {
           "default": "",
