@@ -94,6 +94,7 @@ pub(crate) mod supersession;
 pub mod target_binding;
 pub mod task;
 pub mod title_gate;
+pub(crate) mod trace;
 pub mod triage;
 pub mod triage_cli;
 pub mod triage_health;
