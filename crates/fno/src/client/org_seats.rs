@@ -182,7 +182,7 @@ fn work_of(backlog: &Inputs, id: &str) -> Work {
         priority: node.card.priority.clone(),
         difficulty: node.difficulty.clone(),
         plan: node.plan_path.clone(),
-        pr: node.prs.first().map(|p| p.number),
+        pr: node.prs.iter().map(|p| p.number).max(),
         epic: node.parent.first().map(|l| (l.id.clone(), l.title.clone())),
     }
 }

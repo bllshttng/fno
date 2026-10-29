@@ -397,7 +397,9 @@ fn default_true() -> bool {
 /// readout's denominator; floor stays 58.
 /// v119: `AgentRow.pinned` (serde default), the user's keep mark behind the
 /// sideline's pin star and pin-first order; floor stays 58.
-pub const PROTO_VERSION: u32 = 119;
+/// v120: `SessionBinding.pr_url` + `pr_count` (serde default), so the PR
+/// chip opens the node's own repo and counts every PR; floor stays 58.
+pub const PROTO_VERSION: u32 = 120;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1056,9 +1058,19 @@ pub struct SessionBinding {
     pub node: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<u64>,
+    /// (v120) The stored URL of `pr`, so a tap opens the node's own repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    /// (v120) How many PRs the node records; `pr` is the newest.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pr_count: u32,
     pub source: String,
     pub state: String,
     pub inferred: bool,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// One sideline agent row inside [`ServerMsg::Layout`] (v5, brief US2). The
