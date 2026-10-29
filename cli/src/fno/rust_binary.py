@@ -246,7 +246,7 @@ def settings_read(detect: Optional[str] = None) -> Optional[dict]:
     import json
 
     request = json.dumps({"detect": detect}) if detect is not None else "{}"
-    err, receipt = call_binary_json("settings-read", [], input_text=request)
+    err, receipt = call_binary_json("state", ["settings-read"], input_text=request)
     if err or not isinstance(receipt, dict):
         return None
     return receipt
@@ -276,8 +276,8 @@ def plan_schema(payload: dict) -> Optional[dict]:
     # answer with its own checkout's schema, never a stale binary that lacks
     # the op (the rule command_call states for the same reason).
     err, receipt = call_binary_json(
-        "plan-schema",
-        [],
+        "state",
+        ["plan-schema"],
         binary=find_dev_binary() or resolve_binary(),
         input_text=json.dumps(_plain(payload), default=str),
     )

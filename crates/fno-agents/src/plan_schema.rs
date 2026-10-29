@@ -709,12 +709,8 @@ pub(crate) fn validate_frontmatter(fm: &Map<String, Value>) -> Vec<Value> {
 
 /// The hidden `plan-schema` door: one JSON request in, one verdict out,
 /// always exit 0. Ops: `validate-frontmatter`, `gates`, `validate-block`.
-///
-/// The door's name lives in this const so the dispatcher can name it without
-/// a string literal: the menu-caps counter reads literals inside `run()`, and
-/// a hidden door is not a menu command.
-pub const DOOR_NAME: &str = "plan-schema";
-
+/// Dispatches as the `state plan-schema` action argument (state_path.rs
+/// pre-table), beside the settings fact-set door.
 pub fn run_plan_schema(args: &[String]) -> i32 {
     let _ = args;
     let mut input = String::new();
@@ -853,7 +849,7 @@ mod tests {
                 "rejected": [{"id": id, "reason": "recorded"}],
             })
         };
-        assert_eq!(validate_block("consolidation", &block("x4d12")), vec![]);
+        assert!(validate_block("consolidation", &block("x4d12")).is_empty());
         assert_eq!(validate_block("consolidation", &block("a3f9c1d2")), vec![]);
         let errors = validate_block("consolidation", &block("9abc"));
         assert!(errors

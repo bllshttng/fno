@@ -39,6 +39,16 @@ pub fn run(args: &[String]) -> i32 {
     if name == "migrate" {
         return crate::state_layout::run_migrate_cli(&args[1..]);
     }
+    // The hidden fact-set doors (settings_read.rs, plan_schema.rs): one
+    // stdin-JSON request, one receipt. Same pre-table dispatch: they answer
+    // receipts, not paths, and ride this registered command as action
+    // arguments instead of holding top-level names.
+    if name == "settings-read" {
+        return crate::backlog::settings_read::run_settings_read(&args[1..]);
+    }
+    if name == "plan-schema" {
+        return crate::plan_schema::run_plan_schema(&args[1..]);
+    }
     // `dir` is the state-root folder door (state_layout.rs's dir table): a
     // hook or a Python port asks for a folder by name instead of spelling
     // it, so the layout table stays the one path vocabulary and a fold

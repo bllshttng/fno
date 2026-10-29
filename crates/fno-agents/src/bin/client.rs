@@ -492,23 +492,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::backlog::style_check::run_cli(&args[1..]);
     }
 
-    // The settings fact set's hidden binary-direct door: the node-id knobs,
-    // the config candidates, and the work-map walk (with the cwd -> project
-    // detect) in one spawn. Named through the module's DOOR_NAME const so
-    // the parity guard never sees it and the menu-caps counter never counts
-    // it.
-    if command == fno_agents::backlog::settings_read::DOOR_NAME {
-        return fno_agents::backlog::settings_read::run_settings_read(&args[1..]);
-    }
-
-    // The plan frontmatter schema's hidden binary-direct door: the model,
-    // the two date gates, and the consolidation and dispatch-hold block
-    // shapes in one spawn. Same const treatment so the parity guard never
-    // sees it and the menu-caps counter never counts it.
-    if command == fno_agents::plan_schema::DOOR_NAME {
-        return fno_agents::plan_schema::run_plan_schema(&args[1..]);
-    }
-
     // The mail receipt renderer's hidden binary-direct door: the send receipt
     // prose moved from Python (file budget) with Python keeping transports.
     // Same `matches!` treatment so the parity guard never sees it.

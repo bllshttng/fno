@@ -110,3 +110,4 @@ cli/tests/unit/test_evidence_refusal_remedy.py::test_unmeasured_refusal_names_on
 cli/tests/integration/test_birth_hook_wiring.py::test_decompose_never_fires_birth_hook::pytest.skip  # the door drives the native fno-agents binary, and the smoke shard deletes that target on purpose
 cli/tests/unit/test_backlog_decompose_door.py::_door::pytest.skip  # the decompose door drives the native fno-agents binary, and the smoke shard deletes that target on purpose
 cli/tests/agents/test_cloud_spawn_journey.py::test_AC7_HP_cloud_spawn_followup_and_refusal_journey::mark.skipif  # the live journey spends a real cloud session and needs claude on PATH; opt-in via FNO_CLOUD_LIVE=1
+cli/tests/unit/plan/test_blueprint_mint_difficulty.py::_gate_error::pytest.skip  # native door: the gate drives the fno-agents binary through plan_schema; without a dev build there is no door to ask
