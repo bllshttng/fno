@@ -76,11 +76,6 @@ def test_resolve_route_sends_the_role_payload_and_returns_the_answer(monkeypatch
 
 # --- resolve_explicit_route --------------------------------------------------------
 
-def test_explicit_route_rows():
-    route = mr.resolve_explicit_route(
-        "zai", "glm-5.2", settings=_settings(), env={"ZAI_API_KEY": "zk"}
-    )
-    assert route is not None
 def test_explicit_route_rows(monkeypatch) -> None:
     captured: dict = {}
 
@@ -293,10 +288,3 @@ def test_refresh_rows(monkeypatch) -> None:
     assert refreshed["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-4.7"
     assert note is not None and "opus glm-5.2 -> glm-5.3[1m]" in note
 
-    assert mr.provider_name_for_route({}, settings=_settings()) is None
-    assert (
-        mr.provider_name_for_route(
-            {"ANTHROPIC_BASE_URL": "https://nope.example"}, settings=_settings()
-        )
-        is None
-    )

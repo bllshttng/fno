@@ -658,6 +658,164 @@ mod tests {
             result.lines
         );
     }
+    #[test]
+    fn a_negated_or_punctuated_retraction_answer_never_reads_affirmative() {
+        assert!(is_affirmative_retraction_answer(
+            "Retract it as a junk row."
+        ));
+        assert!(!is_affirmative_retraction_answer("Retract? No."));
+        assert!(!is_affirmative_retraction_answer("Retract nothing."));
+        assert!(!is_affirmative_retraction_answer("Do not retract it."));
+        assert!(!is_affirmative_retraction_answer("keep it for now"));
+        assert!(is_affirmative_retraction_answer("yes"));
+        // The fallback path names the action; a bare yes arms nothing there.
+        assert!(!retraction_intent_lead("yes"));
+        assert!(retraction_intent_lead("Retract it."));
+    }
+
+    #[test]
+    fn an_answered_retraction_question_retracts_the_law_in_the_same_step() {
+        // The retraction writer resolves the machine default store, so the
+        // test pins FNO_HOME/FNO_REPO_ROOT the way the law door tests do.
+        let env = crate::law_match::scope_tests::DoorEnv::new();
+        let graph = env.0.path().join("graph.json");
+        // The live law: an operator row after the lane cutover, seeded
+        // where all_decision_rows reads.
+        let law = decision("q-law", "d-2ffae9ba", "y");
+        crate::backlog::api::decision_record(&crate::backlog::api::Store::new(&graph), law)
+            .unwrap();
+
+        // (a) The stamped ask: an affirmative board answer retracts.
+        let subject = "law-retract:d-2ffae9ba";
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-retract", Some("Retract it as a junk row."));
+        req.graph = graph.clone();
+        seed_question(
+            &req,
+            &ask(
+                "q-retract",
+                "Retract the junk law d-2ffae9ba?",
+                Some(subject),
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("operator retraction recorded for d-2ffae9ba")),
+            "{:?}",
+            result.lines
+        );
+        let (rows, _) = crate::law_match::all_decision_rows().unwrap();
+        let retired = crate::decision_index::retirement_map(&rows);
+        assert!(
+            retired.contains_key("d-2ffae9ba"),
+            "reads retracted: {retired:?}"
+        );
+        let retraction = rows
+            .iter()
+            .find(|r| r.get("_event_type").and_then(Value::as_str) == Some("decision_retracted"))
+            .expect("a retraction row landed");
+        assert_eq!(retraction["authority_source"], "operator");
+        assert_eq!(retraction["retracted_by"], "operator");
+        assert_eq!(retraction["attested_by"], "question-board");
+        let decisions = graph_decisions(&req);
+        let row = decisions
+            .iter()
+            .find(|r| r["subject"] == subject)
+            .expect("decision at the retraction subject");
+        assert_eq!(row["authority_source"], "operator");
+        assert_eq!(row["decision"], "Retract it as a junk row.");
+
+        // (b) A hold answer records law at the subject and retracts nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-hold", Some("Keep it."));
+        req.graph = graph.clone();
+        seed_question(
+            &req,
+            &ask(
+                "q-hold",
+                "Retract the junk law d-2ffae9ba?",
+                Some(subject),
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result.lines.iter().any(|l| l.contains("retracts nothing")),
+            "{:?}",
+            result.lines
+        );
+        let (rows, _) = crate::law_match::all_decision_rows().unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(
+                    |r| r.get("_event_type").and_then(Value::as_str) == Some("decision_retracted")
+                )
+                .count(),
+            1,
+            "the hold retracts nothing"
+        );
+
+        // (c) An agent clear is refused outright; no retraction lands.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-agent", Some("Retract it."));
+        req.graph = graph.clone();
+        req.provenance = json!({"decided_by": "agent-1", "authority_source": "agent"});
+        req.caller.as_mut().unwrap().ancestry_handle = Some("agent-1".to_string());
+        seed_question(
+            &req,
+            &ask(
+                "q-agent",
+                "Retract the junk law d-2ffae9ba?",
+                Some(subject),
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        let (rows, _) = crate::law_match::all_decision_rows().unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(
+                    |r| r.get("_event_type").and_then(Value::as_str) == Some("decision_retracted")
+                )
+                .count(),
+            1,
+            "an agent answer never retracts"
+        );
+
+        // (d) The fallback: a subject-less ask citing the law in its text.
+        let law2 = decision("q-law2", "d-e6084242", "the second junk law");
+        crate::backlog::api::decision_record(&crate::backlog::api::Store::new(&graph), law2)
+            .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-fallback", Some("Retract it."));
+        req.graph = graph.clone();
+        seed_question(
+            &req,
+            &ask(
+                "q-fallback",
+                "Should we retract the junk law d-e6084242?",
+                None,
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("operator retraction recorded for d-e6084242")),
+            "{:?}",
+            result.lines
+        );
+    }
 }
 use crate::backlog::api::{self, Store};
 use crate::decision_trace::{actor_kind_from_authority, Trace};
@@ -1121,6 +1279,29 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     });
                 }
             }
+            let stamped = retraction_subject(question_event).is_some();
+            if let Some((subject, target_id)) = retraction_subject(question_event)
+                .or_else(|| retraction_fallback(question_event))
+                .filter(|_| operator_can_grant(req))
+            {
+                if retraction_answer_grants(question_event, &text, stamped) {
+                    // The validate gate decides, first pass or resumed
+                    // repair alike: a live target writes now, an already
+                    // retired target receipts its refusal, and a partial
+                    // clear's rerun performs the retraction it once
+                    // promised.
+                    match validate_live_law_target(&target_id) {
+                        Err(reason) => answer.lines.push(format!("outstanding: {reason}")),
+                        Ok(()) => {
+                            perform_retraction(&mut answer, &qid, &subject, &target_id, &text)
+                        }
+                    }
+                } else {
+                    answer.lines.push(format!(
+                        "outstanding: law recorded at {subject} retracts nothing; the board retracts only on an affirmative retraction answer"
+                    ));
+                }
+            }
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
                 decision_id: Some(decision_id.clone()),
@@ -1307,15 +1488,19 @@ fn make_decision(
     // resolves an agent authority can no more mint the grant through the
     // clear door than through decide.
     let grant_subject = merge_grant_subject(question_event).filter(|_| operator_can_grant(req));
+    let retraction = retraction_subject(question_event)
+        .or_else(|| retraction_fallback(question_event))
+        .filter(|_| operator_can_grant(req));
     let affirmative = grant_subject.is_some() && merge_answer_grants(question_event, answer);
     let decision_text = if affirmative {
         crate::merge_grant::MERGE_GRANT_DECISION.to_string()
     } else {
         answer.to_string()
     };
-    let subject = match &grant_subject {
-        Some(subject) => subject.clone(),
-        None => node
+    let subject = match (&grant_subject, &retraction) {
+        (Some(subject), _) => subject.clone(),
+        (None, Some((subject, _))) => subject.clone(),
+        (None, None) => node
             .map(str::to_string)
             .unwrap_or_else(|| format!("question:{qid}")),
     };
@@ -1402,7 +1587,7 @@ fn make_decision(
     // operator's own surface. `decided_by` is set outright: the no-identity
     // path resolves "unattributed-caller", which must not sit on an operator
     // law row, and every attended path already resolves "operator".
-    if grant_subject.is_some() {
+    if grant_subject.is_some() || retraction.is_some() {
         decision
             .entry("authority_source")
             .or_insert(json!("operator"));
@@ -1492,24 +1677,249 @@ fn merge_grant_subject(question_event: &Value) -> Option<String> {
     crate::merge_grant::parse_head_grant_subject(subject).map(|_| subject.to_string())
 }
 
+/// The subject prefix a retraction question carries:
+/// `law-retract:<decision-id>`. One namespace beside `merge-grant:`, so the
+/// board answer door can name the operator action its answer performs.
+const LAW_RETRACT_SUBJECT: &str = "law-retract";
+
+/// The retraction target a question subject names, when it is one:
+/// `(subject, target_decision_id)`. One parser for the format, mirroring
+/// `parse_head_grant_subject`; the id casefolds, the way every decision-id
+/// read compares.
+fn retraction_subject(question_event: &Value) -> Option<(String, String)> {
+    let subject = question_event
+        .get("data")
+        .and_then(|data| data.get("subject"))
+        .and_then(Value::as_str)?;
+    let id = subject
+        .strip_prefix(LAW_RETRACT_SUBJECT)?
+        .strip_prefix(':')?
+        .trim();
+    let hex = id.strip_prefix("d-")?;
+    if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((subject.to_string(), id.to_lowercase()))
+}
+
+/// The text fallback for questions asked before the retraction subject
+/// existed: the same detector the ask gate routes on (`cites_retraction`'s
+/// intent word) plus exactly one cited live law id in the question text.
+/// Reads the decision store only after the cheap intent check fires, and
+/// the minted subject is the shape a stamped ask lands at.
+fn retraction_fallback(question_event: &Value) -> Option<(String, String)> {
+    let lower = question_text(question_event).to_lowercase();
+    if !["retract", "repeal", "rescind", "revoke", "overturn"]
+        .iter()
+        .any(|word| lower.contains(word))
+    {
+        return None;
+    }
+    let (rows, _) = crate::law_match::all_decision_rows().ok()?;
+    let retired = crate::decision_index::retirement_map(&rows);
+    let mut cited: Vec<String> = Vec::new();
+    let mut from = 0usize;
+    while let Some(pos) = lower[from..].find("d-") {
+        let abs = from + pos + 2;
+        let end = lower[abs..]
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .map(|p| abs + p)
+            .unwrap_or(lower.len());
+        let hex = &lower[abs..end];
+        // The id shape every minter produces: `d-` plus 4 to 8 hex (the
+        // spawn-name scan's bound, which keeps "d-" inside a longer hex run
+        // from reading as a decision).
+        if (4..=8).contains(&hex.len()) {
+            let id = format!("d-{hex}");
+            let live = rows
+                .iter()
+                .filter(|r| !crate::law_match::is_retraction_row(r))
+                .find(|r| {
+                    r.get("decision_id")
+                        .and_then(Value::as_str)
+                        .map(|v| v.eq_ignore_ascii_case(&id))
+                        == Some(true)
+                })
+                .is_some_and(|row| {
+                    crate::decision_index::is_law(row) && !retired.contains_key(&id)
+                });
+            if live && !cited.contains(&id) {
+                cited.push(id);
+            }
+        }
+        from = abs;
+    }
+    // One cited live law is the fallback's whole contract: an ambiguous
+    // question names no single target and retracts nothing.
+    if cited.len() != 1 {
+        return None;
+    }
+    let id = cited.into_iter().next()?;
+    Some((format!("{LAW_RETRACT_SUBJECT}:{id}"), id))
+}
+
 /// Does this answer on a merge-grant question record the grant? Two shapes:
 /// the closed terminal set above, or picking the question's recommended
 /// option when that option reads affirmative.
 fn merge_answer_grants(question_event: &Value, answer: &str) -> bool {
-    is_affirmative_merge_answer(answer) || picks_recommended_option(question_event, answer)
+    is_affirmative_merge_answer(answer)
+        || picks_recommended_option(question_event, answer, MERGE_OPTION_LEADS)
+}
+
+/// True when an answer on a retraction question reads as the affirmative
+/// retraction. `stamped` distinguishes the machine subject from the text
+/// fallback: the subject names the action, free text must.
+fn retraction_answer_grants(question_event: &Value, answer: &str, stamped: bool) -> bool {
+    if stamped {
+        return is_affirmative_retraction_answer(answer)
+            || picks_recommended_option(question_event, answer, RETRACT_OPTION_LEADS);
+    }
+    // The fallback asks the free text to name the action: a bare yes on a
+    // status-phrased question ("was d-X retracted?") answers the question
+    // and retracts nothing. The action word is the intent.
+    retraction_intent_lead(answer)
+        || picks_recommended_option(question_event, answer, RETRACT_OPTION_LEADS)
+}
+
+/// The intent-lead rule: an affirmative reads only when the answer opens
+/// with a retraction action word and no negation follows it. Shared by both
+/// polarity paths; the generic tail below is the stamped path's extra.
+fn retraction_intent_lead(answer: &str) -> bool {
+    let normalized = answer
+        .trim()
+        .trim_end_matches(['.', '!', '?', ';', ',', ':'])
+        .to_lowercase();
+    const NEGATIONS: [&str; 8] = [
+        "no", "not", "never", "don't", "dont", "nothing", "none", "neither",
+    ];
+    const INTENT: [&str; 5] = ["retract", "repeal", "rescind", "revoke", "overturn"];
+    for lead in INTENT {
+        if let Some(rest) = normalized.strip_prefix(lead) {
+            let rest = rest
+                .trim_start()
+                .trim_start_matches(['?', '!', '.', ',', ';', ':'])
+                .trim_start();
+            let negated = rest.starts_with("n't")
+                || NEGATIONS
+                    .iter()
+                    .any(|n| rest == *n || rest.starts_with(&format!("{n} ")));
+            if !negated {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The closed retraction vocabulary. The intent words lead the way the ask
+/// gate's `cites_retraction` words the action; a negation right after the
+/// lead word ("retract nothing", "retract? no") never reads affirmative, and the
+/// generic tail is the merge set minus the merge-only words.
+fn is_affirmative_retraction_answer(answer: &str) -> bool {
+    let normalized = answer
+        .trim()
+        .trim_end_matches(['.', '!', '?', ';', ',', ':'])
+        .to_lowercase();
+    retraction_intent_lead(answer)
+        || matches!(
+            normalized.as_str(),
+            "yes" | "y" | "approve" | "approved" | "go ahead" | "do it"
+        )
+}
+
+/// The subject path validates its target the way the retract door does: a
+/// live law row must exist for the id, or the answer records law at the
+/// subject and retracts nothing. A subject can name anything; the store
+/// decides what the retraction may land on.
+fn validate_live_law_target(target_id: &str) -> Result<(), String> {
+    let (rows, _) = crate::law_match::all_decision_rows().map_err(|e| {
+        format!("{target_id} names no verifiable target (the decision store is unreadable: {e}); nothing retracted")
+    })?;
+    let row = rows
+        .iter()
+        .filter(|r| !crate::law_match::is_retraction_row(r))
+        .find(|r| {
+            r.get("decision_id")
+                .and_then(Value::as_str)
+                .map(|v| v.eq_ignore_ascii_case(target_id))
+                == Some(true)
+        })
+        .ok_or_else(|| format!("{target_id} names no live decision; nothing retracted"))?;
+    if !crate::decision_index::is_law(row) {
+        return Err(format!(
+            "{target_id} is not a law-lane decision; nothing retracted"
+        ));
+    }
+    if crate::decision_index::retirement_map(&rows).contains_key(target_id) {
+        return Err(format!(
+            "{target_id} is already retired; nothing to retract"
+        ));
+    }
+    Ok(())
+}
+
+/// The board answer's retraction: write through the shared writer, receipt
+/// the outcome. Each partial stage names its own remedy, matching the
+/// retract door's contract: the journal is the durable floor, the index
+/// failure names `fno backlog decide-reindex`, the graph refusal says the
+/// retraction is durable in the journal and the index.
+fn perform_retraction(
+    answer: &mut ClearAnswer,
+    qid: &str,
+    subject: &str,
+    target_id: &str,
+    reason: &str,
+) {
+    let outcome = crate::law_match::write_retraction_event(&crate::law_match::RetractWrite {
+        target_decision_id: target_id.to_string(),
+        subject: subject.to_string(),
+        reason: reason.to_string(),
+        retracted_by: "operator".to_string(),
+        authority_source: "operator".to_string(),
+        attested_by: Some("question-board".to_string()),
+        relayed_by: None,
+        quote: None,
+    });
+    match outcome {
+        crate::law_match::RetractOutcome::Done => answer.lines.push(format!(
+            "outstanding: operator retraction recorded for {target_id} (the law reads RETRACTED)"
+        )),
+        crate::law_match::RetractOutcome::JournalFailed(e) => {
+            answer.exit_code = 1;
+            answer.lines.push(format!(
+                "outstanding: the decision for {qid} is recorded, but the retraction of {target_id} did not land (journal write failed: {e}); the question closed, do not re-answer"
+            ));
+        }
+        crate::law_match::RetractOutcome::IndexFailed(e) => {
+            answer.exit_code = 1;
+            answer.lines.push(format!(
+                "outstanding: {target_id} is retracted to the project journal, but the recall index write failed ({e}); run `fno backlog decide-reindex`, do not re-answer"
+            ));
+        }
+        crate::law_match::RetractOutcome::GraphRefused(e) => answer.lines.push(format!(
+            "outstanding: {target_id} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index"
+        )),
+    }
 }
 
 /// The affirmative LEADS a board option's text may open with. Exact match is
 /// unavailable here (the option text is its own sentence), so the lead set is
 /// closed and conservative: an option that opens any other way never reads as
-/// the grant, whatever the recommendation says.
-fn is_affirmative_option_text(text: &str) -> bool {
+/// the grant, whatever the recommendation says. Per-action: the merge leads
+/// speak the merge vocabulary, the retraction leads the retraction one.
+const MERGE_OPTION_LEADS: &[&str] = &[
+    "yes", "y", "merge", "grant", "approve", "approved", "lgtm", "ship it", "go ahead", "do it",
+];
+const RETRACT_OPTION_LEADS: &[&str] = &[
+    "yes", "y", "retract", "repeal", "rescind", "revoke", "overturn", "approve", "go ahead",
+    "do it",
+];
+
+/// Whether a board option's text opens with one of the action's affirmative
+/// leads. Per-action lead sets: see `MERGE_OPTION_LEADS` / `RETRACT_OPTION_LEADS`.
+fn is_affirmative_option_text(text: &str, leads: &[&str]) -> bool {
     let normalized = text.trim().to_lowercase();
-    [
-        "yes", "y", "merge", "grant", "approve", "approved", "lgtm", "ship it", "go ahead", "do it",
-    ]
-    .iter()
-    .any(|lead| {
+    leads.iter().any(|lead| {
         normalized == *lead
             || normalized.starts_with(&format!("{lead} "))
             || normalized.starts_with(&format!("{lead},"))
@@ -1522,7 +1932,7 @@ fn is_affirmative_option_text(text: &str) -> bool {
 /// closed exact-match set can never admit; the recommendation intake
 /// validated is the asker's own affirmative, so picking it IS the grant.
 /// A recommendation whose text is not affirmative (a hold) never grants.
-fn picks_recommended_option(question_event: &Value, answer: &str) -> bool {
+fn picks_recommended_option(question_event: &Value, answer: &str, leads: &[&str]) -> bool {
     let data = question_event.get("data").unwrap_or(question_event);
     let Some(recommended) = data
         .get("context")
@@ -1557,7 +1967,7 @@ fn picks_recommended_option(question_event: &Value, answer: &str) -> bool {
     let Some(text) = text else {
         return false;
     };
-    if !is_affirmative_option_text(&text) {
+    if !is_affirmative_option_text(&text, leads) {
         return false;
     }
     let norm = |s: &str| {

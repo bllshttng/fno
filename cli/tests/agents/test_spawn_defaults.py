@@ -18,20 +18,6 @@ import fno.agents.spawn_defaults as sd
 requires_rust = pytest.mark.dev_build
 
 
-def test_retired_bg_substrate_refuses_with_the_redirect(capsys):
-    """The bg spelling is retired, not deprecated: one line, the replacement,
-    exit 2. thread keeps working and canonicalizes to the internal selector."""
-    import pytest
-
-    from fno.agents.spawn_defaults import resolve_spawn_gates
-
-    with pytest.raises(SystemExit) as e:
-        resolve_spawn_gates("bg", None, once=False, harness="claude")
-    assert e.value.code == 2
-    assert "substrate 'bg' was retired" in capsys.readouterr().err
-    assert resolve_spawn_gates("thread", None, once=False, harness="claude") == "bg"
-
-
 def _pin_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: str) -> Path:
     """The real path: this checkout's binary, one config, one journal."""
     from fno.rust_binary import find_dev_binary

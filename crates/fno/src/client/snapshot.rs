@@ -385,8 +385,54 @@ fn write(frame: &Frame, args: &SnapshotArgs) -> Result<(), String> {
             std::fs::write(&args.out, font(frame_html::screen_html(frame, args.theme))).map_err(io)
         }
         Format::Svg => std::fs::write(&args.out, svg()).map_err(io),
-        Format::Png => png(&svg(), frame, &args.out),
+        Format::Png => {
+            png(&svg(), frame, &args.out)?;
+            if super::image_layer::painted() {
+                stamp_no_image_protocol(&args.out)?;
+            }
+            Ok(())
+        }
     }
+}
+
+/// The `tEXt` chunk a snapshot png carries when its frame painted an image.
+/// The snapshot speaks no image protocol, so such a shot shows the half-block
+/// path only. The question intake refuses on it (`question_intake.rs`).
+const NO_IMAGE_PROTOCOL_STAMP: (&str, &str) = ("fno-snapshot", "no-image-protocol");
+
+/// Insert the stamp as a `tEXt` chunk right after the png's `IHDR`.
+fn stamp_no_image_protocol(out: &Path) -> Result<(), String> {
+    let io = |e: std::io::Error| format!("stamp {}: {e}", out.display());
+    let mut png = std::fs::read(out).map_err(io)?;
+    // Signature (8) + IHDR: length (4), type (4), data (13), crc (4).
+    let at = 33;
+    if png.len() < at || &png[12..16] != b"IHDR" {
+        return Err(format!(
+            "stamp {}: not a png with IHDR first",
+            out.display()
+        ));
+    }
+    let (key, text) = NO_IMAGE_PROTOCOL_STAMP;
+    let mut body = b"tEXt".to_vec();
+    body.extend_from_slice(key.as_bytes());
+    body.push(0);
+    body.extend_from_slice(text.as_bytes());
+    let mut chunk = ((body.len() - 4) as u32).to_be_bytes().to_vec();
+    chunk.extend_from_slice(&body);
+    chunk.extend_from_slice(&crc32(&body).to_be_bytes());
+    png.splice(at..at, chunk);
+    std::fs::write(out, png).map_err(io)
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &b in bytes {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
 }
 
 /// Rasterize through headless Chrome: the svg in a zero-margin page, a window
@@ -731,6 +777,9 @@ shoot a root seeded with questions, mail or backlog activity \
 questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             )?;
             view.open_detail_on(&id);
+            if let Some(d) = &view.question_detail {
+                d.wait_decoded(Duration::from_secs(10));
+            }
             select_modal_line(&mut view)?;
         }
         Some(ViewKind::RowMenu) => {

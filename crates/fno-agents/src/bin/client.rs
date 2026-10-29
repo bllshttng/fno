@@ -322,6 +322,11 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr-watch") {
         std::process::exit(fno_agents::pr_watch::run(&args[1..]));
     }
+    // A spawn is admitted in process (spawn_seam) before run() parses it.
+    let args = match fno_agents::spawn_seam::admit_spawn(args) {
+        Ok(args) => args,
+        Err(code) => std::process::exit(code),
+    };
     let code = rt.block_on(run(args));
     std::process::exit(code);
 }
@@ -852,8 +857,8 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::codex_posture::run_permission_tokens(&args[1..]);
     }
 
-    // `sandbox-probe`: the pre-seating verdict; Python's spawn gate owns the
-    // exit-85 refusal - the command answers, the caller judges.
+    // `sandbox-probe`: the pre-seating verdict as a command. The spawn seam
+    // calls the probe in process and owns the exit-85 refusal.
     if command == "sandbox-probe" {
         return fno_agents::sandbox_probe::run_sandbox_probe(&args[1..]);
     }
@@ -1538,23 +1543,6 @@ async fn run(args: Vec<String>) -> i32 {
     let mut spawn_hold: Option<fno_agents::spawn_guard::SpawnHold> = None;
     let mut promotion = None;
     if method == "agent.spawn" && command_owned == "spawn" {
-        // The seam gate comes FIRST. A spawn that skipped
-        // the Python seam carries no configured route/model/effort/account,
-        // so it goes back to the front door (FNO_AGENTS_RUNTIME=python stops
-        // the loop: the re-exec crosses the seam, gets the marker, and comes
-        // back marked). On exec failure this spawn's only decision path is
-        // gone and its policy state is unknown, so it refuses rather than
-        // falling through to a harness default the seam could have refused.
-        if spawn_needs_python_seam(&params) {
-            let err = exec_python_front(&args);
-            eprintln!(
-                "fno-agents: config.agents.profiles is read only by the Python \
-                 spawn seam, and exec of 'fno agents spawn' failed: {err}. No \
-                 configured route, model, effort or account was applied; policy \
-                 state unknown; refusing."
-            );
-            return 2;
-        }
         if let Some(map) = params.as_object_mut() {
             if let Err((line, code)) = fno_agents::spawn_bare::admit(map) {
                 eprintln!("{line}");
@@ -2077,38 +2065,6 @@ fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), Str
         print!("{}", String::from_utf8_lossy(&out.stdout));
     }
     Ok(())
-}
-
-/// The Python seam (rust_runtime.make_context -> compose_spawn_argv) is
-/// the only reader of config.agents.profiles. A spawn that skipped it carries
-/// no configured route, model, effort or account, so it goes back to the
-/// front door; the marker asserts the crossing and the door's own posture.
-/// A marker is an upstream seam crossing, never proof a route is authorized -
-/// the strict coordinate checks still own that.
-fn spawn_needs_python_seam(params: &Value) -> bool {
-    // FNO_SPAWN_GATE=0 is the operator bypass both gate implementations honor
-    // (spawn_gate.rs, spawn_gate.py); it excuses the seam bounce the same way.
-    if std::env::var_os("FNO_SPAWN_GATE").is_some_and(|v| v == "0") {
-        return false;
-    }
-    params.get("defaults_applied").is_none()
-}
-
-fn exec_python_front(args: &[String]) -> std::io::Error {
-    use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(fno_agents::scrape::fno_bin())
-        .arg("agents")
-        .args(args)
-        .env("FNO_AGENTS_RUNTIME", "python")
-        .exec();
-    if err.kind() == std::io::ErrorKind::NotFound {
-        return std::process::Command::new(fno_agents::scrape::fno_py())
-            .arg("agents")
-            .args(args)
-            .env("FNO_AGENTS_RUNTIME", "python")
-            .exec();
-    }
-    err
 }
 
 fn maybe_run_spawn(
@@ -3824,28 +3780,6 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             }
             "--yolo" | "-Y" => {
                 return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--yolo"));
-            }
-            // The Python spawn seam (rust_runtime
-            // make_context -> compose_spawn_argv) is the only reader of
-            // config.agents.profiles. This token asserts it crossed upstream
-            // and carries its enforcement verdict. Consumed here - never
-            // forwarded, never read past the `--` fence - so no harness argv
-            // or worker message can see it. Not in VALUE_FLAGS on purpose:
-            // the bare token must not eat a neighbor as its value.
-            "--defaults-applied" => {
-                params.insert(
-                    "defaults_applied".into(),
-                    Value::String("unenforced".into()),
-                );
-            }
-            other if other.starts_with("--defaults-applied=") => {
-                // if/else, not a match: an inner `"word" =>` arm would read as
-                // a phantom command to the Python parity parser's arm scan.
-                let v = &other["--defaults-applied=".len()..];
-                if v != "enforced" && v != "unenforced" {
-                    return Err("--defaults-applied takes 'enforced' or 'unenforced'".into());
-                }
-                params.insert("defaults_applied".into(), Value::String(v.into()));
             }
             // fno's own spelling of claude's --disallowedTools: it refuses by
             // name, since forwarding it would hand claude a flag it lacks.
