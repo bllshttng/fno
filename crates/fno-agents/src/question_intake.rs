@@ -162,6 +162,9 @@ pub struct IntakeAnswer {
     pub position: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<usize>,
+    /// The rung the recorded row carries; the asker wakes its holder.
+    #[serde(skip)]
+    pub rung: Option<Value>,
 }
 
 impl IntakeAnswer {
@@ -176,6 +179,7 @@ impl IntakeAnswer {
             truncated: false,
             position: None,
             total: None,
+            rung: None,
         }
     }
 }
@@ -990,8 +994,29 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     if let Some(n) = node {
         data.insert("node".into(), json!(n));
     }
+    // A rung row that lacks the card fields would read not-ready once its
+    // lease ran out and never reach the board, so it skips the ladder.
     if let Some(rung) = &req.rung {
-        data.insert("rung".into(), rung.clone());
+        let missing: Vec<&str> = [
+            ("class", &parsed.class),
+            ("deadline", &parsed.deadline),
+            ("on_silence", &parsed.on_silence),
+            ("## Tried", &parsed.tried),
+        ]
+        .into_iter()
+        .filter(|(_, v)| v.trim().is_empty())
+        .map(|(k, _)| k)
+        .collect();
+        if missing.is_empty() {
+            data.insert("rung".into(), rung.clone());
+            answer.rung = Some(rung.clone());
+        } else {
+            answer.lines.push(format!(
+                "outstanding: this question goes to the user's board, not to your lead: \
+                 the ladder needs {}. Add them to the question file to ask your lead first.",
+                missing.join(", ")
+            ));
+        }
     }
     if !parsed.class.trim().is_empty() {
         data.insert("class".into(), json!(parsed.class.trim()));
@@ -1556,13 +1581,43 @@ stops
 
     #[test]
     fn a_ladder_ask_carries_its_rung_and_stays_off_the_board() {
-        let home = tmp_home("ladder-rung");
-        let root = tmp_root("ladder-rung");
+        let rung = json!({"level": "lead", "holder_session": "s-lead", "holder_name": "tomas"});
+        // A file without the card fields skips the ladder: the row goes to
+        // the board, and the asker learns which fields the ladder needs.
+        let home = tmp_home("ladder-bare");
+        let root = tmp_root("ladder-bare");
         let mut r = req(QUESTION_FILE, &root);
         r.node = Some("x-aaaa".to_string());
-        r.rung = Some(json!({"level": "lead", "holder_session": "s-lead", "holder_name": "tomas"}));
+        r.rung = Some(rung.clone());
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        assert!(answer.rung.is_none());
+        assert!(answer
+            .lines
+            .iter()
+            .any(|l| l.contains("class, deadline, on_silence, ## Tried")));
+        assert_eq!(
+            crate::outstanding::fold_questions(&journal_text(&root)).len(),
+            1
+        );
+
+        let laddered = QUESTION_FILE
+            .replace(
+                "recommend: 1\n",
+                "recommend: 1\nclass: taste\ndeadline: 2026-11-01T09:00:00Z\non_silence: wait\n",
+            )
+            .replace(
+                "## Reversible",
+                "## Tried\nread the grant table\n\n## Reversible",
+            );
+        let home = tmp_home("ladder-rung");
+        let root = tmp_root("ladder-rung");
+        let mut r = req(&laddered, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.rung = Some(rung);
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        assert!(answer.rung.is_some());
         let journal = journal_text(&root);
         assert!(
             journal.contains("\"holder_session\":\"s-lead\""),

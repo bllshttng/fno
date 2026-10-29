@@ -1170,7 +1170,7 @@ fn run_ask(args: &[String]) -> i32 {
         if !template {
             println!("{qid}");
         }
-        if let Some(rung) = &rung {
+        if let Some(rung) = &answer.rung {
             crate::question_ladder::wake_holder(rung, qid, wake_node.as_deref(), &wake_question);
         }
     }
