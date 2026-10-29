@@ -110,7 +110,7 @@ check "a fresh cache shows this session's own ready question" \
 
 - question: Which reading?
 3 open across the fleet.
-Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead." \
+Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease." \
     "$out"
 
 # A missing cache: the full fold answers.
@@ -140,7 +140,7 @@ check "an unreadable store says so, loudly" \
     "## Outstanding for you
 
 could not be read (fno inbox outstanding exit 1). Run it directly.
-Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead." \
+Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease." \
     "$out"
 
 rm_cache

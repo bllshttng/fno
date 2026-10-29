@@ -77,6 +77,8 @@ pub(crate) fn same_head(a: &str, b: &str) -> bool {
 #[derive(Default)]
 pub(crate) struct RungFacts {
     pub statuses: std::collections::BTreeMap<String, String>,
+    /// node id -> title, for the card's node line.
+    pub titles: std::collections::BTreeMap<String, String>,
     /// node id -> every merged PR number, primary and additional_prs alike,
     /// only when its merge_status reads merged.
     pub merged_prs: std::collections::BTreeMap<String, Vec<u64>>,
@@ -103,6 +105,7 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> RungFacts {
                 [
                     "id",
                     "status",
+                    "title",
                     "pr_number",
                     "merge_status",
                     "additional_prs",
@@ -125,6 +128,9 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> RungFacts {
                 continue;
             };
             facts.statuses.insert(id.to_string(), status.to_string());
+            if let Some(title) = row.get("title").and_then(serde_json::Value::as_str) {
+                facts.titles.insert(id.to_string(), title.to_string());
+            }
             // The stamp is not a rung by itself (a multi-ship node can carry
             // one while work remains); it only feeds the pr-merged rule,
             // which also demands the question name the PR. Later ships ride
@@ -345,6 +351,7 @@ mod tests {
             statuses: statuses.iter().cloned().collect(),
             merged_prs: Default::default(),
             raw: raw.clone(),
+            ..Default::default()
         }
     }
 
@@ -362,6 +369,7 @@ mod tests {
                 statuses: statuses.iter().cloned().collect(),
                 merged_prs,
                 raw: raw.clone(),
+                ..Default::default()
             }
         }
     }
