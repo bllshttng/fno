@@ -2022,14 +2022,14 @@ mod tests {
             &BTreeSet::new(),
             30,
         );
-        // Two idle pool rows; the third argv names a live claim socket, so
-        // the session took the spare and it is not pool.
+        // Two idle pool rows; the third argv names a claim socket that is
+        // gone, so the session took the spare and it is not pool.
         assert_eq!(out.spare_pool_process_count, 2);
         assert_eq!(out.process_count, 0);
     }
 
     #[test]
-    fn a_claimed_spare_with_a_live_socket_is_not_the_pool() {
+    fn a_spare_with_a_live_socket_is_still_the_pool() {
         let dir =
             std::env::temp_dir().join(format!("fno-spare-{}-{}", std::process::id(), line!()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -2044,7 +2044,11 @@ mod tests {
             &BTreeSet::new(),
             30,
         );
-        assert_eq!(out.spare_pool_process_count, 0);
+        // The claim socket on disk is the idle pool's mark: Claude Code
+        // removes it when a session takes the spare (the 2026-10-22
+        // measurement behind memory_groups::spare_claimed), so a present
+        // socket keeps the pool reading.
+        assert_eq!(out.spare_pool_process_count, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
