@@ -2199,6 +2199,41 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .into_bytes(),
     );
     assert!(!clears(&fake, &head));
+    // A board answer: the rationale cites the answered page instead of chat.
+    // The page names the PR and no head; the row carries the head.
+    fake.decisions_stdout = Some(
+        row(
+            "Approved: PR 7 at <head> as built",
+            "user answered q-board7 on the board",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    let qdir = crate::escalation::questions_dir(&tmp);
+    std::fs::create_dir_all(&qdir).unwrap();
+    let page = |status: &str, answer: &str| {
+        format!(
+            "---\nquestion_id: q-board7\nstatus: {status}\ntitle: May PR 7 merge?\n\
+             answer: {answer}\n---\nbody\n"
+        )
+    };
+    // No page, an open page, or a rejecting answer: held.
+    assert!(!clears(&fake, &head));
+    for (status, answer) in [("open", "''"), ("answered", "2. Hold for changes")] {
+        std::fs::write(qdir.join("q-board7.md"), page(status, answer)).unwrap();
+        assert!(!clears(&fake, &head), "{status} {answer} must hold");
+    }
+    // The approving answer clears, at the row's head only.
+    std::fs::write(
+        qdir.join("q-board7.md"),
+        page("answered", "Approve as shown"),
+    )
+    .unwrap();
+    assert!(clears(&fake, &head));
+    assert!(!clears(&fake, &pushed));
+    std::fs::remove_file(qdir.join("q-board7.md")).unwrap();
     // The gate is closed again with the empty index the Fake serves by
     // default; the head-scoped grant text stays out of a held detail.
     fake.decisions_stdout = None;
