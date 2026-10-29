@@ -36,6 +36,12 @@ export PATH="$REPO_ROOT/crates/fno-agents/target/debug:$PATH"
 pass() { echo "ok - $1"; }
 fail() { echo "FAIL - $1" >&2; exit 1; }
 
+# Warm the binary once: AC2's join path runs the hook's own 3s budget, and a
+# cold debug binary paying first-touch page-in plus first-time graph.db
+# creation can overshoot it on a slow box. That is cold-start cost, not the
+# contract under test.
+"$AGENTS_BIN" version >/dev/null 2>&1 || true
+
 # --- AC1: the fresh-install window ------------------------------------------
 T1="$SBX/t1.jsonl"
 printf '%s\n' '{"type":"user","message":{"role":"user","content":"hi"}}' > "$T1"
