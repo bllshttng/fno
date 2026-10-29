@@ -94,7 +94,7 @@ Run every step listed under `## Verification`:
 
 ## 3b. Status-breakpoint emit (best-effort)
 
-A change that commits needs no emit. The PostToolUse commit hook (`fno-agents hook diff-budget`) reads the `Task <n>:` line and records `task_started` and `task_done` for that task, with the node and run from the manifest. `run_summary` fires from `finalize` at the loop terminal. If a change cannot commit, emit by hand. Use one non-fatal line that gates nothing:
+A change that commits needs no emit. The PostToolUse commit hook (`hooks/diff-budget-commit.sh`) reads the `Task <n>:` line and records `task_started` and `task_done` for that task, with the node and run from the manifest. `run_summary` fires from `finalize` at the loop terminal. If a change cannot commit, emit by hand. Use one non-fatal line that gates nothing:
 
 ```bash
 # BLOCKED when a change cannot proceed (also the <help> path):
