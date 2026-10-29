@@ -24,6 +24,7 @@ pub(crate) struct Work {
     pub(crate) difficulty: Option<String>,
     pub(crate) plan: Option<String>,
     pub(crate) pr: Option<u64>,
+    pub(crate) pr_url: Option<String>,
     pub(crate) epic: Option<(String, Option<String>)>,
     /// The node's description, when it is plain text.
     pub(crate) details: Option<String>,
@@ -205,6 +206,7 @@ fn work_of(backlog: &Inputs, id: &str) -> Work {
         difficulty: node.difficulty.clone(),
         plan: node.plan_path.clone(),
         pr: node.prs.first().map(|p| p.number),
+        pr_url: node.prs.first().and_then(|p| p.url.clone()),
         epic: node.parent.first().map(|l| (l.id.clone(), l.title.clone())),
         details: node
             .details

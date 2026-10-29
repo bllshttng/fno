@@ -302,6 +302,7 @@ function openSeat(r) {
   const row = (title, code, href, copy) => {
     const a = el(href ? "a" : "div", "lk"), t = el("span", "lt");
     if (href) a.href = href;
+    if (/^https:/.test(href || "")) { a.target = "_blank"; a.rel = "noopener"; }
     t.append(el("b", null, title), el("code", null, code));
     a.append(t);
     if (copy) {
@@ -315,7 +316,8 @@ function openSeat(r) {
   if (s.plan_uri && s.plan_uri.startsWith("obsidian://")) row("Plan in Obsidian", w.plan, s.plan_uri);
   else if (w.plan) row("Plan", w.plan, s.plan_file && s.plan_file.startsWith("file://") ? s.plan_file : null, w.plan);
   else if (w.id) row("Plan", "no plan_path on " + w.id);
-  if (w.pr) row("Pull request #" + w.pr, "fno do pr status " + w.pr, null, "fno do pr status " + w.pr);
+  // A PR opens on GitHub; the row offers no command to paste.
+  if (w.pr) row("Pull request #" + w.pr, w.pr_url ? w.pr_url.replace(/^https?:\/\//, "") : "no URL recorded on " + w.id, w.pr_url && /^https:\/\//.test(w.pr_url) ? w.pr_url : null);
   if (s.attach) row("Attach in the mux" + (r.local ? "" : " on " + r.machine), s.attach, null, s.attach);
   row("Peek without attaching", "fno agents session peek " + (s.short || s.name), null, "fno agents session peek " + (s.short || s.name));
   if (w.id) row("Node in the backlog", "fno backlog get " + w.id, null, "fno backlog get " + w.id);

@@ -69,7 +69,7 @@ fn fold_groups_each_seat_under_the_lead_it_reports_to() {
     map["machines"][0]["lanes"] =
         json!([{"provider": "anthropic", "cap": 4, "count": 6, "full": true}]);
     let backlog = crate::backlog_model::fixture(vec![
-        json!({"id": "x-1", "status": "in_progress", "title": "Seat work", "project": "fno-books", "details": "Phase 1."}),
+        json!({"id": "x-1", "status": "in_progress", "title": "Seat work", "project": "fno-books", "details": "Phase 1.", "pr_number": 19, "pr_url": "https://github.com/o/r/pull/19"}),
     ]);
     let fleet = fold(&map, &backlog, &[], 7);
     let hosts: Vec<&str> = fleet.machines.iter().map(|m| m.host.as_str()).collect();
@@ -107,6 +107,10 @@ fn fold_groups_each_seat_under_the_lead_it_reports_to() {
     assert_eq!(
         moved.work.as_ref().unwrap().details.as_deref(),
         Some("Phase 1.")
+    );
+    assert_eq!(
+        moved.work.as_ref().unwrap().pr_url.as_deref(),
+        Some("https://github.com/o/r/pull/19")
     );
     assert_eq!(
         (
