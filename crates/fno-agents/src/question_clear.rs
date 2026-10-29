@@ -747,22 +747,26 @@ fn agent_handle(req: &ClearRequest, caller: &ClearCaller) -> Option<String> {
     caller.ancestry_handle.clone()
 }
 
-/// The session holding a ladder row below the user rung.
-fn rung_holder(question_event: &Value) -> Option<&str> {
-    let rung = question_event.get("data")?.get("rung")?;
-    (rung.get("level").and_then(Value::as_str) != Some("user"))
-        .then(|| rung.get("holder_session").and_then(Value::as_str))
-        .flatten()
-}
-
-/// The row's class when the effective rules deny it to agents: the stored
-/// class, else the class word why_user names.
+/// Why an agent may not answer the row: its class (stored, else the class
+/// word why_user names) is in the asking project's questions.rules.deny,
+/// or those rules cannot be read. The rules come from the question's own
+/// cwd, never the closer's, and an unreadable config never reads as allow.
 fn denied_class(question_event: &Value) -> Option<String> {
     let data = question_event.get("data")?;
-    let rules = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| crate::question_ladder::rules_for(&cwd).ok())
+    let cwd = data
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
+    let rules = match crate::question_ladder::rules_for(&cwd) {
+        Ok(rules) => rules,
+        Err(e) => {
+            return Some(format!(
+                "unknown (the asking project's rules are unreadable: {e})"
+            ))
+        }
+    };
     [data.get("class"), data.get("why_user")]
         .into_iter()
         .flatten()
@@ -983,14 +987,14 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .is_some_and(|quote| !quote.trim().is_empty());
             // The rung holder answers the row the ladder placed on it, unless
             // the class is one only the user rules.
-            let holds_rung = rung_holder(question_event)
+            let holds_rung = crate::question_ladder::holder(&question_event["data"])
                 .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
             let denied = denied_class(question_event);
             if holds_rung && req.answer.is_some() {
                 if let Some(class) = denied {
                     refused += 1;
                     answer.lines.push(format!(
-                        "outstanding: refused: {qid} is class {class}, which questions.rules.deny keeps from agents. Nothing was closed. Climb it: fno inbox outstanding climb {qid} --evidence \"<what you checked>\""
+                        "outstanding: refused: {qid} is class {class}, and the asking project's questions.rules.deny keeps it from agents. Nothing was closed. Climb it: fno inbox outstanding climb {qid} --evidence \"<what you checked>\""
                     ));
                     continue;
                 }
