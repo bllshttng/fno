@@ -1,0 +1,354 @@
+{
+ "claude_api_error|-|sid": {
+  "json": "{\"handle\": \"claude_api_error\", \"state\": \"stalled\", \"reason\": \"api-error-tail\", \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"API Error: 429 usage limit reached for this account\", \"provider_refusal\": \"provider_4xx_quota\", \"session_id\": \"sid-apierr-0001\", \"observed_model\": {\"kind\": \"no-model-yet\"}, \"harness_title\": null, \"reachability\": \"unknown\", \"basis\": \"silent\", \"falsifier_error\": null}",
+  "line": "truth claude_api_error: stalled, no model yet [api-error-tail] (silent, last activity  30s ago by last-entry) [unknown: silent]"
+ },
+ "claude_api_error|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_api_error\", \"state\": \"stalled\", \"reason\": \"api-error-tail\", \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"API Error: 429 usage limit reached for this account\", \"provider_refusal\": \"provider_4xx_quota\", \"session_id\": null, \"observed_model\": {\"kind\": \"no-model-yet\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_api_error: dead, no model yet [api-error-tail] (falsified, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_api_error|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_api_error\", \"state\": \"stalled\", \"reason\": \"api-error-tail\", \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"API Error: 429 usage limit reached for this account\", \"provider_refusal\": \"provider_4xx_quota\", \"session_id\": \"sid-apierr-0001\", \"observed_model\": {\"kind\": \"no-model-yet\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_api_error: exited, no model yet [api-error-tail] (resumable, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_api_error|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_api_error\", \"state\": \"stalled\", \"reason\": \"api-error-tail\", \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"API Error: 429 usage limit reached for this account\", \"provider_refusal\": \"provider_4xx_quota\", \"session_id\": null, \"observed_model\": {\"kind\": \"no-model-yet\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_api_error: dead, no model yet [api-error-tail] (falsified, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_api_error|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_api_error\", \"state\": \"stalled\", \"reason\": \"api-error-tail\", \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"API Error: 429 usage limit reached for this account\", \"provider_refusal\": \"provider_4xx_quota\", \"session_id\": \"sid-apierr-0001\", \"observed_model\": {\"kind\": \"no-model-yet\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_api_error: exited, no model yet [api-error-tail] (resumable, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_api_error|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_api_error\", \"state\": \"stalled\", \"reason\": \"api-error-tail\", \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"API Error: 429 usage limit reached for this account\", \"provider_refusal\": \"provider_4xx_quota\", \"session_id\": null, \"observed_model\": {\"kind\": \"no-model-yet\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_api_error: dead, no model yet [api-error-tail] (falsified, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_api_error|process-gone|sid": {
+  "json": "{\"handle\": \"claude_api_error\", \"state\": \"stalled\", \"reason\": \"api-error-tail\", \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"API Error: 429 usage limit reached for this account\", \"provider_refusal\": \"provider_4xx_quota\", \"session_id\": \"sid-apierr-0001\", \"observed_model\": {\"kind\": \"no-model-yet\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_api_error: exited, no model yet [api-error-tail] (resumable, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_done|-|sid": {
+  "json": "{\"handle\": \"claude_done\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<promise>MISSION COMPLETE: gate shipped</promise>\", \"provider_refusal\": null, \"session_id\": \"sid-done-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unknown\", \"basis\": \"silent\", \"falsifier_error\": null}",
+  "line": "truth claude_done: done on claude-sonnet-5-5 (promise emitted, last activity   1m ago by last-entry) [unknown: silent]"
+ },
+ "claude_done|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_done\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<promise>MISSION COMPLETE: gate shipped</promise>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_done: dead on claude-sonnet-5-5 (falsified, last activity   1m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_done|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_done\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<promise>MISSION COMPLETE: gate shipped</promise>\", \"provider_refusal\": null, \"session_id\": \"sid-done-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_done: exited on claude-sonnet-5-5 (resumable, last activity   1m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_done|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_done\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<promise>MISSION COMPLETE: gate shipped</promise>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_done: dead on claude-sonnet-5-5 (falsified, last activity   1m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_done|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_done\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<promise>MISSION COMPLETE: gate shipped</promise>\", \"provider_refusal\": null, \"session_id\": \"sid-done-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_done: exited on claude-sonnet-5-5 (resumable, last activity   1m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_done|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_done\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<promise>MISSION COMPLETE: gate shipped</promise>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_done: dead on claude-sonnet-5-5 (falsified, last activity   1m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_done|process-gone|sid": {
+  "json": "{\"handle\": \"claude_done\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<promise>MISSION COMPLETE: gate shipped</promise>\", \"provider_refusal\": null, \"session_id\": \"sid-done-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_done: exited on claude-sonnet-5-5 (resumable, last activity   1m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_peer_skips|-|sid": {
+  "json": "{\"handle\": \"claude_peer_skips\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<cross-session-message from=\\\"lead-session-1\\\">ack, continuing</cross-session-message>\", \"provider_refusal\": null, \"session_id\": \"sid-peer-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unknown\", \"basis\": \"silent\", \"falsifier_error\": null}",
+  "line": "truth claude_peer_skips: done on claude-sonnet-5-5 (promise emitted, last activity  30s ago by last-entry) [unknown: silent]"
+ },
+ "claude_peer_skips|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_peer_skips\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<cross-session-message from=\\\"lead-session-1\\\">ack, continuing</cross-session-message>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_peer_skips: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_peer_skips|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_peer_skips\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<cross-session-message from=\\\"lead-session-1\\\">ack, continuing</cross-session-message>\", \"provider_refusal\": null, \"session_id\": \"sid-peer-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_peer_skips: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_peer_skips|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_peer_skips\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<cross-session-message from=\\\"lead-session-1\\\">ack, continuing</cross-session-message>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_peer_skips: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_peer_skips|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_peer_skips\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<cross-session-message from=\\\"lead-session-1\\\">ack, continuing</cross-session-message>\", \"provider_refusal\": null, \"session_id\": \"sid-peer-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_peer_skips: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_peer_skips|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_peer_skips\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<cross-session-message from=\\\"lead-session-1\\\">ack, continuing</cross-session-message>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_peer_skips: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_peer_skips|process-gone|sid": {
+  "json": "{\"handle\": \"claude_peer_skips\", \"state\": \"done\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<cross-session-message from=\\\"lead-session-1\\\">ack, continuing</cross-session-message>\", \"provider_refusal\": null, \"session_id\": \"sid-peer-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_peer_skips: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_stalled|-|sid": {
+  "json": "{\"handle\": \"claude_stalled\", \"state\": \"stalled\", \"reason\": null, \"last_activity_age_s\": 10800, \"last_event_at\": \"2026-10-08T09:00:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-stall-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unknown\", \"basis\": \"silent\", \"falsifier_error\": null}",
+  "line": "truth claude_stalled: stalled on claude-sonnet-5-5 (silent, last activity   3h ago by last-entry) [unknown: silent]"
+ },
+ "claude_stalled|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_stalled\", \"state\": \"stalled\", \"reason\": null, \"last_activity_age_s\": 10800, \"last_event_at\": \"2026-10-08T09:00:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_stalled: dead on claude-sonnet-5-5 (falsified, last activity   3h ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_stalled|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_stalled\", \"state\": \"stalled\", \"reason\": null, \"last_activity_age_s\": 10800, \"last_event_at\": \"2026-10-08T09:00:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-stall-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_stalled: exited on claude-sonnet-5-5 (resumable, last activity   3h ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_stalled|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_stalled\", \"state\": \"stalled\", \"reason\": null, \"last_activity_age_s\": 10800, \"last_event_at\": \"2026-10-08T09:00:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_stalled: dead on claude-sonnet-5-5 (falsified, last activity   3h ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_stalled|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_stalled\", \"state\": \"stalled\", \"reason\": null, \"last_activity_age_s\": 10800, \"last_event_at\": \"2026-10-08T09:00:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-stall-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_stalled: exited on claude-sonnet-5-5 (resumable, last activity   3h ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_stalled|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_stalled\", \"state\": \"stalled\", \"reason\": null, \"last_activity_age_s\": 10800, \"last_event_at\": \"2026-10-08T09:00:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_stalled: dead on claude-sonnet-5-5 (falsified, last activity   3h ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_stalled|process-gone|sid": {
+  "json": "{\"handle\": \"claude_stalled\", \"state\": \"stalled\", \"reason\": null, \"last_activity_age_s\": 10800, \"last_event_at\": \"2026-10-08T09:00:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-stall-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_stalled: exited on claude-sonnet-5-5 (resumable, last activity   3h ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_title_and_synthetic_model|-|sid": {
+  "json": "{\"handle\": \"claude_title_and_synthetic_model\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Interrupted by the user\", \"provider_refusal\": null, \"session_id\": \"sid-title-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": \"tgt-x-aaaa-liveness\", \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth claude_title_and_synthetic_model: working on claude-sonnet-5-5 (active, last activity  30s ago by last-entry) [reachable: transcript]"
+ },
+ "claude_title_and_synthetic_model|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_title_and_synthetic_model\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Interrupted by the user\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": \"tgt-x-aaaa-liveness\", \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_title_and_synthetic_model: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_title_and_synthetic_model|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_title_and_synthetic_model\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Interrupted by the user\", \"provider_refusal\": null, \"session_id\": \"sid-title-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": \"tgt-x-aaaa-liveness\", \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_title_and_synthetic_model: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_title_and_synthetic_model|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_title_and_synthetic_model\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Interrupted by the user\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": \"tgt-x-aaaa-liveness\", \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_title_and_synthetic_model: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_title_and_synthetic_model|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_title_and_synthetic_model\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Interrupted by the user\", \"provider_refusal\": null, \"session_id\": \"sid-title-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": \"tgt-x-aaaa-liveness\", \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_title_and_synthetic_model: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_title_and_synthetic_model|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_title_and_synthetic_model\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Interrupted by the user\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": \"tgt-x-aaaa-liveness\", \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_title_and_synthetic_model: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_title_and_synthetic_model|process-gone|sid": {
+  "json": "{\"handle\": \"claude_title_and_synthetic_model\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Interrupted by the user\", \"provider_refusal\": null, \"session_id\": \"sid-title-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": \"tgt-x-aaaa-liveness\", \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_title_and_synthetic_model: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_user_clears_promise|-|sid": {
+  "json": "{\"handle\": \"claude_user_clears_promise\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"new task: sweep the backlog\", \"provider_refusal\": null, \"session_id\": \"sid-clear-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth claude_user_clears_promise: working on claude-sonnet-5-5 (active, last activity   1m ago by last-entry) [reachable: transcript]"
+ },
+ "claude_user_clears_promise|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_user_clears_promise\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"new task: sweep the backlog\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_user_clears_promise: dead on claude-sonnet-5-5 (falsified, last activity   1m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_user_clears_promise|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_user_clears_promise\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"new task: sweep the backlog\", \"provider_refusal\": null, \"session_id\": \"sid-clear-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_user_clears_promise: exited on claude-sonnet-5-5 (resumable, last activity   1m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_user_clears_promise|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_user_clears_promise\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"new task: sweep the backlog\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_user_clears_promise: dead on claude-sonnet-5-5 (falsified, last activity   1m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_user_clears_promise|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_user_clears_promise\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"new task: sweep the backlog\", \"provider_refusal\": null, \"session_id\": \"sid-clear-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_user_clears_promise: exited on claude-sonnet-5-5 (resumable, last activity   1m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_user_clears_promise|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_user_clears_promise\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"new task: sweep the backlog\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_user_clears_promise: dead on claude-sonnet-5-5 (falsified, last activity   1m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_user_clears_promise|process-gone|sid": {
+  "json": "{\"handle\": \"claude_user_clears_promise\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 60, \"last_event_at\": \"2026-10-08T11:59:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"new task: sweep the backlog\", \"provider_refusal\": null, \"session_id\": \"sid-clear-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_user_clears_promise: exited on claude-sonnet-5-5 (resumable, last activity   1m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_watching|-|sid": {
+  "json": "{\"handle\": \"claude_watching\", \"state\": \"watching\", \"reason\": null, \"last_activity_age_s\": 120, \"last_event_at\": \"2026-10-08T11:58:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<watching reason=\\\"ci\\\" pr=\\\"12\\\">waiting on CI</watching>\", \"provider_refusal\": null, \"session_id\": \"sid-watch-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth claude_watching: watching on claude-sonnet-5-5 (watching external, last activity   2m ago by last-entry) [reachable: transcript]"
+ },
+ "claude_watching|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_watching\", \"state\": \"watching\", \"reason\": null, \"last_activity_age_s\": 120, \"last_event_at\": \"2026-10-08T11:58:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<watching reason=\\\"ci\\\" pr=\\\"12\\\">waiting on CI</watching>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_watching: dead on claude-sonnet-5-5 (falsified, last activity   2m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_watching|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_watching\", \"state\": \"watching\", \"reason\": null, \"last_activity_age_s\": 120, \"last_event_at\": \"2026-10-08T11:58:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<watching reason=\\\"ci\\\" pr=\\\"12\\\">waiting on CI</watching>\", \"provider_refusal\": null, \"session_id\": \"sid-watch-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_watching: exited on claude-sonnet-5-5 (resumable, last activity   2m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_watching|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_watching\", \"state\": \"watching\", \"reason\": null, \"last_activity_age_s\": 120, \"last_event_at\": \"2026-10-08T11:58:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<watching reason=\\\"ci\\\" pr=\\\"12\\\">waiting on CI</watching>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_watching: dead on claude-sonnet-5-5 (falsified, last activity   2m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_watching|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_watching\", \"state\": \"watching\", \"reason\": null, \"last_activity_age_s\": 120, \"last_event_at\": \"2026-10-08T11:58:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<watching reason=\\\"ci\\\" pr=\\\"12\\\">waiting on CI</watching>\", \"provider_refusal\": null, \"session_id\": \"sid-watch-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_watching: exited on claude-sonnet-5-5 (resumable, last activity   2m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_watching|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_watching\", \"state\": \"watching\", \"reason\": null, \"last_activity_age_s\": 120, \"last_event_at\": \"2026-10-08T11:58:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<watching reason=\\\"ci\\\" pr=\\\"12\\\">waiting on CI</watching>\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_watching: dead on claude-sonnet-5-5 (falsified, last activity   2m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_watching|process-gone|sid": {
+  "json": "{\"handle\": \"claude_watching\", \"state\": \"watching\", \"reason\": null, \"last_activity_age_s\": 120, \"last_event_at\": \"2026-10-08T11:58:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"<watching reason=\\\"ci\\\" pr=\\\"12\\\">waiting on CI</watching>\", \"provider_refusal\": null, \"session_id\": \"sid-watch-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_watching: exited on claude-sonnet-5-5 (resumable, last activity   2m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_working|-|sid": {
+  "json": "{\"handle\": \"claude_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-work-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth claude_working: working on claude-sonnet-5-5 (active, last activity  30s ago by last-entry) [reachable: transcript]"
+ },
+ "claude_working|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_working: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_working|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-work-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_working: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_working|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_working: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_working|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-work-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_working: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_working|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_working: dead on claude-sonnet-5-5 (falsified, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_working|process-gone|sid": {
+  "json": "{\"handle\": \"claude_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 30, \"last_event_at\": \"2026-10-08T11:59:30Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Reading the ledger now.\", \"provider_refusal\": null, \"session_id\": \"sid-work-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_working: exited on claude-sonnet-5-5 (resumable, last activity  30s ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_your_move_option|-|sid": {
+  "json": "{\"handle\": \"claude_your_move_option\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Apply this to all four files? [Y/n]\", \"provider_refusal\": null, \"session_id\": \"sid-opt-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move_option: your-move on claude-sonnet-5-5 (awaiting your reply, last activity   5m ago by last-entry) [reachable: transcript]"
+ },
+ "claude_your_move_option|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_your_move_option\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Apply this to all four files? [Y/n]\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move_option: dead on claude-sonnet-5-5 (falsified, last activity   5m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_your_move_option|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_your_move_option\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Apply this to all four files? [Y/n]\", \"provider_refusal\": null, \"session_id\": \"sid-opt-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move_option: exited on claude-sonnet-5-5 (resumable, last activity   5m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_your_move_option|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_your_move_option\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Apply this to all four files? [Y/n]\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move_option: dead on claude-sonnet-5-5 (falsified, last activity   5m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_your_move_option|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_your_move_option\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Apply this to all four files? [Y/n]\", \"provider_refusal\": null, \"session_id\": \"sid-opt-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move_option: exited on claude-sonnet-5-5 (resumable, last activity   5m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_your_move_option|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_your_move_option\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Apply this to all four files? [Y/n]\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move_option: dead on claude-sonnet-5-5 (falsified, last activity   5m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_your_move_option|process-gone|sid": {
+  "json": "{\"handle\": \"claude_your_move_option\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Apply this to all four files? [Y/n]\", \"provider_refusal\": null, \"session_id\": \"sid-opt-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move_option: exited on claude-sonnet-5-5 (resumable, last activity   5m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_your_move|-|sid": {
+  "json": "{\"handle\": \"claude_your_move\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"The schema has two candidate keys. Should I proceed with the migration?\", \"provider_refusal\": null, \"session_id\": \"sid-move-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move: your-move on claude-sonnet-5-5 (awaiting your reply, last activity   5m ago by last-entry) [reachable: transcript]"
+ },
+ "claude_your_move|exit-recorded|nosid": {
+  "json": "{\"handle\": \"claude_your_move\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"The schema has two candidate keys. Should I proceed with the migration?\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move: dead on claude-sonnet-5-5 (falsified, last activity   5m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_your_move|exit-recorded|sid": {
+  "json": "{\"handle\": \"claude_your_move\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"The schema has two candidate keys. Should I proceed with the migration?\", \"provider_refusal\": null, \"session_id\": \"sid-move-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move: exited on claude-sonnet-5-5 (resumable, last activity   5m ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "claude_your_move|pane-gone|nosid": {
+  "json": "{\"handle\": \"claude_your_move\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"The schema has two candidate keys. Should I proceed with the migration?\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move: dead on claude-sonnet-5-5 (falsified, last activity   5m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_your_move|pane-gone|sid": {
+  "json": "{\"handle\": \"claude_your_move\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"The schema has two candidate keys. Should I proceed with the migration?\", \"provider_refusal\": null, \"session_id\": \"sid-move-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move: exited on claude-sonnet-5-5 (resumable, last activity   5m ago by last-entry) [unreachable: pane-gone]"
+ },
+ "claude_your_move|process-gone|nosid": {
+  "json": "{\"handle\": \"claude_your_move\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"The schema has two candidate keys. Should I proceed with the migration?\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move: dead on claude-sonnet-5-5 (falsified, last activity   5m ago by last-entry) [unreachable: process-gone]"
+ },
+ "claude_your_move|process-gone|sid": {
+  "json": "{\"handle\": \"claude_your_move\", \"state\": \"your-move\", \"reason\": null, \"last_activity_age_s\": 300, \"last_event_at\": \"2026-10-08T11:55:00Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"The schema has two candidate keys. Should I proceed with the migration?\", \"provider_refusal\": null, \"session_id\": \"sid-move-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"claude-sonnet-5-5\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth claude_your_move: exited on claude-sonnet-5-5 (resumable, last activity   5m ago by last-entry) [unreachable: process-gone]"
+ },
+ "codex_working|-|sid": {
+  "json": "{\"handle\": \"codex_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 45, \"last_event_at\": \"2026-10-08T11:59:15Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Running the sweep.\", \"provider_refusal\": null, \"session_id\": \"sid-codex-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"gpt-6.1-sol\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth codex_working: working on gpt-6.1-sol (active, last activity  45s ago by last-entry) [reachable: transcript]"
+ },
+ "codex_working|exit-recorded|nosid": {
+  "json": "{\"handle\": \"codex_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 45, \"last_event_at\": \"2026-10-08T11:59:15Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Running the sweep.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"gpt-6.1-sol\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth codex_working: dead on gpt-6.1-sol (falsified, last activity  45s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "codex_working|exit-recorded|sid": {
+  "json": "{\"handle\": \"codex_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 45, \"last_event_at\": \"2026-10-08T11:59:15Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Running the sweep.\", \"provider_refusal\": null, \"session_id\": \"sid-codex-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"gpt-6.1-sol\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth codex_working: exited on gpt-6.1-sol (resumable, last activity  45s ago by last-entry) [unreachable: exit-recorded]"
+ },
+ "codex_working|pane-gone|nosid": {
+  "json": "{\"handle\": \"codex_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 45, \"last_event_at\": \"2026-10-08T11:59:15Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Running the sweep.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"gpt-6.1-sol\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth codex_working: dead on gpt-6.1-sol (falsified, last activity  45s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "codex_working|pane-gone|sid": {
+  "json": "{\"handle\": \"codex_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 45, \"last_event_at\": \"2026-10-08T11:59:15Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Running the sweep.\", \"provider_refusal\": null, \"session_id\": \"sid-codex-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"gpt-6.1-sol\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth codex_working: exited on gpt-6.1-sol (resumable, last activity  45s ago by last-entry) [unreachable: pane-gone]"
+ },
+ "codex_working|process-gone|nosid": {
+  "json": "{\"handle\": \"codex_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 45, \"last_event_at\": \"2026-10-08T11:59:15Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Running the sweep.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"observed\", \"model\": \"gpt-6.1-sol\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth codex_working: dead on gpt-6.1-sol (falsified, last activity  45s ago by last-entry) [unreachable: process-gone]"
+ },
+ "codex_working|process-gone|sid": {
+  "json": "{\"handle\": \"codex_working\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": 45, \"last_event_at\": \"2026-10-08T11:59:15Z\", \"last_activity_basis\": \"last-entry\", \"last_message\": \"Running the sweep.\", \"provider_refusal\": null, \"session_id\": \"sid-codex-0001\", \"observed_model\": {\"kind\": \"observed\", \"model\": \"gpt-6.1-sol\", \"samples\": 1}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth codex_working: exited on gpt-6.1-sol (resumable, last activity  45s ago by last-entry) [unreachable: process-gone]"
+ },
+ "opencode_fixture|-|sid": {
+  "json": "{\"handle\": \"opencode_fixture\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": \"[tool_use: bash] Sweep done.\", \"provider_refusal\": null, \"session_id\": \"ses_goldenfix01\", \"observed_model\": {\"kind\": \"not-file-backed\"}, \"harness_title\": null, \"reachability\": \"reachable\", \"basis\": \"transcript\", \"falsifier_error\": null}",
+  "line": "truth opencode_fixture: working (active, last activity    ? ago) [reachable: transcript]"
+ },
+ "opencode_fixture|exit-recorded|nosid": {
+  "json": "{\"handle\": \"opencode_fixture\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": \"[tool_use: bash] Sweep done.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"not-file-backed\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth opencode_fixture: dead (falsified, last activity    ? ago) [unreachable: exit-recorded]"
+ },
+ "opencode_fixture|exit-recorded|sid": {
+  "json": "{\"handle\": \"opencode_fixture\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": \"[tool_use: bash] Sweep done.\", \"provider_refusal\": null, \"session_id\": \"ses_goldenfix01\", \"observed_model\": {\"kind\": \"not-file-backed\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth opencode_fixture: exited (resumable, last activity    ? ago) [unreachable: exit-recorded]"
+ },
+ "opencode_fixture|pane-gone|nosid": {
+  "json": "{\"handle\": \"opencode_fixture\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": \"[tool_use: bash] Sweep done.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"not-file-backed\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth opencode_fixture: dead (falsified, last activity    ? ago) [unreachable: pane-gone]"
+ },
+ "opencode_fixture|pane-gone|sid": {
+  "json": "{\"handle\": \"opencode_fixture\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": \"[tool_use: bash] Sweep done.\", \"provider_refusal\": null, \"session_id\": \"ses_goldenfix01\", \"observed_model\": {\"kind\": \"not-file-backed\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth opencode_fixture: exited (resumable, last activity    ? ago) [unreachable: pane-gone]"
+ },
+ "opencode_fixture|process-gone|nosid": {
+  "json": "{\"handle\": \"opencode_fixture\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": \"[tool_use: bash] Sweep done.\", \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"not-file-backed\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth opencode_fixture: dead (falsified, last activity    ? ago) [unreachable: process-gone]"
+ },
+ "opencode_fixture|process-gone|sid": {
+  "json": "{\"handle\": \"opencode_fixture\", \"state\": \"working\", \"reason\": null, \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": \"[tool_use: bash] Sweep done.\", \"provider_refusal\": null, \"session_id\": \"ses_goldenfix01\", \"observed_model\": {\"kind\": \"not-file-backed\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth opencode_fixture: exited (resumable, last activity    ? ago) [unreachable: process-gone]"
+ },
+ "unknown_handle|-|nosid": {
+  "json": "{\"handle\": \"unknown_handle\", \"state\": \"unknown\", \"reason\": \"not-found\", \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": null, \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"no-transcript\"}, \"harness_title\": null, \"reachability\": \"unknown\", \"basis\": \"no-evidence\", \"falsifier_error\": null}",
+  "line": "truth unknown_handle: unknown (not-found) [unknown: no-evidence]"
+ },
+ "unknown_handle|exit-recorded|nosid": {
+  "json": "{\"handle\": \"unknown_handle\", \"state\": \"unknown\", \"reason\": \"not-found\", \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": null, \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"no-transcript\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"exit-recorded\", \"falsifier_error\": null}",
+  "line": "truth unknown_handle: dead [not-found] (falsified, last activity    ? ago) [unreachable: exit-recorded]"
+ },
+ "unknown_handle|pane-gone|nosid": {
+  "json": "{\"handle\": \"unknown_handle\", \"state\": \"unknown\", \"reason\": \"not-found\", \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": null, \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"no-transcript\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"pane-gone\", \"falsifier_error\": null}",
+  "line": "truth unknown_handle: dead [not-found] (falsified, last activity    ? ago) [unreachable: pane-gone]"
+ },
+ "unknown_handle|process-gone|nosid": {
+  "json": "{\"handle\": \"unknown_handle\", \"state\": \"unknown\", \"reason\": \"not-found\", \"last_activity_age_s\": null, \"last_event_at\": null, \"last_activity_basis\": null, \"last_message\": null, \"provider_refusal\": null, \"session_id\": null, \"observed_model\": {\"kind\": \"no-transcript\"}, \"harness_title\": null, \"reachability\": \"unreachable\", \"basis\": \"process-gone\", \"falsifier_error\": null}",
+  "line": "truth unknown_handle: dead [not-found] (falsified, last activity    ? ago) [unreachable: process-gone]"
+ }
+}

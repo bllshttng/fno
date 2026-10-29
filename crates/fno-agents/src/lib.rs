@@ -685,6 +685,7 @@ pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
 pub mod transcript_turns;
+pub mod truth_cli;
 pub mod truth_probe;
 pub mod update_journal;
 pub mod usage;

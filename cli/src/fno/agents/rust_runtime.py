@@ -149,6 +149,9 @@ RUST_CLIENT_COMMANDS = frozenset(
         # The stream-json observe surface: polls the worker's own
         # stream.read_frames socket, never the daemon. A read.
         "watch",
+        # The transcript-tail supervision classifier over the daemon's own
+        # truth reader, answered in process. A read.
+        "truth",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -415,10 +418,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # peer's on-disk transcript / status events via fno.agents.peek. No Rust
     # client port, so it must never auto-route to the daemon.
     "peek",
-    #: the transcript-tail supervision classifier (`fno agents truth`).
-    # Read-only, pure Python (fno.agents.session_truth reads the transcript via
-    # peek); no Rust client port, so it must never auto-route to the daemon.
-    "truth",
     # The orphan sweep. The registered Python command is a shim that execs
     # `fno-agents census --orphans` (crates/fno-agents/src/orphans.rs); the
     # body routes in every runtime mode, and `orphans` is no client action, so
@@ -873,6 +872,7 @@ _STATUS_ARG_LEAVES = {
     "heal-token": "--heal-token",
     "pane-identity": "--pane-identity",
     "watch": "--watch",
+    "truth": "--truth",
     "liveness": "--liveness",
 }
 
