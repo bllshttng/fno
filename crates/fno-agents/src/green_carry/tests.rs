@@ -128,7 +128,7 @@ fn carry_rides_a_clean_main_merge() {
     record_green(&dir, &green);
     git(&dir, &["checkout", "-q", "main"]);
     std::fs::write(dir.join("m.txt"), "mainline\n").unwrap();
-    let m1 = commit_all(&dir, "m1");
+    let _m1 = commit_all(&dir, "m1");
     git(&dir, &["checkout", "-q", "feature"]);
     git(&dir, &["merge", "-q", "--no-edit", "main"]);
     pin_origin_main(&dir);
@@ -139,7 +139,7 @@ fn carry_rides_a_clean_main_merge() {
         "a comment-only main merge carries"
     );
     assert_eq!(carried.optional_unresolved, Some(Some(0)));
-    let _ = (m1, guard);
+    drop(guard);
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn carry_refuses_a_real_push() {
     let head = commit_all(&dir, "c2");
     let checks = carried_checks(&dir, 7, Some(&head), pending(&head));
     assert_eq!(checks.verdict, "pending", "a branch-authored commit reruns");
-    let _ = guard;
+    drop(guard);
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn carry_refuses_a_conflict_resolution() {
     let head = rev_parse(&dir, "HEAD");
     let checks = carried_checks(&dir, 7, Some(&head), pending(&head));
     assert_eq!(checks.verdict, "pending", "a hand-resolved merge reruns");
-    let _ = guard;
+    drop(guard);
 }
 
 #[test]
@@ -230,5 +230,5 @@ fn carry_refuses_non_ancestor_missing_row_and_keeps_github_block() {
     green_read.verdict = "green".to_string();
     let checks = carried_checks(&dir, 7, Some(&head), green_read);
     assert_eq!(checks.verdict, "green");
-    let _ = guard;
+    drop(guard);
 }
