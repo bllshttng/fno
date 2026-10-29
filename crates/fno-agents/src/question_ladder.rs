@@ -287,6 +287,17 @@ pub fn run_climb(args: &[String]) -> i32 {
     }
     let node = data.get("node").and_then(Value::as_str);
     let next = next_rung(&cwd, node, data);
+    if next.is_none()
+        && data
+            .pointer("/context/tried")
+            .and_then(Value::as_str)
+            .is_none_or(|t| t.trim().is_empty())
+    {
+        return refuse(format!(
+            "{qid} has no `## Tried` section, and the user's board needs it. Answer it \
+             at this rung, or let the lease put it on the board marked not ready"
+        ));
+    }
     let row = climbed(
         row,
         next.clone(),
