@@ -35,7 +35,7 @@ pub const TRANSCRIPT_APPEND_COMMAND: &str = "transcript-append";
 /// sha256 of the envelope line, so a hook retry is an idempotent hit, never a
 /// duplicate). The judge (`validate_envelope`) owns the schema; a refused
 /// record answers `InvalidParams` naming the diagnostic.
-pub(crate) fn handle_transcript_append(ctx: &Ctx, req: &Request) -> Response {
+pub(super) fn handle_transcript_append(ctx: &Ctx, req: &Request) -> Response {
     let Some(session_id) = req
         .params
         .get("session_id")
@@ -138,19 +138,6 @@ pub(crate) fn stored_lines(journal: &Path, session_id: &str) -> Option<Vec<Strin
 /// verdict covers the same rows a file read would.
 const TAIL_WINDOW_BYTES: u64 = 1024 * 1024;
 
-/// The newest stored record's wall-clock ms for one session. `None` when the
-/// store holds nothing for the session or is unreadable.
-pub(crate) fn newest_stored_ts_ms(journal: &Path, session_id: &str) -> Option<i64> {
-    let query = crate::event_store::EventQuery {
-        types: vec![TRANSCRIPT_RECORD_TYPE.to_string()],
-        session_id: Some(session_id).map(String::from),
-        include_rejected: false,
-        ..Default::default()
-    };
-    let rows = crate::event_store::query_events(journal, &query).ok()?;
-    rows.last().map(|row| row.ts_ms)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,8 +169,12 @@ mod tests {
         )
     }
 
+    /// One store, every op answer: a push stores judged records and counts
+    /// them; the same push again is idempotent hits; a record with no line
+    /// refuses by name; the readers answer None for a session with no rows
+    /// (the file fallback owns that read) and the stored lines otherwise.
     #[test]
-    fn append_stores_judged_records_and_answers_counts() {
+    fn append_stores_dedupes_refuses_and_reads_back() {
         let (ctx, journal) = ctx_with_journal();
         let req = append_req(
             "sess-a",
@@ -192,42 +183,21 @@ mod tests {
                 r#"{"type":"user","timestamp":"2026-10-08T01:00:01.000Z"}"#,
             ],
         );
-        let res = handle_transcript_append(&ctx, &req);
-        let body = res.result().expect("ok");
-        assert_eq!(body["stored"], 2);
-        assert_eq!(body["deduped"], 0);
-        assert_eq!(body["refused"].as_array().map(Vec::len), Some(0));
-        // The same push again is idempotent hits, never duplicates.
-        let res = handle_transcript_append(&ctx, &req);
-        let body = res.result().expect("ok");
-        assert_eq!(body["deduped"], 2);
-        // A session with no rows reads None: the file fallback owns the read.
-        assert_eq!(stored_lines(&journal, "sess-b"), None);
-        let lines = stored_lines(&journal, "sess-a").expect("stored");
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("\"type\":\"assistant\""));
-    }
-
-    #[test]
-    fn append_refuses_an_unjudgeable_record_and_names_it() {
-        let (ctx, _journal) = ctx_with_journal();
-        let req = Request::new(
+        let bad = Request::new(
             1,
             format!("agent.{TRANSCRIPT_APPEND_COMMAND}"),
             json!({ "session_id": "sess-a", "records": [{ "noline": true }] }),
         );
-        let res = handle_transcript_append(&ctx, &req);
-        let body = res.result().expect("ok");
-        assert_eq!(body["stored"], 0);
-        assert_eq!(body["refused"].as_array().map(|r| r.len()), Some(1));
-    }
-
-    #[test]
-    fn newest_ts_answers_the_last_committed_row() {
-        let (ctx, journal) = ctx_with_journal();
-        assert_eq!(newest_stored_ts_ms(&journal, "sess-c"), None);
-        let req = append_req("sess-c", &[r#"{"type":"user"}"#]);
-        handle_transcript_append(&ctx, &req);
-        assert!(newest_stored_ts_ms(&journal, "sess-c").is_some());
+        for (req, stored, deduped, refused) in [(&req, 2, 0, 0), (&req, 0, 2, 0), (&bad, 0, 0, 1)] {
+            let res = handle_transcript_append(&ctx, req);
+            let body = res.result().expect("ok");
+            assert_eq!(body["stored"], stored);
+            assert_eq!(body["deduped"], deduped);
+            assert_eq!(body["refused"].as_array().map(Vec::len), Some(refused));
+        }
+        assert_eq!(stored_lines(&journal, "sess-b"), None);
+        let lines = stored_lines(&journal, "sess-a").expect("stored");
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"type\":\"assistant\""));
     }
 }

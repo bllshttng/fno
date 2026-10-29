@@ -460,7 +460,7 @@ pub fn client_sock(home: &AgentsHome) -> PathBuf {
 
 /// True when `FNO_SUPERVISOR_SOCKET` pins a socket: the client must never
 /// fork a daemon.
-fn sock_pinned() -> bool {
+pub(crate) fn sock_pinned() -> bool {
     std::env::var_os("FNO_SUPERVISOR_SOCKET").is_some_and(|v| !v.is_empty())
 }
 
