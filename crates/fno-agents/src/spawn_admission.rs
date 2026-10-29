@@ -1315,4 +1315,42 @@ mod tests {
         assert_eq!(rewritten, argv);
         assert_eq!(profile, None);
     }
+
+    /// The filing's measured shape: a planless low node derives /target by the
+    /// lean-dispatch arm, and its /fno:target payload passes. The lean-dispatch
+    /// note is long prose ("lean dispatch: planless low node plans inline..."),
+    /// which is exactly what the wrong-element read fed to the decide.
+    #[test]
+    fn a_planless_low_node_passes_a_target_payload() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let entries = vec![serde_json::json!({
+            "id": "x-7e20", "slug": "x-7e20", "title": "the drag", "type": "feature",
+            "status": "idea", "priority": "p2", "project": "proj", "domain": "code",
+            "created_at": "2026-09-07T00:00:00Z", "difficulty": "low",
+        })];
+        crate::graph_store::seed_rows(&dir.path().join("graph.json"), &entries).unwrap();
+        let prior = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path());
+        let argv: Vec<String> = [
+            "spawn",
+            "--node",
+            "x-7e20",
+            "--message",
+            "/fno:target x-7e20 fix the drag",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let outcome = node_seed_rewrite(&argv);
+        match prior {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        let (rewritten, profile) = outcome.unwrap();
+        assert_eq!(rewritten, argv);
+        assert_eq!(profile, None);
+    }
 }
