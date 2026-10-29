@@ -1,17 +1,12 @@
-//! The sandbox host seam: how a worker's substrate is isolated from the host,
-//! and what it may reach. Split out of daemon.rs (shrink-only) so sandbox-side
-//! additions land here, never back in the daemon file.
-//!
-//! Ruling Q7 order is shared-state protection first: a `devcontainer` worker
-//! gets ONLY its worktree and the daemon sockets bind-mounted, never the
-//! agents home, so registry and claims change through daemon ops, never
-//! direct file writes. `none` is today: no isolation, direct state access.
-//! The remote-box spelling is the same plan with a forwarded socket: the env
-//! pin (`FNO_SUPERVISOR_SOCKET`) points at the forward, not a path.
+//! The daemon side of the sandbox seam: the `agent.sandbox-plan` op, the
+//! socket directory a box mounts, and the `socket` carrier probe the spawn
+//! gate runs. Split out of daemon.rs (shrink-only) so sandbox-side additions
+//! land here, never back in the daemon file. The plan types and the launch
+//! wrap live in `crate::sandbox_launch`, where the spawn client reaches them.
 
 use super::*;
 
-use std::collections::BTreeMap;
+use crate::sandbox_launch::{launch_for, SandboxProvider};
 
 /// The carrier name a sandboxed lane declares in
 /// `[harness.<harness>.state_root_grant]`: the lane reaches the state root
@@ -19,125 +14,31 @@ use std::collections::BTreeMap;
 /// spawn gate probes the socket before believing the declaration.
 pub const SOCKET_CARRIER: &str = "socket";
 
-/// Where the mounted state doors live inside the container. The launch env
-/// pins (`FNO_SUPERVISOR_SOCKET`, `FNO_STATE_DIR`) all resolve under it, so
-/// the container needs no `~/.fno` at all.
-pub const CONTAINER_STATE_DIR: &str = "/fno-state";
-
-/// One bind-mount of the launch plan.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct BindMount {
-    pub host: PathBuf,
-    pub container: PathBuf,
-    pub readonly: bool,
-}
-
-/// What one sandboxed spawn mounts and exports. `none` produces the empty
-/// plan: the spawn command runs unchanged.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct SandboxLaunch {
-    pub provider: &'static str,
-    pub mounts: Vec<BindMount>,
-    pub env: BTreeMap<String, String>,
-}
-
-/// Which isolation a spawn uses. `none` is today; `devcontainer` isolates
-/// the worker behind the bind-mount plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SandboxProvider {
-    None,
-    Devcontainer,
-}
-
-impl SandboxProvider {
-    /// Resolve `[sandbox] provider`. Absent reads `none` (today). An unknown
-    /// spelling is an error, never a silent downgrade to `none`: the operator
-    /// configured isolation and must not believe workers are sandboxed when
-    /// they are not.
-    pub fn from_config(cwd: &Path) -> Result<Self, String> {
-        match crate::agents_config::config_lookup(cwd, &["sandbox", "provider"]) {
-            None => Ok(Self::None),
-            Some(v) => match v.as_str().map(str::trim) {
-                Some("none") => Ok(Self::None),
-                Some("devcontainer") => Ok(Self::Devcontainer),
-                _ => Err(format!(
-                    "[sandbox] provider must be \"none\" or \"devcontainer\", got {}",
-                    v.as_str()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("{v:?}"))
-                )),
-            },
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Devcontainer => "devcontainer",
-        }
-    }
-}
-
-/// The launch plan for one provider: the worktree (read-write, the worker's
-/// product) and the supervisor socket (read-write; connecting to a unix
-/// socket needs write access on some filesystems). The container paths are
-/// fixed, so a launch recipe is reproducible from the plan alone.
-pub fn launch_for(
-    provider: SandboxProvider,
-    worktree: &Path,
-    supervisor_sock: &Path,
-) -> SandboxLaunch {
-    match provider {
-        SandboxProvider::None => SandboxLaunch {
-            provider: SandboxProvider::None.as_str(),
-            mounts: Vec::new(),
-            env: BTreeMap::new(),
-        },
-        SandboxProvider::Devcontainer => {
-            let sock_container = Path::new(CONTAINER_STATE_DIR)
-                .join(supervisor_sock.file_name().unwrap_or_default());
-            let mut env = BTreeMap::new();
-            env.insert(
-                "FNO_SUPERVISOR_SOCKET".to_string(),
-                sock_container.to_string_lossy().into_owned(),
-            );
-            env.insert("FNO_STATE_DIR".to_string(), CONTAINER_STATE_DIR.to_string());
-            SandboxLaunch {
-                provider: SandboxProvider::Devcontainer.as_str(),
-                mounts: vec![
-                    BindMount {
-                        host: worktree.to_path_buf(),
-                        container: PathBuf::from("/workspace"),
-                        readonly: false,
-                    },
-                    BindMount {
-                        host: supervisor_sock.to_path_buf(),
-                        container: sock_container,
-                        readonly: false,
-                    },
-                ],
-                env,
-            }
-        }
-    }
-}
-
-/// The `docker run`-shaped mount arguments for a plan: one flag per mount,
-/// host and container path verbatim. A caller that launches through
-/// `devcontainer` instead of raw docker still consumes the same mount list.
-pub fn docker_mount_args(launch: &SandboxLaunch) -> Vec<String> {
-    launch
-        .mounts
-        .iter()
-        .map(|m| {
-            format!(
-                "--mount type=bind,src={},dst={}{}",
-                m.host.display(),
-                m.container.display(),
-                if m.readonly { ",readonly" } else { "" }
-            )
+/// Re-link `<home>/sandbox-sock/supervisor.sock` to the socket the daemon
+/// just bound. A box mounts this directory, never the socket file: the
+/// daemon unlinks and rebinds its socket at every start, and a file mount
+/// keeps the dead inode (ECONNREFUSED after the first restart). A directory
+/// mount sees the fresh link. A socket path cannot be rebound in place, and
+/// the home directory holds the registry and claims, so a hard link in a
+/// directory of its own is the one shape that survives a restart. A failure
+/// logs one line; the gate probe and the in-box probe name the dead path.
+pub(crate) fn publish_sandbox_sock(home: &AgentsHome) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = home.sandbox_sock_dir();
+    let link = dir.join("supervisor.sock");
+    let res = std::fs::create_dir_all(&dir)
+        .and_then(|()| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)))
+        .and_then(|()| match std::fs::remove_file(&link) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
         })
-        .collect()
+        .and_then(|()| std::fs::hard_link(home.supervisor_sock(), &link));
+    if let Err(e) = res {
+        eprintln!(
+            "fno-agents daemon: sandbox socket link {}: {e}",
+            link.display()
+        );
+    }
 }
 
 /// Whether the supervisor socket at `path` answers a connect. The gate's
@@ -188,7 +89,7 @@ pub(crate) fn socket_carrier_ok(stance: Option<&str>, sock: Option<&Path>) -> Re
 /// reads. The spawn lane (or the operator composing a devcontainer.json)
 /// consumes the JSON; the daemon owns the socket paths, so the plan is the
 /// one authority a container needs.
-pub(crate) fn handle_sandbox_plan(ctx: &Ctx, req: &Request) -> Response {
+pub(super) fn handle_sandbox_plan(ctx: &Ctx, req: &Request) -> Response {
     let worktree = match req.params.get("worktree").and_then(|v| v.as_str()) {
         Some(w) => PathBuf::from(w),
         None => {
@@ -199,7 +100,7 @@ pub(crate) fn handle_sandbox_plan(ctx: &Ctx, req: &Request) -> Response {
         Ok(p) => p,
         Err(e) => return Response::err(req.id, ErrorCode::InvalidParams, e),
     };
-    let launch = launch_for(provider, &worktree, &ctx.home.supervisor_sock());
+    let launch = launch_for(provider, &ctx.home.sandbox_sock_dir());
     Response::ok(
         req.id,
         serde_json::to_value(&launch).unwrap_or_else(|_| json!({"provider": "none"})),
@@ -218,93 +119,60 @@ mod tests {
         dir
     }
 
+    /// The op reads the provider from the worktree config. Absent answers the
+    /// empty plan; an unknown spelling refuses; `devcontainer` mounts the
+    /// socket directory, never the socket file or the agents home, and pins
+    /// the client to the link inside it (AC2).
     #[test]
-    fn provider_parse_reads_the_config_key_and_refuses_unknown() {
-        let dir = tempdir("parse");
-        std::fs::write(
-            dir.join("config.toml"),
-            "[sandbox]\nprovider = \"devcontainer\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            SandboxProvider::from_config(&dir).unwrap(),
-            SandboxProvider::Devcontainer
+    fn sandbox_plan_reads_the_provider_and_mounts_the_socket_dir() {
+        let worktree = tempdir("op");
+        std::fs::create_dir_all(worktree.join(".fno")).unwrap();
+        let home = crate::paths::AgentsHome::at(tempdir("op-home"));
+        let ctx = super::super::tests::test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+        let req = Request::new(
+            1,
+            format!("agent.{}", crate::sandbox_launch::SANDBOX_PLAN_COMMAND),
+            json!({ "worktree": worktree.to_string_lossy() }),
         );
-        std::fs::write(dir.join("config.toml"), "[sandbox]\nprovider = \"pod\"\n").unwrap();
-        let err = SandboxProvider::from_config(&dir).unwrap_err();
-        assert!(err.contains("devcontainer"), "{err}");
-        // Absent key reads none: today's behavior is the default.
-        std::fs::write(dir.join("config.toml"), "").unwrap();
-        assert_eq!(
-            SandboxProvider::from_config(&dir).unwrap(),
-            SandboxProvider::None
-        );
+        let config = worktree.join(".fno/config.toml");
+        let cases = [
+            (
+                "",
+                Some(json!({"provider": "none", "mounts": [], "env": {}})),
+            ),
+            ("[sandbox]\nprovider = \"pod\"\n", None),
+            (
+                "[sandbox]\nprovider = \"devcontainer\"\n",
+                Some(json!({
+                    "provider": "devcontainer",
+                    "mounts": [{
+                        "host": home.sandbox_sock_dir().to_string_lossy(),
+                        "container": "/fno-state/sock",
+                    }],
+                    "env": {
+                        "FNO_STATE_DIR": "/fno-state",
+                        "FNO_SUPERVISOR_SOCKET": "/fno-state/sock/supervisor.sock",
+                    },
+                })),
+            ),
+        ];
+        for (body, want) in cases {
+            std::fs::write(&config, body).unwrap();
+            let res = handle_sandbox_plan(&ctx, &req);
+            match want {
+                Some(want) => assert_eq!(res.result().expect("ok"), &want, "{body}"),
+                None => assert!(res.result().is_none(), "{body} refuses"),
+            }
+        }
     }
 
-    #[test]
-    fn none_provider_launches_unchanged() {
-        let launch = launch_for(
-            SandboxProvider::None,
-            Path::new("/repo/wt"),
-            Path::new("/h/s.sock"),
-        );
-        assert_eq!(launch.provider, "none");
-        assert!(launch.mounts.is_empty());
-        assert!(launch.env.is_empty());
-        assert!(docker_mount_args(&launch).is_empty());
-    }
-
-    #[test]
-    fn devcontainer_plan_mounts_worktree_and_socket_pins_env() {
-        let launch = launch_for(
-            SandboxProvider::Devcontainer,
-            Path::new("/repo/wt"),
-            Path::new("/home/u/.fno/agents/supervisor.sock"),
-        );
-        assert_eq!(launch.provider, "devcontainer");
-        assert_eq!(launch.mounts.len(), 2);
-        assert_eq!(launch.mounts[0].host, Path::new("/repo/wt"));
-        assert_eq!(launch.mounts[0].container, Path::new("/workspace"));
-        assert!(!launch.mounts[0].readonly);
-        assert_eq!(
-            launch.mounts[1].container,
-            Path::new("/fno-state/supervisor.sock")
-        );
-        assert_eq!(
-            launch.env.get("FNO_SUPERVISOR_SOCKET").map(String::as_str),
-            Some("/fno-state/supervisor.sock")
-        );
-        assert_eq!(
-            launch.env.get("FNO_STATE_DIR").map(String::as_str),
-            Some("/fno-state")
-        );
-        let args = docker_mount_args(&launch);
-        assert_eq!(args.len(), 2);
-        assert!(
-            args[0].starts_with("--mount type=bind,src=/repo/wt,dst=/workspace"),
-            "{}",
-            args[0]
-        );
-    }
-
-    #[test]
-    fn reachability_answers_a_live_listener_and_names_a_dead_path() {
-        let dir = tempdir("probe");
-        let sock = dir.join("supervisor.sock");
-        assert!(supervisor_sock_reachable(&sock).is_err());
-        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        assert!(supervisor_sock_reachable(&sock).is_ok());
-        drop(listener);
-    }
-
-    /// The `socket` carrier is verified, never taken on faith: a live
-    /// listener passes the stance leg; a dead path refuses naming the
-    /// socket; a stance that is not the carrier is never probed; no path to
-    /// probe fails open, the same leg the empty-roots case takes (AC8).
+    /// The `socket` carrier is verified, never taken on faith: a dead path
+    /// refuses naming the socket, a live listener passes; a stance that is
+    /// not the carrier is never probed; no path to probe fails open, the same
+    /// leg the empty-roots case takes (AC8).
     #[test]
     fn socket_carrier_is_probed_not_declared() {
-        let dir = tempdir("carrier");
-        let sock = dir.join("supervisor.sock");
+        let sock = tempdir("carrier").join("supervisor.sock");
         let err = socket_carrier_ok(Some("socket"), Some(&sock))
             .err()
             .expect("dead socket refuses");
@@ -314,41 +182,38 @@ mod tests {
         );
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         assert!(socket_carrier_ok(Some("socket"), Some(&sock)).is_ok());
-        drop(listener);
-        let listener2 = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         assert!(socket_carrier_ok(Some("unsandboxed"), Some(&sock)).is_ok());
         assert!(socket_carrier_ok(None, Some(&sock)).is_ok());
         assert!(socket_carrier_ok(Some("socket"), None).is_ok());
-        drop(listener2);
+        drop(listener);
     }
 
+    /// The box mounts the link directory, so a daemon restart must not strand
+    /// it: after the unlink and rebind the stale link refuses, and the
+    /// publish the daemon runs at every bind points it at the new socket
+    /// (AC1).
     #[test]
-    fn sandbox_plan_op_answers_the_launch_json() {
-        // The config anchor is the worktree itself: `config_candidates` reads
-        // `<cwd>/.fno/config.toml` first, so the op test stages the provider
-        // there instead of racing a process env pin.
-        let worktree = tempdir("op");
-        std::fs::create_dir_all(worktree.join(".fno")).unwrap();
-        let home = crate::paths::AgentsHome::at(tempdir("op-home"));
-        let ctx = super::super::tests::test_ctx(home, PathBuf::from("fno-agents-worker"));
-        let req = Request::new(
-            1,
-            "agent.sandbox-plan",
-            json!({ "worktree": worktree.to_string_lossy() }),
+    fn sandbox_sock_link_follows_rebind() {
+        use std::os::unix::fs::MetadataExt as _;
+        let home = crate::paths::AgentsHome::at(tempdir("rebind"));
+        let sock = home.supervisor_sock();
+        let link = home.sandbox_sock_dir().join("supervisor.sock");
+        let first = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        publish_sandbox_sock(&home);
+        assert!(supervisor_sock_reachable(&link).is_ok());
+        drop(first);
+        std::fs::remove_file(&sock).unwrap();
+        let _second = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(
+            supervisor_sock_reachable(&link).is_err(),
+            "the old link holds the dead inode"
         );
-        let res = handle_sandbox_plan(&ctx, &req);
-        let body = res.result().expect("ok");
-        assert_eq!(body["provider"], "none");
-        // Same worktree, config naming devcontainer: the plan isolates.
-        std::fs::write(
-            worktree.join(".fno/config.toml"),
-            "[sandbox]\nprovider = \"devcontainer\"\n",
-        )
-        .unwrap();
-        let res = handle_sandbox_plan(&ctx, &req);
-        let body = res.result().expect("ok");
-        assert_eq!(body["provider"], "devcontainer");
-        assert_eq!(body["mounts"].as_array().map(Vec::len), Some(2));
+        publish_sandbox_sock(&home);
+        assert_eq!(
+            std::fs::metadata(&link).unwrap().ino(),
+            std::fs::metadata(&sock).unwrap().ino()
+        );
+        assert!(supervisor_sock_reachable(&link).is_ok());
     }
 
     #[tokio::test]

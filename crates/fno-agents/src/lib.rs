@@ -546,6 +546,7 @@ pub mod rules;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
+pub mod sandbox_launch;
 pub mod sandbox_probe;
 pub mod scoreboard;
 pub mod scoreboard_escalation;

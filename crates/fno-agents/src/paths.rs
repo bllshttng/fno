@@ -417,6 +417,13 @@ impl AgentsHome {
         self.root.join("supervisor.sock")
     }
 
+    /// The directory a devcontainer box mounts to reach the daemon: it holds
+    /// a hard link to `supervisor_sock()` that the daemon re-creates at
+    /// every bind, and nothing else from the home.
+    pub fn sandbox_sock_dir(&self) -> PathBuf {
+        self.root.join("sandbox-sock")
+    }
+
     /// Sidecar advisory-lock file for the supervisor-socket singleton guard
     ///. Held exclusively, for the daemon's whole process lifetime, by
     /// whichever process is entitled to bind `supervisor_sock()`. Since

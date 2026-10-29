@@ -1146,6 +1146,7 @@ pub async fn bind_supervisor_socket(
     };
 
     paths::set_file_mode_0600(&sock)?;
+    sandbox_host::publish_sandbox_sock(home);
 
     // fstat-verify the invariant; refuse to serve if either perm is wrong.
     #[cfg(unix)]
@@ -1881,7 +1882,9 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         // The sandbox launch plan: mounts + env for one worktree under the
         // configured provider (`none` answers the empty plan). Lived in
         // sandbox_host; the dispatch line is paid by the handle_status move.
-        Some("sandbox-plan") => run_blocking(ctx, req, sandbox_host::handle_sandbox_plan).await,
+        Some(crate::sandbox_launch::SANDBOX_PLAN_COMMAND) => {
+            run_blocking(ctx, req, sandbox_host::handle_sandbox_plan).await
+        }
         Some("truth") => run_blocking(ctx, req, crate::truth_probe::truth_rpc).await,
         Some("reconcile") => run_blocking(ctx, req, handle_reconcile).await,
         // Label rename: the registry transaction under the flock, off-loop.
