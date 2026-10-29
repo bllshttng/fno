@@ -53,6 +53,10 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
             }
         }
     }
+    // FNO_CONFIG names a file its own directory walk already pushed; a file
+    // listed twice would count its work-map rows twice.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
     out
 }
 
