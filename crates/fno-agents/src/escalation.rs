@@ -11,15 +11,6 @@ use crate::finalize::{
     read_project_id, resolve_obsidian_vault, resolve_project_name, resolve_vault_root,
 };
 
-/// The four classes that reach the superuser. Everything else, the lead
-/// decides and logs.
-pub const CLASSES: [&str; 4] = [
-    "public-surface",
-    "irreversible",
-    "money-security",
-    "law-change",
-];
-
 const SECTION_DECIDING: &str = "What is being decided";
 const SECTION_WHY_NOW: &str = "Why it matters now";
 const SECTION_OPTIONS: &str = "Options";
@@ -284,10 +275,13 @@ fn is_numbered(line: &str) -> bool {
         && chars.next() == Some(' ')
 }
 
-/// The reasons only a user can answer, shared by the ask gate and the
-/// question sweep: a question carrying one of these in why_user survives
-/// its node closing, whatever the ask gate decided.
-pub fn why_user_is_user_only(why: &str) -> bool {
+/// The question sweep's read of why_user: a question only the user can
+/// answer survives its node closing. A class word reads through the rules;
+/// free text from before the class word was required reads by keyword.
+pub fn why_user_is_user_only(why: &str, rules: &crate::question_ladder::Rules) -> bool {
+    if let Some(class) = crate::question_ladder::class_word(why) {
+        return rules.user_only(class);
+    }
     let why = why.to_ascii_lowercase();
     [
         "irreversible",
@@ -347,7 +341,7 @@ pub fn problems(e: &Escalation) -> Vec<String> {
     let mut out = Vec::new();
     if e.class.is_empty() {
         out.push("missing class".to_string());
-    } else if !CLASSES.contains(&e.class.as_str()) {
+    } else if !crate::question_ladder::CLASSES.contains(&e.class.as_str()) {
         out.push(format!("unknown class: {}", e.class));
     }
     for (name, body) in [
@@ -563,8 +557,14 @@ The lead waits. A force push cannot be undone.
 
     #[test]
     fn a_law_change_reaches_the_user_like_the_other_user_classes() {
-        assert!(why_user_is_user_only("law-change: it retires two laws"));
-        assert!(!why_user_is_user_only("the user asked to see it"));
+        let rules = crate::question_ladder::Rules::default();
+        assert!(why_user_is_user_only(
+            "law-change: it retires two laws",
+            &rules
+        ));
+        assert!(!why_user_is_user_only("the user asked to see it", &rules));
+        assert!(why_user_is_user_only("taste", &rules));
+        assert!(!why_user_is_user_only("public-surface", &rules));
     }
 
     #[test]

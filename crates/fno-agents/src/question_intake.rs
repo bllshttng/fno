@@ -619,7 +619,7 @@ Move its text into a known section, or link a vault page from 'Why these options
             .find(|l| l.split_once(':').is_some_and(|(k, _)| k.trim() == "class"))
             .unwrap_or("class:");
         answer.lines.push(format!(
-            "outstanding: refused: read '{read_line}'. class must be one of six \
+            "outstanding: refused: read '{read_line}'. class must be one of these \
 words: {}. 'decision' is not a class.",
             crate::decision_trace::DECISION_CLASSES.join(", ")
         ));
@@ -728,31 +728,41 @@ choice starts>'.",
             answer.exit_code = 2;
             return answer;
         }
-        // The asker-must-decide refusal (user ruling 2026-09-22): a
-        // reversible question with a recommendation is one the asker or its
-        // lead settles itself; it reaches the user only with a user-only
-        // reason in why_user. A question whose closing action is an
-        // operator-only retraction is not the asker's to settle, whatever
-        // the file says: the same authority rule decides here.
-        if parsed.reversible.trim().eq_ignore_ascii_case("yes") {
-            let user_only = crate::escalation::why_user_is_user_only(&parsed.why_user);
-            if !user_only && !retraction_ask {
-                let decide = match node {
-                    Some(n) => format!("fno backlog decide {n} \"<ruling>\""),
-                    None => "fno backlog decide <node> \"<ruling>\"".to_string(),
-                };
-                answer.lines.push(format!(
-                    "outstanding: refused: reversible with a recommendation is yours \
-to rule. Decide door first: {decide} (--authority agent) - record the \
-ruling, then continue. \
-The user answers only what only a user can: irreversible, spends money or a \
-credential, reaches outside the machine, changes a law, or is a product or taste \
-call - name it with why_user: in the question file (law-change for a law)."
-                ));
-                answer.refusal = Some("decide_yourself".to_string());
+        // The asker-must-decide refusal (user ruling 2026-09-22): a class
+        // in questions.rules.allow, or a reversible question, is one the
+        // asker or its lead settles itself; it reaches the user only when
+        // why_user names exactly one class in questions.rules.deny. A
+        // question whose closing action is an operator-only retraction is
+        // not the asker's to settle, whatever the file says.
+        let cwd = req.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
+        let rules = match crate::question_ladder::rules_for(&cwd) {
+            Ok(r) => r,
+            Err(e) => {
+                answer.lines.push(format!("outstanding: refused: {e}."));
+                answer.refusal = Some("config".to_string());
                 answer.exit_code = 2;
                 return answer;
             }
+        };
+        let class = parsed.class.trim();
+        let user_only = crate::question_ladder::class_word(&parsed.why_user)
+            .is_some_and(|c| rules.user_only(c));
+        let reversible = parsed.reversible.trim().eq_ignore_ascii_case("yes");
+        if (rules.asker_decides(class) || (reversible && !user_only)) && !retraction_ask {
+            let decide = match node {
+                Some(n) => format!("fno backlog decide {n} \"<ruling>\""),
+                None => "fno backlog decide <node> \"<ruling>\"".to_string(),
+            };
+            answer.lines.push(format!(
+                "outstanding: refused: this question is yours to rule. Decide door \
+first: {decide} (--authority agent) - record the ruling, then continue. \
+The user answers only a class in questions.rules.deny ({}): name exactly one \
+with why_user: <class> in the question file.",
+                rules.deny.join(", ")
+            ));
+            answer.refusal = Some("decide_yourself".to_string());
+            answer.exit_code = 2;
+            return answer;
         }
     }
 
@@ -1434,6 +1444,25 @@ stops
         let answer2 = run_intake(&r2, &home);
         assert_eq!(answer2.exit_code, 2);
         assert_eq!(answer2.refusal.as_deref(), Some("decide_yourself"));
+        // why_user is exactly one class word: free text refuses and names
+        // the deny classes; a deny class passes.
+        let with_why = |why: &str| {
+            QUESTION_FILE
+                .replace("## Reversible\ncostly", "## Reversible\nyes")
+                .replace(
+                    "## Meanwhile\nstops\n",
+                    &format!("## Meanwhile\nstops\n\n## Why user\n{why}\n"),
+                )
+        };
+        let answer3 = run_intake(&req(&with_why("product call"), &root), &home);
+        assert_eq!(answer3.refusal.as_deref(), Some("decide_yourself"));
+        assert!(answer3
+            .lines
+            .iter()
+            .any(|l| l.contains("irreversible, money-security")));
+        let taste_root = tmp_root("rule10-taste");
+        let answer4 = run_intake(&req(&with_why("taste"), &taste_root), &home);
+        assert_eq!(answer4.exit_code, 0, "lines: {:?}", answer4.lines);
     }
 
     #[test]
