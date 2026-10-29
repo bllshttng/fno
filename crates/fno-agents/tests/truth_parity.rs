@@ -56,6 +56,7 @@ fn the_single_form_exits_13_on_an_unknown_handle_and_the_batch_exits_0() {
     let run = |argv: &[&str]| {
         std::process::Command::new(env!("CARGO_BIN_EXE_fno-agents"))
             .args(argv)
+            .envs(fno_agents::test_run::self_owner_env())
             .env("FNO_AGENTS_HOME", &home)
             .env("FNO_CLAUDE_PROJECTS_DIR", home.join("projects"))
             .env("FNO_CODEX_SESSIONS_DIR", home.join("codex"))

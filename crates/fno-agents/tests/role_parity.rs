@@ -37,6 +37,7 @@ impl World {
             .args(["status", "--role"])
             .args(argv)
             .env_clear()
+            .envs(fno_agents::test_run::self_owner_env())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", &self.root)
             .env("FNO_HOME", self.root.join(".fno"))

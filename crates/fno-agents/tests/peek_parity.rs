@@ -49,6 +49,7 @@ fn every_case_matches_its_python_golden() {
             .args(["status", "--peek"])
             .args(&argv)
             .current_dir(&root)
+            .envs(fno_agents::test_run::self_owner_env())
             .env("HOME", &root)
             .env("FNO_AGENTS_HOME", root.join("agents"))
             .env("FNO_HOME", root.join("state"))
