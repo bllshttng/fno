@@ -299,7 +299,7 @@ def resolve_own_transcript(session_id: str, harness: str) -> Optional[Path]:
     """This session's own transcript jsonl, harness-aware, or None.
 
     The single locator shared by the model resolver (`resolve_self_model`) and
-    the context probe (`fno.context_probe`), so the FNO_CLAUDE_PROJECTS_DIR /
+    the context probe (`context-run --probe`), so the FNO_CLAUDE_PROJECTS_DIR /
     FNO_CODEX_SESSIONS_DIR seams live in one place rather than being
     reimplemented per caller. A session owns one transcript, so the first match
     wins. None - when the id/harness is blank or no transcript is found - is a

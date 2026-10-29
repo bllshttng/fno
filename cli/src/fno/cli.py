@@ -68,7 +68,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "What is waiting on a human: approvals, notify, outstanding, lead board, decisions, law.",
         {"hidden": True},
     ),
-    # Moved to `inbox` (COMMAND_MOVES). The old top-level registration stays for
+    # Moved to `inbox`; the front door refuses the root word (command-names.tsv). The old registration stays for
     # one release - unreachable via resolve_command (the move intercepts
     # first) so it stays a hidden one-release shim, not a phantom root; the
     # moved-spellings block no longer renders, so the row teaches
@@ -89,8 +89,8 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # the entries between this comment and `agents` below whose names
-    # sit in COMMAND_MOVES are one-release shims in their canonical homes;
-    # their move rows stay in command_moves.py.
+    # are retired at the front door (crates/fno/command-names.tsv) and answer
+    # only through fno-py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
@@ -146,11 +146,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "status": (
         "fno.whoami_leaves:whoami_app",
         "Session gate satisfaction + bounded events tail + inconsistencies.",
-        {"hidden": True},
-    ),
-    "context": (
-        "fno.context_probe:context_command",
-        "Context-window usage for this session or a given transcript (hook door).",
         {"hidden": True},
     ),
     "cost": (
@@ -301,38 +296,18 @@ class _HonestMenuGroup(make_lazy_group_cls(LAZY_SUBCOMMANDS)):  # type: ignore[m
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         super().format_help(ctx, formatter)
-        from fno.command_moves import destination_is_registered, move_for
-
         names = self.list_commands(ctx)
-        moved_names = {
-            n
-            for n in names
-            if (move := move_for(n)) is not None
-            and destination_is_registered(move, names)
-        }
-        # Moved spellings are excluded from BOTH counts, so the fraction
-        # stays possible even if a moved entry ever loses its hidden flag
-        # (the test suite pins that flag; this is the runtime backstop).
         visible = 0
         for n in names:
             cmd = self.get_command(ctx, n)
-            if (
-                cmd is not None
-                and not getattr(cmd, "hidden", False)
-                and n not in moved_names
-            ):
+            if cmd is not None and not getattr(cmd, "hidden", False):
                 visible += 1
-        moved = len(moved_names)
-        moved_note = (
-            f", plus {moved} moved spelling{'s' if moved != 1 else ''} that still work"
-            if moved
-            else ""
-        )
         formatter.write_paragraph()
         formatter.write_text(
-            f"Showing {visible} of {len(names) - moved} top-level commands{moved_note}. "
-            f"`mux` and `version` forward to the Rust front binary. Hidden "
-            f"commands are invocable: run `fno help --all` for every command."
+            f"Showing {visible} top-level commands. "
+            f"`mux` and `version` forward to the Rust front binary; `restart`, "
+            f"`uninstall` and `update` answer there too. Run `fno <command> --help` "
+            f"for one command."
         )
 
 
@@ -464,13 +439,13 @@ close flags (--skip-stamp, -F --force, -R --reason); any completion
 flag (-p/-l/-m, --backfill) or a title/branch query takes the rich
 completion surface ported from the retired root spelling.
 
-Run `fno help <command>` for any command's full flag list.\
+Run `fno <command> --help` for any command's full flag list.\
 """
 
 SHORTHAND_POINTER = (
     "Shorthands: UPPERCASE shorts are global (-J --json, -A --all, -F --force, "
     "-N --dry-run, -R --reason, -Y --yolo); lowercase shorts are per-command. "
-    "Run `fno help shorthands` for the full legend."
+    "Run `fno-py help shorthands` for the full legend."
 )
 
 # Short help for the eager inline commands (defined in this module, so listing
@@ -489,34 +464,19 @@ def _render_full_menu() -> str:
     it never imports a command module, so a broken sub-app still lists here
     (AC3-UI). Scope is the TOP LEVEL only: a sub-app's own (hidden) commands are
     one import away and would break the no-import guarantee, so they live behind
-    the scoped door `fno help <group> --all` instead.
+    the scoped door `fno-py help <group> --all` instead.
 
-    A spelling registered in COMMAND_MOVES is a signpost, not a root: it forwards
-    to its new home and prints the new spelling on use. Moved spellings render
-    nowhere here (operator ruling via d-26002be8: "they can be discovered in
-    their own subcommands") - each alias prints its new home when used, which
-    is the teaching moment that matters.
     """
-    from fno.command_moves import destination_is_registered, move_for
-
-    # Eager inline commands classify too, not only lazy entries: a later
-    # wave moves `cost`, which is an eager @app.command, and a move on an
-    # eager name must render as a signpost exactly like a lazy one or the
-    # full menu and the --help count line disagree.
     candidates: dict[str, str] = dict(_EAGER_COMMAND_HELP)
     for name, entry in LAZY_SUBCOMMANDS.items():
         candidates[name] = entry[1] if isinstance(entry, tuple) and len(entry) >= 2 else ""
-    rows: dict[str, str] = {}
-    for name, short in candidates.items():
-        move = move_for(name)
-        if move is None or not destination_is_registered(move, candidates):
-            rows[name] = short
+    rows = candidates
     width = max(len(n) for n in rows)
     lines = [
         "fno-py full top-level surface - every fno-py command, including hidden.",
         "The curated menu is `fno --help`; hidden commands are invocable, just not advertised.",
-        "For a group's own commands (hidden included) run `fno help <group> --all` "
-        "(e.g. `fno help agents --all`), or `fno <group> --help` for its menu.",
+        "For a group's own commands (hidden included) run `fno-py help <group> --all` "
+        "(e.g. `fno-py help agents --all`), or `fno <group> --help` for its menu.",
         "",
         "Commands:",
     ]
@@ -526,7 +486,7 @@ def _render_full_menu() -> str:
 
 def _render_group_full_menu(path: list[str]) -> Optional[str]:
     """Render a sub-app's full command list (hidden included) for
-    `fno help <group> [<subgroup> ...] --all`.
+    `fno-py help <group> [<subgroup> ...] --all`.
 
     Unlike the top-level door this DOES import the named group (one module), so
     it can enumerate the group's own hidden commands - the discovery path that the
@@ -581,6 +541,7 @@ def _render_group_full_menu(path: list[str]) -> Optional[str]:
 
 @app.command(
     name="help",
+    hidden=True,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "Show help for the root command or any subcommand. The git-style "

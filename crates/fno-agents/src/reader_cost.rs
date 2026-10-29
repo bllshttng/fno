@@ -92,13 +92,12 @@ pub fn cpu_split_ns(_pid: u32) -> Option<(u64, u64)> {
 
 /// Program basenames whose rows are the fleet's own readers; the class is
 /// the basename plus the first two non-flag argv tokens.
-const FNO_PROGRAMS: [&str; 8] = [
+const FNO_PROGRAMS: [&str; 7] = [
     "fno",
     "fno-py",
     "fno-agents",
     "fno-agents-daemon",
     "fno-agents-worker",
-    "fno-footprint-cause",
     "fno-gh-proxy",
     "macmon",
 ];

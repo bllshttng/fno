@@ -791,8 +791,6 @@ pub(crate) struct View {
     /// The manual reorder sequence (agent names in display order) behind the
     /// Manual sort column, persisted.
     manual_order: Vec<String>,
-    /// Pinned agent names in pin order; they lead every sort.
-    pinned_agents: Vec<String>,
     /// Manual status-row toggle (prefix+s). Client-local and deliberately
     /// unpersisted: a reattach resets to on (AC4-FR).
     status_on: bool,
@@ -1653,6 +1651,8 @@ enum MenuAction {
     PortalAt(Option<Dir>),
     /// Release the row's mail hold; built only on a row wearing a hold mark.
     ReleaseHold,
+    /// Pin or unpin the row's session: the keep mark no reaper passes.
+    TogglePin,
     /// Flip the Split Direction group's pane|portal toggle in-menu. Never
     /// reaches [`execute_row_menu_action`]: the execute path closes the menu,
     /// and the toggle's whole point is flipping BEFORE the arrow is pressed,
@@ -1693,6 +1693,7 @@ impl MenuAction {
             MenuAction::ClosePortal => Some("close-portal"),
             MenuAction::PortalPicker => Some("open-in-portal"),
             MenuAction::ReleaseHold => Some("release-hold"),
+            MenuAction::TogglePin => Some("pin-row"),
             MenuAction::ToggleSplitOpens => Some("toggle-split-opens"),
             _ => None,
         }
@@ -1960,7 +1961,6 @@ impl View {
         let agent_group = view_store::load_agent_group();
         let show_card_head = view_store::load_card_head();
         let manual_order = view_store::load_manual_order();
-        let pinned_agents = view_store::load_pinned();
         // The stored intent, resolved once. Deliberately NOT clamped to
         // the current terminal here: `panel_w` clamps transiently on every paint,
         // and pre-clamping the stored value would let a small startup terminal
@@ -1982,7 +1982,6 @@ impl View {
             agent_group,
             show_card_head,
             manual_order,
-            pinned_agents,
             status_on: true,
             resource_meter_on: false,
             confirm_lifecycle: view_store::load_confirm_lifecycle(),
@@ -2048,7 +2047,7 @@ impl View {
             yard_gen: 0,
             org: crate::org_overlay::Panel::default(),
             digest: None,
-            notice: None,
+            notice: view_store::take_legacy_pins().map(agent_sort::legacy_pin_notice),
             reply_notice_tx: None,
             details_tx: None,
             next_reply_request_id: 1,
@@ -5677,7 +5676,6 @@ impl View {
         let now = crate::digest_overlay::now_secs();
         let order = &AgentOrder {
             manual: &self.manual_order,
-            pinned: &self.pinned_agents,
         };
         let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
         let mut group = Vec::new();

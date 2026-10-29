@@ -144,6 +144,11 @@ RUST_CLIENT_COMMANDS = frozenset(
         "whoami",
         "registry-repair",
         "heal-token",
+        # The pane/registry identity cross-check: a read, never a repair.
+        "pane-identity",
+        # The stream-json observe surface: polls the worker's own
+        # stream.read_frames socket, never the daemon. A read.
+        "watch",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -373,11 +378,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # Python-owned `fno agents mail` subgroup and therefore never auto-route as
     # direct send, inbox, or ack Rust commands. `incident` relays argv.
     "incident",
-    # Epic G2 Task 4.3: the stream-json observe surface. Pure Python;
-    # polls the worker's stream.read_frames directly. No Rust client port (the
-    # `--watch` worker-binary surface noted in client.rs is a separate lane), so
-    # it must never auto-route to the daemon.
-    "watch",
     "distress-verdicts", #: blocked_child's verdict lookup; no Rust port.
     # The stop hook's read-only spawn-gate capacity probe. Pure Python (the
     # gate lives in fno.agents.spawn_gate); no Rust port, so it must never
@@ -424,11 +424,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # body routes in every runtime mode, and `orphans` is no client action, so
     # it must never auto-route.
     "orphans",
-    #: the pane/registry identity cross-check. Pure Python (one pane ls
-    # subprocess + load_registry + a ps probe); a mismatch is a READING, never
-    # a repair, and the daemon holds no such command, so it must never auto-route
-    # to the daemon.
-    "pane-identity",
     #: the codex late-bind helper `late_bind_codex_sessions` (Rust,
     # fno-agents daemon) shells out to for one pane's rollout session id.
     # Pure Python (fno.agents.mux_spawn._codex_session_id_for_pid, reads the
@@ -876,6 +871,8 @@ _STATUS_ARG_LEAVES = {
     "whoami": "--whoami",
     "registry-repair": "--registry-repair",
     "heal-token": "--heal-token",
+    "pane-identity": "--pane-identity",
+    "watch": "--watch",
     "liveness": "--liveness",
 }
 

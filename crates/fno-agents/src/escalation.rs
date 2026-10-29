@@ -11,15 +11,6 @@ use crate::finalize::{
     read_project_id, resolve_obsidian_vault, resolve_project_name, resolve_vault_root,
 };
 
-/// The four classes that reach the superuser. Everything else, the lead
-/// decides and logs.
-pub const CLASSES: [&str; 4] = [
-    "public-surface",
-    "irreversible",
-    "money-security",
-    "law-change",
-];
-
 const SECTION_DECIDING: &str = "What is being decided";
 const SECTION_WHY_NOW: &str = "Why it matters now";
 const SECTION_OPTIONS: &str = "Options";
@@ -37,6 +28,8 @@ const SECTION_REVERSIBLE: &str = "Reversible";
 const SECTION_COST_IF_WRONG: &str = "Cost if wrong";
 const SECTION_MEANWHILE: &str = "Meanwhile";
 const SECTION_WHY_USER: &str = "Why user";
+const SECTION_TRIED: &str = "Tried";
+const SECTION_EVIDENCE: &str = "Evidence";
 
 #[derive(Default, Clone, PartialEq, Debug)]
 pub struct EscalationOption {
@@ -74,6 +67,9 @@ pub struct Escalation {
     /// reaches the user (irreversible, money or credential, outside the
     /// machine, law-change, product or taste). Empty reads as absent.
     pub why_user: String,
+    /// What the asker and each rung checked, and what it read.
+    pub tried: String,
+    pub evidence: String,
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
     pub answers_ask: Option<String>,
@@ -84,7 +80,7 @@ pub struct Escalation {
 
 /// Every section heading a question page carries. The escalation-only
 /// sections parse too, but the question row never stores them.
-pub const QUESTION_SECTIONS: [&str; 11] = [
+pub const QUESTION_SECTIONS: [&str; 13] = [
     SECTION_OPTIONS,
     SECTION_RECOMMENDATION,
     SECTION_BLOCKED_BECAUSE,
@@ -95,6 +91,8 @@ pub const QUESTION_SECTIONS: [&str; 11] = [
     SECTION_COST_IF_WRONG,
     SECTION_MEANWHILE,
     SECTION_WHY_USER,
+    SECTION_TRIED,
+    SECTION_EVIDENCE,
     "Answer",
 ];
 
@@ -265,6 +263,8 @@ pub fn parse(text: &str) -> Escalation {
     esc.reversible = section(SECTION_REVERSIBLE);
     esc.cost_if_wrong = section(SECTION_COST_IF_WRONG);
     esc.meanwhile = section(SECTION_MEANWHILE);
+    esc.tried = section(SECTION_TRIED);
+    esc.evidence = section(SECTION_EVIDENCE);
     let why_user = section(SECTION_WHY_USER);
     if !why_user.is_empty() {
         esc.why_user = why_user;
@@ -284,10 +284,13 @@ fn is_numbered(line: &str) -> bool {
         && chars.next() == Some(' ')
 }
 
-/// The reasons only a user can answer, shared by the ask gate and the
-/// question sweep: a question carrying one of these in why_user survives
-/// its node closing, whatever the ask gate decided.
-pub fn why_user_is_user_only(why: &str) -> bool {
+/// The question sweep's read of why_user: a question only the user can
+/// answer survives its node closing. A class word reads through the rules;
+/// free text from before the class word was required reads by keyword.
+pub fn why_user_is_user_only(why: &str, rules: &crate::question_ladder::Rules) -> bool {
+    if let Some(class) = crate::question_ladder::class_word(why) {
+        return rules.user_only(class);
+    }
     let why = why.to_ascii_lowercase();
     [
         "irreversible",
@@ -347,7 +350,7 @@ pub fn problems(e: &Escalation) -> Vec<String> {
     let mut out = Vec::new();
     if e.class.is_empty() {
         out.push("missing class".to_string());
-    } else if !CLASSES.contains(&e.class.as_str()) {
+    } else if e.class == "none" || !crate::question_ladder::CLASSES.contains(&e.class.as_str()) {
         out.push(format!("unknown class: {}", e.class));
     }
     for (name, body) in [
@@ -563,8 +566,14 @@ The lead waits. A force push cannot be undone.
 
     #[test]
     fn a_law_change_reaches_the_user_like_the_other_user_classes() {
-        assert!(why_user_is_user_only("law-change: it retires two laws"));
-        assert!(!why_user_is_user_only("the user asked to see it"));
+        let rules = crate::question_ladder::Rules::default();
+        assert!(why_user_is_user_only(
+            "law-change: it retires two laws",
+            &rules
+        ));
+        assert!(!why_user_is_user_only("the user asked to see it", &rules));
+        assert!(why_user_is_user_only("taste", &rules));
+        assert!(!why_user_is_user_only("public-surface", &rules));
     }
 
     #[test]

@@ -224,7 +224,7 @@ fn render_public(project: &str, requests: Option<&Value>) -> Result<Staged, Stri
         "public": public_obj,
     });
     let mut child = Command::new(crate::scrape::fno_bin())
-        .arg("board-render")
+        .args(["backlog", "publish", "--local-snapshot"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

@@ -225,16 +225,13 @@ def node_id_suffix(node_id: str) -> str:
 def node_id_prefix() -> str:
     """Configured ``config.backlog.id_prefix`` or the legacy ``ab-`` fallback.
 
-    Fail-open: a malformed settings.yaml (ValidationError) or an unset key
-    yields the legacy prefix rather than raising, so minting never crashes
-    (AC2-ERR).
+    Fail-open: a door failure or an unset key yields the legacy prefix rather
+    than raising, so minting never crashes (AC2-ERR).
     """
-    try:
-        from fno.config import load_settings
-        p = load_settings().backlog.id_prefix
-        return p if p else LEGACY_PREFIX
-    except Exception:
-        return LEGACY_PREFIX
+    from fno import rust_binary
+
+    prefix = (rust_binary.settings_read() or {}).get("prefix")
+    return prefix if isinstance(prefix, str) and prefix else LEGACY_PREFIX
 
 
 def node_id_hex_width() -> int:
@@ -243,11 +240,10 @@ def node_id_hex_width() -> int:
     Fail-open like ``node_id_prefix``. An absent key resolves to 8 (legacy
     preservation), NOT the setup wizard's offered default of 4.
     """
-    try:
-        from fno.config import load_settings
-        return int(load_settings().backlog.id_hex_width)
-    except Exception:
-        return LEGACY_HEX
+    from fno import rust_binary
+
+    width = (rust_binary.settings_read() or {}).get("hex_width")
+    return int(width) if isinstance(width, int) else LEGACY_HEX
 
 
 _ARCHIVE_ID_MEMO: dict = {"key": None, "ids": frozenset()}
@@ -311,8 +307,17 @@ def mint_node_id(existing_ids) -> str:
     consistent snapshot and two concurrent mints cannot collide (AC2-FR).
     """
     import uuid
-    prefix = node_id_prefix()
-    width = node_id_hex_width()
+
+    from fno import rust_binary
+
+    # One door spawn serves both knobs: mint fires on nearly every node
+    # creation, and one receipt is half the subprocess cost of two calls.
+    receipt = rust_binary.settings_read() or {}
+    prefix = receipt.get("prefix")
+    if not (isinstance(prefix, str) and prefix):
+        prefix = LEGACY_PREFIX
+    width = receipt.get("hex_width")
+    width = int(width) if isinstance(width, int) else LEGACY_HEX
     archive_ids = _archived_id_pool()
     for _ in range(_MINT_MAX_ATTEMPTS):
         candidate = f"{prefix}{uuid.uuid4().hex[:width]}"

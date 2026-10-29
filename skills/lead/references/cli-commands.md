@@ -3,7 +3,7 @@
 
 Curated for the role: the commands an adjudicator actually uses, each with the one gotcha that makes it non-obvious.
 
-`fno help --all` is the source of truth for every command this page does not list, and `fno help <group> --all` enumerates a subtree.
+`fno <group> --help` is the source of truth for every command this page does not list, and `fno-py help <group> --all` adds the hidden Python leaves.
 
 A command with no gotcha earns no line here, because the help surface already covers it.
 

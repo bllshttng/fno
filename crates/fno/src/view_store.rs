@@ -236,8 +236,8 @@ struct StoreFile {
     /// absent = empty (everything sorts by name at the manual column).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manual_order: Option<serde_json::Value>,
-    /// Pinned agent names, in pin order; they lead every sort. Default
-    /// absent = none.
+    /// Legacy per-view pin names, from before a pin became the session's
+    /// keep mark. Read once by [`take_legacy_pins`], then cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pinned: Option<serde_json::Value>,
 }
@@ -929,21 +929,19 @@ pub fn save_manual_order(order: &[String]) {
     });
 }
 
-pub fn load_pinned() -> Vec<String> {
+/// How many legacy per-view pins the store held, once: the key clears on
+/// read, so the user hears on one attach that those rows need a new pin.
+pub fn take_legacy_pins() -> Option<usize> {
     #[cfg(test)]
     if TEST_PATH.with(|c| c.borrow().is_none()) {
-        return Vec::new();
+        return None;
     }
-    read_raw()
+    let n = read_raw()
         .pinned
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_pinned(pins: &[String]) {
-    mutate(|file| {
-        file.pinned = serde_json::to_value(pins).ok();
-    });
+        .and_then(|v| v.as_array().map(Vec::len))
+        .filter(|n| *n > 0)?;
+    mutate(|file| file.pinned = None);
+    Some(n)
 }
 
 /// Persist the sections the operator EXPLICITLY chose, merging them into the

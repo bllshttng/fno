@@ -54,7 +54,7 @@ if command -v fno >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   raw=""
   raw_rc=0
   if command -v with_timeout >/dev/null 2>&1; then
-    raw="$(printf '%s' "$obs" | with_timeout 30 fno agents workspace worktree overlap-record --stdin --since 28 2>/dev/null || printf '%s' "$obs" | with_timeout 30 fno workspace worktree overlap-record --stdin --since 28 2>/dev/null)"; raw_rc=$?
+    raw="$(printf '%s' "$obs" | with_timeout 30 fno agents workspace worktree overlap-record --stdin --since 28 2>/dev/null)"; raw_rc=$?
   else
     # No wall-clock bound available: never make an unbounded call that could
     # block SessionStart. Surface unrecorded; the advisory still prints.
@@ -234,7 +234,7 @@ if command -v fno >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     (
       mkdir -p "$(dirname "$_CACHE_FILE")" 2>/dev/null
       tmp="$(mktemp "${_CACHE_FILE}.XXXXXX" 2>/dev/null)" || exit 0
-      if fno agents workspace worktree stranded --json > "$tmp" 2>/dev/null || fno workspace worktree stranded --json > "$tmp" 2>/dev/null; then
+      if fno agents workspace worktree stranded --json > "$tmp" 2>/dev/null; then
         mv -f "$tmp" "$_CACHE_FILE"
       else
         rm -f "$tmp"
