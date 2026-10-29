@@ -647,6 +647,7 @@ pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;
 pub mod team_names;
+pub mod team_read;
 pub mod team_reap;
 pub mod team_rescope;
 pub mod team_settle;
