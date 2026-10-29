@@ -517,6 +517,23 @@ fn run_append(req: &IntakeRequest) -> IntakeAnswer {
     answer
 }
 
+/// Who asked, for the card: the handle and session the row already carries,
+/// plus the registry name and harness and this machine's host name.
+fn origin_of(req: &IntakeRequest, home: &AgentsHome) -> Option<Value> {
+    let session = req.session_id.as_deref().filter(|s| !s.is_empty())?;
+    let rows = crate::state::load_registry(&home.registry_json())
+        .map(|r| r.entries)
+        .unwrap_or_default();
+    let row = crate::lead_state::find_by_session(&rows, session, None);
+    Some(json!({
+        "handle": req.asker,
+        "session_id": session,
+        "name": row.map(|r| r.name.clone()),
+        "harness": row.and_then(|r| r.harness.clone()),
+        "host": crate::claims::hostname(),
+    }))
+}
+
 /// The dual write of one `operator_question` envelope: the project journal
 /// (durable, fatal) then the recall index. `Err` carries whether the journal
 /// half landed, and the line naming the failure.
@@ -950,6 +967,9 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     if !parsed.class.trim().is_empty() {
         data.insert("class".into(), json!(parsed.class.trim()));
     }
+    if let Some(origin) = origin_of(req, home) {
+        data.insert("origin".into(), origin);
+    }
     if !req.blocks.is_empty() {
         data.insert("blocks".into(), json!(req.blocks));
     }
@@ -1008,6 +1028,10 @@ already waits ({}). Answer it or clear it; do not ask twice.",
         ("reversible", &parsed.reversible),
         ("cost_if_wrong", &parsed.cost_if_wrong),
         ("meanwhile", &parsed.meanwhile),
+        ("tried", &parsed.tried),
+        ("evidence", &parsed.evidence),
+        ("deadline", &parsed.deadline),
+        ("on_silence", &parsed.on_silence),
     ] {
         if !value.trim().is_empty() {
             context.insert(key.into(), json!(value.trim()));
