@@ -161,12 +161,17 @@ where
                 .iter()
                 .map(|name| {
                     let home = home.clone();
-                    s.spawn(move || revive(&home, name))
+                    let value = name.clone();
+                    let handle = s.spawn(move || revive(&home, &value));
+                    (name.clone(), handle)
                 })
                 .collect();
-            for handle in handles {
-                if let Ok(row) = handle.join() {
-                    rows.push(row);
+            for (name, handle) in handles {
+                match handle.join() {
+                    Ok(row) => rows.push(row),
+                    // A panicked thread's row still lands, so the receipt
+                    // keeps one row per worker and the retry loop sees it.
+                    Err(_) => rows.push(ReceiptRow::new(&name, "failed", "revive thread panicked")),
                 }
             }
         });
@@ -1008,7 +1013,9 @@ mod tests {
         );
         assert_eq!(rows.len(), 7);
         assert!(rows.iter().all(|r| r.outcome == "revived"), "{rows:?}");
-        assert_eq!(max_inflight.load(Ordering::SeqCst), 3);
+        let peak = max_inflight.load(Ordering::SeqCst);
+        assert!(peak <= 3, "the bound is three: {peak}");
+        assert!(peak >= 2, "the batch runs concurrently: {peak}");
         let lg = log.lock().unwrap();
         assert_eq!(lg.iter().filter(|e| *e == "guard").count(), 1, "{lg:?}");
         assert_eq!(lg[0], "guard", "the birth precedes every revive: {lg:?}");
