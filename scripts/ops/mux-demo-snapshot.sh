@@ -534,9 +534,9 @@ PY
 # append-only JSONL with a documented row shape, so the seed writes them
 # directly. The projections resolve the stores under the config state dir:
 # <state>/chats/<chat>/messages.jsonl and <state>/questions.jsonl.
-python3 - "$ROOT" <<'PY'
+python3 - "$ROOT" "${SIDS[0]}" <<'PY'
 import json, os, sys, datetime
-root = sys.argv[1]
+root, scout_sid = sys.argv[1], sys.argv[2]
 now = datetime.datetime.now(datetime.timezone.utc)
 
 def ts(mins_ago):
@@ -620,7 +620,15 @@ png(shot, 160, 90, (40, 120, 200))
 qs = [
     {"ts": ts(4), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?",
-              "images": [shot]}},
+              "images": [shot],
+              "origin": {"handle": "scout", "session_id": scout_sid, "name": "scout",
+                         "harness": "claude", "host": "bb16"},
+              "rung": {"level": "user"},
+              "via": [{"level": "lead", "holder_name": "rowan", "evidence": "the demo script reads no machine state"}],
+              "context": {"tried": "Two lead-rung reviews passed; the paint gate still holds the run.",
+                          "evidence": "The 18:00 slot is the only shared window this week.",
+                          "deadline": ts(-3600), "on_silence": "proceed"},
+              "class": "irreversible"}},
     {"ts": ts(14), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
     {"ts": ts(26), "type": "operator_decision", "source": "target",
