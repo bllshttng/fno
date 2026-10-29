@@ -4,8 +4,10 @@
 # joined fno only.
 #
 # A session joins at its first fno skill or command (crates/fno-agents/src/
-# join_marker.rs). An unjoined session gets no preamble. A joined one gets it
-# once, and again after each compaction: `fno-agents report --kind join
+# join_marker.rs). An unjoined session gets no preamble once any session on
+# the machine has joined; before that (a fresh install), the install itself
+# is the opt-in and every session reads due. A joined one gets it once, and
+# again after each compaction: `fno-agents report --kind join
 # --preamble-due --mark` answers `due` and stamps it taught.
 #
 # Usage: session-start-using-fno.sh [EVENT] [join]
