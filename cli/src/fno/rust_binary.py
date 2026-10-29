@@ -272,8 +272,14 @@ def plan_schema(payload: dict) -> Optional[dict]:
             return [_plain(v) for v in value]
         return value
 
+    # The dev build outranks the installed copy: a validating surface must
+    # answer with its own checkout's schema, never a stale binary that lacks
+    # the op (the rule command_call states for the same reason).
     err, receipt = call_binary_json(
-        "plan-schema", [], input_text=json.dumps(_plain(payload), default=str)
+        "plan-schema",
+        [],
+        binary=find_dev_binary() or resolve_binary(),
+        input_text=json.dumps(_plain(payload), default=str),
     )
     if err or not isinstance(receipt, dict):
         return None

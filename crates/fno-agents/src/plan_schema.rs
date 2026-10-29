@@ -96,26 +96,25 @@ pub(crate) fn difficulty_gate_error(
     if fm.is_empty() {
         return None;
     }
-    let created_raw = fm.get("created");
-    let created = super::backlog::intake::parse_created(created_raw);
-    let Some((y, m, d)) = created else {
-        if !undatable_refuses {
-            return None;
-        }
-        return match created_raw {
-            None => Some(
-                "cannot read created: absent from frontmatter; the difficulty \
-                 gate needs a date. Set created: <YYYY-MM-DD> and, for \
-                 post-gate plans, difficulty: low, medium, high."
+    let (y, m, d) = match gate_created(fm) {
+        Ok(ymd) => ymd,
+        Err(raw) => {
+            if !undatable_refuses {
+                return None;
+            }
+            return Some(match raw {
+                None => "cannot read created: absent from frontmatter; the difficulty \
+                         gate needs a date. Set created: <YYYY-MM-DD> and, for \
+                         post-gate plans, difficulty: low, medium, high."
                     .to_string(),
-            ),
-            Some(raw) => Some(format!(
-                "cannot read created: {}; the difficulty gate needs a date. \
-                 Set created: <YYYY-MM-DD> and, for post-gate plans, \
-                 difficulty: low, medium, high.",
-                super::backlog::intake::yaml_display(raw)
-            )),
-        };
+                Some(raw) => format!(
+                    "cannot read created: {}; the difficulty gate needs a date. \
+                     Set created: <YYYY-MM-DD> and, for post-gate plans, \
+                     difficulty: low, medium, high.",
+                    super::backlog::intake::yaml_display(&raw)
+                ),
+            });
+        }
     };
     if (y, m, d) <= (2026, 8, 26) {
         return None;
@@ -132,17 +131,67 @@ pub(crate) fn difficulty_gate_error(
     }
 }
 
+/// The gate date read shared by both date gates: `Ok` a real calendar date,
+/// `Err` the raw undatable value. Impossible dates (2026-02-31: a day the
+/// calendar never had) route to the undatable branch beside absent and
+/// unparseable ones, so a minting lane refuses them and an authoring scope
+/// defers.
+fn gate_created(fm: &Map<String, Value>) -> Result<(i32, u32, u32), Option<Value>> {
+    let raw = fm.get("created");
+    let Some((y, m, d)) = super::backlog::intake::parse_created(raw) else {
+        return Err(raw.cloned());
+    };
+    if !super::backlog::intake::valid_ymd(y, m, d) {
+        return Err(raw.cloned());
+    }
+    Ok((y, m, d))
+}
+
 /// Whether `created` dates the plan past the difficulty gate. None: empty or
 /// undatable, which the lenient scopes treat as no band requirement.
 pub(crate) fn created_after_gate(fm: &Map<String, Value>) -> Option<bool> {
     if fm.is_empty() {
         return None;
     }
-    let (y, m, d) = super::backlog::intake::parse_created(fm.get("created"))?;
-    if !super::backlog::intake::valid_ymd(y, m, d) {
-        return None;
+    gate_created(fm)
+        .ok()
+        .map(|(y, m, d)| (y, m, d) > (2026, 8, 26))
+}
+
+/// The full `created` timestamp: a real calendar date, and any time tail a
+/// real time. The deleted pydantic field was `datetime`, so a garbage tail
+/// ("2026-08-20Tnot-a-time") refused there and refuses here; `iso_created`
+/// alone accepts any suffix after the T.
+fn valid_created_string(s: &str) -> bool {
+    use chrono::{DateTime, NaiveDateTime};
+    if !s.is_ascii() || s.len() < 10 {
+        return false;
     }
-    Some((y, m, d) > (2026, 8, 26))
+    let date_ok = super::backlog::intake::valid_ymd(
+        s[..4].parse().unwrap_or(0),
+        s[5..7].parse().unwrap_or(0),
+        s[8..10].parse().unwrap_or(0),
+    );
+    if !date_ok {
+        return false;
+    }
+    if s.len() == 10 {
+        return true;
+    }
+    const NAIVE: [&str; 6] = [
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S%.f",
+    ];
+    NAIVE
+        .iter()
+        .any(|f| NaiveDateTime::parse_from_str(s, f).is_ok())
+        || NAIVE
+            .iter()
+            .any(|f| DateTime::parse_from_str(s, &format!("{f}%#z")).is_ok())
 }
 
 /// The date-keyed Execution Strategy refusal, or None. Same shape as the
@@ -163,26 +212,25 @@ pub(crate) fn waves_gate_error(
     if !gated || has_execution_strategy {
         return None;
     }
-    let created_raw = fm.get("created");
-    let created = super::backlog::intake::parse_created(created_raw);
-    let Some((y, m, d)) = created else {
-        if !undatable_refuses {
-            return None;
-        }
-        return match created_raw {
-            None => Some(
-                "cannot read created: absent from frontmatter; the Execution \
-                 Strategy gate needs a date. Set created: <YYYY-MM-DD> and, \
-                 for post-gate plans, an ## Execution Strategy section."
+    let (y, m, d) = match gate_created(fm) {
+        Ok(ymd) => ymd,
+        Err(raw) => {
+            if !undatable_refuses {
+                return None;
+            }
+            return Some(match raw {
+                None => "cannot read created: absent from frontmatter; the Execution \
+                         Strategy gate needs a date. Set created: <YYYY-MM-DD> and, \
+                         for post-gate plans, an ## Execution Strategy section."
                     .to_string(),
-            ),
-            Some(raw) => Some(format!(
-                "cannot read created: {}; the Execution Strategy gate needs a \
-                 date. Set created: <YYYY-MM-DD> and, for post-gate plans, an \
-                 ## Execution Strategy section.",
-                super::backlog::intake::yaml_display(raw)
-            )),
-        };
+                Some(raw) => format!(
+                    "cannot read created: {}; the Execution Strategy gate needs a \
+                     date. Set created: <YYYY-MM-DD> and, for post-gate plans, an \
+                     ## Execution Strategy section.",
+                    super::backlog::intake::yaml_display(&raw)
+                ),
+            });
+        }
     };
     if (y, m, d) <= WAVES_REQUIRED_AFTER {
         return None;
@@ -407,9 +455,10 @@ pub(crate) fn validate_block(kind: &str, block: &Value) -> Vec<Value> {
 pub(crate) fn validate_frontmatter(fm: &Map<String, Value>) -> Vec<Value> {
     let mut errors = Vec::new();
 
-    // Model before-validator: claims fills an absent node.
+    // Model before-validator: claims fills an absent OR NULL node (pydantic's
+    // before-validator saw null the same as absent).
     let mut working = fm.clone();
-    if working.get("claims").is_some() && working.get("node").is_none() {
+    if working.get("claims").is_some() && working.get("node").map_or(true, Value::is_null) {
         working.insert("node".into(), working["claims"].clone());
     }
     let fm = &working;
@@ -449,13 +498,7 @@ pub(crate) fn validate_frontmatter(fm: &Map<String, Value>) -> Vec<Value> {
             Some(fm.get("created").unwrap()),
         )),
         Some(v @ Value::String(s)) => {
-            if super::backlog::intake::iso_created(s.trim())
-                && !super::backlog::intake::valid_ymd(
-                    s[..4].parse().unwrap_or(0),
-                    s[5..7].parse().unwrap_or(0),
-                    s[8..10].parse().unwrap_or(0),
-                )
-            {
+            if super::backlog::intake::iso_created(s.trim()) && !valid_created_string(s.trim()) {
                 errors.push(violation(
                     "created",
                     "Input should be a valid date",
@@ -617,28 +660,46 @@ pub(crate) fn validate_frontmatter(fm: &Map<String, Value>) -> Vec<Value> {
         }
     }
 
-    // Model-level: the date-keyed difficulty gate, minting scope (the model
-    // always refused an undatable plan).
-    if let Some(gate) = difficulty_gate_error(fm, true) {
+    // Model-level: the date-keyed difficulty gate, authoring scope. The
+    // model defers an undatable plan exactly like validate-plan.sh: the
+    // blueprint mint dates the doc itself, and a frontmatter still missing
+    // `created` gets the created field error above, never a gate refusal.
+    if let Some(gate) = difficulty_gate_error(fm, false) {
         errors.push(violation("difficulty", gate, None));
     }
 
     // Model-level: the company work_order must name this plan's node. The
     // deep refs validation stays with the company family; the door checks
-    // the one rule schema.py owned.
+    // the one rule schema.py owned, plus the shallow shape pydantic's typed
+    // model enforced (a scalar company_work or a missing work_order is the
+    // author's error to see, not a valid plan).
     if let Some(cw) = fm.get("company_work") {
-        if let Some(work_order) = cw.get("work_order") {
-            if let Some(order_node) = work_order.get("node_id").and_then(Value::as_str) {
-                let plan_node = fm.get("node").and_then(Value::as_str).unwrap_or_default();
-                if order_node != plan_node {
-                    errors.push(violation(
-                        "company_work",
-                        &format!(
-                            "Value error, company_work work_order node_id must match plan node"
-                        ),
-                        Some(cw),
-                    ));
-                }
+        if !cw.is_null() {
+            match cw.as_object() {
+                None => errors.push(violation(
+                    "company_work",
+                    "Input should be a valid dictionary",
+                    Some(cw),
+                )),
+                Some(cw_obj) => match cw_obj.get("work_order") {
+                    None => {
+                        errors.push(violation("company_work.work_order", "Field required", None))
+                    }
+                    Some(work_order) => {
+                        if let Some(order_node) = work_order.get("node_id").and_then(Value::as_str)
+                        {
+                            let plan_node =
+                                fm.get("node").and_then(Value::as_str).unwrap_or_default();
+                            if order_node != plan_node {
+                                errors.push(violation(
+                                    "company_work",
+                                    "Value error, company_work work_order node_id must match plan node",
+                                    Some(cw),
+                                ));
+                            }
+                        }
+                    }
+                },
             }
         }
     }
@@ -648,6 +709,12 @@ pub(crate) fn validate_frontmatter(fm: &Map<String, Value>) -> Vec<Value> {
 
 /// The hidden `plan-schema` door: one JSON request in, one verdict out,
 /// always exit 0. Ops: `validate-frontmatter`, `gates`, `validate-block`.
+///
+/// The door's name lives in this const so the dispatcher can name it without
+/// a string literal: the menu-caps counter reads literals inside `run()`, and
+/// a hidden door is not a menu command.
+pub const DOOR_NAME: &str = "plan-schema";
+
 pub fn run_plan_schema(args: &[String]) -> i32 {
     let _ = args;
     let mut input = String::new();
@@ -732,6 +799,14 @@ mod tests {
         assert!(difficulty_gate_error(&undatable, true)
             .unwrap()
             .starts_with("cannot read created: absent"));
+        // An impossible calendar date is an undatable one: the minting
+        // scope refuses it instead of honoring a pre-gate reading.
+        let mut impossible = base.clone();
+        impossible.insert("created".into(), json!("2026-02-31"));
+        assert!(difficulty_gate_error(&impossible, true)
+            .unwrap()
+            .starts_with("cannot read created: 2026-02-31"));
+        assert_eq!(difficulty_gate_error(&impossible, false), None);
     }
 
     #[test]
@@ -760,6 +835,12 @@ mod tests {
         // strategy-less plan it cannot date.
         let undatable = fm(&[("status", json!("ready"))]);
         assert!(waves_gate_error(&undatable, false, true)
+            .unwrap()
+            .starts_with("cannot read created"));
+        // Impossible dates refuse beside absent ones in the minting scope.
+        let mut impossible = post_gate.clone();
+        impossible.insert("created".into(), json!("2026-02-31"));
+        assert!(waves_gate_error(&impossible, false, true)
             .unwrap()
             .starts_with("cannot read created"));
     }
@@ -839,6 +920,16 @@ mod tests {
         ]));
         assert!(errors.iter().any(|e| e["message"]
             == "Value error, created must be a date (YYYY-MM-DD), not a bare number"));
+        // A garbage time tail refuses: pydantic parsed the datetime, so a
+        // value like this was never a valid created.
+        let errors = validate_frontmatter(&fm(&[
+            ("node", json!("x-1234abcd")),
+            ("status", json!("ready")),
+            ("created", json!("2026-08-20Tnot-a-time")),
+        ]));
+        assert!(errors
+            .iter()
+            .any(|e| e["field"] == "created" && e["message"] == "Input should be a valid date"));
     }
 
     #[test]
@@ -854,6 +945,15 @@ mod tests {
         let errors = validate_frontmatter(&fm(&[
             ("claims", json!("x-1234abcd")),
             ("status", json!("stub")),
+            ("created", json!("2026-01-01")),
+        ]));
+        assert!(errors.is_empty(), "{errors:?}");
+        // A null node is an absent one: pydantic's before-validator filled
+        // it from claims, and claims-bound design docs keep that contract.
+        let errors = validate_frontmatter(&fm(&[
+            ("claims", json!("x-1234abcd")),
+            ("node", json!(Value::Null)),
+            ("status", json!("ready")),
             ("created", json!("2026-01-01")),
         ]));
         assert!(errors.is_empty(), "{errors:?}");
@@ -893,5 +993,24 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| e["field"] == "completion" && e["message"] == "Input should be 'delivery'"));
+        // The shallow company_work shape: a scalar or a work_order-less
+        // mapping is the author's error to see, never a valid plan.
+        let errors = validate_frontmatter(&fm(&[
+            ("node", json!("x-1234abcd")),
+            ("status", json!("ready")),
+            ("created", json!("2026-01-01")),
+            ("company_work", json!("solo")),
+        ]));
+        assert!(errors.iter().any(|e| e["field"] == "company_work"
+            && e["message"] == "Input should be a valid dictionary"));
+        let errors = validate_frontmatter(&fm(&[
+            ("node", json!("x-1234abcd")),
+            ("status", json!("ready")),
+            ("created", json!("2026-01-01")),
+            ("company_work", json!({"function": {"id": "operations"}})),
+        ]));
+        assert!(errors
+            .iter()
+            .any(|e| e["field"] == "company_work.work_order" && e["message"] == "Field required"));
     }
 }

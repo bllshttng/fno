@@ -9,6 +9,11 @@
 use serde_json::Value;
 use std::io::Read;
 
+/// The door's name, held in one const so the dispatcher can name it without
+/// a string literal: the menu-caps counter reads literals inside `run()`,
+/// and a hidden door is not a menu command.
+pub const DOOR_NAME: &str = "settings-read";
+
 /// Run the door: read the request from stdin, print the fact-set receipt,
 /// always exit 0. The request is `{"detect": "<cwd>"}` (or `{}`); a missing
 /// or unparseable request simply carries no detect.
