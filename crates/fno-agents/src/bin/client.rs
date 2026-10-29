@@ -1777,7 +1777,7 @@ async fn run(args: Vec<String>) -> i32 {
                 // filter so no other list pays the app-server round trip; an
                 // unreachable daemon becomes `available: false`, never a list
                 // failure. The await must happen here - format_success is sync.
-                let result = if command_owned == "list"
+                let mut result = if command_owned == "list"
                     && result["filters_applied"]["provider"].as_str() == Some("codex")
                 {
                     let mut with_loaded = result;
@@ -1788,6 +1788,13 @@ async fn run(args: Vec<String>) -> i32 {
                 } else {
                     result
                 };
+                // A registry rename moves fno's label only; the harness
+                // session keeps its old title until the native rename
+                // reaches it. Best-effort: the receipt names a failed push,
+                // the rename still exits 0.
+                if command_owned == "rename" {
+                    fno_agents::rename::stamp_title_push(&home, &mut result);
+                }
                 if let Some(line) = format_success(
                     &command_owned,
                     &agent_name,
