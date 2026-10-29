@@ -2269,10 +2269,9 @@ pub fn run_backlog_retract(argv: &[String]) -> i32 {
     )
 }
 
-/// `law_only` keeps the law command's contract: the operator gate before any
-/// read, laws-only subject matching, and the pointer refusal for a non-law
-/// target. The backlog entry drops all three, so `fno inbox law retract`
-/// keeps answering exactly what it answered before this door widened.
+/// `law_only` keeps the law command's contract: laws-only subject matching,
+/// the operator and chat_attested lanes only, and the pointer refusal for a
+/// non-law target. Both entries share the lane gate and the quote gate.
 fn run_retract_labeled(label: &str, usage: &str, argv: &[String], law_only: bool) -> i32 {
     let door = match parse_retract_door(argv, usage, law_only, true) {
         Ok(d) => d,
