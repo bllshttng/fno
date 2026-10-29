@@ -451,12 +451,39 @@ fn report_cutoff(window: &str) -> i64 {
 
 /// One `decision_span` per fire, `span_kind = "rule"`: the rows the
 /// rules report reads. Best-effort; a lost row never changes the answer.
+/// A door event dedupes its spans per rule, event and subject set in the
+/// doors bucket of the rules-seen cursor: a polled merge preview
+/// (`fno do pr status`) re-decides the same door ask on every read, and
+/// the span belongs to the ask, not to the poll.
 fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
     if decision.fires.is_empty() {
         return;
     }
+    let is_door = ev.kind.starts_with("door:") || ev.kind == "plan-start";
+    let mut seen: Option<std::collections::HashSet<String>> = if is_door {
+        let root = crate::decision_index::default_state_path("rules-seen")
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        Some(crate::announce::load_cursor(&root, "rules-seen", "doors"))
+    } else {
+        None
+    };
+    let mut dirty = false;
     let trace_id = crate::decision_trace::new_span_id();
     for fire in &decision.fires {
+        if let Some(seen_set) = seen.as_mut() {
+            let key = format!(
+                "span:{}:{}:{}",
+                fire.rule,
+                ev.kind,
+                ev.subjects.join(",")
+            );
+            if !seen_set.insert(key) {
+                continue;
+            }
+            dirty = true;
+        }
         let trace = crate::decision_trace::Trace {
             trace_id: trace_id.clone(),
             span_id: crate::decision_trace::new_span_id(),
@@ -480,6 +507,15 @@ fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
             ev.tool.clone().map(Value::from).unwrap_or(Value::Null),
         );
         let _ = crate::decision_trace::emit_span("rule", &trace, &attrs);
+    }
+    if dirty {
+        if let Some(seen_set) = seen {
+            let root = crate::decision_index::default_state_path("rules-seen")
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            crate::announce::save_cursor(&root, "rules-seen", "doors", &seen_set);
+        }
     }
 }
 
