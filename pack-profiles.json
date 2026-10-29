@@ -52,6 +52,7 @@
     "hooks/pretooluse-bash-dispatch.sh",
     "hooks/prompt-outstanding.sh",
     "hooks/reconcile-session-start.sh",
+    "hooks/lib/run-python.sh",
     "hooks/refusal-streak-record.sh",
     "hooks/review-hold.sh",
     "hooks/session-join-prompt.sh",
