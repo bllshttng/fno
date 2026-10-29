@@ -551,15 +551,15 @@ mod tests {
     // corrupt-line repair arm
     // ------------------------------------------------------------------
 
+    /// The corrupt specimen shape with a claims link.
+    fn corrupt_doc() -> String {
+        "---\nclaims: x-regress\nstatus: \"in_\"in_review\"\n---\n# T\n\nbody\n".to_string()
+    }
+
     #[test]
     fn repair_arm_rebuilds_a_corrupt_status_line_from_the_node() {
         let dir = tmp_dir("repair");
-        // The corrupt-specimen shape, plus a claims link.
-        write_doc(
-            &dir,
-            "corrupt.md",
-            "---\nclaims: x-regress\nstatus: \"in_\"in_review\"\n---\n# T\n\nbody\n",
-        );
+        write_doc(&dir, "corrupt.md", &corrupt_doc());
         let res = sweep(&dir, true, &map(&[("x-regress", "done")]));
         assert_eq!(res.repaired, 1, "{:?}", res.warnings);
         let text = read_doc(&dir.join("corrupt.md"));
@@ -570,30 +570,20 @@ mod tests {
     #[test]
     fn repair_arm_holds_when_the_node_writes_no_plan_status() {
         let dir = tmp_dir("repair-live");
-        write_doc(
-            &dir,
-            "corrupt.md",
-            "---\nclaims: x-regress\nstatus: \"in_\"in_review\"\n---\n# T\n\nbody\n",
-        );
+        write_doc(&dir, "corrupt.md", &corrupt_doc());
         // An in_progress node maps to no plan-status write: the repair holds
         // rather than guessing. An in_review node repairs forward to
         // in_review, never a terminal guess.
         let res = sweep(&dir, true, &map(&[("x-regress", "in_progress")]));
         assert_eq!(res.repaired, 0);
         assert_eq!(res.stood_down, 1, "{:?}", res.warnings);
-        let text = read_doc(&dir.join("corrupt.md"));
-        assert!(text.contains("in_\"in_review\""), "{text}");
+        assert!(read_doc(&dir.join("corrupt.md")).contains("in_\"in_review\""));
 
         let dir2 = tmp_dir("repair-forward");
-        write_doc(
-            &dir2,
-            "corrupt.md",
-            "---\nclaims: x-regress\nstatus: \"in_\"in_review\"\n---\n# T\n\nbody\n",
-        );
+        write_doc(&dir2, "corrupt.md", &corrupt_doc());
         let res2 = sweep(&dir2, true, &map(&[("x-regress", "in_review")]));
         assert_eq!(res2.repaired, 1, "{:?}", res2.warnings);
-        let text2 = read_doc(&dir2.join("corrupt.md"));
-        assert!(text2.contains("status: \"in_review\""), "{text2}");
+        assert!(read_doc(&dir2.join("corrupt.md")).contains("status: \"in_review\""));
     }
 
     // ------------------------------------------------------------------
