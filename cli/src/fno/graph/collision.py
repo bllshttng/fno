@@ -200,8 +200,8 @@ def partition(
     ``(groups, unevaluated)`` - disjoint sets of item ids, and the ids with
     no usable path (empty set, or every entry normalizing away). An
     unevaluated item is a singleton group as well:
-    "no parseable file list" is its own verdict, never a silent pass (the same
-    rule ``_classify_lane_candidate`` applies at node grain).
+    "no parseable file list" is its own verdict, never a silent pass (the
+    native fill gate applies the same rule at node grain).
     """
     parent: dict[str, str] = {}
     for item_id, _ in items:
@@ -216,8 +216,7 @@ def partition(
         return node
 
     def union(left: str, right: str) -> None:
-        left_root = find(left)
-        right_root = find(right)
+        left_root, right_root = find(left), find(right)
         if left_root != right_root:
             parent[right_root] = left_root
 

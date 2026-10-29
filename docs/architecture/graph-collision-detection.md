@@ -8,139 +8,60 @@ status: shipped
 ## Overview
 
 Graph collision detection catches the failure mode where two specs written
-hours apart silently target the same files and surface, and neither plan
-author realizes they are stepping on each other until merge time. The fix
-is a deterministic file-overlap primitive that four independent surfaces
+hours apart silently target the same files and surfaces, and neither plan
+author realizes they are stepping on each other until merge time. The
+mechanism is a deterministic file-overlap comparison that four surfaces
 consume:
 
 1. **`/blueprint`** runs a check between writing the plan and auto-intake.
    High-severity collisions trigger an `AskUserQuestion` flow with four
    resolutions (proceed / modify / supersede / cancel).
-2. **`fno backlog triage health`** runs an all-pairs check across the
-   pending backlog plus four other "is this backlog healthy?" metrics.
+2. **`fno backlog triage health`** compares the pending backlog and reports
+   collisions beside its other health metrics.
 3. **`fno backlog collisions check`** is the direct CLI surface for
    checking a plan against the graph from a script or one-off prompt.
-4. **Dispatch** (`select_lane_fill`, shared by `lane-fill` / `dispatch-lanes`
-   and the active-backlog daemon) compares each candidate against every node a
-   live worker already holds before filling a lane. See
-   [Dispatch-time gate](#dispatch-time-gate) below.
-
-The primitive deliberately scopes to *file overlap* in v1. Concept overlap
-(two plans both adding a "status" field without sharing files) requires
-either an LLM call or an explicit `topic` tag and gets its own follow-up.
-File overlap is mechanical, deterministic, and covers the highest-leverage
-failure case at zero runtime cost.
+4. **Dispatch** (the native lane-fill gate behind `lane-fill` /
+   `dispatch-lanes` and the active-backlog daemon) compares each candidate
+   against every node a live worker already holds before filling a lane.
 
 ## Architecture
 
-```mermaid
-graph TD
-    SPEC["/blueprint quick or full"] --> WRITE["Write plan file"]
-    WRITE --> CHECK["fno backlog collisions check"]
-    CHECK --> COL["collision.py: find_collisions"]
+The collision decision is native. `crates/fno-agents/src/backlog/collision.rs`
+owns severity scoring and the comparison; `cutover.rs collision_thresholds`
+resolves the thresholds from the config candidates with the same fail-open
+contract the settings model's sanitizer holds; `advance_fill.rs` turns a
+collision into a fill verdict at dispatch time. The dual-inventory row for
+this decision reads RETIRED: the Python engine that once mirrored it died
+when its last callers (the graph CLI's collisions sub-app and the Python
+triage health) went native.
 
-    HEALTH["fno backlog triage health"] --> COL
-    DIRECT["fno backlog collisions check"] --> COL
+What stays in Python is the plan-file parser and the task-grain partition,
+both under `cli/src/fno/graph/collision.py`, because the plugin skills
+(which sit outside cli/src) import them:
 
-    COL --> PARSE["parse_files_to_modify\n(quick + folder plans)"]
-    COL --> THRESH["_load_thresholds\n(project beats user beats default)"]
-    COL --> CLASSIFY["_classify\n(severity scoring)"]
-    COL --> ACTION["_infer_action\n(absorb/supersede/coordinate)"]
+| Symbol | Consumer | Purpose |
+|--------|----------|---------|
+| `parse_files_to_modify(plan_path)` | `has_file_surface` | Extract normalized paths from a plan's file table. Recognized headings: `Files to Modify`, `Files to Change`, `Files Touched`, `File Ownership Map`, `Files`. Handles single-file quick plans and folder plans (every `*.md` under the folder, so 00-INDEX.md plus each NN-* phase file). |
+| `has_file_surface(plan_path)` | skills/blueprint `mutate_doc.py` | Whether the plan states a surface at all. False is UNEVALUATED, not clean: a caller that must tell "compared, no overlap" from "nothing to compare" asks here first. |
+| `match_shared_root(path, roots)` | `partition`, the orchestrator | The generated-output root a normalized path falls under. |
+| `partition(items, shared_roots)` | skills/execute `orchestrator.py` | Union-find grouping of `(task id, paths)` pairs; overlap serializes, an empty path set is its own unevaluated verdict. |
+| `HIDDEN_SHARED_OUTPUT_ROOTS` | both skills | The shared-output root tuple, canonical home. |
 
-    CHECK --> ASK{"high severity?"}
-    ASK -->|no| ADOPT["auto-intake"]
-    ASK -->|yes| OPTIONS["AskUserQuestion:\nproceed / modify /\nsupersede / cancel"]
-    OPTIONS --> ACK["fno backlog update\ncollisions_acknowledged=<ids>"]
-    OPTIONS --> SUP["fno backlog supersede\n<new> --replaces <old>\n--cause ... --surface ...\n--reason ... --covers ..."]
-    OPTIONS --> ADOPT
-```
-
-## The collision primitive
-
-`cli/src/fno/graph/collision.py` is pure Python with stdlib-only
-dependencies. It exposes:
-
-| Function | Purpose |
-|----------|---------|
-| `parse_files_to_modify(plan_path)` | Extract file paths from a plan's file table. Recognized headings: `Files to Modify`, `Files to Change`, `Files Touched`, `File Ownership Map`, `Files`. Handles single-file quick plans and folder plans (every `*.md` under the folder, so 00-INDEX.md plus each NN-* phase file). |
-| `has_file_surface(plan_path)` | Whether the plan states a surface at all. `find_collisions` returns `[]` both when it compared and found nothing and when it had nothing to compare; this separates the two. |
-| `resolve_plan_path(plan_path)` | Public resolver for a graph-stored `plan_path` (absolute, `~`, or repo-relative). |
-| `find_collisions(candidate, graph, *, self_id, thresholds)` | Compare a candidate plan's file set against every pending plan on the graph. Returns sorted `Collision` records (high severity first). |
-| `find_acknowledged_collisions(graph)` | Find nodes whose `collisions_acknowledged` references nodes that have since shipped. Surfaces the "your acknowledged collision is now resolved" reconciliation in triage health. |
-| `_load_thresholds(project, user)` | Resolve severity thresholds from layered config. Project beats user beats the v1 defaults baked into `DEFAULT_THRESHOLDS`. |
-| `_resolve_plan_path(plan_path, repo_root)` | Resolve absolute, `~`-prefixed, and repo-relative plan paths to an absolute Path. |
-
-`Collision` is a frozen dataclass with `Literal` types for `severity` and
-`recommended_action` so the type checker catches typos at the call site
-rather than producing surprises at runtime. `CollisionThresholds` is a
-`TypedDict` with the four threshold keys; the layered loader returns
-this shape so a key-typo in a consumer is a type error, not a `KeyError`.
-
-## Severity scoring
-
-Default thresholds (v1 heuristics; tunable via `config.toml`):
-
-| Severity | Trigger |
-|----------|---------|
-| `high`   | shared file count >= 3 OR (shared / min(set_sizes)) >= 0.5 |
-| `medium` | shared file count >= 2 OR (shared / max(set_sizes)) >= 0.25 |
-| `low`    | shared count == 1 |
+## Severity and actions
 
 Thresholds live under `config.collision.severity_thresholds` in
-`~/.fno/config.toml` (or project-local `.fno/config.toml`).
-The `/setup` wizard's Step 8e exposes them under "advanced" config and
-defaults to skip; most users never tune them. After running with defaults
-for a few weeks, `fno backlog triage health --json --all` lets you inspect
-the real distribution and recalibrate.
-
-## Action inference
-
-Recommended actions are deterministic from set relationships and
-plan ages:
-
-| Relationship | Action |
-|--------------|--------|
-| shared < 50% of the wider surface | `coordinate` |
-| shared >= 50% of the wider surface AND candidate is a strict subset of other | `absorb` (existing plan covers everything) |
-| shared >= 50% of the wider surface AND other is a strict subset of candidate | `supersede` (new plan covers more) |
-| shared >= 50% of the wider surface AND other is older | `absorb` |
-| anything else | `coordinate` |
-
-## Dispatch-time gate
-
-`/blueprint` catches a collision between two plans written hours apart.
-It cannot catch a collision between two plans that are already `ready` and get
-dispatched to concurrent workers in the same round.
-That happened: three nodes describing one root cause, filed by three authors in
-three phrasings, all landing in the same file, all fired in parallel.
-
-`select_lane_fill` (`cli/src/fno/backlog/advance.py`) now consults the primitive
-before it fills a lane.
-For each candidate it compares the plan's file surface against the surfaces of
-every node a live worker holds, plus this round's own picks.
-Both claim shapes count, because both mean somebody is editing those files: a
-`lane-slot:` holder (a peer lane) and a bare `node:<id>` claim (a hand-run
-`/target`, which holds no slot).
-A comparator whose own plan states no surface is reported rather than counted -
-`find_collisions` would skip it silently and the gate would read clean without
-having compared against it at all.
-A `high`-severity overlap skips the candidate and logs the node it collides with
-and the shared files.
-
-Guard order in `_classify_lane_candidate`: `peer-lane`, then collision, then domain. Domain was a proxy for "these will not collide". The collision gate is the real measurement, so it runs first and never defers to the proxy. Two same-domain nodes with disjoint file surfaces co-schedule. What remains of domain is a tiebreak. An unevaluated candidate whose domain is already held carries `unevaluated:no-surface+same-domain:<domain>`, so the report still explains the serialized unknown. Intake keeps the unevaluated class plan-less by refusing a plan whose `## Files to Modify` parses empty (`--allow-no-surface` to override).
-
-Two properties are load-bearing:
-
-- **The node stays `ready`, never parked.** Skipping is the reversible option:
-  the node is retried next round once the colliding lane finishes.
-- **The gate fails OPEN end to end**, seeding included.
-  An error reading a plan surface, the claims directory, or the graph lets the dispatch proceed with a warning.
-  A dedup check that can wedge the dispatcher is worse than the duplicate work it
-  prevents.
+`~/.fno/config.toml` (or project-local `.fno/config.toml`); the defaults
+ride the pydantic `CollisionThresholdsBlock`, whose sanitizer drops
+non-numeric and negative values so a bad threshold degrades to the default
+instead of breaking the load. The `/setup` wizard exposes them under
+"advanced" and defaults to skip; most users never tune them. Severity
+bands and the recommended actions (`coordinate`, `absorb`, `supersede`)
+are the native engine's contract; their wording is pinned by the
+reachable-paths port-twin baseline rows.
 
 ## Empty surfaces: unevaluated is not clean
 
-The gate is only as good as its input, and the input was empty.
+The gate is only as good as its input, and the input was once empty.
 
 `parse_files_to_modify` originally matched `Files to Modify` and its synonyms but
 not `File Ownership Map` - the one section `/blueprint` actually writes.
@@ -148,8 +69,8 @@ Every blueprint-generated plan therefore parsed to an empty surface and silently
 could not collide with anything.
 The heading is now recognized.
 
-A plan with no file table at all is still possible, and there `find_collisions`
-returns an empty list - the same value it returns for "compared, no overlap".
+A plan with no file table at all is still possible, and there the comparison
+has nothing to compare - the same outcome as "compared, no overlap".
 Callers that need to tell those apart ask `has_file_surface` first:
 
 - `fno backlog collisions check --json` emits
@@ -160,25 +81,52 @@ Callers that need to tell those apart ask `has_file_surface` first:
   force the surface to be stated at planning time, not to manufacture one that
   makes the warning go away.
 
+## Dispatch-time gate
+
+`/blueprint` catches a collision between two plans written hours apart.
+It cannot catch a collision between two plans that are already `ready` and get
+dispatched to concurrent workers in the same round.
+That happened: three nodes describing one root cause, filed by three authors in
+three phrasings, all landing in the same file, all fired in parallel.
+
+The native fill gate consults the collision engine before it fills a lane.
+For each candidate it compares the plan's file surface against the surfaces of
+every node a live worker holds, plus this round's own picks.
+Both claim shapes count, because both mean somebody is editing those files: a
+`lane-slot:` holder (a peer lane) and a bare `node:<id>` claim (a hand-run
+`/target`, which holds no slot).
+A comparator whose own plan states no surface is reported rather than counted,
+so the gate never reads clean without having compared against it at all.
+A high-severity overlap skips the candidate and logs the node it collides with
+and the shared files.
+
+Two properties are load-bearing:
+
+- **The node stays `ready`, never parked.** Skipping is the reversible option:
+  the node is retried next round once the colliding lane finishes.
+- **The gate fails OPEN end to end**, seeding included.
+  An error reading a plan surface, the claims directory, or the graph lets the dispatch proceed with a warning.
+  A dedup check that can wedge the dispatcher is worse than the duplicate work it
+  prevents.
+
 ## Audit trail
 
-Three new graph fields, all missing-field tolerant:
+Graph fields the mechanism reads and writes, all missing-field tolerant:
 
 | Field | Owner | Purpose |
 |-------|-------|---------|
-| `collisions_acknowledged: list[str]` | `cmd_update --acknowledge-collisions` | ab-IDs of collisions the user knowingly proceeded past. The sentinel `__skipped_check__` records "I ran with `--no-collision-check`." |
-| `superseded_by: str \| None` | `cmd_supersede` | The new node ID that replaced this one. |
-| `supersedes: list[str]` | `cmd_supersede` | The old node IDs this node replaces. |
+| `collisions_acknowledged: list[str]` | the update verb | ab-IDs of collisions the user knowingly proceeded past. The sentinel `__skipped_check__` records "I ran with `--no-collision-check`." |
+| `superseded_by: str \| None` | the supersede verb | The new node ID that replaced this one. |
+| `supersedes: list[str]` | the supersede verb | The old node IDs this node replaces. |
 
-`find_acknowledged_collisions` walks the graph for nodes whose
-`collisions_acknowledged` references nodes that have since shipped. Triage
-health surfaces these as a "your acknowledged collision is now resolved -
-verify the conflict resolved cleanly" line so a deliberately-accepted
+Acknowledged collisions whose referenced nodes have since shipped surface
+as a "your acknowledged collision is now resolved - verify the conflict
+resolved cleanly" line in triage health, so a deliberately-accepted
 conflict gets a closing-the-loop nudge.
 
 ## Status derivation
 
-`statuses.py` adds a new `superseded` derived state. Precedence ladder:
+`statuses.py` adds a `superseded` derived state. Precedence ladder:
 
 ```
 done > superseded > deferred > blocked > claimed > idea > ready
@@ -187,37 +135,9 @@ done > superseded > deferred > blocked > claimed > idea > ready
 A superseded node never re-surfaces as ready or in `fno backlog next`.
 Reactivation requires explicit `unsupersede` (not just `undefer`) because
 the user must consciously revive a plan that another plan has already
-supplanted. `cmd_supersede` refuses to mutate already-shipped or
+supplanted. The supersede verb refuses to mutate already-shipped or
 already-superseded nodes so the operation is never a destructive write
 against ship history; the user opens a follow-up node instead.
-
-## Triage health command
-
-`fno backlog triage health` returns a structured JSON report:
-
-```json
-{
-  "scope": "all projects",
-  "idea_pile_depth": 1,
-  "stale_ready_nodes": [...],
-  "failure_prone_nodes": [...],
-  "collisions": [...],
-  "acknowledged_resolved": [...],
-  "totals": { "pending": 33, "ideas": 1, "stale": 0, ... }
-}
-```
-
-The shape is consumable by downstream tooling: `/loop`, scheduled agents,
-dashboards. Future health-style commands (`fno backlog audit`,
-`fno backlog cost-report`) follow the same pattern.
-
-## Performance notes
-
-`find_collisions` resolves repo-relative plan paths against the repo root
-via `git rev-parse --show-toplevel`. The result is memoized at module
-scope so `triage health` does not spawn N subprocesses for an N-node
-backlog. The fallback path (when `git` is missing) emits a one-shot
-stderr warning so a misconfigured environment is visible.
 
 ## Out of scope (follow-ups)
 
@@ -225,7 +145,7 @@ stderr warning so a misconfigured environment is visible.
   `topic`/`epic` tags) - separate design loop.
 - **Auto-resolution** of low-severity collisions (auto-rebase the
   candidate against the existing plan) - opt-in via a future flag.
-- **Cross-project collisions** - today's primitive is project-scoped
+- **Cross-project collisions** - today's mechanism is project-scoped
   because the graph is project-scoped.
 - **Kanban edge rendering** - showing "these two cards have a connecting edge" in `~/.fno/cache/pages/graph.md` requires extending the renderer.
 - **Time-bounded collision tolerance** - "plans more than 60 days old
@@ -233,8 +153,8 @@ stderr warning so a misconfigured environment is visible.
 
 ## References
 
-- Module: [cli/src/fno/graph/collision.py](../../cli/src/fno/graph/collision.py)
+- Native engine: `crates/fno-agents/src/backlog/collision.rs`
+- Python helpers: [cli/src/fno/graph/collision.py](../../cli/src/fno/graph/collision.py)
 - Tests: [cli/tests/integration/test_collision.py](../../cli/tests/integration/test_collision.py)
-- Settings template: [.fno/config.toml.example](../../.fno/config.toml.example)
-- CLI vocabulary: [CLAUDE.md](../../CLAUDE.md) (Backlog Vocabulary section)
+- Dual inventory: [docs/architecture/dual-implementation-inventory.md](dual-implementation-inventory.md) (the file-collision row)
 - Spec wiring: [skills/blueprint/SKILL.md](../../skills/blueprint/SKILL.md) (Quick step 3a, Full step 11a)

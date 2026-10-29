@@ -72,7 +72,7 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.75x | 11 | 4 | `cli/src/fno/adapters/providers/managed.py:1105` | `slot_principal` |
 | 2.75x | 11 | 4 | `cli/src/fno/agents/rust_runtime.py:309` | `runtime_mode` |
 | 2.75x | 11 | 4 | `cli/src/fno/agents/rust_runtime.py:400` | `_is_role_bearing_spawn` |
-| 2.75x | 11 | 4 | `cli/src/fno/graph/collision.py:101` | `_strip_path` |
+| 2.75x | 11 | 4 | `cli/src/fno/graph/collision.py:64` | `_strip_path` |
 | 2.75x | 11 | 4 | `cli/src/fno/graph/store.py:737` | `_graph_lock_path` |
 | 2.75x | 11 | 4 | `cli/src/fno/plan/_ownership.py:36` | `assert_blueprint_can_write` |
 | 2.75x | 11 | 4 | `cli/src/fno/relay/roundtrip.py:324` | `submit_via_worker` |
