@@ -1,6 +1,6 @@
 # Worktree mechanics
 
-The placement contract lives in this file now: the [Placement](#placement) section below is the authority on where worktrees go, the policy values and their precedence, and the forbidden locations. It moved out of the preamble (`.claude/rules/worktrees.md`, deleted) so the same contract reaches codex and every other harness through the rule engine at the `git worktree add` decision point (`.fno-rules/rules.toml`). This file is also the authority on the machinery.
+The placement contract lives in this file now. The [Placement](#placement) section below is the authority on where worktrees go, policy precedence, and the forbidden locations. It moved out of the deleted preamble file so every harness reads the same contract through the rule engine at the `git worktree add` decision point (`.fno-rules/rules.toml`). This file is also the authority on the machinery.
 
 When you edit the hook, remove or prune a worktree, or trace why a location gate fired, read this first.
 
@@ -8,7 +8,7 @@ When you edit the hook, remove or prune a worktree, or trace why a location gate
 
 The single place saying where git worktrees go and what to do after creating one. Skill defaults that place them elsewhere lose to this rule.
 
-The placement rule fires as context: the project rule `worktree-first` (`.fno-rules/rules.toml`) informs at every `git worktree add` and pre-tool Write under `.claude/worktrees/`, so the contract reaches a harness that never loaded any preamble. It is an inform, never a block: an explicit in-conversation user request for a different path outranks the rule. Project state resolves through the repo's space regardless of worktree. Do not solicit overrides.
+The placement rule fires as context. The project rule `worktree-first` (`.fno-rules/rules.toml`) informs at every `git worktree add` and at pre-tool writes under `.claude/worktrees/`. The contract thus reaches a harness that never loaded any preamble. The rule is an inform, never a block. An explicit in-conversation user request for a different path outranks the rule. Project state resolves through the repo's space regardless of worktree. Do not solicit overrides.
 
 **The worktree root is config-driven via `config.paths.worktrees_base`. Set nothing and the defaults work.**
 
@@ -31,7 +31,7 @@ Setup links shared state from canonical: vault symlink, gitignored `.claude/` su
 
 Per-project policy precedence: per-project `work.workspaces.<slug>.projects[].worktree` > global `config.worktree.policy` > built-in `harness-native`.
 
-- **`never`** - launch in place on the canonical checkout (for projects whose tree IS the product, e.g. an Obsidian vault). ensure prints the repo root, exit 0; callers skip `setup-worktree.sh`; the location gate treats the protected branch as `ok`.
+- **`never`** - launch in place on the canonical checkout (for projects whose tree IS the product, e.g. an Obsidian vault). ensure prints the repo root and exits 0. Callers skip `setup-worktree.sh`. The location gate treats the protected branch as `ok`.
 - **`harness-native`** (both keys unset) - the harness's own location: claude lands at `<repo>/.claude/worktrees/<name>`. Codex Desktop uses `/worktree` or **Hand off -> Worktree**. A harness with no native transition degrades to `~/.fno/worktrees`. Ensure needs `--harness` and never guesses. An explicit `paths.worktrees_base` degrades `harness-native` to `external`: the key alone relocates.
 - **`external`** - fno-managed at `<worktrees_base>/<repo>/<name>`.
 
@@ -45,9 +45,9 @@ Forbidden locations (regardless of config):
 - `~/.cursor/worktrees/...` (cursor-agent's native worktree). fno allocates the worktree and never passes cursor-agent a native worktree flag.
 - `<repo>/worktrees/` or any non-`.claude` path inside the checkout. Enforced since 2026-09-03: `setup-worktree.sh` refuses a `WORKTREE` that does not exist.
 - `../<name>` or any sibling-of-canonical path.
-- Anything beneath `$CODEX_HOME/worktrees`; Footnote never allocates there.
+- Anything beneath `$CODEX_HOME/worktrees`. Footnote never allocates there.
 
-Exception: `/speculate` keeps its own `.claude/worktrees/<name>` placement even when `worktrees_base` is set (do not generalize).
+When `worktrees_base` is set, `/speculate` still keeps its own `.claude/worktrees/<name>` placement. Do not generalize the exception.
 
 ## Branch names
 

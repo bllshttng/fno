@@ -15,7 +15,7 @@ Lead responses with the next action, number multi-step work, give concrete time 
 0. **Worktree-first.** Whenever possible, enter a dedicated feature worktree before editing, generating, or committing (`worktree.policy = "never"` projects work in place by design). Keep the canonical checkout unclogged. Prune after merge.
 1. **Think before coding.** State assumptions; if uncertain, ask. Surface alternative interpretations and simpler options instead of silently picking.
 2. **Simplicity first.** Minimum code that solves the problem. No speculative features, single-use abstractions, unrequested config. If 200 lines could be 50, rewrite.
-3. **OSS-first: fix in the project, never memory-only.** Anything load-bearing (workaround, invariant, gotcha, "next time do X") goes in code, docs, `--help` text, a gate, a test, or a filed node - never private agent memory, which ships to nobody. Full rule: [docs/oss-fix-not-memory.md](docs/oss-fix-not-memory.md).
+3. **OSS-first: fix in the project, never memory-only**. Anything load-bearing goes in code, docs, `--help` text, a gate, a test, or a filed node. The load-bearing thing is the workaround, the invariant, the gotcha, the "next time do X". It never lands in private agent memory, which ships to nobody. Full rule: [docs/oss-fix-not-memory.md](docs/oss-fix-not-memory.md).
 4. **Fix what you find - overrides "surgical changes."** Fix pre-existing problems in this PR, even when unrelated. Prefer FEWER, larger PRs. Carveouts (`fno backlog carveout add`) / follow-up nodes are for genuinely large separable efforts only.
 5. **Goal-driven execution.** Turn tasks into verifiable goals with a verify step each ("add validation" -> "write failing tests, make them pass").
 6. **Comments earn their place.** Match the surrounding file's comment density and idiom; add one only for a non-obvious invariant, race, or why-not-the-obvious. Never ticket/PR/node IDs. `scripts/ci/check-no-internal-refs.sh` fails on node IDs, prose and code alike; bare ticket and PR numbers still have no gate.
@@ -52,7 +52,7 @@ footnote/
 
 ### Conventions
 
-- **Worktrees:** worktree-first for all repo work. `claude --worktree <name>` is intercepted by `hooks/worktree-setup.sh`; after creation run `bash scripts/setup/setup-worktree.sh`. Full contract: [docs/architecture/worktree-mechanics.md](docs/architecture/worktree-mechanics.md) (Placement).
+- **Worktrees:** worktree-first for all repo work. `claude --worktree <name>` is intercepted by `hooks/worktree-setup.sh`. After creation run `bash scripts/setup/setup-worktree.sh`. Full contract: [docs/architecture/worktree-mechanics.md](docs/architecture/worktree-mechanics.md) (Placement).
 - **Search:** prefer `rg` / Grep over `grep -r` (descends into nested worktrees). Scope any `grep -r` to a path. Load-bearing sweep: `RIPGREP_CONFIG_PATH= rg -uu`, never a bare `rg -uu` (`-u` ignores files, not globs).
 - **Prose style:** a paragraph is ONE physical line. A newline starts the next block. House style, and the gate: [docs/style-rules.md](docs/style-rules.md).
 - **File budget:** a file over 5,000 lines is shrink-only. `cli/src/fno` bars new Python (use `crates/`); an edit is a port, deletion or lead-approved blocking-bug fix, no new surface, enforced by `scripts/ci/check-file-budget.sh` at push.
