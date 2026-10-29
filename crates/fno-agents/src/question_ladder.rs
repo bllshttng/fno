@@ -180,9 +180,11 @@ pub fn wake_holder(rung: &Value, qid: &str, node: Option<&str>, question: &str) 
     };
     let node = node.unwrap_or("<node>");
     let text = format!(
-        "fno/questions: a worker asked {qid}, and it sits with you: {}\n\nRule it \
-         with `fno backlog decide {node} \"<ruling>\"` and tell the asker. Unanswered, \
-         it reaches the user's board {} minutes after it was asked.",
+        "fno/questions: a worker asked {qid}, and it sits with you: {}\n\nAnswer it \
+         with `fno inbox outstanding clear {qid} --answer \"<ruling>\" --authority role`. \
+         If only the user can rule it, climb it: `fno inbox outstanding climb {qid} \
+         --evidence \"<what you checked>\"`. Unanswered, it reaches the user's board {} \
+         minutes after it reached you. Node: {node}.",
         question.chars().take(600).collect::<String>(),
         LEASE_SECS / 60
     );
@@ -199,6 +201,134 @@ pub fn on_board(data: &Value, ts: &str, now_secs: i64) -> bool {
         Some(_) => crate::event_store::parse_rfc3339_ms(ts)
             .is_none_or(|ms| ms / 1000 + LEASE_SECS <= now_secs),
     }
+}
+
+/// The rung a holder climbs to: the node lead's higher-up when one lives
+/// and has not held the row yet, else the user (`None`).
+fn next_rung(cwd: &Path, node: Option<&str>, data: &Value) -> Option<Value> {
+    use crate::owner_ladder::{resolve, world, Ask, Rung};
+    let held: Vec<&str> = std::iter::once(data.pointer("/rung/holder_session"))
+        .chain(
+            data.get("via")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|hop| hop.get("holder_session")),
+        )
+        .filter_map(|s| s.and_then(Value::as_str))
+        .collect();
+    let w = world(&crate::paths::AgentsHome::from_env(), cwd).ok()?;
+    let owner = resolve(
+        &Ask {
+            node,
+            from_session: held.first().copied(),
+            start: Rung::HigherUp,
+        },
+        &w,
+    );
+    let session = owner.session.filter(|s| !held.contains(&s.as_str()))?;
+    (owner.rung == Rung::HigherUp).then(|| {
+        json!({"level": "higher", "holder_session": session, "holder_name": owner.holder, "scope": owner.scope})
+    })
+}
+
+/// The climbed row: the same question with one `via` hop naming the rung it
+/// left, at the next rung (or the user's). Pure, so the door stays testable.
+pub fn climbed(row: &Value, next: Option<Value>, evidence: &str, ts: &str) -> Value {
+    let mut row = row.clone();
+    row["ts"] = json!(ts);
+    let data = &mut row["data"];
+    let mut hop = data.get("rung").cloned().unwrap_or_else(|| json!({}));
+    hop["action"] = json!("climb");
+    hop["evidence"] = json!(evidence.chars().take(2000).collect::<String>());
+    hop["ts"] = json!(ts);
+    let mut via = data
+        .get("via")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    via.push(hop);
+    data["via"] = json!(via);
+    data["rung"] = next.unwrap_or_else(|| json!({"level": "user"}));
+    row
+}
+
+/// `fno inbox outstanding climb <qid> --evidence "<what this rung checked>"`:
+/// the rung holder moves the question up one rung, or onto the user's board.
+pub fn run_climb(args: &[String]) -> i32 {
+    const USAGE: &str =
+        "usage: fno inbox outstanding climb <qid> --evidence \"<what this rung checked>\"";
+    let (qid, evidence) = match args {
+        [q, flag, e] | [flag, e, q] if flag == "--evidence" => (q.clone(), e.trim().to_string()),
+        _ => {
+            eprintln!("outstanding: {USAGE}");
+            return 2;
+        }
+    };
+    if evidence.is_empty() {
+        eprintln!("outstanding: climb needs --evidence naming what this rung checked\n{USAGE}");
+        return 2;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = crate::paths::AgentsHome::from_env();
+    let session = crate::outstanding::session_id(&cwd).unwrap_or_default();
+    let index = crate::provider_cap::questions_path(&home);
+    let (asked, closed) = crate::question_intake::question_rows(&index);
+    let refuse = |line: String| {
+        eprintln!("outstanding: refused: {line}. Nothing was moved.");
+        3
+    };
+    if closed.contains(&qid) {
+        return refuse(format!("{qid} is already closed"));
+    }
+    let Some(row) = asked.get(&qid) else {
+        return refuse(format!("{qid} is not a question id this machine knows"));
+    };
+    let data = &row["data"];
+    let holder = data.pointer("/rung/holder_session").and_then(Value::as_str);
+    let Some(holder) =
+        holder.filter(|_| data.pointer("/rung/level").and_then(Value::as_str) != Some("user"))
+    else {
+        return refuse(format!("{qid} is already on the user's board"));
+    };
+    if holder != session {
+        let name = data
+            .pointer("/rung/holder_name")
+            .and_then(Value::as_str)
+            .unwrap_or(holder);
+        return refuse(format!(
+            "{qid} sits with {name}; only the rung holder climbs it"
+        ));
+    }
+    let node = data.get("node").and_then(Value::as_str);
+    let next = next_rung(&cwd, node, data);
+    let row = climbed(
+        row,
+        next.clone(),
+        &evidence,
+        &crate::loopcheck::now_rfc3339_utc(),
+    );
+    if let Err(e) = crate::question_intake::append_question_event(
+        &row,
+        &crate::paths::events_path(&cwd),
+        &index,
+    ) {
+        eprintln!("{}", e.1);
+        return 1;
+    }
+    match &next {
+        Some(rung) => {
+            let question = data.get("question").and_then(Value::as_str).unwrap_or("");
+            wake_holder(rung, &qid, node, question);
+            let name = rung
+                .get("holder_name")
+                .and_then(Value::as_str)
+                .unwrap_or("the next lead");
+            println!("{qid} climbed to {name}");
+        }
+        None => println!("{qid} climbed to the user's board"),
+    }
+    0
 }
 
 /// [`on_board`] over a whole `operator_question` envelope, at the wall clock.
@@ -239,6 +369,26 @@ mod tests {
         assert!(err.contains("taste is in both"), "{err}");
         assert_eq!(class_word(" Taste "), Some("taste"));
         assert_eq!(class_word("product call"), None);
+    }
+
+    #[test]
+    fn a_climb_adds_one_via_hop_and_lands_on_the_next_rung_or_the_board() {
+        let row = json!({"ts": "t0", "data": {"question_id": "q-1",
+            "rung": {"level": "lead", "holder_session": "s-l", "holder_name": "tomas"}}});
+        let up = climbed(
+            &row,
+            Some(json!({"level": "higher", "holder_session": "s-h"})),
+            "read PR 12",
+            "t1",
+        );
+        assert_eq!(up["ts"], json!("t1"));
+        assert_eq!(up["data"]["rung"]["holder_session"], json!("s-h"));
+        assert_eq!(up["data"]["via"][0]["holder_name"], json!("tomas"));
+        assert_eq!(up["data"]["via"][0]["evidence"], json!("read PR 12"));
+        let top = climbed(&up, None, "no owner named", "t2");
+        assert_eq!(top["data"]["rung"], json!({"level": "user"}));
+        assert_eq!(top["data"]["via"].as_array().map(Vec::len), Some(2));
+        assert!(on_board(&top["data"], "t2", 0));
     }
 
     #[test]

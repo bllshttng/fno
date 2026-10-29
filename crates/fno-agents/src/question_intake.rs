@@ -503,36 +503,51 @@ fn run_append(req: &IntakeRequest) -> IntakeAnswer {
         .index_path
         .clone()
         .unwrap_or_else(|| questions_path(&AgentsHome::from_env()));
-    let line = match serde_json::to_string(event) {
-        Ok(l) => l,
-        Err(e) => {
-            answer.lines.push(format!(
-                "outstanding: failed to record question: could not serialize the envelope: {e}"
-            ));
+    if let Err((journaled, e)) = append_question_event(event, &journal_path, &index) {
+        answer.lines.push(e);
+        answer.exit_code = 1;
+        if journaled {
+            answer.qid = Some(qid);
+        } else {
             answer.refusal = Some("write".to_string());
-            answer.exit_code = 1;
-            return answer;
         }
-    };
-    if let Err(e) = crate::event_store::append_envelope(&journal_path, &line, None) {
-        answer.lines.push(format!(
-            "outstanding: failed to append question to project journal: {e}"
-        ));
-        answer.refusal = Some("write".to_string());
-        answer.exit_code = 1;
-        return answer;
-    }
-    if let Err(e) = crate::provider_cap::append_questions_row(&index, event) {
-        answer.lines.push(format!(
-            "outstanding: recorded {qid} in the project journal, but the recall index \
-write failed: {e}. Run `fno inbox outstanding reindex`."
-        ));
-        answer.qid = Some(qid);
-        answer.exit_code = 1;
         return answer;
     }
     answer.qid = Some(qid);
     answer
+}
+
+/// The dual write of one `operator_question` envelope: the project journal
+/// (durable, fatal) then the recall index. `Err` carries whether the journal
+/// half landed, and the line naming the failure.
+pub(crate) fn append_question_event(
+    event: &Value,
+    journal_path: &Path,
+    index: &Path,
+) -> Result<(), (bool, String)> {
+    let line = serde_json::to_string(event).map_err(|e| {
+        (
+            false,
+            format!(
+                "outstanding: failed to record question: could not serialize the envelope: {e}"
+            ),
+        )
+    })?;
+    crate::event_store::append_envelope(journal_path, &line, None).map_err(|e| {
+        (
+            false,
+            format!("outstanding: failed to append question to project journal: {e}"),
+        )
+    })?;
+    crate::provider_cap::append_questions_row(index, event).map_err(|e| {
+        (
+            true,
+            format!(
+                "outstanding: recorded the question in the project journal, but the recall \
+index write failed: {e}. Run `fno inbox outstanding reindex`."
+            ),
+        )
+    })
 }
 
 pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
@@ -931,6 +946,9 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     }
     if let Some(rung) = &req.rung {
         data.insert("rung".into(), rung.clone());
+    }
+    if !parsed.class.trim().is_empty() {
+        data.insert("class".into(), json!(parsed.class.trim()));
     }
     if !req.blocks.is_empty() {
         data.insert("blocks".into(), json!(req.blocks));

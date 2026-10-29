@@ -612,6 +612,29 @@ mod tests {
         };
         assert!(holds_team(&[team.clone()], "01a0cbdd"));
         assert!(!holds_team(&[team], "49a80492"));
+
+        // (i) The rung holder answers its worker's ask; (j) a denied class
+        // refuses it and names the climb.
+        for (qid, class, code) in [("q-held", "public-surface", 0), ("q-deny", "taste", 3)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut req = request(&tmp, qid, Some("C: do as asked"));
+            req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+            req.closed_by = Some("01a0cbdd-baed-4482-9135-37ba1cb0f0d2".to_string());
+            let mut ask = ask_from(qid, "49a80492", "which lane?");
+            ask["data"]["class"] = json!(class);
+            ask["data"]["rung"] =
+                json!({"level": "lead", "holder_session": "01a0cbdd-baed-4482-9135-37ba1cb0f0d2"});
+            seed_question(&req, &ask);
+            let result = run_clear(&req);
+            assert_eq!(result.exit_code, code, "{class}: {:?}", result.lines);
+            if code == 3 {
+                assert!(
+                    result.lines[0].contains("fno inbox outstanding climb"),
+                    "{:?}",
+                    result.lines
+                );
+            }
+        }
     }
 
     #[test]
@@ -722,6 +745,31 @@ fn agent_handle(req: &ClearRequest, caller: &ClearCaller) -> Option<String> {
         }
     }
     caller.ancestry_handle.clone()
+}
+
+/// The session holding a ladder row below the user rung.
+fn rung_holder(question_event: &Value) -> Option<&str> {
+    let rung = question_event.get("data")?.get("rung")?;
+    (rung.get("level").and_then(Value::as_str) != Some("user"))
+        .then(|| rung.get("holder_session").and_then(Value::as_str))
+        .flatten()
+}
+
+/// The row's class when the effective rules deny it to agents: the stored
+/// class, else the class word why_user names.
+fn denied_class(question_event: &Value) -> Option<String> {
+    let data = question_event.get("data")?;
+    let rules = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| crate::question_ladder::rules_for(&cwd).ok())
+        .unwrap_or_default();
+    [data.get("class"), data.get("why_user")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(crate::question_ladder::class_word)
+        .find(|class| rules.user_only(class))
+        .map(str::to_string)
 }
 
 /// The asker's own question: the full session-id pair decides, the
@@ -933,9 +981,24 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .get("quote")
                 .and_then(Value::as_str)
                 .is_some_and(|quote| !quote.trim().is_empty());
+            // The rung holder answers the row the ladder placed on it, unless
+            // the class is one only the user rules.
+            let holds_rung = rung_holder(question_event)
+                .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
+            let denied = denied_class(question_event);
+            if holds_rung && req.answer.is_some() {
+                if let Some(class) = denied {
+                    refused += 1;
+                    answer.lines.push(format!(
+                        "outstanding: refused: {qid} is class {class}, which questions.rules.deny keeps from agents. Nothing was closed. Climb it: fno inbox outstanding climb {qid} --evidence \"<what you checked>\""
+                    ));
+                    continue;
+                }
+            }
             let allowed = if req.answer.is_some() {
                 (authority == Some("chat_attested") && quoted)
                     || (own_ask && authority == Some("role") && caller.teamed)
+                    || (holds_rung && matches!(authority, Some("role") | Some("agent")))
             } else {
                 own_ask
             };

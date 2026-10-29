@@ -25,6 +25,7 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
         "reindex" => Some(run_reindex(rest)),
         "clear" => Some(run_clear_cmd(rest)),
         "ask" => Some(run_ask(rest)),
+        "climb" => Some(crate::question_ladder::run_climb(rest)),
         _ => None,
     }
 }
