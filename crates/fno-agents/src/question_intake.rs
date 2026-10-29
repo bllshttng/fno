@@ -32,6 +32,9 @@ pub const QUESTION_CAP: usize = 2000;
 pub const QUESTION_TEMPLATE: &str = "\
 ---
 recommend: 1
+class: <public-surface, gate-override, irreversible, money-security, outside-reach, taste or law-change>
+deadline: <RFC 3339 time, such as 2026-11-01T09:00:00Z>
+on_silence: <take-recommended or wait>
 ---
 
 <the question, one line>
@@ -56,6 +59,12 @@ Option 1, <the reason in one line>.
 
 ## Not thought through
 <the part you did not check>
+
+## Tried
+<what you did to answer it yourself>
+
+## Evidence
+<what you read or ran, with the command or file>
 
 ## Reversible
 costly
@@ -91,6 +100,10 @@ pub struct IntakeRequest {
     pub asker: Option<String>,
     #[serde(default)]
     pub laws: Vec<crate::law_match::LawRow>,
+    /// The ladder rung the asker placed the row on (`question_ladder::place`);
+    /// absent is the user rung.
+    #[serde(default)]
+    pub rung: Option<Value>,
     pub storage_root: PathBuf,
     /// The machine index, resolved by the Python side (`paths.questions_jsonl()`)
     /// so the caller's sandbox stays the single path authority. Falls back to
@@ -149,6 +162,9 @@ pub struct IntakeAnswer {
     pub position: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<usize>,
+    /// The rung the recorded row carries; the asker wakes its holder.
+    #[serde(skip)]
+    pub rung: Option<Value>,
 }
 
 impl IntakeAnswer {
@@ -163,6 +179,7 @@ impl IntakeAnswer {
             truncated: false,
             position: None,
             total: None,
+            rung: None,
         }
     }
 }
@@ -499,36 +516,68 @@ fn run_append(req: &IntakeRequest) -> IntakeAnswer {
         .index_path
         .clone()
         .unwrap_or_else(|| questions_path(&AgentsHome::from_env()));
-    let line = match serde_json::to_string(event) {
-        Ok(l) => l,
-        Err(e) => {
-            answer.lines.push(format!(
-                "outstanding: failed to record question: could not serialize the envelope: {e}"
-            ));
+    if let Err((journaled, e)) = append_question_event(event, &journal_path, &index) {
+        answer.lines.push(e);
+        answer.exit_code = 1;
+        if journaled {
+            answer.qid = Some(qid);
+        } else {
             answer.refusal = Some("write".to_string());
-            answer.exit_code = 1;
-            return answer;
         }
-    };
-    if let Err(e) = crate::event_store::append_envelope(&journal_path, &line, None) {
-        answer.lines.push(format!(
-            "outstanding: failed to append question to project journal: {e}"
-        ));
-        answer.refusal = Some("write".to_string());
-        answer.exit_code = 1;
-        return answer;
-    }
-    if let Err(e) = crate::provider_cap::append_questions_row(&index, event) {
-        answer.lines.push(format!(
-            "outstanding: recorded {qid} in the project journal, but the recall index \
-write failed: {e}. Run `fno inbox outstanding reindex`."
-        ));
-        answer.qid = Some(qid);
-        answer.exit_code = 1;
         return answer;
     }
     answer.qid = Some(qid);
     answer
+}
+
+/// Who asked, for the card: the handle and session the row already carries,
+/// plus the registry name and harness and this machine's host name.
+fn origin_of(req: &IntakeRequest, home: &AgentsHome) -> Option<Value> {
+    let session = req.session_id.as_deref().filter(|s| !s.is_empty())?;
+    let rows = crate::state::load_registry(&home.registry_json())
+        .map(|r| r.entries)
+        .unwrap_or_default();
+    let row = crate::lead_state::find_by_session(&rows, session, None);
+    Some(json!({
+        "handle": req.asker,
+        "session_id": session,
+        "name": row.map(|r| r.name.clone()),
+        "harness": row.and_then(|r| r.harness.clone()),
+        "host": crate::claims::hostname(),
+    }))
+}
+
+/// The dual write of one `operator_question` envelope: the project journal
+/// (durable, fatal) then the recall index. `Err` carries whether the journal
+/// half landed, and the line naming the failure.
+pub(crate) fn append_question_event(
+    event: &Value,
+    journal_path: &Path,
+    index: &Path,
+) -> Result<(), (bool, String)> {
+    let line = serde_json::to_string(event).map_err(|e| {
+        (
+            false,
+            format!(
+                "outstanding: failed to record question: could not serialize the envelope: {e}"
+            ),
+        )
+    })?;
+    crate::event_store::append_envelope(journal_path, &line, None).map_err(|e| {
+        (
+            false,
+            format!("outstanding: failed to append question to project journal: {e}"),
+        )
+    })?;
+    crate::provider_cap::append_questions_row(index, event).map_err(|e| {
+        (
+            true,
+            format!(
+                "outstanding: recorded the question in the project journal, but the recall \
+index write failed: {e}. Run `fno inbox outstanding reindex`."
+            ),
+        )
+    })
 }
 
 pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
@@ -558,10 +607,10 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
 
     // The law refusal first: a live law on this subject means the question
     // is never recorded (fail-closed, d-0fa92eb9) - unless the question's
-    // closing action is the retraction of that law. A law-lane row refuses
-    // every non-operator retraction (`retract_decision`), so "act on the
-    // law; do not ask" has no agent-side remedy there and the user is the
-    // only door. The closing action may ride the pin line (`--ask`), so it
+    // closing action is the retraction of a superuser law. A session
+    // retracts a chat_attested law itself, but a superuser law refuses every
+    // session retraction, so "act on the law; do not ask" has no agent-side
+    // remedy there and the user is the only door. The closing action may ride the pin line (`--ask`), so it
     // scans with the question, not after it.
     let closing_text = match req.ask.as_deref() {
         Some(ask) if !ask.trim().is_empty() => format!("{}\n{}", req.question, ask),
@@ -603,8 +652,9 @@ fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}
             if req.subject.is_none() {
                 line += " If the question is about another subject, name it with --subject.";
             }
-            line += " If the question asks to retract this law, name its id in the \
-question and ask again: only the user may record that retraction.";
+            line += " If the question asks to retract this law: a chat-attested law \
+retracts from your session with `fno inbox law retract <id> --reason <why> --quote \"<the user's words>\"`; \
+for a superuser law, name its id in the question and ask again.";
             answer.lines.push(line);
         }
         if let Some(refusal) = law_verdict.nearby_refusal {
@@ -944,6 +994,36 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     if let Some(n) = node {
         data.insert("node".into(), json!(n));
     }
+    // A rung row that lacks the card fields would read not-ready once its
+    // lease ran out and never reach the board, so it skips the ladder.
+    if let Some(rung) = &req.rung {
+        let missing: Vec<&str> = [
+            ("class", &parsed.class),
+            ("deadline", &parsed.deadline),
+            ("on_silence", &parsed.on_silence),
+            ("## Tried", &parsed.tried),
+        ]
+        .into_iter()
+        .filter(|(_, v)| v.trim().is_empty())
+        .map(|(k, _)| k)
+        .collect();
+        if missing.is_empty() {
+            data.insert("rung".into(), rung.clone());
+            answer.rung = Some(rung.clone());
+        } else {
+            answer.lines.push(format!(
+                "outstanding: this question goes to the user's board, not to your lead: \
+                 the ladder needs {}. Add them to the question file to ask your lead first.",
+                missing.join(", ")
+            ));
+        }
+    }
+    if !parsed.class.trim().is_empty() {
+        data.insert("class".into(), json!(parsed.class.trim()));
+    }
+    if let Some(origin) = origin_of(req, home) {
+        data.insert("origin".into(), origin);
+    }
     if !req.blocks.is_empty() {
         data.insert("blocks".into(), json!(req.blocks));
     }
@@ -1002,6 +1082,10 @@ already waits ({}). Answer it or clear it; do not ask twice.",
         ("reversible", &parsed.reversible),
         ("cost_if_wrong", &parsed.cost_if_wrong),
         ("meanwhile", &parsed.meanwhile),
+        ("tried", &parsed.tried),
+        ("evidence", &parsed.evidence),
+        ("deadline", &parsed.deadline),
+        ("on_silence", &parsed.on_silence),
     ] {
         if !value.trim().is_empty() {
             context.insert(key.into(), json!(value.trim()));
@@ -1235,6 +1319,7 @@ mod tests {
             cwd: Some("/repo/fno".to_string()),
             asker: Some("worker-1".to_string()),
             laws: vec![],
+            rung: None,
             storage_root: root.to_path_buf(),
             index_path: None,
             journal_path: None,
@@ -1495,6 +1580,54 @@ stops
     }
 
     #[test]
+    fn a_ladder_ask_carries_its_rung_and_stays_off_the_board() {
+        let rung = json!({"level": "lead", "holder_session": "s-lead", "holder_name": "tomas"});
+        // A file without the card fields skips the ladder: the row goes to
+        // the board, and the asker learns which fields the ladder needs.
+        let home = tmp_home("ladder-bare");
+        let root = tmp_root("ladder-bare");
+        let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.rung = Some(rung.clone());
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        assert!(answer.rung.is_none());
+        assert!(answer
+            .lines
+            .iter()
+            .any(|l| l.contains("class, deadline, on_silence, ## Tried")));
+        assert_eq!(
+            crate::outstanding::fold_questions(&journal_text(&root)).len(),
+            1
+        );
+
+        let laddered = QUESTION_FILE
+            .replace(
+                "recommend: 1\n",
+                "recommend: 1\nclass: taste\ndeadline: 2026-11-01T09:00:00Z\non_silence: wait\n",
+            )
+            .replace(
+                "## Reversible",
+                "## Tried\nread the grant table\n\n## Reversible",
+            );
+        let home = tmp_home("ladder-rung");
+        let root = tmp_root("ladder-rung");
+        let mut r = req(&laddered, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.rung = Some(rung);
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        assert!(answer.rung.is_some());
+        let journal = journal_text(&root);
+        assert!(
+            journal.contains("\"holder_session\":\"s-lead\""),
+            "{journal}"
+        );
+        // Fresh, the row sits with the lead: the board fold does not list it.
+        assert!(crate::outstanding::fold_questions(&journal).is_empty());
+    }
+
+    #[test]
     fn a_question_missing_a_readiness_section_is_refused_and_named() {
         // The gate mirrors the mux's readiness read: each stripped section
         // is named in the refusal, nothing is recorded, no variant exits 0.
@@ -1556,6 +1689,7 @@ stops
             decision: Some("a placeholder ruling".to_string()),
             ts: Some("2026-08-29T19:20:10Z".to_string()),
             lane: Some("law".to_string()),
+            authority_source: Some("operator".to_string()),
         }
     }
 
@@ -1624,8 +1758,9 @@ stops
     #[test]
     fn a_question_to_retract_a_law_is_accepted() {
         // The closing action is a retraction, and the retract gate refuses
-        // every non-operator authority on a law-lane row: the ask is the
-        // only door, so neither the law refusal nor decide_yourself fires.
+        // every session on a superuser law: the ask is the only door, so
+        // neither the law refusal nor decide_yourself fires. A chat_attested
+        // law retracts from the session, so the same ask is refused.
         let home = tmp_home("retract-accept");
         let root = tmp_root("retract-accept");
         let question = QUESTION_FILE
@@ -1641,6 +1776,23 @@ stops
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
         assert!(journal_text(&root).lines().count() == 1);
+
+        let chat_root = tmp_root("retract-chat");
+        let mut chat = req(&question, &chat_root);
+        chat.subject = Some("junk-law".to_string());
+        chat.node = Some("x-aaaa".to_string());
+        chat.laws = vec![crate::law_match::LawRow {
+            authority_source: Some("chat_attested".to_string()),
+            ..junk_law()
+        }];
+        let answer = run_intake(&chat, &home);
+        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
+        assert!(
+            answer.lines.iter().any(|l| l.contains("d-junk0001")),
+            "{:?}",
+            answer.lines
+        );
+        assert_eq!(journal_text(&chat_root).lines().count(), 0);
     }
 
     #[test]
@@ -1741,6 +1893,7 @@ stops
             decision: Some("stay strict".to_string()),
             ts: Some("2026-09-01T00:00:00Z".to_string()),
             lane: Some("law".to_string()),
+            authority_source: None,
         }];
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 2);
