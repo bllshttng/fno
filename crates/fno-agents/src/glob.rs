@@ -79,6 +79,7 @@ mod tests {
         assert!(fnmatch("d1", "d[0-9]"));
         assert!(!fnmatch("dx", "d[0-9]"));
         assert!(fnmatch("dx", "d[!0-9]"));
-        assert!(fnmatch("a[b", "a["));
+        assert!(fnmatch("a[b", "a[b"));
+        assert!(!fnmatch("a[b", "a["));
     }
 }
