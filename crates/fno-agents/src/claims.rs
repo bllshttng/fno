@@ -2625,6 +2625,10 @@ mod tests {
         unp.pid_unavailable = true;
         unp.schema_version = 2;
         assert_eq!(basis_of(&unp, &probe_pid), basis::PID_UNAVAILABLE);
+        // The same record claimed on another machine names the machine.
+        unp.host = "another-host.example".into();
+        unp.machine_id = Some("6219ED9C-0000-0000-0000-000000000000".into());
+        assert_eq!(basis_of(&unp, &probe_pid), basis::OFFHOST);
     }
 
     #[test]

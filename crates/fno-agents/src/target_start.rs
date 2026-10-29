@@ -1,6 +1,6 @@
 //! `fno do target start`: the native port of the Python command. One-command
 //! cold-start: resolve the node, run the pre-allocation gates (hold,
-//! containment, foreign holder), `fno worktree ensure` the isolated tree,
+//! containment, foreign holder), `fno agents workspace worktree ensure` the isolated tree,
 //! bind an existing manifest (idempotent re-run / successor takeover), then
 //! call the native init by its door with the flags forwarded - `--steps`
 //! included, which the Python command never carried (the driver set
@@ -393,7 +393,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     let ambient_harness = crate::claims::resolve_identity().1;
     let mut ensure_cmd = Command::new("fno");
     ensure_cmd
-        .args(["worktree", "ensure", "--repo"])
+        .args(["agents", "workspace", "worktree", "ensure", "--repo"])
         .arg(&repo_root)
         .args(["--name", &name]);
     if let Some(harness) = ambient_harness.filter(|h| !h.is_empty()) {
