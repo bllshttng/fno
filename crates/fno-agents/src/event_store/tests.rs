@@ -694,13 +694,13 @@ fn query_filters_narrow_and_identity_columns_match() {
 
 #[test]
 fn envelope_node_indexes_and_data_node_wins() {
-    let top = json!({"ts": "2026-10-28T12:00:00Z", "type": "task_started",
+    let top = json!({"ts": "2026-10-28T12:00:00Z", "v": 1, "type": "task_started",
         "source": "target", "node": "x-aaaa", "task": "1.1", "data": {}});
     assert_eq!(
         extract_identity(&top.to_string()).node_id.as_deref(),
         Some("x-aaaa")
     );
-    let both = json!({"ts": "2026-10-28T12:00:00Z", "type": "task_done",
+    let both = json!({"ts": "2026-10-28T12:00:00Z", "v": 1, "type": "task_done",
         "source": "target", "node": "x-bbbb", "data": {"node": "x-aaaa"}});
     assert_eq!(
         extract_identity(&both.to_string()).node_id.as_deref(),
