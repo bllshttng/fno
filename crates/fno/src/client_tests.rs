@@ -512,12 +512,11 @@ fn xf331_rows() {
     let mut agent = focus_agent(11);
     agent.exited = true;
     view.layout.agents.push(agent);
-    // (x-c5ee) The squad's only agent is exited -> it would default LiveOnly
-    // and hide the row; force Expanded so the exited focus row still paints.
-    view.set_squad_view(1, SectionView::Expanded);
+    view.set_squad_view(1, SectionView::Expanded); // an exited lone agent would hide
     let frame = view.compose();
     let cols = frame.cols as usize;
-    let cell = frame.cells[2 * cols + 1]; // display row 1 after the pin gutter: the exited focus row
+    let row = &frame.cells[2 * cols..3 * cols]; // display row 1: the exited focus row
+    let cell = *row.iter().find(|c| c.c != ' ').unwrap(); // its first mark, past the gutter
     assert_eq!(
         cell.flags & cell_flags::INVERSE,
         0,
@@ -6995,7 +6994,7 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
     // BOLD, and NOT dimmed even though it is external - the accent beats the
     // external DIM.
     let eb_row = lines.iter().position(|l| l.contains("z-extblk")).unwrap();
-    let eb_status: String = frame.cells[eb_row * cols..eb_row * cols + 5]
+    let eb_status: String = frame.cells[eb_row * cols + 1..eb_row * cols + 6]
         .iter()
         .map(|c| c.c)
         .collect();
@@ -7004,12 +7003,12 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
         "external-blocked: the attention word: {eb_status:?}"
     );
     assert_eq!(
-        frame.cells[eb_row * cols].fg,
+        frame.cells[eb_row * cols + 1].fg,
         LATTICE_ACCENT,
         "external-blocked: amber accent"
     );
     assert_eq!(
-        frame.cells[eb_row * cols].flags & cell_flags::DIM,
+        frame.cells[eb_row * cols + 1].flags & cell_flags::DIM,
         0,
         "external-blocked: attention is never dimmed"
     );
