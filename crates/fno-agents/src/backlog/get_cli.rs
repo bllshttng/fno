@@ -298,17 +298,41 @@ fn serve_loaded(
     let row = rows.remove(0);
     let out = stamped_annotated(row, archived);
     if render.trace {
-        println!("{}", trace_out(&out));
+        println!("{}", trace_out(&connection, &out));
         return 0;
     }
     println!("{}", render_out(&out, render));
     0
 }
 
-/// The `--trace` arm: the fold over this node.
-fn trace_out(row: &Value) -> String {
+/// The `--trace` arm: the fold over this node, plus one fold per direct
+/// child when the node has children. A child that fails to load is named,
+/// never dropped.
+fn trace_out(connection: &rusqlite::Connection, row: &Value) -> String {
     let shared = super::trace::Shared::load();
-    py_json_pretty(&super::trace::fold(row, &shared.gather(row)))
+    let mut inputs = shared.gather(row);
+    for child in row
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(cid) = child.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let folded = match super::nodes::load_with_claim(connection, cid, None, None) {
+            Ok(Some(node)) => {
+                let node = node.to_json();
+                super::trace::fold(&node, &shared.gather(&node))
+            }
+            Ok(None) => {
+                json!({"node": cid, "header": {}, "errors": {}, "reason": "child not loaded"})
+            }
+            Err(e) => json!({"node": cid, "header": {}, "errors": {}, "reason": e}),
+        };
+        inputs.children.push(folded);
+    }
+    py_json_pretty(&super::trace::fold(row, &inputs))
 }
 
 /// The rows the single-node defaults pass can visit for this node: every

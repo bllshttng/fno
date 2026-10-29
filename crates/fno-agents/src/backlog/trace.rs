@@ -1,4 +1,6 @@
-//! `fno backlog get <id> --trace`: one node's history as JSON.
+//! `fno backlog get <id> --trace`: one node's history as JSON, with the
+//! questions that wait on the user. An epic adds one row per child and a
+//! header over them.
 //!
 //! The fold writes nothing. Phases come from the graph `sessions` rows, the
 //! review span from review_invocation and review_attestation rows whose
@@ -53,6 +55,9 @@ pub(crate) struct Inputs {
     pub(crate) cost_usd: Option<f64>,
     pub(crate) tasks: Result<Vec<PlanTask>, String>,
     pub(crate) scans: HashMap<String, SessionScan>,
+    pub(crate) questions: Result<Vec<crate::outstanding::Question>, String>,
+    /// Folded child traces; non-empty makes this an epic trace.
+    pub(crate) children: Vec<Value>,
 }
 
 impl Default for Inputs {
@@ -63,6 +68,8 @@ impl Default for Inputs {
             cost_usd: None,
             tasks: Ok(Vec::new()),
             scans: HashMap::new(),
+            questions: Ok(Vec::new()),
+            children: Vec::new(),
         }
     }
 }
@@ -212,7 +219,18 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         .filter_map(|s| str_of(s, "session_id"))
         .collect();
     let (tasks, tasks_reason) = task_rows(inp, &execute);
-    json!({
+    let (waiting, waiting_reason) = match &inp.questions {
+        Ok(questions) => (
+            questions
+                .iter()
+                .filter(|q| q.node.as_deref() == Some(id) || q.blocks.iter().any(|b| b == id))
+                .map(question_row)
+                .collect::<Vec<Value>>(),
+            Value::Null,
+        ),
+        Err(e) => (Vec::new(), json!(e)),
+    };
+    let mut out = json!({
         "node": id,
         "title": str_of(node, "title"),
         "status": str_of(node, "status"),
@@ -221,7 +239,80 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         "tasks": tasks,
         "tasks_reason": tasks_reason,
         "errors": errors_value(totals, reasons),
-    })
+        "waiting": waiting,
+        "waiting_reason": waiting_reason,
+    });
+    if !inp.children.is_empty() {
+        rollup(&mut out, &inp.children);
+    }
+    out
+}
+
+/// A question row with its numbered options. An option is stored as a JSON
+/// object string (`{"n":1,"text":...}`) or as plain text.
+fn question_row(q: &crate::outstanding::Question) -> Value {
+    let options: Vec<Value> = q
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, raw)| match serde_json::from_str::<Value>(raw) {
+            Ok(Value::Object(o)) => json!({
+                "n": o.get("n").and_then(Value::as_u64).unwrap_or(i as u64 + 1),
+                "text": o.get("text").and_then(Value::as_str).unwrap_or(raw),
+            }),
+            _ => json!({"n": i + 1, "text": raw}),
+        })
+        .collect();
+    json!({"id": q.id, "question": q.question, "subject": q.subject, "ts": q.ts, "options": options})
+}
+
+/// An epic's rows: one per child with its span and error totals. The epic
+/// header spans the earliest child start to the latest child end, and its
+/// totals add every child's.
+fn rollup(out: &mut Value, children: &[Value]) {
+    let mut totals = Map::new();
+    let mut reasons = Map::new();
+    merge(&mut totals, &mut reasons, &out["errors"]);
+    let at = |v: &Value| v.as_str().and_then(ms_of);
+    let mut starts: Vec<i64> = at(&out["header"]["started_at"]).into_iter().collect();
+    let mut ends: Vec<i64> = at(&out["header"]["ended_at"]).into_iter().collect();
+    let mut cost: Option<f64> = out["header"]["cost_usd"].as_f64();
+    let mut rows = Vec::new();
+    for child in children {
+        let h = &child["header"];
+        starts.extend(at(&h["started_at"]));
+        ends.extend(at(&h["ended_at"]));
+        if let Some(c) = h["cost_usd"].as_f64() {
+            cost = Some(cost.unwrap_or(0.0) + c);
+        }
+        merge(&mut totals, &mut reasons, &child["errors"]);
+        let mut row = json!({
+            "id": child["node"],
+            "title": child["title"],
+            "status": child["status"],
+            "started_at": h["started_at"],
+            "ended_at": h["ended_at"],
+            "errors": child["errors"],
+            "waiting": child["waiting"].as_array().map(Vec::len).unwrap_or(0),
+        });
+        if at(&h["started_at"]).is_none() {
+            row["state"] = json!("not started");
+        }
+        rows.push(row);
+    }
+    let (start, end) = (starts.iter().min(), ends.iter().max());
+    let header = &mut out["header"];
+    header["started_at"] = json!(start.map(|m| stamp(*m)));
+    header["ended_at"] = json!(end.map(|m| stamp(*m)));
+    header["duration_s"] = json!(start.zip(end).map(|(s, e)| (e - s).max(0) / 1000));
+    header["cost_usd"] = json!(cost);
+    if cost.is_some() {
+        if let Some(h) = header.as_object_mut() {
+            h.remove("cost_reason");
+        }
+    }
+    out["errors"] = errors_value(totals, reasons);
+    out["children"] = Value::Array(rows);
 }
 
 fn sum_scans(sessions: &[&Value], inp: &Inputs, f: fn(&SessionScan) -> Option<u64>) -> Option<u64> {
@@ -593,12 +684,14 @@ fn scan_claude(raw: &str) -> SessionScan {
     scan
 }
 
-/// Shared reads for one trace call: the store, the ledger and each session
-/// transcript, read once even when an epic folds many children.
+/// Shared reads for one trace call: the store, the questions, the ledger
+/// and each session transcript, read once even when an epic folds many
+/// children.
 pub(crate) struct Shared {
     events_path: PathBuf,
     store_ok: Result<(), String>,
     reviews: Vec<Value>,
+    questions: Result<Vec<crate::outstanding::Question>, String>,
     ledger: super::scorecard::LedgerIndex,
     transcripts: crate::context_run::SessionTranscripts,
     /// One scan per session: an epic's children often share a lead session.
@@ -619,7 +712,11 @@ impl Shared {
                 .collect()
         })
         .unwrap_or_default();
+        let home = crate::paths::AgentsHome::from_env();
+        let questions =
+            crate::outstanding::read_open_questions(&crate::provider_cap::questions_path(&home));
         Shared {
+            questions,
             events_path,
             store_ok,
             reviews,
@@ -686,6 +783,8 @@ impl Shared {
             cost_usd: super::scorecard::node_cost_usd(node, id, &self.ledger),
             tasks,
             scans,
+            questions: self.questions.clone(),
+            children: Vec::new(),
         }
     }
 }
@@ -789,6 +888,45 @@ mod tests {
             t["tasks"][1]["errors"]["unread"]["tool_errors"],
             "parallel tasks share this window"
         );
+    }
+
+    #[test]
+    fn waiting_rows_and_the_epic_span_cover_started_children_only() {
+        let q = crate::outstanding::Question {
+            id: "q-1".into(),
+            question: "Merge?".into(),
+            node: Some("x-1".into()),
+            options: vec![r#"{"n":1,"text":"Approve"}"#.into(), "Changes".into()],
+            ..Default::default()
+        };
+        let inp = Inputs {
+            questions: Ok(vec![q]),
+            ..Default::default()
+        };
+        let t = fold(&json!({"id": "x-1"}), &inp);
+        assert_eq!(
+            t["waiting"][0]["options"],
+            json!([{"n": 1, "text": "Approve"}, {"n": 2, "text": "Changes"}])
+        );
+
+        let child = |id: &str, start: Option<&str>| {
+            let sessions: Vec<Value> = start
+                .map(|s| session("execute", "s", Some(s), Some("2026-10-05T00:00:00Z")))
+                .into_iter()
+                .collect();
+            fold(&json!({"id": id, "sessions": sessions}), &Inputs::default())
+        };
+        let epic = Inputs {
+            children: vec![
+                child("x-a", Some("2026-10-04T00:00:00Z")),
+                child("x-b", None),
+            ],
+            ..Default::default()
+        };
+        let e = fold(&json!({"id": "x-e"}), &epic);
+        assert_eq!(e["header"]["started_at"], "2026-10-04T00:00:00Z");
+        assert_eq!(e["header"]["ended_at"], "2026-10-05T00:00:00Z");
+        assert_eq!(e["children"][1]["state"], "not started");
     }
 
     #[test]
