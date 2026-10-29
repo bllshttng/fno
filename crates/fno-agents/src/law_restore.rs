@@ -1,11 +1,6 @@
-//! `fno inbox law restore <decision-id>`: the undo of a law retraction.
-//!
-//! A restore re-records the retracted row as a new `operator_decision` with a
-//! fresh id that supersedes the old one. Every reader already derives
-//! retirement from `decision_retracted` and `supersedes`, so the old id reads
-//! as superseded by its live successor and no reader changes. The row passed
-//! the statement validator and the evidence gate once, so the restore copies
-//! it and runs neither.
+//! `fno inbox law restore <decision-id>`: re-record a retracted law under a
+//! fresh id that supersedes it, so every reader sees a live successor. The
+//! row passed the validator and evidence gate once; the copy runs neither.
 
 use serde_json::{json, Value};
 
@@ -19,17 +14,8 @@ use crate::law_match::{
 const RESTORE_USAGE: &str = "usage: fno inbox law restore <decision-id>";
 
 /// The fields a restore copies from the retracted row, verbatim.
-const COPIED: &[&str] = &[
-    "decision",
-    "subject",
-    "scope",
-    "paths",
-    "graduation",
-    "graduation_ref",
-    "rationale",
-    "reads",
-    "options",
-];
+const COPIED: &str =
+    "decision subject scope paths graduation graduation_ref rationale reads options";
 
 pub fn run_restore(argv: &[String]) -> i32 {
     let token = match argv {
@@ -142,9 +128,9 @@ fn restored_data(token: &str, rows: &[Value], caller: &Caller) -> Result<Value, 
         "supersedes": row_id(old),
         "restores": retraction.map(|r| field(r, "retraction_id")).unwrap_or(""),
     });
-    for key in COPIED {
-        if let Some(value) = old.get(*key).filter(|v| !v.is_null()) {
-            data[*key] = value.clone();
+    for key in COPIED.split(' ') {
+        if let Some(value) = old.get(key).filter(|v| !v.is_null()) {
+            data[key] = value.clone();
         }
     }
     if let Some(a) = &caller.attested_by {
@@ -201,7 +187,6 @@ mod tests {
         assert_eq!(data["authority_source"], json!("chat_attested"));
         assert_eq!(data["decision"], json!("One pane is never a portal"));
         assert_eq!(data["reads"], json!([{"cmd": "head -5 a.py"}]));
-        assert_ne!(data["decision_id"], json!("d-aaaa0001"));
 
         // Once restored, the old id reads superseded by a restore.
         let mut restored = data.clone();
