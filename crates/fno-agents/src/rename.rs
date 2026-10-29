@@ -300,11 +300,22 @@ pub fn receipt(name: &str, result: &Value) -> Option<String> {
 /// and pane lanes host panes, not thread addresses, so they are not here.
 const TITLE_PUSH_HARNESSES: &[&str] = &["claude", "codex", "opencode"];
 
+/// The statuses a quiet-capable row holds. A title push types at the
+/// prompt line, so a mid-turn row (Busy) is excluded: its quiet gate can
+/// hold the delivery for its full wait, a budget the mux rename gesture
+/// does not have. Mail keeps the wider drive-eligible set; a title is not
+/// urgent enough to wait out a turn.
+const TITLE_PUSH_STATUSES: &[crate::AgentStatus] = &[
+    crate::AgentStatus::Ready,
+    crate::AgentStatus::Idle,
+    crate::AgentStatus::Live,
+];
+
 /// The harness-title push a completed rename owes the session: the native
-/// rename command when the row's harness declares one, the session can
-/// receive a turn, and its reported title still differs. `None` names no
+/// rename command when the row's harness declares one, the session is
+/// quiet-capable, and its reported title still differs. `None` names no
 /// push: no harness session, no delivery lane, no native verb, the title
-/// already matches, or the row cannot receive a turn.
+/// already matches, or the row is not quiet-capable.
 pub(crate) fn title_push(row: &RegistryEntry, new_name: &str) -> Option<String> {
     row.harness_session_id
         .as_deref()
@@ -313,7 +324,7 @@ pub(crate) fn title_push(row: &RegistryEntry, new_name: &str) -> Option<String> 
         .harness
         .as_deref()
         .filter(|harness| !harness.is_empty())?;
-    if !TITLE_PUSH_HARNESSES.contains(&harness) || !row.status.is_drive_eligible() {
+    if !TITLE_PUSH_HARNESSES.contains(&harness) || !TITLE_PUSH_STATUSES.contains(&row.status) {
         return None;
     }
     crate::lead_checkin::title_rename_command(harness, new_name, row.harness_title.as_deref())
@@ -496,6 +507,14 @@ mod tests {
         let mut r = row("wren", "sess-1");
         r.harness_title = Some("quill".into());
         r.status = crate::AgentStatus::Exited;
+        assert_eq!(title_push(&r, "wren"), None);
+    }
+
+    #[test]
+    fn title_push_skips_a_mid_turn_row_whose_quiet_gate_would_hold_the_delivery() {
+        let mut r = row("wren", "sess-1");
+        r.harness_title = Some("quill".into());
+        r.status = crate::AgentStatus::Busy;
         assert_eq!(title_push(&r, "wren"), None);
     }
 
