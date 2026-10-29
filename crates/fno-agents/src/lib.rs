@@ -597,6 +597,7 @@ pub mod spawn_seam;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;
+pub(crate) mod stacked_base_stamp;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
