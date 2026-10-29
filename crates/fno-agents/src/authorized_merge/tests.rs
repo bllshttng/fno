@@ -54,6 +54,9 @@ struct Fake {
     /// Answer for the REST recovery call alone, so a test can fail the
     /// `gh pr merge` and let the retry succeed.
     gh_recovery_ok: Option<bool>,
+    /// Per-endpoint answers: the first key the joined argv contains wins,
+    /// ahead of `gh_output`.
+    gh_routes: Vec<(String, String)>,
     gh_calls: RefCell<Vec<Vec<String>>>,
     /// Simulated merge-slot claim: `None` is free, `Some(pr)` is held.
     slot: RefCell<Option<u64>>,
@@ -398,6 +401,14 @@ impl Probes for Fake {
             if let Some(ok) = self.gh_recovery_ok {
                 return Ok((ok, String::new()));
             }
+        }
+        let joined = args.join(" ");
+        if let Some((_, out)) = self
+            .gh_routes
+            .iter()
+            .find(|(k, _)| joined.contains(k.as_str()))
+        {
+            return Ok((true, out.clone()));
         }
         Ok((self.gh_ok, self.gh_output.clone()))
     }
@@ -1997,6 +2008,35 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     // A push after the user looked holds again.
     let pushed: String = "b".repeat(40);
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
+    // A main merge or a test-only commit leaves the PR's paint patch alone:
+    // the look carries. Only a hunk header moved, and a test file changed.
+    let paint = |hunk: &str, line: &str| {
+        format!(r#"["crates/fno/src/client/theme.rs","modified","{hunk}\n-old\n+{line}","s1"]"#)
+    };
+    let test_file = r#"["cli/tests/test_x.py","modified","@@ -1 +1 @@\n+t","s2"]"#;
+    let routes = |now: String| {
+        vec![
+            ("/commits".to_string(), format!("{head}\n{pushed}\n")),
+            (".base.ref".to_string(), "main\n".to_string()),
+            (
+                format!("compare/main...{head}"),
+                paint("@@ -1,2 +1,2 @@", "new"),
+            ),
+            (
+                format!("compare/main...{pushed}"),
+                format!("{now}\n{test_file}"),
+            ),
+        ]
+    };
+    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "new"));
+    assert!(
+        crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none(),
+        "an unchanged paint patch carries the look to the new head"
+    );
+    // A real paint change at the new head holds.
+    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "newer"));
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
+    fake.gh_routes.clear();
     // The page archives into done/; the approval must not lapse.
     let donedir = qdir.join("done");
     std::fs::create_dir_all(&donedir).unwrap();
@@ -2159,6 +2199,41 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .into_bytes(),
     );
     assert!(!clears(&fake, &head));
+    // A board answer: the rationale cites the answered page instead of chat.
+    // The page names the PR and no head; the row carries the head.
+    fake.decisions_stdout = Some(
+        row(
+            "Approved: PR 7 at <head> as built",
+            "user answered q-board7 on the board",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    let qdir = crate::escalation::questions_dir(&tmp);
+    std::fs::create_dir_all(&qdir).unwrap();
+    let page = |status: &str, answer: &str| {
+        format!(
+            "---\nquestion_id: q-board7\nstatus: {status}\ntitle: May PR 7 merge?\n\
+             answer: {answer}\n---\nbody\n"
+        )
+    };
+    // No page, an open page, or a rejecting answer: held.
+    assert!(!clears(&fake, &head));
+    for (status, answer) in [("open", "''"), ("answered", "2. Hold for changes")] {
+        std::fs::write(qdir.join("q-board7.md"), page(status, answer)).unwrap();
+        assert!(!clears(&fake, &head), "{status} {answer} must hold");
+    }
+    // The approving answer clears, at the row's head only.
+    std::fs::write(
+        qdir.join("q-board7.md"),
+        page("answered", "Approve as shown"),
+    )
+    .unwrap();
+    assert!(clears(&fake, &head));
+    assert!(!clears(&fake, &pushed));
+    std::fs::remove_file(qdir.join("q-board7.md")).unwrap();
     // The gate is closed again with the empty index the Fake serves by
     // default; the head-scoped grant text stays out of a held detail.
     fake.decisions_stdout = None;

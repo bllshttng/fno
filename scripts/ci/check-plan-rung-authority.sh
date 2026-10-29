@@ -393,7 +393,11 @@ crates/fno-agents/src/observer/mod.rs
 crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
-crates/fno-agents/src/verify_advise.rs"
+crates/fno-agents/src/verify_advise.rs
+crates/fno-agents/src/wave.rs"
+# wave.rs reads a plan's Execution Strategy and `## Changes` headings for its
+# task list; it never extracts a plan status, so the shelling rule does not
+# apply to it.
 # plan_carry.rs reads a plan body only to hash it and copy it across hosts;
 # it never parses frontmatter, so the shelling rule does not apply to it.
 # scoreboard/plan_join.rs reads plan frontmatter (ACs, probes, ownership) to
@@ -587,6 +591,15 @@ while IFS= read -r reader; do
                 | grep -vE '\.get\("status"\)' \
                 | grep -vE '"status":[[:space:]]*"unjoined",' \
                 | grep -vE '"status"\.to_string\(\)' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/wave.rs" ]; then
+        # wave's "status" literals are `git status --porcelain` argv for the
+        # wave worktree checks; its plan read is the task list, never `status:`.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\["status", "--porcelain"' \
                 || true
         )"
     fi

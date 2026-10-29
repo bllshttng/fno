@@ -88,14 +88,15 @@ def warn_if_note_is_long(text, *, stream=None):
 
     from fno import rust_binary
 
-    try:
-        from fno.config import load_settings
-
-        cap = load_settings().style.word_cap.encounter
-    except Exception:  # noqa: BLE001 - an advisory must never break a write
+    # The style door's receipt carries the configured cap beside the count,
+    # so this advisory never reads config in-process. A door failure or an
+    # unreadable receipt stays silent: an advisory must never break a write.
+    receipt = rust_binary.style_receipt_advisory(text)
+    if receipt is None:
         return
-    count = rust_binary.style_word_count(text)
-    if count <= cap * 4:
+    cap = receipt.get("word_cap")
+    count = receipt.get("word_count")
+    if not isinstance(cap, int) or not isinstance(count, int) or count <= cap * 4:
         return
     print(
         f"note appended ({count} words). Long evidence belongs in a plan doc; "

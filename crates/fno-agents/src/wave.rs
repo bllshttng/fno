@@ -13,6 +13,7 @@ use std::process::{Command, Output};
 #[derive(Clone, Debug)]
 pub(crate) struct Task {
     pub(crate) id: String,
+    pub(crate) title: String,
     surfaces: Vec<String>,
     blocked_by: Vec<String>,
     verify: String,
@@ -29,6 +30,8 @@ struct Wave {
 pub(crate) struct Strategy {
     waves: Vec<Wave>,
     pub(crate) tasks: BTreeMap<String, Task>,
+    /// Task ids in the order the plan lists them.
+    pub(crate) order: Vec<String>,
 }
 
 fn value_text(value: &Value) -> Option<String> {
@@ -92,6 +95,7 @@ pub(crate) fn parse_strategy(path: &Path) -> Result<Strategy, String> {
     let root: Value = serde_yaml_ng::from_str(source)
         .map_err(|e| format!("Execution Strategy YAML is invalid: {e}"))?;
     let mut tasks = BTreeMap::new();
+    let mut order = Vec::new();
     if let Some(rows) = mapping_value(&root, "tasks").and_then(Value::as_sequence) {
         for row in rows {
             let Some(id) = mapping_value(row, "id").and_then(value_text) else {
@@ -105,10 +109,15 @@ pub(crate) fn parse_strategy(path: &Path) -> Result<Strategy, String> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            let title = mapping_value(row, "title")
+                .and_then(value_text)
+                .unwrap_or_default();
+            order.push(id.clone());
             tasks.insert(
                 id.clone(),
                 Task {
                     id,
+                    title,
                     surfaces,
                     blocked_by,
                     verify,
@@ -134,7 +143,54 @@ pub(crate) fn parse_strategy(path: &Path) -> Result<Strategy, String> {
             });
         }
     }
-    Ok(Strategy { waves, tasks })
+    Ok(Strategy {
+        waves,
+        tasks,
+        order,
+    })
+}
+
+/// One plan task, in plan order.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PlanTask {
+    pub(crate) id: String,
+    pub(crate) title: String,
+}
+
+/// The plan's tasks: the Execution Strategy task list, else the numbered
+/// `### N. title` headings of a flat plan's `## Changes`.
+pub(crate) fn plan_tasks(plan: &Path) -> Result<Vec<PlanTask>, String> {
+    if let Ok(strategy) = parse_strategy(plan) {
+        if !strategy.order.is_empty() {
+            return Ok(strategy
+                .order
+                .iter()
+                .map(|id| PlanTask {
+                    id: id.clone(),
+                    title: strategy.tasks[id].title.clone(),
+                })
+                .collect());
+        }
+    }
+    let text = std::fs::read_to_string(plan).map_err(|e| format!("plan not read: {e}"))?;
+    let mut in_changes = false;
+    let out: Vec<PlanTask> = text
+        .lines()
+        .filter_map(|line| {
+            if line.starts_with("## ") {
+                in_changes = line.trim() == "## Changes";
+            }
+            let rest = line.strip_prefix("### ").filter(|_| in_changes)?;
+            let (n, title) = rest.split_once(". ")?;
+            let numbered = !n.is_empty() && n.chars().all(|c| c.is_ascii_digit() || c == '.');
+            let (id, title) = (n.to_string(), title.trim().to_string());
+            numbered.then_some(PlanTask { id, title })
+        })
+        .collect();
+    if out.is_empty() {
+        return Err("plan lists no tasks".to_string());
+    }
+    Ok(out)
 }
 
 /// The number of waves the plan's Execution Strategy declares, or None when

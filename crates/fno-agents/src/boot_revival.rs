@@ -388,7 +388,7 @@ pub(crate) fn plan(
 
 /// One revival through the canonical re-entry plan: the listing lists the
 /// job, so the plan is `claude respawn <job id>`.
-fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
+pub(crate) fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
     let plan = match crate::reentry::resolve_reentry(
         &home.registry_json(),
         name,

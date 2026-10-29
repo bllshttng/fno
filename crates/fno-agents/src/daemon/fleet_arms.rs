@@ -46,6 +46,7 @@ pub(super) struct FleetArms {
     otlp_export: crate::otlp_export::Arm,
     burn_watch: crate::burn_watch::Arm,
     watch_expiry: crate::watch_expiry::Arm,
+    node_liveness: crate::node_liveness::Arm,
     ci_cadence: crate::ci_cadence::Arm,
     main_revert: crate::main_revert::Arm,
     ci_tier: crate::ci_tier::Arm,
@@ -140,6 +141,7 @@ impl FleetArms {
             otlp_export: crate::otlp_export::Arm::new(opts.agents_config_cwd.clone()),
             burn_watch: crate::burn_watch::Arm::default(),
             watch_expiry: crate::watch_expiry::Arm::default(),
+            node_liveness: crate::node_liveness::Arm::default(),
             ci_cadence: crate::ci_cadence::Arm::default(),
             main_revert: crate::main_revert::Arm::default(),
             ci_tier: crate::ci_tier::Arm::default(),
@@ -348,6 +350,8 @@ impl FleetArms {
         crate::otlp_export::maybe_tick(&self.otlp_export, ctx.home.clone());
         crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
         crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());
+        // Every claimed node has a live run, a wait or a recovery task.
+        crate::node_liveness::maybe_tick(&self.node_liveness, ctx.home.clone());
         // The post-push CI reader: each pushed head is read at 1, 15, 30
         // and 55 minutes; a real red cancels its runs and wakes the pusher.
         crate::ci_cadence::maybe_tick(&self.ci_cadence, ctx.home.clone());

@@ -1,0 +1,1 @@
+[doctor] post-merge: unconfigured - config.post_merge.parking_lot_path is unset; the /fno:ship pr merged prose+triage will be skipped. Set it with: fno config setup post-merge

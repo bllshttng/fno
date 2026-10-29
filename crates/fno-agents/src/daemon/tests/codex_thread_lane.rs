@@ -6,7 +6,7 @@
 //! dispatch family. Shared helpers (`tmp_home`, `rentry`, `test_ctx`, ...)
 //! stay in the parent tests module and resolve through the glob.
 use super::*;
-use crate::daemon::codex_thread_resume::recover_codex_threads;
+use crate::daemon::codex_thread_resume::{codex_thread_recovery_candidate, recover_codex_threads};
 
 // `thread_entry` stays in the parent tests module (used by the plan_reconcile
 // liveness family too, not only this one) and reaches here through the glob.
@@ -457,6 +457,9 @@ async fn recovery_refuses_a_codex_thread_row_whose_cwd_is_gone() {
             entry.harness_session_id = Some(live_id.to_string());
             entry.codex_session_id = Some(live_id.to_string());
             entry.pid = None;
+            // A fresh real-turn stamp: the recovery gate (x-a8ef) resumes
+            // only rows whose last turn is recent.
+            entry.last_message_at = Some(now_rfc3339_like());
             registry.entries.push(entry);
         })
         .unwrap();
@@ -502,6 +505,9 @@ async fn recovery_refuses_a_codex_thread_row_whose_cwd_is_gone() {
             entry.harness_session_id = Some(gone_id.to_string());
             entry.codex_session_id = Some(gone_id.to_string());
             entry.pid = None;
+            // A fresh real-turn stamp: the recovery gate (x-a8ef) resumes
+            // only rows whose last turn is recent.
+            entry.last_message_at = Some(now_rfc3339_like());
             registry.entries.push(entry);
         })
         .unwrap();
@@ -550,6 +556,170 @@ async fn recovery_refuses_a_codex_thread_row_whose_cwd_is_gone() {
             .filter(|f| f["method"] == "thread/resume")
             .count();
         assert_eq!(resumes, 0, "the fake must receive no resume frame");
+        std::fs::remove_dir_all(home.root()).ok();
+    })
+    .await;
+}
+
+// --- startup-recovery freshness (x-a8ef) -----------------------------------
+
+/// The candidate gate's freshness contract at the predicate level: a row
+/// with no recent real-turn stamp is never a recovery candidate, whatever
+/// its stored status claims. Absent, unparseable and future stamps fail
+/// closed (stale), the same contract `InsideLegReport::received_within`
+/// runs. Every case builds a full resume identity; only the stamps differ.
+#[test]
+fn recovery_candidate_requires_a_recent_real_turn_stamp() {
+    let now = crate::claude_ask::now_epoch_secs();
+    // The fixture's created_at is the unparseable "t", so the stamp under
+    // test is the only freshness evidence on each row.
+    let candidate = |mutate: &dyn Fn(&mut RegistryEntry)| {
+        let mut entry = thread_entry("t-freshness", AgentStatus::Live, None);
+        mutate(&mut entry);
+        codex_thread_recovery_candidate(&entry, now)
+    };
+    assert!(
+        candidate(&|e| {
+            e.last_message_at = Some(now_rfc3339_like());
+        }),
+        "a row whose last turn just completed resumes"
+    );
+    assert!(
+        !candidate(&|e| {
+            e.last_message_at = Some("2026-09-01T00:00:00Z".into());
+        }),
+        "a month-idle row never resumes at startup: that stamp is age, not life"
+    );
+    assert!(
+        !candidate(&|e| {
+            e.last_message_at = None;
+            e.inside_leg = None;
+            e.created_at = "t".into();
+        }),
+        "absent and unparseable stamps fail closed: no evidence is not freshness"
+    );
+    assert!(
+        candidate(&|e| {
+            e.created_at = now_rfc3339_like();
+        }),
+        "a young row mid-first-turn (fresh created_at, no turn stamps) resumes"
+    );
+    assert!(
+        !candidate(&|e| {
+            e.last_message_at = Some("2026-09-01T00:00:00".into());
+        }),
+        "an unparseable last_message_at fails closed: with no other fresh stamp the row is not a candidate"
+    );
+    assert!(
+        !candidate(&|e| {
+            e.last_message_at = Some("2099-01-01T00:00:00Z".into());
+        }),
+        "a future stamp is corruption, not freshness: it must not resume the row"
+    );
+    let mut exited = thread_entry("t-exited", AgentStatus::Exited, None);
+    exited.last_message_at = Some(now_rfc3339_like());
+    assert!(
+        !codex_thread_recovery_candidate(&exited, now),
+        "the non-terminal gate outranks freshness: an Exited row never auto-resumes"
+    );
+}
+
+/// Recovery skips a codex thread row whose last real turn is stale (x-a8ef):
+/// no resume frame leaves, no handle is hosted, and the row settles Orphaned
+/// instead of reading Live forever. The on-demand resume seam is untouched:
+/// the same row still resumes the moment someone actually asks.
+#[tokio::test(flavor = "current_thread")]
+async fn recovery_skips_a_codex_thread_row_whose_last_turn_is_stale() {
+    let stale_id = "0198f313-0000-7000-8000-00000000c0de";
+    let behavior = crate::codex_fake_daemon::Behavior::quick().with_thread_id(stale_id);
+    let received = std::sync::Arc::clone(&behavior.received);
+    with_fake_codex_daemon(behavior, async {
+        let home = tmp_home("codex-recover-stale");
+        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
+        let worktree = home.root().join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        state::update_registry(&home.registry_json(), |registry| {
+            let mut entry = thread_entry("t-stale", AgentStatus::Live, None);
+            entry.cwd = worktree.to_string_lossy().into_owned();
+            entry.project_root = entry.cwd.clone();
+            entry.harness_session_id = Some(stale_id.to_string());
+            entry.codex_session_id = Some(stale_id.to_string());
+            entry.pid = None;
+            entry.last_message_at = Some("2026-09-01T00:00:00Z".into());
+            registry.entries.push(entry);
+        })
+        .unwrap();
+        recover_codex_threads(&ctx).await;
+
+        let registry = load_registry_offloaded(home.registry_json())
+            .await
+            .expect("registry readable");
+        let entry = registry.find("t-stale").cloned().unwrap();
+        assert_eq!(
+            entry.status,
+            AgentStatus::Orphaned,
+            "a skipped stale row settles Orphaned: resumable, never Live-forever"
+        );
+        assert!(
+            !ctx.codex_threads.lock().await.contains_key("t-stale"),
+            "no handle for a stale row"
+        );
+        let resumes = received
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|f| f["method"] == "thread/resume")
+            .count();
+        assert_eq!(resumes, 0, "no resume frame may leave for a stale row");
+
+        // The on-demand seam is untouched: the same row resumes when asked.
+        let handle = ensure_codex_thread_handle(&ctx, &entry)
+            .await
+            .expect("an on-demand ask still resumes the stale row");
+        drop(handle);
+        ctx.codex_threads.lock().await.remove("t-stale");
+        std::fs::remove_dir_all(home.root()).ok();
+    })
+    .await;
+}
+
+/// A young row that never completed a turn (fresh created_at, no turn
+/// stamps) still resumes: it was mid-first-flight when the daemon died, and
+/// its silence is age, not death (x-a8ef).
+#[tokio::test(flavor = "current_thread")]
+async fn recovery_resumes_a_young_row_that_never_turned() {
+    let young_id = "0198f313-0000-7000-8000-00000000d1ce";
+    let behavior = crate::codex_fake_daemon::Behavior::quick().with_thread_id(young_id);
+    with_fake_codex_daemon(behavior, async {
+        let home = tmp_home("codex-recover-young");
+        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
+        let worktree = home.root().join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        state::update_registry(&home.registry_json(), |registry| {
+            let mut entry = thread_entry("t-young", AgentStatus::Live, None);
+            entry.cwd = worktree.to_string_lossy().into_owned();
+            entry.project_root = entry.cwd.clone();
+            entry.harness_session_id = Some(young_id.to_string());
+            entry.codex_session_id = Some(young_id.to_string());
+            entry.pid = None;
+            entry.created_at = now_rfc3339_like();
+            registry.entries.push(entry);
+        })
+        .unwrap();
+        recover_codex_threads(&ctx).await;
+
+        let registry = load_registry_offloaded(home.registry_json())
+            .await
+            .expect("registry readable");
+        assert_eq!(
+            registry.find("t-young").map(|entry| entry.status),
+            Some(AgentStatus::Live),
+            "a young row resumes and reads Live"
+        );
+        assert!(
+            ctx.codex_threads.lock().await.contains_key("t-young"),
+            "a young row holds a hosted handle"
+        );
         std::fs::remove_dir_all(home.root()).ok();
     })
     .await;

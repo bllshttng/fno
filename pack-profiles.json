@@ -41,6 +41,7 @@
     "hooks/inject-project-vision.sh",
     "hooks/join-partition-write-guard.sh",
     "hooks/law-stage-inject.sh",
+    "hooks/rules-dispatch.sh",
     "hooks/lead-delegation-guard.sh",
     "hooks/merge-capture.sh",
     "hooks/node-bind-prompt-submit.sh",

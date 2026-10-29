@@ -404,6 +404,16 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     // The node is a tap target where it is painted.
     let mut agents = lead_and_worker();
     agents[1].node = Some("x-4310".into());
+    // The node lives in another repo: the tap opens its stored URL.
+    agents[1].bindings = vec![crate::proto::SessionBinding {
+        node: "x-4310".into(),
+        pr: agents[1].pr,
+        pr_url: Some("https://github.com/acme/web/pull/42".into()),
+        pr_count: 1,
+        source: "spawn".into(),
+        state: "open".into(),
+        inferred: true,
+    }];
     let mut v = card_view(agents);
     v.term = (30, 140);
     v.sideline_width = 80;
@@ -428,9 +438,16 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
         .expect("PR painted") as u16
         + 1;
     assert!(
-        matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(url)) if url.ends_with("/pull/42")),
+        matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(url)) if url == "https://github.com/acme/web/pull/42"),
         "PR tap opens its own link: {line:?}"
     );
+    // No stored URL: the tap opens no PR, never a guessed home repo.
+    v.layout.agents[1].bindings[0].pr_url = None;
+    assert!(
+        !matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(_))),
+        "{line:?}"
+    );
+    v.layout.agents[1].bindings[0].pr_url = Some("https://github.com/acme/web/pull/42".into());
     let node_span =
         card_line::node_span(&v.layout.agents[1], v.sideline_paint_w() - 1).expect("node range");
     let pr_span =

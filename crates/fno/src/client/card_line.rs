@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::proto::{AgentRow, BacklogCard};
+use crate::proto::{AgentRow, BacklogCard, SessionBinding};
 
 /// Keep node and PR adjacent at the panel's right edge, separated by ` · `.
 pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
@@ -34,27 +34,30 @@ pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
     }
 }
 
-/// The other-bindings count that follows the PR text: ` +N PRs` when any
-/// other binding carries a pr, else ` +N open` when another binding stays
-/// open. Empty when the row drives nothing else. `N` counts the other
-/// bindings; wire order is the fold's strongest-first order, the wire
-/// carrying no ts.
+/// The count that follows the PR text, which names the newest PR of the
+/// row's node: ` +N PRs` counts every other PR, the node's older ones and
+/// those of the row's other bindings; else ` +N open` when another binding
+/// stays open. Empty when there is nothing else. Wire order is the fold's
+/// strongest-first order, the wire carrying no ts.
 pub(super) fn binding_suffix(a: &AgentRow) -> String {
-    let others = a
+    let is_current = |b: &&SessionBinding| Some(b.node.as_str()) == a.node.as_deref();
+    let older_own = a
         .bindings
         .iter()
-        .filter(|b| Some(b.node.as_str()) != a.node.as_deref())
-        .count();
-    if others == 0 {
-        return String::new();
-    }
-    let others_with_pr = a
+        .find(is_current)
+        .map_or(0, |b| b.pr_count.saturating_sub(1) as usize);
+    let others = a.bindings.iter().filter(|b| !is_current(b)).count();
+    let other_prs: usize = a
         .bindings
         .iter()
-        .filter(|b| Some(b.node.as_str()) != a.node.as_deref() && b.pr.is_some())
-        .count();
-    if others_with_pr > 0 {
-        format!(" +{others_with_pr} PRs")
+        .filter(|b| !is_current(b) && b.pr.is_some())
+        .map(|b| (b.pr_count as usize).max(1))
+        .sum();
+    let prs = older_own + other_prs;
+    if prs > 0 {
+        format!(" +{prs} PRs")
+    } else if others == 0 {
+        String::new()
     } else {
         let open = a
             .bindings
@@ -470,6 +473,8 @@ mod binding_display_tests {
         SessionBinding {
             node: node.into(),
             pr,
+            pr_url: None,
+            pr_count: 0,
             source: "claim".into(),
             state: state.into(),
             inferred,
@@ -503,6 +508,13 @@ mod binding_display_tests {
             binding("x-oth2", None, "merged", false),
         ]);
         assert_eq!(binding_suffix(&b), " +2 open");
+        // The chip names the node's newest PR; its older PRs count too.
+        let mut own = binding("x-cur", Some(4107), "open", false);
+        own.pr_count = 10;
+        assert_eq!(binding_suffix(&row(vec![own.clone()])), " +9 PRs");
+        let mut other = binding("x-oth1", Some(100), "open", false);
+        other.pr_count = 2;
+        assert_eq!(binding_suffix(&row(vec![own, other])), " +11 PRs");
     }
 
     #[test]

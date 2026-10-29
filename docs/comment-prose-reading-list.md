@@ -19,7 +19,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.6x | 39 | 15 | `cli/src/fno/config/__init__.py:3793` | `load_settings` |
 | 2.44x | 44 | 18 | `cli/src/fno/graph/cli.py:6491` | `_cascade_close_contained` |
 | 2.42x | 29 | 12 | `cli/src/fno/agents/rust_runtime.py:597` | `_scrub_account_auth_at_seam` |
-| 2.42x | 29 | 12 | `cli/src/fno/graph/_intake.py:487` | `_settings_candidate_paths` |
 | 2.35x | 47 | 20 | `cli/src/fno/agents/format.py:28` | `serialize_entry` |
 | 2.33x | 28 | 12 | `cli/src/fno/target_cli.py:297` | `_resolve_plan_pointer` |
 | 2.32x | 58 | 25 | `cli/src/fno/agents/registry.py:1164` | `restamp_harness_session_id` |
@@ -91,7 +90,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.45x | 27 | 11 | `cli/src/fno/agents/harness_map.py:179` | `normalize_command` |
 | 2.44x | 44 | 18 | `cli/src/fno/graph/cli.py:6491` | `_cascade_close_contained` |
 | 2.42x | 29 | 12 | `cli/src/fno/agents/rust_runtime.py:597` | `_scrub_account_auth_at_seam` |
-| 2.42x | 29 | 12 | `cli/src/fno/graph/_intake.py:487` | `_settings_candidate_paths` |
 | 2.4x | 12 | 5 | `cli/src/fno/agents/harnesses/claude.py:1514` | `claude_stop` |
 | 2.4x | 12 | 5 | `cli/src/fno/agents/self_stamp.py:35` | `stamp_from` |
 | 2.38x | 19 | 8 | `cli/src/fno/graph/statuses.py:40` | `_rung_to_graph_status` |
@@ -226,7 +224,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.56x | 14 | 9 | `cli/src/fno/adapters/providers/usage.py:167` | `_is_active_slot_occupant` |
 | 1.56x | 14 | 9 | `cli/src/fno/events/__main__.py:66` | `_collect_event_types` |
 | 1.55x | 65 | 42 | `cli/src/fno/backlog/advance.py:199` | `selection_guards` |
-| 1.55x | 17 | 11 | `cli/src/fno/cli.py:295` | `_check_migration` |
 | 1.54x | 20 | 13 | `cli/src/fno/events/__init__.py:712` | `phase_0_decision` |
 | 1.54x | 37 | 24 | `cli/src/fno/pr_watch/__init__.py:89` | `decide` |
 | 1.53x | 29 | 19 | `cli/src/fno/agents/model_routing.py:667` | `materialize_route_settings` |
@@ -272,7 +269,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.43x | 10 | 7 | `cli/src/fno/graph/execution.py:406` | `_serial_fallback` |
 | 1.43x | 10 | 7 | `cli/src/fno/paths.py:507` | `evals_history` |
 | 1.43x | 10 | 7 | `cli/src/fno/review/findings_parser.py:93` | `_strip_code_fence` |
-| 1.43x | 20 | 14 | `cli/src/fno/setup/migrate_paths.py:32` | `detect_install` |
 | 1.43x | 10 | 7 | `cli/src/fno/worker/review.py:271` | `_warn_unknown_agent_keys` |
 | 1.42x | 17 | 12 | `cli/src/fno/adapters/providers/loader.py:110` | `_extract_accounts_block` |
 | 1.42x | 17 | 12 | `cli/src/fno/plan/brief.py:423` | `filter_acs_for_task` |
@@ -334,7 +330,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.29x | 9 | 7 | `cli/src/fno/test_target_init_plan_backfill.py:193` | `test_dangling_node_plan_is_not_backfilled` |
 | 1.29x | 9 | 7 | `cli/src/fno/turn_attribution.py:136` | `summarize_per_provider` |
 | 1.28x | 23 | 18 | `cli/src/fno/drive_authority.py:98` | `emit_operator_initiated` |
-| 1.28x | 37 | 29 | `cli/src/fno/graph/_intake.py:612` | `project_root_from_settings` |
 | 1.27x | 14 | 11 | `cli/src/fno/adapters/providers/test_loader.py:1363` | `test_extra_field_on_AgentProviderBinding_rejected` |
 | 1.27x | 14 | 11 | `cli/src/fno/agents/dispatch.py:1915` | `_pick_account_env` |
 | 1.27x | 19 | 15 | `cli/src/fno/agents/model_routing.py:352` | `env_scrub_warning` |
@@ -474,7 +469,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.06x | 19 | 18 | `cli/src/fno/bus/cursor.py:90` | `advance_cursor` |
 | 1.06x | 17 | 16 | `cli/src/fno/doctor.py:395` | `_rust_report` |
 | 1.06x | 35 | 33 | `cli/src/fno/done/cli.py:271` | `_apply_rollup` |
-| 1.06x | 34 | 32 | `cli/src/fno/graph/_intake.py:533` | `detect_project_from_settings` |
 | 1.05x | 22 | 21 | `cli/src/fno/agents/harnesses/claude.py:1858` | `mcp_channel_reachable` |
 | 1.04x | 25 | 24 | `cli/src/fno/graph/cli.py:6301` | `_cascade_close_parents` |
 | 1.04x | 25 | 24 | `cli/src/fno/relay/roundtrip.py:737` | `submit_via_control_reply` |
