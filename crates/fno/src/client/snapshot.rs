@@ -407,7 +407,10 @@ fn stamp_no_image_protocol(out: &Path) -> Result<(), String> {
     // Signature (8) + IHDR: length (4), type (4), data (13), crc (4).
     let at = 33;
     if png.len() < at || &png[12..16] != b"IHDR" {
-        return Err(format!("stamp {}: not a png with IHDR first", out.display()));
+        return Err(format!(
+            "stamp {}: not a png with IHDR first",
+            out.display()
+        ));
     }
     let (key, text) = NO_IMAGE_PROTOCOL_STAMP;
     let mut body = b"tEXt".to_vec();

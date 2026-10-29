@@ -478,11 +478,17 @@ fn sheet(imgs: &[&image::DynamicImage], px: (u32, u32)) -> image::DynamicImage {
     let slot = px.0 / imgs.len().max(1) as u32;
     let pad = 8;
     for (i, img) in imgs.iter().enumerate() {
-        let thumb = img.resize(
+        let (w, h) = (
             slot.saturating_sub(pad).max(1),
             px.1.saturating_sub(pad).max(1),
-            image::imageops::FilterType::Triangle,
         );
+        // The fast integer thumbnail shrinks; only a shot smaller than its
+        // slot pays for a filtered resize up.
+        let thumb = if img.width() > w || img.height() > h {
+            img.thumbnail(w, h)
+        } else {
+            img.resize(w, h, image::imageops::FilterType::Triangle)
+        };
         let x = i as u32 * slot + (slot.saturating_sub(thumb.width())) / 2;
         let y = px.1.saturating_sub(thumb.height()) / 2;
         image::imageops::overlay(&mut canvas, &thumb.to_rgba8(), i64::from(x), i64::from(y));
@@ -1056,7 +1062,8 @@ pub(super) fn mouse(view: &mut View, rep: crate::mouse::MouseReport) {
     let Some(d) = view.question_detail.as_mut() else {
         return;
     };
-    if d.expanded || !matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+    // The notes input owns the keyboard, so a click never hides it.
+    if d.expanded || d.free.is_some() || !matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
         return;
     }
     let Some(r) = d.strip_at.get() else {
