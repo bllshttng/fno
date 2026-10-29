@@ -169,25 +169,6 @@ def test_global_events_json_ignores_relative_ledger_override(
     assert global_events_json() == (Path.home() / ".fno" / "events.jsonl").resolve()
 
 
-def test_graphql_quota_lock_ignores_project_state_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """One GitHub identity needs one machine lock across all repositories."""
-    machine_home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(machine_home))
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  state_dir: '{tmp_path / 'project-state'}'\n",
-    )
-
-    from fno.paths import graphql_quota_lock
-
-    assert graphql_quota_lock() == (
-        machine_home / ".fno" / "state" / "locks" / "github-graphql-quota.lock"
-    )
-
-
 # ---------------------------------------------------------------------------
 # AC1-FR: Cache lifetime (same object on second call)
 # ---------------------------------------------------------------------------

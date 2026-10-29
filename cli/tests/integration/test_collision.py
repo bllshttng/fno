@@ -48,6 +48,8 @@ def tmp_graph(tmp_path, monkeypatch) -> Path:
     # Seam readers resolve fno.paths.graph_json at call time; pin the
     # resolver to the same hermetic file (module-attr pins do not reach it).
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
+    # The native triage door is a child process; it reads the store root from env.
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
     return g
 
 

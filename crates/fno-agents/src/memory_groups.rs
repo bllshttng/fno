@@ -82,7 +82,7 @@ pub fn classify(command: &str) -> Option<Group> {
 /// argv with no socket token keeps its pool reading.
 pub fn spare_claimed(argv: &[&str]) -> bool {
     argv.iter()
-        .rposition(|t| *t == "--bg-spare")
+        .rposition(|t| *t == "bg-spare" || *t == "--bg-spare")
         .and_then(|at| argv.get(at + 1))
         .filter(|sock| sock.ends_with(".claim.sock"))
         .is_some_and(|sock| !std::path::Path::new(sock).exists())

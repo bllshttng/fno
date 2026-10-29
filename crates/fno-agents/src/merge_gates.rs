@@ -1142,15 +1142,18 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
 /// The text of every live role row on this node that approves this PR, at
 /// any head: one decisions read, so a caller can test many heads with it.
 fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -> Vec<String> {
+    // Subject-scoped and uncapped: a capped newest-first read of the whole
+    // lane loses an approval once enough other rows land after it.
     let args: Vec<String> = [
         "backlog",
         "decisions",
+        node,
         "--lane",
         "unattributed",
         "--state",
         "all",
         "--limit",
-        "200",
+        "0",
         "--json",
     ]
     .iter()
