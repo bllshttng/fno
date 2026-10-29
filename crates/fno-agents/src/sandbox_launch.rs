@@ -206,6 +206,19 @@ pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, Stri
             ),
         )
     })?;
+    // The daemon reads the key with its own env; a different `FNO_CONFIG`
+    // there answers an unmounted plan, and no recreate can fix that.
+    if launch.provider != SandboxProvider::Devcontainer.as_str() {
+        return Err((
+            2,
+            format!(
+                "the daemon reads [sandbox] provider = \"{}\" for {}, the spawn reads \"devcontainer\"; \
+                 restart the daemon under the same config",
+                launch.provider,
+                cwd.display()
+            ),
+        ));
+    }
     let run = |argv: Vec<String>| {
         Command::new(&argv[0])
             .args(&argv[1..])
@@ -313,13 +326,16 @@ fn box_argv(
     mut argv: Vec<String>,
     env: &[(String, String)],
 ) -> Result<Vec<String>, String> {
+    // The dispatch cwd is canonical; compare argv paths in the same form.
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let inside = canonical(worktree);
     // The box resolves the harness on its own PATH.
     if let Some(name) = Path::new(&argv[0]).file_name() {
         argv[0] = name.to_string_lossy().into_owned();
     }
     if let Some(host) = argv[1..].iter().find(|a| {
         let p = Path::new(a.as_str());
-        p.is_absolute() && !p.starts_with(worktree) && p.exists()
+        p.is_absolute() && p.exists() && !canonical(p).starts_with(&inside)
     }) {
         return Err(format!(
             "the command names {host}, a host path outside the worktree the box cannot see"

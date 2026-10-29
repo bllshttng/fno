@@ -1224,7 +1224,7 @@ pub fn state_root_grant_gate(
 ) -> Result<(), Refusal> {
     let sock = crate::paths::AgentsHome::from_env_opt()
         .as_ref()
-        .map(|h| h.supervisor_sock());
+        .map(crate::client::client_sock);
     state_root_grant_gate_decide(harness, substrate, roots, sock.as_deref()).inspect_err(|r| {
         eprintln!("{}", verdict_line(r));
     })

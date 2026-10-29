@@ -52,4 +52,5 @@ The image must carry `fno-agents` and each harness binary the box runs. The spaw
 - Pane, thread and cloud spawns refuse under `devcontainer`.
 - Some macOS Docker hosts do not pass a host unix socket through a bind mount. OrbStack 29.8.2 is one. The in-box probe refuses on such a host.
 - Codex sessions push no transcript. The hook is claude-only.
+- Every box mounts the same socket directory. A box can read another spawn's env file in the short time before that spawn's box deletes it. An exec that fails before the box starts leaves the file on the host. Each file is 0600 in a 0700 directory under the agents home, so no other host user can read it.
 - The Python config loader still notes `sandbox.provider` as an unmodeled key. The Rust loader knows it.
