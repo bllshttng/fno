@@ -1608,6 +1608,11 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         action: "toggle-split-opens",
         key: b't',
     },
+    // `.` pins, the sideline selector's own pin byte.
+    MenuKeyBinding {
+        action: "pin-row",
+        key: b'.',
+    },
 ];
 
 /// The one resolver both menu-scope projections read: the binding registered

@@ -24,7 +24,7 @@ The view wears the panel slots every fno view wears: body text, bold for emphasi
 
 ## Keys
 
-Use `j` and `k` or the arrows to move in the explorer. The cursor opens each lead it reaches. Use `h` and `l` to change tab, or `1` to `5` to pick one. Press `u` or Backspace to go up from a seat to its lead, its machine and the fleet. PageUp and PageDown scroll the right pane. `F` toggles full screen, `?` shows the keys and Esc returns to Agents. The tab persists across client restarts.
+Use `j` and `k` or the arrows to move in the explorer. The cursor opens each lead it reaches. Use `h` and `l` to change tab, or `1` to `5` to pick one. Press `u` or Backspace to go up from a seat to its lead, its machine and the fleet. PageUp and PageDown scroll the right pane. `F` toggles full screen, `?` shows the keys and Esc returns to Agents. `W` opens the web bridge's `/command` page in the browser. With no live bridge, the notice names the `fno mux serve --web` command to start one. Over ssh, a bridge bound to loopback opens nothing, and the notice names `--bind 0.0.0.0`. The tab persists across client restarts.
 
 Enter on the fleet, a machine or a lead moves to the next row, so Enter on a lead opens its first seat. Enter on a seat attaches it. Space peeks, `x` stops and `P` opens the portal picker. A tap selects a row, a tab or a graph box. A second tap on the selected seat acts like Enter.
 
