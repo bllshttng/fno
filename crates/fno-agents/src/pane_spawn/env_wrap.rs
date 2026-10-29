@@ -87,7 +87,7 @@ pub fn mesh_env_pairs(
         pairs.push(format!("FNO_HARNESS_SESSION_ID={}", sid.trim()));
     }
     // Worker parity with the gh delegate: the PATH pair rides only when the
-    // delegating wrapper published one (`worker_environment`, PATH differs
+    // delegating wrapper published one (the front door's gh proxy, PATH differs
     // only under FNO_REAL_GH).
     if let Ok(real) = std::env::var("FNO_REAL_GH") {
         if let Some(dir) = std::path::Path::new(&real).parent() {

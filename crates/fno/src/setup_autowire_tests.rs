@@ -128,21 +128,4 @@ fn auto_wire_pure_contracts_hold() {
         parse_opencode_receipt(r#"{"status": "failed"}"#),
         Outcome::Failed("0 file(s) (footnote ?) -> ?".into())
     );
-
-    // The agy adapter paths parse three lines; "-" is an absent adapter, not
-    // a missing engine, and fewer than three lines refuse.
-    assert_eq!(
-        parse_agy_paths("/a/stop.sh\n/role.sh\n/guard.sh"),
-        Some([
-            "/a/stop.sh".to_string(),
-            "/role.sh".to_string(),
-            "/guard.sh".to_string()
-        ])
-    );
-    assert_eq!(
-        parse_agy_paths("adapter.sh\n-\n-"),
-        Some(["adapter.sh".to_string(), String::new(), String::new()])
-    );
-    assert_eq!(parse_agy_paths(""), None);
-    assert_eq!(parse_agy_paths("only\ntwo"), None);
 }

@@ -2103,18 +2103,26 @@ fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
     if status {
         let mut installed = dest.is_file();
         if installed {
-            if let Some(src) = extension_src {
-                installed = files_byte_equal(Path::new(src), &dest).unwrap_or(false);
+            if let Some(src) = extension_src
+                .map(PathBuf::from)
+                .or_else(default_pi_extension_src)
+            {
+                installed = files_byte_equal(&src, &dest).unwrap_or(false);
             }
         }
         print_pi_receipt(installed, &dest, agent_dir_source, &skills, json);
         return 0;
     }
-    let Some(src) = extension_src else {
-        eprintln!("plugin install pi: --extension-src <path> is required (or pass --status)");
+    let Some(src) = extension_src
+        .map(PathBuf::from)
+        .or_else(default_pi_extension_src)
+    else {
+        eprintln!(
+            "plugin install pi: no plugin tree carries the pi extension; pass --extension-src <path> (or --status)"
+        );
         return 2;
     };
-    let src_path = Path::new(src);
+    let src_path = src.as_path();
     if !src_path.is_file() {
         eprintln!(
             "plugin install pi: extension source {} is not a file",
@@ -2538,6 +2546,20 @@ fn grok_receipt_for(reachability: GrokReachability) -> String {
     }
 }
 
+/// The pi extension shipped in the plugin tree: the session's plugin root,
+/// then the filtered stage. `None` when neither carries it.
+pub(crate) fn default_pi_extension_src() -> Option<PathBuf> {
+    const REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
+    let stage = state_root()
+        .join("plugin-stage")
+        .join(Profile::Full.stage_dir());
+    crate::provider::plugin_root()
+        .into_iter()
+        .chain(std::iter::once(stage))
+        .map(|root| root.join(REL))
+        .find(|path| path.is_file())
+}
+
 /// Whether footnote's loop artifacts reach `harness` on THIS machine: the
 /// machine fact behind the capability row. `None` names a harness with no
 /// fno-installed loop gate (a native row whose loop closes through the
@@ -2577,10 +2599,13 @@ pub(crate) fn loop_install_probe(
             let dest = crate::pi::pi_agent_dir()
                 .join("extensions")
                 .join("footnote.ts");
+            let src = extension_src
+                .map(Path::to_path_buf)
+                .or_else(default_pi_extension_src);
             let mut installed = dest.is_file();
             if installed {
-                if let Some(src) = extension_src {
-                    installed = files_byte_equal(Path::new(src), &dest).unwrap_or(false);
+                if let Some(src) = src {
+                    installed = files_byte_equal(&src, &dest).unwrap_or(false);
                 }
             }
             Some(if installed {

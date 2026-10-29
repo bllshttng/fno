@@ -74,8 +74,8 @@ enum Role {
     ConfigSchema(Vec<String>),
     /// The native `config` doors (get, history, build-dir,
     /// assert-subagent-budget, status-sinks, active-backlog, plugin install,
-    /// set, unset, rm). One classify and one dispatch in `config_cli::`; the
-    /// doctor command stays beside the setup family's engine.
+    /// doctor, set, unset, rm). One classify and one dispatch in
+    /// `config_cli::`; the doctor body sits in `config_doctor::`.
     ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).

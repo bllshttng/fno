@@ -55,6 +55,10 @@ READ_ALLOWLIST = (
     "crates/fno-agents/src/backlog/mod.rs",
     "crates/fno-agents/src/backlog/note_history.rs",
     "crates/fno-agents/src/backlog/note_migrate.rs",
+    # The config doctor's state-roots report: graph_json() builds the
+    # default store path it reports roots against, a path builder that
+    # never opens the store.
+    "crates/fno/src/config_doctor/mod.rs",
     # The state lane's fixture writer: populate_state_profile builds a
     # synthetic graph.json inside the session sandbox for the state canary.
     # It never opens the real store.
