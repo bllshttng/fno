@@ -278,13 +278,15 @@ pub fn boxed(cmd: Command) -> Command {
     };
     let mut argv = vec![cmd.get_program().to_string_lossy().into_owned()];
     argv.extend(cmd.get_args().map(|a| a.to_string_lossy().into_owned()));
-    let env: Vec<(String, String)> = cmd
+    // A removal (`env_remove`, the model scrub) rides as `None`: the box can
+    // define the same key, so it must be unset there too.
+    let env: Vec<(String, Option<String>)> = cmd
         .get_envs()
-        .filter_map(|(k, v)| {
-            Some((
+        .map(|(k, v)| {
+            (
                 k.to_string_lossy().into_owned(),
-                v?.to_string_lossy().into_owned(),
-            ))
+                v.map(|v| v.to_string_lossy().into_owned()),
+            )
         })
         .collect();
     let argv = match box_argv(launch, worktree, strip_qos(argv), &env) {
@@ -324,7 +326,7 @@ fn box_argv(
     launch: &SandboxLaunch,
     worktree: &Path,
     mut argv: Vec<String>,
-    env: &[(String, String)],
+    env: &[(String, Option<String>)],
 ) -> Result<Vec<String>, String> {
     // The dispatch cwd is canonical; compare argv paths in the same form.
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
@@ -371,9 +373,9 @@ fn env_file_name() -> String {
     format!("env-{}-{nanos}", std::process::id())
 }
 
-/// `export K='V'` per pair, single-quoted for sh. A key sh cannot name is
-/// skipped.
-fn write_env_file(path: &Path, env: &[(String, String)]) -> std::io::Result<()> {
+/// `export K='V'` per set pair, single-quoted for sh, and `unset K` per
+/// removal. A key sh cannot name is skipped.
+fn write_env_file(path: &Path, env: &[(String, Option<String>)]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     let mut body = String::new();
@@ -384,8 +386,10 @@ fn write_env_file(path: &Path, env: &[(String, String)]) -> std::io::Result<()> 
             .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
             && k.chars().all(|c| c == '_' || c.is_ascii_alphanumeric());
         // PWD names the host checkout; the box runs in its own workspace.
-        if named && k != "PWD" {
-            body.push_str(&format!("export {k}='{}'\n", v.replace('\'', "'\\''")));
+        match v {
+            _ if !named || k == "PWD" => {}
+            Some(v) => body.push_str(&format!("export {k}='{}'\n", v.replace('\'', "'\\''"))),
+            None => body.push_str(&format!("unset {k}\n")),
         }
     }
     std::fs::OpenOptions::new()
@@ -425,7 +429,10 @@ mod tests {
             .map(String::from)
             .to_vec(),
         );
-        let env = [("ROUTE_KEY".to_string(), "s3'cret".to_string())];
+        let env = [
+            ("ROUTE_KEY".to_string(), Some("s3'cret".to_string())),
+            ("STALE_MODEL".to_string(), None),
+        ];
         let out = box_argv(&launch, &wt, argv, &env).unwrap();
         let joined = out.join(" ");
         assert!(joined.starts_with(&format!(
@@ -444,7 +451,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let body = std::fs::read_to_string(file.path()).unwrap();
-        assert_eq!(body, "export ROUTE_KEY='s3'\\''cret'\n");
+        assert_eq!(body, "export ROUTE_KEY='s3'\\''cret'\nunset STALE_MODEL\n");
         use std::os::unix::fs::PermissionsExt as _;
         assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
 

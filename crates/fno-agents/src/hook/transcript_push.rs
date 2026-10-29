@@ -102,13 +102,27 @@ fn write_cursor(transcript: &Path, offset: u64) {
     let _ = std::fs::write(cursor_path(transcript), offset.to_string());
 }
 
-/// Post the lines to the daemon and answer whether it acked. Daemon down
-/// reads as not-acked: the cursor stays, the next fire retries.
+/// The event store refuses a record whose data exceeds the schema's
+/// `max_data_bytes` (65536). The data is `{session_id, line}` with the line
+/// JSON-escaped; this margin covers the keys and the session id.
+const MAX_RECORD_BYTES: usize = 65536 - 512;
+
+/// Post the lines to the daemon and answer whether it stored every one.
+/// Daemon down, or any refused record, reads as not-acked: the cursor
+/// stays, the next fire retries. A line the store can never hold is
+/// skipped here, so it cannot stall the cursor forever.
 fn post_lines(home: &crate::paths::AgentsHome, session_id: &str, lines: &[String]) -> bool {
-    if lines.is_empty() {
+    let records: Vec<Value> = lines
+        .iter()
+        .filter(|line| {
+            serde_json::to_string(line).map_or(0, |s| s.len()) + session_id.len()
+                <= MAX_RECORD_BYTES
+        })
+        .map(|line| json!({ "line": line }))
+        .collect();
+    if records.is_empty() {
         return true;
     }
-    let records: Vec<Value> = lines.iter().map(|line| json!({ "line": line })).collect();
     let req = crate::protocol::Request::new(
         1,
         format!(
@@ -119,7 +133,9 @@ fn post_lines(home: &crate::paths::AgentsHome, session_id: &str, lines: &[String
     );
     matches!(
         block_on(crate::client::call_if_running(home, &req)),
-        Some(Ok(resp)) if resp.error().is_none()
+        Some(Ok(resp)) if resp.result().is_some_and(|r| {
+            r.get("refused").and_then(Value::as_array).is_some_and(Vec::is_empty)
+        })
     )
 }
 
