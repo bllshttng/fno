@@ -227,7 +227,7 @@ If ARGUMENTS carry a `--reconcile <manifest-path>` token, this is a **G4 de-stub
 
 ### 1-3f. Initialization
 
-The full initialization sequence (load workspace config, project config, size profile, init state, detect input type, cross-project, Linear, plan validation, domain resolution, discovery gate, checkpoint, kill criteria) lives in [references/init-state.md](references/init-state.md).
+The full initialization sequence lives in [references/init-state.md](references/init-state.md). It loads workspace config, project config, size profile and init state. It detects the input type, cross-project work and Linear. Then it runs plan validation, domain resolution, the discovery gate, the checkpoint and the kill criteria.
 
 Quick summary:
 - **HARD-GATE (location), resolved from policy, never asked:** Before invoking `init-target-state.sh`, consult the shared location verdict (the SAME one `/execute`, `/fix`, and the SessionStart heads-up use, so there is no per-skill drift):

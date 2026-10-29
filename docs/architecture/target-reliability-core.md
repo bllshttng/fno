@@ -14,8 +14,7 @@ Not for: how completion is decided (PR + CI + review). That is [control-plane-lo
 
 A meaningful share of target BLOCKED states are not code bugs. They are:
 
-- **Environmental:** dirty working tree, expired auth, missing dependencies,
-  low disk.
+- **Environmental:** dirty working tree, expired auth, missing dependencies, low disk.
 - **Cross-phase context drift:** each phase reconstructs context from the
   full session, drifts, and sometimes loses critical info from the prior
   phase (a deferred story, an edge case noted, a file intentionally left

@@ -117,10 +117,7 @@ backfill). The hand-off is a top-level `## Schema Reconciliation` section,
 grepped exactly like the `## Discovery` skip above so the later phase reuses it
 instead of regenerating.
 
-1. **Read the schema at its source.** The receipt's `database.signals` name
-   the files to read: migrations, `prisma/schema.prisma`, or the drizzle
-   schema. Never connect to `.env.production` or `.env.staging`, and never
-   echo a connection string.
+1. **Read the schema at its source.** The receipt's `database.signals` name the files to read: migrations, `prisma/schema.prisma`, or the drizzle schema. Never connect to `.env.production` or `.env.staging`. Never echo a connection string.
 2. **Dedup against the backlog.** Run `fno backlog find "<feature keywords>"`
    (title tokens plus the one-line summary) to surface an existing node that
    already covers this ground. This is plan-level dedup ("are we already
