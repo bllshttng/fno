@@ -443,6 +443,19 @@ fn extract_text(content: Option<&Value>) -> String {
     }
 }
 
+/// A record the harness or control plane injected, never the worker's own
+/// voice. A skill/command injection opens with the command-framing tags and
+/// carries the whole skill body, protocol tags quoted throughout; a
+/// `<local-command-stdout>` record is the harness's output, not the
+/// worker's. Tool-result blocks already drop in `extract_text`; this
+/// catches the injected record that DOES carry text.
+pub(crate) fn injected_record_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("<command-message>")
+        || t.starts_with("<command-name>")
+        || t.starts_with("<local-command-stdout>")
+}
+
 /// A claude transcript `user`/`assistant` line, else `None`.
 fn parse_claude_record(v: &Value) -> Option<TruthRecord> {
     let kind = v.get("type").and_then(Value::as_str)?;
@@ -1484,6 +1497,20 @@ mod tests {
     }
 
     const NOW: f64 = 1_791_460_800.0; // 2026-10-08T12:00:00Z
+
+    /// A command-framed record (the skill body rides one string) and a
+    /// local-command output are injections, never the worker's own report;
+    /// the worker's text is not.
+    #[test]
+    fn an_injected_command_record_is_not_worker_text() {
+        assert!(injected_record_text(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\nbody quoting <help class=\"stuck\" reason=\"ci\">"
+        ));
+        assert!(injected_record_text(
+            "<local-command-stdout>ok</local-command-stdout>"
+        ));
+        assert!(!injected_record_text("RESULT: SUCCESS shipped the fix"));
+    }
 
     /// Until the warm pass rebuilds a session, truth answers `warming`, and
     /// the decoded probe is neither live nor dead. After the rebuild the same

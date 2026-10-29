@@ -208,24 +208,42 @@ pub(crate) fn carries_an_attribute(tag_body: &str) -> bool {
 /// parses (the events schema permits a reason-less blocked row); a bare
 /// attribute-less tag does not.
 pub(crate) fn extract_help_distress(text: &str) -> Option<HelpDistress> {
-    let text = &blank_code_spans_and_fences(text);
+    let blanked = blank_code_spans_and_fences(text);
+    let (start, tag_end) = find_help_tag(&blanked)?;
+    let tag = &blanked[start..tag_end];
+    Some(HelpDistress {
+        reason: parse_xml_attr(tag, "reason").unwrap_or_default(),
+        evidence: parse_xml_attr(tag, "evidence"),
+        kind: DistressKind::Help,
+        class: parse_xml_attr(tag, "class")
+            .map(|c| HelpClass::parse(&c))
+            .unwrap_or(HelpClass::Unclassified),
+    })
+}
+
+/// The byte span `(start, past_gt)` of the first real help block's opening
+/// tag, the same parse [`extract_help_distress`] runs. The code-blanking is
+/// length-preserving (one output char per input char), so the span indexes
+/// the ORIGINAL text and a caller can slice the raw block for display.
+pub(crate) fn help_open_span(text: &str) -> Option<(usize, usize)> {
+    let blanked = blank_code_spans_and_fences(text);
+    find_help_tag(&blanked)
+}
+
+/// The scan over already-blanked text: the first `<help` that opens a tag
+/// (whitespace follows), carries at least one attribute, and is not prose.
+fn find_help_tag(blanked: &str) -> Option<(usize, usize)> {
     let mut from = 0usize;
-    while let Some(rel) = text[from..].find("<help") {
+    while let Some(rel) = blanked[from..].find("<help") {
         let start = from + rel;
-        let after = &text[start + "<help".len()..];
+        let after = &blanked[start + "<help".len()..];
         let boundary = after.chars().next().is_some_and(|c| c.is_whitespace());
         if boundary {
             let tag_end = after.find('>')?;
-            let tag = &text[start..start + "<help".len() + tag_end + 1];
+            let end = start + "<help".len() + tag_end + 1;
+            let tag = &blanked[start..end];
             if carries_an_attribute(&tag["<help".len()..tag.len() - 1]) {
-                return Some(HelpDistress {
-                    reason: parse_xml_attr(tag, "reason").unwrap_or_default(),
-                    evidence: parse_xml_attr(tag, "evidence"),
-                    kind: DistressKind::Help,
-                    class: parse_xml_attr(tag, "class")
-                        .map(|c| HelpClass::parse(&c))
-                        .unwrap_or(HelpClass::Unclassified),
-                });
+                return Some((start, end));
             }
         }
         from = start + "<help".len();
@@ -951,6 +969,23 @@ mod tests {
         assert_eq!(extract_help_distress("use <helper> here"), None);
         // Absence stays absence.
         assert_eq!(extract_help_distress("no distress at all"), None);
+    }
+
+    /// The display span skips a quoted tag and lands on the real block, and
+    /// its coordinates index the original text, not the blanked copy.
+    #[test]
+    fn help_open_span_indexes_the_original_past_a_quoted_tag() {
+        let text =
+            "Not `<help>`-worthy. Real one:\n<help reason=\"ci\" evidence=\"red\">blocked</help>";
+        let (start, tag_end) = help_open_span(text).expect("the real block parses");
+        assert_eq!(
+            &text[start..tag_end],
+            "<help reason=\"ci\" evidence=\"red\">"
+        );
+        // An unclosed real block still spans its opening tag.
+        let unclosed = "recovery tail <help reason=\"x\">";
+        let (start, tag_end) = help_open_span(unclosed).expect("unclosed still parses");
+        assert_eq!(&unclosed[start..tag_end], "<help reason=\"x\">");
     }
 
     #[test]
