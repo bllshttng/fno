@@ -42,6 +42,7 @@ use crate::claude_drive::{
 };
 use crate::claude_roster::{read_control_key_in, ClaudeRoster};
 use crate::codex_inject::discover_loaded_threads;
+use crate::mail_delivery_state::{DeliveryState, Evidence, Parked};
 use crate::paths::AgentsHome;
 
 /// Default transcript-growth poll budget: 40 * 250ms = 10s. A live blocked
@@ -421,10 +422,16 @@ pub fn parse_args(rest: &[String]) -> Result<MailInjectArgs, (i32, String)> {
     })
 }
 
-/// The single JSON outcome line Python parses: `{"delivered": bool, "reason": str}`.
-/// Pure so the contract is unit-tested.
-pub fn outcome_json(delivered: bool, reason: &str) -> String {
-    serde_json::json!({ "delivered": delivered, "reason": reason }).to_string()
+/// The single JSON outcome line: the state the lane reached
+/// (`{"state", "where"?, "reason", "evidence"?}`). `delivered` stays for the
+/// Python readers that predate the states; it is true only where the old
+/// bool was (an accepted record or a body the harness queued), never for a
+/// body left in the composer. Pure so the contract is unit-tested.
+pub fn outcome_json(state: &DeliveryState) -> String {
+    let mut v = state.to_json();
+    v["reason"] = serde_json::json!(state.reason().unwrap_or(state.word()));
+    v["delivered"] = serde_json::json!(legacy_outcome(Ok(state.clone())).is_ok());
+    v.to_string()
 }
 
 /// The route for an idle claude thread row. A not-confirmed raw inject
@@ -557,17 +564,21 @@ pub fn mail_send_receipt(stdout: &str) -> &str {
         .unwrap_or("")
 }
 
-/// Did the send get accepted? Exit 0 covers both `delivered (hosted)` and
-/// `queued (durable)`, so only the receipt says which. Acceptance is not landing:
-/// see `fno agents mail sent`.
+/// Did the send reach the recipient's harness? Exit 0 covers both a live
+/// state (`injected`, `parked`, `accepted-*`) and `queued (durable)`, so only
+/// the receipt says which. Reaching is not reading: see `fno agents mail sent`.
 pub fn mail_send_accepted(code: i32, stdout: &str) -> bool {
-    code == 0 && mail_send_receipt(stdout).contains("delivered (hosted)")
+    code == 0 && crate::mail_delivery_state::receipt_reached(mail_send_receipt(stdout))
 }
 
 /// Print the outcome JSON to stdout and return its exit code.
-fn emit(delivered: bool, reason: &str) -> i32 {
-    println!("{}", outcome_json(delivered, reason));
-    outcome_exit(delivered)
+fn emit(state: &DeliveryState) -> i32 {
+    println!("{}", outcome_json(state));
+    outcome_exit(state.reached())
+}
+
+fn emit_failed(reason: &str) -> i32 {
+    emit(&DeliveryState::failed(reason))
 }
 
 /// The glyph legacy stored turns use as their one-line body separator
@@ -609,7 +620,7 @@ fn one_line(text: &str) -> String {
 }
 
 /// The content-confirm marker for a typed inject: the typed text up to its first line break.
-fn typed_marker(text: &str) -> String {
+pub(crate) fn typed_marker(text: &str) -> String {
     let typed = one_line(text);
     match typed.find('\n') {
         Some(idx) => typed[..idx].to_string(),
@@ -670,24 +681,44 @@ fn confirm_or_withdraw<T: crate::claude_attach::ControlTransport>(
     journal: &Path,
     session: &str,
     withdraw_on_silence: bool,
-    mut confirmed: impl FnMut() -> bool,
-) -> Result<(), &'static str> {
+    mut landing: impl FnMut() -> Option<DeliveryState>,
+) -> DeliveryState {
+    // A harness-queue sighting is remembered, never returned early: the
+    // queued body may still become an accepted record inside the budget.
+    let mut queued = false;
+    let mut poll = |queued: &mut bool| match landing() {
+        Some(state) if state.is_accepted() => Some(state),
+        Some(_) => {
+            *queued = true;
+            None
+        }
+        None => None,
+    };
     let half = (attempts.max(1) / 2).max(1);
     for _ in 0..half {
-        if confirmed() {
-            return Ok(());
+        if let Some(state) = poll(&mut queued) {
+            return state;
         }
         std::thread::sleep(interval);
     }
-    let _ = transport.send_line("\r");
+    // A body the harness already queued left the composer: a second CR
+    // would only submit whatever the operator types next.
+    if !queued {
+        let _ = transport.send_line("\r");
+    }
     for _ in half..attempts.max(1) {
-        if confirmed() {
-            return Ok(());
+        if let Some(state) = poll(&mut queued) {
+            return state;
         }
         std::thread::sleep(interval);
+    }
+    if queued {
+        return DeliveryState::Parked {
+            where_: Parked::HarnessQueue,
+        };
     }
     if !withdraw_on_silence {
-        return Err("not-confirmed");
+        return DeliveryState::Injected;
     }
     // Withdraw only when the operator has not typed since the inject: a
     // typing row newer than `typed_since_ms` means their text is in the
@@ -695,10 +726,29 @@ fn confirm_or_withdraw<T: crate::claude_attach::ControlTransport>(
     let ts = crate::operator_witness::typing_state(journal, session, now_ms());
     let typed_since_inject = ts.newest_typing_ms.is_some_and(|t| t > typed_since_ms);
     if ts.recent || typed_since_inject {
-        return Err("left-in-composer");
+        return DeliveryState::Parked {
+            where_: Parked::Composer,
+        };
     }
     let _ = transport.send_line(&"\u{7f}".repeat(typed_chars + 2));
-    Err("not-confirmed")
+    // The DEL bytes took the line back, so nothing sits with the recipient:
+    // `failed` keeps the bus copy drainable.
+    DeliveryState::failed("not-confirmed")
+}
+
+/// The pre-state answer of a typed lane, for the callers that only ask
+/// "did it land": an accepted record or a harness-queued body is `Ok`.
+pub(crate) fn legacy_outcome(
+    state: Result<DeliveryState, &'static str>,
+) -> Result<(), &'static str> {
+    match state? {
+        s if s.is_accepted() => Ok(()),
+        DeliveryState::Parked {
+            where_: Parked::HarnessQueue,
+        } => Ok(()),
+        DeliveryState::Parked { .. } => Err("left-in-composer"),
+        _ => Err("not-confirmed"),
+    }
 }
 
 /// Epoch milliseconds now, the typing-feed join key.
@@ -895,6 +945,133 @@ pub(crate) fn confirm_content_after(
     Ok(false)
 }
 
+/// What the harness's own record says about the typed turn: the rows past
+/// `since_byte` that carry `marker`, read by kind. A claude
+/// `queue-operation` row is the body waiting in Claude Code's queue
+/// (parked). A claude `queued_command` attachment is the body folded into
+/// the running turn (steer). A codex item carries its `turn_id`: equal to
+/// `running_turn`, the turn running at inject, it is a steer. Any other
+/// row holding the marker (a claude user record, a pi, grok or footnote
+/// turn) is a new turn. `None` means nothing holds the marker yet.
+pub(crate) fn landing_after(
+    path: &Path,
+    marker: &str,
+    since_byte: u64,
+    running_turn: Option<&str>,
+) -> io::Result<Option<DeliveryState>> {
+    let escaped = escaped_marker(marker);
+    if escaped.is_empty() {
+        return Ok(None);
+    }
+    let mut file = std::fs::File::open(path)?;
+    file.seek(io::SeekFrom::Start(since_byte))?;
+    let mut queued = false;
+    let mut steer: Option<Option<String>> = None;
+    let mut new_turn: Option<Option<String>> = None;
+    for line in io::BufReader::new(file).lines() {
+        let line = line?;
+        if !line.contains(&escaped) {
+            continue;
+        }
+        let row: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+        let kind = row.get("type").and_then(serde_json::Value::as_str);
+        if kind == Some("queue-operation") {
+            queued = true;
+            continue;
+        }
+        if kind == Some("attachment")
+            && row
+                .pointer("/attachment/type")
+                .and_then(serde_json::Value::as_str)
+                == Some("queued_command")
+        {
+            steer.get_or_insert(None);
+            continue;
+        }
+        let turn = row
+            .pointer("/payload/turn_id")
+            .or_else(|| row.pointer("/payload/item/turn_id"))
+            .and_then(serde_json::Value::as_str);
+        match turn {
+            Some(t) if running_turn == Some(t) => steer = Some(Some(t.to_string())),
+            Some(t) => new_turn = Some(Some(t.to_string())),
+            // A codex user message line carries no turn id; its item line
+            // follows. Without one, a turn running at inject is the steer.
+            None if running_turn.is_some() => {
+                steer.get_or_insert(running_turn.map(str::to_string));
+            }
+            None => {
+                new_turn.get_or_insert(None);
+            }
+        }
+    }
+    let evidence = |turn_id: Option<String>| Evidence {
+        record: path.display().to_string(),
+        turn_id,
+        at: crate::graph_store::now_isoformat(),
+    };
+    Ok(match (steer, new_turn) {
+        (_, Some(Some(t))) => Some(DeliveryState::accepted(false, evidence(Some(t)))),
+        (Some(t), _) => Some(DeliveryState::accepted(true, evidence(t))),
+        (None, Some(t)) => Some(DeliveryState::accepted(false, evidence(t))),
+        (None, None) if queued => Some(DeliveryState::Parked {
+            where_: Parked::HarnessQueue,
+        }),
+        (None, None) => None,
+    })
+}
+
+/// The codex turn running at the end of `rollout`: the newest
+/// `task_started` with no `task_complete` or `turn_aborted` for its id.
+pub(crate) fn codex_running_turn(rollout: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(rollout).ok()?;
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    file.seek(io::SeekFrom::Start(len.saturating_sub(TURN_END_TAIL_BYTES)))
+        .ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let mut running: Option<String> = None;
+    for line in String::from_utf8_lossy(&tail).lines() {
+        if !line.contains("task_started")
+            && !line.contains("task_complete")
+            && !line.contains("turn_aborted")
+        {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let turn = row
+            .pointer("/payload/turn_id")
+            .and_then(serde_json::Value::as_str);
+        match row
+            .pointer("/payload/type")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("task_started") => running = turn.map(str::to_string),
+            Some("task_complete" | "turn_aborted") if running.as_deref() == turn => running = None,
+            _ => {}
+        }
+    }
+    running
+}
+
+/// The turn running at inject for a lane's confirm target: only a codex
+/// rollout names its turns, so every other record reads `None`.
+fn running_turn_of(confirm: &LaneConfirm) -> Option<String> {
+    match confirm {
+        LaneConfirm::Transcript { path, .. }
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("rollout-")) =>
+        {
+            codex_running_turn(path)
+        }
+        _ => None,
+    }
+}
+
 /// Resolve everything an inject needs before it can write a byte: the recipient's
 /// roster entry, its `control.sock`, and its transcript (the confirm target).
 /// Returns `(control_sock, short_id, transcript)`.
@@ -946,7 +1123,7 @@ pub fn deliver_via_control_sock(
     interval_ms: u64,
     enter_delay_ms: u64,
 ) -> Result<(), &'static str> {
-    deliver_via_control_sock_in(
+    legacy_outcome(deliver_via_control_sock_state(
         &crate::claude_roster::daemon_dir(),
         &crate::claude_drive::claude_projects_dir(),
         session,
@@ -954,7 +1131,7 @@ pub fn deliver_via_control_sock(
         attempts,
         interval_ms,
         enter_delay_ms,
-    )
+    ))
 }
 
 /// Deliver through an explicitly selected Claude account root. The roster,
@@ -969,6 +1146,28 @@ pub fn deliver_via_control_sock_in(
     interval_ms: u64,
     enter_delay_ms: u64,
 ) -> Result<(), &'static str> {
+    legacy_outcome(deliver_via_control_sock_state(
+        daemon_dir,
+        projects_base,
+        session,
+        text,
+        attempts,
+        interval_ms,
+        enter_delay_ms,
+    ))
+}
+
+/// The control.sock lane with the state it reached. `Err` is a refusal
+/// before any byte was typed.
+pub fn deliver_via_control_sock_state(
+    daemon_dir: &Path,
+    projects_base: &Path,
+    session: &str,
+    text: &str,
+    attempts: u32,
+    interval_ms: u64,
+    enter_delay_ms: u64,
+) -> Result<DeliveryState, &'static str> {
     let (sock, short, transcript) = resolve_target_in(session, daemon_dir, projects_base)?;
     let auth = read_control_key_in(daemon_dir);
 
@@ -1000,7 +1199,7 @@ pub fn deliver_via_control_sock_in(
     )?;
 
     let journal = AgentsHome::from_env().events_jsonl();
-    confirm_or_withdraw(
+    Ok(confirm_or_withdraw(
         &mut transport,
         attempts,
         Duration::from_millis(interval_ms),
@@ -1009,8 +1208,8 @@ pub fn deliver_via_control_sock_in(
         &journal,
         session,
         true,
-        || confirm_content_after(&transcript, &marker, baseline).unwrap_or(false),
-    )
+        || landing_after(&transcript, &marker, baseline, None).unwrap_or(None),
+    ))
 }
 
 /// The keeper lane's raw-byte transport: one `Input` frame per write, through
@@ -1229,7 +1428,7 @@ pub fn deliver_via_keeper_socket(
     interval_ms: u64,
     enter_delay_ms: u64,
 ) -> Result<(), &'static str> {
-    deliver_via_keeper_socket_in(
+    legacy_outcome(deliver_via_keeper_socket_in(
         &crate::paths::AgentsHome::from_env(),
         None,
         &crate::grok_store::grok_sessions_root(),
@@ -1238,7 +1437,7 @@ pub fn deliver_via_keeper_socket(
         attempts,
         interval_ms,
         enter_delay_ms,
-    )
+    ))
 }
 
 /// Deliver `text` to a keeper-hosted lane-B thread against an explicit
@@ -1257,7 +1456,7 @@ pub fn deliver_via_keeper_socket_in(
     attempts: u32,
     interval_ms: u64,
     enter_delay_ms: u64,
-) -> Result<(), &'static str> {
+) -> Result<DeliveryState, &'static str> {
     let target = resolve_keeper_target_in(home, session)?;
     let stream =
         std::os::unix::net::UnixStream::connect(&target.sock).map_err(|_| "no-keeper-listener")?;
@@ -1312,7 +1511,11 @@ pub fn deliver_via_keeper_socket_in(
     // The keeper `Unconfirmable` arm (cursor-agent, agy) keeps today's shape:
     // it types and never withdraws, because no landing can be seen there.
     let withdraw_on_silence = !matches!(confirm, LaneConfirm::Unconfirmable);
-    let confirmed = move || -> bool {
+    let running = running_turn_of(&confirm);
+    let land = move |path: &Path, baseline: u64| {
+        landing_after(path, &marker, baseline, running.as_deref()).unwrap_or(None)
+    };
+    let confirmed = move || -> Option<DeliveryState> {
         if let Some(stream) = confirm_stream.as_ref() {
             let mut sink = [0u8; 8192];
             let mut reader = stream;
@@ -1324,60 +1527,52 @@ pub fn deliver_via_keeper_socket_in(
             }
         }
         match &confirm {
-            LaneConfirm::Transcript { path, baseline } => {
-                confirm_content_after(path, &marker, *baseline).unwrap_or(false)
-            }
+            LaneConfirm::Transcript { path, baseline } => land(path, *baseline),
             LaneConfirm::PendingStore { harness } => match harness.as_str() {
                 "pi" => match store {
                     Some(s) => match crate::pi::lookup_sessions_in(s, &target.cwd, session) {
-                        crate::pi::SessionLookup::One { file } => {
-                            confirm_content_after(&file, &marker, 0).unwrap_or(false)
-                        }
-                        _ => false,
+                        crate::pi::SessionLookup::One { file } => land(&file, 0),
+                        _ => None,
                     },
-                    None => false,
+                    None => None,
                 },
                 "claude" => match crate::claude_drive::find_transcript_in(
                     &crate::claude_drive::claude_projects_dir(),
                     session,
                 ) {
-                    Some(file) => confirm_content_after(&file, &marker, 0).unwrap_or(false),
-                    None => false,
+                    Some(file) => land(&file, 0),
+                    None => None,
                 },
                 "codex" => match crate::codex_store::codex_rollout_path(None, session) {
-                    Some(file) => confirm_content_after(&file, &marker, 0).unwrap_or(false),
-                    None => false,
+                    Some(file) => land(&file, 0),
+                    None => None,
                 },
                 "footnote" => match crate::footnote_harness::transcript::find_session_dir(
                     &crate::footnote_harness::transcript::sessions_root(),
                     session,
                 ) {
-                    Some(dir) => confirm_content_after(
+                    Some(dir) => land(
                         &crate::footnote_harness::transcript::transcript_file(&dir, session),
-                        &marker,
                         0,
-                    )
-                    .unwrap_or(false),
-                    None => false,
+                    ),
+                    None => None,
                 },
                 _ => match crate::grok_store::lookup_session(grok_root, session) {
-                    crate::pi::SessionLookup::One { file } => {
-                        confirm_content_after(&file, &marker, 0).unwrap_or(false)
-                    }
-                    _ => false,
+                    crate::pi::SessionLookup::One { file } => land(&file, 0),
+                    _ => None,
                 },
             },
             // No local accepted-turn record exists to grep, so nothing on
             // this lane ever confirms. The budget still runs its
             // full course: the CR resubmits inside it are send retries for a
             // busy recipient, not confirm polls, and the honest outcome is
-            // the unconfirmed receipt whose durable recovery Python writes.
-            LaneConfirm::Unconfirmable => false,
-            LaneConfirm::Refused(_) => false,
+            // `injected`: the bytes sit at the prompt and no record says more.
+            LaneConfirm::Unconfirmable => None,
+            LaneConfirm::Refused(_) => None,
         }
     };
     let journal = AgentsHome::from_env().events_jsonl();
-    confirm_or_withdraw(
+    Ok(confirm_or_withdraw(
         &mut transport,
         attempts,
         Duration::from_millis(interval_ms),
@@ -1387,7 +1582,7 @@ pub fn deliver_via_keeper_socket_in(
         session,
         withdraw_on_silence,
         confirmed,
-    )
+    ))
 }
 
 /// Run `mail-inject`. Reads the turn TEXT from STDIN and delivers it to the
@@ -2056,7 +2251,7 @@ impl crate::claude_attach::ControlTransport for PaneTransport {
 /// lanes, with the pane transport underneath and the HOSTED harness's own
 /// accepted-turn record (claude transcript or codex rollout) as the confirm
 /// target -- the landing confirm the codex pane never had.
-pub(crate) fn deliver_via_pane(
+pub(crate) fn deliver_via_pane_state(
     session: &str,
     address: &str,
     hosted_harness: Option<&str>,
@@ -2064,7 +2259,7 @@ pub(crate) fn deliver_via_pane(
     attempts: u32,
     interval_ms: u64,
     enter_delay_ms: u64,
-) -> Result<(), &'static str> {
+) -> Result<DeliveryState, &'static str> {
     let (server, pane_id) = match address.split_once(':') {
         Some(pair) => pair,
         None => return Err(NOT_INJECTABLE),
@@ -2073,10 +2268,23 @@ pub(crate) fn deliver_via_pane(
         .map(str::to_string)
         .unwrap_or_else(|| resolve_row_harness(session).unwrap_or_else(|| "claude".to_string()));
     let confirm_cwd = resolve_row_cwd(session);
-    let confirm_target = resolve_confirm(&row_hosted, session, &confirm_cwd, None, &grok_root());
-    if let LaneConfirm::Refused(reason) = confirm_target {
-        return Err(reason);
-    }
+    let pi_store = crate::pi::pi_store(&confirm_cwd).ok();
+    let confirm_target = match resolve_confirm(
+        &row_hosted,
+        session,
+        &confirm_cwd,
+        pi_store.as_ref(),
+        &grok_root(),
+    ) {
+        // A pane can host a harness no lane reads a turn record for
+        // (opencode, a shell). It still takes typed bytes: `injected`.
+        LaneConfirm::Refused("no-confirm-source") => LaneConfirm::Unconfirmable,
+        LaneConfirm::Refused(reason) => return Err(reason),
+        confirm => confirm,
+    };
+    // An unconfirmable pane is typed and left: no record could ever clear
+    // a withdraw, so a withdraw would delete every message it is sent.
+    let withdraw_on_silence = !matches!(confirm_target, LaneConfirm::Unconfirmable);
     let mut transport = PaneTransport {
         server: server.to_string(),
         address: pane_id.to_string(),
@@ -2097,7 +2305,8 @@ pub(crate) fn deliver_via_pane(
         },
     )?;
     let journal = AgentsHome::from_env().events_jsonl();
-    confirm_or_withdraw(
+    let running = running_turn_of(&confirm_target);
+    Ok(confirm_or_withdraw(
         &mut transport,
         attempts,
         Duration::from_millis(interval_ms),
@@ -2105,10 +2314,10 @@ pub(crate) fn deliver_via_pane(
         typed_since,
         &journal,
         session,
-        true,
+        withdraw_on_silence,
         move || match &confirm_target {
             LaneConfirm::Transcript { path, baseline } => {
-                confirm_content_after(path, &marker, *baseline).unwrap_or(false)
+                landing_after(path, &marker, *baseline, running.as_deref()).unwrap_or(None)
             }
             LaneConfirm::PendingStore { harness } => {
                 let file = match harness.as_str() {
@@ -2122,15 +2331,43 @@ pub(crate) fn deliver_via_pane(
                         session,
                     )
                     .map(|dir| crate::footnote_harness::transcript::transcript_file(&dir, session)),
+                    "pi" => {
+                        pi_store.as_ref().and_then(|store| {
+                            match crate::pi::lookup_sessions_in(store, &confirm_cwd, session) {
+                                crate::pi::SessionLookup::One { file } => Some(file),
+                                _ => None,
+                            }
+                        })
+                    }
                     _ => None,
                 };
-                file.and_then(|f| confirm_content_after(&f, &marker, 0).ok())
-                    .unwrap_or(false)
+                file.and_then(|f| landing_after(&f, &marker, 0, None).ok().flatten())
             }
-            LaneConfirm::Unconfirmable => false,
-            LaneConfirm::Refused(_) => false,
+            LaneConfirm::Unconfirmable => None,
+            LaneConfirm::Refused(_) => None,
         },
-    )
+    ))
+}
+
+/// The pane lane's pre-state answer, for callers that only ask whether it landed.
+pub(crate) fn deliver_via_pane(
+    session: &str,
+    address: &str,
+    hosted_harness: Option<&str>,
+    text: &str,
+    attempts: u32,
+    interval_ms: u64,
+    enter_delay_ms: u64,
+) -> Result<(), &'static str> {
+    legacy_outcome(deliver_via_pane_state(
+        session,
+        address,
+        hosted_harness,
+        text,
+        attempts,
+        interval_ms,
+        enter_delay_ms,
+    ))
 }
 
 /// The registry row's harness name for `session`, for the pane lane's
@@ -2175,8 +2412,16 @@ async fn run_seed_mode(args: &MailInjectArgs, text: &str, cwd: &str) -> i32 {
     match crate::codex_inject::deliver_seed_via_codex_daemon(&args.session, &text, Path::new(cwd))
         .await
     {
-        Ok(()) => emit(true, "delivered"),
-        Err(reason) => emit(false, &reason.to_string()),
+        // A seed is the spawner's own first turn, not mail: there is no
+        // envelope to find, so the turn the daemon started is the record.
+        Ok(()) => emit(&DeliveryState::accepted(
+            false,
+            Evidence {
+                record: "codex:turn/start".to_string(),
+                ..Evidence::default()
+            },
+        )),
+        Err(reason) => emit_failed(&reason.to_string()),
     }
 }
 
@@ -2264,7 +2509,7 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
     let mut text = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut text) {
         eprintln!("mail-inject: reading stdin: {e}");
-        return emit(false, "io-error");
+        return emit_failed("io-error");
     }
 
     // `--seed`: a bounded codex pane's first turn, not mail (the flag mode
@@ -2363,57 +2608,78 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
             &mut now_ms,
             &mut |d| std::thread::sleep(d),
         ) {
-            return emit(false, &reason);
+            return emit_failed(&reason);
         }
     }
 
-    let result: Result<(), String> = match args.harness {
+    // Every refusal before a byte was written is `failed` with its reason.
+    let refused = |reason: &str| DeliveryState::failed(reason);
+    let state: DeliveryState = match args.harness {
         MailInjectHarness::Claude => match cloud_row {
-            // A cloud row delivers through the queued CLI follow-up; the exit
-            // code is the delivery answer (measured probe 7).
-            Some(entry) => crate::claude_cloud::deliver_cloud_followup(&entry, &text),
-            None => deliver_via_control_sock(
+            // The cloud follow-up's exit 0 means claude.ai took the CLI call;
+            // no local record can show the turn, so it stops at `injected`.
+            Some(entry) => match crate::claude_cloud::deliver_cloud_followup(&entry, &text) {
+                Ok(()) => DeliveryState::Injected,
+                Err(reason) => refused(&reason),
+            },
+            None => deliver_via_control_sock_state(
+                &crate::claude_roster::daemon_dir(),
+                &crate::claude_drive::claude_projects_dir(),
                 &args.session,
                 &text,
                 args.attempts,
                 args.interval_ms,
                 args.enter_delay_ms,
             )
-            .map_err(|reason| reason.to_string()),
+            .unwrap_or_else(refused),
         },
         MailInjectHarness::Codex => {
-            crate::codex_inject::deliver_via_codex_daemon(&args.session, &text)
-                .await
-                .map_err(|reason| reason.to_string())
+            crate::codex_inject::deliver_state_via_codex_daemon(&args.session, &text).await
         }
-        MailInjectHarness::Opencode => crate::opencode_serve::steer_registered_session(
+        // opencode serve answers when the session took the prompt, and it has
+        // no steer read: both outcomes report as a new turn.
+        MailInjectHarness::Opencode => match crate::opencode_serve::steer_registered_session(
             &args.session,
             &text,
             Duration::from_secs(600),
-        )
-        .map(|_| ()),
-        MailInjectHarness::Keeper => deliver_via_keeper_socket(
+        ) {
+            Ok(_) => DeliveryState::accepted(
+                false,
+                Evidence {
+                    record: "opencode:serve".to_string(),
+                    at: crate::graph_store::now_isoformat(),
+                    ..Evidence::default()
+                },
+            ),
+            Err(reason) => refused(&reason),
+        },
+        MailInjectHarness::Keeper => deliver_via_keeper_socket_in(
+            &AgentsHome::from_env(),
+            None,
+            &crate::grok_store::grok_sessions_root(),
             &args.session,
             &text,
             args.attempts,
             args.interval_ms,
             args.enter_delay_ms,
         )
-        .map_err(|reason| reason.to_string()),
+        .unwrap_or_else(refused),
         MailInjectHarness::Pane => {
             let Some(address) = args.pane.clone() else {
-                return emit(false, "pane lane needs --pane <session>:<pane-id>");
+                return emit_failed("pane lane needs --pane <session>:<pane-id>");
             };
-            deliver_via_pane(
+            // `--harness pane` names the lane, not the hosted harness: the
+            // confirm target comes from the session's registry row.
+            deliver_via_pane_state(
                 &args.session,
                 &address,
-                args.harness_row.as_deref(),
+                args.harness_row.as_deref().filter(|h| *h != "pane"),
                 &text,
                 args.attempts,
                 args.interval_ms,
                 args.enter_delay_ms,
             )
-            .map_err(|reason| reason.to_string())
+            .unwrap_or_else(refused)
         }
     };
 
@@ -2428,14 +2694,14 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
         &args.session,
         &text,
         args.harness,
-        result.is_ok(),
+        state.reached(),
         args.origin.as_deref(),
         args.self_send,
     );
 
-    match result {
-        Ok(()) => emit(true, "delivered"),
-        Err(reason) => {
+    match state.reason() {
+        None => emit(&state),
+        Some(reason) => {
             // Self-explaining at the point of use. The JSON reason is a token for
             // a parser; a human reading the terminal gets the sentence, so the
             // misreading that cost a session cannot recur from this door.
@@ -2453,7 +2719,7 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
                     eprintln!("{h}");
                 }
             }
-            emit(false, &reason)
+            emit(&state)
         }
     }
 }
@@ -2487,8 +2753,14 @@ mod tests {
 
     #[test]
     fn mail_send_accepted_false_paths() {
-        assert!(!mail_send_accepted(1, "msg-1 delivered (hosted)\n"));
+        assert!(!mail_send_accepted(1, "msg-1 accepted-new-turn\n"));
         assert!(!mail_send_accepted(0, "\n"));
+        // A durable copy never reached the recipient's harness.
+        assert!(!mail_send_accepted(0, "msg-1 delivered (durable)\n"));
+        // A clear's posture line carries the receipt after its last colon.
+        assert!(crate::mail_delivery_state::receipt_reached(
+            "outstanding: q-1 answered; mail to w1: accepted-new-turn"
+        ));
         assert_eq!(mail_send_receipt("  \n"), "");
     }
 
@@ -2947,10 +3219,13 @@ mod tests {
             true,
             || {
                 calls += 1;
-                calls > 5
+                (calls > 5).then(|| DeliveryState::accepted(false, Evidence::default()))
             },
         );
-        assert_eq!(r, Ok(()), "a turn recorded after the extra CR confirms");
+        assert!(
+            r.is_accepted(),
+            "a turn recorded after the extra CR confirms: {r:?}"
+        );
         assert_eq!(t.sent, vec!["\r".to_string()], "exactly one extra CR");
         let _ = std::fs::remove_file(&journal);
     }
@@ -2967,9 +3242,9 @@ mod tests {
             &journal,
             "s1",
             true,
-            || false,
+            || None,
         );
-        assert_eq!(r, Err("not-confirmed"));
+        assert_eq!(r, DeliveryState::failed("not-confirmed"));
         assert_eq!(
             t.sent,
             vec!["\r".to_string(), "\u{7f}".repeat(9)],
@@ -3280,14 +3555,97 @@ mod tests {
     }
 
     #[test]
-    fn outcome_json_is_the_python_contract() {
-        let v: serde_json::Value = serde_json::from_str(&outcome_json(true, "delivered")).unwrap();
+    fn outcome_json_names_the_state_and_keeps_the_legacy_bool_honest() {
+        let steer = DeliveryState::accepted(true, Evidence::default());
+        let v: serde_json::Value = serde_json::from_str(&outcome_json(&steer)).unwrap();
+        assert_eq!(v["state"], "accepted-steer");
         assert_eq!(v["delivered"], true);
-        assert_eq!(v["reason"], "delivered");
+        let composer = DeliveryState::Parked {
+            where_: Parked::Composer,
+        };
+        let c: serde_json::Value = serde_json::from_str(&outcome_json(&composer)).unwrap();
+        assert_eq!(
+            (c["state"].as_str(), c["where"].as_str()),
+            (Some("parked"), Some("composer"))
+        );
+        assert_eq!(
+            c["delivered"], false,
+            "a body in the composer was never delivered"
+        );
         let w: serde_json::Value =
-            serde_json::from_str(&outcome_json(false, NOT_INJECTABLE)).unwrap();
+            serde_json::from_str(&outcome_json(&DeliveryState::failed(NOT_INJECTABLE))).unwrap();
+        assert_eq!(
+            (w["state"].as_str(), w["reason"].as_str()),
+            (Some("failed"), Some("not-injectable"))
+        );
         assert_eq!(w["delivered"], false);
-        assert_eq!(w["reason"], "not-injectable");
+    }
+
+    /// Each harness record shape the repro measured reads as its own state:
+    /// a claude queue row is parked, a queued_command attachment is a steer,
+    /// a user record is a new turn, and a codex item is a steer only when it
+    /// carries the turn that was running at inject.
+    #[test]
+    fn landing_reads_parked_steer_and_new_turn_from_the_record() {
+        let dir = std::env::temp_dir().join(format!("fno-landing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = "`@a · fmail-0000000000aa`";
+        let esc = escaped_marker(marker);
+        let read = |name: &str, lines: &[String], running: Option<&str>| {
+            let path = dir.join(name);
+            std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+            landing_after(&path, marker, 0, running).unwrap()
+        };
+        let queue =
+            format!(r#"{{"type":"queue-operation","operation":"enqueue","content":"{esc}"}}"#);
+        assert_eq!(
+            read("q.jsonl", &[queue.clone()], None).map(|s| s.word()),
+            Some("parked")
+        );
+        let steer = format!(
+            r#"{{"type":"attachment","attachment":{{"type":"queued_command","prompt":"{esc}"}}}}"#
+        );
+        assert_eq!(
+            read("s.jsonl", &[queue, steer], None).map(|s| s.word()),
+            Some("accepted-steer")
+        );
+        let user = format!(r#"{{"type":"user","message":{{"content":"{esc}"}}}}"#);
+        assert_eq!(
+            read("u.jsonl", &[user], None).map(|s| s.word()),
+            Some("accepted-new-turn")
+        );
+        let item = |turn: &str| {
+            format!(
+                r#"{{"type":"event_msg","payload":{{"type":"item_completed","turn_id":"{turn}","item":{{"text":"{esc}"}}}}}}"#
+            )
+        };
+        let steered = read("c1.jsonl", &[item("t-run")], Some("t-run")).unwrap();
+        assert_eq!(steered.word(), "accepted-steer");
+        assert_eq!(
+            steered.evidence().unwrap().turn_id.as_deref(),
+            Some("t-run")
+        );
+        assert_eq!(
+            read("c2.jsonl", &[item("t-new")], Some("t-run")).map(|s| s.word()),
+            Some("accepted-new-turn")
+        );
+        // A sibling whose header shares a prefix never matches the full line.
+        let sibling = r#"{"type":"user","message":{"content":"`@a · fmail-0000000000ab`"}}"#;
+        assert_eq!(read("n.jsonl", &[sibling.to_string()], None), None);
+        // The running turn: the newest task_started with no completion.
+        let rollout = dir.join("rollout-x.jsonl");
+        std::fs::write(
+            &rollout,
+            [
+                r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"#,
+                r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1"}}"#,
+                r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"t2"}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(codex_running_turn(&rollout).as_deref(), Some("t2"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The reason token must not go back to saying anything about liveness. Two
@@ -3547,7 +3905,10 @@ mod tests {
             25,
             0,
         );
-        assert_eq!(outcome, Ok(()), "the envelope lands and confirms");
+        assert!(
+            outcome.as_ref().is_ok_and(DeliveryState::is_accepted),
+            "the envelope lands and confirms: {outcome:?}"
+        );
 
         let frames = handle.join().unwrap();
         assert_eq!(frames.len(), 2, "one typed frame, one CR frame");

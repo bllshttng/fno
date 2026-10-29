@@ -74,13 +74,13 @@ async fn messages_reply_board_contracts() {
                {"id":"m1","ts":"2026-10-01T09:00:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Ship it.","body":"Ship it.","system":false},
                {"id":"m2","ts":"2026-10-01T09:01:00Z","from":"first","from_key":"s1","to_key":"s-c","summary":"On it.","body":"On it.","system":false},
                {"id":"m3","ts":"2026-10-01T09:02:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Merged.","body":"Merged.","system":false},
-               {"id":"m4","ts":"2026-10-01T09:20:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Landed.","body":"Landed.","system":false}],
+               {"id":"m4","ts":"2026-10-01T09:20:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Landed.","body":"Landed.","system":false,"state":"parked"}],
              "last_ts":"2026-10-01T09:20:00Z"},
             {"chat_id":"chat-a2","participants":["s-c","s-q"],
              "rows":[
                {"id":"m5","ts":"2026-10-01T08:55:00Z","from":"quill","from_key":"s-q","to_key":"s-c","summary":"one","body":"one","system":false},
                {"id":"m6","ts":"2026-10-01T08:56:00Z","from":"quill","from_key":"s-q","to_key":"s-c","summary":"two","body":"two","system":false},
-               {"id":"m7","ts":"2026-10-01T08:57:00Z","from":"candor","from_key":"s-c","to_key":"s-q","summary":"three","body":"three","system":false},
+               {"id":"m7","ts":"2026-10-01T08:57:00Z","from":"candor","from_key":"s-c","to_key":"s-q","to":"quill","summary":"three","body":"three","system":false,"state":"failed","state_reason":"waited-3s;no-pane-ref;not-confirmed","state_failures":2},
                {"id":"m8","ts":"2026-10-01T08:58:00Z","from":"quill","from_key":"s-q","to_key":"s-c","summary":"four","body":"four","system":false}],
              "last_ts":"2026-10-01T08:58:00Z"}
         ],
@@ -166,6 +166,13 @@ async fn messages_reply_board_contracts() {
     );
     // The active tab is one full inverted cell, pad included; the
     // inactive cells never invert.
+    // A parked send of candor's: `!` shows beside the unread `*`, never in
+    // its place.
+    assert!(
+        chats_lines.iter().any(|l| l.text.starts_with("!*first")),
+        "{:?}",
+        chats_lines.iter().map(|l| &l.text).collect::<Vec<_>>()
+    );
     let strip = &chats_lines[0];
     assert!(strip.roles[..7].iter().all(|r| *r == BRole::Tab));
     assert!(!strip.roles[7..].contains(&BRole::Tab));
@@ -221,6 +228,12 @@ async fn messages_reply_board_contracts() {
     let texts: Vec<String> = lines3.iter().map(|l| l.text.clone()).collect();
     assert!(texts[0].starts_with("first"), "{texts:?}");
     assert!(
+        texts
+            .iter()
+            .any(|t| t.ends_with("parked \u{b7} enter submit")),
+        "{texts:?}"
+    );
+    assert!(
         texts[0].contains("[i]") && texts[0].contains("..."),
         "{texts:?}"
     );
@@ -257,6 +270,18 @@ async fn messages_reply_board_contracts() {
         .filter(|t| t.trim() == "quill" || t.trim() == "candor")
         .count();
     assert_eq!(labels4, 3, "{texts4:?}");
+    // A retry that failed again names its cause in words, then the retry
+    // key, then the copy rung last, in the warning color.
+    let warn: Vec<&str> = lines4
+        .iter()
+        .filter(|l| l.roles.contains(&BRole::Warn))
+        .map(|l| l.text.trim())
+        .collect();
+    assert_eq!(
+        warn.join(" ").replace('\u{a0}', " "),
+        "retry failed: quill has no pane to type into \u{b7} r retry \u{b7} y copy",
+        "{texts4:?}"
+    );
     let one_i = texts4.iter().position(|t| t.ends_with("one")).unwrap();
     let two_i = texts4.iter().position(|t| t.ends_with("two")).unwrap();
     assert_eq!(two_i, one_i + 1, "one run, no blank between: {texts4:?}");

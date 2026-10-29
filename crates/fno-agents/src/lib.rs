@@ -342,6 +342,7 @@ pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
+pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;

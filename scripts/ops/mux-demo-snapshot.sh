@@ -557,9 +557,34 @@ def write(chat, rows):
         for r in rows:
             f.write(json.dumps(r) + "\n")
 
+def state(i, mins_ago, word, reason=None):
+    # A delivery-state line: what the recipient's harness did with a send.
+    return {"type": "delivery", "id": f"fmail-demo-{i}", "how": word, "reason": reason,
+            "ts": ts(mins_ago)}
+
+# Every delivery state a sent row shows. A chat whose last row is parked or
+# failed waits on the sender, so the chat list marks it with `!`.
 write("chat-demo-review", [
     msg(1, 9, "rowan", "scout", "Rate-limit review pass today? PR 118 is up."),
+    state(1, 9, "accepted-new-turn"),
     msg(2, 6, "scout", "rowan", "Landed: 60 req/min per key, the 429 carries Retry-After."),
+    # A failed send the user retried with r, and it then delivered.
+    msg(11, 5, "rowan", "scout", "Pin the limit in the README too."),
+    state(11, 5, "failed", "not-confirmed"),
+    state(11, 4, "accepted-new-turn"),
+    msg(7, 2, "rowan", "scout", "Good. Add the 429 case to the journey test before merge."),
+    state(7, 2, "parked"),
+    msg(9, 1, "rowan", "scout", "And tag the release once CI is green."),
+    state(9, 1, "failed", "not-confirmed"),
+    # The r retry failed too, so the line offers the copy rung.
+    state(9, 0, "failed", "waited-3s;no-pane-ref"),
+    # A first failure: its cause and r retry, no copy rung yet.
+    msg(10, 0, "rowan", "scout", "Then post the 429 shot on the visual page."),
+    state(10, 0, "failed", "not-confirmed"),
+])
+write("chat-demo-keys", [
+    msg(8, 4, "rowan", "archer", "Rotate the staging key once the deploy is green."),
+    state(8, 4, "failed", "bus-only"),
 ])
 write("chat-demo-scope", [
     msg(3, 21, "wren", "archer", "Webhook retry landed behind a flag; the dead-letter queue drains nightly."),
