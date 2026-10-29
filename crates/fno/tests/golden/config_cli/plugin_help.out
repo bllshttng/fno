@@ -3,15 +3,18 @@ Usage: fno config plugin install [OPTIONS] [HARNESS]
   Install your local checkout for development. --dev replaces a release-channel
   plugin.
 
-  Side effects. It builds a stage under ~/.fno/plugin-stage/fno and points the
-  harness at it. It removes stale plugin copies. It strips the machine-wide
+  Side effects. It builds a stage under ~/.fno/plugin-stage/fno (fno-pack with
+  --pack, which drops the mux skills and mux hooks) and points the harness at
+  it. footnote gets a link at ~/.footnote/plugins/fno. It removes stale plugin
+  copies. It strips the machine-wide
   CARGO_BUILD_BUILD_DIR and SCCACHE_DIR lines an older install wrote, from
   ~/.zshrc, ~/.bashrc, the Claude settings.json and the Codex config.toml. It
   then runs a reclaim pass over fno's own caches, without the uv cache prune.
   The receipt names every file it rewrote.
 
 Arguments:
-  [HARNESS]  claude | codex | opencode | agy
+  [HARNESS]  claude | codex | opencode | pi | agy | grok | zcode | footnote
 
 Options:
+  --pack  Install the pack profile: no mux skills, no mux hooks.
   --help  Show this message and exit.
