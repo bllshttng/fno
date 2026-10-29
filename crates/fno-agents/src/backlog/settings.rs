@@ -31,18 +31,17 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
         }
     }
     // The project config the FNO_CONFIG redirect names (python's
-    // `config_file()` candidate), then the global file. A pinned file
-    // spelled config.toml/settings.yaml is already covered by the parent
-    // push; pushing it again would read its work map twice.
+    // `config_file()` candidate), then the global file. The explicit file is
+    // usually its parent's settings.yaml sibling, so the sibling push already
+    // covered it: skip the repeat so one file is read once (a doubled work
+    // map was the symptom; Python's FNO_CONFIG branch reads the file exactly
+    // once).
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         let cfg = PathBuf::from(cfg);
         if let Some(parent) = cfg.parent() {
             push_dir(parent.to_path_buf());
         }
-        let covered = cfg.file_name().is_some_and(|n| {
-            n == std::ffi::OsStr::new("config.toml") || n == std::ffi::OsStr::new("settings.yaml")
-        });
-        if !covered {
+        if !out.contains(&cfg) {
             out.push(cfg);
         }
     }
