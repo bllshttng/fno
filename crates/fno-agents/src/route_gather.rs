@@ -1048,12 +1048,16 @@ mod tests {
     }
 
     #[test]
-    fn lanes_source_answers_empty_when_no_layer_declares_lanes() {
+    fn lanes_source_answers_empty_when_no_lane_carrier_exists() {
+        // No lanes anywhere: the profile carries only scalars. A bare rung
+        // names no command at all and answers the same empty shape.
         let (guard, tmp, saved) = pinned_sandbox(
             "lanes-source-no-lanes",
             "[agents.profiles.target]\neffort = \"high\"\n",
         );
         let out = lanes_source_for(&tmp, "agents.profiles.target");
+        assert_eq!(out, json!({}));
+        let out = lanes_source_for(&tmp, "agents.profiles");
         assert_eq!(out, json!({}));
         drop(guard);
         clear_sandbox_env(saved);
@@ -1081,15 +1085,6 @@ mod tests {
             json!(tmp.join("config.toml").display().to_string())
         );
         assert_eq!(out["overrides"], json!([]));
-        drop(guard);
-        clear_sandbox_env(saved);
-    }
-
-    #[test]
-    fn lanes_source_answers_empty_for_a_bare_rung() {
-        let (guard, tmp, saved) = pinned_sandbox("lanes-source-bare-rung", "");
-        let out = lanes_source_for(&tmp, "agents.profiles");
-        assert_eq!(out, json!({}));
         drop(guard);
         clear_sandbox_env(saved);
     }

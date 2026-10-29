@@ -347,8 +347,14 @@ pub(crate) struct ConfigSource {
 /// supplied it; a candidate missing the path, unreadable, or unparseable is
 /// skipped exactly as the value read skips it.
 pub(crate) fn config_sources_deep(cwd: &Path, keys: &[&str], leaf: &str) -> Vec<ConfigSource> {
-    let mut out = Vec::new();
+    let mut out: Vec<ConfigSource> = Vec::new();
     for path in config_candidates(cwd) {
+        // One candidate can enter twice (cwd under $HOME makes the project
+        // and global spellings the same file); the first sighting is the
+        // priority that matters, a repeat would read as its own override.
+        if out.iter().any(|s| s.path == path) {
+            continue;
+        }
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
