@@ -25,5 +25,10 @@ grade:
   - kind: exit
     command: "test \"$(git rev-list --count origin/main..HEAD)\" -le 4"
     expect: 0
+  # Route instrument: commit and heading counts above are artifact proxies a
+  # squash defeats. The ceiling is a generous placeholder, not a measured
+  # reading; tighten it from a real attempt's logged count.
+  - kind: tool-budget
+    max_tool_calls: 120
 timeout_minutes: 20
 tags: [failure-mode, thrash]

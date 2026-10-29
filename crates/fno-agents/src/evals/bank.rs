@@ -6,7 +6,7 @@
 //! always-pass. The goldens pin the bytes.
 
 pub const VALID_TIERS_REPR: &str = "('capability', 'regression')";
-pub const VALID_CHECK_KINDS_REPR: &str = "('exit', 'file-exists', 'grep')";
+pub const VALID_CHECK_KINDS_REPR: &str = "('exit', 'file-exists', 'grep', 'tool-budget')";
 
 pub const COHORTS_FILENAME: &str = "cohorts.yaml";
 
@@ -18,6 +18,7 @@ pub struct GradeCheck {
     pub expect: i64,
     pub path: Option<String>,
     pub pattern: Option<String>,
+    pub max_tool_calls: Option<i64>,
 }
 
 /// A loaded, validated bank task. A task with no prompt is grade-only:
@@ -162,7 +163,7 @@ fn parse_check(
     let kind = map.get(serde_yaml_ng::Value::String("kind".into()));
     let kind = kind.and_then(|v| v.as_str()).unwrap_or("");
     require(
-        kind == "exit" || kind == "file-exists" || kind == "grep",
+        kind == "exit" || kind == "file-exists" || kind == "grep" || kind == "tool-budget",
         format!("{where_prefix}: kind must be one of {VALID_CHECK_KINDS_REPR}, got '{kind}'"),
     )?;
     if kind == "exit" {
@@ -180,6 +181,23 @@ fn parse_check(
             expect,
             path: None,
             pattern: None,
+            max_tool_calls: None,
+        });
+    }
+    if kind == "tool-budget" {
+        let max = map.get(serde_yaml_ng::Value::String("max_tool_calls".into()));
+        let max = max.and_then(|v| v.as_i64()).unwrap_or(0);
+        require(
+            max > 0,
+            format!("{where_prefix}: kind=tool-budget requires max_tool_calls as a positive integer"),
+        )?;
+        return Ok(GradeCheck {
+            kind: kind.to_string(),
+            command: None,
+            expect: 0,
+            path: None,
+            pattern: None,
+            max_tool_calls: Some(max),
         });
     }
     let fpath = map.get(serde_yaml_ng::Value::String("path".into()));
@@ -195,6 +213,7 @@ fn parse_check(
             expect: 0,
             path: Some(fpath.to_string()),
             pattern: None,
+            max_tool_calls: None,
         });
     }
     let pattern = map.get(serde_yaml_ng::Value::String("pattern".into()));
@@ -209,6 +228,7 @@ fn parse_check(
         expect: 0,
         path: Some(fpath.to_string()),
         pattern: Some(pattern.to_string()),
+        max_tool_calls: None,
     })
 }
 
@@ -319,6 +339,32 @@ mod tests {
         assert_eq!(task.grade.len(), 1);
         // The warning prints to stderr; the task still loads (a warning,
         // not an error).
+    }
+
+    #[test]
+    fn a_tool_budget_without_a_positive_integer_refuses_naming_id_file_and_field() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, field) in [("missing", ""), ("zero", "    max_tool_calls: 0\n"), ("text", "    max_tool_calls: many\n")] {
+            let body = format!(
+                "id: budget-{name}\ntier: capability\ngrade:\n  - kind: tool-budget\n{field}"
+            );
+            let p = write_task(dir.path(), &format!("{name}.yaml"), &body);
+            let err = load_task(&p).unwrap_err();
+            assert!(err.0.contains(&format!("task 'budget-{name}'")), "{0}", err.0);
+            assert!(err.0.contains(&format!("{name}.yaml")), "{0}", err.0);
+            assert!(err.0.contains("max_tool_calls"), "{0}", err.0);
+        }
+    }
+
+    #[test]
+    fn a_tool_budget_with_a_positive_integer_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_task(
+            dir.path(),
+            "ok.yaml",
+            "id: budget-ok\ntier: capability\ngrade:\n  - kind: tool-budget\n    max_tool_calls: 40\n",
+        );
+        assert_eq!(load_task(&p).unwrap().grade[0].max_tool_calls, Some(40));
     }
 
     #[test]
