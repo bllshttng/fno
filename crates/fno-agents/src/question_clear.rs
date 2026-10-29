@@ -1288,10 +1288,16 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .get("quote")
                 .and_then(Value::as_str)
                 .is_some_and(|quote| !quote.trim().is_empty());
+            // A moot withdrawal outranks the rung: it closes as coordination,
+            // never as an answer, so the deny classes do not bar it.
+            let lead_withdraw = !own_ask
+                && req.answer.is_some()
+                && lead_may_withdraw(req, &caller, asker_session, node);
             // The rung holder answers the row the ladder placed on it, unless
             // the class is one only the user rules.
-            let holds_rung = crate::question_ladder::holder(&question_event["data"])
-                .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
+            let holds_rung = !lead_withdraw
+                && crate::question_ladder::holder(&question_event["data"])
+                    .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
             let denied = denied_class(question_event);
             if holds_rung && req.answer.is_some() {
                 if let Some(class) = denied {
@@ -1309,14 +1315,12 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             } else {
                 own_ask
             };
-            if !allowed && !own_ask {
+            if !allowed && lead_withdraw {
                 if let Some(ruling) = req.answer.as_deref() {
-                    if lead_may_withdraw(req, &caller, asker_session, node) {
-                        lead_reason = Some(format!(
-                            "withdrawn by lead {agent}: {}",
-                            cut(ruling, req.cap)
-                        ));
-                    }
+                    lead_reason = Some(format!(
+                        "withdrawn by lead {agent}: {}",
+                        cut(ruling, req.cap)
+                    ));
                 }
             }
             if !allowed && lead_reason.is_none() {
