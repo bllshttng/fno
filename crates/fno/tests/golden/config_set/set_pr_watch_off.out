@@ -1,0 +1,2 @@
+set pr_watch.enabled = False (global: <FIXTURE>/fake_home/.fno/config.toml)
+pr-watch: agent unloaded (disabled).

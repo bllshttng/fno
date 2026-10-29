@@ -24,7 +24,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 CLI_SRC="$REPO/cli"
-PROBE_MODULE="import click, fno.state.cli"
+PROBE_MODULE="import click, fno.graph.cli"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 skip() { echo "SKIP: $*" >&2; exit 77; }
@@ -175,7 +175,7 @@ PYEOF
 # failure carries its own mechanism in the record.
 NARROW_PROBE_CMD="import sys, json
 try:
-    import click, fno.state.cli
+    import click, fno.graph.cli
 except Exception as exc:
     import fno
     spec = getattr(fno, '__spec__', None)

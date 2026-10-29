@@ -219,7 +219,7 @@ async fn rm_requires_the_post_list_to_prove_the_claude_row_is_gone() {
             ])
         },
         &|_| Ok(()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -261,7 +261,7 @@ async fn rm_keeps_registry_row_when_claude_refuses_without_force() {
             ])
         },
         &|_| Err("claude rm exited 1".into()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -294,7 +294,7 @@ async fn rm_keeps_registry_row_when_claude_refuses_without_force() {
             ])
         },
         &|_| Err("claude rm exited 1".into()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -453,7 +453,7 @@ async fn rm_refuses_to_report_removed_when_the_row_is_already_gone() {
             .unwrap();
             Ok(())
         },
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )

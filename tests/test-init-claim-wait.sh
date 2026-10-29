@@ -224,6 +224,8 @@ run_init() {
         PATH="$sbx/stub-bin:$PATH" \
         FNO_AGENTS_BIN="$sbx/stub-bin/fno-agents" \
         FNO_TEST_SPACE="$sbx/space" \
+        FNO_TEST_GATES_GREEN=1 \
+        FNO_TEST_OWNED_IDENTITY_CANNED=1 \
         CALL_LOG="$sbx/call-log" \
         "$@" \
         bash "$INIT_SCRIPT" 2>&1

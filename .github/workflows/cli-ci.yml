@@ -7,6 +7,8 @@ name: cli-ci
 # by sha ran every merge in full: the runs piled up against the PR runs and
 # main never settled. Cancelling the running main run instead starves main:
 # merges land faster than the suite finishes, so no main run ever completes.
+# The repo is user-owned, so GitHub has no merge queue for it: this coalesced
+# main run and the fno merge queue are the batch that runs every lane.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -72,7 +74,7 @@ on:
 jobs:
   real-codex-0145:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
     runs-on: ubuntu-24.04
     # The codex converge engine is Rust now: this builds the fno-agents
     # library and one integration test, a cold compile the old 0.5m Python
@@ -114,7 +116,10 @@ jobs:
   changed-packet-size:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # The sizer builds fno-agents from a cold cache when the fleet loads the
+    # runners; 5 minutes cut that build off mid-compile and read as a
+    # selector regression.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -131,13 +136,16 @@ jobs:
         with:
           version: "latest"
 
+      - name: Provision the native test command
+        uses: ./.github/actions/smoke-setup
+
       - name: Estimate the packet
         id: estimate
         env:
           CHANGED_BASE: ${{ github.event.pull_request.base.sha }}
           CHANGED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          est="$(uv run --project cli fno-py doctor test smoke --changed \
+          est="$("$FNO_AGENTS_FRONT" test-run doctor smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" --list 2>/dev/null \
             | sed -n 's/.*changed-estimate minutes=\([0-9][0-9]*\).*/\1/p' \
             | tail -1)"
@@ -185,15 +193,19 @@ jobs:
       shard_count: ${{ steps.estimate.outputs.shard_count }}
       shard_array: ${{ steps.estimate.outputs.shard_array }}
 
-  # The Rust selector owns lane routing. A PR selects every full lane main
-  # runs; only the PR-only bundle freshness job depends on the diff.
+  # The Rust selector owns lane routing. Main, the nightly and an unreadable
+  # diff select every lane. A PR diff confined to crates/ selects its cargo
+  # lanes (fno-agents only skips the mux lanes) and the smoke-seam leg in
+  # place of the full Python shards.
   pr-affected:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      cargo: ${{ steps.select.outputs.cargo }}
+      cargo_agents: ${{ steps.select.outputs.cargo_agents }}
+      cargo_mux: ${{ steps.select.outputs.cargo_mux }}
       python_full: ${{ steps.select.outputs.python_full }}
+      python_seam: ${{ steps.select.outputs.python_seam }}
       skill_bundles: ${{ steps.select.outputs.skill_bundles }}
     steps:
       - name: Checkout
@@ -343,7 +355,7 @@ jobs:
             exit 0
           fi
           set +e
-          uv run --project cli fno-py doctor test smoke --changed \
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" \
             --shard "${{ matrix.shard }}/${{ needs.changed-packet-size.outputs.shard_count }}"
           rc=$?
@@ -484,7 +496,7 @@ jobs:
         # pass it here.
         #
         # The test/lint steps live in the code-owned `fno doctor test smoke`
-        # runner (cli/src/fno/test_cmd.py) so "run what CI runs" is one command
+        # runner (crates/fno-agents/src/test_smoke_registry.rs) so "run what CI runs" is one command
         # and local/CI parity is structural. A bare `fno doctor test smoke` with
         # no selector still runs every step; the shards are a CI concern only.
         #
@@ -509,7 +521,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-pytest-${{ matrix.shard }} "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          uv run --project cli fno-py doctor test smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
 
   slow-e2e:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -527,7 +539,7 @@ jobs:
       - name: Run the slow pane lane
         env:
           FNO_PYTEST_SHARD: "1/1"
-        run: uv run --project cli fno-py doctor test --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
+        run: $FNO_AGENTS_FRONT test-run doctor --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
 
   smoke-rest:
     needs: [pr-affected]
@@ -550,6 +562,16 @@ jobs:
 
       - name: Provision the smoke runner
         uses: ./.github/actions/smoke-setup
+
+      # Positive probe over the checked-in graduation registry. Every decision
+      # in REGISTERED_GRADUATION_PROBES claims a shipped enforcement artifact;
+      # this re-measures that claim, so deleting the enforcement a retired
+      # ruling rests on turns red here instead of silently un-retiring it.
+      # BEFORE the smoke shard: the probe's pytest drives the dev fno-agents
+      # binary, and the shard's pytest lane scrubs that binary by design - a
+      # post-smoke placement probed a dead path and red every shard.
+      - name: Decision graduation probes
+        run: uv run --project cli python scripts/ci/check-decision-graduation.py
 
       - name: "Smoke shard: everything except pytest (${{ matrix.shard }}/4)"
         # Same trap, same reason as the pytest shard above.
@@ -574,7 +596,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-rest-${{ matrix.shard }} "$(( SECONDS - start ))" 30 || true' EXIT
           : "$start"
-          uv run --project cli fno-py doctor test smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
 
       # Static dead-import guard: a module move down a layer can leave
       # test-only callers on the old `from fno.agents import moved` path that
@@ -585,12 +607,30 @@ jobs:
       - name: Dead import paths (module-move guard)
         run: bash scripts/ci/check-import-paths.sh
 
-      # Positive probe over the checked-in graduation registry. Every decision
-      # in REGISTERED_GRADUATION_PROBES claims a shipped enforcement artifact;
-      # this re-measures that claim, so deleting the enforcement a retired
-      # ruling rests on turns red here instead of silently un-retiring it.
-      - name: Decision graduation probes
-        run: uv run --project cli python scripts/ci/check-decision-graduation.py
+  # A crates-only PR skips the full Python shards, but the Python suite
+  # reaches Rust through the native doors. This leg runs the registry's seam
+  # steps (the @requires_rust parity suites, the keyless smoke, the heal
+  # harness) with the binaries built. Main still runs the full shards.
+  smoke-seam:
+    needs: [pr-affected]
+    if: ${{ !cancelled() && needs.pr-affected.outputs.python_seam == 'true' }}
+    runs-on: ubuntu-24.04
+    # Same 12-minute step cap and 15-minute backstop as a pytest shard.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Provision the smoke runner
+        uses: ./.github/actions/smoke-setup
+
+      - name: "Smoke seam: Rust/Python seam steps"
+        timeout-minutes: 12
+        run: |
+          start=$SECONDS
+          trap 'bash scripts/ci/smoke-duration-report.sh smoke-seam "$(( SECONDS - start ))" 12 || true' EXIT
+          : "$start"
+          "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Build fno-agents debug binary*,Build the fno front door*,Scoped @requires_rust*,Keyless*,registry-miss heal*'
 
   # Keeps the required check named `smoke`. Branch protection and the review
   # gate key on that exact name, so publishing only `smoke-pytest` and
@@ -608,9 +648,10 @@ jobs:
   # does not make the run cancelled, so the gate still runs and still blocks.
   #
   # Each shard must pass unless the PR selector deliberately skipped the full
-  # Python lane. Cancelled and unexpected skipped results still block.
+  # Python lane. smoke-seam must pass whenever the selector chose it. Cancelled
+  # and unexpected skipped results still block.
   smoke:
-    needs: [pr-affected, smoke-pytest, smoke-rest]
+    needs: [pr-affected, smoke-pytest, smoke-rest, smoke-seam]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     # These result checks stay in a short aggregator. A cap this tight is a
@@ -636,7 +677,7 @@ jobs:
             echo "$1 outran the job-level timeout-minutes cap; the run was never cancelled."
             echo "Read the shard's smoke-duration line: the EXIT trap prints it on every exit, with seconds and verdict."
           }
-          echo "pr-affected=${{ needs.pr-affected.result }} smoke-pytest=${{ needs.smoke-pytest.result }} smoke-rest=${{ needs.smoke-rest.result }}"
+          echo "pr-affected=${{ needs.pr-affected.result }} smoke-pytest=${{ needs.smoke-pytest.result }} smoke-rest=${{ needs.smoke-rest.result }} smoke-seam=${{ needs.smoke-seam.result }}"
           capped smoke-pytest "${{ needs.smoke-pytest.result }}"
           capped smoke-rest "${{ needs.smoke-rest.result }}"
           # A cancelled selector (queue-storm cancellation, or its own job
@@ -655,6 +696,11 @@ jobs:
             [ "${{ needs.smoke-rest.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+          } || exit 1
+          [ "${{ needs.smoke-seam.result }}" = "success" ] || {
+            [ "${{ needs.smoke-seam.result }}" = "skipped" ] \
+              && { [ "${{ needs.pr-affected.outputs.python_seam }}" != "true" ] \
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 
@@ -692,7 +738,7 @@ jobs:
   hook-latency:
     name: per-turn hook latency budgets
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
     runs-on: ubuntu-24.04
     # Widest of 14 passing runs sampled 2026-09-24: 6.9m. The release build
     # of fno-agents outgrew the 10m cap on cold runners once the crate grew
@@ -775,7 +821,7 @@ jobs:
   test-agents:
     name: cargo test (fno-agents) + schema parity
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
     runs-on: ubuntu-24.04
     # This job once held the whole cargo suite, and on 2026-09-17 two runs
     # (main at 37da45e9, PR 2137) that could pass were cancelled at its cap.
@@ -1054,7 +1100,7 @@ jobs:
 
   test-agents-integration:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
     name: cargo test integration (fno-agents) ${{ matrix.shard }}/4
     strategy:
       fail-fast: false
@@ -1178,7 +1224,7 @@ jobs:
 
   test-mux:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_mux == 'true' }}
     name: cargo test (fno mux)
     runs-on: ubuntu-24.04
     # Three recent green runs put the combined job at 885s, 889s, and 891s.
@@ -1263,7 +1309,7 @@ jobs:
 
   test-mux-integration:
     needs: [pr-affected]
-    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_mux == 'true' }}
     name: cargo test integration (fno mux)
     runs-on: ubuntu-24.04
     # Companion half of the measured test-binary split. A 15m cap cancelled
@@ -1345,25 +1391,25 @@ jobs:
           [ "${{ needs.test-agents.result }}" = "success" ] || {
             [ "${{ needs.test-agents.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+              && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-agents-integration.result }}" = "success" ] || {
             [ "${{ needs.test-agents-integration.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+              && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux.result }}" = "success" ] || {
             [ "${{ needs.test-mux.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+              && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux-integration.result }}" = "success" ] || {
             [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+              && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
                 || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 

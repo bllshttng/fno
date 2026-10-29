@@ -1,0 +1,1 @@
+refusing to repair <ROOT>/home-repair-data/registry.json: rolling schema_version=99 back to 43 would DISCARD data these rows carry - calm-otter: future_field. The 2026-08-28 rollback was lossless only because every row happened to carry the newer fields empty; this is the assertion that ends that luck. Deploy the newer schema instead.

@@ -1,0 +1,1 @@
+set review.nonblocking_categories = ['style', 'docs'] (global: <FIXTURE>/fake_home/.fno/config.toml)

@@ -120,23 +120,6 @@ def mint_or_none(source, command, identity, **kwargs):
     except (AgentNameError, BridgeUsageError):
         return None
 
-def bridge_name(prefix, node_id, *, slug=None, qualifier=None, discriminator=None,
-                source=None, command=None, model=None):
-    # Usage refusals (both forms, missing command/prefix) are the binary's texts:
-    # _mint maps its exit 2 to BridgeUsageError, exit 3 to AgentNameError. A
-    # missing --command is forwarded as absent so the binary names the refusal.
-    if command or source:
-        args = list(_opt_pos(source, "--source"))
-        if command:
-            args += ["--command", command if command in dispatch_commands() else command_code_for(command)]
-        # A positional prefix rides too: the binary refuses the both-forms pair.
-        pos = [prefix, node_id] if (prefix or "").strip() else [node_id]
-        return _mint(*args, *pos,
-                     *_flags(("--slug", slug), ("--qualifier", qualifier), ("--discriminator", discriminator),
-                             ("--model", model)))
-    return agent_name(prefix, node_id, slug=slug, qualifier=qualifier, discriminator=discriminator,
-                      model=model)
-
 def _opt_pos(value, flag):
     return [flag, value] if (value or "").strip() else []
 

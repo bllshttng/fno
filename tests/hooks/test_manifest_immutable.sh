@@ -6,13 +6,15 @@
 #   T1  init produces manifest with required fields (session_id, created_at, attended, no_external)
 #   T2  manifest contains NONE of the mutable control-plane fields
 #   T3  manifest contains the new attended/advisory/budget fields
-#   T4  write-once: fno state set --field status refuses with exit 5
-#   T5  write-once: fno state set --field plan_path on empty field is allowed
 #   T6  bash -n syntax check on init script
 #   T7  test_loop_check_shim.sh still passes (reads claude_transcript_id from the manifest)
 #
+# The write-once `state set` cases (refused with exit 5, first-fill allowed)
+# used to drive the Python CLI here; that surface died with the target-family
+# port, and the fno-agents parity replay pins the contract now ("state set
+# other field refused", "state set plan_path twice refused").
+#
 # Self-contained: creates a tmp git repo and runs init-target-state.sh from it.
-# Uses the Python CLI at cli/.venv/bin/python if available, else skips T4/T5.
 
 set -uo pipefail
 
@@ -32,16 +34,6 @@ skip() { SKIP_COUNT=$((SKIP_COUNT+1)); printf '[manifest] SKIP: %s\n' "$*"; }
 [[ -f "$INIT_HOOK" ]] || { fail "init hook not found at $INIT_HOOK"; exit 1; }
 command -v git  >/dev/null 2>&1 || { fail "git required"; exit 1; }
 command -v bash >/dev/null 2>&1 || { fail "bash required"; exit 1; }
-
-# Python CLI - try the venv first, then system python with the package
-PYTHON_CLI=""
-CLI_VENV="${REPO_ROOT}/cli/.venv/bin/python"
-if [[ -x "$CLI_VENV" ]]; then
-  # quick sanity: can it import fno?
-  if PYTHONPATH="${REPO_ROOT}/cli/src" "$CLI_VENV" -c "import fno" 2>/dev/null; then
-    PYTHON_CLI="$CLI_VENV"
-  fi
-fi
 
 # These cases exercise the manifest writer after the Python wrapper's policy
 # gates have already passed. Keep the direct-script fallback gates out of this
@@ -226,92 +218,8 @@ else
 fi
 rm -rf "$_TMP3"
 
-# ── T4/T5: write-once via Python CLI ────────────────────────────────────────
-if [[ -z "$PYTHON_CLI" ]]; then
-  skip "T4: Python CLI not available (no cli/.venv/bin/python with fno importable)"
-  skip "T5: Python CLI not available"
-else
-  # T4: writing 'status' must be refused with exit 5
-  _TMP4=$(mktemp -d)
-  make_git_repo "$_TMP4"
-  (
-    cd "$_TMP4" && install_stub "$_TMP4" && \
-    TARGET_START=1 TARGET_INPUT="write-once-test" \
-    PATH="$_TMP4/bin:$PATH" FNO_AGENTS_BIN="$_TMP4/bin/fno-agents" FNO_TEST_SPACE="$_TMP4/space" \
-    bash "$INIT_HOOK" 2>/dev/null
-  ) || true
-  MANIFEST4="$_TMP4/space/target-state.md"
-  if [[ -f "$MANIFEST4" ]]; then
-    SET_RC=0
-    SET_OUT=$(PYTHONPATH="${REPO_ROOT}/cli/src" "$PYTHON_CLI" -m fno.cli \
-      state set \
-      --path "$MANIFEST4" \
-      --type target \
-      --field status \
-      --value COMPLETE 2>&1) || SET_RC=$?
-    if [[ $SET_RC -eq 5 ]]; then
-      pass "T4: fno state set --field status refused with exit 5 (write-once)"
-    else
-      fail "T4: expected exit 5, got $SET_RC; output: $SET_OUT"
-    fi
-    # Verify the message mentions the immutability contract
-    if echo "$SET_OUT" | grep -qi "immutable\|control-plane\|ab-d0337fbc\|plan_path"; then
-      pass "T4: refusal message references immutability context"
-    else
-      fail "T4: refusal message missing immutability context; got: $SET_OUT"
-    fi
-  else
-    fail "T4: manifest not created for write-once test"
-  fi
-  rm -rf "$_TMP4"
-
-  # T5: first-fill of empty plan_path is allowed
-  _TMP5=$(mktemp -d)
-  make_git_repo "$_TMP5"
-  (
-    cd "$_TMP5" && install_stub "$_TMP5" && \
-    TARGET_START=1 TARGET_INPUT="plan-path-fill-test" \
-    PATH="$_TMP5/bin:$PATH" FNO_AGENTS_BIN="$_TMP5/bin/fno-agents" FNO_TEST_SPACE="$_TMP5/space" \
-    bash "$INIT_HOOK" 2>/dev/null
-  ) || true
-  MANIFEST5="$_TMP5/space/target-state.md"
-  if [[ -f "$MANIFEST5" ]]; then
-    # plan_path after init with no TARGET_PLAN_PATH should be empty / ""
-    CURRENT_PLAN=$(grep -E "^plan_path:" "$MANIFEST5" | head -1 | sed 's/^plan_path:[[:space:]]*//' | tr -d '"')
-    if [[ -z "$CURRENT_PLAN" ]]; then
-      SET5_RC=0
-      SET5_OUT=$(PYTHONPATH="${REPO_ROOT}/cli/src" "$PYTHON_CLI" -m fno.cli \
-        state set \
-        --path "$MANIFEST5" \
-        --type target \
-        --field plan_path \
-        --value "/some/plan.md" 2>&1) || SET5_RC=$?
-      if [[ $SET5_RC -eq 0 ]]; then
-        pass "T5: first-fill of empty plan_path allowed (exit 0)"
-      else
-        fail "T5: first-fill of empty plan_path should be allowed, got exit $SET5_RC; output: $SET5_OUT"
-      fi
-      # T5b: second write to non-empty plan_path should be refused
-      SET5B_RC=0
-      SET5B_OUT=$(PYTHONPATH="${REPO_ROOT}/cli/src" "$PYTHON_CLI" -m fno.cli \
-        state set \
-        --path "$MANIFEST5" \
-        --type target \
-        --field plan_path \
-        --value "/different/plan.md" 2>&1) || SET5B_RC=$?
-      if [[ $SET5B_RC -eq 5 ]]; then
-        pass "T5b: second write to non-empty plan_path refused (write-once)"
-      else
-        fail "T5b: expected exit 5 on second plan_path write, got $SET5B_RC; output: $SET5B_OUT"
-      fi
-    else
-      skip "T5: plan_path already set ('$CURRENT_PLAN'); skipping first-fill test"
-    fi
-  else
-    fail "T5: manifest not created for plan_path fill test"
-  fi
-  rm -rf "$_TMP5"
-fi
+# The write-once `state set` cases moved to the fno-agents parity replay
+# when the Python `state` group died with the family port (see header).
 
 # ── T7: shim test still passes ───────────────────────────────────────────────
 if [[ -f "$SHIM_TEST" ]]; then

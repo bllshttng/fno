@@ -232,6 +232,18 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
         cwd,
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs"),
     )?;
+    let runs = head_runs(gh_bin, cwd, head)?;
+    // A new run of a workflow on the same head (a body edit, a re-trigger)
+    // mints a new check suite, so the suite id cannot key supersession: the
+    // old run's failure would stand beside the new run's row forever. The
+    // workflow file keys it: two files can share a display name.
+    let workflow_of = |suite: &Value| -> String {
+        runs.iter()
+            .find(|run| run.get("check_suite_id") == Some(suite))
+            .and_then(|run| run.get("path").and_then(Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| suite.to_string())
+    };
     let mut rows: Vec<Value> = Vec::new();
     let mut raw: Vec<Value> = Vec::new();
     for page in pages {
@@ -269,7 +281,7 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
                 "link": run.get("html_url").and_then(|v| v.as_str()).unwrap_or(""),
                 "workflow": run
                     .pointer("/check_suite/id")
-                    .map(|v| v.to_string())
+                    .map(workflow_of)
                     .unwrap_or_default(),
                 "startedAt": run.get("started_at").and_then(|v| v.as_str()).unwrap_or(""),
                 "completedAt": run.get("completed_at").and_then(|v| v.as_str()).unwrap_or(""),
@@ -282,7 +294,7 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
     }
     // A run that failed before minting a job owns no check run; the shared
     // rule adds its row so the failure cannot read green.
-    rows.extend(zero_job_rows(gh_bin, cwd, head, &raw)?);
+    rows.extend(zero_job_rows(gh_bin, cwd, &runs, &raw)?);
     // The check-runs endpoint returns ONLY check-runs. A commit StatusContext
     // lives on a different endpoint, and reading one without the other is a
     // false green; a failed read propagates, it never reads green.
@@ -290,16 +302,9 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
     Ok(rows)
 }
 
-/// The rows for the Actions runs that failed before minting a job:
-/// the head_sha-scoped runs listing, the shared rule in
-/// `pr_status_facts::zero_job_failures`, and this module's row shape. A
-/// failed runs read is an `Err`, like a failed check-runs read.
-pub(crate) fn zero_job_rows(
-    gh_bin: &str,
-    cwd: &Path,
-    head: &str,
-    check_runs: &[Value],
-) -> Result<Vec<Value>, String> {
+/// The head_sha-scoped Actions runs listing. A failed runs read is an
+/// `Err`, like a failed check-runs read.
+fn head_runs(gh_bin: &str, cwd: &Path, head: &str) -> Result<Vec<Value>, String> {
     let pages = gh_api_pages_conditional(
         gh_bin,
         cwd,
@@ -311,6 +316,18 @@ pub(crate) fn zero_job_rows(
             runs.extend(list.iter().cloned());
         }
     }
+    Ok(runs)
+}
+
+/// The rows for the Actions runs that failed before minting a job:
+/// the head's runs listing, the shared rule in
+/// `pr_status_facts::zero_job_failures`, and this module's row shape.
+pub(crate) fn zero_job_rows(
+    gh_bin: &str,
+    cwd: &Path,
+    runs: &[Value],
+    check_runs: &[Value],
+) -> Result<Vec<Value>, String> {
     let jobs_total = |id: u64| -> Result<u64, String> {
         let raw = gh_api(
             gh_bin,
@@ -324,7 +341,7 @@ pub(crate) fn zero_job_rows(
             .and_then(Value::as_u64)
             .ok_or_else(|| format!("the jobs read for run {id} carried no total_count"))
     };
-    let found = crate::pr_status_facts::zero_job_failures(&runs, check_runs, &jobs_total)?;
+    let found = crate::pr_status_facts::zero_job_failures(runs, check_runs, &jobs_total)?;
     Ok(found
         .iter()
         .map(|r| {
@@ -1372,6 +1389,12 @@ pub fn run_push(argv: &[String]) -> i32 {
         }
     };
 
+    // (2c) A PR below a full CI tier waits for a slot (ci_tier.rs).
+    if let Some(refusal) = crate::ci_tier::push_hold(&cwd, &target) {
+        eprintln!("pr-push: {refusal}");
+        return 3;
+    }
+
     // (3) behind-before.
     let before = behind(&git, &cwd);
 
@@ -1754,6 +1777,10 @@ for a in "$@"; do case "$a" in
       echo '{"check_runs":[{"id":124,"name":"cancelled","status":"completed","conclusion":"cancelled","output":{"annotations_count":0},"started_at":"2026-09-19T06:00:00Z","completed_at":"2026-09-19T06:10:00Z","html_url":"https://github.com/o/r/actions/runs/124/job/457","check_suite":{"id":89}}]}'
       exit 0
     fi
+    if [ -f "$D/new-run" ]; then
+      echo '{"check_runs":[{"id":201,"name":"node-closure","status":"completed","conclusion":"failure","output":{"annotations_count":0},"started_at":"2026-10-27T20:32:33Z","completed_at":"2026-10-27T20:35:23Z","html_url":"https://github.com/o/r/actions/runs/301/job/1","check_suite":{"id":11}},{"id":202,"name":"node-closure","status":"in_progress","conclusion":null,"started_at":"2026-10-27T20:37:16Z","completed_at":null,"html_url":"https://github.com/o/r/actions/runs/302/job/2","check_suite":{"id":12}}]}'
+      exit 0
+    fi
     echo '{"check_runs":[{"name":"rust-ci","status":"completed","conclusion":"success","started_at":"2026-09-19T06:00:00Z","completed_at":"2026-09-19T06:05:00Z","html_url":"https://github.com/o/r/actions/runs/35344488345/job/99","check_suite":{"id":7}}]}'
     exit 0 ;;
   */status)
@@ -1767,6 +1794,10 @@ for a in "$@"; do case "$a" in
     if [ -f "$D/fail-runs" ]; then
       echo "gh: runs read failed" >&2
       exit 1
+    fi
+    if [ -f "$D/new-run" ]; then
+      echo '{"total_count":2,"workflow_runs":[{"id":301,"name":"guards","check_suite_id":11,"path":".github/workflows/guards.yml","status":"completed","conclusion":"failure","created_at":"2026-10-27T20:25:56Z","run_started_at":"2026-10-27T20:25:56Z"},{"id":302,"name":"guards","check_suite_id":12,"path":".github/workflows/guards.yml","status":"in_progress","conclusion":null,"created_at":"2026-10-27T20:37:15Z","run_started_at":"2026-10-27T20:37:15Z"}]}'
+      exit 0
     fi
     echo '{"total_count":1,"workflow_runs":[{"id":35366958901,"path":".github/workflows/cli-ci.yml","status":"completed","conclusion":"failure","created_at":"2026-09-19T07:00:00Z","html_url":"https://github.com/o/r/actions/runs/35366958901"}]}'
     exit 0 ;;
@@ -1793,6 +1824,29 @@ exit 1
                 "err names the {fragment} read: {err}"
             );
         }
+    }
+
+    /// A body edit starts a new run of the same workflow on the same head,
+    /// in a new check suite. Its pending row supersedes the old run's
+    /// failure, so the wait reads no live red and cancels nothing.
+    #[test]
+    fn a_new_run_of_a_workflow_supersedes_its_old_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let gh = stub_gh(dir.path());
+        std::fs::write(dir.path().join("new-run"), b"").unwrap();
+        let rows = read_checks_rows(gh.to_str().unwrap(), dir.path(), "abc123").unwrap();
+        let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
+        let buckets: Vec<&str> = latest
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["bucket"].as_str().unwrap())
+            .collect();
+        assert_eq!(buckets, ["pending"], "{latest}");
+        assert_eq!(
+            crate::pr_status::wait::cancel_in_flight(gh.to_str().unwrap(), dir.path(), "abc123"),
+            None
+        );
     }
 
     /// A work repo off a pushed bare origin: base commit on main carrying

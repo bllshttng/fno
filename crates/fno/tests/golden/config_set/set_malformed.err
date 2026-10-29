@@ -1,0 +1,1 @@
+error: existing config at <FIXTURE>/fake_home/.fno/config.toml is malformed: Expected ']' at the end of a table declaration (at line 1, column 8)

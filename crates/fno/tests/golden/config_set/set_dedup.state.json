@@ -1,0 +1,26 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "review": {
+   "max_rounds": 6
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "review.max_rounds",
+   "new_value": 6,
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

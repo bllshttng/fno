@@ -134,6 +134,9 @@ pub struct QuestionItem {
     pub settled: bool,
     #[serde(default)]
     pub options: Vec<QuestionOption>,
+    /// The screenshots the ask attached, as absolute paths.
+    #[serde(default)]
+    pub images: Vec<String>,
     #[serde(default)]
     pub blocked_because: Option<String>,
     #[serde(default)]

@@ -2476,7 +2476,7 @@ def dispatch_spawn(
             message, role_level, role_scope, succession, take_over, harness, parent_edge,
             name=name, revive=bool(resume_session_id))
         message = promotion["message"]
-        name = adopt_drawn_name(succession, promotion.get("plan"), name)
+        name = adopt_drawn_name(promotion.get("plan"), name)
 
     # 3b. Codex thread spawns are held by the Rust app-server lane. The Python
     # runtime delegates there instead of silently downgrading to a one-shot.
@@ -2606,7 +2606,7 @@ def dispatch_spawn(
                 )
                 if role_refusal is not None:
                     raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
-                name = adopt_drawn_name(succession, role_plan, name)
+                name = adopt_drawn_name(role_plan, name)
 
             # a revive must come back on the route the row was born with
             # unless this invocation resolved one of its own; raises exit 2 when
@@ -4459,14 +4459,13 @@ def _a2a_first_use_gate(
     keep_on = answer in ("", "y", "yes")
 
     try:
-        from fno.config.writer import set_config_value
+        from fno.rust_binary import resolve_front_binary
 
-        set_config_value(
-            "config.agents.a2a.auto",
-            "true" if keep_on else "false",
-            scope="global",
-            lock_timeout=config_lock_timeout_seconds,
-        )
+        argv = ["config", "set", "config.agents.a2a.auto", "true" if keep_on else "false"]
+        # The budget bounds the lock wait only; the run bound covers startup.
+        env = {**os.environ, "FNO_CONFIG_LOCK_TIMEOUT": str(config_lock_timeout_seconds)}
+        subprocess.run([str(resolve_front_binary() or "fno"), *argv], check=True,
+                       capture_output=True, env=env, timeout=config_lock_timeout_seconds + 30)
     except Exception as exc:
         sys.stderr.write(
             f"\nfno-agents a2a: could not persist confirmation ({exc}); "

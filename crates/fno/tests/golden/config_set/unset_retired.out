@@ -1,0 +1,1 @@
+unset dispatch.allowed_verbs (was ['a']); now defaults to None (global: <FIXTURE>/fake_home/.fno/config.toml)

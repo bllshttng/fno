@@ -269,7 +269,7 @@ struct LawAnswer {
 
 /// One-line, char-safe truncation: collapse whitespace, then cut at a char
 /// boundary so a multi-byte character is never split.
-fn one_line(text: &str, cap: usize) -> String {
+pub(crate) fn one_line(text: &str, cap: usize) -> String {
     let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match flat.char_indices().nth(cap) {
         Some((i, _)) => flat[..i].to_owned(),
@@ -462,11 +462,12 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
                 to = to,
             ),
             None => format!(
-                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell; the operator can answer it: fno inbox outstanding clear {qid} --answer \"per {law_id}\"",
+                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
                 law_id = law_id,
                 qid = q.id,
                 ident = ident,
                 q100 = q100,
+                chat = crate::question_clear::chat_answer_line(&q.id),
             ),
         };
         lines.push(line);
@@ -635,7 +636,7 @@ fn classify_stage(hook: &Value) -> Option<&'static str> {
 }
 
 /// The law's first sentence, split at `". "`, `"! "` or `"? "`.
-fn first_sentence(text: &str) -> &str {
+pub(crate) fn first_sentence(text: &str) -> &str {
     let mut end = text.len();
     for sep in [". ", "! ", "? "] {
         if let Some(pos) = text.find(sep) {
@@ -2052,6 +2053,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if !paths.is_empty() {
         data["paths"] = json!(paths);
+    }
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::stamp_person(map);
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
     // Durability first: the project journal. A failed write here records
@@ -3958,6 +3962,10 @@ pub(crate) mod scope_tests {
         assert!(
             !index.contains("\"paths\""),
             "no paths key when none sent: {index}"
+        );
+        assert!(
+            index.contains("\"person\":"),
+            "the person rides along: {index}"
         );
         let journal = env.journal_text();
         assert!(

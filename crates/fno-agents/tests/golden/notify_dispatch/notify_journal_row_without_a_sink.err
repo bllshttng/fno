@@ -1,0 +1,1 @@
+fno inbox notify: no OS notification tool available (need osascript on macOS or notify-send on Linux); notification not sent.

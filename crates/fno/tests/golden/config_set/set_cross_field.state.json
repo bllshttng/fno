@@ -1,0 +1,39 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "obsidian": {
+   "enabled": true,
+   "vault": "/tmp/vault"
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "obsidian.enabled",
+   "new_value": true,
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  },
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "obsidian.vault",
+   "new_value": "/tmp/vault",
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

@@ -1,7 +1,7 @@
 // Ported from the single-file draft of send.rs; split by question.
 use super::*;
 
-/// Python `is_full_session_id` (store_fallback): 32-hex or dashed-uuid shape.
+/// 32-hex or dashed-uuid shape.
 /// `pub(crate)`: the reply leaf's provenance arm reads it.
 pub(crate) fn is_full_session_id(token: &str) -> bool {
     let stripped: String = token.chars().filter(|c| *c != '-').collect();
@@ -11,7 +11,7 @@ pub(crate) fn is_full_session_id(token: &str) -> bool {
     stripped.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Python `is_session_shaped`: a full id or an 8-hex short handle.
+/// A full id or an 8-hex short handle.
 pub(super) fn is_session_shaped(token: &str) -> bool {
     is_full_session_id(token) || is_unsafe_short_address(token)
 }
@@ -20,7 +20,7 @@ pub(super) fn is_session_shaped(token: &str) -> bool {
 // Address resolution: the five durable stores
 // ---------------------------------------------------------------------------
 
-/// Python `ReachableSession`: one stored session a token can name.
+/// One stored session a token can name.
 /// `pub(crate)`: the reply leaf's ladder reads it.
 #[derive(Clone, Debug)]
 pub(crate) struct ReachableSession {
@@ -41,7 +41,7 @@ pub(crate) struct ReachResult {
     pub(crate) degraded: Vec<&'static str>,
 }
 
-/// Python `_token_matches`: full id or 8-hex short, case-folded hex.
+/// Full id or 8-hex short, case-folded hex.
 pub(super) fn token_matches(token: &str, session_id: &str) -> bool {
     if token.is_empty() || session_id.is_empty() {
         return false;
@@ -49,7 +49,7 @@ pub(super) fn token_matches(token: &str, session_id: &str) -> bool {
     crate::identity::session_handle_tier(token, session_id).is_some()
 }
 
-/// Python `_decode_project_dir`: best-effort cwd from a claude projects dir
+/// Best-effort cwd from a claude projects dir
 /// name. The encoding is lossy, so this stays a guess (verbatim=False).
 pub(super) fn decode_project_dir(name: &str) -> Option<String> {
     if !name.starts_with('-') {
@@ -65,7 +65,7 @@ pub(super) fn decode_project_dir(name: &str) -> Option<String> {
 
 /// `pub(crate)`: the reply leaf's transcript scan reads the same store.
 pub(crate) fn projects_dir() -> PathBuf {
-    // Python `default_projects_dir` precedence, which the delivery-matrix
+    // Precedence, which the delivery-matrix
     // cell 6b fixture pins: the fno override leads, and a blank value never
     // redirects the scan at a cwd-relative path.
     if let Ok(dir) = std::env::var(crate::claude_drive::PROJECTS_DIR_ENV) {
@@ -117,9 +117,9 @@ pub(super) fn roster_path() -> PathBuf {
     base.join("roster.json")
 }
 
-/// Python `_alias_to_session_ids`: alias map inversion plus the registry rows'
+/// Alias map inversion plus the registry rows'
 /// alias lists. `Err(())` reads degraded (a torn store is not a clean miss).
-pub(super) fn alias_to_session_ids(token: &str) -> Result<Vec<String>, ()> {
+pub(crate) fn alias_to_session_ids(token: &str) -> Result<Vec<String>, ()> {
     let path = AgentsHome::from_env().root().join("name-map.json");
     let mut hits: Vec<String> = Vec::new();
     if path.exists() {
@@ -154,7 +154,6 @@ pub(super) fn alias_to_session_ids(token: &str) -> Result<Vec<String>, ()> {
     Ok(hits)
 }
 
-/// Python `_reachable_from_registry`.
 pub(super) fn reachable_from_registry(token: &str) -> (Vec<ReachableSession>, bool) {
     let registry = AgentsHome::shared_registry_json();
     let rows = match crate::client_commands::load_registry_entries(&registry) {
@@ -231,7 +230,7 @@ pub(super) fn reachable_from_transcripts(token: &str) -> (Vec<ReachableSession>,
     (hits, true)
 }
 
-/// Python `_reachable_from_roster`: the claude daemon roster rows, exited
+/// The claude daemon roster rows, exited
 /// ones included. Absent file: real empty. Type-drifted: failure.
 pub(super) fn reachable_from_roster(token: &str) -> (Vec<ReachableSession>, bool) {
     let path = roster_path();
@@ -265,7 +264,7 @@ pub(super) fn reachable_from_roster(token: &str) -> (Vec<ReachableSession>, bool
     (hits, true)
 }
 
-/// Python `_reachable_from_graph`: session stamps on backlog nodes. The
+/// Session stamps on backlog nodes. The
 /// malformed-tolerant read Python used has no Rust twin, so an unreadable
 /// store reads degraded, never empty.
 pub(super) fn reachable_from_graph(token: &str) -> (Vec<ReachableSession>, bool) {
@@ -418,7 +417,7 @@ pub(super) fn source_matches_verbatim(source: &str) -> bool {
     source_is_verbatim(source)
 }
 
-/// Python `_report_ambiguity`: names each candidate and its first source.
+/// Names each candidate and its first source.
 pub(super) fn named_ambiguity(
     token: &str,
     found: &std::collections::HashMap<(String, String), ReachableSession>,
@@ -513,7 +512,7 @@ pub(crate) fn unavailable_token_exit(name: &str, failed: &[String], candidates: 
 // The name lane and the dispatch engine
 // ---------------------------------------------------------------------------
 
-/// Python `_self_recipient`: canonical own address after resolution.
+/// Canonical own address after resolution.
 pub(super) fn self_recipient(
     token: &str,
     resolved_session_id: Option<&str>,
@@ -532,7 +531,7 @@ pub(super) fn self_recipient(
     Some(crate::identity::canonical_handle(&own))
 }
 
-/// Python `_reply_session_for`: the collision-safe sender session id, or None
+/// The collision-safe sender session id, or None
 /// when --from-name named a third address.
 pub(super) fn reply_session_for(from_name: Option<&str>) -> Option<String> {
     let session = resolve_self_session()?;
@@ -559,7 +558,7 @@ pub(super) fn reply_session_for(from_name: Option<&str>) -> Option<String> {
     None
 }
 
-/// Python `_resolve_token`: reachability BEFORE the envelope is addressed.
+/// Reachability BEFORE the envelope is addressed.
 pub(super) fn resolve_token(
     token: &str,
 ) -> Result<(Option<ReachableSession>, Option<String>), TokenFailure> {
@@ -605,7 +604,6 @@ pub(super) enum TokenFailure {
     },
 }
 
-/// Python `_is_job_name` / `is_job_token`.
 pub(super) fn is_job_token(token: &str) -> bool {
     token.starts_with("node:") || token.starts_with("pr:")
 }

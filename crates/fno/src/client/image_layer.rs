@@ -123,6 +123,12 @@ fn picker() -> &'static Picker {
         .unwrap_or_else(|| FALLBACK.get_or_init(Picker::halfblocks))
 }
 
+/// True when the terminal speaks an image protocol; half-blocks is the
+/// no-graphics fallback.
+pub(super) fn graphics() -> bool {
+    picker().protocol_type() != ProtocolType::Halfblocks
+}
+
 /// Encode `img` to fit `rect`. `None` when the rect is empty or the encoder
 /// refuses the image.
 pub(super) fn render(img: &DynamicImage, rect: Rect) -> Option<Rendered> {

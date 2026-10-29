@@ -431,7 +431,7 @@ pub(crate) fn tool_on_path(tool: &str) -> bool {
 
 /// `fno-agents pr-base-lineage-check <pr>`: the command door over `lineage`,
 /// the same verdict `fno do pr merge` obeys. One REST read fills the base
-/// ref (the Python `_base_ref` ask); a miss leaves it empty and `lineage`
+/// ref; a miss leaves it empty and `lineage`
 /// answers its own unknown for the unreadable base. Output is the Python
 /// command's exact format: stdout `base-lineage: ok|bypassed ... - <reason>`
 /// at 0, stderr `REFUSED` plus the bypass hint at 3, `unknown` at 4, and a

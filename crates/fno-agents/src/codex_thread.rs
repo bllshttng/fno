@@ -250,23 +250,6 @@ pub fn thread_unarchive_request_json(id: u64, thread_id: &str) -> String {
     .to_string()
 }
 
-/// Build the `thread/resume` request. The full thread id and cwd are both
-/// required so recovery cannot silently move a worker onto the canonical repo.
-pub fn thread_resume_request_json(thread_id: &str, cwd: &str, approval_policy: &str) -> String {
-    json!({
-        "id": 1,
-        "method": "thread/resume",
-        "params": {
-            "threadId": thread_id,
-            "excludeTurns": true,
-            "cwd": cwd,
-            "sandbox": "workspace-write",
-            "approvalPolicy": approval_policy,
-        }
-    })
-    .to_string()
-}
-
 /// Resume one exact thread for provider control without changing its model,
 /// sandbox, approval policy, or thread config.
 pub(crate) fn thread_resume_control_request_json(id: u64, thread_id: &str, cwd: &Path) -> String {
@@ -409,12 +392,6 @@ pub fn is_lead_objective(objective: &str, scope: &str) -> bool {
     objective == lead_objective(scope) || objective == format!("$fno:lead {}", scope.trim())
 }
 
-pub fn parse_goal_response(raw: &str) -> Result<Option<NativeGoal>, ThreadDriverError> {
-    let value: Value = serde_json::from_str(raw)
-        .map_err(|_| ThreadDriverError::Protocol("invalid thread/goal response".into()))?;
-    parse_goal_value(&value)
-}
-
 pub fn parse_goal_value(value: &Value) -> Result<Option<NativeGoal>, ThreadDriverError> {
     if let Some(error) = value.get("error") {
         return Err(ThreadDriverError::Protocol(server_error(error)));
@@ -527,11 +504,6 @@ pub fn ensure_lead_goal(
         }
     }
     Ok(GoalStatus::Active)
-}
-
-/// Build a `turn/start` request for the held driver.
-pub fn turn_start_request_json_with_id(id: u64, thread_id: &str, text: &str) -> String {
-    turn_start_request_json_with_effort(id, thread_id, text, None)
 }
 
 pub fn turn_start_request_json_with_effort(

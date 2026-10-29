@@ -126,9 +126,9 @@ Neither reads a field `_apply_graph_defaults` rewrites, so neither is a drift la
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno doctor test` / `fno doctor test rust` / `fno doctor test smoke` | `cli/src/fno/test_cmd.py` | KEEP, canonical | — |
-| 2 | CI smoke job | `.github/workflows/cli-ci.yml` -> `uv run fno-py doctor test smoke` | DONE (was pytest-in-smoke.sh; one entry now) | — |
-| 3 | Shell test registry | `cli/src/fno/test_cmd.py` (`_STRUCTURAL_STEPS` + `discover_shell_harnesses`) | DONE (auto-discover owned trees; smoke.sh retired) | — |
+| 1 | `fno doctor test` / `fno doctor test rust` / `fno doctor test smoke` | `crates/fno-agents/src/test_command.rs` (native) | KEEP, canonical | — |
+| 2 | CI smoke job | `.github/workflows/cli-ci.yml` -> `fno-agents test-run doctor smoke` | DONE (was pytest-in-smoke.sh; one entry now) | — |
+| 3 | Shell test registry | `crates/fno-agents/src/test_smoke_registry.rs` + `test_smoke_discovery.rs` | DONE (auto-discover owned trees; smoke.sh retired) | — |
 | 4 | Bare `pytest` | user-invoked | KEEP external tool; warn in worktrees | OPEN |
 | 5 | RTK wrappers | RTK config | KEEP bypass guard | — |
 

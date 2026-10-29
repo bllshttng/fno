@@ -1,0 +1,5 @@
+{"after": {"dispatch": {"keep": 1}}, "before": "[dispatch]\nallowed_verbs = [\"a\"]\nverb_registry = \"x\"\nkeep = 1\n", "file": "config.toml", "name": "toml_both", "receipts": ["removed retired key dispatch.allowed_verbs from <FIXTURE>/toml_both/config.toml", "removed retired key dispatch.verb_registry from <FIXTURE>/toml_both/config.toml"]}
+{"after": {"review": {"max_rounds": 2}}, "before": "[dispatch]\nallowed_verbs = []\n\n[review]\nmax_rounds = 2\n", "file": "config.toml", "name": "toml_one", "receipts": ["removed retired key dispatch.allowed_verbs from <FIXTURE>/toml_one/config.toml"]}
+{"after": {"dispatch": {"verb_registry": "x"}, "review": {"max_rounds": 2}}, "before": "dispatch:\n  verb_registry: x\nreview:\n  max_rounds: 2\n", "file": "settings.yaml", "name": "yaml_one", "receipts": []}
+{"after": {"review": {"max_rounds": 2}}, "before": "[review]\nmax_rounds = 2\n", "file": "config.toml", "name": "toml_none", "receipts": []}
+{"after": {"review": {"posture": "allowed_verbs"}}, "before": "[review]\nposture = \"allowed_verbs\"\n", "file": "config.toml", "name": "toml_mention_only", "receipts": []}

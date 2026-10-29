@@ -138,6 +138,9 @@ serde_json = "1"
 
 [dev-dependencies]
 proptest = "1"
+# The lead-lifecycle fixtures stamp a fresh manifest created_at (same
+# version/features as the main dependency, so nothing new compiles).
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }
 # Goldens frozen from Python hold correctly rounded floats. serde_json's
 # default parser can land one ULP off (0.9696969696969697 reads back as
 # ...696), so a parity compare needs the exact parse.

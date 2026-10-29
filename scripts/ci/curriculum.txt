@@ -35,8 +35,7 @@ pr merge
 pr rebase
 pr verify
 pr ritual
-# L9 when it breaks (skill-led; five CLI commands)
-test
+# L9 when it breaks (skill-led; four CLI commands)
 config get
 config set
 config unset
