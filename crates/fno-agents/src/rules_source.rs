@@ -252,6 +252,15 @@ pub fn run_rules_import(file: &str) -> i32 {
 
 fn rules_import_inner(file: &str) -> Result<usize, (i32, String)> {
     let text = std::fs::read_to_string(file).map_err(|e| (2, format!("{file}: {e}")))?;
+    // The authority floor answers before any store read or validation, so
+    // an agent caller learns only the refusal, never the file's contents.
+    let caller = crate::law_match::resolve_caller().map_err(|m| (3, m))?;
+    if caller.authority != "operator" {
+        return Err((3, format!(
+            "writing law_trigger rows demands the operator floor; this caller resolves {}. Run the import from the user's terminal.",
+            caller.authority
+        )));
+    }
     let index = match decision_index::default_store_live() {
         Ok(rows) => decision_index::laws_of(rows),
         Err(e) => return Err((1, format!("the decision index: {e}"))),
@@ -263,13 +272,6 @@ fn rules_import_inner(file: &str) -> Result<usize, (i32, String)> {
             .and_then(Value::as_str)
             .unwrap_or("the rule file does not validate");
         return Err((3, msg.to_string()));
-    }
-    let caller = crate::law_match::resolve_caller().map_err(|m| (3, m))?;
-    if caller.authority != "operator" {
-        return Err((3, format!(
-            "writing law_trigger rows demands the operator floor; this caller resolves {}. Run the import from the user's terminal.",
-            caller.authority
-        )));
     }
     let rules = crate::rules::parse_table(&text).map_err(|e| (3, format!("{e}")))?;
     let bodies = rule_bodies(&text);

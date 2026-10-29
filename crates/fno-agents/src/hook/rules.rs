@@ -99,16 +99,7 @@ fn event_of(kind: &str, hook: &Value, cwd: &Path) -> Option<Event> {
         }
         _ => return None,
     }
-    ev.node = ev
-        .text
-        .as_deref()
-        .unwrap_or("")
-        .split_whitespace()
-        .map(|t| {
-            t.trim_matches(|c: char| !c.is_ascii_alphanumeric())
-                .to_lowercase()
-        })
-        .find(|t| crate::law_match::matches_node_id_shape(t));
+    ev.node = ev.text.as_deref().and_then(crate::rules_source::node_in_text);
     ev.project =
         crate::law_match::resolve_project(Some(cwd), &crate::law_match::settings_sources()).ok();
     Some(ev)
