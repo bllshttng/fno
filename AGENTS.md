@@ -76,7 +76,7 @@ Five advertised commands (table below): `target`, `think`, `review`, `ship`, `fi
 | `ship pr create` \| `check` \| `merged` | Open PR inline / poll+implement external review / post-merge ritual |
 | `growth-launch "<objective>"` | Growth-studio pack: four-role campaign bundle held at a founder approval gate |
 
-Surface evolution: `blueprint` mutates the design doc in place ([lean-blueprint](docs/architecture/lean-blueprint.md)). An approved native Plan-Mode plan is picked up by the next bare `target` ([target-plan-mode-integration](docs/architecture/target-plan-mode-integration.md)).
+Surface evolution: an approved native Plan-Mode plan is picked up by the next bare `target` ([target-plan-mode-integration](docs/architecture/target-plan-mode-integration.md)).
 
 ## Backlog (`fno backlog`)
 
