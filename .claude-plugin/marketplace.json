@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
-    "version": "0.4.3"
+    "version": "0.4.5"
   },
   "plugins": [
     {
