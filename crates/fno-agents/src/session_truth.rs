@@ -86,10 +86,14 @@ pub(crate) enum Signal {
 
 impl Signal {
     pub(crate) fn of(text: &str) -> Self {
-        if watching_re().is_match(text) {
+        // One blank pass serves the two opener arms; the help arm blanks
+        // again inside the parser, which is idempotent on already-blanked
+        // text.
+        let blanked = crate::distress::blank_code_spans_and_fences(text);
+        if watching_re().is_match(&blanked) {
             return Signal::Watching;
         }
-        if promise_re().is_match(text) {
+        if promise_re().is_match(&blanked) {
             return Signal::Promise;
         }
         if api_error_re().is_match(text.trim_start()) {
@@ -1519,6 +1523,23 @@ mod tests {
         let real =
             "blocked on the ruling: <help class=\"question\" reason=\"grid\">which band?</help>";
         assert_eq!(Signal::of(real), Signal::Question);
+    }
+
+    /// The done and watching signals also blank code spans first, exactly as
+    /// the loop runtime's intent match does: a quoted promise or watching
+    /// tag is prose, a real one still signals.
+    #[test]
+    fn a_quoted_promise_or_watching_tag_does_not_signal_but_a_real_one_does() {
+        let quoted = "the gate reads `<promise>MISSION COMPLETE</promise>` from external truth";
+        assert_ne!(Signal::of(quoted), Signal::Promise);
+        assert_eq!(
+            Signal::of("<promise>MISSION COMPLETE: shipped</promise>"),
+            Signal::Promise
+        );
+        assert_eq!(
+            Signal::of("<watching reason=\"ci\" pr=\"4081\">"),
+            Signal::Watching
+        );
     }
 
     /// Until the warm pass rebuilds a session, truth answers `warming`, and

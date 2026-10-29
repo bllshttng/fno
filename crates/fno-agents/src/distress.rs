@@ -226,6 +226,9 @@ pub(crate) fn extract_help_distress(text: &str) -> Option<HelpDistress> {
 /// length-preserving (one output char per input char), so the span indexes
 /// the ORIGINAL text and a caller can slice the raw block for display.
 pub(crate) fn help_open_span(text: &str) -> Option<(usize, usize)> {
+    if !text.contains("<help") {
+        return None;
+    }
     let blanked = blank_code_spans_and_fences(text);
     find_help_tag(&blanked)
 }
