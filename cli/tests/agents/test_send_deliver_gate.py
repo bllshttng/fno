@@ -666,7 +666,7 @@ print(f"{result.msg_id} delivered ({result.delivery})")
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(result.stdout.splitlines()) == 1
-        assert result.stdout.strip().endswith("injected")
+        assert result.stdout.strip().endswith("delivered (hosted)")
         audit_rows = read_rows()
         # The write-ahead stage row and the hosted receipt share one id.
         assert len(audit_rows) == 2
