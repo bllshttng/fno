@@ -21,7 +21,7 @@ pub fn run(args: &[OsString]) -> i32 {
         }
     }
     if tokens.is_empty() {
-        eprintln!("usage: fno config plugin install <claude|codex|opencode|agy> [flags...]");
+        eprintln!("usage: fno config plugin install <claude|codex|opencode|pi|agy|grok|zcode|footnote> [--pack] [flags...]");
         return 2;
     }
     let binary = crate::digest_overlay::fno_agents_bin();
