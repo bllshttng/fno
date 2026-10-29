@@ -203,7 +203,7 @@ A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `ev
 
 ## Chat channels
 
-A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in config.toml. Keep the row's secret in `~/.fno/.env`, so the daemon reads it.
+A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in config.toml. Keep the row's secret in `~/.fno/.env`, so the daemon reads it. `fno config setup run --only messaging` walks each channel, writes its row and its secret, and sends one test message. Setup also offers this step, and a skip prints the same command.
 
 A chat row is an `[[attention.sinks]]` row with `type` set to `telegram`, `discord` or `bluebubbles`. Every row carries `name`, `type`, `machine`, `token_env` and `allow`. Telegram adds `chat_id`. Discord adds `channel_id`. BlueBubbles adds `url` and `chat_guid`, and its `token_env` names the server password. A loopback `url` is legal for BlueBubbles, because the server runs on the same Mac.
 
@@ -225,7 +225,7 @@ Discord needs Message Content Intent turned on for the bot. Without it Discord r
 
 The arm's mux pass runs on every beat beside the pages. Every unsuperseded `attention_answer` row, whatever its sink, drives one reply ladder from the persisted state at `~/.fno/state/attention/replies.json`. First the clear: while the item is still open, the arm runs `fno inbox outstanding clear` (the same retry cap as the file lane, five). A note item skips the clear, because no door closes a note. Then the rungs, in order:
 
-1. `mail` - the clear's mail leg. The posture line decides: `delivered (hosted)` is the end, `rung: mail, outcome: landed`.
+1. `mail` - the clear's mail leg. The posture line decides. A reached receipt (`injected`, `parked`, `accepted-*`) is the end: `rung: mail, outcome: landed`.
 2. `resume` - a durable park under an idle asker. When the asker has a session id, the arm runs `fno agents session resume <session_id> --message <answer>`. This is the one resume door, with a 30 s bound and stdin closed. The message carries the question id and a dedupe line. A later beat looks for the question id in the asker's transcript, after the byte offset the resume saved. Seeing it confirms delivery (`rung: resume, outcome: confirmed`).
 3. `role` - an exit-17 resume, a nonzero exit, a missing transcript, or five unconfirmed minutes. The arm mails the answer, wrapped, to the live role whose territory names the asker's node (`rung: role, outcome: sent`). With no role, the row reads `rung: none, outcome: failed` and the evidence names why.
 

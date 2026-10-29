@@ -84,54 +84,6 @@ about the claim - `fno backlog intake` reads the frontmatter directly. When you
 want to override the frontmatter at intake time (e.g. repairing a past
 mistake), use `fno backlog intake <plan>.md --claims ab-XXX`.
 
-## Schema Citation Gate (graduated; DB-touching plans)
-
-A plan that changes the database without ever naming a real table, enum, or
-constraint is planning blind. This gate makes a DB-touching plan cite the
-schema.
-It is graduated: full / large plans fail closed, quick / small plans warn.
-
-**When the gate fires (AC3-FR).** Only when the codemap has a
-`## Database Schema` section (the schema is known). With no schema section
-there is nothing to validate against, so the gate does NOT fire and planning
-proceeds. Reuse the schema written at design time: if the design doc already
-carries a `## Schema Reconciliation` section, the touched tables it names are
-trusted candidate citations; otherwise read `.fno/codemap.md`'s
-`## Database Schema` section directly.
-
-**DB-touch detection (lowest-false-positive signal).** A plan is DB-touching
-when the schema section exists AND the plan's File Ownership Map / Files-to-
-Modify targets a DB path (`migrations/`, `supabase/`, `*.sql`, or a model /
-schema file) OR a task body names a known table/enum from the schema section.
-A heuristic keyword like the bare word "table" does NOT trip the gate.
-
-**Satisfaction.** A DB-touching task is satisfied when it cites at least one
-real identifier present in the schema section. An exact identifier match is
-required; a schema-qualified form is accepted (a task naming `user_accounts`
-matches a schema table `user_accounts`, and `public.user_accounts` is also
-accepted), but a partial token like `account` does not match.
-
-**Enforcement, graduated by size:**
-
-- **Full / L plans -> fail closed.** Refuse: print the message to stderr, halt
-  before any write, and surface a non-zero status. The refusal MUST name the
-  uncited task
-  and list candidate identifiers from the schema section (AC3-ERR / AC3-UI):
-
-  ```
-  Plan task {task-id} touches the database but cites no real schema identifier.
-  Cite one of: {comma-separated tables/enums/constraints from the schema section}.
-  ```
-
-- **Quick / -S plans -> warn, proceed.** Emit a single-line warning on stderr
-  (`Warning: task {task-id} touches the DB without a schema citation`) and
-  continue (AC3-EDGE). Small blast radius does not justify blocking, mirroring
-  how the discovery gate relaxes for `-S`.
-
-Do NOT auto-insert a citation to silence the gate: as with Failure Mode
-Ingestion, the point is to force schema thinking into the plan, not to paper
-over its absence.
-
 ## No new Python (plans that write cli/src/fno Python)
 
 Trigger: a Files to Modify row, a File Ownership Map row, or a task `surface` names a path under `cli/src/fno` ending `.py`.
@@ -182,7 +134,7 @@ Graduated like the No New Python gate. A plan created after 2026-09-17 errors. A
 
 ## Answerer Enumeration Gate (graduated, every plan that changes a read, write, or feed)
 
-A plan that fixes one site of a question asked at several sites ships the symptom again as PR two. This gate makes the plan count the answerers before the PRs do. The protocol that fills the block lives in [answerer-enumeration.md](answerer-enumeration.md): the four steps, the sweep rules, the quote-the-expression rule, and the worked example. This section is the gate contract, modeled on the Schema Citation Gate above.
+A plan that fixes one site of a question asked at several sites ships the symptom again as PR two. This gate makes the plan count the answerers before the PRs do. The protocol that fills the block lives in [answerer-enumeration.md](answerer-enumeration.md): the four steps, the sweep rules, the quote-the-expression rule, and the worked example. This section is the gate contract.
 
 ### Trigger
 

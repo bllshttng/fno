@@ -119,7 +119,7 @@ pub struct Screen {
 
 /// The fixed screen order. The wizard never reorders; a false `when`
 /// records a skip and moves on.
-pub const SCREENS: [Screen; 15] = [
+pub const SCREENS: [Screen; 16] = [
     Screen {
         id: "preflight",
         when: When::Always,
@@ -167,6 +167,11 @@ pub const SCREENS: [Screen; 15] = [
     },
     Screen {
         id: "services",
+        when: When::Always,
+        stops: [false, true, true],
+    },
+    Screen {
+        id: "messaging",
         when: When::Always,
         stops: [false, true, true],
     },
@@ -452,6 +457,7 @@ pub fn step(state: &mut State, pr: &mut dyn Prompter, pb: &mut dyn Probes) -> Ne
         "budget" => screen_budget(state, pr, stops),
         "review-merge" => screen_review_merge(state, pr, stops),
         "services" => screen_services(state, pr, stops),
+        "messaging" => screen_messaging(state, pr, stops),
         "projects" => screen_projects(state, pr, stops),
         "join" => screen_join(state, pr, stops),
         "review" => screen_review(state, pr, stops),
@@ -991,6 +997,55 @@ fn screen_services(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
     Outcome::Forward
 }
 
+/// Chat channels for open questions. Every preset ticks none: a channel
+/// needs a token only the person can make, so the aggressive pass skips it
+/// and the setup at apply asks for each pick's details.
+fn screen_messaging(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
+    let labels: Vec<&str> = crate::setup_messaging::CHANNELS
+        .iter()
+        .map(|(_, label)| *label)
+        .collect();
+    let defaults: Vec<usize> = match state.answers.get("messaging") {
+        Some(Answer::Picked(picked)) => (0..labels.len())
+            .filter(|i| {
+                picked
+                    .iter()
+                    .any(|p| p == crate::setup_messaging::CHANNELS[*i].0)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let idxs = if !stops {
+        defaults
+    } else {
+        match ticks_flow(
+            state,
+            pr,
+            "messaging",
+            "Send open questions to a chat? Pick none to skip.",
+            &labels,
+            &defaults,
+        ) {
+            Flow::Answered(v) => v,
+            Flow::Back => return Outcome::Back,
+            Flow::Cancel => return Outcome::Cancel,
+        }
+    };
+    let picked: Vec<String> = idxs
+        .iter()
+        .filter_map(|i| crate::setup_messaging::CHANNELS.get(*i))
+        .map(|(kind, _)| kind.to_string())
+        .collect();
+    if picked.is_empty() {
+        pr.note(
+            "messaging",
+            &format!("later: {}", crate::setup_messaging::REENTER),
+        );
+    }
+    state.answers.insert("messaging", Answer::Picked(picked));
+    Outcome::Forward
+}
+
 fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
     // The project layer answers only inside a git repo: repo_root()
     // falls back to the cwd, and setup must not litter an arbitrary
@@ -1231,6 +1286,18 @@ pub fn pending(state: &State) -> Vec<Proposal> {
                 value: "true".into(),
                 scope: "global",
                 reason: "the background service this run picked".into(),
+                source: "wizard",
+            });
+        }
+    }
+    if let Some(Answer::Picked(picked)) = state.answers.get("messaging") {
+        for kind in picked {
+            rows.push(Proposal {
+                id: "messaging",
+                key: String::new(),
+                value: kind.clone(),
+                scope: "global",
+                reason: "the chat channel this run picked; setup asks for its token".into(),
                 source: "wizard",
             });
         }

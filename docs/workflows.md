@@ -64,8 +64,6 @@ To work a whole board instead of one node: `/fno:target bg --all-ready` dispatch
 
 ## Utilities
 
-`fno doctor codemap` writes an AST and PageRank map of the most important symbols in the repo. Blueprint and target read it for structural context. `--db-schema` appends the database schema, read-only.
-
 `fno agents workspace worktree status` lists worktrees with their live session. `fno agents workspace worktree cleanup --merged` removes merged ones. [Worktrees](guides/worktrees.md) has the full lifecycle.
 
 ## Change behavior with config

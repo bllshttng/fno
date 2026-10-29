@@ -1724,6 +1724,17 @@ fn load_snapshot() -> (Option<f64>, Option<f64>, Option<f64>, u64) {
     (Some(loads[0]), Some(loads[1]), Some(loads[2]), capacity)
 }
 
+/// The `load average:` text segment, or `unavailable` when getloadavg came
+/// back short. Printing the reading keeps the number a reader would fetch
+/// from `uptime` inside the instrument, carrying its own demotion; nothing
+/// gates on it.
+fn load_line(load5: Option<f64>, load15: Option<f64>, cpus: Option<u64>) -> String {
+    match (load5, load15, cpus) {
+        (Some(l5), Some(l15), Some(n)) => format!("5m {l5:.1}, 15m {l15:.1} on {n} cpus"),
+        _ => "unavailable".into(),
+    }
+}
+
 /// Sorted-key JSON, the byte shape the deleted `json.dumps(..., sort_keys=True)`
 /// froze for stdout consumers.
 pub fn sorted_json(value: &Value) -> String {
@@ -1806,6 +1817,14 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
         ),
         adm["ceiling"].as_f64().unwrap_or(0.0) * 100.0,
         adm["verdict"].as_str().unwrap_or("?"),
+    );
+    println!(
+        "load average: {} (a separate axis - it did not decide the verdict)",
+        load_line(
+            payload["load_5m"].as_f64(),
+            payload["load_15m"].as_f64(),
+            payload["load_cpu_count"].as_u64(),
+        ),
     );
     println!(
         "sustained CPU: {:.3} cores (threshold {:.3} from {} cpus; a separate axis - it did not decide the verdict)",
@@ -2093,6 +2112,17 @@ mod tests {
             share_segment(0.1, 0.9, "upper", None),
             "10.0%, up to 90.0% with rows unattributed"
         );
+    }
+
+    #[test]
+    fn load_line_renders_the_reading_and_falls_back_to_unavailable() {
+        assert_eq!(
+            load_line(Some(141.0), Some(140.0), Some(12)),
+            "5m 141.0, 15m 140.0 on 12 cpus"
+        );
+        assert_eq!(load_line(None, Some(140.0), Some(12)), "unavailable");
+        assert_eq!(load_line(Some(141.0), None, Some(12)), "unavailable");
+        assert_eq!(load_line(Some(141.0), Some(140.0), None), "unavailable");
     }
 
     #[test]

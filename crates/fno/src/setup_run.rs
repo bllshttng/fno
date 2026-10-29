@@ -1937,6 +1937,53 @@ pub(crate) fn list_json() -> serde_json::Value {
     serde_json::Value::Array(arr)
 }
 
+/// The messaging step: the terminal walk when prompting, else one skip
+/// line naming the re-entry command. `picked` carries the wizard's picks.
+fn step_messaging(exe: &Path, prompting: bool, picked: Option<&[&str]>, rep: &mut Report) {
+    use crate::setup_messaging as m;
+    let rows = match m::sink_rows() {
+        Ok(rows) => rows,
+        Err(e) => {
+            let message = format!("messaging: {e}");
+            rep.rows
+                .push(row("needs_human", "messaging_unfinished", message.clone()));
+            rep.needs_human.push(message);
+            return;
+        }
+    };
+    if !prompting {
+        rep.skipped.push(m::summary_line(&rows, &m::machine()));
+        return;
+    }
+    let set = |value: &str| config_set(exe, &[("attention.sinks", value)], false);
+    let home = match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home),
+        None => {
+            let message = "messaging: cannot write ~/.fno/.env: HOME is unset".to_string();
+            rep.rows
+                .push(row("needs_human", "messaging_unfinished", message.clone()));
+            rep.needs_human.push(message);
+            return;
+        }
+    };
+    let out = m::step(
+        rows,
+        picked,
+        &mut m::TermAsk::new(),
+        &set,
+        &mut m::Curl,
+        &home,
+    );
+    rep.done.extend(out.done);
+    rep.skipped.extend(out.skipped);
+    rep.paths.extend(out.paths);
+    for message in out.needs_human {
+        rep.rows
+            .push(row("needs_human", "messaging_unfinished", message.clone()));
+        rep.needs_human.push(message);
+    }
+}
+
 fn layer_name(l: Layer) -> &'static str {
     match l {
         Layer::Global => "global",
@@ -2066,6 +2113,7 @@ pub(crate) fn apply_wizard_pending(
             "auto-heal" => step_auto_heal(exe, &mut rep),
             "groom-agent" => step_groom_agent(exe, &mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
+            "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
             _ => rep.skipped.push(format!("{}: no runner", p.id)),
         }
         let outcome = step_outcome(p.id, &rep.done[done_len..], &rep.skipped[skipped_len..]);
@@ -2435,18 +2483,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "groom-agent") => step_groom_agent(&exe, &mut rep, &mut loaded),
             (Layer::Global, "projects") => step_projects(&exe, &root, &mut rep),
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
-            (Layer::Global, "messaging") => match crate::setup_messaging::sink_rows() {
-                Ok(rows) => rep.skipped.push(crate::setup_messaging::summary_line(
-                    &rows,
-                    &crate::setup_messaging::machine(),
-                )),
-                Err(e) => {
-                    let message = format!("messaging: {e}");
-                    rep.rows
-                        .push(row("needs_human", "messaging_unfinished", message.clone()));
-                    rep.needs_human.push(message);
-                }
-            },
+            (Layer::Global, "messaging") => step_messaging(&exe, prompting, None, &mut rep),
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
             (Layer::Global, "join") => {

@@ -1367,16 +1367,17 @@ def handle_blocked_task(
 
 # Self-contained frontmatter-schema check. Duplicated (not shared) with
 # skills/blueprint: driver skills are CI-enforced self-contained and cannot
-# cross-import. Validation runs under a pydantic-capable python because /execute's
-# ambient python3 lacks pydantic (same reason finalize.rs shells the cli venv).
+# cross-import. Validation runs the plan-schema door out-of-process because
+# /execute's ambient python3 lacks fno on its path (same reason finalize.rs
+# shells the cli venv).
 _VALIDATE_SNIPPET = r"""
 import json, sys
-from pydantic import ValidationError
-from fno.plan.schema import PlanFrontmatter
+from fno.rust_binary import plan_schema
 fm = json.load(sys.stdin)
-try:
-    PlanFrontmatter.model_validate(fm)
-except ValidationError as e:
+answer = plan_schema({"op": "validate-frontmatter", "frontmatter": fm, "undatable_refuses": False})
+if answer is None:
+    sys.exit(0)  # door unavailable - degrade, the later checks still guard
+if not answer.get("valid"):
     # Block only on STRUCTURAL corruption (a bad size, a garbage timestamp).
     # A missing required field is tolerated (a plan binds its node later), and
     # a drifted-but-recognizable `status` (planned/designed/superseded/...) is
@@ -1385,12 +1386,12 @@ except ValidationError as e:
     # frontmatter status. Blocking /execute on status drift would refuse ~5% of real
     # plans that run fine today.
     present = [
-        x for x in e.errors()
-        if x["type"] != "missing" and (x["loc"][:1] != ("status",))
+        x for x in answer.get("errors") or []
+        if x.get("message") != "Field required" and x.get("field") != "status"
     ]
     for x in present:
-        loc = ".".join(str(p) for p in x["loc"]) or "<root>"
-        print(f"  {loc}: {x['msg']} (got {x.get('input')!r})")
+        loc = str(x.get("field") or "<root>")
+        print(f"  {loc}: {x.get('message')} (got {x.get('got')!r})")
     if present:
         sys.exit(7)
 """
@@ -1400,17 +1401,14 @@ def _validate_frontmatter_via_schema(fm: Dict) -> Optional[str]:
     """Return a per-field refusal report if *fm* is invalid, else None.
 
     Refuses only on present-but-invalid fields (missing required fields are
-    tolerated). Best-effort: prefers cli/.venv's python, falls back to the
-    current interpreter when it has pydantic, and skips if neither is found.
+    tolerated). Best-effort: prefers cli/.venv's python (the door snippets
+    need only fno on PYTHONPATH plus the binary rust_binary resolves); any
+    python3 works, so one is always available.
     """
     venv = _CLI_SRC.parent / ".venv" / "bin" / "python"
     if venv.exists():
         py: str = str(venv)
     else:
-        try:
-            import pydantic  # noqa: F401
-        except ImportError:
-            return None
         py = sys.executable
 
     env = dict(os.environ)

@@ -216,6 +216,100 @@ fn expires_at(line: &Value) -> Option<&str> {
         .or_else(|| line.get("expires").and_then(Value::as_str))
 }
 
+/// Each message's delivery state, folded from the store's delivery lines in
+/// order (`landed`, the legacy `hosted`/`typed` marks, and `state` rows). An
+/// accepted line is terminal: a later retry line never lowers it. A legacy
+/// mark is read only for a message with no `state` row: a reached send also
+/// writes `hosted`, which would otherwise turn a parked message accepted.
+fn delivery_states(
+    texts: &[String],
+) -> std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState> {
+    use crate::mail_delivery_state::{DeliveryState, Evidence};
+    let mut out: std::collections::HashMap<String, DeliveryState> = Default::default();
+    let mut stated: std::collections::HashSet<String> = Default::default();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("delivery") {
+            continue;
+        }
+        let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+        let how = v.get("how").and_then(Value::as_str).unwrap_or("");
+        if id.is_empty() || how.is_empty() {
+            continue;
+        }
+        let (state, legacy) = match how {
+            "landed" => (
+                DeliveryState::accepted(
+                    false,
+                    Evidence {
+                        record: "landed".into(),
+                        ..Evidence::default()
+                    },
+                ),
+                false,
+            ),
+            word => {
+                match DeliveryState::from_json(&json!({"state": word, "reason": v.get("reason")})) {
+                    Some(state) => (state, false),
+                    None => (DeliveryState::from_legacy(word), true),
+                }
+            }
+        };
+        let accepted = out.get(id).is_some_and(DeliveryState::is_accepted);
+        if legacy && (accepted || stated.contains(id)) {
+            continue;
+        }
+        if !legacy && accepted && stated.contains(id) {
+            continue;
+        }
+        if !legacy {
+            stated.insert(id.to_string());
+        }
+        out.insert(id.to_string(), state);
+    }
+    out
+}
+
+/// How many delivery lines read `failed` for each message: one failure is
+/// the first send, more mean a retry failed too, and the tab then offers the
+/// copy rung.
+fn failure_counts(texts: &[String]) -> std::collections::HashMap<String, u64> {
+    let mut out: std::collections::HashMap<String, u64> = Default::default();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) == Some("delivery")
+            && v.get("how").and_then(Value::as_str) == Some("failed")
+        {
+            if let Some(id) = v.get("id").and_then(Value::as_str) {
+                *out.entry(id.to_string()).or_default() += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The state word for one message row: its folded delivery lines, else the
+/// legacy reading of its own `delivery` mark.
+fn state_word(
+    states: &std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState>,
+    v: &Value,
+) -> &'static str {
+    let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+    match states.get(id) {
+        Some(state) => state.word(),
+        None => crate::mail_delivery_state::DeliveryState::from_legacy(
+            v.get("delivery")
+                .and_then(Value::as_str)
+                .unwrap_or("durable"),
+        )
+        .word(),
+    }
+}
+
 /// The projection of one chats store. `now` decides which announcements
 /// still stand.
 pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
@@ -252,6 +346,8 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         .filter_map(|entry| std::fs::read_to_string(entry.path().join("messages.jsonl")).ok())
         .collect();
     let aliases = store_aliases(&texts, registry);
+    let states = delivery_states(&texts);
+    let failures = failure_counts(&texts);
     for text in &texts {
         let mut rows: Vec<Value> = Vec::new();
         for line in text.lines() {
@@ -316,6 +412,14 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 "expires": expires_at(&v),
                 "in_reply_to": v.get("in_reply_to").and_then(Value::as_str),
                 "delivery": v.get("delivery").and_then(Value::as_str),
+                "state": state_word(&states, &v),
+                "state_reason": v.get("id").and_then(Value::as_str)
+                    .and_then(|id| states.get(id))
+                    .and_then(|s| s.reason()),
+                "state_failures": v.get("id").and_then(Value::as_str)
+                    .and_then(|id| failures.get(id))
+                    .copied()
+                    .unwrap_or(0),
                 "system": system_row,
             });
             match v.get("kind").and_then(Value::as_str) {
@@ -584,8 +688,9 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
         }
         "details" => run_details(&args[1..]),
         "journal-reply" => run_journal_reply(&args[1..]),
+        "retry" => crate::mail_cli::send::retry::run(&args[1..]),
         _ => {
-            eprintln!("usage: fno-agents mail-threads [--format json | details --session <id> | journal-reply --to <name> --to-session <id> --in-reply-to <msg-id>]");
+            eprintln!("usage: fno-agents mail-threads [--format json | details --session <id> | journal-reply --to <name> --to-session <id> --in-reply-to <msg-id> | retry <msg-id>]");
             2
         }
     }
@@ -1360,6 +1465,32 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// A reached send writes its state row and then the legacy `hosted`
+    /// mark. The mark must not turn a parked message accepted, in either
+    /// order, while a message with only the mark still reads from it.
+    #[test]
+    fn delivery_state_rows_outrank_the_legacy_hosted_mark() {
+        let line =
+            |id: &str, how: &str| json!({"type": "delivery", "id": id, "how": how}).to_string();
+        let text = [
+            line("m-parked", "parked"),
+            line("m-parked", "hosted"),
+            line("m-late", "hosted"),
+            line("m-late", "injected"),
+            line("m-old", "hosted"),
+            line("m-landed", "parked"),
+            line("m-landed", "landed"),
+            line("m-landed", "failed"),
+        ]
+        .join("\n");
+        let states = delivery_states(&[text]);
+        let word = |id: &str| states.get(id).map(|s| s.word());
+        assert_eq!(word("m-parked"), Some("parked"));
+        assert_eq!(word("m-late"), Some("injected"));
+        assert_eq!(word("m-old"), Some("accepted-new-turn"));
+        assert_eq!(word("m-landed"), Some("accepted-new-turn"));
     }
 
     #[test]

@@ -54,16 +54,6 @@ Load [plan-validation.md](plan-validation.md) for the full protocol.
 
 A worker spawned by `fno backlog join <node>` (`jn-t-<node>-<k>`; legacy rows still read `j-<node>-<k>`) is a VISITOR in the node holder's worktree, not a target. First: `.fno/join-briefs/<node>.md` carries your joiner brief (the lead and mail hub, and your claim discipline) - when that file exists for the bound node, read it before dispatching. The brief's band table names YOUR band (the lead carries the highest; a band REPEATS when the plan has more lanes than distinct bands, so your band is your ROW's, never inferable from the lane count): set `FNO_WORKER_BAND` from your row before the dispatch round - the spawn-time env export of the same name cannot reach a daemon-forked worker, the brief file can. Never run `target init` and never take the node claim: the target session keeps it, and a joiner that runs `target init` anyway gets the existing "another session holds the node, not this caller" refusal - on that refusal, stop with `<help>` instead of retrying. Read `graph_node_id` from THIS worktree's manifest with `target_state_field` (step 3e), and let `FNO_WORKER_NAME` be the task-claim holder (the joiner 1 contract): the task commands bind their holder to the roster name, so each joiner is provable as a distinct owner. Everything else in this flow runs unchanged - a joiner's stop hook exits 0 (`visitor allowed`) because its session id matches no manifest in the worktree. This is the joiner half only. The caller half names the join trigger. The one-wave pass, step 4 (`/fno:lead --once`), covers a lead handing out a `join: manual` plan, and `/target` initialization covers `join: auto` firing at `fno do target init`.
 
-### 0b. Structural Context (AUTO)
-
-Generate fresh codemap for structural awareness:
-
-```bash
-fno doctor codemap --tokens 2048 2>/dev/null || true
-```
-
-If `fno` is unavailable or `fno doctor codemap`'s deps are missing, skip silently. Read the codemap in the repo's space (`fno-agents state path codemap`) if it exists. Use it to identify god nodes (high-PageRank files) that need careful handling during wave execution, and to understand module dependency flow for wave ordering.
-
 ### 1. Load Execution Strategy
 
 Read and parse the execution strategy from the plan's `## Execution Strategy` section.
