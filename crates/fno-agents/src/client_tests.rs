@@ -1875,11 +1875,8 @@ fn spawn_request_carries_the_callers_codex_edge() {
     let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
     // One codex id under both names is the measured thread shape.
     let _guard = IdentityEnvGuard::take(&[("CODEX_THREAD_ID", "T"), ("CODEX_SESSION_ID", "T")]);
-    let (_method, params) = build_request(
-        "spawn",
-        &["wk".to_string(), "hi".to_string()],
-    )
-    .expect("a plain spawn request parses");
+    let (_method, params) = build_request("spawn", &["wk".to_string(), "hi".to_string()])
+        .expect("a plain spawn request parses");
     assert_eq!(params["spawned_by_session"], serde_json::json!("T"));
     assert_eq!(params["spawned_by_harness"], serde_json::json!("codex"));
 }
@@ -1890,11 +1887,8 @@ fn spawn_request_without_markers_carries_no_edge() {
     // A daemon arm or a bare shell carries nothing: the request says so, and
     // the mint stamps its honest null rather than a guessed parent.
     let _guard = IdentityEnvGuard::take(&[]);
-    let (_method, params) = build_request(
-        "spawn",
-        &["wk".to_string(), "hi".to_string()],
-    )
-    .expect("a plain spawn request parses");
+    let (_method, params) = build_request("spawn", &["wk".to_string(), "hi".to_string()])
+        .expect("a plain spawn request parses");
     assert!(params.get("spawned_by_session").is_none(), "{params:?}");
     assert!(params.get("spawned_by_harness").is_none(), "{params:?}");
 }

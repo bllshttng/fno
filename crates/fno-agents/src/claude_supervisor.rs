@@ -627,7 +627,8 @@ mod tests {
             "FNO_HARNESS_SESSION_ID",
         ] {
             assert!(
-                envs.iter().any(|(key, value)| key == name && value.is_none()),
+                envs.iter()
+                    .any(|(key, value)| key == name && value.is_none()),
                 "{name} rode into the supervisor birth"
             );
         }
