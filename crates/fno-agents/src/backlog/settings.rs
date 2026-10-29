@@ -53,6 +53,10 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
             }
         }
     }
+    // A FNO_CONFIG that names `<dir>/settings.yaml` is also its parent's
+    // candidate: read each file once, at its first position.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
     out
 }
 
