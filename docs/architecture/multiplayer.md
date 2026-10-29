@@ -4,11 +4,13 @@ Two or more machines run one fleet. Each machine dials out to one libSQL server 
 
 ## The key
 
-`store.remote_url` in the per-machine global config (`~/.fno/config.toml`) turns it on. It holds the primary's URL, for example `http://r2d2:18080` on the tailnet. `store.remote_token` is optional. When it is set, each request carries it as a bearer token. `store.remote_addrs` is optional too. It lists IPs, such as `["100.101.102.103"]`, the primary's Tailscale IP. When the host name does not resolve or answer, the client dials each one in order. A bare IP takes the URL's port. Only the connect moves to the next address, so a request is never sent twice. The key is per machine and never enters git. A project config cannot set it, because the reader reads the global file only.
+`store.remote_url` in the per-machine global config (`~/.fno/config.toml`) turns it on. It holds the primary's URL, for example `https://r2d2.tailnet.ts.net` or `http://r2d2:18080` on the tailnet. `store.remote_token` is optional. When it is set, each request carries it as a bearer token. Give each machine its own token, as [One token per machine](#one-token-per-machine) says. `store.remote_addrs` is optional too. It lists IPs, such as `["100.101.102.103"]`, the primary's Tailscale IP. When the host name does not resolve or answer, the client dials each one in order. A bare IP takes the URL's port. Only the connect moves to the next address, so a request is never sent twice. The key is per machine and never enters git. A project config cannot set it, because the reader reads the global file only.
 
 Unset is the stock install. Every store stays a local file and no fno process opens a socket for it. That holds forever: a machine with no account and no network keeps working.
 
-A malformed value refuses every shared claim, with a message that names the key. A typo never falls back to local in silence. Only `http://` URLs are accepted, because the client carries no TLS. The tailnet owns remote reach, the same way `fno web` leaves it.
+A malformed value refuses every shared claim, with a message that names the key. A typo never falls back to local in silence.
+
+Run the primary on a private network such as Tailscale, and never bind it to a LAN or a public address. The tailnet owns remote reach, the same way `fno web` leaves it. Both `http://` and `https://` URLs work. Over `http://`, the token, every claim row and the shared backlog cross the wire in clear. Over `https://`, the client checks the primary's certificate against the system roots, so the primary must serve a real one. On a tailnet, `tailscale serve --bg --https=443 http://127.0.0.1:18080` on the primary gives sqld a certificate for its `ts.net` name. A certificate the system does not trust fails closed: the error says `failed TLS`, names the key, and nothing is written. That error is never read as an outage, so mail does not queue behind it.
 
 ## What moves to the primary
 
@@ -95,13 +97,29 @@ A send to `<name>@<host>` writes one row to `fno_mail_bus`, the mail table on th
 
 Each host's daemon pulls its rows on `agents.remote.pull_interval_secs`. That key lives in the global config, default 15 seconds. The pull injects each row through the receiver's own local send. Lane selection, holds, and receipts stay the local path's.
 
-The sender reads as `<person>:<host>/<session name>` in the row's `from_id`, for example `@bb16:imac2d2/nemo`. A reply still routes from a row stamped in the older `<user>@<host>/<session name>` form. The sender writes that field itself, so it proves nothing alone. The tailnet is the boundary. The raw allowlist is a second check, never a proof of identity (operator ruling, 2026-10-10). A `raw = 1` row is the pane-typing lane. The pull refuses it unless `agents.remote.raw_senders` lists the sender head. The empty default refuses every cross-host raw row. The label's name part resolves through the identity tiers: `--from-name`, the ambient session's agent name, the session's registry row, then the person. [The person beside the machine](#the-person-beside-the-machine) names its source. A registered agent session with no flags stamps its role name, so a reply can address `<name>@<host>`.
+The sender reads as `<person>:<host>/<session name>` in the row's `from_id`, for example `@bb16:imac2d2/nemo`. A reply still routes from a row stamped in the older `<user>@<host>/<session name>` form. The sender writes that field itself, so the field alone proves nothing. The machine key below proves the host. The raw allowlist is a second check, never a proof of identity (operator ruling, 2026-10-10). A `raw = 1` row is the pane-typing lane. The pull refuses it unless `agents.remote.raw_senders` lists the sender head. The empty default refuses every cross-host raw row. The label's name part resolves through the identity tiers: `--from-name`, the ambient session's agent name, the session's registry row, then the person. [The person beside the machine](#the-person-beside-the-machine) names its source. A registered agent session with no flags stamps its role name, so a reply can address `<name>@<host>`.
 
 A row waits up to 7 days for its host (`MAIL_TTL_SECS`). The expire leg flips past-due rows to `expired`. A pull that finds the name unknown leaves the row pending until then. `INSERT OR IGNORE` on the unique `msg_id` makes a retry after an ambiguous timeout a no-op. The receiver's seen ledger (`mail_seen.jsonl` in the agents state root) keeps a redelivered row from injecting twice. Delivery is at-least-once at the bus and once at the receiver.
 
 A final refusal does not wait. A pull that sees exit 1 asks the receiver's own style door about the body. The door naming violations is the style refusal, and a retry replays it. The pull marks such a row `refused`, and the sender's `mail status` shows it. Every other refusal keeps waiting for the TTL. The list: an unknown name (exit 16, once 13), a failed durable write (exit 12), a cap or forged-envelope refusal, a signal kill. The durable demotion (exit 14) is not on the refusal list. That exit means the receiver's local send already wrote its durable copy, so the pull marks the row `delivered` and runs no second send. A failed pull attempt leaves one daemon log line naming the msg_id and the exit, so a row that retries forever is never silent. A pending row that just failed backs its next attempt down a ladder. The rung schedule doubles from 15 s and caps at 15 min. The memory is one persisted entry per msg_id beside the seen ledger (`mail_retry.jsonl`). A pending row pays the send's cold start on the ladder, never once a beat.
 
 The primary can be unreachable. The send then queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`. When the store answers again, the flush leg drains it. No `store.remote_url` at all means the ssh fallback. The remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane. The reason: that flag stamps whichever machine runs the command, so pass `--from-name`.
+
+### The machine key
+
+Each machine signs every bus row it writes. The key is an Ed25519 key in `machine_key.pk8` in the agents state root, owner-only, made on first use. The row carries the public key and the signature over its fields, so a row edited on the primary does not verify. The pull checks each row before it injects it. Trust is first use: the first key a receiver sees for a host is pinned in its `machine_pins.json`. After that, the pull refuses a row for that host that another key signed. It also refuses an unsigned row, and a row whose `from_id` names another host. A refused row is marked `refused`, and the daemon log names the msg_id and the reason. An unsigned row from a host with no pin still injects, so a peer on an older build keeps working until it upgrades.
+
+Only the user changes a key, by rotating it. `fno-agents mail-remote key rotate` makes a new key on this machine and prints the pin line. Every peer then refuses this machine's mail until the user runs that line on the peer: `fno-agents mail-remote key pin <host> <public key>`. `fno-agents mail-remote key show` prints this machine's key and every pin, each with a short fingerprint.
+
+### One token per machine
+
+One shared token lets any writer act as any machine on the primary. Give each machine its own token instead, all signed by one key the user holds. Start sqld with `--auth-jwt-key-file <user key>.pub.pem`. Then mint a token per machine:
+
+```bash
+fno-agents mail-remote key token ~/keys/fleet-user.pk8 imac2d2
+```
+
+The first run makes the user key, and each run writes the `.pub.pem` file beside it. The token prints on stdout. Set it as `store.remote_token` on that machine only. Keep the user key off the machines that run the fleet.
 
 Host spellings normalize on write and on pull. Lowercase, and a trailing `.local` drops, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
 
