@@ -113,7 +113,7 @@ pub fn preamble_due(
         // is the pointing-at-fno, so the preamble reads due without waiting
         // for a /fno: prompt to trip the join. The first join on the machine
         // closes the window and opt-in resumes.
-        return any_joined(root);
+        return !any_joined(root);
     }
     crate::mail_teach::lesson_due_at(
         root,
