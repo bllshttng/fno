@@ -130,7 +130,7 @@ fn terminal(row: &RegistryEntry) -> bool {
 /// The row's session identity, in the precedence every team reader uses:
 /// `harness_session_id`, then `cc_session_id`, then `short_id`. The manifest
 /// arm, the manifest removal, the team-name carry and the lock-time identity
-/// match all key on this one answer, so a re-scope never binds the crown to
+/// match all key on this one answer, so a re-scope never binds the role to
 /// one id while the next check-in looks it up by another.
 pub(crate) fn holder_session(row: &RegistryEntry) -> Option<String> {
     [
