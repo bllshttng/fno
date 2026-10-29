@@ -885,9 +885,10 @@ pub fn run(args: &[String]) -> i32 {
         Some("peek") => cmd_peek(&args[1..]),
         Some("reply") => cmd_reply(&args[1..]),
         Some("status") => cmd_status(&args[1..]),
+        Some("key") => crate::machine_key::run(&args[1..]),
         _ => {
             eprintln!(
-                "usage: fno-agents mail-remote <send|peek|status|reply> <name>@<host> [args...]"
+                "usage: fno-agents mail-remote <send|peek|status|reply> <name>@<host> [args...] | key ..."
             );
             2
         }
@@ -1142,6 +1143,8 @@ mod tests {
             payload: "hello".into(),
             raw: false,
             expire_at: 1_800_000_000,
+            from_host: "h".into(),
+            ..Default::default()
         };
         let home = std::path::Path::new("/tmp/fno-mail-arm-retry-test");
         let remote = Remote::parse("http://127.0.0.1:1", None).expect("parses");

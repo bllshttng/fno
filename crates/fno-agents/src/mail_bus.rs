@@ -6,6 +6,11 @@
 //! primary: it never joins `SHARED_PREFIXES` or `SHARED_TABLES`, and no local
 //! schema carries it. The primary's AUTOINCREMENT `seq` is the only ordering,
 //! the same store-clock-beats-host-clocks rule the claim leases use.
+//!
+//! Each row carries the sending machine's public key and its signature over
+//! [`signed_bytes`]. The receiver checks both before it injects
+//! ([`crate::machine_key::check`]), so a row edited on the primary, or one
+//! that claims a host whose pinned key did not sign it, never lands.
 
 use crate::store_remote::{Remote, Reply, SqlValue};
 
@@ -30,7 +35,17 @@ subject TEXT, \
 created_at INTEGER NOT NULL, \
 expire_at INTEGER NOT NULL, \
 status TEXT NOT NULL DEFAULT 'pending', \
-delivered_at INTEGER)";
+delivered_at INTEGER, \
+pubkey TEXT, \
+sig TEXT)";
+
+/// The signature columns, added to a table created before they existed.
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so each runs alone and a
+/// duplicate-column error from a host that won the race reads as success.
+const ADDED_COLUMNS: [&str; 2] = [
+    "ALTER TABLE fno_mail_bus ADD COLUMN pubkey TEXT",
+    "ALTER TABLE fno_mail_bus ADD COLUMN sig TEXT",
+];
 
 /// Hosts compare equal across machines that spell themselves differently
 /// (`iMac2D2.local` from gethostname, `imac2d2` from a user typing). One
@@ -74,7 +89,32 @@ pub fn mint_msg_id() -> String {
 /// Create the bus table. `IF NOT EXISTS`, so every host can run it at first
 /// use; concurrent creates are idempotent on sqld like on SQLite.
 pub fn ensure_schema(remote: &Remote) -> Result<(), String> {
-    remote.script(DDL)
+    remote.script(DDL)?;
+    for alter in ADDED_COLUMNS {
+        match remote.execute(alter, &[]) {
+            Err(e) if !e.contains("duplicate column name") => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The bytes a row's signature covers: every field the sender writes and
+/// the receiver acts on, hosts already normalized. A JSON array, so no
+/// field can bleed into the next.
+pub fn signed_bytes(
+    msg_id: &str,
+    from_id: &str,
+    from_host: &str,
+    to_name: &str,
+    to_host: &str,
+    payload: &str,
+    raw: bool,
+    subject: &str,
+) -> Vec<u8> {
+    serde_json::json!([msg_id, from_id, from_host, to_name, to_host, payload, raw, subject])
+        .to_string()
+        .into_bytes()
 }
 
 /// What one send wrote. `duplicated` marks an `INSERT OR IGNORE` miss: the
@@ -101,18 +141,27 @@ pub fn insert(
     subject: Option<&str>,
 ) -> Result<InsertOutcome, String> {
     let insert = "INSERT OR IGNORE INTO fno_mail_bus \
-(msg_id, from_id, from_host, to_name, to_host, payload, raw, subject, created_at, expire_at) \
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT strftime('%s','now')), \
+(msg_id, from_id, from_host, to_name, to_host, payload, raw, subject, pubkey, sig, \
+created_at, expire_at) \
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT strftime('%s','now')), \
 (SELECT strftime('%s','now')) + ?)";
+    let (from_host, to_host) = (normalize_host(from_host), normalize_host(to_host));
+    let subject = subject.unwrap_or_default();
+    let key = crate::machine_key::own()?;
+    let signature = key.sign(&signed_bytes(
+        msg_id, from_id, &from_host, to_name, &to_host, payload, raw, subject,
+    ));
     let args = vec![
         SqlValue::Text(msg_id.to_string()),
         SqlValue::Text(from_id.to_string()),
-        SqlValue::Text(normalize_host(from_host)),
+        SqlValue::Text(from_host),
         SqlValue::Text(to_name.to_string()),
-        SqlValue::Text(normalize_host(to_host)),
+        SqlValue::Text(to_host),
         SqlValue::Text(payload.to_string()),
         SqlValue::Integer(raw as i64),
-        SqlValue::Text(subject.unwrap_or_default().to_string()),
+        SqlValue::Text(subject.to_string()),
+        SqlValue::Text(key.public_key()),
+        SqlValue::Text(signature),
         SqlValue::Integer(MAIL_TTL_SECS),
     ];
     let reply = remote.execute(insert, &args)?;
@@ -146,7 +195,7 @@ fn read_seq(remote: &Remote, msg_id: &str) -> Result<i64, String> {
 }
 
 /// One pending row pulled for this host, in primary-seq order.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct BusRow {
     pub seq: i64,
     pub msg_id: String,
@@ -155,11 +204,36 @@ pub struct BusRow {
     pub payload: String,
     pub raw: bool,
     pub expire_at: i64,
+    pub from_host: String,
+    pub to_host: String,
+    pub subject: String,
+    /// The sender's public key and signature; `None` from a sender that
+    /// predates signing.
+    pub pubkey: Option<String>,
+    pub sig: Option<String>,
 }
 
-const PENDING_COLUMNS: &str = "seq, msg_id, from_id, to_name, payload, raw, expire_at";
+impl BusRow {
+    /// The bytes this row's signature must cover.
+    pub fn signed_bytes(&self) -> Vec<u8> {
+        signed_bytes(
+            &self.msg_id,
+            &self.from_id,
+            &self.from_host,
+            &self.to_name,
+            &self.to_host,
+            &self.payload,
+            self.raw,
+            &self.subject,
+        )
+    }
+}
+
+const PENDING_COLUMNS: &str =
+    "seq, msg_id, from_id, to_name, payload, raw, expire_at, from_host, to_host, subject, pubkey, sig";
 
 fn row_from_values(values: &[SqlValue]) -> Option<BusRow> {
+    let optional = |i: usize| values.get(i).and_then(|v| v.text()).map(str::to_string);
     Some(BusRow {
         seq: values.first()?.integer()?,
         msg_id: values.get(1)?.text()?.to_string(),
@@ -168,6 +242,11 @@ fn row_from_values(values: &[SqlValue]) -> Option<BusRow> {
         payload: values.get(4)?.text()?.to_string(),
         raw: values.get(5)?.integer()? != 0,
         expire_at: values.get(6)?.integer()?,
+        from_host: optional(7).unwrap_or_default(),
+        to_host: optional(8).unwrap_or_default(),
+        subject: optional(9).unwrap_or_default(),
+        pubkey: optional(10),
+        sig: optional(11),
     })
 }
 
@@ -298,5 +377,60 @@ mod tests {
         assert!(a.starts_with("fmail-"));
         assert_eq!(a.len(), 6 + 12);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_signed_row_injects_and_a_row_edited_on_the_primary_is_refused() {
+        let primary = crate::store_remote::test_primary::start();
+        let remote = &primary.remote;
+        ensure_schema(remote).unwrap();
+        // A second host's create races the first: the ALTERs read as done.
+        ensure_schema(remote).unwrap();
+        for id in ["fmail-clean", "fmail-edited"] {
+            insert(
+                remote,
+                id,
+                "bb16:iMac2D2.local/quill",
+                "iMac2D2.local",
+                "nemo",
+                "r2d2",
+                "hi",
+                false,
+                None,
+            )
+            .unwrap();
+        }
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE fno_mail_bus SET payload = 'rm -rf' WHERE msg_id = 'fmail-edited'",
+                [],
+            )
+            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let mut injected = Vec::new();
+        let rows = fetch_pending(remote, "r2d2").unwrap();
+        assert!(rows.iter().all(|r| r.pubkey.is_some() && r.sig.is_some()));
+        let delivered = crate::mail_arm::pull_rows_with(remote, rows, home.path(), &mut |row| {
+            injected.push(row.msg_id.clone());
+            true
+        });
+        assert_eq!((delivered, injected), (1, vec!["fmail-clean".to_string()]));
+        let status = |id: &str| {
+            remote
+                .execute(
+                    "SELECT status FROM fno_mail_bus WHERE msg_id = ?",
+                    &[SqlValue::Text(id.into())],
+                )
+                .unwrap()
+                .rows[0][0]
+                .clone()
+        };
+        assert_eq!(status("fmail-edited"), SqlValue::Text(REFUSED.into()));
+        // The first signed row pinned the sender's host.
+        let pins = std::fs::read_to_string(crate::machine_key::pins_path(home.path())).unwrap();
+        assert!(pins.contains("\"imac2d2\""), "{pins}");
     }
 }

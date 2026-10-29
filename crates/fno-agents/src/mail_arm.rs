@@ -164,6 +164,13 @@ pub(crate) fn pull_rows_with(
         if !retry_due(&retries, &row.msg_id) {
             continue;
         }
+        if let Err(reason) = sender_trusted(home, &row) {
+            eprintln!("mail-arm: refused {}: {reason}", row.msg_id);
+            if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+            }
+            continue;
+        }
         if inject(&row) {
             retries.remove(&row.msg_id);
             save_retries(home, &retries);
@@ -179,6 +186,35 @@ pub(crate) fn pull_rows_with(
         }
     }
     delivered
+}
+
+/// Is this row's sender who it says it is? A signed row must verify, its
+/// key must match the one pinned for its host (first use pins it), and the
+/// host inside `from_id` (`<user>:<host>/<name>`), the sender a receiver
+/// reads, must be the host the key signed for.
+fn sender_trusted(home: &std::path::Path, row: &BusRow) -> Result<(), String> {
+    let signed = row.pubkey.as_deref().zip(row.sig.as_deref());
+    if signed.is_some() {
+        let claimed = row
+            .from_id
+            .split('/')
+            .next()
+            .and_then(|head| head.rsplit([':', '@']).next())
+            .map(mail_bus::normalize_host);
+        if claimed.as_deref() != Some(row.from_host.as_str()) {
+            return Err(format!(
+                "from_id {:?} names a host other than the signing host {:?}",
+                row.from_id, row.from_host
+            ));
+        }
+    }
+    crate::machine_key::check(
+        &crate::machine_key::pins_path(home),
+        &row.from_host,
+        signed,
+        &row.signed_bytes(),
+    )
+    .map(drop)
 }
 
 /// One pending row's retry memory: the attempt count the ladder reads and
