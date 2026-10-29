@@ -5603,7 +5603,7 @@
           "two"
         ]
       },
-      "output": "think inspection: incomplete\nrepository: error branch=- head=- dirty=2\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=true\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3\nwarning: one\nwarning: two"
+      "output": "think inspection: incomplete\nrepository: error branch=- head=- dirty=2\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3\nwarning: one\nwarning: two"
     },
     {
       "fn": "render_receipt",
