@@ -13,7 +13,6 @@ from fno.plan.brief import (
     validate_task_edges,
 )
 from fno.plan.criteria import CriteriaParseError, compile_criteria
-from fno.plan.schema import created_after_gate, waves_gate_error
 
 
 @dataclass(frozen=True)
@@ -482,6 +481,22 @@ def validate_execution(
     """
     strategy_text = doc.get_section("Execution Strategy")
     is_quick = doc.frontmatter.get("kind") == "quick-plan"
+    # One door read serves both date gates for this whole validation: the
+    # waves gate (with the body fact passed in) and the per-wave band
+    # requirement's created_after answer. AUTHORING lenience throughout, the
+    # same posture plan/cli.py applies one scope up: validate-plan.sh dates
+    # undatable plans itself. A door failure reads as no gate error and no
+    # band requirement, which is what an undatable plan read as before.
+    from fno import rust_binary
+
+    gates = rust_binary.plan_schema(
+        {
+            "op": "gates",
+            "frontmatter": doc.frontmatter,
+            "undatable_refuses": False,
+            "has_execution_strategy": strategy_text is not None,
+        }
+    ) or {"difficulty_gate": None, "waves_gate": None, "created_after": None}
     # The quick BODY checks - required sections, template placeholders left in
     # place, a concrete file path, a runnable verification - are orthogonal to
     # the Execution Strategy and must run for EVERY quick plan.
@@ -506,17 +521,12 @@ def validate_execution(
             # parallelism. Pre-gate plans keep the hatch; backfilling their
             # topology would fabricate waves nobody authored.
             # AUTHORING scope, so undatable frontmatter DEFERS rather than
-            # refusing - the same split `plan/cli.py` applies one line above
-            # when it calls `difficulty_gate_error(..., undatable_refuses=False)`
-            # in this very branch's caller. validate-plan.sh dates those plans
-            # itself from the filename, and refusing here would preempt its
-            # dating: a `status: ready` quick-plan with no `created:` key would
-            # be refused for a date the validator was about to supply.
-            gate_error = waves_gate_error(
-                doc.frontmatter,
-                has_execution_strategy=False,
-                undatable_refuses=False,
-            )
+            # refusing - the same split `plan/cli.py` applies one scope up.
+            # validate-plan.sh dates those plans itself from the filename,
+            # and refusing here would preempt its dating: a `status: ready`
+            # quick-plan with no `created:` key would be refused for a date
+            # the validator was about to supply.
+            gate_error = gates.get("waves_gate")
             if gate_error:
                 return ExecutionValidationResult(
                     [*quick_violations, _violation("Execution Strategy", gate_error)]
@@ -662,7 +672,7 @@ def validate_execution(
         # the frontmatter difficulty_gate_error covers the plan-level band.
         wave_band = wave.get("difficulty")
         if wave_band is None or (isinstance(wave_band, str) and not wave_band.strip()):
-            if created_after_gate(doc.frontmatter) is True:
+            if gates.get("created_after") is True:
                 violations.append(
                     _violation(
                         f"waves.{label}.difficulty",

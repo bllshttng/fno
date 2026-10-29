@@ -1085,7 +1085,7 @@ def _name_lane_send(
         print(json_receipt(
             msg_id,
             to=recipient,
-            status=f"delivered (woken) [revived as bg thread {woken_as}]",
+            status=f"injected (woken) [revived as bg thread {woken_as}]",
             subject=subject,
         ))
         if corr:
@@ -1093,7 +1093,7 @@ def _name_lane_send(
         return
     if injected:
         print(json_receipt(
-            msg_id, to=recipient, status=f"delivered (hosted){live}{corr}", subject=subject,
+            msg_id, to=recipient, status=f"injected{live}{corr}", subject=subject,
         ))
         return
 

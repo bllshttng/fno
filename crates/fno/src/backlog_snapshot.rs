@@ -308,8 +308,14 @@ fn render_one(
         )
         .map_err(|e| format!("node serialization failed: {e}"))?;
         if let (Some(vault), Some(plan)) = (vault, view.get("plan_path").and_then(Value::as_str)) {
-            if let Some(url) = obsidian_url(vault, plan) {
-                view["obsidian"] = Value::String(url);
+            let cfg = crate::digest_overlay::ObsidianCfg {
+                enabled: true,
+                vault: Some(vault.to_string()),
+            };
+            if let crate::link::PlanLink::Obsidian { uri } =
+                crate::link::plan_link(Some(Path::new(plan)), &cfg)
+            {
+                view["obsidian"] = Value::String(uri);
             }
         }
         nodes.insert(id.clone(), view);
@@ -356,7 +362,10 @@ fn render_one(
     if public {
         payload = to_public_payload(payload);
     }
-    Ok((snapshot_page(crate::web::BACKLOG_PAGE, &payload)?, count))
+    Ok((
+        snapshot_page(&crate::web::house(crate::web::BACKLOG_PAGE), &payload)?,
+        count,
+    ))
 }
 
 /// The registry rows the snapshot's roster needs: live promoted agents only.
@@ -681,89 +690,6 @@ fn atomic_write(out: &Path, body: &str) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Obsidian deep links: the port of render_html.py's plan-path canonicalizer.
-// A plan path reaches the graph in several shapes (vault-relative,
-// vault-prefixed, worktree-rooted); the link wants vault-relative with `.md`
-// stripped, and only a markdown file links at all.
-// ---------------------------------------------------------------------------
-
-/// The vault top-level directories a canonical plan path may start with.
-const VAULT_TOPLEVEL_DIRS: &[&str] = &["internal/"];
-
-fn canonical_plan_path(plan_path: &str, vault: Option<&str>) -> Option<String> {
-    let p = plan_path.trim();
-    if p.is_empty() {
-        return None;
-    }
-    if VAULT_TOPLEVEL_DIRS.iter().any(|d| p.starts_with(d)) {
-        return Some(p.to_string());
-    }
-    if let Some(vault) = vault {
-        let needle = format!("/{vault}/");
-        strip_vault_prefix(p, &needle)
-    } else {
-        last_toplevel_segment(p)
-    }
-}
-
-fn strip_vault_prefix(p: &str, needle: &str) -> Option<String> {
-    let idx = p.rfind(needle)?;
-    let stripped = &p[idx + needle.len()..];
-    if VAULT_TOPLEVEL_DIRS.iter().any(|d| stripped.starts_with(d)) {
-        return Some(stripped.to_string());
-    }
-    None
-}
-
-/// The worktree-rooted shape: pick the LAST top-level dir occurrence and
-/// keep from there.
-fn last_toplevel_segment(p: &str) -> Option<String> {
-    let mut best: isize = -1;
-    for marker in VAULT_TOPLEVEL_DIRS {
-        let needle = format!("/{marker}");
-        if let Some(idx) = p.rfind(&needle) {
-            let idx = idx as isize;
-            if idx > best {
-                best = idx;
-            }
-        }
-    }
-    if best >= 0 {
-        return Some(p[best as usize + 1..].to_string());
-    }
-    None
-}
-
-fn obsidian_url(vault: &str, plan_path: &str) -> Option<String> {
-    let canonical = canonical_plan_path(plan_path, Some(vault))?;
-    let canonical = canonical.trim_end_matches('/').to_string();
-    if !canonical.ends_with(".md") {
-        return None;
-    }
-    let target = canonical[..canonical.len() - 3].to_string();
-    Some(format!(
-        "obsidian://open?vault={}&file={}",
-        percent_encode(vault, ""),
-        percent_encode(&target, "/")
-    ))
-}
-
-/// Percent-encode with Python's `quote` defaults: unreserved characters and
-/// the `safe` set pass through, everything else becomes %XX.
-fn percent_encode(text: &str, safe: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for b in text.bytes() {
-        let c = b as char;
-        if c.is_ascii_alphanumeric() || "_.~-".contains(c) || safe.contains(c) {
-            out.push(c);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
 /// `fno backlog publish --local-snapshot` claims lexically, before the
 /// backlog namespace hands over to the sibling binary: the stdin request
 /// protocol is the front binary's, and a sibling that predates the door
@@ -945,36 +871,6 @@ mod tests {
         assert!(classify(&door[..2]).is_none());
         assert!(classify(&[OsString::from("board-render")]).is_none());
         assert!(classify(&[OsString::from("mux")]).is_none());
-    }
-
-    /// Only a markdown plan deep-links, and both URL parts encode.
-    #[test]
-    fn the_obsidian_link_encodes_vault_and_file() {
-        assert_eq!(
-            obsidian_url("c3po", "internal/fno/plans/my plan.md").as_deref(),
-            Some("obsidian://open?vault=c3po&file=internal/fno/plans/my%20plan")
-        );
-        assert_eq!(obsidian_url("c3po", "internal/fno/plans/dir"), None);
-    }
-
-    /// The canonicalizer accepts the three recorded shapes and refuses a
-    /// path with no recognizable vault segment.
-    #[test]
-    fn plan_paths_canonicalize_to_vault_relative() {
-        assert_eq!(
-            canonical_plan_path("internal/fno/plans/x.md", None).as_deref(),
-            Some("internal/fno/plans/x.md")
-        );
-        assert_eq!(
-            canonical_plan_path("/Users/me/c3po/internal/fno/plans/x.md", Some("c3po")).as_deref(),
-            Some("internal/fno/plans/x.md")
-        );
-        assert_eq!(
-            canonical_plan_path("/wt/footnote/some-worktree/internal/fno/plans/x.md", None)
-                .as_deref(),
-            Some("internal/fno/plans/x.md")
-        );
-        assert_eq!(canonical_plan_path("~/elsewhere/x.md", Some("c3po")), None);
     }
 
     /// The public projection end to end: the request surface is exact (an

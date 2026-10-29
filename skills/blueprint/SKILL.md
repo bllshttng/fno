@@ -41,7 +41,6 @@ Each gate loads only when its trigger fires. The bodies (with verbatim scripts) 
 | Answerer Enumeration Gate | the plan changes a read, write, or feed - step 2b-bis |
 | Consolidation Gate | always, between discovery grounding (2b) and the write (3) - step 2d |
 | Five questions and the judge | every plan - answered at 2a-bis, judged at step 3 after finalize |
-| Schema Citation Gate | the codemap has a `## Database Schema` section AND the plan touches the DB |
 | No new Python | a Files to Modify row, File Ownership Map row, or task surface names `cli/src/fno/**.py` |
 | Code Index Audit | every plan - step 2-index |
 | Executor Lock Transcription | a design doc supplies a Locked Decision (executor) |
@@ -140,51 +139,13 @@ fi
    `## Failure Modes` section, use it as the seed for error-path acceptance
    criteria (AC4-EDGE) cited inline in the Changes section. A research doc
    without one is fine: the `what-if` brief asks that question against source.
-2. **Structural context** — Generate a fresh codemap:
-   ```bash
-   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-   # `fno doctor codemap` writes codemap.md into the repo's space by default and
-   # auto-appends the DB-schema companion when --db-schema is set.
-   # The `.env` clause widens detection to repos whose connection lives only
-   # in a dev .env file (the case `db-schema.py` now discovers).
-   db_env_found=""
-   for ef in .env.local .env.development.local .env.development .env; do
-     if [ -f "$REPO_ROOT/$ef" ] && grep -qE '^(export[[:space:]]+)?(DATABASE_URL|POSTGRES_URL|SUPABASE_DB_URL|DIRECT_URL)=' "$REPO_ROOT/$ef"; then
-       db_env_found=1; break
-     fi
-   done
-   # Reuse-or-regenerate: when /think already wrote a `## Schema Reconciliation`
-   # section AND the codemap is fresh (<24h), schema was grounded at design
-   # time - skip the --db-schema regeneration (mirrors the `## Discovery` skip
-   # below). $DESIGN_DOC_PATH is the resolved design-doc argument, if any.
-   CODEMAP_PATH=$(fno-agents state path codemap 2>/dev/null || true)
-   [ -z "$CODEMAP_PATH" ] && CODEMAP_PATH="$REPO_ROOT/.fno/codemap.md"
-   schema_reused=""
-   if [ -n "${DESIGN_DOC_PATH:-}" ] && grep -q '^## Schema Reconciliation$' "$DESIGN_DOC_PATH" 2>/dev/null \
-      && [ -f "$CODEMAP_PATH" ] && [ -z "$(find "$CODEMAP_PATH" -mmin +1440 2>/dev/null)" ]; then
-     schema_reused=1
-   fi
-   if [ -z "$schema_reused" ] && { [ -d "$REPO_ROOT/supabase" ] || [ -f "$REPO_ROOT/prisma/schema.prisma" ] || [ -f "$REPO_ROOT/drizzle/schema.ts" ] || [ -n "$DATABASE_URL" ] || [ -n "$db_env_found" ]; }; then
-     fno doctor codemap --tokens 2048 --db-schema 2>/dev/null || true
-   elif [ -z "$schema_reused" ]; then
-     fno doctor codemap --tokens 2048 2>/dev/null || true
-   fi
-   ```
-   If `fno` is unavailable or codemap's deps are missing, skip silently. Read `.fno/codemap.md` if it exists - use it to identify god nodes, module boundaries, and dependency flow before Grep/Glob exploration. Top files in the output are highest-importance; changes to these need extra phases.
-
 2-index. **Ask the code index** - every plan, before the premise check. Run `bash "${SKILL_DIR}/scripts/lib/code-index-detect.sh"` and list every symbol, command, flag, file and prior-art claim the node or doc makes. Ask the first `ready` `symbol` provider about each code claim and the first `ready` `semantic` provider about each prior-art claim. Run the manifest's `ask` argv under its `timeout_secs` with `{term}` replaced. When the manifest has a `fresh` probe, run it. Write the `code_index:` frontmatter block (`main_sha`, one provider entry with `status:` and `fresh:`) and the `## Existence audit` table as the plan's first section. An index answers only for the files it indexed. Ask it about the claims on that surface, and open every hit: a hit on another surface is not an answer. For a claim the index does not cover, take the verdict from the AGENTS.md search convention. Say in the evidence cell that the index did not cover it. Verdicts read `exists at <file:line>`, `exists as <other name> at <file:line>`, or `absent after <exact command>`. If neither an index nor a search settles a claim, the verdict reads `unanswered: <why>`. Confirm an `absent` verdict, and every verdict from a provider with `fresh: no` or `unknown`, with the AGENTS.md search convention before you write it. `docs/graph-search.md` says why an index never makes a zero trustworthy. A provider that errors or times out is recorded `status: error` and the step continues. With no provider present, write one line saying so and continue. Never build an index during a blueprint. The Code Index Audit gate ([references/blueprint-gates.md](references/blueprint-gates.md#code-index-audit-every-plan---step-2-index)) refuses a post-gate plan that skipped this. After the index and `rg` sweep, name exact source line ranges and read only those ranges. A whole-file read needs a stated reason in the plan's Existence audit.
 
 2a. **Verify the premise** - applies to node-seeded and raw-prose input; a supplied design doc already carries cited findings. Read the node's `dispatch-brief` field (`dispatch_brief`) first when present; it is confirmed scope and known files or commands, not an ignore list or a fence. Then read the whole node with `fno backlog get <id>`, including `dispatch_brief` and `progress_notes`; a later correcting note wins over the details. When a plan is bound, add `--plan <path>`. Run `fno backlog freshness <id>` before you measure the claim. Its `shipped`, `partly_shipped` and `changed` verdicts are warnings that name the PRs to read before designing. Each reading is recorded as an event, and v1 never halts. Name the one claim the plan rests on (what a line does, a count, a stall). Measure it again at its source, with a positive control, before writing. When it holds, cite the reading in Context. When it does not, record the real reading with `fno backlog note <id> "<reading>"`, then plan the real defect or halt and say the node is wrong. A plan on a premise nobody re-measured sends a worker after a defect that does not exist.
 
 2a-bis. **The five questions** - answer them BEFORE designing, each as a named thing or the word `none`, into a `## Five questions` section: who hits this and what it costs them today (a named person, a sourced cost); which existing command, skill or config it extends; which case the design will not cover; what could be deleted; which existing module already implements this or could be extended. For the last one, ask the `symbol` provider step 2-index found; otherwise run `rg` for the node's key symbols and read `docs/architecture/dual-implementation-inventory.md`. The schema lives in [references/quick-template.md](references/quick-template.md). The pass criteria stay in the judge's own lens files. This skill never links them and never copies them here, so a plan cannot learn to write to its judge. The drafting lenses, and the rule that the grader's own files stay unread while drafting: [references/product-lenses.md](references/product-lenses.md). An answer that changes the deliverable changes the plan; that is the point of asking before designing. Step 3's judge call grades the answers. The rulings this step runs inside: a ruling surfaced in the stage block (`## Law governing blueprint`) or owed an entry in `decisions_acknowledged` is fixed - the blueprint obeys it and neither re-derives it nor re-asks it. A directive from the user or the lead with no ruling behind it gets exactly one challenge: name the alternative, ask once with the cost of each side, then follow the answer; a second challenge on the same subject in the same session is a violation of this rule, not diligence. A blueprint that concludes the node should be superseded or narrowed writes that as a question row (`fno inbox outstanding ask --question-file <file> --node <id>`, which lists it in `fno inbox outstanding`; the port refuses a question whose file carries no what, why, two options, recommendation with its reason, or a reversible one with no `why_user:` - the context fields come from the template in `docs/architecture/attention-items.md` "Asking with context") and closes its session with `--summary`; it never records the decision itself.
-2c. **Schema citation gate** - When a `## Database Schema` section exists in the
-   codemap, run the **Schema Citation Gate** ([references/blueprint-gates.md](references/blueprint-gates.md#schema-citation-gate-graduated-db-touching-plans)) before adopt.
-   Quick mode is `-S`-class, so it WARNS on an uncited DB-touching task and
-   proceeds; it does not block.
-2b. **Discovery grounding** - A supplied design doc carries cited findings, and `/blueprint` compiles it without re-running discovery.
-   When creating a fresh plan from raw prose or a node-seeded path with no cited findings, blueprint grounds itself first. Run `fno do think inspect "<seed>" --json` for the receipt. It reports duplicate candidates, schema status, and the active pitfalls.
-   Then load `references/discovery-gate.md`. Ask at most 3 questions with `quick`, or 5 otherwise.
-   For a plan that needs deeper investigation than the receipt, run `/think` first. Think writes cited findings that blueprint then compiles.
+
+2b. **Discovery grounding** - A supplied design doc carries cited findings, and `/blueprint` compiles it without re-running discovery. When a fresh plan starts from raw prose or a node-seeded path with no cited findings, blueprint grounds itself first. Run `fno do think inspect "<seed>" --json` for the receipt. It reports duplicate candidates, database signals, and the active pitfalls. Then load `references/discovery-gate.md`. Ask at most 3 questions with `quick`, or 5 otherwise. For a plan that needs deeper investigation than the receipt, run `/think` first. Think writes cited findings that blueprint then compiles.
 
 2b-bis. **Answerer enumeration** - every plan that changes a read, write, or feed. Run [references/answerer-enumeration.md](references/answerer-enumeration.md)'s four steps: phrase the question in one line, enumerate every answerer (sites repo-wide, feeds measured at each site the plan changes), state the count as the PR estimate, and dispose of every answerer in principle 9's vocabulary. Record the outcome as a `surface:` frontmatter block (schema: [references/quick-template.md](references/quick-template.md)); `validate-plan.sh` refuses a post-2026-09-03 non-quick plan without one. The step sits here, before the Consolidation Gate (2d), because the order is load-bearing: enumerating answerers finds sibling SITES, consolidation finds sibling NODES, and a question with four answerers often already has two nodes filed against it. Sweeping first is what lets 2d see them.
 
@@ -497,7 +458,7 @@ Write for a fresh-context agent that knows nothing about this conversation:
 | "Use the approach we agreed on" | "Use server actions (not API routes) because Next.js 15 app router" |
 | "Add validation to the API endpoints" | "Add Zod schema to POST /api/facilities in `src/routes/facilities.ts:78`: `{ name: z.string().min(1).max(100), capacity: z.number().int().min(1).max(500) }`. Pattern: `src/routes/users.ts:34`" |
 
-**DB-aware planning** (when codemap.md has a Database Schema section):
+When the receipt detects a database, plan DB-aware:
 
 | Bad (misses DB) | Good (DB-aware) |
 |-----------------|-----------------|

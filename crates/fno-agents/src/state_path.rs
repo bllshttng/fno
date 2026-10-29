@@ -24,7 +24,7 @@ pub fn run(args: &[String]) -> i32 {
         args
     };
     let Some(name) = args.first() else {
-        eprintln!("usage: fno-agents state path <target-state|run-log|events|plans|inbox|leads|scratchpad|status-sinks|worktree-log|codemap|escalations|questions|plans-dirs|plan-dir|plan-path|migrate|dir|mint-id>");
+        eprintln!("usage: fno-agents state path <target-state|run-log|events|plans|inbox|leads|scratchpad|status-sinks|worktree-log|escalations|questions|plans-dirs|plan-dir|plan-path|migrate|dir|mint-id|settings-read>");
         return 2;
     };
     // `plans-dirs` is not a single-path accessor: it answers with one dir per
@@ -39,11 +39,15 @@ pub fn run(args: &[String]) -> i32 {
     if name == "migrate" {
         return crate::state_layout::run_migrate_cli(&args[1..]);
     }
-    // `settings-read` is the settings fact set's hidden door (settings_read.rs):
-    // the node-id knobs, the config candidates, and the work-map walk in one
-    // spawn. Same pre-table dispatch: it answers a fact-set receipt, not a path.
+    // The hidden fact-set doors (settings_read.rs, plan_schema.rs): one
+    // stdin-JSON request, one receipt. Same pre-table dispatch: they answer
+    // receipts, not paths, and ride this registered command as action
+    // arguments instead of holding top-level names.
     if name == "settings-read" {
         return crate::backlog::settings_read::run_settings_read(&args[1..]);
+    }
+    if name == "plan-schema" {
+        return crate::plan_schema::run_plan_schema(&args[1..]);
     }
     // `dir` is the state-root folder door (state_layout.rs's dir table): a
     // hook or a Python port asks for a folder by name instead of spelling
@@ -58,6 +62,12 @@ pub fn run(args: &[String]) -> i32 {
     }
     if name == "plan-path" {
         return crate::plans_path::run_plan_path(&args[1..]);
+    }
+    // `settings-read` is the settings fact set's door: the node-id knobs,
+    // the config candidates, and the work-map walk (with the cwd -> project
+    // detect) in one spawn. It answers a receipt, not a path.
+    if name == "settings-read" {
+        return crate::backlog::settings_read::run_settings_read(&args[1..]);
     }
     // `mint-id` is the shell door to the crate's one session-id mint: hooks
     // and Python forwarders call it instead of minting their own, so one
@@ -97,7 +107,7 @@ pub fn run(args: &[String]) -> i32 {
     let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
     let Some(path) = resolve(name, &cwd) else {
         eprintln!(
-            "error: unknown state path {name} (known: codemap, dir, escalations, events, inbox, leads, plan-dir, plan-path, plans, plans-dirs, questions, run-log, scratchpad, status-sinks, target-state, worktree-log)"
+            "error: unknown state path {name} (known: dir, escalations, events, inbox, leads, plan-dir, plan-path, plans, plans-dirs, questions, run-log, scratchpad, status-sinks, target-state, worktree-log)"
         );
         return 2;
     };
@@ -222,7 +232,6 @@ pub(crate) fn resolve(name: &str, cwd: &std::path::Path) -> Option<PathBuf> {
         "scratchpad" => Some(wt.join("scratchpad")),
         "status-sinks" => Some(space.join("status-sinks")),
         "worktree-log" => Some(space.join("worktree-log.jsonl")),
-        "codemap" => Some(wt.join("codemap.md")),
         // Rust-owned: the escalation notes directory (crate::escalation).
         // Nothing in Python reads it, so there is no Python accessor to mirror.
         "escalations" => Some(crate::escalation::dir(cwd)),

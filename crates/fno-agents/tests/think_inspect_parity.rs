@@ -6,14 +6,14 @@
 //! decision and plan-ruling evidence), the whole receipt with injected
 //! sources, the human render, and the missing-repository refusal replay one
 //! frozen case from `tests/golden/think_inspect/pure.json`, captured from
-//! the Python leg by `tests/fixtures/think_inspect/capture_driver.py`.
+//! the Python leg before it was deleted. The database cases were cut by
+//! hand when the codemap schema grounding was removed.
 
 //! parity-stage: characterization
 //! parity-oracle: fno.think_inspect
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use fno_agents::think_inspect::{self, Inputs, Outcome};
 use serde_json::{json, Value};
@@ -69,25 +69,6 @@ fn write_files(root: &Path, files: &Value) {
     }
 }
 
-fn set_mtimes(root: &Path, artifact: &Path, mtimes: &Value) {
-    if let Some(map) = mtimes.as_object() {
-        for (rel, secs) in map {
-            let path = if rel == "@artifact" {
-                artifact.to_path_buf()
-            } else {
-                root.join(rel)
-            };
-            let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs.as_u64().unwrap_or(0));
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .expect("open for mtime");
-            file.set_times(std::fs::FileTimes::new().set_accessed(at).set_modified(at))
-                .expect("set mtime");
-        }
-    }
-}
-
 fn decisions_answer(v: &Value) -> Result<Vec<Value>, String> {
     match v.get("raise").and_then(Value::as_str) {
         Some(message) => Err(message.to_string()),
@@ -116,15 +97,8 @@ fn graph_section(input: &Value) -> Value {
 fn build_receipt(input: &Value) -> Value {
     let (_guard, root) = tmp();
     let repo = root.join("repo");
-    let space = root.join("space");
     std::fs::create_dir_all(&repo).expect("repo");
-    std::fs::create_dir_all(&space).expect("space");
     write_files(&repo, &input["repo_files"]);
-    let artifact = space.join("codemap.md");
-    if let Some(body) = input["artifact"].as_str() {
-        std::fs::write(&artifact, body).expect("artifact");
-    }
-    set_mtimes(&repo, &artifact, &input["mtimes"]);
     let plans = root.join("plans");
     if !input["plans"].is_null() {
         std::fs::create_dir_all(&plans).expect("plans");
@@ -158,7 +132,6 @@ fn build_receipt(input: &Value) -> Value {
         archive: Some(rows(&input["archive"])),
         plans_path: Some(plans),
         home: Some(home),
-        space_dir: Some(space),
         run: &run,
         decisions: &decisions,
     };
@@ -196,16 +169,9 @@ fn answer(f: &str, input: &Value) -> Value {
         "database" => {
             let (_guard, root) = tmp();
             let repo = root.join("repo");
-            let space = root.join("space");
             std::fs::create_dir_all(&repo).expect("repo");
-            std::fs::create_dir_all(&space).expect("space");
             write_files(&repo, &input["files"]);
-            let artifact = space.join("codemap.md");
-            if let Some(body) = input["artifact"].as_str() {
-                std::fs::write(&artifact, body).expect("artifact");
-            }
-            set_mtimes(&repo, &artifact, &input["mtimes"]);
-            think_inspect::database_section(&repo, Some(&artifact))
+            think_inspect::database_section(&repo)
         }
         "pitfalls" => {
             let (_guard, root) = tmp();

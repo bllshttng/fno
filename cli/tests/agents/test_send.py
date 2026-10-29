@@ -122,7 +122,7 @@ def test_dispatch_send_happy_path_live_claude(
         from_name="fno/claude",
     )
 
-    # stdout contract: "msg-<id> delivered (hosted)"
+    # stdout contract: "msg-<id> injected"
     assert result.msg_id.startswith("fmail-"), f"Bad msg_id: {result.msg_id!r}"
     assert result.delivery == "hosted", f"Expected hosted, got {result.delivery!r}"
 

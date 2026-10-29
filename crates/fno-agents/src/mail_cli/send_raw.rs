@@ -739,7 +739,7 @@ fn emit_review_sent(
     let confirmed = delivered;
     let receipt = receipt.map(str::to_string).unwrap_or_else(|| {
         if confirmed {
-            "delivered (hosted)".to_string()
+            "injected".to_string()
         } else {
             "live-miss".to_string()
         }

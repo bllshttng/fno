@@ -45,7 +45,7 @@ const LANES: &[&str] = &["law-door", "decide-door", "rule-file"];
 /// already read, so decide() never reads the same row a second time).
 pub const DISPOSITION_KINDS: &[&str] = &["grant", "retire", "superseded-pair", "native"];
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct When {
     pub events: Vec<String>,
@@ -89,7 +89,7 @@ impl When {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Authority {
     pub by: String,
@@ -101,7 +101,7 @@ fn yes() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,

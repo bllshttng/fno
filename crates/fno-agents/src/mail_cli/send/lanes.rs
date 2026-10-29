@@ -440,6 +440,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
     }
 
     let mut injected = false;
+    let mut lane_state = DeliveryState::Queued;
     let mut woken_as: Option<String> = None;
     let mut lanes: Vec<String> = Vec::new();
     let mut to_session = recipient_session.clone();
@@ -460,8 +461,9 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             to_session = Some(probe_target.clone());
             let mut probe_reasons: Vec<String> = Vec::new();
             if probe_agent.as_deref() == Some("codex") {
-                injected =
+                lane_state =
                     mail_inject_codex(&probe_target, &wrapped, Some(&mut probe_reasons), None);
+                injected = lane_state.reached();
                 if injected {
                     to_harness = Some("codex".to_string());
                 }
@@ -470,7 +472,8 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                 }
             } else {
                 let mut reasons: Vec<String> = Vec::new();
-                injected = mail_inject_claude(&probe_target, &wrapped, Some(&mut reasons), None);
+                lane_state = mail_inject_claude(&probe_target, &wrapped, Some(&mut reasons), None);
+                injected = lane_state.reached();
                 if injected {
                     to_harness = Some("claude".to_string());
                 }
@@ -479,7 +482,8 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                 }
                 if !injected && probe_agent.is_none() {
                     let mut both: Vec<String> = Vec::new();
-                    injected = mail_inject_codex(&probe_target, &wrapped, Some(&mut both), None);
+                    lane_state = mail_inject_codex(&probe_target, &wrapped, Some(&mut both), None);
+                    injected = lane_state.reached();
                     if injected {
                         to_harness = Some("codex".to_string());
                     }
@@ -505,6 +509,11 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                     let reach = token_reachable.as_ref().expect("checked");
                     let (ok, woken, wake_lane) = wake_rung(reach, &wrapped);
                     injected = ok;
+                    if ok {
+                        // A woken session took the body through its resume
+                        // prompt; no turn record was read.
+                        lane_state = DeliveryState::Injected;
+                    }
                     if injected {
                         woken_as = woken;
                     }
@@ -529,24 +538,29 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         let keeper_thread_row = keeper_recipient && row_hosts_keeper_thread(&resolved.session_id);
         if provider.as_deref() == Some("claude") {
             let mut reasons = Vec::new();
-            injected = mail_inject_claude(&resolved.session_id, &wrapped, Some(&mut reasons), None);
+            lane_state =
+                mail_inject_claude(&resolved.session_id, &wrapped, Some(&mut reasons), None);
+            injected = lane_state.reached();
             if !injected && !reasons.is_empty() {
                 live_reason = Some(reasons.join(";"));
             }
         } else if provider.as_deref() == Some("codex") {
             let mut reasons = Vec::new();
-            injected = mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
+            lane_state =
+                mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
+            injected = lane_state.reached();
             if !injected && !reasons.is_empty() {
                 live_reason = Some(reasons.join(";"));
             }
         } else if keeper_thread_row {
             let mut reasons = Vec::new();
-            injected = mail_inject_keeper(
+            lane_state = mail_inject_keeper(
                 &resolved.session_id,
                 &wrapped,
                 &lane_harness,
                 Some(&mut reasons),
             );
+            injected = lane_state.reached();
             if !injected && !reasons.is_empty() {
                 live_reason = Some(reasons.join(";"));
             }
@@ -560,8 +574,8 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             // into an unrelated pane.
             if let Some(entry) = resolve_pane_entry(Some(resolved), Some(&recipient), args.token) {
                 if str_field(&entry, "status") == "live" {
-                    let pane = mux_pane_send(&entry, &wrapped);
-                    injected = pane;
+                    lane_state = mail_inject_pane(&entry, &wrapped, None);
+                    injected = lane_state.reached();
                 }
             }
         }
@@ -579,6 +593,14 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         .reply_to
         .map(|r| format!(" re:{r}"))
         .unwrap_or_default();
+    if args.resolved.is_some() || args.token.is_some() {
+        crate::mail_delivery_state::record(
+            &msg_id,
+            &lane_state,
+            &stamp_from(args.from_name),
+            &recipient,
+        );
+    }
     if injected {
         let row = record.clone();
         if let Err(exc) = record_hosted_delivery(&row, to_harness.as_deref(), to_session.as_deref())
@@ -596,7 +618,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                 args.subject,
                 &recipient,
                 &format!(
-                    "delivered (woken) [revived as bg thread {}]",
+                    "injected (woken) [revived as bg thread {}]",
                     woken_as.expect("checked")
                 ),
             )
@@ -613,7 +635,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                 &msg_id,
                 args.subject,
                 &recipient,
-                &format!("delivered (hosted){live}{corr}"),
+                &crate::mail_delivery_state::receipt(&lane_state, &format!("{live}{corr}")),
             )
         );
         return Ok(NameLane::Done);
@@ -939,6 +961,7 @@ pub(super) fn dispatch_send_to_project(
             to: None,
             to_harness: None,
             to_session: None,
+            state: DeliveryState::Queued,
         },
         None,
     ))
@@ -1054,6 +1077,7 @@ mod project_demotion_tests {
             to: Some("alpha".to_string()),
             to_harness: None,
             to_session: None,
+            state: DeliveryState::Queued,
         };
         let door = demotion_door_args(&result, "projA", None);
         let pos = door
@@ -1483,11 +1507,13 @@ pub(super) fn job_lane_send(
     let wrapped = envelope(Some(session_id.as_str()));
     let provider = job.harness.clone().unwrap_or_else(|| "claude".to_string());
     let mut reasons: Vec<String> = Vec::new();
-    let injected = if provider == "codex" {
+    let state = if provider == "codex" {
         mail_inject_codex(&session_id, &wrapped, Some(&mut reasons), None)
     } else {
         mail_inject_claude(&session_id, &wrapped, Some(&mut reasons), None)
     };
+    crate::mail_delivery_state::record(&msg_id, &state, &sender, &recipient);
+    let injected = state.reached();
     let bus_only = !injected && reasons.iter().any(|r| r == BUS_ONLY_POLICY);
     let holder_tag = format!(
         " [holder {provider} {}]",
@@ -1522,7 +1548,7 @@ pub(super) fn job_lane_send(
                 &msg_id,
                 subject,
                 &recipient,
-                &format!("delivered (hosted){holder_tag}"),
+                &crate::mail_delivery_state::receipt(&state, &holder_tag),
             )
         );
         return Ok(());
@@ -1673,7 +1699,7 @@ pub(super) fn run_dispatch_then_name_lane(
                         &result.msg_id,
                         subject,
                         token,
-                        "delivered (hosted)",
+                        &crate::mail_delivery_state::receipt(&result.state, ""),
                     )
                 );
                 return 0;
@@ -1916,7 +1942,9 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
         );
         return Err(1);
     }
-    if !mux_pane_send(entry, wrapped) {
+    let state = mail_inject_pane(entry, wrapped, None);
+    crate::mail_delivery_state::record(msg_id, &state, sender, recipient);
+    if !state.reached() {
         release_budget(&reservation);
         eprintln!(
             "error: --force did not confirm a send into pane {pane_num}. The payload may still be sitting unsent in the recipient's composer, and the staged body row will deliver by drain, so check the pane before retrying. The refusal is on stderr above."
@@ -1939,7 +1967,7 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
             msg_id,
             subject,
             recipient,
-            &format!("typed (pane {pane_num})"),
+            &crate::mail_delivery_state::receipt(&state, &format!("[pane {pane_num}]")),
         )
     );
     if !corr.is_empty() {

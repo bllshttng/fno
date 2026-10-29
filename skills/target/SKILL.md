@@ -227,7 +227,7 @@ If ARGUMENTS carry a `--reconcile <manifest-path>` token, this is a **G4 de-stub
 
 ### 1-3f. Initialization
 
-The full initialization sequence (load workspace config, codemap, project config, size profile, init state, detect input type, cross-project, Linear, plan validation, domain resolution, discovery gate, checkpoint, kill criteria) lives in [references/init-state.md](references/init-state.md).
+The full initialization sequence lives in [references/init-state.md](references/init-state.md). It loads workspace config, project config, size profile and init state. It detects the input type, cross-project work and Linear. Then it runs plan validation, domain resolution, the discovery gate, the checkpoint and the kill criteria.
 
 Quick summary:
 - **HARD-GATE (location), resolved from policy, never asked:** Before invoking `init-target-state.sh`, consult the shared location verdict (the SAME one `/execute`, `/fix`, and the SessionStart heads-up use, so there is no per-skill drift):
@@ -294,7 +294,7 @@ fi
 
 **Override:** Pass `--skip-preflight` to bypass (not recommended - blocks surface real problems): `/target --skip-preflight "my feature"`. Even when skipped, the skip is recorded in target-state.md so it's auditable.
 
-**What gets checked:** See [references/preflight-checks.md](references/preflight-checks.md) for the full check catalog (working tree clean, branch state, deps installed, auth valid, disk space, codemap freshness). Checks that produce `warn` or `unknown` do not block - only `fail` status blocks.
+**What gets checked:** See [references/preflight-checks.md](references/preflight-checks.md) for the full check catalog (working tree clean, branch state, deps installed, auth valid, disk space). Checks that produce `warn` or `unknown` do not block - only `fail` status blocks.
 
 ### 3h. Phase Handoff Artifacts (best-effort)
 

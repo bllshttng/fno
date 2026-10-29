@@ -96,7 +96,7 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
     let mut deliver = |argv: &[String], _: &str| {
         assert_eq!(argv[8], caller);
         notices.push(argv[9].clone());
-        (0, "delivered (hosted)".to_string(), String::new())
+        (0, "accepted-new-turn".to_string(), String::new())
     };
     run_pass(&home, t0 + 60_000, &mut deliver).unwrap();
 
