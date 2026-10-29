@@ -1004,6 +1004,95 @@ mod tests {
         assert_eq!(pol["enforce_inventory"], json!(false));
         assert_eq!(pol["operator_access"], "unknown");
     }
+
+    #[test]
+    fn lanes_source_names_the_project_layer_and_the_overridden_global() {
+        let (guard, tmp, saved) = pinned_sandbox(
+            "lanes-source-two-layer",
+            "[agents.profiles.target]\nlanes = [\"claude-opus-5-5\"]\n",
+        );
+        std::fs::write(
+            tmp.join("config.toml"),
+            "[agents.profiles.target]\nlanes = [\"zai-flash\"]\n",
+        )
+        .unwrap();
+        let out = lanes_source_for(&tmp, "agents.profiles.target");
+        assert_eq!(
+            out["from"],
+            json!(tmp.join(".fno/config.toml").display().to_string())
+        );
+        assert_eq!(
+            out["overrides"],
+            json!([tmp.join("config.toml").display().to_string()])
+        );
+        drop(guard);
+        clear_sandbox_env(saved);
+    }
+
+    #[test]
+    fn lanes_source_names_a_single_layer_with_no_override_clause() {
+        let (guard, tmp, saved) = pinned_sandbox("lanes-source-single-layer", "not [ valid {{{{");
+        std::fs::write(
+            tmp.join("config.toml"),
+            "[agents.profiles.target]\nlanes = [\"zai-flash\"]\n",
+        )
+        .unwrap();
+        let out = lanes_source_for(&tmp, "agents.profiles.target");
+        assert_eq!(
+            out["from"],
+            json!(tmp.join("config.toml").display().to_string())
+        );
+        assert_eq!(out["overrides"], json!([]));
+        drop(guard);
+        clear_sandbox_env(saved);
+    }
+
+    #[test]
+    fn lanes_source_answers_empty_when_no_layer_declares_lanes() {
+        let (guard, tmp, saved) = pinned_sandbox(
+            "lanes-source-no-lanes",
+            "[agents.profiles.target]\neffort = \"high\"\n",
+        );
+        let out = lanes_source_for(&tmp, "agents.profiles.target");
+        assert_eq!(out, json!({}));
+        drop(guard);
+        clear_sandbox_env(saved);
+    }
+
+    #[test]
+    fn lanes_source_answers_empty_for_a_bare_rung() {
+        let (guard, tmp, saved) = pinned_sandbox("lanes-source-bare-rung", "");
+        let out = lanes_source_for(&tmp, "agents.profiles");
+        assert_eq!(out, json!({}));
+        drop(guard);
+        clear_sandbox_env(saved);
+    }
+}
+
+/// Where a slot's `lanes` list came from: `{"from": <file>, "overrides":
+/// [<lower files>]}` for the resolved profile, `{}` when no candidate
+/// declares lanes (or the rung names no command). The supplier is the
+/// highest-priority candidate declaring lanes; every lower carrier is
+/// overridden whole (arrays never merge), which is the fact a reader of the
+/// global config cannot see from the value alone.
+pub(crate) fn lanes_source_for(cwd: &Path, rung_base: &str) -> Value {
+    let Some(command) = rung_command(rung_base) else {
+        return json!({});
+    };
+    let sources =
+        crate::agents_config::config_sources_deep(cwd, &["agents", "profiles", &command], "lanes");
+    let Some(index) = sources.iter().position(|s| s.carries_leaf) else {
+        return json!({});
+    };
+    let overrides: Vec<String> = sources[index + 1..]
+        .iter()
+        .filter(|s| s.carries_leaf)
+        .map(|s| s.path.display().to_string())
+        .collect();
+    json!({
+        "from": sources[index].path.display().to_string(),
+        "overrides": overrides,
+    })
 }
 
 /// `spawn_compose`'s view of the three helpers the walk ask needs.

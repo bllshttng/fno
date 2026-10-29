@@ -332,6 +332,52 @@ fn deep_merge_toml(base: toml::Value, over: toml::Value) -> toml::Value {
     }
 }
 
+/// One config candidate that carries the queried subtree, highest priority
+/// first. `carries_leaf` says whether THIS file declares `leaf` at the
+/// subtree root: with the merge's replace-whole rule for non-tables, the
+/// highest-priority carrier of the leaf is the file whose value won.
+pub(crate) struct ConfigSource {
+    pub path: std::path::PathBuf,
+    pub carries_leaf: bool,
+}
+
+/// The source view of [`config_value_deep`]: every candidate that carries
+/// the key path, and whether it declares `leaf` there. The walk's chain
+/// line names these so a lanes list is attributable to the file that
+/// supplied it; a candidate missing the path, unreadable, or unparseable is
+/// skipped exactly as the value read skips it.
+pub(crate) fn config_sources_deep(cwd: &Path, keys: &[&str], leaf: &str) -> Vec<ConfigSource> {
+    let mut out = Vec::new();
+    for path in config_candidates(cwd) {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(table) = parse_config(&content) else {
+            continue;
+        };
+        let root = toml::Value::Table(table);
+        let mut cur: &toml::Value = &root;
+        let mut present = true;
+        for k in keys {
+            match cur.get(*k) {
+                Some(v) => cur = v,
+                None => {
+                    present = false;
+                    break;
+                }
+            }
+        }
+        if !present {
+            continue;
+        }
+        out.push(ConfigSource {
+            path,
+            carries_leaf: cur.get(leaf).is_some(),
+        });
+    }
+    out
+}
+
 fn resolve_state_path(raw: &str, cwd: &Path) -> Option<PathBuf> {
     let expanded = if let Some(rest) = raw.strip_prefix("~/") {
         PathBuf::from(std::env::var_os("HOME")?).join(rest)

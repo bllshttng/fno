@@ -1522,9 +1522,26 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         }
         return grid_leg(&payload, &rung_base, &mut chain);
     }
-    chain.push(json!(format!(
-        "slot {rung_base} lanes walked in declared order"
-    )));
+    let mut lanes_line = format!("slot {rung_base} lanes walked in declared order");
+    // AC1: the lanes list is attributable - the file that supplied it (and
+    // any lower layer it replaced whole) rides the chain, so a reader
+    // checking the wrong config layer sees the conflict instead of filing a
+    // router bug.
+    let source = crate::route_gather::lanes_source_for(&slot_cwd(), &rung_base);
+    let from = source.get("from").and_then(Value::as_str).unwrap_or("");
+    if !from.is_empty() {
+        lanes_line.push_str(&format!(" (lanes from {from}"));
+        let overridden: Vec<&str> = source
+            .get("overrides")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        if !overridden.is_empty() {
+            lanes_line.push_str(&format!("; overrides {}", overridden.join(", ")));
+        }
+        lanes_line.push(')');
+    }
+    chain.push(json!(lanes_line));
 
     // Policy resolution with named refusals; an out-of-enum value is a
     // config fault, never a silent permissive coercion. The selected
@@ -3265,6 +3282,49 @@ mod tests {
                 .unwrap_or("")
                 .contains("capacity=exhausted")),
             "lanes: {lanes:?}"
+        );
+    }
+
+    #[test]
+    fn the_lanes_line_names_the_file_that_supplied_the_lane_list() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("config.toml");
+        std::fs::write(&config, "[agents.profiles.target]\nlanes = [\"flash-x\"]\n").unwrap();
+        let prior = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("FNO_CONFIG", &config);
+        let out = resolve_slot_payload(&payload(json!({})));
+        match &prior {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+        let line = chain_of(&out)
+            .into_iter()
+            .find(|l| l.contains("lanes walked in declared order"))
+            .expect("the lanes-walked chain line");
+        assert!(
+            line.ends_with(&format!("(lanes from {})", config.display())),
+            "line: {line}"
+        );
+    }
+
+    #[test]
+    fn a_config_carrying_no_lanes_leaves_the_lanes_line_bare() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _config = ConfigPin::empty(dir.path());
+        let out = resolve_slot_payload(&payload(json!({})));
+        let line = chain_of(&out)
+            .into_iter()
+            .find(|l| l.contains("lanes walked in declared order"))
+            .expect("the lanes-walked chain line");
+        assert!(
+            !line.contains("(lanes from"),
+            "no attribution when no layer declares lanes: {line}"
         );
     }
 
