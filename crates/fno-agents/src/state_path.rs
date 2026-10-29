@@ -24,7 +24,7 @@ pub fn run(args: &[String]) -> i32 {
         args
     };
     let Some(name) = args.first() else {
-        eprintln!("usage: fno-agents state path <target-state|run-log|events|plans|inbox|leads|scratchpad|status-sinks|worktree-log|escalations|questions|plans-dirs|plan-dir|plan-path|migrate|dir|mint-id>");
+        eprintln!("usage: fno-agents state path <target-state|run-log|events|plans|inbox|leads|scratchpad|status-sinks|worktree-log|escalations|questions|plans-dirs|plan-dir|plan-path|migrate|dir|mint-id|settings-read>");
         return 2;
     };
     // `plans-dirs` is not a single-path accessor: it answers with one dir per
@@ -52,6 +52,12 @@ pub fn run(args: &[String]) -> i32 {
     }
     if name == "plan-path" {
         return crate::plans_path::run_plan_path(&args[1..]);
+    }
+    // `settings-read` is the settings fact set's door: the node-id knobs,
+    // the config candidates, and the work-map walk (with the cwd -> project
+    // detect) in one spawn. It answers a receipt, not a path.
+    if name == "settings-read" {
+        return crate::backlog::settings_read::run_settings_read(&args[1..]);
     }
     // `mint-id` is the shell door to the crate's one session-id mint: hooks
     // and Python forwarders call it instead of minting their own, so one

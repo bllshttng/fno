@@ -1,4 +1,4 @@
-//! The hidden `settings-read` door: the whole settings fact set the Python
+//! The hidden `state settings-read` door: the whole settings fact set the Python
 //! graph leftovers used to read in-process (node-id knobs, config
 //! candidates, the work map, the cwd -> project detect), answered in one
 //! spawn. One JSON request in, one JSON receipt out; every field is
