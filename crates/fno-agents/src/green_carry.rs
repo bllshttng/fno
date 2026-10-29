@@ -1,22 +1,15 @@
-//! The merge door's green carry (x-cd18). A green CI verdict recorded at a
-//! PR head is a GitHub fact that never changes once read; when the only
-//! change past that head is main merging in, the recorded verdict answers
-//! for the new head too. The carry is one-sided: a non-ancestor recorded
-//! head, a code diff that differs, or any probe miss leaves today's hold in
-//! place, so a wrong carry needs an identical code diff AND an ancestor
-//! relation, both checkable before the substitution.
+//! The merge door's green carry. A green CI verdict recorded at a PR head
+//! is a GitHub fact that never changes once read; when the only change past
+//! that head is main merging in, the recorded verdict answers for the new
+//! head too. The carry is one-sided: a non-ancestor recorded head, a code
+//! diff that differs, or any probe miss leaves today's hold in place, so a
+//! wrong carry needs an identical code diff AND an ancestor relation, both
+//! checkable before the substitution.
 
 use crate::authorized_merge::ChecksRead;
 use crate::loopcheck::git_bounded;
 use serde_json::Value;
 use std::path::Path;
-
-/// Memo name prefix for one PR, the payload-code naming
-/// (reviews::payload_is_code): `@` cannot occur in a GitHub owner or repo
-/// name, so PR 7 of `o/r` never shares a prefix with PR 1 of `o/r-7`.
-pub(crate) fn memo_prefix(slug: &str, pr: u64) -> String {
-    format!("{}@{pr}@", slug.replace('/', "--"))
-}
 
 /// `origin/main`-style base qualification, the FreshnessResolver fold: a
 /// bare branch name may itself contain a slash, so only the `origin/`
@@ -48,10 +41,16 @@ fn green_rows(cwd: &Path, prefix: &str) -> Vec<(String, Value)> {
         .filter_map(|entry| {
             let file = entry.file_name();
             let file = file.to_string_lossy().into_owned();
-            if !file.starts_with(prefix) || !file.ends_with(".json") {
+            // strip_* over byte-slicing: a foreign file in the memo dir must
+            // cost a skipped row, never a char-boundary panic in the merge
+            // door.
+            let Some(head) = file
+                .strip_prefix(prefix.as_str())
+                .and_then(|f| f.strip_suffix(".json"))
+                .map(str::to_string)
+            else {
                 return None;
-            }
-            let head = file[prefix.len()..file.len() - ".json".len()].to_string();
+            };
             let row =
                 serde_json::from_str::<Value>(&std::fs::read_to_string(entry.path()).ok()?).ok()?;
             let modified = entry.metadata().ok()?.modified().ok()?;
@@ -113,7 +112,7 @@ pub(crate) fn carried_checks(
     let Some(slug) = crate::pr_status::cache::git_slug(cwd) else {
         return checks;
     };
-    for (green_head, row) in green_rows(cwd, &memo_prefix(&slug, pr)) {
+    for (green_head, row) in green_rows(cwd, &crate::pr_status::memo::memo_prefix(&slug, pr)) {
         if !carries(cwd, &green_head, head, &row) {
             continue;
         }

@@ -17,6 +17,13 @@ pub(crate) const RUN_ANNOTATIONS: &str = "run-annotations";
 pub(crate) const GREEN_VERDICT: &str = "green-verdict";
 pub(crate) const KINDS: [&str; 3] = [PAYLOAD_CODE, RUN_ANNOTATIONS, GREEN_VERDICT];
 
+/// Memo name prefix for one PR, the payload-code naming
+/// (reviews::payload_is_code): `@` cannot occur in a GitHub owner or repo
+/// name, so PR 7 of `o/r` never shares a prefix with PR 1 of `o/r-7`.
+pub(crate) fn memo_prefix(slug: &str, pr: u64) -> String {
+    format!("{}@{pr}@", slug.replace('/', "--"))
+}
+
 fn memo_path(cwd: &Path, kind: &str, name: &str) -> Option<PathBuf> {
     let dir = crate::agents_config::pr_status_cache_dir(cwd)?.join(kind);
     Some(dir.join(format!("{name}.json")))

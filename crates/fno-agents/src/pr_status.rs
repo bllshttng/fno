@@ -1191,7 +1191,7 @@ pub(crate) fn status_payload<P: GhProbe>(
             &crate::green_carry::qualified_base(base),
             &head_sha,
         ) {
-            let prefix = crate::green_carry::memo_prefix(slug, pr);
+            let prefix = crate::pr_status::memo::memo_prefix(slug, pr);
             let row = serde_json::json!({
                 "ts": now_ms(),
                 "base": base,

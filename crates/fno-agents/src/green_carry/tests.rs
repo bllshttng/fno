@@ -3,7 +3,7 @@
 //! non-ancestor head, and a missing row; a carried read keeps the current
 //! payload's github_block.
 
-use super::{carried_checks, memo_prefix};
+use super::carried_checks;
 use crate::authorized_merge::ChecksRead;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -89,7 +89,7 @@ fn record_green(dir: &Path, head: &str) {
         "rerun_recovered": null,
         "rerun_failures": null,
     });
-    let prefix = memo_prefix(&slug, 7);
+    let prefix = crate::pr_status::memo::memo_prefix(&slug, 7);
     crate::pr_status::memo::write(
         dir,
         crate::pr_status::memo::GREEN_VERDICT,
