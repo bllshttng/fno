@@ -583,7 +583,7 @@ fn advance_reads_real_selection_and_preserves_launch_pins() {
         "x-aaaa",
         json!({"plan_path":p,"cwd":seed.root,"model":"glm-5.3-flash[1m]","provider":"claude","effort":"high"})
     )]));
-    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  'agents truth '*) printf '%s\\n' '{}' ;;\n  *) exec \"$NATIVE_DOOR\" \"$@\" ;;\nesac");
+    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  *) exec \"$NATIVE_DOOR\" \"$@\" ;;\nesac");
     let log = w.dir.path().join("launches");
     let invoke = || {
         let mut c = w.command();
@@ -640,7 +640,7 @@ fn closed_project_drives_dependents_even_when_next_selection_has_another_scope()
             json!({"blocked_by":["x-aaaa"],"plan_path":p,"cwd":seed.root,"model":"glm-5.3-flash[1m]","provider":"claude"})
         )
     ]));
-    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  'agents truth '*) printf '%s\\n' '{}' ;;\n  *) exec \"$NATIVE_DOOR\" \"$@\" ;;\nesac");
+    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  *) exec \"$NATIVE_DOOR\" \"$@\" ;;\nesac");
     let log = w.dir.path().join("launches");
     let mut c = w.command();
     c.args([

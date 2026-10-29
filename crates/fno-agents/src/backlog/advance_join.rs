@@ -270,7 +270,11 @@ fn live_joiners(node: &str) -> Vec<String> {
     if handles.is_empty() {
         return Vec::new();
     }
-    let answer = Value::Object(crate::truth_cli::truth_payloads(&handles).into_iter().collect());
+    let answer = Value::Object(
+        crate::truth_cli::truth_payloads(&handles)
+            .into_iter()
+            .collect(),
+    );
     candidates
         .iter()
         .filter(|r| {
