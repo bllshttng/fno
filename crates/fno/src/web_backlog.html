@@ -21,42 +21,9 @@
       content="default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <title>fno backlog</title>
 <style>
-/* The footnote themes (Telemetry palette): Superscript dark, Paper light,
-   the same tokens the mux paints in theme.rs. The brand is monochrome ink;
-   hue carries state only. */
-:root {
-  color-scheme: dark light;
-  --crust: #070707; --mantle: #0e0e0e; --base: #141414;
-  --surface0: #2b2b2b; --surface1: #404040; --surface2: #555555;
-  --overlay1: #838383; --subtext0: #b4b4b4; --text: #e8e8e8;
-  --red: #e1a6a3; --yellow: #c5b784; --green: #9cc49c; --blue: #9fb8e5; --violet: #bcaedf;
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: light) {
-  :root {
-    --crust: #dfdfdf; --mantle: #e9e9e9; --base: #f7f7f7;
-    --surface0: #d7d7d7; --surface1: #bfbfbf; --surface2: #a8a8a8;
-    --overlay1: #656565; --subtext0: #505050; --text: #292929;
-    --red: #965351; --yellow: #796823; --green: #3f6c41; --blue: #4c689d; --violet: #6f5d96;
-  }
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--base); color: var(--text); font: 12.5px/1.45 var(--mono); }
+/* fno-house */
+html, body { height: 100%; }
 body { display: flex; flex-direction: column; overflow: hidden; }
-::selection { background: var(--text); color: var(--base); }
-:focus-visible { outline: 1px solid var(--text); outline-offset: 1px; }
-noscript p { margin: 0; padding: 8px 12px; color: var(--yellow); }
-button, select, input { font: inherit; }
-.controls { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 14px; background: var(--mantle); border-bottom: 1px solid var(--surface0); }
-.mark { font-weight: 700; margin-right: 10px; white-space: pre; }
-.mark b { background: var(--text); color: var(--base); margin-right: 1ch; }
-.controls .lbl { color: var(--overlay1); font-size: 12px; }
-.controls button, .controls select, .controls input { font-size: 12px; background: var(--base); color: var(--text); border: 1px solid var(--surface1); border-radius: 0; padding: 3px 8px; max-width: 180px; min-height: 26px; }
-.controls button { cursor: pointer; color: var(--subtext0); }
-.controls button:hover { border-color: var(--text); }
-.controls button.active { background: var(--text); color: var(--base); border-color: var(--text); }
-.controls label { display: flex; align-items: center; gap: 4px; color: var(--overlay1); font-size: 12px; }
-.controls input[type=checkbox] { accent-color: var(--text); min-height: 0; }
 #note { flex: 0 0 auto; }
 #note:empty { display: none; }
 #note .err { padding: 3px 14px; color: var(--red); white-space: pre-wrap; }
@@ -129,8 +96,6 @@ button, select, input { font: inherit; }
 }
 .cmd { display: flex; align-items: center; gap: 4px; }
 .cmd code { font: inherit; font-size: 11px; color: var(--yellow); overflow-wrap: anywhere; }
-.copybtn { font-size: 10px; cursor: pointer; flex: 0 0 auto; background: var(--base); color: var(--subtext0); border: 1px solid var(--surface1); border-radius: 0; padding: 2px 7px; min-height: 22px; }
-.copybtn:hover { color: var(--text); border-color: var(--text); }
 .prlink, .planline a { color: var(--blue); overflow-wrap: anywhere; }
 .noteline { margin: 3px 0; overflow-wrap: anywhere; }
 .noteline .nts { color: var(--overlay1); font-size: 11px; }
@@ -185,7 +150,6 @@ button, select, input { font: inherit; }
 #f-q { flex: 1 1 auto; width: 100%; font-size: 13px; background: var(--base); color: var(--text); border: 1px solid var(--surface1); border-radius: 0; padding: 5px 44px 5px 10px; min-height: 30px; }
 #f-q:focus { border-color: var(--text); outline: none; }
 #searchbox input:focus + kbd { display: none; }
-kbd { font: inherit; font-size: 10.5px; color: var(--overlay1); border: 1px solid var(--surface1); padding: 1px 5px; line-height: 14px; white-space: nowrap; }
 #searchbox kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; background: var(--base); }
 /* The recent-search list: an anchored dropdown under the bar, shown on
    focus, one row per stored query plus the one clear action. */
@@ -196,7 +160,6 @@ kbd { font: inherit; font-size: 10.5px; color: var(--overlay1); border: 1px soli
 .recentrow:hover { background: var(--surface0); }
 .recentrow .rq { flex: 1 1 auto; overflow-wrap: anywhere; }
 .recentrow.recentclear { color: var(--overlay1); }
-.controls kbd { margin-left: 4px; }
 #f-q-clear { flex: 0 0 auto; font-size: 12px; cursor: pointer; background: var(--base); color: var(--subtext0); border: 1px solid var(--surface1); border-radius: 0; padding: 3px 10px; min-height: 30px; }
 #f-q-clear:hover { color: var(--text); border-color: var(--text); }
 #f-q-clear[hidden] { display: none; }
@@ -210,8 +173,6 @@ kbd { font: inherit; font-size: 10.5px; color: var(--overlay1); border: 1px soli
 /* The j/k selection reads as a doubled border, so a blocked card's red edge
    and the selection stay visible at once. */
 .card.sel, .lrow.sel { box-shadow: inset 0 0 0 2px var(--blue); }
-#toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: var(--base); padding: 6px 14px; font-size: 12px; z-index: 1500; opacity: 0; transition: opacity .15s; pointer-events: none; }
-#toast.show { opacity: 1; }
 #sheet { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--crust); opacity: .92; z-index: 1200; }
 #sheet[hidden] { display: none; }
 #sheetbox { background: var(--mantle); border: 1px solid var(--surface1); padding: 14px 18px 16px; min-width: 280px; max-width: 92vw; }
@@ -220,7 +181,7 @@ kbd { font: inherit; font-size: 10.5px; color: var(--overlay1); border: 1px soli
 #sheetbox td.k { color: var(--text); white-space: pre; }
 #sheetclose { margin-top: 12px; font-size: 11px; cursor: pointer; background: var(--base); color: var(--subtext0); border: 1px solid var(--surface1); border-radius: 0; padding: 3px 10px; min-height: 26px; }
 #sheetclose:hover { color: var(--text); border-color: var(--text); }
-@media (prefers-reduced-motion: reduce) { .card { transition: none; } #toast { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .card { transition: none; } }
 @media (max-width: 720px) { #panel { width: auto !important; left: 0; } #panelgrip { display: none; } .mark { flex-basis: 100%; } }
 </style>
 </head>
