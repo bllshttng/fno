@@ -1,0 +1,10 @@
+state_dir=<FIXTURE>/state
+graph_json=<FIXTURE>/state/db/graph.json
+ledger_json=<FIXTURE>/ledger/l.json
+briefs_dir=<FIXTURE>/briefs-x
+fleet_dir=<FIXTURE>/state/fleet
+postmortems_dir=<FIXTURE>/state/postmortems
+worktrees_base=<FIXTURE>/wt
+memory_dir=<FIXTURE>/mem
+hook_logs_dir=<FIXTURE>/state/hook-logs
+space_dir=<FIXTURE>/state/spaces/<FIXTURE_SLUG>-proj

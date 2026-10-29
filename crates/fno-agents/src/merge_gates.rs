@@ -121,38 +121,53 @@ pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64) -> Option<String>
 }
 
 /// Every PR number a graph row carries: the persisted `pr_number` field plus
-/// the `additional_prs` entries (typed rows carry `{number}` or `{url}`
-/// objects; legacy rows carry bare ints or `/pull/<n>` URL strings). A
-/// contract dependent whose PR is recorded only in `additional_prs` must
-/// still be found or the gate is bypassed.
+/// the `additional_prs` entries. A contract dependent whose PR is recorded
+/// only in `additional_prs` must still be found or the gate is bypassed.
 fn pr_numbers_of(entry: &Value) -> Vec<u64> {
+    pr_refs_of(entry).into_iter().map(|r| r.number).collect()
+}
+
+/// One PR a graph row records, with the URL it names when it names one.
+pub(crate) struct PrRef {
+    pub(crate) number: u64,
+    pub(crate) url: Option<String>,
+    pub(crate) primary: bool,
+}
+
+/// Every PR ref a graph row carries: `pr_number` with its `pr_url`, then the
+/// `additional_prs` entries (typed rows carry `{number}` or `{url}` objects;
+/// legacy rows carry bare ints or `/pull/<n>` URL strings).
+pub(crate) fn pr_refs_of(entry: &Value) -> Vec<PrRef> {
     let mut out = Vec::new();
+    let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_owned);
     if let Some(n) = entry.get("pr_number").and_then(Value::as_u64) {
-        out.push(n);
+        out.push(PrRef {
+            number: n,
+            url: text(entry.get("pr_url")),
+            primary: true,
+        });
     }
     if let Some(list) = entry.get("additional_prs").and_then(Value::as_array) {
         for raw in list {
-            match raw {
-                Value::Number(n) => {
-                    if let Some(n) = n.as_u64() {
-                        out.push(n);
-                    }
-                }
+            let (number, url) = match raw {
+                Value::Number(n) => (n.as_u64(), None),
                 Value::Object(o) => {
-                    if let Some(n) = o.get("number").and_then(Value::as_u64) {
-                        out.push(n);
-                    } else if let Some(url) = o.get("url").and_then(Value::as_str) {
-                        if let Some(n) = pull_number_from_url(url) {
-                            out.push(n);
-                        }
-                    }
+                    let url = text(o.get("url"));
+                    let number = o.get("number").and_then(Value::as_u64);
+                    (
+                        number.or_else(|| url.as_deref().and_then(pull_number_from_url)),
+                        url,
+                    )
                 }
-                Value::String(url) => {
-                    if let Some(n) = pull_number_from_url(url) {
-                        out.push(n);
-                    }
-                }
-                _ => {}
+                Value::String(url) => (pull_number_from_url(url), Some(url.clone())),
+                _ => (None, None),
+            };
+            if let Some(number) = number {
+                out.push(PrRef {
+                    number,
+                    url,
+                    primary: false,
+                });
             }
         }
     }
@@ -579,8 +594,8 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
 
 /// The visual-approval gate: a PR whose changed files touch a configured
 /// paint path holds until an ANSWERED question page names the PR, or a
-/// role-recorded decision row transcribes the user's chat approval of this
-/// exact head. The user's look is the only clear, mechanizing the prose
+/// role-recorded decision row transcribes the user's chat or board approval
+/// of this exact head. The user's look is the only clear, mechanizing the prose
 /// rulings this gate replaces (rebrand and splash PRs merged with no user
 /// look). `merge.visual_paint_paths` lists the lines the gate watches; an
 /// explicit empty list disarms it, and no key at all arms footnote's own mux
@@ -645,11 +660,12 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         "PR {pr} touches the paint surface the config lists ({}); full CI is held at \
          this head, and the daemon cancels every run but rust-ci (the shots) until the \
          look clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
-         decision whose rationale attests the chat and whose text names the PR and \
-         its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
-         --authority role --rationale 'user in chat: <the user's words>'`). Ask via \
+         decision whose text names the PR and its head sha (`fno backlog decide <node> \
+         'Approved: PR {pr} at {head}' --authority role --rationale 'user in chat: \
+         <the user's words>'`). For a board answer, cite the answered page that names \
+         the PR instead (`--rationale 'user answered <q-id> on the board'`). Ask via \
          `fno inbox outstanding ask`, then the user answers the page or the lead \
-         records the chat approval. Pass each shot with --image.",
+         records the approval. Pass each shot with --image.",
         touched.join(", ")
     );
     match (node_id.as_deref(), shots.as_slice()) {
@@ -658,8 +674,8 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
              re-read status - the gate files no empty page"
         )),
         (None, _) => detail.push_str(
-            "; no node is bound to this PR (by pr_number), so the page has no shots \
-             key: bind the node, then re-read status",
+            "; no node is bound to this PR (by pr_number or additional_prs), so the \
+             page has no shots key: bind the node, then re-read status",
         ),
         (Some(node), shots) => {
             let short = head.chars().take(8).collect::<String>();
@@ -857,28 +873,29 @@ pub(crate) fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
 /// changes" or "none of these" is an answer too, and it must keep the hold.
 /// Head-scoped like the role row: a push after the user looked holds again.
 fn answered_question_names_pr(root: &Path, pr: u64, head: &str) -> bool {
-    if head.is_empty() {
-        return false;
-    }
+    !head.is_empty()
+        && approving_pages(root, pr)
+            .iter()
+            .any(|(_, text)| text.contains(head))
+}
+
+/// Every ANSWERED question page that picks the approve option and names the
+/// PR, as `(question id, page text)`, at any head.
+fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
     let dir = crate::escalation::questions_dir(root);
     // Answered pages are archived into done/ after the fact; an approval
     // must not lapse because its page moved there.
-    let mut dirs = vec![dir.clone()];
-    dirs.push(dir.join("done"));
-    dirs.iter().any(|d| {
-        crate::lead_answers::read_question_pages(d).is_ok_and(|pages| {
-            pages.iter().any(|(_stem, text)| {
-                crate::attention_file::parse_page(text)
-                    .map(|(front, _)| {
-                        front.status == "answered"
-                            && front.answer.as_deref().is_some_and(answer_approves)
-                    })
-                    .unwrap_or(false)
-                    && page_names_pr(text, pr)
-                    && text.contains(head)
-            })
+    [dir.clone(), dir.join("done")]
+        .iter()
+        .flat_map(|d| crate::lead_answers::read_question_pages(d).unwrap_or_default())
+        .filter_map(|(_stem, text)| {
+            let (front, _) = crate::attention_file::parse_page(&text)?;
+            (front.status == "answered"
+                && front.answer.as_deref().is_some_and(answer_approves)
+                && page_names_pr(&text, pr))
+            .then_some((front.question_id, text))
         })
-    })
+        .collect()
 }
 
 /// Does a recorded answer pick the approve option? A numbered answer
@@ -954,11 +971,25 @@ fn row_is_chat_attested(row: &Value) -> bool {
         .is_some_and(|r| r.to_lowercase().contains("user in chat"))
 }
 
-/// True when a live role decision row transcribes the user's chat approval
-/// of this PR at this head: authority `role`, the PR's bound node as subject
+/// The rationale cites one of these question ids as a whole token. The
+/// user answered that page on the board, so the board is the channel and
+/// the lead need not write a chat attestation that would be false.
+fn row_cites_any(row: &Value, ids: &[String]) -> bool {
+    let Some(r) = row.get("rationale").and_then(Value::as_str) else {
+        return false;
+    };
+    let tokens: Vec<&str> = r
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .collect();
+    ids.iter().any(|id| tokens.contains(&id.as_str()))
+}
+
+/// True when a live role decision row transcribes the user's approval of
+/// this PR at this head: authority `role`, the PR's bound node as subject
 /// (the decide door lets only the lead whose territory covers that node mint
-/// it), a chat-attested rationale, and text naming both the PR and the exact
-/// head sha the user looked at. Head-scoped like the operator head grant: a
+/// it), a rationale that attests the user's chat words or cites an answered
+/// question page that approves this PR, and text naming both the PR and the
+/// exact head sha the lead re-pinned. Head-scoped like the operator head grant: a
 /// push invalidates the approval. An unreadable index never clears.
 pub(crate) fn role_chat_clears_pr<P: Probes>(
     probes: &P,
@@ -970,15 +1001,18 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     if head.is_empty() {
         return false;
     }
+    // Subject-scoped and uncapped: a capped newest-first read of the whole
+    // lane loses an approval once enough other rows land after it.
     let args: Vec<String> = [
         "backlog",
         "decisions",
+        node,
         "--lane",
         "unattributed",
         "--state",
         "all",
         "--limit",
-        "200",
+        "0",
         "--json",
     ]
     .iter()
@@ -990,6 +1024,11 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     let Ok(payload) = serde_json::from_slice::<Value>(&out) else {
         return false;
     };
+    let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)
+        .into_iter()
+        .map(|(id, _)| id)
+        .filter(|id| !id.is_empty())
+        .collect();
     payload
         .get("decisions")
         .and_then(Value::as_array)
@@ -1001,7 +1040,7 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
                         row.get("lifecycle").and_then(Value::as_str),
                         Some("live") | Some("unscoped")
                     )
-                    && row_is_chat_attested(row)
+                    && (row_is_chat_attested(row) || row_cites_any(row, &approved))
                     && {
                         let text = row_text(row);
                         text.contains(head) && page_names_pr(&text, pr)

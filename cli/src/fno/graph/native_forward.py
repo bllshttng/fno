@@ -20,13 +20,9 @@ def _native_forward(command: str):
 
         The whole argv rides `fno-agents backlog <command>`; its output is
         echoed back through the wheel and its exit code returned. The child
-        gets `FNO_STATE_DIR` set to the state root the wheel's own graph
-        resolver answers, so both legs read one store even when that root
-        came from config or an in-process pin the child cannot see.
+        resolves the state root itself, from the same env and config.
         """
-        import os
-
-        from fno import paths, rust_binary
+        from fno import rust_binary
 
         binary = rust_binary.resolve_binary()
         if binary is None:
@@ -36,14 +32,11 @@ def _native_forward(command: str):
                 err=True,
             )
             raise typer.Exit(code=2)
-        anchor = paths.graph_json().parent
-        state_root = anchor.parent if anchor.name == "db" else anchor
         proc = subprocess.run(
             [str(binary), "backlog", command, *ctx.args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env={**os.environ, "FNO_STATE_DIR": str(state_root)},
         )
         if proc.stdout:
             typer.echo(proc.stdout, nl=False)

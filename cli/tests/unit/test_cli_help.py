@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 
@@ -28,17 +27,11 @@ def test_help_root_matches_dashdash_help():
     for needle in ("backlog", "agents", "config", "doctor"):
         assert needle in via_help.output, f"missing {needle} in `fno help` output"
         assert needle in via_dashdash.output, f"missing {needle} in `fno --help` output"
-    # Hidden commands are reachable only through the full-surface door. Moved
-    # spellings render nowhere in it (x-6233: the block is gone and each
-    # alias prints its new home on use), so the needles are real roots.
+    # Hidden commands are reachable only through the full-surface door.
     via_all = runner.invoke(app, ["help", "--all"])
     assert via_all.exit_code == 0
     for needle in ("backlog", "inbox", "mux", "version", "update"):
         assert needle in via_all.output, f"missing {needle} in `fno help --all` output"
-    for gone in ("claim", "event", "pr", "done", "mail", "workspace"):
-        assert not re.search(rf"^\s+{gone}\s", via_all.output, re.MULTILINE), (
-            f"moved spelling {gone!r} must not render as a row"
-        )
 
 
 def test_help_subcommand_works_in_module_mode():

@@ -703,6 +703,15 @@ fn run(a: &Args, gh: Gh) -> i32 {
             match crate::org_board::budget::run_with_timeout(&cmd, &a.cwd, CREATE_TIMEOUT) {
                 Ok(out) => {
                     print!("{}", String::from_utf8_lossy(&out));
+                    // The sha origin holds is the PR head; local HEAD can
+                    // carry commits that were never pushed.
+                    let remote = format!("refs/heads/{branch}");
+                    if let Ok(line) = git(&a.cwd, &["ls-remote", "origin", &remote]) {
+                        let sha = line.split_whitespace().next().unwrap_or_default();
+                        let run = crate::stacked_base_stamp::runner("git", "gh");
+                        let base = a.base.trim_start_matches("origin/");
+                        crate::stacked_base_stamp::stamp(&a.cwd, base, sha, &run);
+                    }
                     0
                 }
                 Err(e) if e.over_budget() => {

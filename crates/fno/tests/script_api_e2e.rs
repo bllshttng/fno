@@ -655,6 +655,7 @@ fn zero_viewer_identity_join_reads_fresh_registry_and_real_claim() {
     let claim = scratch
         .command()
         .args([
+            "agents",
             "claim",
             "acquire",
             "node:x-f0c2-verify",

@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -51,6 +51,10 @@ pub enum ViewKind {
     Feed,
     /// The sideline row context menu on the first agent row.
     RowMenu,
+    /// The pointer resting on the third agent row, away from the chosen one.
+    Hover,
+    /// The selector cursor on the fourth agent row, away from the chosen one.
+    Cursor,
     /// The tab-strip context menu on the first tab.
     TabMenu,
     /// The sideline menu popup.
@@ -151,6 +155,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "bell-full" => Some(ViewKind::BellFull),
         "feed" => Some(ViewKind::Feed),
         "row-menu" => Some(ViewKind::RowMenu),
+        "hover" => Some(ViewKind::Hover),
+        "cursor" => Some(ViewKind::Cursor),
         "tab-menu" => Some(ViewKind::TabMenu),
         "sideline-menu" => Some(ViewKind::SidelineMenu),
         "composer" => Some(ViewKind::Composer),
@@ -790,6 +796,17 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 .ok_or("no agent rows to open a row menu on")?;
             view.open_row_menu(i, Anchor::Center);
         }
+        Some(kind @ (ViewKind::Hover | ViewKind::Cursor)) => {
+            let agents = view.display_rows().into_iter().enumerate();
+            let mut agents = agents.filter(|(_, r)| matches!(r, super::DisplayRow::Agent(_)));
+            let hover = matches!(kind, ViewKind::Hover);
+            let i = agents.nth(if hover { 2 } else { 3 }).map(|(i, _)| i);
+            if hover {
+                view.hover_row = i;
+            } else {
+                view.selector = i;
+            }
+        }
         Some(ViewKind::SplitMenu) => {
             let i = view
                 .display_rows()
@@ -1142,6 +1159,8 @@ mod tests {
             ("bell-full", ViewKind::BellFull),
             ("feed", ViewKind::Feed),
             ("row-menu", ViewKind::RowMenu),
+            ("hover", ViewKind::Hover),
+            ("cursor", ViewKind::Cursor),
             ("tab-menu", ViewKind::TabMenu),
             ("sideline-menu", ViewKind::SidelineMenu),
             ("composer", ViewKind::Composer),

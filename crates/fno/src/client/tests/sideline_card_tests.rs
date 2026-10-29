@@ -1234,6 +1234,27 @@ async fn a_long_press_on_each_card_line_opens_the_agents_menu() {
 }
 
 #[tokio::test]
+async fn a_click_on_a_cards_star_toggles_its_pin() {
+    // The star sits on line 2, which arms the press hold, not a row drag:
+    // a short release there must still reach the pin.
+    let mut v = card_view(lead_and_worker());
+    let (_, detail_i) = card_rows_for(&v, "lead-a");
+    let row = (detail_i - v.sideline_offset() + 1) as u16;
+    let col = (0..v.panel_w()).find(|c| v.pin_star_at(row, *c).is_some());
+    let col = col.expect("line 2 carries a star cell");
+    let (mut buf, mut carry) = (Vec::<u8>::new(), Vec::<u8>::new());
+    let click = format!("\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m", c = col + 1, r = row + 1);
+    let mut scanner = Scanner::default();
+    crate::client::handle_stdin(&mut v, &mut scanner, &mut carry, click.as_bytes(), &mut buf)
+        .await
+        .unwrap();
+    assert!(v
+        .notice
+        .as_ref()
+        .is_some_and(|(n, _)| n == "pinning lead-a"));
+}
+
+#[tokio::test]
 async fn a_right_press_on_each_card_line_opens_the_agents_menu() {
     // Same span for right-click, the no-config path for terminals that
     // swallow the hold. The inter-card rule stays inert: no menu opens.

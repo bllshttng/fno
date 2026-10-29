@@ -253,11 +253,11 @@ pub(super) fn build_row_menu_with(
     // A pin is a session fact, so only a row with a session id offers it.
     if agent.harness_session_id.is_some() {
         let (glyph, label) = if agent.pinned {
-            ("\u{2606}", "Unpin")
+            (super::sideline::PIN_OUTLINE, "Unpin")
         } else {
-            ("\u{2605}", "Pin")
+            (super::sideline::PIN_STAR, "Pin")
         };
-        add(entry(glyph, label), &[MenuAction::TogglePin]);
+        add(entry(&glyph.to_string(), label), &[MenuAction::TogglePin]);
     }
     // The hold lift is common to every row state too: the mark rides the
     // row, not its pane, so a worker wearing [DND] or [HELD] can sit in any

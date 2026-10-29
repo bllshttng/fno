@@ -157,6 +157,7 @@ pub mod compaction;
 mod completion_output;
 pub mod component_update;
 pub mod config_route;
+pub mod context_audit;
 pub mod context_run;
 pub mod context_window;
 pub mod convert;
@@ -206,6 +207,7 @@ pub mod finalize_run_summary;
 pub mod first_check;
 pub mod fleet_beacon;
 pub mod fleet_incident;
+pub mod fleet_lanes;
 pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_state;
@@ -215,6 +217,7 @@ pub(crate) mod fnod;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
+pub mod footprint_cause;
 pub mod friction;
 pub mod gate_probes;
 pub mod gc;
@@ -280,6 +283,7 @@ pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
+pub mod law_restore;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub(crate) mod lead_checkin_beat_budget;
@@ -407,7 +411,9 @@ pub mod otlp_export;
 pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
+pub mod pack_profile;
 pub mod pane_claim;
+pub mod pane_identity;
 pub mod pane_keeper;
 pub mod pane_loop;
 pub mod pane_rebind;
@@ -470,6 +476,7 @@ pub mod quarantine;
 pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
+pub mod question_ladder;
 pub mod question_sweep;
 pub mod quiet_retire;
 pub mod reader_cost;
@@ -594,6 +601,7 @@ pub mod spawn_seam;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;
+pub(crate) mod stacked_base_stamp;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -681,6 +689,7 @@ pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
 pub mod wake_read;
+pub mod watch;
 pub mod watch_expiry;
 pub mod wave;
 pub mod whoami;
@@ -2062,9 +2071,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // loop that never ran. The Python tick emits nothing for this family.
     "pr_heal_tick",
     // The heal loop's acted-on rows: one flake guard staged per flapping
-    // (sha, run id, check), and one remedy row per PR the loop acted on.
+    // (sha, run id, check), one remedy row per PR the loop acted on, and
+    // one hold row per rerun deferred to a live Actions incident.
     "pr_heal_flake",
     "pr_heal_pr",
+    "pr_heal_hold",
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",

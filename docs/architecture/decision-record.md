@@ -19,7 +19,7 @@ The old `fno decide` spelling remains as a one-release compatibility shim. It pr
 
 ## Two producers, both explicit
 
-`fno inbox decide` records a ruling that has no question on file. `fno outstanding clear --answer` records the answer to an open `operator_question`, because an answered question IS a decision.
+`fno inbox decide` records a ruling that has no question on file. `fno inbox outstanding clear --answer` records the answer to an open `operator_question`, because an answered question IS a decision.
 
 Both are explicit on purpose. Automatic classification of "was that a ruling?" is judgment on a truncated view, which `docs/architecture/memory-system.md` records as deprecated for cause.
 
@@ -92,7 +92,7 @@ There is no new recording gate, and none is needed. `crates/fno-agents/src/loopc
 | Store | What it is for | Path |
 |---|---|---|
 | Project journal | Durability and the project audit trail | `<canonical-repo>/.fno/events.jsonl` |
-| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` via `paths.decisions_jsonl()` |
+| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` |
 | Graph projection | The node view, for anyone reading the node | the subject node's `decisions` array |
 
 Rust readers do not read the JSONL alone. `decision_index::default_store_live` reads graph.db decisions plus the JSONL rows the db lacks. The merge keys match `_read_index`, so a ruling the db holds is never invisible to a Rust reader.
@@ -177,7 +177,7 @@ The command is idempotent by decision id, so a second run adds nothing.
 
 ## Lifecycle and standing law
 
-The index remains append-only. A retraction is a new `decision_retracted` event, never an edit or delete: `fno backlog decide-retract d-1a2b3c4d --reason "the decision no longer applies"`. The command resolves the target first, refuses a blank reason or unknown id, and requires the operator lane to retract law. If the project journal is durable but the recall-index append fails, the command names `fno backlog decide-reindex` and never recommends retrying the retraction.
+The index remains append-only. A retraction is a new `decision_retracted` event, never an edit or delete: `fno backlog decide-retract d-1a2b3c4d --reason "the decision no longer applies"`. The command resolves the target first, refuses a blank reason or unknown id, and requires the operator lane to retract an operator law. A session retracts a `chat_attested` law with `--quote "<the user's words>"`, and the quote rides the retraction event. `fno inbox law restore <id>` undoes a law retraction. It re-records the row under a new id with `supersedes: <id>` and `restores: <retraction id>`, so every reader sees the old id superseded by a live successor. The same lane rule applies: a session restores only its own kind. If the project journal is durable but the recall-index append fails, the command names `fno backlog decide-reindex` and never recommends retrying the retraction.
 
 Every row carries a derived lifecycle: `live`, `expired`, `superseded`, `retracted`, `unknown`, or `unscoped`. Human output leads with that marker, and JSON includes `lifecycle`, reason, and any positive closure evidence. `--state live|expired|superseded|retracted|unscoped|all` filters the same projection. If a coord row is stamped to a node, it expires only after that node's graph entry has positive closure evidence. If a repository-scoped PR row exists, it expires only after its exact graph binding is marked merged. A failed graph read makes the lifecycle `unknown`; the command names the unread graph on stderr, and every state filter keeps the row. Missing or ambiguous closure evidence is `unscoped`. Neither `unknown` nor `unscoped` is live. Law does not expire because a node or PR closes.
 
@@ -260,6 +260,6 @@ A decision id is a citable fact too. A worker once named a deletion-offset rulin
 
 The one-step door (`fno inbox law set`) has no staged proposal, no content hash, and no resume path (ruling d-e1eec854). The old ceremony was deleted because it refused the honest headless path at the last step. An attended chat approved the same enactment without reading the hash.
 
-The cost of that trade, measured rather than assumed: `require_marked_caller` answers `chat_attested` off `resolve_self_identity`, which walks process ancestry. The door is not "a mail-injected slash command". It is ANY process descended from a harness session. That includes an agent's own Bash call with no user-shaped text anywhere. The narrower mail shape is the one that cannot be detected. Across every transcript in this machine's claude project directory, 2173 user turns carrying an `<fno_mail>` envelope were recorded with `promptSource: "typed"` and 2439 with `origin: {"kind": "human"}`. `fno agents mail send --raw` strips the envelope that is the one remaining marker. The door is the law LANE and never the `operator` VALUE: `_resolve_decider` still refuses an `operator` claim from a resolved session. The asymmetry buys honesty. A session can mint a law row and cannot retract one, because `retract_decision` requires `operator`.
+The cost of that trade, measured rather than assumed: `require_marked_caller` answers `chat_attested` off `resolve_self_identity`, which walks process ancestry. The door is not "a mail-injected slash command". It is ANY process descended from a harness session. That includes an agent's own Bash call with no user-shaped text anywhere. The narrower mail shape is the one that cannot be detected. Across every transcript in this machine's claude project directory, 2173 user turns carrying an `<fno_mail>` envelope were recorded with `promptSource: "typed"` and 2439 with `origin: {"kind": "human"}`. `fno agents mail send --raw` strips the envelope that is the one remaining marker. The door is the law LANE and never the `operator` VALUE: `_resolve_decider` still refuses an `operator` claim from a resolved session. The asymmetry buys honesty. A session can mint and retract its own kind of law row. It can never retire an `operator` row, by retraction or by supersession.
 
 One family is closed to the chat door entirely: subjects under `review-coverage-waiver`, the merge gate's waiver evidence. These refuse every non-superuser authority at the write chokepoint. A waiver asserts a person read the diff. No chat row can carry that fact. The attended `fno do pr coverage-waive` command is the only path.
