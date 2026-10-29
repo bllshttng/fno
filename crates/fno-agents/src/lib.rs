@@ -407,7 +407,9 @@ pub mod otlp_export;
 pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
+pub mod pack_profile;
 pub mod pane_claim;
+pub mod pane_identity;
 pub mod pane_keeper;
 pub mod pane_loop;
 pub mod pane_rebind;
@@ -470,6 +472,7 @@ pub mod quarantine;
 pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
+pub mod question_ladder;
 pub mod question_sweep;
 pub mod quiet_retire;
 pub mod reader_cost;
@@ -594,6 +597,7 @@ pub mod spawn_seam;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;
+pub(crate) mod stacked_base_stamp;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -2062,9 +2066,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // loop that never ran. The Python tick emits nothing for this family.
     "pr_heal_tick",
     // The heal loop's acted-on rows: one flake guard staged per flapping
-    // (sha, run id, check), and one remedy row per PR the loop acted on.
+    // (sha, run id, check), one remedy row per PR the loop acted on, and
+    // one hold row per rerun deferred to a live Actions incident.
     "pr_heal_flake",
     "pr_heal_pr",
+    "pr_heal_hold",
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",

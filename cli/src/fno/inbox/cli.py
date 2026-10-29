@@ -10,7 +10,7 @@ front's nested commands: no Python mount.
  (d-add90c60): the human-authority commands join the human-facing group.
 `decisions` and the whole `law` app are the Rust front's nested commands (no
 Python mount), and `fno inbox decide` answers natively through the decide
-door; the root `fno decide` / `fno law` spellings are COMMAND_MOVES shims.
+door; the front door retires the root `fno decide` / `fno law` spellings.
 """
 
 from __future__ import annotations

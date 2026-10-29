@@ -53,3 +53,18 @@ pub(crate) fn incident_note(incidents: &Value) -> String {
         incident_line(incidents)
     )
 }
+
+/// The rerun-hold verdict for a cancelled run: Some when every job reads the
+/// casualty shape AND the status page confirms a live Actions incident - the
+/// one combination where re-queueing the run feeds it back into a dead
+/// queue. The returned line is the hold's explanation for the report row.
+/// Either read failing to confirm is no incident, so the rerun issues.
+pub(crate) fn rerun_hold(jobs: &[Value], incidents: &Value) -> Option<String> {
+    if incidents.is_null() || !cancelled_no_runner(jobs) {
+        return None;
+    }
+    Some(format!(
+        "{} - the cancelled run never got a runner; wait out the incident instead of rerunning",
+        incident_line(incidents)
+    ))
+}

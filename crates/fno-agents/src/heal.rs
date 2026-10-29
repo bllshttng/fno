@@ -165,6 +165,7 @@ pub(crate) enum Remedy {
     /// no verdict, so rerunning it IS reaching a verdict. `--failed` reruns
     /// only `failure` conclusions; a cancelled run has none. At most once per
     /// (head sha, run id); a second red verdict on the same pair escalates.
+    /// A confirmed Actions incident holds the issuance (see `apply_rerun`).
     Rerun { run_id: String },
     /// `gh run rerun <id> --failed` for a rerunnable escalation (a
     /// test-shaped or unknown red): only the failed jobs rerun. Same
@@ -1910,6 +1911,32 @@ fn journal_rerun_keys(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// Every `(sha, run id)` pair any tick ever held for a live Actions
+/// incident. The unchanged-PR skip opens for a held head: the hold freezes
+/// the PR's world, so without this door the hold would never re-probe and
+/// the rerun would wait out the incident forever.
+fn journal_hold_keys(path: &std::path::Path) -> Vec<String> {
+    let _ = crate::event_store::import_all(path);
+    let Ok(rows) = crate::event_store::query_events(
+        path,
+        &crate::event_store::EventQuery {
+            types: vec!["pr_heal_hold".to_string()],
+            ..Default::default()
+        },
+    ) else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
+        .filter_map(|row| {
+            row.get("data")
+                .and_then(|d| d.get("key"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect()
+}
+
 /// PRs whose conflicting-trigger refresh already concluded in the last 24
 /// hours, out of the `pr_heal_pr` journal: a real push (`rebased`) or a
 /// push that moved nothing (`skip_rebase_noop`). A still-conflicting
@@ -2170,6 +2197,26 @@ fn apply_rerun(a: &Args, findings: &mut [Finding], head: &str) -> Vec<String> {
             };
             continue;
         }
+        // A cancelled run during a live Actions incident never reached a
+        // runner, so rerunning it feeds the dead queue (2026-10-05): hold
+        // the row with the incident line. Both reads fail open - no
+        // casualty shape, no live page, no hold. The hold lands one
+        // journal row: the unchanged-PR skip opens for a held head, so the
+        // next tick re-probes the incident and the rerun can resume.
+        if was_cancelled {
+            if let Some(hold) = incident_hold(a, &run_id) {
+                f.remedy = Remedy::Escalate { repro: hold };
+                let mut fields = serde_json::Map::new();
+                fields.insert("key".to_string(), serde_json::json!(key));
+                fields.insert("run_id".to_string(), serde_json::json!(run_id));
+                if let Err(e) = crate::events::EventEmitter::new(journal_path(a), "pr-heal")
+                    .emit_fields("pr_heal_hold", fields)
+                {
+                    eprintln!("pr-heal: the pr_heal_hold row for {key} did not land: {e}");
+                }
+                continue;
+            }
+        }
         match run(&a.gh_bin, &rerun_args, &a.cwd, remedy_timeout(a)) {
             Ok((true, _, _)) => {
                 issued.push(key);
@@ -2194,6 +2241,29 @@ fn apply_rerun(a: &Args, findings: &mut [Finding], head: &str) -> Vec<String> {
         }
     }
     issued
+}
+
+/// The incident probe a cancelled rerun must pass before issuing: read the
+/// run's jobs for the never-got-a-runner shape, and only then spend the
+/// status-page read. Every jobs page is read - the predicate demands every
+/// job match, so page 1 alone can wrongly hold. Fail-open: any read
+/// failure is no incident.
+fn incident_hold(a: &Args, run_id: &str) -> Option<String> {
+    let pages = gh_api_pages_conditional(
+        a,
+        &format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?per_page=100"),
+    )
+    .ok()?;
+    let jobs: Vec<Value> = pages
+        .iter()
+        .filter_map(|page| page.get("jobs").and_then(Value::as_array).cloned())
+        .flatten()
+        .collect();
+    if !crate::gh_incident::cancelled_no_runner(&jobs) {
+        return None;
+    }
+    let incidents = crate::pr_status::seams::platform_incident_via(&seam_bin(a, "curl"));
+    crate::gh_incident::rerun_hold(&jobs, &incidents)
 }
 
 /// One `pr_heal_tick` row per drive-loop invocation: the arm's visibility.
@@ -2429,6 +2499,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
     // ever reran, every (sha, run id, check) already recorded as a flake, and
     // the last sweep's per-PR world the skip gate compares against.
     let rerun_keys_ever = journal_rerun_keys(&journal_path(a));
+    let hold_keys_ever = journal_hold_keys(&journal_path(a));
     let flake_guards = journal_flake_guards(&journal_path(a));
     let prior_states = last_sweep_states(&journal_path(a), &a.cwd.to_string_lossy().as_ref());
     let refreshed_prs_24h =
@@ -2489,6 +2560,9 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     )
                     .is_none()
                     && !rerun_keys_ever
+                        .iter()
+                        .any(|k| k.as_str().starts_with(format!("{h}:").as_str()))
+                    && !hold_keys_ever
                         .iter()
                         .any(|k| k.as_str().starts_with(format!("{h}:").as_str()))
             }
@@ -2990,8 +3064,9 @@ fn run_one(a: &Args, pr: &str) -> (i32, Vec<String>) {
         remote_branch: None,
     };
     match crate::pr_push::guarded_push(&ctx, &head) {
-        crate::pr_push::PushOutcome::Pushed { .. } => {
+        crate::pr_push::PushOutcome::Pushed { remote_branch, .. } => {
             println!("pushed once");
+            crate::pr_push::stamp_guard(&ctx, &remote_branch);
             (code, reran_keys)
         }
         crate::pr_push::PushOutcome::InFlight { .. } => {

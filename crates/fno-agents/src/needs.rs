@@ -1362,6 +1362,7 @@ pub(crate) fn settled_questions(
                     if CLOSED_RUNGS.contains(&status.as_str()) {
                         let user_only = crate::escalation::why_user_is_user_only(
                             data.get("why_user").and_then(Value::as_str).unwrap_or(""),
+                            &crate::question_ladder::Rules::default(),
                         );
                         let word = if user_only { "moot" } else { "node-closed" };
                         reason = Some(format!("{word}: {n} {status}"));

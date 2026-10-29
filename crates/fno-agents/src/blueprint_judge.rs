@@ -177,7 +177,7 @@ fn load_lenses(dir: Option<&Path>) -> Lenses {
 fn gather_context(dimension: &str, plan_text: &str, cwd: &Path) -> String {
     if dimension == "surface_fit" {
         return match Command::new(crate::scrape::fno_bin())
-            .args(["help", "--all"])
+            .arg("--help")
             .output()
         {
             Ok(o) if o.status.success() => {

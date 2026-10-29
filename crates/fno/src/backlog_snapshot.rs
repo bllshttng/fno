@@ -690,15 +690,101 @@ fn atomic_write(out: &Path, body: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `fno board-render` claims its name lexically, beside the other native
-/// front commands: the argv `board-render ...` never forwards to Python.
+// ---------------------------------------------------------------------------
+// Obsidian deep links: the port of render_html.py's plan-path canonicalizer.
+// A plan path reaches the graph in several shapes (vault-relative,
+// vault-prefixed, worktree-rooted); the link wants vault-relative with `.md`
+// stripped, and only a markdown file links at all.
+// ---------------------------------------------------------------------------
+
+/// The vault top-level directories a canonical plan path may start with.
+const VAULT_TOPLEVEL_DIRS: &[&str] = &["internal/"];
+
+fn canonical_plan_path(plan_path: &str, vault: Option<&str>) -> Option<String> {
+    let p = plan_path.trim();
+    if p.is_empty() {
+        return None;
+    }
+    if VAULT_TOPLEVEL_DIRS.iter().any(|d| p.starts_with(d)) {
+        return Some(p.to_string());
+    }
+    if let Some(vault) = vault {
+        let needle = format!("/{vault}/");
+        strip_vault_prefix(p, &needle)
+    } else {
+        last_toplevel_segment(p)
+    }
+}
+
+fn strip_vault_prefix(p: &str, needle: &str) -> Option<String> {
+    let idx = p.rfind(needle)?;
+    let stripped = &p[idx + needle.len()..];
+    if VAULT_TOPLEVEL_DIRS.iter().any(|d| stripped.starts_with(d)) {
+        return Some(stripped.to_string());
+    }
+    None
+}
+
+/// The worktree-rooted shape: pick the LAST top-level dir occurrence and
+/// keep from there.
+fn last_toplevel_segment(p: &str) -> Option<String> {
+    let mut best: isize = -1;
+    for marker in VAULT_TOPLEVEL_DIRS {
+        let needle = format!("/{marker}");
+        if let Some(idx) = p.rfind(&needle) {
+            let idx = idx as isize;
+            if idx > best {
+                best = idx;
+            }
+        }
+    }
+    if best >= 0 {
+        return Some(p[best as usize + 1..].to_string());
+    }
+    None
+}
+
+fn obsidian_url(vault: &str, plan_path: &str) -> Option<String> {
+    let canonical = canonical_plan_path(plan_path, Some(vault))?;
+    let canonical = canonical.trim_end_matches('/').to_string();
+    if !canonical.ends_with(".md") {
+        return None;
+    }
+    let target = canonical[..canonical.len() - 3].to_string();
+    Some(format!(
+        "obsidian://open?vault={}&file={}",
+        percent_encode(vault, ""),
+        percent_encode(&target, "/")
+    ))
+}
+
+/// Percent-encode with Python's `quote` defaults: unreserved characters and
+/// the `safe` set pass through, everything else becomes %XX.
+fn percent_encode(text: &str, safe: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        let c = b as char;
+        if c.is_ascii_alphanumeric() || "_.~-".contains(c) || safe.contains(c) {
+            out.push(c);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// `fno backlog publish --local-snapshot` claims lexically, before the
+/// backlog namespace hands over to the sibling binary: the stdin request
+/// protocol is the front binary's, and a sibling that predates the door
+/// refuses the flag as unknown.
 pub fn classify(args: &[std::ffi::OsString]) -> Option<Vec<String>> {
-    if args.first()?.to_str()? != "board-render" {
+    let head: Vec<&str> = args.iter().take(3).filter_map(|a| a.to_str()).collect();
+    if head != ["backlog", "publish", "--local-snapshot"] {
         return None;
     }
     Some(
         args.iter()
-            .skip(1)
+            .skip(3)
             .filter_map(|a| a.to_str().map(str::to_string))
             .collect(),
     )
@@ -863,8 +949,10 @@ mod tests {
     #[test]
     fn board_render_claims_its_name() {
         use std::ffi::OsString;
-        assert!(classify(&[OsString::from("board-render")]).is_some());
-        assert!(classify(&[OsString::from("board-render"), OsString::from("--x")]).is_some());
+        let door = ["backlog", "publish", "--local-snapshot"].map(OsString::from);
+        assert_eq!(classify(&door), Some(vec![]));
+        assert!(classify(&door[..2]).is_none());
+        assert!(classify(&[OsString::from("board-render")]).is_none());
         assert!(classify(&[OsString::from("mux")]).is_none());
     }
 
