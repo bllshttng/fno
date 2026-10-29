@@ -259,7 +259,10 @@
 #      manifest reads, footnote state never lands there. report/ops.rs
 #      joins ~/.claude/projects for the find-transcript op, the same
 #      own-transcript store its deleted Python twin walked at doctor.py:887;
-#      read-only. Footnote stores nothing in any of them.
+#      read-only. Footnote stores nothing in any of them. config_doctor/
+#      checks.rs (the setup-family port) prints an advisory line naming
+#      ~/.claude/settings.json as the file a human edits to widen
+#      permissions.additionalDirectories; message prose, no path is built.
 #
 # A file not on this list that starts referencing .claude/ must be a
 # conscious addition: either it's another instance of (1)-(3) above (add it
@@ -336,6 +339,7 @@ cli/src/fno/agents/rust_runtime.py
 cli/src/fno/agents/self_stamp.py
 cli/src/fno/agents/spawn_gate.py
 cli/src/fno/agents/whoami.py
+crates/fno/src/config_doctor/checks.rs
 crates/fno/src/doctor/report.rs
 crates/fno/src/doctor/report/advisors.rs
 crates/fno/src/doctor/report/ops.rs

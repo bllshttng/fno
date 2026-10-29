@@ -124,8 +124,40 @@ fn resolve(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Temp roots a fixture or a fallback shim can live under, fixed per process
+/// so the verdict cannot drift with the caller's env: a scrubbed-env driver
+/// floors the temp dir to /tmp while the fixture sits under the OS temp root,
+/// and one misread wrote the durable shim a sweep then deletes.
+fn temp_bases() -> Vec<PathBuf> {
+    let env = std::env::temp_dir();
+    let mut bases = vec![resolve(&env), env];
+    for base in [
+        "/tmp",
+        "/private/tmp",
+        "/var/tmp",
+        "/private/var/tmp",
+        "/var/folders",
+        "/private/var/folders",
+    ] {
+        let base = PathBuf::from(base);
+        if !bases.contains(&base) {
+            bases.push(base);
+        }
+    }
+    bases
+}
+
+/// The path's own spellings, raw and resolved, strictly under a base: the
+/// caller's tempdir need not be the binary's, and a sibling sharing the
+/// prefix string is not under it.
 fn in_temp(path: &Path) -> bool {
-    resolve(path).starts_with(resolve(&std::env::temp_dir()))
+    let raw = path.to_path_buf();
+    let resolved = resolve(path);
+    temp_bases().iter().any(|base| {
+        [raw.as_path(), resolved.as_path()]
+            .into_iter()
+            .any(|spelling| spelling != base && spelling.starts_with(base))
+    })
 }
 
 /// The fno-agents a shim names. A cargo build dir is swept with its
@@ -194,6 +226,12 @@ fn ensure_proxy(
     let Some(binary) = shim_binary(path) else {
         return Ok(None);
     };
+    if !is_executable(&binary) {
+        // shim_binary checked runnable, but a sweep can delete the file
+        // between resolve and install, and a shim that execs a missing
+        // binary breaks every gh call on the machine.
+        return Ok(None);
+    }
     let root = match root {
         Some(root) => root.to_path_buf(),
         None => proxy_dir().ok_or("no HOME and no FNO_STATE_DIR")?,

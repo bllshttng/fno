@@ -58,3 +58,38 @@ fn install_refuses_a_delegate_that_is_the_shim() {
     let err = install_shim(&root, Path::new("/opt/fno-agents"), &root.join("gh")).unwrap_err();
     assert!(err.contains("points back to the Footnote proxy"), "{err}");
 }
+
+#[test]
+fn in_temp_judges_every_temp_root_in_both_spellings() {
+    // A fixture under the OS temp root reads as temp even while a scrubbed
+    // driver's TMPDIR floors to /tmp, and the raw /private spelling holds.
+    let fixture = std::env::temp_dir().join("fno-in-temp-fixture/gh");
+    assert!(in_temp(&fixture));
+    assert!(in_temp(Path::new("/private/var/folders/ab/T/fno-501/github-cli")));
+    // A sibling sharing the prefix string is not under it, and the base
+    // itself is not strictly under.
+    assert!(!in_temp(Path::new("/tmpx/fno/gh")));
+    assert!(!in_temp(Path::new("/tmp")));
+    assert!(!in_temp(Path::new("/opt/fno/bin/fno-agents")));
+}
+
+#[test]
+fn is_executable_refuses_a_dead_or_unrunnable_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    // fs::write sets no execute bit: the swept-override shape.
+    let dead = dir.path().join("swept/fno-agents");
+    std::fs::create_dir_all(dead.parent().unwrap()).unwrap();
+    std::fs::write(&dead, b"payload").unwrap();
+    assert!(!is_executable(&dead));
+    std::fs::remove_dir_all(dead.parent().unwrap()).unwrap();
+    // Deleted after resolve: the TOCTOU the guard in ensure_proxy reads at
+    // install time, so a durable shim never lands pointing here.
+    assert!(!is_executable(&dead));
+    let live = dir.path().join("live");
+    std::fs::write(&live, "#!/bin/sh\n").unwrap();
+    let mut perm = std::fs::metadata(&live).unwrap().permissions();
+    #[allow(clippy::precedence)]
+    perm.set_mode(perm.mode() | 0o111);
+    std::fs::set_permissions(&live, perm).unwrap();
+    assert!(is_executable(&live));
+}

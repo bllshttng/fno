@@ -2453,7 +2453,7 @@ fn grok_receipt_for(reachability: GrokReachability) -> String {
 /// then the filtered stage. `None` when neither carries it.
 pub(crate) fn default_pi_extension_src() -> Option<PathBuf> {
     const REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
-    let stage = state_root().join("plugin-stage").join("fno");
+    let stage = state_root().join("plugin-stage").join(STAGE_DIR);
     crate::provider::plugin_root()
         .into_iter()
         .chain(std::iter::once(stage))
