@@ -2,66 +2,55 @@
 //! line for a task the bound plan lists records that task's task_done at the
 //! commit time, plus a task_started at the run's previous boundary when the
 //! run has none (`derived: commit`). The flat path used to ask for these in
-//! prose, and the prose was skipped. Never blocks: a failed write prints one
-//! stderr line naming the task.
+//! prose, and the prose was skipped. The shim runs this entry in the
+//! background after the budget line, so a slow store never costs the model
+//! that line. A failed write is dropped, and run_summary shows the gap.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+/// The background entry: the commit payload arrives on stdin.
+pub fn run(_args: &[String]) -> i32 {
+    let payload = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
+    let _ = record(&payload);
+    0
+}
 
 /// Record the boundary for this Bash call, if it committed a plan task.
-pub fn record(payload: &Value) {
-    if !super::diff_budget::committed(payload) {
-        return;
-    }
-    let Some(cwd) = payload
+fn record(payload: &Value) -> Option<()> {
+    super::diff_budget::committed(payload).then_some(())?;
+    let cwd = payload
         .get("cwd")
         .and_then(Value::as_str)
         .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-    else {
-        return;
-    };
-    let Some(manifest) = super::diff_budget::manifest_path(&cwd) else {
-        return;
-    };
-    let Ok(text) = std::fs::read_to_string(&manifest) else {
-        return;
-    };
+        .or_else(|| std::env::current_dir().ok())?;
+    let manifest = super::diff_budget::manifest_path(&cwd)?;
+    let text = std::fs::read_to_string(&manifest).ok()?;
     let field = |key: &str| manifest_field(&text, key);
-    let (Some(run), Some(node)) = (field("fno_id"), field("graph_node_id")) else {
-        return;
-    };
-    let Some(plan) = super::diff_budget::plan_path(&manifest, &cwd) else {
-        return;
-    };
+    let (run, node) = (field("fno_id")?, field("graph_node_id")?);
+    let plan = super::diff_budget::plan_path(&manifest, &cwd)?;
     let git = |args: &[&str]| super::diff_budget::git_out(&cwd, args);
-    let Some(task) = commit_task(&git(&["log", "-1", "--format=%B"]), &plan) else {
-        return;
-    };
+    let task = commit_task(&git(&["log", "-1", "--format=%B"]), &plan)?;
     let events = crate::paths::events_path(&cwd);
     let commit = (
         git(&["rev-parse", "HEAD"]),
         git(&["log", "-1", "--format=%cI"]),
     );
     let ids = [run.as_str(), node.as_str(), task.as_str()];
-    if let Err(e) = emit(&events, ids, &commit, field("created_at").as_deref()) {
-        eprintln!("task boundary: task {task} events not recorded ({e})");
-    }
+    let _ = emit(&events, ids, &commit, field("created_at").as_deref());
     settle(&node, &task);
+    Some(())
 }
 
-/// Settle the task row as the prose emit did. Detached: it can outlast the
-/// hook's 4 s bound, and this hook's stdout is the additionalContext.
+/// Settle the task row as the prose emit did.
 fn settle(node: &str, task: &str) {
-    let spawned = std::process::Command::new(crate::loopcheck::loopcheck_fno_bin())
+    let _ = Command::new(crate::loopcheck::loopcheck_fno_bin())
         .args(["backlog", "task", "update", node, task, "--status", "done"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    if let Err(e) = spawned {
-        eprintln!("task boundary: task {task} row not settled: {e}");
-    }
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn manifest_field(text: &str, key: &str) -> Option<String> {
