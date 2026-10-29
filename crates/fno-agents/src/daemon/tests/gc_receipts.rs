@@ -1004,9 +1004,6 @@ fn a_row_without_a_located_transcript_records_failed_resume_evidence() {
 
     let home = tmp_home("gc-resume-evidence-failed");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let dir = home.root().join("store");
-    std::fs::create_dir_all(&dir).unwrap();
-    let quiet = quiet_transcript(&dir, "q.jsonl", 2 * 3600);
     let graph = graph_read(
         &[("s-nores-0000-0000-0000-000000000000", "N1", "done")],
         &[],
@@ -1023,7 +1020,6 @@ fn a_row_without_a_located_transcript_records_failed_resume_evidence() {
     })
     .unwrap();
     let confirming = |_e: &state::RegistryEntry| CascadeOutcome::Removed;
-    let q1 = quiet.clone();
     let summary = gc_sweep::run(
         &home,
         &emitter,
@@ -1031,7 +1027,7 @@ fn a_row_without_a_located_transcript_records_failed_resume_evidence() {
         false,
         7,
         &move |_| graph.clone(),
-        &move |_| Some(vec![q1.clone()]),
+        &|_| Some(Vec::new()),
         &uniform_ages(2 * 3600),
         &|_| true,
         &confirming,
