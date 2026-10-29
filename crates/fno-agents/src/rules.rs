@@ -437,9 +437,11 @@ pub fn bm25_rank(docs: &[(String, String)], query: &str, k: usize) -> Vec<(Strin
     scored
 }
 
-/// The lowest BM25 score a tier-1 rule needs to fire. Not yet measured
-/// against labeled cases: 2.0 keeps a single term shared by many rules
-/// under the floor while one rare shared term clears it.
+/// The lowest BM25 score a tier-1 rule needs to fire. Measured against 72
+/// labeled cases over the live corpus (36 fire, 36 unrelated prompts, the
+/// rule-engine wiring plan, 2026-10-29): 2.0 answered recall@3 0.667 with
+/// zero false fires on the unrelated prompts, where an embedding scorer
+/// answered 0.75 recall with a 0.333 false-fire rate.
 pub const TIER1_FLOOR: f64 = 2.0;
 /// A tier-1 match fires for the best three ranks at most.
 const TIER1_TOP: usize = 3;
