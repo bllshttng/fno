@@ -33,20 +33,6 @@ from pydantic import (
     model_validator,
 )
 
-class UserBlock(BaseModel):
-    """How the machine addresses the human (nested under ``config.user``).
-
-    ``name`` is a form of address, never an identity and never an authority.
-    Empty is the unset state; the native birth read (backlog/birth.rs
-    ``display_name``) falls back to ``git config user.name`` so a fresh
-    install already says something better than a role noun.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str = ""
-
-
 from fno.config.build_block import BuildBlock as BuildBlock
 from fno.config.split_block import SplitBlock as SplitBlock
 
@@ -94,6 +80,20 @@ _GLOB_CHARS = frozenset("*?[")
 # them. Defined here, not in fno.graph, because the validator is the only reader
 # and config must not depend upward on the graph package.
 RESERVED_PREFIXES = frozenset({"cv-", "fu-", "tgt-"})
+
+
+class UserBlock(BaseModel):
+    """How the machine addresses the human (nested under ``config.user``).
+
+    ``name`` is a form of address, never an identity and never an authority.
+    Empty is the unset state; the native birth read (backlog/birth.rs
+    ``display_name``) falls back to ``git config user.name`` so a fresh
+    install already says something better than a role noun.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = ""
 
 
 def _check_no_glob(value: str, field_name: str) -> None:
