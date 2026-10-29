@@ -678,69 +678,6 @@ def render_seed(message: str, harness: str) -> str:
     return normalize_command(message, harness)
 
 
-<<<<<<< HEAD
-def spawn_seed_receipt_fields(effective_message: str) -> dict[str, str]:
-    """The receipt fields a delivered seed contributes; prose seeds get none.
-
-    ``command_fired`` is ``pending`` because a busy worker fired nothing; the
-    marker names the command whose pass settles it.
-    """
-    fields = {"effective_message": effective_message, "command_fired": "pending"}
-    marker = command_fired_marker(effective_message)
-    if marker:
-        fields["command_marker"] = marker
-    return fields
-
-
-def spawn_seed_receipt_fragment(effective_message: Optional[str]) -> str:
-    """The JSON fragment form of :func:`spawn_seed_receipt_fields`; "" for prose."""
-    if effective_message is None:
-        return ""
-    return "".join(
-        f", {json.dumps(key)}: {json.dumps(value)}"
-        for key, value in spawn_seed_receipt_fields(effective_message).items()
-    )
-
-
-def _loop_gate_answer(harness: str, command: str) -> dict:
-    try:
-        from fno.rust_binary import call_binary_json
-    except ImportError:
-        return {"refusal": (
-            f"refused: the loop gate for harness {harness!r} could not be read "
-            f"(its transport failed to import), so the looping command "
-            f"{command!r} is not admitted."
-        )}
-    args = ["--target-family", "--message", command, "--harness", harness]
-    err, answer = call_binary_json("status", args, timeout=45)
-    if err is not None or not isinstance(answer, dict):
-        return {"refusal": (
-            f"refused: the loop gate for harness {harness!r} could not be read "
-            f"({err or 'unreadable answer'}), so the looping command {command!r} "
-            f"is not admitted. An fno-agents older than this fno answers "
-            f"'unknown argument'; run 'fno doctor update --rust'."
-        )}
-    return answer
-
-
-def check_loop_participation(harness: str, command: str) -> None:
-    """Refuse a LOOPING dispatch at a harness that cannot close a loop.
-
-    ``command`` is judged by :func:`is_target_family`, so a one-shot passes
-    untouched. The decision lives in ``capability_leaves.rs`` (the
-    ``fno-agents status --target-family --harness`` leaf), which reads the
-    same packaged table and asks the per-harness install probes; an
-    unreadable leaf refuses, never admits.
-    """
-    if not is_target_family(command):
-        return
-    refusal = _loop_gate_answer(harness, command).get("refusal")
-    if refusal:
-        raise DispatchResolveError(refusal)
-
-
-=======
->>>>>>> origin/main
 def dispatch_command(harness: str, allow_merge: bool = False) -> str:
     """Builtin autonomous dispatch command for ``harness``: the per-harness
     normalization of ``/target --no-merge {id}``, or of ``/target {id}`` when
