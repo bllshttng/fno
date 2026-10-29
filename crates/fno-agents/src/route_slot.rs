@@ -1400,6 +1400,10 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     let mut lanes_raw = lanes_raw_value;
     let mut prefix: Vec<Value> = Vec::new();
     let mut overlay_fields: Map<String, Value> = Map::new();
+    // Set when the difficulty overlay itself supplied the lane list: the
+    // attribution then queries the overlay's own path, since the base list
+    // the payload carried is not what walked.
+    let mut overlay_lanes_keys: Option<(String, String)> = None;
     if let Some(bd) = by_difficulty_obj.filter(|bd| !bd.is_empty()) {
         let (diff_key, diff_reason) = {
             let node_difficulty = payload
@@ -1421,7 +1425,10 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
             }
             if let Some(ovl_lanes) = ovl.get("lanes") {
                 match ovl_lanes.as_array() {
-                    Some(arr) if !arr.is_empty() => lanes_raw = Value::Array(arr.clone()),
+                    Some(arr) if !arr.is_empty() => {
+                        lanes_raw = Value::Array(arr.clone());
+                        overlay_lanes_keys = Some(("by_difficulty".to_string(), diff_key.clone()));
+                    }
                     _ => {
                         chain.push(json!(format!(
                             "slot=config {rung_base}.by_difficulty.{diff_key}.lanes must be a non-empty list when declared"
@@ -1526,8 +1533,16 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     // AC1: the lanes list is attributable - the file that supplied it (and
     // any lower layer it replaced whole) rides the chain, so a reader
     // checking the wrong config layer sees the conflict instead of filing a
-    // router bug.
-    let source = crate::route_gather::lanes_source_for(&slot_cwd(), &rung_base);
+    // router bug. An overlay-supplied list attributes through the overlay's
+    // own path, whose carriers can differ from the base list's.
+    let source = match &overlay_lanes_keys {
+        Some((table, key)) => crate::route_gather::lanes_source_for_subkeys(
+            &slot_cwd(),
+            &rung_base,
+            &[table.as_str(), key.as_str()],
+        ),
+        None => crate::route_gather::lanes_source_for(&slot_cwd(), &rung_base),
+    };
     let from = source.get("from").and_then(Value::as_str).unwrap_or("");
     if !from.is_empty() {
         lanes_line.push_str(&format!(" (lanes from {from}"));

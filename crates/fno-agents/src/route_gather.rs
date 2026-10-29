@@ -1060,6 +1060,32 @@ mod tests {
     }
 
     #[test]
+    fn overlay_lanes_attribute_through_their_own_path() {
+        // The base lanes live in the project layer; the difficulty overlay's
+        // list lives only in the global layer. Tables merge key-by-key, so
+        // the overlay is the list that walks - and the attribution must name
+        // the global file, not the base list's supplier.
+        let (guard, tmp, saved) = pinned_sandbox(
+            "lanes-source-overlay",
+            "[agents.profiles.target]\nlanes = [\"claude-opus-5-5\"]\n",
+        );
+        std::fs::write(
+            tmp.join("config.toml"),
+            "[agents.profiles.target.by_difficulty.medium]\nlanes = [\"zai-flash\"]\n",
+        )
+        .unwrap();
+        let out =
+            lanes_source_for_subkeys(&tmp, "agents.profiles.target", &["by_difficulty", "medium"]);
+        assert_eq!(
+            out["from"],
+            json!(tmp.join("config.toml").display().to_string())
+        );
+        assert_eq!(out["overrides"], json!([]));
+        drop(guard);
+        clear_sandbox_env(saved);
+    }
+
+    #[test]
     fn lanes_source_answers_empty_for_a_bare_rung() {
         let (guard, tmp, saved) = pinned_sandbox("lanes-source-bare-rung", "");
         let out = lanes_source_for(&tmp, "agents.profiles");
@@ -1076,11 +1102,20 @@ mod tests {
 /// overridden whole (arrays never merge), which is the fact a reader of the
 /// global config cannot see from the value alone.
 pub(crate) fn lanes_source_for(cwd: &Path, rung_base: &str) -> Value {
+    lanes_source_for_subkeys(cwd, rung_base, &[])
+}
+
+/// [`lanes_source_for`] with keys inserted between the profile and the
+/// `lanes` leaf: the difficulty overlay's carriers (`by_difficulty.<key>`)
+/// answer through their own path, since tables merge key-by-key across
+/// layers and the overlay list's supplier can differ from the base list's.
+pub(crate) fn lanes_source_for_subkeys(cwd: &Path, rung_base: &str, subkeys: &[&str]) -> Value {
     let Some(command) = rung_command(rung_base) else {
         return json!({});
     };
-    let sources =
-        crate::agents_config::config_sources_deep(cwd, &["agents", "profiles", &command], "lanes");
+    let mut keys = vec!["agents", "profiles", command.as_str()];
+    keys.extend_from_slice(subkeys);
+    let sources = crate::agents_config::config_sources_deep(cwd, &keys, "lanes");
     let Some(index) = sources.iter().position(|s| s.carries_leaf) else {
         return json!({});
     };
