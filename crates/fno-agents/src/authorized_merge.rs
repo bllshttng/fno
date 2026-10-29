@@ -2361,16 +2361,24 @@ pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
         .is_some_and(|tags| tags.iter().filter_map(Value::as_str).any(|t| t == tag))
 }
 
-/// The graph entry bound to this PR by its recorded `pr_number`. `None` on an
-/// unreadable graph or no bound node: callers above treat absent as "not
-/// bound", which for every gate here must hold rather than release.
+/// The graph entry bound to this PR: the node whose `pr_number` it is, else
+/// the node that lists it in `additional_prs`, as the later half of a split
+/// PR does. `None` on an unreadable graph or no bound node: callers above
+/// treat absent as "not bound", which for every gate here must hold rather
+/// than release.
 pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let store = GraphStore::new(&graph_path);
     let entries = backlog_api::rows(&store).ok()?;
-    entries
-        .into_iter()
-        .find(|e| e.get("pr_number").and_then(Value::as_i64) == Some(pr as i64))
+    let at = entries
+        .iter()
+        .position(|e| e.get("pr_number").and_then(Value::as_u64) == Some(pr))
+        .or_else(|| {
+            entries
+                .iter()
+                .position(|e| crate::merge_gates::pr_numbers_of(e).contains(&pr))
+        })?;
+    entries.into_iter().nth(at)
 }
 
 /// The main-repair exemption probe over the live graph: `None` when this

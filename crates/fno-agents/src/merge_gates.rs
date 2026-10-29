@@ -125,7 +125,7 @@ pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64) -> Option<String>
 /// objects; legacy rows carry bare ints or `/pull/<n>` URL strings). A
 /// contract dependent whose PR is recorded only in `additional_prs` must
 /// still be found or the gate is bypassed.
-fn pr_numbers_of(entry: &Value) -> Vec<u64> {
+pub(crate) fn pr_numbers_of(entry: &Value) -> Vec<u64> {
     let mut out = Vec::new();
     if let Some(n) = entry.get("pr_number").and_then(Value::as_u64) {
         out.push(n);
@@ -658,8 +658,8 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
              re-read status - the gate files no empty page"
         )),
         (None, _) => detail.push_str(
-            "; no node is bound to this PR (by pr_number), so the page has no shots \
-             key: bind the node, then re-read status",
+            "; no node is bound to this PR (by pr_number or additional_prs), so the \
+             page has no shots key: bind the node, then re-read status",
         ),
         (Some(node), shots) => {
             let short = head.chars().take(8).collect::<String>();

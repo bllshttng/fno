@@ -2168,5 +2168,35 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         "{}",
         held.detail
     );
+    // A split: the node holds PR 6 and lists PR 7 in additional_prs. PR 7
+    // binds to it, so the approval recorded on that node clears PR 7. A row
+    // whose own pr_number is the PR still wins over a row that only lists it.
+    crate::graph_store::seed_rows(
+        &crate::org_board::scope::graph_json_path(&tmp),
+        &[
+            json!({"id": "x-lists", "status": "in_review", "additional_prs": [{"number": 6}]}),
+            json!({"id": "x-paint", "status": "in_review", "pr_number": 6,
+                   "additional_prs": [{"number": 7}]}),
+        ],
+    )
+    .unwrap();
+    let bound = |pr| {
+        crate::authorized_merge::pr_bound_entry(&tmp, pr)
+            .and_then(|e| e.get("id").and_then(Value::as_str).map(str::to_owned))
+    };
+    assert_eq!(bound(7).as_deref(), Some("x-paint"));
+    assert_eq!(bound(6).as_deref(), Some("x-paint"));
+    assert_eq!(bound(8), None);
+    fake.decisions_stdout = Some(
+        row(
+            "Approved: PR 7 at <head> as built",
+            "user in chat: approved",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
     std::fs::remove_dir_all(&tmp).ok();
 }
