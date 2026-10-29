@@ -1,0 +1,9 @@
+[
+  {"name": "default", "config": null, "env": {}},
+  {"name": "state_dir_absolute", "config": "schema_version: 1\nconfig:\n  state_dir: <FIXTURE>/state\n", "env": {}},
+  {"name": "paths_overrides", "config": "schema_version: 1\nconfig:\n  state_dir: <FIXTURE>/state\n  paths:\n    briefs_dir: <FIXTURE>/briefs-x\n    ledger_json: <FIXTURE>/ledger/l.json\n    worktrees_base: <FIXTURE>/wt\n    memory_dir: <FIXTURE>/mem\n", "env": {}},
+  {"name": "env_state_dir", "config": null, "env": {"FNO_STATE_DIR": "<FIXTURE>/envstate"}},
+  {"name": "env_beats_config", "config": "schema_version: 1\nconfig:\n  state_dir: <FIXTURE>/state\n", "env": {"FNO_STATE_DIR": "<FIXTURE>/envstate"}},
+  {"name": "relative_state_dir", "config": "schema_version: 1\nconfig:\n  state_dir: .fno/\n", "env": {}},
+  {"name": "relative_ledger_override", "config": "schema_version: 1\nconfig:\n  paths:\n    ledger_json: state/ledger.json\n", "env": {}}
+]
