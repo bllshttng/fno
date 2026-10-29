@@ -43,6 +43,9 @@ impl World {
             .env("FNO_STATE_DIR", self.root.join(".fno"))
             .env("FNO_SPACES_DIR", self.root.join("spaces"))
             .env("FNO_AGENTS_HOME", self.root.join("agents"))
+            // The term-command mail is a real send; a grant case must not
+            // deliver anywhere, so the sender is a binary that refuses.
+            .env("FNO_AGENTS_BIN", "/usr/bin/false")
             .current_dir(&self.root)
             .output()
             .unwrap();

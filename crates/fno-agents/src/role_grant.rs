@@ -576,9 +576,10 @@ fn stranded(
 
 /// Mail the term command to the freshly promoted holder; never fails. `--raw`
 /// types the payload as the operator would, so a slash arrives as a command.
+/// It runs this binary's own mail leaf, never the `fno` front.
 fn send_term_command(address: &str, command: &str) -> String {
-    let out = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["agents", "mail", "send", address, command, "--raw"])
+    let out = std::process::Command::new(crate::mail_cli::send_raw::agents_binary())
+        .args(["mail", "send", address, command, "--raw"])
         .stdin(std::process::Stdio::null())
         .output();
     let out = match out {

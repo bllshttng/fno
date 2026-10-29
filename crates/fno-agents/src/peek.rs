@@ -238,28 +238,14 @@ fn pane_of(row: &RegistryEntry) -> Option<&MuxRef> {
         .filter(|m| !m.session.trim().is_empty() && m.pane_id >= 1)
 }
 
-/// Read a mux pane's scrollback through `fno mux pane read`.
-fn read_pane(mux: &MuxRef, n: usize) -> (i32, String) {
-    let out = std::process::Command::new(crate::scrape::fno_bin())
-        .args([
-            "mux",
-            "pane",
-            "read",
-            "--server",
-            &mux.session,
-            &mux.pane_id.to_string(),
-            "--lines",
-            &n.to_string(),
-        ])
-        .stdin(std::process::Stdio::null())
-        .output();
-    match out {
-        Ok(o) => (
-            o.status.code().unwrap_or(1),
-            String::from_utf8_lossy(&o.stdout).into_owned(),
-        ),
-        Err(e) => (1, e.to_string()),
-    }
+/// The last `n` lines of a mux pane's scrollback, through the shared pane
+/// reader; `None` when the mux does not answer or the pane is blank.
+fn read_pane(mux: &MuxRef, n: usize) -> Option<String> {
+    let bin = crate::scrape::fno_bin();
+    let text = crate::scrape::mux_pane_read(&bin, Some(&mux.session), mux.pane_id)?;
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    let tail = lines[lines.len().saturating_sub(n)..].join("\n");
+    (!tail.trim().is_empty()).then_some(tail)
 }
 
 /// A pane worker's screen text, read in process: the lead check-in's
@@ -269,11 +255,8 @@ pub(crate) fn pane_texts(handle: &str, n: usize) -> Result<Vec<String>, String> 
     let mux = row_named(rows.as_deref(), handle)
         .and_then(pane_of)
         .ok_or_else(|| format!("{handle} is no pane worker"))?;
-    let (code, text) = read_pane(mux, n);
-    if code != 0 || text.trim().is_empty() {
-        return Err(format!("mux pane read exited {code}"));
-    }
-    Ok(vec![text.trim_end().to_string()])
+    let text = read_pane(mux, n).ok_or_else(|| "mux pane read did not answer".to_string())?;
+    Ok(vec![text])
 }
 
 /// Observe a pane-substrate worker, or `None` to let the caller fall
@@ -285,8 +268,7 @@ fn try_mux_pane(
     out: &mut impl Write,
 ) -> Option<i32> {
     let mux = row.and_then(pane_of)?;
-    let (code, text) = read_pane(mux, args.lines);
-    if code != 0 || text.trim().is_empty() {
+    let Some(text) = read_pane(mux, args.lines) else {
         if crate::session_truth::pane_gone(mux) {
             eprintln!(
                 "{handle}: pane {} is gone; the worker exited. Resume: fno agents resume {handle}",
@@ -300,7 +282,7 @@ fn try_mux_pane(
             mux.pane_id, mux.session, mux.pane_id
         );
         return Some(EXIT_UNSUPPORTED);
-    }
+    };
     if args.json {
         emit(
             out,
