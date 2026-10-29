@@ -287,7 +287,119 @@ pub fn receipt(name: &str, result: &Value) -> Option<String> {
             receipt.push_str(&format!("; team {from} -> {to}"));
         }
     }
+    if let Some(push) = result.get("title_push").and_then(Value::as_str) {
+        receipt.push_str("; ");
+        receipt.push_str(push);
+    }
     Some(receipt)
+}
+
+/// The thread-session harnesses `mail-inject` delivers to. A title push
+/// attempts only these: another harness has no delivery lane, and the
+/// attempt would spend a subprocess to answer not-injectable. The keeper
+/// and pane lanes host panes, not thread addresses, so they are not here.
+const TITLE_PUSH_HARNESSES: &[&str] = &["claude", "codex", "opencode"];
+
+/// The harness-title push a completed rename owes the session: the native
+/// rename command when the row's harness declares one, the session can
+/// receive a turn, and its reported title still differs. `None` names no
+/// push: no harness session, no delivery lane, no native verb, the title
+/// already matches, or the row cannot receive a turn.
+pub(crate) fn title_push(row: &RegistryEntry, new_name: &str) -> Option<String> {
+    row.harness_session_id
+        .as_deref()
+        .filter(|session| !session.is_empty())?;
+    let harness = row
+        .harness
+        .as_deref()
+        .filter(|harness| !harness.is_empty())?;
+    if !TITLE_PUSH_HARNESSES.contains(&harness) || !row.status.is_drive_eligible() {
+        return None;
+    }
+    crate::lead_checkin::title_rename_command(harness, new_name, row.harness_title.as_deref())
+}
+
+/// Deliver a command to one live session: type it at the session's prompt
+/// through the one-shot live-delivery command, the same vehicle the mail
+/// raw lane drives. `self_send` marks the audit event when the recipient
+/// is the calling session's own row. The caller's transaction is already
+/// durable when this runs, so a failed delivery is a reported note, never
+/// a rollback.
+pub(crate) fn deliver_command_to_session(
+    session: &str,
+    harness: &str,
+    command: &str,
+    self_send: bool,
+) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let mut args = vec![
+        "mail-inject".to_string(),
+        "--session".to_string(),
+        session.to_string(),
+        "--harness".to_string(),
+        harness.to_string(),
+    ];
+    if self_send {
+        args.push("--self-send".to_string());
+    }
+    let mut child = Command::new(executable)
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("mail-inject start failed: {error}"))?;
+    let mut stdin = child.stdin.take().ok_or("mail-inject stdin unavailable")?;
+    stdin
+        .write_all(command.as_bytes())
+        .map_err(|error| format!("mail-inject write failed: {error}"))?;
+    drop(stdin);
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("mail-inject wait failed: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if detail.is_empty() {
+        format!("mail-inject exited {}", output.status)
+    } else {
+        detail
+    })
+}
+
+/// After a successful `agent.rename` RPC: when the renamed row's harness
+/// session can hear a native rename, deliver it and stamp the receipt
+/// field that says what happened. Best-effort by contract: the registry
+/// rename is already durable, and a silent skip (no eligible session) is
+/// the absent field, not a note.
+pub fn stamp_title_push(home: &crate::paths::AgentsHome, result: &mut Value) {
+    let Some(new_name) = result.get("new_name").and_then(Value::as_str) else {
+        return;
+    };
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return;
+    };
+    let Some(row) = registry.entries.iter().find(|entry| entry.name == new_name) else {
+        return;
+    };
+    let Some(command) = title_push(row, new_name) else {
+        return;
+    };
+    // title_push proved both fields present and non-empty, so the defaults
+    // below are unreachable spellings of a proved fact, not guesses.
+    let outcome = deliver_command_to_session(
+        row.harness_session_id.as_deref().unwrap_or_default(),
+        row.harness.as_deref().unwrap_or_default(),
+        &command,
+        false,
+    );
+    result["title_push"] = Value::String(match outcome {
+        Ok(()) => "title pushed".to_string(),
+        Err(error) => format!("title push failed: {error}"),
+    });
 }
 
 #[cfg(test)]
@@ -340,6 +452,69 @@ mod tests {
         ));
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn title_push_plans_the_native_rename_for_a_reachable_row() {
+        let mut r = row("wren", "sess-1");
+        r.status = crate::AgentStatus::Live;
+        r.harness_title = Some("quill".into());
+        assert_eq!(title_push(&r, "wren").as_deref(), Some("/rename wren"));
+    }
+
+    #[test]
+    fn title_push_skips_when_the_harness_title_already_matches() {
+        let mut r = row("wren", "sess-1");
+        r.status = crate::AgentStatus::Live;
+        r.harness_title = Some("wren".into());
+        assert_eq!(title_push(&r, "wren"), None);
+    }
+
+    #[test]
+    fn title_push_skips_a_harness_without_the_native_verb() {
+        let mut r = row("kestrel", "sess-1");
+        r.harness = Some("codex".into());
+        r.status = crate::AgentStatus::Live;
+        r.harness_title = Some("kestrel".into());
+        assert_eq!(title_push(&r, "hawk"), None);
+    }
+
+    #[test]
+    fn title_push_skips_a_harness_with_no_delivery_lane() {
+        // agy declares /rename but mail-inject delivers no agy thread
+        // session, so the push would spend a subprocess to answer
+        // not-injectable. Skipped at the plan, not at delivery.
+        let mut r = row("wren", "sess-1");
+        r.harness = Some("agy".into());
+        r.status = crate::AgentStatus::Live;
+        r.harness_title = Some("quill".into());
+        assert_eq!(title_push(&r, "wren"), None);
+    }
+
+    #[test]
+    fn title_push_skips_a_row_that_cannot_receive_a_turn() {
+        let mut r = row("wren", "sess-1");
+        r.harness_title = Some("quill".into());
+        r.status = crate::AgentStatus::Exited;
+        assert_eq!(title_push(&r, "wren"), None);
+    }
+
+    #[test]
+    fn title_push_skips_a_row_without_a_harness_session() {
+        let mut r = row("wren", "");
+        r.status = crate::AgentStatus::Live;
+        assert_eq!(title_push(&r, "wren"), None);
+    }
+
+    #[test]
+    fn receipt_names_the_title_push() {
+        let result = serde_json::json!({
+            "renamed": true, "old_name": "quill", "new_name": "wren",
+            "title_push": "title pushed",
+        });
+        let line = receipt("quill", &result).unwrap();
+        assert!(line.contains("renamed quill -> wren"), "{line}");
+        assert!(line.contains("title pushed"), "{line}");
     }
 
     #[test]
