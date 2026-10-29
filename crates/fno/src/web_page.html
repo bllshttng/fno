@@ -582,8 +582,10 @@
       if (SHARE) ws.send(JSON.stringify({ knock: { k: shareKey, name: shareName } }));
     };
     ws.onmessage = (ev) => {
-      try { onMsg(JSON.parse(ev.data)); }
-      catch (e) { setBar("disconnected", "stale", "a frame did not parse: " + e.message + "; showing last frame"); }
+      let msg;
+      try { msg = JSON.parse(ev.data); }
+      catch (e) { setBar("disconnected", "stale", "a frame did not parse: " + e.message + "; showing last frame"); return; }
+      onMsg(msg);
     };
     ws.onclose = (ev) => {
       if (SHARE && (ev.code === 1008 || ev.code === 1001)) {

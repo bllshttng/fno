@@ -4,8 +4,8 @@
 # says why silence is right with a `/* quiet-ok: <reason> */` comment as its
 # whole body.
 #
-# Scans every tracked .html file under crates/. Refused shapes, with only
-# whitespace between the braces:
+# Scans every tracked .html file under crates/. Refused shapes, when the
+# body holds only whitespace and comments and no comment says quiet-ok:
 #   catch {}   catch (e) {}   .catch(() => {})   .catch((e) => {})
 #   .catch(function () {})
 #
@@ -16,9 +16,12 @@ set -euo pipefail
 
 scan() {
   perl -0777 -ne '
-    while (/(catch\s*(?:\(\s*[\w\$]*\s*\))?\s*\{\s*\}|\.catch\(\s*(?:\(\s*[\w\$]*\s*\)\s*=>|[\w\$]+\s*=>|function\s*\(\s*[\w\$]*\s*\))\s*\{\s*\}\s*\))/g) {
+    my $body = qr{\{((?:\s|/\*.*?\*/|//[^\n]*)*)\}}s;
+    while (/(catch\s*(?:\(\s*[\w\$]*\s*\))?\s*$body|\.catch\(\s*(?:\(\s*[\w\$]*\s*\)\s*=>|[\w\$]+\s*=>|function\s*\(\s*[\w\$]*\s*\))\s*$body\s*\))/g) {
+      my ($hit, $inner) = ($1, defined $2 ? $2 : $3);
+      next if $inner =~ /quiet-ok/;
       my $line = 1 + (substr($_, 0, $-[0]) =~ tr/\n//);
-      print "$ARGV:$line: empty catch: $1\n";
+      print "$ARGV:$line: empty catch: $hit\n";
     }
   ' "$@"
 }
@@ -30,10 +33,12 @@ if [ "${1:-}" = "--self-test" ]; then
   printf '%s\n' 'try { a(); } catch {' '  }' > "$tmp/bad2.html"
   printf '%s\n' 'fetch(u).catch(() => {});' > "$tmp/bad3.html"
   printf '%s\n' 'fetch(u).catch(function (e) { });' > "$tmp/bad4.html"
+  printf '%s\n' 'try { a(); } catch (e) { /* ignore */ }' > "$tmp/bad5.html"
+  printf '%s\n' 'fetch(u).catch(() => {' '  // nothing to do' '});' > "$tmp/bad6.html"
   printf '%s\n' 'try { a(); } catch (e) { /* quiet-ok: no storage */ }' \
     'fetch(u).catch((e) => show(e));' 'try { a(); } catch (e) { ok = false; }' \
-    'r.json().catch(() => ({}));' > "$tmp/good.html"
-  for f in bad1 bad2 bad3 bad4; do
+    'r.json().catch(() => ({}));' 'p.catch(() => { /* quiet-ok: best effort */ });' > "$tmp/good.html"
+  for f in bad1 bad2 bad3 bad4 bad5 bad6; do
     if [ -z "$(scan "$tmp/$f.html")" ]; then
       echo "self-test: $f.html passed but must be refused" >&2
       exit 1
@@ -44,7 +49,7 @@ if [ "${1:-}" = "--self-test" ]; then
     scan "$tmp/good.html" >&2
     exit 1
   fi
-  echo "self-test: ok (4 refused, 4 passed)"
+  echo "self-test: ok (6 refused, 5 passed)"
   exit 0
 fi
 
