@@ -693,6 +693,41 @@ fn query_filters_narrow_and_identity_columns_match() {
 }
 
 #[test]
+fn envelope_node_indexes_and_data_node_wins() {
+    let top = json!({"ts": "2026-10-28T12:00:00Z", "type": "task_started",
+        "source": "target", "node": "x-aaaa", "task": "1.1", "data": {}});
+    assert_eq!(
+        extract_identity(&top.to_string()).node_id.as_deref(),
+        Some("x-aaaa")
+    );
+    let both = json!({"ts": "2026-10-28T12:00:00Z", "type": "task_done",
+        "source": "target", "node": "x-bbbb", "data": {"node": "x-aaaa"}});
+    assert_eq!(
+        extract_identity(&both.to_string()).node_id.as_deref(),
+        Some("x-aaaa")
+    );
+
+    // A row imported before the fallback gets its node on the next open.
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("events.jsonl");
+    append_envelope(&live, &top.to_string(), None).unwrap();
+    let store = store_path(&live);
+    let conn = rusqlite::Connection::open(&store).unwrap();
+    conn.execute_batch(
+        "UPDATE events SET node_id = NULL;
+         DELETE FROM events_meta WHERE key = 'envelope_node_backfilled';",
+    )
+    .unwrap();
+    drop(conn);
+    let mut conn = rusqlite::Connection::open(&store).unwrap();
+    ensure_schema(&mut conn, &store).unwrap();
+    let node: Option<String> = conn
+        .query_row("SELECT node_id FROM events", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(node.as_deref(), Some("x-aaaa"));
+}
+
+#[test]
 fn journal_text_reads_history_then_live_with_the_type_filter() {
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("events.jsonl");
