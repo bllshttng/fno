@@ -49,6 +49,7 @@ pub(super) struct FleetArms {
     ci_cadence: crate::ci_cadence::Arm,
     main_revert: crate::main_revert::Arm,
     ci_tier: crate::ci_tier::Arm,
+    look_hold: crate::look_hold::Arm,
     merge_queue: crate::merge_queue::Arm,
     pr_idle: crate::pr_idle::Arm,
     codex_watch: crate::codex_watch::Arm,
@@ -142,6 +143,7 @@ impl FleetArms {
             ci_cadence: crate::ci_cadence::Arm::default(),
             main_revert: crate::main_revert::Arm::default(),
             ci_tier: crate::ci_tier::Arm::default(),
+            look_hold: crate::look_hold::Arm::default(),
             merge_queue: crate::merge_queue::Arm::default(),
             pr_idle: crate::pr_idle::Arm::default(),
             codex_watch: crate::codex_watch::Arm::default(),
@@ -354,6 +356,8 @@ impl FleetArms {
         crate::main_revert::maybe_tick(&self.main_revert, ctx.home.clone());
         // The CI tier: open PRs run CI six at a time (opt-in, ci_tier.rs).
         crate::ci_tier::maybe_tick(&self.ci_tier, ctx.home.clone());
+        // A paint PR waiting on the user's look runs only its shots (look_hold.rs).
+        crate::look_hold::maybe_tick(&self.look_hold, ctx.home.clone());
         // The merge queue: green PRs land in batches tested on main (opt-in,
         // merge_queue.rs).
         crate::merge_queue::maybe_tick(&self.merge_queue, ctx.home.clone());

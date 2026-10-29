@@ -329,7 +329,44 @@ reviewed_head_sha="$head_sha"
 # binary diff); the refusal fires only when the diff changed no file at all.
 reviewed_file_count="$(git diff --name-only "${reviewed_base_sha}..HEAD" 2>/dev/null | command grep -c . || true)"
 reviewed_line_count="$(git diff --numstat "${reviewed_base_sha}..HEAD" 2>/dev/null | awk '{ add += $1; del += $2 } END { print add + del + 0 }')"
+# The invocation's flags resolve BEFORE the empty-diff refusal, because the
+# fix-verification carve-out below reads them: a refusal that fires first
+# never learns the run was scoped (the shape: a worker that fixes a
+# finding before its first classify leaves the raise row and the fix commit
+# on one head, so the scoped verify has an empty diff and, without this read,
+# nothing to attest).
+review_flags="$(printf '%s' "$hold_json" | jq -c '.metadata.flags // []' 2>/dev/null || echo '[]')"
+if ! jq -e 'type == "array" and all(.[]; type == "string")' <<<"$review_flags" >/dev/null 2>&1; then
+  review_flags='[]'
+fi
 if (( reviewed_file_count == 0 )); then
+  # The fix-verification carve-out: base == head with a raise AT this head and
+  # a scoped --verify-fixes invocation is an in-place verification, not a
+  # review of nothing. The finding was raised at this exact head and the fix
+  # landed before any attested head (fix delta empty, no later head can ever
+  # witness it), so the scoped verify re-read the finding's site here and its
+  # disposition rides the classified pass - exactly the terminal form the
+  # merge gate reads (disposition_gate: a fixed disposition carried by a
+  # --verify-fixes invocation is terminal at the disposing round's own head).
+  # The witness door answers the word `raised` (exit 0) only when the chain's
+  # newest in-scope row raises at this head, so a contentless verify with
+  # nothing to verify still refuses below. The word, not the exit code, is
+  # the gate: a pre-raise-at-head binary ignores the flag, prints a round
+  # number, and exits 0 - an exit-code check would fail open on staleness.
+  # The door is called only for a scoped run: an unscoped empty diff refuses
+  # on the flags alone and pays no witness read.
+  if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
+    raise_witness="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" \
+      --raise-at-head 2>/dev/null || true)"
+    if [[ "$raise_witness" == "raised" ]]; then
+      echo "emit-attestation: empty diff accepted as an in-place fix-verification (a raise at head ${head_sha:0:8} on branch ${branch}); the disposition rides the classified verdict" >&2
+    else
+      refuse_empty_diff=1
+    fi
+  else
+    refuse_empty_diff=1
+  fi
+  if [[ "${refuse_empty_diff:-}" == "1" ]]; then
   # The refusal is durable, not just stderr: one review_invocation row with
   # stage=refused closes the `sent` row this attempt opened, carrying the same
   # invocation_id and the measured zero. The script still exits 1 whatever
@@ -371,6 +408,7 @@ if (( reviewed_file_count == 0 )); then
   echo "If you are reviewing a worktree from the canonical checkout, hand the review its" >&2
   echo "target explicitly: run from the worktree path, or pass the PR number to the review command." >&2
   exit 1
+  fi
 fi
 
 # The actor reads (repo_root, session_id, harness), the hold, and the
@@ -382,14 +420,9 @@ fi
 review_args_raw="$(printf '%s' "$hold_json" | jq -r '.metadata.args_raw // empty' 2>/dev/null || true)"
 review_level="$(printf '%s' "$hold_json" | jq -r '.metadata.level // "unset"' 2>/dev/null || echo unset)"
 review_level_source="$(printf '%s' "$hold_json" | jq -r '.metadata.level_source // "fallback"' 2>/dev/null || echo fallback)"
-review_flags="$(printf '%s' "$hold_json" | jq -c '.metadata.flags // []' 2>/dev/null || echo '[]')"
 [[ -n "$review_command" ]] || review_command="/code-review"
 [[ -n "$review_level" ]] || review_level="unset"
 [[ -n "$review_level_source" ]] || review_level_source="fallback"
-[[ -n "$review_flags" ]] || review_flags='[]'
-if ! jq -e 'type == "array" and all(.[]; type == "string")' <<<"$review_flags" >/dev/null 2>&1; then
-  review_flags='[]'
-fi
 # A declared scope stamps the round it verifies: when the invocation carried
 # --verify-fixes, the pass declares review_round so the counter reads the
 # round it verified, not a fresh one (law: a scoped fix-verification is not a
