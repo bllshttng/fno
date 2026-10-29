@@ -341,7 +341,7 @@ pub fn problems(e: &Escalation) -> Vec<String> {
     let mut out = Vec::new();
     if e.class.is_empty() {
         out.push("missing class".to_string());
-    } else if !crate::question_ladder::CLASSES.contains(&e.class.as_str()) {
+    } else if e.class == "none" || !crate::question_ladder::CLASSES.contains(&e.class.as_str()) {
         out.push(format!("unknown class: {}", e.class));
     }
     for (name, body) in [

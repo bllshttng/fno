@@ -139,7 +139,7 @@ pub struct IntakeAnswer {
     /// that predates the template arm.
     #[serde(default)]
     pub template: bool,
-    /// `law` | `node_pointer` | `context` | `decide_yourself` | `dedup` | `write` | `index`.
+    /// `law` | `node_pointer` | `context` | `config` | `decide_yourself` | `dedup` | `write` | `index`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
