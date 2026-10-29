@@ -1,7 +1,6 @@
-//! The user's pin: a keep mark on a row's session id or its lineage, read
-//! from the marker files `fno agents reap --keep` writes (fno-agents
-//! `keep_mark.rs` owns the format), so the sideline and every reaper read one
-//! fact.
+//! The user's pin: a keep mark on a row's session id or lineage, read from
+//! the files `fno agents reap --keep` writes, so the sideline and every
+//! reaper read one fact.
 
 use super::{registry_path, RegistryAgent};
 use std::path::Path;

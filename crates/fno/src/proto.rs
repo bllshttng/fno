@@ -1118,9 +1118,8 @@ pub struct AgentRow {
     /// which degrades to the old label, never a wrong one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub held_conversation: bool,
-    /// (v119) The user pinned this session: a keep mark stands on its
-    /// session id or lineage, so no reaper removes it. Read off the keep
-    /// marker files, never stored per view.
+    /// (v119) The user pinned this session: a keep mark on its session id or
+    /// lineage, so no reaper removes it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
     /// (v47) True only when `exited` is a terminal registry status

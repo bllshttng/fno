@@ -516,7 +516,7 @@ fn xf331_rows() {
     let frame = view.compose();
     let cols = frame.cols as usize;
     let row = &frame.cells[2 * cols..3 * cols]; // display row 1: the exited focus row
-    let cell = *row.iter().find(|c| c.c != ' ').unwrap(); // its first mark, past the gutter
+    let cell = row[1]; // its status cell, past the pin gutter
     assert_eq!(
         cell.flags & cell_flags::INVERSE,
         0,
@@ -7013,7 +7013,7 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
         "external-blocked: attention is never dimmed"
     );
     assert_eq!(
-        frame.cells[eb_row * cols].flags & cell_flags::BOLD,
+        frame.cells[eb_row * cols + 1].flags & cell_flags::BOLD,
         cell_flags::BOLD,
         "external-blocked: BOLD"
     );

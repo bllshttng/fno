@@ -72,16 +72,10 @@ pub(super) fn pin_agent(view: &mut View, a: &AgentRow) {
                 .output(),
         )
         .await;
-        let first = |b: &[u8]| {
-            String::from_utf8_lossy(b)
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_string()
-        };
+        let first = |b: &[u8]| String::from_utf8_lossy(b).lines().next().map(str::to_owned);
         let text = match outcome {
-            Ok(Ok(o)) if o.status.success() => first(&o.stdout),
-            Ok(Ok(o)) => format!("pin refused: {}", first(&o.stderr)),
+            Ok(Ok(o)) if o.status.success() => first(&o.stdout).unwrap_or_default(),
+            Ok(Ok(o)) => format!("pin refused: {}", first(&o.stderr).unwrap_or_default()),
             Ok(Err(e)) => format!("pin did not start: {e}"),
             Err(_) => "pin is still running; the row shows it when it lands".into(),
         };
