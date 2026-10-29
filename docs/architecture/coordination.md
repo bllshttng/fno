@@ -374,16 +374,16 @@ A claimed node must have a live run, an explicit wait, or a recovery path. The d
 
 Each node gets one of four verdicts, in this order:
 
-- **Live.** The claim classifies Live through the session witness on this machine. A claim from another machine is Live only when that machine's fleet beacon is fresh and a beacon session row names the claim's session.
+- **Live.** The claim classifies Live through the session witness on this machine. For a claim from another machine, a fresh fleet beacon must name the claim's session.
 - **Waiting.** A current `<watching>` intent of the claim's session is inside its bound. Or a claim from another machine is inside its lease, so its host is still renewing. Or a `reconcile:` lease still holds.
 - **Recovering.** An open `node-liveness` fleet task is younger than 120 minutes.
 - **Uncovered.** Anything else. The reason names the cause, for example `claim-suspect:pid-absent`, `offhost-lease-expired`, `reconcile-pending-expired` or `no-claim`.
 
 A pid, a transcript age or a note is evidence, never liveness. A dead pid inside a TTL reads Suspect for the claim store, and it reads Uncovered here.
 
-After a node reads Uncovered for 30 minutes, the arm files one `node-liveness` fleet task for it. The task names the command that clears it. The default restart posture is balanced auto: on that first filing, the arm also resumes the node's own registry worker in place, through the same door boot revival uses. Uncommitted work in the worktree survives. The arm never restarts a worker for a claim held on another machine, and never resumes a row that a stop through fno still holds down. The task closes on the first sweep where the node reads Live or Waiting, or reaches a terminal rung.
+After a node reads Uncovered for 30 minutes, the arm files one `node-liveness` fleet task for it. The task names the command that clears it. The default restart posture is balanced auto. On that first filing, the arm also resumes the node's own registry worker in place. It uses the door that boot revival uses. Uncommitted work in the worktree survives. The arm never restarts a worker for a claim from another machine. It never resumes a row that a stop through fno still holds down. The task closes on the first sweep where the node reads Live or Waiting, or reaches a terminal rung.
 
-`fno agents status --liveness --nodes [--json]` reads the verdict the arm serves at `<agents home>/node-liveness.json` and probes nothing. It exits 0 when every node is covered. It exits 1 when a node is Uncovered past the grace window with no young recovery task. It exits 2 when the verdict is missing or older than 15 minutes.
+`fno agents status --liveness --nodes [--json]` reads the verdict the arm serves at `<agents home>/node-liveness.json` and probes nothing. If every node is covered, it exits 0. If a node is Uncovered past the grace window with no young recovery task, it exits 1. If the verdict is missing or older than 15 minutes, it exits 2.
 
 ## Operator runbook
 
