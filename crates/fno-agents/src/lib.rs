@@ -331,6 +331,7 @@ pub mod loop_target;
 pub mod loopcheck;
 pub mod loops_config;
 pub mod loops_pause;
+pub mod machine_key;
 pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;

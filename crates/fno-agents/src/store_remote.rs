@@ -478,7 +478,7 @@ impl Remote {
     }
 
     fn post(&self, route: &str, body: &str) -> Result<String, String> {
-        let mut stream = self.connect()?;
+        let stream = self.connect()?;
         stream
             .set_read_timeout(Some(REPLY_WAIT))
             .and_then(|()| stream.set_write_timeout(Some(REPLY_WAIT)))
