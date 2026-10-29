@@ -37,7 +37,7 @@ pub fn run_store_export(args: &[String]) -> i32 {
         }
     };
     let remote = match args.url {
-        Some(url) => Remote::parse(&url, None),
+        Some(url) => Remote::parse(&url, crate::store_remote::configured_token()),
         None => crate::store_remote::configured()
             .and_then(|r| r.ok_or_else(|| "store.remote_url is unset; pass --url".to_string())),
     };
