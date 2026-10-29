@@ -8,7 +8,6 @@
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 /// The background entry: the commit payload arrives on stdin.
 pub fn run(_args: &[String]) -> i32 {
@@ -43,14 +42,11 @@ fn record(payload: &Value) -> Option<()> {
     Some(())
 }
 
-/// Settle the task row as the prose emit did.
+/// Settle the task row as the prose emit did, through the native task door.
+/// It runs last: a refusal there can end this background process.
 fn settle(node: &str, task: &str) {
-    let _ = Command::new(crate::loopcheck::loopcheck_fno_bin())
-        .args(["backlog", "task", "update", node, task, "--status", "done"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let args = ["update", node, task, "--status", "done"].map(String::from);
+    let _ = crate::backlog::task::run_task(&args);
 }
 
 fn manifest_field(text: &str, key: &str) -> Option<String> {
