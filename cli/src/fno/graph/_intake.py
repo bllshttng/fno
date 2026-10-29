@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Collection, Iterator, Literal, Optional, TypedDict, Union
+from typing import Collection, Literal, Optional, TypedDict, Union
 
 from fno.graph._constants import (
     PRIORITY_ORDER, _rank_band,
@@ -676,182 +676,6 @@ def repo_root() -> str:
     return _git_repo_root() or os.getcwd()
 
 
-def _settings_candidate_paths() -> list[Path]:
-    """Settings files to consult for project<->path config, nearest first.
-
-    Project-local (cwd-relative, then the file ``load_settings()`` actually
-    used) followed by GLOBAL ``~/.fno/settings.yaml``. The global file is
-    essential: the ``work.workspaces`` project->path map lives only there, and
-    inside a repo ``config_file()`` resolves to the project-local settings, so
-    without the global entry the map is never consulted and project detection
-    returns None for every node filed from inside a project.
-
-    De-duplicated by normalized path so an outside-a-repo run (where
-    ``config_file()`` is already the global file) does not read + warn on the
-    same file twice. Shared by :func:`detect_project_from_settings` and
-    :func:`_list_known_projects` so the two readers cannot drift apart again.
-    """
-    # The canonical "where is the global settings file" resolver. Honors the
-    # $FNO_GLOBAL_SETTINGS_PATH redirect (config_file() / state_dir() do NOT
-    # follow it), so a redirected global work-map is still consulted (codex P2
-    # on PR #419).
-    # Function-local: config_io imports pydantic/yaml at module load; a top-level
-    # import here would pull them into every graph-module import (bare-python
-    # smoke consumers of the graph package have neither). config_io (a leaf) not
-    # fno.config, so no config<->graph cycle.
-    from fno.config_io import _global_settings_path, config_read_candidates
-
-    out: list[Path] = []
-    seen: set[str] = set()
-    # config.toml-first: each settings.yaml location also yields its config.toml
-    # sibling as a higher-priority candidate (flat hard cut).
-    for path in config_read_candidates([
-        Path(".fno/settings.yaml"),
-        _paths.config_file(),
-        _global_settings_path(),
-    ]):
-        # abspath (not normpath) so the cwd-relative candidate and an absolute
-        # config_file() pointing at the SAME project-local file dedup to one
-        # read (gemini MEDIUM on PR #419); normpath leaves one relative + one
-        # absolute, which never match.
-        key = os.path.abspath(os.path.expanduser(str(path)))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(path)
-    return out
-
-
-def _iter_settings_projects() -> "Iterator[tuple[object, object]]":
-    """Yield ``(name, raw_path)`` for every ``work`` project entry, in file
-    then declaration order: multi-workspace first, then legacy flat.
-
-    The single schema walk behind the work-map readers (detection, reverse
-    lookup, known-names, the maintain workspace map) so all four consume one
-    shape and cannot drift. Values are yielded untyped; each consumer applies
-    its own guards. Best-effort: a missing or unparseable file contributes
-    nothing.
-    """
-    # Function-local: keep graph-module load free of config_io's pydantic/yaml.
-    from fno.config_io import read_config_flat
-
-    for path in _settings_candidate_paths():
-        if not path.exists():
-            continue
-        # read_config_flat parses config.toml (or a legacy settings.yaml) and
-        # returns the FLAT dict; work is top-level.
-        work = read_config_flat(path).get("work")
-        if not isinstance(work, dict):
-            continue
-
-        workspaces = work.get("workspaces")
-        if isinstance(workspaces, dict):
-            for ws in workspaces.values():
-                if not isinstance(ws, dict):
-                    continue
-                projects = ws.get("projects")
-                if not isinstance(projects, list):
-                    continue
-                for proj in projects:
-                    if not isinstance(proj, dict):
-                        continue
-                    yield proj.get("name"), proj.get("path")
-
-        flat_projects = work.get("projects")
-        if isinstance(flat_projects, dict):
-            for name, cfg in flat_projects.items():
-                if not isinstance(cfg, dict):
-                    continue
-                yield name, cfg.get("path")
-
-
-def detect_project_from_settings(cwd_path: str | None = None) -> str | None:
-    """Auto-detect project name from settings.yaml work config.
-
-    Walks ``.fno/settings.yaml`` (project-local) then
-    ``~/.fno/settings.yaml`` (global). Returns the first project whose
-    ``path`` matches ``cwd_path`` (after expanduser + normpath). Silent on
-    failure: missing files, parse errors, or no match all return None so
-    auto-detection never breaks ``backlog add`` for users without settings.
-
-    Schema accepted:
-
-    Multi-workspace (canonical, current settings.yaml shape)::
-
-        work:
-          workspaces:
-            <ws-name>:
-              projects:
-                - name: my-proj
-                  path: ~/code/my-proj
-
-    Legacy flat (older settings.yaml shape, kept for back-compat)::
-
-        work:
-          projects:
-            my-proj:
-              path: ~/code/my-proj
-    """
-    # abspath (not just normpath) so a relative cwd like "." resolves to the
-    # full absolute path before comparison. settings.yaml `path:` entries are
-    # stored as ~ / absolute, so a relative target would never match.
-    target = os.path.abspath(os.path.expanduser(cwd_path)) if cwd_path else os.getcwd()
-
-    for name, raw_path in _iter_settings_projects():
-        if not name or not raw_path:
-            continue
-        proj_path = os.path.normpath(os.path.expanduser(str(raw_path)))
-        if proj_path == target:
-            return str(name)
-
-    return None
-
-
-def project_root_from_settings(project: str | None) -> str | None:
-    """Inverse of detect_project_from_settings: project name -> work-map path.
-
-    Walks the same candidate settings files (via ``_settings_candidate_paths``)
-    in the same order as the forward direction so the two cannot drift apart.
-    Returns ``os.path.abspath(os.path.expanduser(path))`` for the first match
-    found, or ``None`` when:
-
-    - ``project`` is falsy (None or empty string)
-    - no settings file maps that project name
-    - all settings files are missing, unreadable, or malformed
-
-    Pure map lookup: no stat(), no git calls, no existence check. A mapped-but-
-    missing path must fail loudly downstream, not silently fall back here.
-
-    Schema accepted (same two variants as ``detect_project_from_settings``):
-
-    Multi-workspace::
-
-        work:
-          workspaces:
-            <ws-name>:
-              projects:
-                - name: my-proj
-                  path: ~/code/my-proj
-
-    Legacy flat::
-
-        work:
-          projects:
-            my-proj:
-              path: ~/code/my-proj
-    """
-    if not project:
-        return None
-
-    for name, raw_path in _iter_settings_projects():
-        if not name or not raw_path:
-            continue
-        if name == project:
-            return os.path.abspath(os.path.expanduser(str(raw_path)))
-
-    return None
-
-
 def plan_claims(plan_path: str) -> "set[str]":
     """The node ids a plan's frontmatter declares ownership of, as a set.
 
@@ -965,16 +789,21 @@ def _has_frontmatter_block(plan_path: str) -> bool:
 def _list_known_projects() -> set[str]:
     """Return all project names declared across project-local and global settings.yaml.
 
-    Mirrors the schema walk in ``detect_project_from_settings``. Returns an
-    empty set if no settings file is readable or PyYAML is unavailable.
+    Reads the work-map pairs through the settings door (the same fact set the
+    node-id knobs use). Returns an empty set on a door failure.
     Used by the post-resolution sanity check that warns when an intake
     routes to a project the orchestrator has never heard of.
     """
+    from fno import rust_binary
+
+    receipt = rust_binary.settings_read()
+    if receipt is None:
+        return set()
 
     known: set[str] = set()
-    for name, _raw in _iter_settings_projects():
-        if isinstance(name, str):
-            known.add(name)
+    for pair in receipt.get("projects") or []:
+        if isinstance(pair, list) and len(pair) == 2 and pair[0]:
+            known.add(str(pair[0]))
 
     return known
 

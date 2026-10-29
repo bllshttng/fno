@@ -212,16 +212,78 @@ def style_receipt(
     return call_binary_json("style-check", argv, input_text=text)
 
 
+def style_receipt_advisory(text: str) -> Optional[dict]:
+    """The style receipt for an advisory read: None on a door failure.
+
+    ``word_cap`` rides the receipt (the configured ``style.word_cap.encounter``
+    or the model's 80 default), so an advisory learns cap and count in one
+    spawn instead of its own config read.
+    """
+    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
+    if err or not isinstance(receipt, dict):
+        return None
+    return receipt
+
+
 def style_word_count(text: str) -> int:
     """Masked word count through the style door; 0 when the door fails.
 
     The counting sites are advisory (a ledger row, a long-note nudge), so a
     door failure counts zero rather than blocking the send.
     """
-    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
-    if err or not isinstance(receipt, dict):
-        return 0
+    receipt = style_receipt_advisory(text) or {}
     return int(receipt.get("word_count") or 0)
+
+
+def settings_read(detect: Optional[str] = None) -> Optional[dict]:
+    """One settings fact-set read through the door; None when it fails.
+
+    The receipt carries the node-id knobs (``prefix``, ``hex_width``), the
+    config ``candidates``, the work-map ``projects`` pairs, and the optional
+    cwd -> project ``project`` answer. Callers are fail-open resolvers, so a
+    door failure reads as None and the caller keeps its legacy default.
+    """
+    import json
+
+    request = json.dumps({"detect": detect}) if detect is not None else "{}"
+    err, receipt = call_binary_json("state", ["settings-read"], input_text=request)
+    if err or not isinstance(receipt, dict):
+        return None
+    return receipt
+
+
+def plan_schema(payload: dict) -> Optional[dict]:
+    """One plan-frontmatter validation read through the door; None on failure.
+
+    ``payload`` carries the op (``validate-frontmatter`` or ``gates``) with
+    its arguments. YAML dates are flattened to ISO strings so the payload is
+    JSON-safe, and a door failure reads as None: the caller keeps its own
+    failure posture.
+    """
+    import datetime
+    import json
+
+    def _plain(value):
+        if isinstance(value, (datetime.datetime, datetime.date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {k: _plain(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_plain(v) for v in value]
+        return value
+
+    # The dev build outranks the installed copy: a validating surface must
+    # answer with its own checkout's schema, never a stale binary that lacks
+    # the op (the rule command_call states for the same reason).
+    err, receipt = call_binary_json(
+        "state",
+        ["plan-schema"],
+        binary=find_dev_binary() or resolve_binary(),
+        input_text=json.dumps(_plain(payload), default=str),
+    )
+    if err or not isinstance(receipt, dict):
+        return None
+    return receipt
 
 
 def style_word_count_checked(text: str) -> int:

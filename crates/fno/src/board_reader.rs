@@ -27,6 +27,7 @@ pub(crate) const BOARD_FIELDS: &[&str] = &[
     "plan_path",
     "pr_url",
     "pr_number",
+    "additional_prs",
     "locked_by_harness_session",
     "sessions",
 ];

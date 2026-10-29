@@ -404,6 +404,16 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     // The node is a tap target where it is painted.
     let mut agents = lead_and_worker();
     agents[1].node = Some("x-4310".into());
+    // The node lives in another repo: the tap opens its stored URL.
+    agents[1].bindings = vec![crate::proto::SessionBinding {
+        node: "x-4310".into(),
+        pr: agents[1].pr,
+        pr_url: Some("https://github.com/acme/web/pull/42".into()),
+        pr_count: 1,
+        source: "spawn".into(),
+        state: "open".into(),
+        inferred: true,
+    }];
     let mut v = card_view(agents);
     v.term = (30, 140);
     v.sideline_width = 80;
@@ -428,9 +438,16 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
         .expect("PR painted") as u16
         + 1;
     assert!(
-        matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(url)) if url.ends_with("/pull/42")),
+        matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(url)) if url == "https://github.com/acme/web/pull/42"),
         "PR tap opens its own link: {line:?}"
     );
+    // No stored URL: the tap opens no PR, never a guessed home repo.
+    v.layout.agents[1].bindings[0].pr_url = None;
+    assert!(
+        !matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(_))),
+        "{line:?}"
+    );
+    v.layout.agents[1].bindings[0].pr_url = Some("https://github.com/acme/web/pull/42".into());
     let node_span =
         card_line::node_span(&v.layout.agents[1], v.sideline_paint_w() - 1).expect("node range");
     let pr_span =
@@ -1214,6 +1231,27 @@ async fn a_long_press_on_each_card_line_opens_the_agents_menu() {
             "line {display_i}: no click action rode the long press"
         );
     }
+}
+
+#[tokio::test]
+async fn a_click_on_a_cards_star_toggles_its_pin() {
+    // The star sits on line 2, which arms the press hold, not a row drag:
+    // a short release there must still reach the pin.
+    let mut v = card_view(lead_and_worker());
+    let (_, detail_i) = card_rows_for(&v, "lead-a");
+    let row = (detail_i - v.sideline_offset() + 1) as u16;
+    let col = (0..v.panel_w()).find(|c| v.pin_star_at(row, *c).is_some());
+    let col = col.expect("line 2 carries a star cell");
+    let (mut buf, mut carry) = (Vec::<u8>::new(), Vec::<u8>::new());
+    let click = format!("\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m", c = col + 1, r = row + 1);
+    let mut scanner = Scanner::default();
+    crate::client::handle_stdin(&mut v, &mut scanner, &mut carry, click.as_bytes(), &mut buf)
+        .await
+        .unwrap();
+    assert!(v
+        .notice
+        .as_ref()
+        .is_some_and(|(n, _)| n == "pinning lead-a"));
 }
 
 #[tokio::test]

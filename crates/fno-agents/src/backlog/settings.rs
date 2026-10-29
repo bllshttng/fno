@@ -18,7 +18,7 @@ use std::path::PathBuf;
 /// entries are DISCOVERED, so they honor `FNO_CONFIG_SEARCH_ROOT`
 /// ([`crate::agents_config::within_search_ceiling`]); the FNO_CONFIG and
 /// FNO_GLOBAL_SETTINGS_PATH entries are explicit and read as-is.
-fn candidates() -> Vec<PathBuf> {
+pub(crate) fn candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut push_dir = |dir: PathBuf| {
         out.push(dir.join("config.toml"));
@@ -31,13 +31,19 @@ fn candidates() -> Vec<PathBuf> {
         }
     }
     // The project config the FNO_CONFIG redirect names (python's
-    // `config_file()` candidate), then the global file.
+    // `config_file()` candidate), then the global file. The explicit file is
+    // usually its parent's settings.yaml sibling, so the sibling push already
+    // covered it: skip the repeat so one file is read once (a doubled work
+    // map was the symptom; Python's FNO_CONFIG branch reads the file exactly
+    // once).
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         let cfg = PathBuf::from(cfg);
         if let Some(parent) = cfg.parent() {
             push_dir(parent.to_path_buf());
         }
-        out.push(cfg);
+        if !out.contains(&cfg) {
+            out.push(cfg);
+        }
     }
     match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         Some(v) if !v.is_empty() => out.push(PathBuf::from(v)),
@@ -53,6 +59,10 @@ fn candidates() -> Vec<PathBuf> {
             }
         }
     }
+    // A FNO_CONFIG that names `<dir>/settings.yaml` is also its parent's
+    // candidate: read each file once, at its first position.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
     out
 }
 
@@ -180,6 +190,64 @@ pub fn node_id_hex_width() -> usize {
         }
     }
     8
+}
+
+/// Lexical `normpath`: drop `.` components and resolve `..` against the
+/// buffer, never touching the filesystem. The Python readers compared paths
+/// in this form (os.path.normpath), so a `dir/./x/..` entry still matches.
+fn normalize(path: &std::path::Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The work-map pairs across every candidate, in walk order, paths
+/// home-expanded and lexically normalized: the form the Python work-map
+/// readers yielded. Empty names are skipped (the Python consumers guarded
+/// them per row; the door owns the guard now).
+pub(crate) fn work_map_pairs() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for path in candidates() {
+        for (name, raw) in work_pairs(&read_flat(&path)) {
+            if name.is_empty() || raw.is_empty() {
+                continue;
+            }
+            let normalized = normalize(&expand_home(&raw));
+            out.push((name, normalized.to_string_lossy().into_owned()));
+        }
+    }
+    out
+}
+
+/// The cwd -> project detect over the work map: first pair whose normalized
+/// path equals the normalized cwd (the argument, or the process cwd). Silent
+/// None, like the Python reader it answers: a missing map never blocks.
+pub(crate) fn detect_project(cwd: Option<&str>) -> Option<String> {
+    let target = match cwd.filter(|c| !c.is_empty()) {
+        Some(c) => {
+            let expanded = expand_home(c);
+            if expanded.is_absolute() {
+                normalize(&expanded)
+            } else {
+                let base = std::env::current_dir().ok()?;
+                normalize(&base.join(expanded))
+            }
+        }
+        None => std::env::current_dir().ok()?,
+    };
+    let target = target.to_string_lossy().into_owned();
+    work_map_pairs()
+        .into_iter()
+        .find(|(_, path)| path == &target)
+        .map(|(name, _)| name)
 }
 
 /// The state directory the porcelain reads serve from: `FNO_STATE_DIR` when
@@ -338,5 +406,72 @@ mod tests {
                 ("two".to_string(), "/repo/two".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn detect_matches_the_normalized_work_map_path() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("settings.yaml");
+        std::fs::write(
+            &cfg,
+            "work:\n  projects:\n    my-proj:\n      path: /repo/my-proj\n",
+        )
+        .unwrap();
+        let prior = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("FNO_CONFIG", &cfg);
+
+        // The dot-dot walk normalizes back to the mapped path.
+        assert_eq!(
+            detect_project(Some("/repo/my-proj/./x/..")).as_deref(),
+            Some("my-proj")
+        );
+        assert_eq!(detect_project(Some("/elsewhere")), None);
+
+        match prior {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+    }
+
+    #[test]
+    fn work_map_pairs_carry_names_and_normalized_paths() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("settings.yaml");
+        std::fs::write(
+            &cfg,
+            "work:\n  workspaces:\n    ws:\n      projects:\n        - name: one\n          path: /repo/one\n        - name: ''\n          path: /repo/empty-name\n",
+        )
+        .unwrap();
+        let prior = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("FNO_CONFIG", &cfg);
+        // The exact-count assertion needs the walk to see ONLY the fixture:
+        // an unset FNO_GLOBAL_SETTINGS_PATH sends candidates() at the real
+        // HOME settings, whose work map joins the count on any configured
+        // machine (measured on a fleet runner: left 2, right 1). An empty
+        // existing file keeps that branch pointed at the tempdir.
+        let empty_global = dir.path().join("empty-global-settings.yaml");
+        std::fs::write(&empty_global, "").unwrap();
+        let prior_global = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &empty_global);
+
+        let pairs = work_map_pairs();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, "one");
+        assert_eq!(pairs[0].1, "/repo/one");
+
+        match prior_global {
+            Some(v) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", v),
+            None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
+        }
+        match prior {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
     }
 }

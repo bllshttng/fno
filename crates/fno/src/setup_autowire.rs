@@ -94,25 +94,6 @@ fn real_run(argv: &[&str]) -> Result<String, String> {
     ))
 }
 
-/// Run the wheel Python engine with `code`, returning trimmed stdout. `None`
-/// when fno-py is absent or the snippet fails: every caller degrades to a
-/// named failed/manual line rather than guessing.
-fn py_eval(code: &str) -> Option<String> {
-    let py = crate::bootstrap::resolved_python_script()?;
-    let mut cmd = std_command(py);
-    cmd.arg("-c")
-        .arg(code)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = std_spawn(&mut cmd).ok()?.wait_with_output().ok()?;
-    if out.status.success() {
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
 pub(crate) fn on_path(name: &str) -> bool {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path).any(|dir| {
@@ -287,13 +268,20 @@ fn agents_str(agents: &Path) -> &str {
 
 // --- pi ---------------------------------------------------------------------
 
-const PI_SRC_PY: &str = "from fno.setup.integration import _pi_extension_src as p; print(p())";
+const PI_EXTENSION_REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
+
+/// The pi extension that ships in the plugin tree. `None` when this install
+/// carries no plugin tree, so the wire line fails by name instead of guessing.
+fn pi_extension_src() -> Option<String> {
+    let path = crate::cli_hooks::plugin_script(PI_EXTENSION_REL);
+    path.is_file().then(|| path.display().to_string())
+}
 
 fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     let Some(src) = src else {
-        return Outcome::Failed(
-            "the fno-py engine is missing; cannot locate the pi extension source".into(),
-        );
+        return Outcome::Failed(format!(
+            "no plugin tree carries {PI_EXTENSION_REL}; cannot locate the pi extension source"
+        ));
     };
     if let Ok(out) = run(&[
         agents_str(agents),
@@ -340,39 +328,26 @@ fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
 // --- agy --------------------------------------------------------------------
 
 /// The three plugin-shipped agy adapters (Stop adapter, role inject, lead
-/// guard), one per line, "-" when this CLI-only install carries none (a bare
-/// empty line would not survive the trimmed capture). The Stop adapter is
+/// guard), empty when this CLI-only install carries none. The Stop adapter is
 /// load-bearing: without it the wiring degrades to manual.
-const AGY_PATHS_PY: &str = r#"from fno.setup.integration import (
-    _agy_adapter_path,
-    _agy_role_adapter_path,
-    _agy_guard_adapter_path,
-)
-for p in (_agy_adapter_path(), _agy_role_adapter_path(), _agy_guard_adapter_path()):
-    print(p if p is not None else "-")"#;
-
-pub fn parse_agy_paths(out: &str) -> Option<[String; 3]> {
-    let lines: Vec<&str> = out.lines().collect();
-    if lines.len() < 3 {
-        return None;
-    }
-    let one = |l: &str| {
-        let t = l.trim();
-        if t == "-" {
-            String::new()
+pub fn agy_paths() -> [String; 3] {
+    let one = |rel: &str| {
+        let path = crate::cli_hooks::plugin_script_durable(rel);
+        if path.is_file() {
+            path.display().to_string()
         } else {
-            t.to_string()
+            String::new()
         }
     };
-    Some([one(lines[0]), one(lines[1]), one(lines[2])])
+    [
+        one("hooks/footnote-agy-target-stop-hook.sh"),
+        one("hooks/agy-team-inject.sh"),
+        one("hooks/agy-lead-guard.sh"),
+    ]
 }
 
-fn agy_wire(agents: &Path, paths: Option<[String; 3]>, home: &Path, run: Run) -> Outcome {
-    let Some([adapter, role, guard]) = paths else {
-        return Outcome::Failed(
-            "the fno-py engine is missing; cannot locate the agy adapters".into(),
-        );
-    };
+fn agy_wire(agents: &Path, paths: [String; 3], home: &Path, run: Run) -> Outcome {
+    let [adapter, role, guard] = paths;
     if adapter.is_empty() {
         return Outcome::Manual(
             "adapter ships in the plugin (not this CLI-only install); wire \
@@ -436,6 +411,22 @@ fn agy_wire(agents: &Path, paths: Option<[String; 3]>, home: &Path, run: Run) ->
     }
 }
 
+// --- footnote ---------------------------------------------------------------
+
+/// footnote loads `~/.footnote/plugins/fno` in place. The install links the
+/// full stage there, and its receipt line names the link.
+pub fn footnote_wire(agents: &Path, run: Run) -> Outcome {
+    match run(&[agents_str(agents), "plugin-install", "footnote"]) {
+        Ok(out) => Outcome::Installed(
+            out.lines()
+                .find_map(|l| l.strip_prefix("plugin install footnote: "))
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        Err(e) => Outcome::Failed(e),
+    }
+}
+
 // --- main -------------------------------------------------------------------
 
 pub(crate) struct Harness {
@@ -443,7 +434,7 @@ pub(crate) struct Harness {
     pub(crate) label: &'static str,
 }
 
-pub(crate) const HARNESS_LIST: [Harness; 6] = [
+pub(crate) const HARNESS_LIST: [Harness; 7] = [
     Harness {
         name: "claude",
         label: "Claude Code",
@@ -467,6 +458,10 @@ pub(crate) const HARNESS_LIST: [Harness; 6] = [
     Harness {
         name: "agy",
         label: "Antigravity CLI",
+    },
+    Harness {
+        name: "footnote",
+        label: "footnote",
     },
 ];
 
@@ -514,10 +509,15 @@ pub fn run() -> i32 {
                         "the fno-agents binary is missing; run `fno doctor update`".into(),
                     )
                 } else {
-                    let src = py_eval(PI_SRC_PY);
+                    let src = pi_extension_src();
                     pi_wire(&agents, src.as_deref(), &real_run)
                 }
             }
+            "footnote" if home_missing => no_home(),
+            "footnote" if !agents_ok => {
+                Outcome::Failed("the fno-agents binary is missing; run `fno doctor update`".into())
+            }
+            "footnote" => footnote_wire(&agents, &real_run),
             _ => {
                 if home_missing {
                     no_home()
@@ -526,8 +526,7 @@ pub fn run() -> i32 {
                         "the fno-agents binary is missing; run `fno doctor update`".into(),
                     )
                 } else {
-                    let paths = py_eval(AGY_PATHS_PY).and_then(|out| parse_agy_paths(&out));
-                    agy_wire(&agents, paths, &home, &real_run)
+                    agy_wire(&agents, agy_paths(), &home, &real_run)
                 }
             }
         };

@@ -558,7 +558,8 @@ _cargo_free_bytes() {
 _cargo_build_base() {
     # Where cargo intermediates live: paths.cargo_targets_base when set, else
     # ~/.fno/cargo-build. FNO_CARGO_TARGETS_BASE overrides the read so tests
-    # can point the sweep at a sandbox. Mirrors fno.paths.cargo_build_dir_value.
+    # can point the sweep at a sandbox. Mirrors fno_build_base in
+    # crates/fno-agents/src/cargo_build_dirs.rs.
     local raw=""
     if [[ -n "${FNO_CARGO_TARGETS_BASE:-}" ]]; then
         printf '%s\n' "${FNO_CARGO_TARGETS_BASE/#\~/$HOME}"

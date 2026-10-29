@@ -1,1 +1,1 @@
-message 'ackmsg-5' was already delivered (hosted); cursor not advanced
+message 'ackmsg-5' already reached the recipient's harness (hosted); cursor not advanced

@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 import tomli_w
-from typer.testing import CliRunner
 
 from fno.agents import dispatch as dispatch_mod
 from fno.agents import spawn_flag_owners
@@ -159,29 +158,6 @@ class TestReceipts:
         monkeypatch.setattr(
             mux_spawn, "dispatch_spawn_bounded_pane", lambda **kw: result
         )
-
-    def test_pane_receipt_carries_account_and_source(
-        self, armed: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from fno.agents import mux_spawn
-        from fno.agents.cli import agents_app
-
-        self._stub_pane_back(
-            monkeypatch,
-            mux_spawn.MuxSpawnResult(
-                name="p-prov", provider="claude", session="s", pane_id=1,
-                child_pid=None, session_uuid=None,
-                launch_account="readyrule", launch_account_source="caller",
-            ),
-        )
-        result = CliRunner().invoke(
-            agents_app, ["spawn", "--name", "p-prov", "hi", "--harness", "claude", "--as", "pane", "--split", "left"]
-        )
-        assert result.exit_code == 0, result.output
-        receipt = self._receipt_of(result.output)
-        assert receipt["account"] == "readyrule"
-        assert receipt["account_source"] == "caller"
-
 
 class TestPaneRowDecider:
     """The real `dispatch_spawn_pane` decides the row pair; a stubbed back

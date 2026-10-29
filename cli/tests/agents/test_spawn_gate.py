@@ -36,21 +36,32 @@ def _no_live_cpu_axis(monkeypatch):
 
     Since x-7783 every spawn takes the footprint reading, and that read is a
     ps snapshot against the real machine. Left unstubbed these tests refuse
-    or hold according to what the developer's box happens to be doing. The
-    prefetch is pinned too: run_gate takes the read before the decider, and
-    an unpinned read would price a real ps snapshot per pass.
+    or hold according to what the developer's box happens to be computing.
+    The prefetch is pinned too: run_gate takes the read before the decider,
+    and an unpinned read would price a real census run per pass. The census
+    owns the admission math (Rust tests pin it); the gate's mapping is what
+    these tests stub past.
     """
-    from fno import doctor_footprint
-    from fno.footprint import Admission, Footprint
-
-    idle = Footprint(0.0, 0.0, 0.1, 0, 0, 0, 0, 0.0, 0.2, [], 0, None)
+    idle_payload = {
+        "admission": {
+            "verdict": "admit",
+            "reason": "test admit",
+            "share_low": 0.1,
+            "share_high": 0.1,
+            "bound": "exact",
+            "fleet_cores": 1.2,
+            "machine_cores": 6.0,
+            "capacity_cores": 12.0,
+            "ceiling": 0.5,
+            "gap": None,
+        }
+    }
     monkeypatch.setattr(
-        spawn_gate, "_prefetch_fleet_reading", lambda: (idle, None)
+        spawn_gate, "_prefetch_fleet_reading", lambda: (idle_payload, None)
     )
-    monkeypatch.setattr(doctor_footprint, "_admission_config", lambda: 0.5)
-    admit = Admission(
+    admit = spawn_gate.Admission(
         verdict="admit",
-        axis="fleet_cpu_share",
+        axis="fleet_cpu",
         reason="test admit",
         share_low=0.1,
         share_high=0.1,
@@ -228,23 +239,6 @@ class TestTransport:
         assert answer["reason"] == "gate_unavailable"
         assert "exited 1" in answer["error"]
 
-class TestQos:
-
-    def test_demote_failure_is_nonfatal_warning(self, monkeypatch, capsys):
-        """AC3-ERR: taskpolicy failure warns once, never raises."""
-        monkeypatch.setattr(spawn_gate, "_qos_enabled", lambda: True)
-        import subprocess
-
-        def boom(*a, **k):
-            raise FileNotFoundError("taskpolicy not found")
-
-        monkeypatch.setattr(subprocess, "run", boom)
-        spawn_gate.qos_demote_pid(12345)
-        err = capsys.readouterr().err
-        assert "non-fatal" in err
-        # Pass-path lines carry the note prefix: only refusals say `spawn-gate:`
-        assert err.strip().startswith("spawn-gate note:")
-
 
 # --- parent-edge visibility (x-7b36 change 12) --------------------------------
 # A null spawned_by_session is sometimes correct (an ambiguous identity resolve
@@ -325,5 +319,3 @@ class TestGateExitReporting:
         assert data["reason"] == "gate_unavailable"
         assert "exited 87" in data["error"]
         assert "NoneType" not in data["error"]
-
-

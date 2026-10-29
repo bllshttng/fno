@@ -157,6 +157,7 @@ pub mod compaction;
 mod completion_output;
 pub mod component_update;
 pub mod config_route;
+pub mod context_audit;
 pub mod context_run;
 pub mod context_window;
 pub mod convert;
@@ -206,6 +207,7 @@ pub mod finalize_run_summary;
 pub mod first_check;
 pub mod fleet_beacon;
 pub mod fleet_incident;
+pub mod fleet_lanes;
 pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_state;
@@ -215,6 +217,7 @@ pub(crate) mod fnod;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
+pub mod footprint_cause;
 pub mod friction;
 pub mod gate_probes;
 pub mod gc;
@@ -235,9 +238,11 @@ pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
+pub mod glob;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
+pub mod green_carry;
 pub mod grok_ask;
 pub mod grok_store;
 pub mod harness_beat;
@@ -280,6 +285,7 @@ pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
+pub mod law_restore;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub(crate) mod lead_checkin_beat_budget;
@@ -327,6 +333,7 @@ pub mod loop_target;
 pub mod loopcheck;
 pub mod loops_config;
 pub mod loops_pause;
+pub mod machine_key;
 pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
@@ -336,6 +343,7 @@ pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
+pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
@@ -378,6 +386,7 @@ pub mod native_bg_mint;
 pub mod needs;
 pub mod node_bind;
 pub mod node_branch;
+pub mod node_liveness;
 pub mod node_origin;
 pub mod node_reading;
 pub mod node_route;
@@ -407,7 +416,9 @@ pub mod otlp_export;
 pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
+pub mod pack_profile;
 pub mod pane_claim;
+pub mod pane_identity;
 pub mod pane_keeper;
 pub mod pane_loop;
 pub mod pane_rebind;
@@ -426,6 +437,7 @@ pub mod pi_transcript;
 mod pi_transcript_tests;
 pub mod plan_carry;
 pub mod plan_doc;
+pub mod plan_schema;
 pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
@@ -470,6 +482,7 @@ pub mod quarantine;
 pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
+pub mod question_ladder;
 pub mod question_sweep;
 pub mod quiet_retire;
 pub mod reader_cost;
@@ -536,6 +549,8 @@ pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;
 pub mod rules;
+pub mod rules_check;
+pub mod rules_source;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
@@ -590,9 +605,11 @@ pub mod spawn_promote;
 pub mod spawn_remote;
 pub mod spawn_role;
 pub mod spawn_route;
+pub mod spawn_seam;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;
+pub(crate) mod stacked_base_stamp;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -680,6 +697,7 @@ pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
 pub mod wake_read;
+pub mod watch;
 pub mod watch_expiry;
 pub mod wave;
 pub mod whoami;
@@ -2061,9 +2079,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // loop that never ran. The Python tick emits nothing for this family.
     "pr_heal_tick",
     // The heal loop's acted-on rows: one flake guard staged per flapping
-    // (sha, run id, check), and one remedy row per PR the loop acted on.
+    // (sha, run id, check), one remedy row per PR the loop acted on, and
+    // one hold row per rerun deferred to a live Actions incident.
     "pr_heal_flake",
     "pr_heal_pr",
+    "pr_heal_hold",
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",

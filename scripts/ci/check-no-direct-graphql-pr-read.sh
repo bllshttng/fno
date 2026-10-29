@@ -9,7 +9,7 @@ matches=$(python3 scripts/ci/graphql-caller-inventory.py)
 classified=$(printf '%s\n' "$matches" | awk 'NF {n++} END {print n+0}')
 unclassified=$(printf '%s\n' "$matches" | awk -F'|' '$1 == "unclassified" {n++} END {print n+0}')
 digest=$(printf '%s\n' "$matches" | LC_ALL=C sort | shasum -a 256 | awk '{print $1}')
-expected_digest="820b62501766008a4fcc4e7e7f14d9dad8cd3d00c3486e9eec66d8978de8286f"
+expected_digest="e3a0bbc63998b22d2537f9afff53c60523e14bc4f237030727643f1e4a9d3ebf"
 
 if [[ "${1:-}" == "--print-digest" ]]; then
   printf 'classified_graphql_callers=%s digest=%s\n' "$classified" "$digest"
@@ -25,18 +25,18 @@ if [[ "$unclassified" -ne 0 ]]; then
   echo "direct-graphql-pr-read: executable callers lack a routing disposition" >&2
   exit 1
 fi
-if ! printf '%s\n' "$matches" | grep -q '^fno-process-proxy|argv-pr|cli/src/fno/pr/_merge.py|'; then
-  echo "direct-graphql-pr-read: argv inventory missed _merge.py" >&2
+if ! printf '%s\n' "$matches" | grep -q '^agents-rest-delegate|argv-pr|crates/fno-agents/src/pr_status/proxy.rs|'; then
+  echo "direct-graphql-pr-read: argv inventory missed the pr_status proxy op door" >&2
   exit 1
 fi
 # Pin the BOUNDARY, never the line that happens to express it today. Both of
 # the first two pins broke on ordinary edits that changed nothing about the
-# boundary: `worker_environment(os.environ)` became `worker_environment(base)`,
+# boundary: a Python proxy call changed its argument spelling,
 # and the `gh_bin` default was wrapped across two lines. A whole-line grep then
 # reports "a named enforcement boundary is missing" for a boundary that is
 # present and working, which is a false red nobody can act on. Match the
 # assignment and the callee, or the binary name, and let formatting move.
-if ! grep -q 'protected = worker_environment(' cli/src/fno/cli.py \
+if ! grep -q 'crate::gh_proxy::protect(&mut command)' crates/fno/src/bootstrap.rs \
     || ! grep -q '"fno-gh-coverage"' crates/fno-agents/src/finalize.rs \
     || ! grep -q '"fno-gh-loopcheck"' crates/fno-agents/src/loopcheck/args.rs; then
   echo "direct-graphql-pr-read: a named enforcement boundary is missing" >&2

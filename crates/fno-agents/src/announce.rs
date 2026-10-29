@@ -480,7 +480,7 @@ pub(crate) fn append_line_open(live: &Path, obj: &Value, chats_dir: &Path) -> Re
         .map_err(|e| format!("bus open {}: {e}", live.display()))?;
     f.write_all(line.as_bytes())
         .map_err(|e| format!("bus append: {e}"))?;
-    if kind == "landed" || has_delivery {
+    if kind == "landed" || kind == crate::mail_delivery_state::STATE_KIND || has_delivery {
         if let Err(e) = crate::chats::record(chats_dir, obj) {
             eprintln!("chats record (receipt) failed: {e}");
         }

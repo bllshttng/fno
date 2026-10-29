@@ -45,6 +45,15 @@ pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// ([`crate::backlog_model`]) through `/backlog/model.json` and
 /// `/backlog/node.json` and computes nothing the model already answered.
 pub(crate) const BACKLOG_PAGE: &str = include_str!("web_backlog.html");
+pub(crate) const COMMAND_PAGE: &str = include_str!("web_command.html");
+/// The house stylesheet the backlog and command pages share. The CSP allows
+/// inline style only, so [`house`] writes it into each page's `<style>`.
+pub(crate) const HOUSE_CSS: &str = include_str!("web_house.css");
+
+/// `page` with its `/* fno-house */` marker replaced by [`HOUSE_CSS`].
+pub(crate) fn house(page: &str) -> String {
+    page.replacen("/* fno-house */", HOUSE_CSS, 1)
+}
 /// The browser drives nothing, so anything it sends is dropped - but cap it so
 /// a hostile client cannot OOM the bridge with one giant frame.
 const INBOUND_WS_CAP: usize = 64 * 1024;
@@ -229,70 +238,70 @@ pub(crate) fn web_state_path_for_session(session: &str) -> Option<PathBuf> {
     web_state_path(&proto::socket_path(session).ok()?)
 }
 
-/// Read a session's web-bridge state file and build the pasteable
-/// per-pane URL. The bridge writes `web-<session>.json` at bind; the file's
-/// existence alone proves nothing, and neither does an answering port: the
-/// recorded pid must still be live and the port must answer before this
-/// prints a URL. Exit codes follow the mux commands'
-/// (0 printed, 1 no usable bridge).
-pub(crate) fn print_pane_url(command: &str, session: &str, pane: u64) -> i32 {
+/// A session's live web bridge, as its state file records it.
+pub(crate) struct LiveBridge {
+    /// `http://<host>:<port>`, the host this machine reaches it at.
+    pub(crate) base: String,
+    pub(crate) token: String,
+    /// True when the bridge listens on loopback only.
+    pub(crate) loopback: bool,
+}
+
+/// Read a session's web-bridge state file. The file's existence alone
+/// proves nothing, and neither does an answering port: the recorded pid
+/// must still be live and the port must answer. `Err` is the start hint.
+pub(crate) fn live_bridge(session: &str) -> Result<LiveBridge, String> {
     let hint = format!(
         "no web bridge for session {session}; start one with: fno mux serve --web --session {session}"
     );
-    let Some(path) = web_state_path_for_session(session) else {
-        eprintln!("{command}: {hint}");
-        return 1;
-    };
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        eprintln!("{command}: {hint}");
-        return 1;
-    };
-    let state: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("{command}: {hint}");
-            return 1;
-        }
-    };
+    let state: serde_json::Value = web_state_path_for_session(session)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .ok_or_else(|| hint.clone())?;
     let bind = state
         .get("bind")
         .and_then(|v| v.as_str())
         .unwrap_or("127.0.0.1");
-    let port = match state.get("port").and_then(|v| v.as_u64()) {
-        Some(p) => p,
-        None => {
-            eprintln!("{command}: {hint}");
-            return 1;
-        }
-    };
-    let token = state
-        .get("token")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    // A wide bind is reachable locally too; the pasteable URL says where THIS
-    // machine finds it, mirroring the bind-time print's host hint.
-    let host = if bind == "0.0.0.0" || bind == "::" {
-        "127.0.0.1"
-    } else {
-        bind
-    };
-    // Probe liveness for ANY spelling the operator may have bound (codex P2):
-    // a corpse file must not read as a bridge. A bare TCP answer is not
-    // ownership - a dead bridge's port can be taken by a stranger - so the
-    // record's pid must still be live, the same identity --stop and --status
-    // already enforce, before the port probe means anything.
+    let port = state
+        .get("port")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| hint.clone())?;
+    // A wide bind is reachable locally too; the URL says where THIS machine
+    // finds it, mirroring the bind-time print's host hint.
+    let wide = bind == "0.0.0.0" || bind == "::";
+    let host = if wide { "127.0.0.1" } else { bind };
+    // A bare TCP answer is not ownership - a dead bridge's port can be taken
+    // by a stranger - so the record's pid must still be live, the same
+    // identity --stop and --status already enforce.
     if !recorded_pid_is_live(&state) || !tcp_answers(host, port as u16) {
-        eprintln!("{command}: {hint}");
-        return 1;
+        return Err(hint);
     }
-    // Bracket a literal IPv6 host; a bare::1 in a URL truncates at the colon.
+    // Bracket a literal IPv6 host; a bare ::1 in a URL truncates at the colon.
     let url_host = if host.contains(':') {
         format!("[{host}]")
     } else {
         host.to_string()
     };
-    println!("http://{url_host}:{port}/?t={token}&pane={pane}");
-    0
+    Ok(LiveBridge {
+        base: format!("http://{url_host}:{port}"),
+        token: state["token"].as_str().unwrap_or_default().to_string(),
+        loopback: !wide && (host.starts_with("127.") || host == "::1" || host == "localhost"),
+    })
+}
+
+/// Print the pasteable per-pane URL. Exit codes follow the mux commands'
+/// (0 printed, 1 no usable bridge).
+pub(crate) fn print_pane_url(command: &str, session: &str, pane: u64) -> i32 {
+    match live_bridge(session) {
+        Ok(b) => {
+            println!("{}/?t={}&pane={pane}", b.base, b.token);
+            0
+        }
+        Err(hint) => {
+            eprintln!("{command}: {hint}");
+            1
+        }
+    }
 }
 
 impl WebStateFile {
@@ -804,6 +813,7 @@ fn router(state: AppState) -> Router {
         .route("/backlog/act", post(backlog_act))
         .route("/rundown", get(team))
         .route("/team", get(team))
+        .route("/command", get(command))
         .route("/command/model.json", get(command_model))
         .route("/ws", get(ws_handler))
         .with_state(state)
@@ -1026,17 +1036,30 @@ async fn backlog(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respon
     }
     // The page's write controls exist only when the serving bridge can
     // write: one string replace, no second page.
+    let page = house(BACKLOG_PAGE);
     let page = if st.writable {
-        BACKLOG_PAGE.replacen("<body>", "<body data-writable=\"true\">", 1)
+        page.replacen("<body>", "<body data-writable=\"true\">", 1)
     } else {
-        BACKLOG_PAGE.to_string()
+        page
     };
+    html_response(with_nav(&page, NavPage::Backlog))
+}
+
+/// `GET /command`: the command center page; it reads `/command/model.json`.
+async fn command(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    html_response(with_nav(&house(COMMAND_PAGE), NavPage::Command))
+}
+
+fn html_response(body: String) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        with_nav(&page, NavPage::Backlog),
+        body,
     )
         .into_response()
 }
@@ -1477,6 +1500,7 @@ enum NavPage {
     Live,
     Backlog,
     Team,
+    Command,
 }
 
 fn token_ok(supplied: Option<&str>, expected: &str) -> bool {
@@ -1587,6 +1611,7 @@ fn nav_fragment(current: NavPage) -> String {
         NavPage::Live => "live",
         NavPage::Backlog => "backlog",
         NavPage::Team => "rundown",
+        NavPage::Command => "command",
     };
     let link = |p: NavPage| {
         if p == current {
@@ -1617,7 +1642,7 @@ fn nav_fragment(current: NavPage) -> String {
          min-height:30px;padding:0 4px;border-bottom:2px solid transparent}}\
          nav.fno-nav a[aria-current=\"page\"]{{color:#fff;border-bottom-color:#c99b45}}\
          nav.fno-nav a:hover{{color:#fff}}{controls}</style>\
-         {}{}{}\
+         {}{}{}{}\
          <script>(function(){{var nav=document.querySelector(\"nav.fno-nav\");if(!nav)return;\
          var p=location.pathname,base;\
          if(nav.dataset.current===\"live\"){{base=p.endsWith(\"/\")?p:p+\"/\";}}\
@@ -1632,6 +1657,7 @@ fn nav_fragment(current: NavPage) -> String {
         link(NavPage::Live),
         link(NavPage::Backlog),
         link(NavPage::Team),
+        link(NavPage::Command),
     )
 }
 
@@ -2851,6 +2877,7 @@ console.log("recent searches: 12 cases ok");
             (NavPage::Live, "live"),
             (NavPage::Backlog, "backlog"),
             (NavPage::Team, "rundown"),
+            (NavPage::Command, "command"),
         ] {
             let frag = nav_fragment(page);
             // The CSS selector also names the attribute; count the link tags.
@@ -3079,6 +3106,9 @@ console.log("recent searches: 12 cases ok");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
         assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
         assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
+        assert!(ask("/command").await.starts_with("HTTP/1.1 401"));
+        let reply = ask("/command?t=right").await;
+        assert!(reply.contains("data-current=\"command\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
         server.abort();

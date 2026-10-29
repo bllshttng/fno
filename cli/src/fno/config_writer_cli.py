@@ -1,16 +1,13 @@
-"""The `fno config` typer shell: the app, its lazy mounts, and the doctor leaf.
+"""The `fno config` typer shell: the app and its remaining lazy mounts.
 
-Every other leaf answers natively on the `fno` front door
-(crates/fno/src/config_cli/), the writer (set, unset, rm) included; the
-registrations below keep the help pages and forward. The doctor's engine
-lives in the setup family (fno.setup.config_doctor), so this module stays
+Every leaf answers natively on the `fno` front door (crates/fno/src/config_cli/),
+the writer (set, unset, rm), plugin install and doctor included; the
+registrations below keep the help pages and forward. So this module stays
 top-level and unmapped by the layer scan, like its config_cli.py ancestor.
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -32,7 +29,7 @@ from fno._lazy_group import make_lazy_group_cls
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
     "accounts": ("fno.adapters.providers.cli:cli", "Manage account records."),
     # Folded under config (unit 6). The old top-level spellings stay
-    # one-release shims (fno.command_moves); these mounts are the canonical
+    # retired at the front door (command-names.tsv); these mounts are the canonical
     # homes. Lazy for the same reason `accounts` is: `fno config get` runs
     # from shell dozens of times per phase and must not pay for their imports.
     # Hidden: the menu cap is 12 and config already curates nine visible
@@ -41,15 +38,8 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     # `config route` / `config routing` (the provider route lanes and the
     # declared-inventory reads) answer natively: the front classifies both
     # spellings onto route-slot's config-route mode, so no Python mount
-    # remains.
-    # One local-dev install door for every plugin harness. VISIBLE on
-    # purpose and as a lazy mount: this installs the footnote plugin itself,
-    # from the filtered stage, in one action per harness (claude|codex|
-    # opencode|agy). The codex arm stays on the Python converge engine.
-    "plugin": (
-        "fno.setup.plugin_install_cli:plugin_app",
-        "Install your local checkout of footnote into a harness, for development.",
-    ),
+    # remains. `config plugin` and `config doctor` answer natively the same
+    # way; their mounts left with the setup family's Python.
 }
 
 app = typer.Typer(
@@ -57,85 +47,6 @@ app = typer.Typer(
     cls=make_lazy_group_cls(_LAZY_SUBCOMMANDS),
 )
 
-
-@app.command("doctor")
-def doctor(
-    post_merge: bool = typer.Option(
-        False,
-        "--post-merge",
-        help="Report this repo's post-merge config readiness (read-only).",
-    ),
-    review: bool = typer.Option(
-        False,
-        "--review",
-        help="Report whether every config.review.reviewers entry can actually "
-        "run in this session (read-only). Diagnostic twin of the refusal "
-        "`fno do target init` performs.",
-    ),
-    json_out: bool = typer.Option(
-        False,
-        "--json",
-        "-J",
-        help="With --post-merge, emit the verdict as a single JSON object.",
-    ),
-) -> None:
-    """Inspect resolved paths; flag suspicious values. Read-only.
-
-    With ``--post-merge`` (or ``--json``), instead report whether
-    ``config.post_merge.parking_lot_path`` is set for this repo - the gate the
-    /fno:ship pr merged ritual needs. With ``--review``, report whether every
-    configured local reviewer can run in this session. Bare ``fno config
-    doctor`` runs the path diagnostic and appends a one-line post-merge
-    readiness summary plus the resolved ship gates (each probe with its source,
-    each reviewer with the rung it asserts).
-    """
-    from fno.setup.config_doctor import _report_gates, _report_review_capability, _report_state_roots
-    from fno.setup.config_doctor import (
-        _report_deprecated_active_backlog_mission,
-        _report_deprecated_dispatch_harness,
-        _report_deprecated_auto_merge,
-        _report_band_routing,
-        _report_harness_overlays,
-        _repo_root,
-        post_merge_readiness,
-    )
-
-    if review:
-        raise typer.Exit(_report_review_capability(json_out=json_out))
-
-    if post_merge or json_out:
-        verdict = post_merge_readiness(_repo_root())
-        if json_out:
-            typer.echo(json.dumps(verdict.to_dict()))
-        else:
-            typer.echo(verdict.summary_line())
-        raise typer.Exit(0)
-
-    from fno.setup.doctor import run_doctor
-
-    rc = run_doctor()
-    # Every report is advisory: one that fails never crashes the diagnostic.
-    # The post-merge line runs first so bare doctor shows the gap without the
-    # flag (Open Question 1). One wrapper, so the next report is a name here.
-    # Typed as a list, not a bare tuple: mypy's join over the mixed lambda +
-    # imported helpers collapsed to an untyped callable and strict mode read
-    # the call itself as untyped.
-    reports: list[Callable[[], None]] = [
-        lambda: typer.echo(post_merge_readiness(_repo_root()).summary_line()),
-        _report_gates,
-        _report_state_roots,
-        _report_deprecated_auto_merge,
-        _report_deprecated_dispatch_harness,
-        _report_deprecated_active_backlog_mission,
-        _report_band_routing,
-        _report_harness_overlays,
-    ]
-    for report in reports:
-        try:
-            report()
-        except Exception:  # noqa: BLE001 - a report, not the diagnostic itself
-            pass
-    raise typer.Exit(rc)
 
 
 @app.command("set")

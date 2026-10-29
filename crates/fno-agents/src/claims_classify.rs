@@ -15,11 +15,13 @@ use super::{
 /// parity harness can drive the Refused arm deterministically; the Python
 /// leg's equivalent seam is monkeypatching `_probe_create_time`.
 fn liveness_reading(rec: &ClaimRecord, probe: &dyn Fn(i32) -> PidProbe) -> (bool, &'static str) {
-    if rec.pid_unavailable {
-        return (false, basis::PID_UNAVAILABLE);
-    }
+    // Off-host first: a foreign claim's pid says nothing on this machine,
+    // so its basis names the machine, never the missing pid.
     if !is_same_machine(&rec.host, rec.machine_id.as_deref()) {
         return (false, basis::OFFHOST);
+    }
+    if rec.pid_unavailable {
+        return (false, basis::PID_UNAVAILABLE);
     }
     let Some(pid) = rec.pid else {
         return (false, basis::PID_UNAVAILABLE);

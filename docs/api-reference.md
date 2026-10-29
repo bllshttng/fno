@@ -145,7 +145,7 @@ Configuration, analysis, and operational tools.
 | `setup` | `/fno:setup` | Interactive config.toml configuration wizard |
 | `ship-docs` | `/fno:ship-docs` | Architecture documentation generation |
 
-Two former skills are now CLI commands: `fno doctor codemap` (AST-based structural analysis with PageRank: god nodes, orphans, module boundaries) and `fno agents workspace worktree` (worktree lifecycle: status, cleanup, archive).
+A former skill is now a CLI command: `fno agents workspace worktree` (worktree lifecycle: status, cleanup, archive).
 
 #### Multi-repo features
 

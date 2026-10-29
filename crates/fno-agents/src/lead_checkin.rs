@@ -3426,38 +3426,7 @@ fn rename_harness_title_for_team(scope: &str) -> Result<(), String> {
     let Some(command) = title_rename_command(harness, label, row.harness_title.as_deref()) else {
         return Ok(());
     };
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let mut child = std::process::Command::new(executable)
-        .args([
-            "mail-inject",
-            "--session",
-            session,
-            "--harness",
-            harness,
-            "--self-send",
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("mail-inject start failed: {error}"))?;
-    let mut stdin = child.stdin.take().ok_or("mail-inject stdin unavailable")?;
-    stdin
-        .write_all(command.as_bytes())
-        .map_err(|error| format!("mail-inject write failed: {error}"))?;
-    drop(stdin);
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("mail-inject wait failed: {error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if detail.is_empty() {
-            format!("mail-inject exited {}", output.status)
-        } else {
-            detail
-        });
-    }
-    Ok(())
+    crate::rename::deliver_command_to_session(session, harness, &command, true)
 }
 
 #[cfg(test)]

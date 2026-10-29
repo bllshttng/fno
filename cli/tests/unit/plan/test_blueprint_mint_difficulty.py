@@ -1,11 +1,11 @@
 """Minted docs must be born passing the difficulty gate (x-e3d1).
 
 skills/blueprint/scripts/mutate_doc.py stamps ``created: <today>`` into every
-doc it first-fills, and the difficulty gate
-(:data:`fno.plan.schema.DIFFICULTY_REQUIRED_AFTER`) requires a ``difficulty``
-band on plans created strictly after 2026-08-26. The producer never wrote one,
-so the wall clock crossing the boundary at 00:00Z on 2026-08-27 made every
-minted doc born failing its own validator - with no code change at all.
+doc it first-fills, and the difficulty gate (the plan-schema door, Rust
+owner) requires a ``difficulty`` band on plans created strictly after
+2026-08-26. The producer never wrote one, so the wall clock crossing the
+boundary at 00:00Z on 2026-08-27 made every minted doc born failing its own
+validator - with no code change at all.
 
 The proof: the mint must CONTAIN a band and PASS the gate.
 """
@@ -20,14 +20,20 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fno.plan.schema import (
-    WAVES_REQUIRED_AFTER,
-    difficulty_gate_error,
-    waves_gate_error,
-)
+from fno import rust_binary
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPT_PATH = _REPO_ROOT / "skills" / "blueprint" / "scripts" / "mutate_doc.py"
+
+
+def _gate_error(fm: dict) -> str | None:
+    """The door's difficulty-gate verdict; skips when no dev build exists."""
+    gates = rust_binary.plan_schema(
+        {"op": "gates", "frontmatter": fm, "undatable_refuses": True}
+    )
+    if gates is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    return gates.get("difficulty_gate")
 
 
 def _load_mutate_module():
@@ -152,7 +158,7 @@ def test_minted_doc_carries_a_band_and_passes_the_gate(
     tmp_path: Path, post_gate_clock: None
 ) -> None:
     """The real mint path emits a difficulty key, and the emitted frontmatter
-    passes difficulty_gate_error."""
+    passes the door's difficulty gate."""
     doc = tmp_path / "think-findings.md"
     doc.write_text(_THINK_DOC, encoding="utf-8")
 
@@ -166,7 +172,7 @@ def test_minted_doc_carries_a_band_and_passes_the_gate(
     assert fm.get("difficulty") in {"low", "medium", "high"}, (
         f"minted frontmatter carries no difficulty band: {fm.get('difficulty')!r}"
     )
-    assert difficulty_gate_error(fm) is None, "minted doc is born failing its own validator"
+    assert _gate_error(fm) is None, "minted doc is born failing its own validator"
 
 
 def test_author_set_band_is_preserved(tmp_path: Path) -> None:
@@ -213,7 +219,7 @@ def test_finalize_writes_a_banded_doc(tmp_path: Path) -> None:
     assert fm.get("difficulty") in {"low", "medium", "high"}, (
         f"finalized doc carries no band: {fm.get('difficulty')!r}"
     )
-    assert difficulty_gate_error(fm) is None
+    assert _gate_error(fm) is None
 
 
 def test_plan_mode_skeleton_is_born_passing_the_gate(tmp_path: Path) -> None:
@@ -247,76 +253,4 @@ def test_plan_mode_skeleton_is_born_passing_the_gate(tmp_path: Path) -> None:
     assert fm.get("difficulty") in {"low", "medium", "high"}, (
         f"skeleton carries no difficulty band: {fm.get('difficulty')!r}"
     )
-    assert difficulty_gate_error(fm) is None
-
-
-# ---------------------------------------------------------------------------
-# The Execution Strategy gate (x-a804), the same date-keyed shape one rung up.
-#
-# `quick` was told to skip `## Execution Strategy` on the assertion that a
-# quick plan is single-task, and nothing checked the assertion: 200 of the 232
-# flat quick-plans in a fortnight carried more than one numbered change. Each
-# measured width 0, so `fno backlog join` could not tell a genuinely
-# single-task plan from one that never declared its parallelism.
-#
-# The pair below mirrors the difficulty proof above: a post-gate plan with no
-# strategy must be REFUSED, and the identical plan dated on or before the gate
-# must still PASS (so the fix cannot silently become a retroactive gate that
-# refuses 1385 plans nobody is going to rewrite).
-# ---------------------------------------------------------------------------
-
-_ONE_DAY = datetime.timedelta(days=1)
-
-
-def _quick_fm(created: datetime.date, *, status: str = "ready") -> dict:
-    return {
-        "status": status,
-        "kind": "quick-plan",
-        "created": created.isoformat(),
-        "difficulty": "medium",
-    }
-
-
-def test_waves_gate_refuses_a_post_gate_plan_with_no_strategy() -> None:
-    """AC5-ERR: strictly after the boundary, the section is required and the
-    refusal names the gate date so an author can date their own plan."""
-    fm = _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY)
-    err = waves_gate_error(fm, has_execution_strategy=False)
-    assert err is not None
-    assert WAVES_REQUIRED_AFTER.isoformat() in err, err
-    assert "Execution Strategy" in err, err
-
-
-def test_waves_gate_boundary_is_strictly_after_not_on_or_after() -> None:
-    """A plan created ON the gate date predates the gate reaching its author,
-    the same boundary the difficulty gate uses. Pinned because an off-by-one
-    here silently refuses a day's worth of plans."""
-    assert waves_gate_error(
-        _quick_fm(WAVES_REQUIRED_AFTER), has_execution_strategy=False
-    ) is None
-    assert waves_gate_error(
-        _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY), has_execution_strategy=False
-    ) is not None
-
-
-@pytest.mark.parametrize("status", ["idea", "design"])
-def test_waves_gate_exempts_the_pre_execution_rungs(status: str) -> None:
-    """THE MIDNIGHT TRAP, closed by construction.
-
-    `scaffold_separate_plan` mints an epic child with `created` stamped at
-    RUNTIME and no Execution Strategy, and a /think doc sits at `design` until
-    /blueprint appends one. A gate that fired on either would go red at
-    00:00Z on a commit nobody touched - exactly what the difficulty gate did
-    at 2026-08-27T00:00Z, which took smoke-rest red on every open PR.
-    """
-    fm = _quick_fm(WAVES_REQUIRED_AFTER + _ONE_DAY, status=status)
-    assert waves_gate_error(fm, has_execution_strategy=False) is None
-
-
-def test_waves_gate_undatable_refuses_on_the_minting_lanes() -> None:
-    """Same split as the difficulty gate: a lane with no fallback dater
-    refuses rather than minting a strategy-less plan it cannot date."""
-    fm = {"status": "ready", "kind": "quick-plan", "difficulty": "medium"}
-    err = waves_gate_error(fm, has_execution_strategy=False)
-    assert err is not None
-    assert "cannot read created" in err, err
+    assert _gate_error(fm) is None

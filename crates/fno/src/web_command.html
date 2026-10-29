@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fno command</title>
+<style>
+/* fno-house */
+/* The command page in the house style: monochrome ink on the theme tokens,
+   square edges, mono type. Hue carries state only. The table and drawer rules
+   below still use the older names, which alias the tokens. */
+:root{--writing:var(--green);--parked:var(--yellow);--quiet:var(--violet);--unknown:var(--overlay1);--ok:var(--green);--link:var(--blue);--font-ui:var(--mono);--font-data:var(--mono)}
+.bar{position:sticky;top:var(--fno-nav-h,0px);z-index:5}
+.bar #age{color:var(--overlay1);font-size:11.5px;margin-right:auto}
+.wrap{padding:12px max(14px,env(safe-area-inset-right,0px)) 32px max(14px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:12px}
+.counts,.seg{display:flex;flex-wrap:wrap;gap:6px}
+.controls button.count{display:inline-flex;align-items:center;gap:6px;color:var(--text);font-variant-numeric:tabular-nums}.controls button.count[aria-pressed="false"]{color:var(--overlay1);border-style:dashed}
+.dot{width:7px;height:7px;flex:none;display:inline-block}.controls span.count{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;min-height:26px;border:1px solid var(--surface0);font-size:12px;font-variant-numeric:tabular-nums}
+#banners:empty{display:none}.banner{padding:4px 10px;border:1px solid var(--yellow);color:var(--yellow)}
+.fleet{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:10px}
+.host{display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;align-items:center;padding:10px 12px;background:var(--mantle);border:1px solid var(--surface0)}.host canvas{width:120px;height:120px}
+.hinfo{display:flex;flex-direction:column;gap:5px;min-width:0}.hname{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.hname b{font-size:14px;font-weight:700}.hname span{font-size:11px;color:var(--overlay1)}
+.live{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--green)}.live i{width:7px;height:7px;background:var(--green)}.live.stale{color:var(--yellow)}.live.stale i{background:var(--yellow)}
+.meter{display:grid;grid-template-columns:84px minmax(0,1fr) auto;gap:8px;align-items:center;font-size:11.5px}.meter>span:first-child{color:var(--overlay1)}.meter b{font-weight:500;font-variant-numeric:tabular-nums}.track{height:4px;background:var(--surface0);overflow:hidden}.track i{display:block;height:100%}.mix{display:flex;height:4px;overflow:hidden;gap:1px}
+.panel{border:1px solid var(--surface0);background:var(--mantle);padding:10px 12px;display:flex;flex-direction:column;gap:6px}.panel h2,.panel h3{margin:4px 0 2px;font-size:11px;color:var(--overlay1);font-weight:700}.panel h2::before,.panel h3::before{content:"## "}
+.lk{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--surface0);background:var(--base)}.lt{display:flex;flex-direction:column;min-width:0;gap:2px;flex:1}.lt b{font-weight:600;overflow-wrap:anywhere}.lt code{font:inherit;font-size:11px;color:var(--yellow);overflow-wrap:anywhere}
+.empty{color:var(--overlay1);margin:0}
+.filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.filters label{font-size:12px;color:var(--overlay1);margin-right:2px}
+.chip{border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);font-size:12px;padding:3px 10px;cursor:pointer;min-height:26px}.chip:hover{border-color:var(--text)}.chip[aria-pressed="true"]{color:var(--text);border-color:var(--text)}.chip[aria-checked="true"]{background:var(--text);color:var(--base);border-color:var(--text)}
+.view{display:flex;flex-direction:column;gap:12px}.view[hidden]{display:none}
+.stage{position:relative;height:min(76vh,780px);min-height:420px;overflow:hidden;border:1px solid var(--surface0);background:var(--base)}.stage canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}.stage canvas.dragging{cursor:grabbing}
+.layouts{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--mantle);border:1px solid var(--surface0);z-index:2;max-width:calc(100% - 24px);overflow-x:auto}.layouts .lbl{font-size:12px;color:var(--overlay1);padding:0 2px;white-space:nowrap}.layouts .chip{white-space:nowrap}
+.lnote{position:absolute;top:52px;left:50%;transform:translateX(-50%);font-size:11.5px;color:var(--overlay1);text-align:center;max-width:calc(100% - 24px);pointer-events:none;z-index:2;margin:0}
+.legend{position:absolute;left:10px;bottom:10px;display:flex;flex-wrap:wrap;gap:4px 12px;padding:5px 10px;background:var(--mantle);border:1px solid var(--surface0);font-size:11px;color:var(--overlay1);max-width:calc(100% - 20px)}.legend span{display:inline-flex;align-items:center;gap:6px}.shp{width:9px;height:9px;display:inline-block;background:var(--subtext0)}.shp.circle{border-radius:50%}.shp.diamond{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.shp.triangle{clip-path:polygon(50% 0,100% 100%,0 100%)}.shp.down{clip-path:polygon(0 0,100% 0,50% 100%)}.hint{position:absolute;right:10px;bottom:10px;font-size:11px;color:var(--overlay1);pointer-events:none}
+.tip{position:absolute;pointer-events:none;min-width:220px;max-width:300px;padding:7px 10px;background:var(--mantle);border:1px solid var(--surface1);opacity:0;transition:opacity .15s;font-size:12px;line-height:1.4;z-index:3}.tip.on{opacity:1}.tip .t1{font-weight:700;margin-bottom:3px}.tip .t2{font-size:11px;color:var(--overlay1)}
+.fleet.many{grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr))}.many .host{grid-template-columns:56px minmax(0,1fr);gap:10px;padding:8px 10px}.many .host canvas{width:56px;height:56px}.many .meter{grid-template-columns:62px minmax(0,1fr) auto;gap:6px;font-size:10.5px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:640px){.stage{height:62vh}.hint{display:none}.bar{position:static}}@media (max-width:480px){.host{grid-template-columns:88px minmax(0,1fr)}.host canvas{width:88px;height:88px}}
+.tablewrap{border:1px solid var(--surface0);background:var(--mantle)}.ttools{display:flex;flex-wrap:wrap;gap:10px;padding:8px 12px;border-bottom:1px solid var(--surface0);align-items:center}.ttools input{flex:1 1 220px;min-width:0;background:var(--base);border:1px solid var(--surface1);color:var(--text);padding:4px 8px;min-height:26px;font:12px var(--mono)}.ttools input:focus{border-color:var(--text);outline:none}.ttools span{font-size:11.5px;color:var(--overlay1)}
+.tscroll{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:1060px}th,td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--surface0);vertical-align:top;font-size:12px}th{font-size:11px;color:var(--overlay1);font-weight:700;cursor:pointer;user-select:none;white-space:nowrap;background:var(--mantle)}th:hover{color:var(--text)}th[aria-sort]{color:var(--text)}th[aria-sort]::after{content:" ↓"}th[aria-sort="ascending"]::after{content:" ↑"}
+tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--base)}td .sub{color:var(--overlay1);font-size:11px;margin-top:2px;display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.drawer{position:fixed;top:calc(var(--fno-nav-h,0px) + 8px);right:8px;bottom:8px;width:min(440px,calc(100vw - 16px));z-index:20;background:var(--mantle);border:1px solid var(--surface1);transform:translateX(calc(100% + 16px));visibility:hidden;transition:transform .2s ease-out,visibility .2s;display:flex;flex-direction:column;overflow:hidden}.drawer.on{transform:none;visibility:visible}
+.dhead{padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--surface0)}.dtop{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;font-size:11.5px;font-weight:700;border:1px solid var(--surface1)}.x{margin-left:auto;width:26px;height:26px;border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);cursor:pointer;font:inherit;font-size:14px;line-height:1}.x:hover{color:var(--text);border-color:var(--text)}
+.dhead h2{margin:0;font-size:14px;line-height:1.35;font-weight:700}.dnode{font-size:11.5px;color:var(--overlay1)}.dbody{padding:10px 14px 18px;overflow:auto;display:flex;flex-direction:column;gap:14px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--overlay1);font-weight:700}.sec h3::before{content:"## "}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.dbox b{font-weight:700}.dbox code{font:inherit;color:var(--yellow)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}.lkb{flex:none;border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px;text-decoration:none;display:inline-flex;align-items:center}.lkb:hover{color:var(--text);border-color:var(--text)}
+@media (max-width:640px){.drawer{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:78vh;transform:translateY(calc(100% + 16px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
+</style>
+</head>
+<body>
+<header class="controls bar"><span class="mark">Ｆ<b>[no]</b> command</span><span id="age">fno fleet · reading</span>
+  <span class="lbl">state</span><div class="counts" id="counts"></div>
+  <span class="lbl">view</span><div class="seg" role="tablist" aria-label="View"><button role="tab" id="tab-synapse" aria-selected="true">synapse</button><button role="tab" id="tab-table" aria-selected="false">table</button></div></header>
+<div class="wrap">
+  <div id="banners"></div>
+  <section class="fleet" id="machines" aria-label="Machines"><p class="empty">reading the fleet</p></section>
+  <div class="filters" id="chips"><label>Machine</label></div>
+  <div class="view" id="view-synapse">
+    <section class="stage" aria-label="Fleet synapse map"><canvas id="cv"></canvas>
+      <div class="layouts" role="radiogroup" aria-label="Layout"><span class="lbl">Group by</span><button class="chip" role="radio" aria-checked="true" data-layout="constellation">Projects</button><button class="chip" role="radio" aria-checked="false" data-layout="hemispheres">Machines</button><button class="chip" role="radio" aria-checked="false" data-layout="transit">Subway</button></div>
+      <p class="lnote" id="lnote"></p>
+      <div class="legend"><span id="lhosts" style="display:contents"></span><span><i class="dot" style="background:var(--writing)"></i>writing</span><span><i class="dot" style="background:var(--parked)"></i>parked</span><span><i class="dot" style="background:var(--quiet)"></i>quiet</span><span><i class="dot" style="border:1.5px solid var(--unknown)"></i>unknown</span><span><i class="dot" style="border:1.5px solid var(--text)"></i>lead</span><span><i class="dot" style="background:var(--subtext0)"></i>project / epic</span></div>
+      <div class="hint">Hover to fire · click for details · drag to pan · scroll to zoom</div>
+      <div class="tip" id="tip"></div>
+    </section>
+    <section class="panel" aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
+  </div>
+  <section class="tablewrap" id="view-table" hidden aria-label="Seats">
+    <div class="ttools"><input id="filter" type="search" placeholder="Filter by seat, node, title, model, session id" aria-label="Filter seats"><span id="rowcount"></span></div>
+    <div class="tscroll"><table><thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody></table></div>
+  </section>
+</div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="Seat details">
+  <div class="dhead"><div class="dtop"><span class="pill" id="dstate"></span><span class="mono" id="dhost" style="color:var(--overlay1)"></span><button class="x" id="dclose" aria-label="Close details">×</button></div><h2 id="dtitle"></h2><div class="dnode" id="dnode"></div></div>
+  <div class="dbody" id="dbody"></div>
+</aside>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+(() => {
+const ORDER = ["writing", "parked", "quiet", "unknown"];
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+const ago = (s) => s == null ? "unknown" : s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : s < 172800 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d";
+const dot = (state) => { const d = el("i", "dot"); d.style.background = "var(--" + state + ")"; return d; };
+const since = (iso) => { const t = Date.parse(iso); return isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 1000)); };
+
+function header(model) {
+  const all = model.machines.flatMap((m) => m.leads.flatMap((l) => l.seats));
+  const counts = document.getElementById("counts");
+  counts.replaceChildren();
+  const q = model.waiting.questions;
+  const add = (n, word, color) => {
+    const c = el(color ? "button" : "span", "count");
+    if (color) {
+      c.append(dot(color));
+      c.setAttribute("aria-pressed", String(!hiddenStates.has(color)));
+      c.onclick = () => { hiddenStates.has(color) ? hiddenStates.delete(color) : hiddenStates.add(color); header(model); paint(); cam.tk = fitK(); };
+    }
+    c.append(el("b", null, n), " " + word);
+    counts.append(c);
+  };
+  for (const s of ORDER) add(all.filter((x) => x.status === s).length, s, s);
+  add(q ? q.length : "?", "questions");
+  document.getElementById("age").textContent = "fno fleet · " + (model.age_s == null ? "not read" : "read " + ago(model.age_s) + " ago") + " · " + all.length + " sessions";
+}
+
+function banners(model) {
+  const box = document.getElementById("banners");
+  box.replaceChildren();
+  const add = (text) => box.append(el("div", "banner", text));
+  const e = model.fleet_error;
+  if (e && model.machines.length) add("fleet read failed " + ago(e.failed_age_s) + " ago: " + e.reason + "; showing the read from " + ago(model.age_s) + " ago");
+  if (model.notice) add(model.notice);
+  if (model.seat_error) add(model.seat_error);
+}
+
+function waiting(model) {
+  const box = document.getElementById("waiting");
+  box.replaceChildren();
+  const w = model.waiting;
+  if (w.questions_error) box.append(el("p", "empty", "questions not read: " + w.questions_error));
+  const qs = w.questions || [];
+  const hosts = [...new Set(qs.map((q) => q.host))].sort((a, b) => (a != null) - (b != null) || String(a).localeCompare(String(b)));
+  for (const host of hosts) {
+    box.append(el("h3", null, host == null ? "this machine" : host));
+    for (const q of qs.filter((x) => x.host === host)) {
+      const r = el("div", "lk"), t = el("span", "lt");
+      t.append(el("b", null, q.title || q.id));
+      t.append(el("code", null, [q.node || "no node", ago(since(q.created_at)) + " old", "fno inbox outstanding clear " + q.id + " --answer \"…\"" + (host == null ? "" : " (on " + host + ")")].join(" · ")));
+      r.append(t);
+      box.append(r);
+    }
+  }
+  if (w.prs_error) box.append(el("p", "empty", "PRs not read: " + w.prs_error + "; showing the last read"));
+  const prs = w.prs || [];
+  if (prs.length) box.append(el("h3", null, "PRs in review"));
+  for (const p of prs) {
+    const r = el(p.url ? "a" : "div", "lk"), t = el("span", "lt");
+    if (p.url && p.url.startsWith("https://")) r.href = p.url;
+    t.append(el("b", null, "#" + p.number + " " + (p.title || "")), el("code", null, p.node + " · " + (p.merge_status || "merge state not recorded")));
+    r.append(t);
+    box.append(r);
+  }
+  if (!qs.length && !prs.length && !w.questions_error && !w.prs_error) box.append(el("p", "empty", "Nothing waits on you (read " + ago(model.age_s) + " ago)"));
+}
+
+const meter = (label, bar, value) => {
+  const m = el("div", "meter");
+  m.append(el("span", null, label), bar, el("b", null, value));
+  return m;
+};
+const track = (frac, color) => {
+  const t = el("span", "track"), i = el("i");
+  if (frac != null) { i.style.width = Math.min(100, frac * 100) + "%"; i.style.background = "var(--" + color + ")"; }
+  t.append(i);
+  return t;
+};
+let cards = [];
+function machines(model) {
+  const box = document.getElementById("machines");
+  box.replaceChildren();
+  box.classList.toggle("many", model.machines.length > 3);
+  cards = [];
+  if (!model.machines.length) {
+    box.append(el("p", "empty", "fleet not read: " + (model.fleet_error ? model.fleet_error.reason : "no machines")));
+    return;
+  }
+  for (const m of model.machines) {
+    const seats = m.leads.flatMap((l) => l.seats), mix = el("span", "mix");
+    for (const s of ORDER) {
+      const n = seats.filter((x) => x.status === s).length;
+      if (n) { const i = el("i"); i.style.flex = n; i.style.background = "var(--" + s + ")"; mix.append(i); }
+    }
+    const c = el("div", "host"), cv = el("canvas"), info = el("div", "hinfo"), name = el("div", "hname"), live = el("span", m.fresh ? "live" : "live stale");
+    live.append(el("i"), (m.fresh ? "online" : "stale") + " · beat " + ago(m.age_s) + " ago");
+    name.append(el("b", null, m.display_name || m.host), el("span", null, (m.display_name ? m.host + " · " : "") + m.leads.length + (m.leads.length === 1 ? " lead" : " leads")), live);
+    const mem = m.mem_used, cpu = m.cpu == null ? null : m.cpu / 100;
+    info.append(name, meter("Sessions", mix, seats.length),
+      meter("Memory", track(mem, mem > .85 ? "parked" : "ok"), mem == null ? "not sampled" : Math.round(mem * 100) + "%"),
+      meter("Spawn cap", track(m.cap ? seats.length / m.cap : null, seats.length >= m.cap ? "parked" : "quiet"), m.cap == null ? "not published" : seats.length + " / " + m.cap + (seats.length >= m.cap ? " · at cap" : "")),
+      ...((m.lanes || []).length ? [] : [meter("Lanes", track(null), "not published")]),
+      ...(m.lanes || []).map((l) => meter(l.provider, track(l.cap ? (l.count || 0) / l.cap : null, l.full ? "parked" : "quiet"),
+        l.count == null ? "not read" : l.cap == null ? l.count + " · no cap" : l.count + " / " + l.cap + (l.full ? " · full" : ""))),
+      meter("CPU", track(cpu, "quiet"), cpu == null ? "not sampled" : Math.round(m.cpu) + "%"));
+    cv.width = cv.height = 240;
+    cv.setAttribute("aria-hidden", "true");
+    c.append(cv, info);
+    box.append(c);
+    cards.push({cv, h: m});
+  }
+}
+
+const work = (r, k) => r.s.work ? r.s.work[k] : null;
+const model_ = (r) => r.s.model && r.s.model + (r.s.model_basis ? " (" + r.s.model_basis + ")" : "");
+const COLS = [
+  ["machine", (r) => r.host], ["lead", (r) => r.lead], ["seat", (r) => r.s.name], ["harness", (r) => r.s.harness],
+  ["model", model_], ["state", (r) => ORDER.indexOf(r.s.status), (v, r) => r.s.status],
+  ["alive", (r) => since(r.s.started_at), ago], ["last msg", (r) => since(r.s.last_message_at), (v) => ago(v) + " ago"],
+  ["node", (r) => work(r, "id")], ["PR", (r) => work(r, "pr"), (v) => "#" + v],
+];
+let rows = [], hiddenHosts = new Set(), hiddenStates = new Set(), sort = {col: 5, dir: 1}, openKey = null;
+const keyOf = (r) => r.host + "/" + (r.s.session_id || r.s.name);
+for (const [id, view] of [["tab-synapse", "view-synapse"], ["tab-table", "view-table"]]) {
+  document.getElementById(id).onclick = () => {
+    for (const t of ["synapse", "table"]) {
+      document.getElementById("tab-" + t).setAttribute("aria-selected", String("view-" + t === view));
+      document.getElementById("view-" + t).hidden = "view-" + t !== view;
+    }
+  };
+}
+
+function seats(model) {
+  rows = model.machines.flatMap((m) => m.leads.flatMap((l) => l.seats.map((s) => ({host: m.host, machine: m.display_name || m.host, local: m.local, lead: l.name, s}))));
+  const chips = document.getElementById("chips");
+  chips.replaceChildren(el("label", null, "Machine"));
+  for (const m of model.machines) {
+    const b = el("button", "chip", m.host + " · " + rows.filter((r) => r.host === m.host).length);
+    b.setAttribute("aria-pressed", String(!hiddenHosts.has(m.host)));
+    b.onclick = () => { hiddenHosts.has(m.host) ? hiddenHosts.delete(m.host) : hiddenHosts.add(m.host); seats(model); };
+    chips.append(b);
+  }
+  paint();
+  graph(model);
+  const again = rows.find((r) => keyOf(r) === openKey);
+  if (again) openSeat(again); else if (openKey) closeSeat();
+}
+
+function paint() {
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  const hay = (r) => [r.host, r.lead, r.s.name, r.s.session_id, r.s.harness, r.s.model, work(r, "id"), work(r, "title")];
+  const shown = rows.filter((r) => !hiddenHosts.has(r.host) && !hiddenStates.has(r.s.status) && (!q || hay(r).some((v) => v && String(v).toLowerCase().includes(q))));
+  const get = COLS[sort.col][1];
+  shown.sort((a, b) => {
+    const x = get(a), y = get(b);
+    if (x == null || y == null) return (x == null) - (y == null);
+    return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * sort.dir;
+  });
+  document.getElementById("thead").replaceChildren(...COLS.map(([label], i) => {
+    const th = el("th", null, label);
+    if (i === sort.col) th.setAttribute("aria-sort", sort.dir > 0 ? "ascending" : "descending");
+    th.tabIndex = 0;
+    th.onclick = th.onkeydown = (e) => {
+      if (e.key && e.key !== "Enter") return;
+      sort = {col: i, dir: i === sort.col ? -sort.dir : 1};
+      paint();
+    };
+    return th;
+  }));
+  document.getElementById("tbody").replaceChildren(...shown.map((r) => {
+    const tr = el("tr");
+    tr.tabIndex = 0;
+    for (const [label, get, fmt] of COLS) {
+      const v = get(r), td = el("td", typeof v === "number" ? "num" : null);
+      if (label === "state") td.append(dot(r.s.status), " ");
+      td.append(v == null ? (label === "last msg" ? "not published" : "") : fmt ? fmt(v, r) : v);
+      if (label === "node" && work(r, "title")) td.append(el("span", "sub", work(r, "title")));
+      tr.append(td);
+    }
+    tr.onclick = () => openSeat(r);
+    tr.onkeydown = (e) => { if (e.key === "Enter") openSeat(r); };
+    return tr;
+  }));
+  document.getElementById("rowcount").textContent = shown.length + " of " + rows.length + " seats";
+}
+
+const drawer = document.getElementById("drawer"), toastEl = document.getElementById("toast");
+let toastTimer = 0;
+function toast(text) {
+  toastEl.textContent = text;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1600);
+}
+function openSeat(r) {
+  const s = r.s, w = s.work || {}, none = "not published";
+  openKey = keyOf(r);
+  document.getElementById("dstate").replaceChildren(dot(s.status), s.status);
+  document.getElementById("dhost").textContent = r.machine + " · " + (r.lead === "no lead" ? "no lead" : "lead " + r.lead);
+  document.getElementById("dtitle").textContent = w.title || s.name;
+  document.getElementById("dnode").textContent = w.id ? [w.id, w.status, w.priority, w.difficulty, s.project].filter(Boolean).join(" · ") : ["no node", s.project].filter(Boolean).join(" · ");
+  const box = (text) => {
+    const d = el("div", text ? "dbox" : "dbox none");
+    if (!text) { d.textContent = none; return d; }
+    // A light markdown read, built from text nodes only: heading and list
+    // marks drop, **bold** and `code` render.
+    text.split("\n").forEach((line, i) => {
+      if (i) d.append("\n");
+      line = line.replace(/^(\s*)(#{1,6}\s+|[-*+]\s+)/, (m0, sp, mark) => sp + (/^#/.test(mark) ? "" : "• "));
+      for (const part of line.split(/(\*\*[^*]+\*\*|`[^`]+`)/)) {
+        if (/^\*\*[^*]+\*\*$/.test(part)) d.append(el("b", null, part.slice(2, -2)));
+        else if (/^`[^`]+`$/.test(part)) d.append(el("code", null, part.slice(1, -1)));
+        else if (part) d.append(part);
+      }
+    });
+    return d;
+  };
+  const kv = el("dl", "kv");
+  for (const [k, v, mono] of [
+    ["Session id", s.session_id, 1], ["Handle", s.short || s.name], ["Harness", s.harness], ["Model", model_(r), 1],
+    ["Alive", s.started_at ? ago(since(s.started_at)) + " since " + s.started_at : null],
+    ["Status", s.status + (s.status_age_s == null ? "" : " for " + ago(s.status_age_s)) + " · progress " + (s.progress || "unknown")],
+    ["Memory", s.rss_mb == null ? null : Math.round(s.rss_mb) + " MB"], ["User turns", s.user_turns],
+    ["Context", s.context_pct == null ? null : s.context_pct + "% used"],
+    ["Epic", w.epic ? w.epic[0] + (w.epic[1] ? " · " + w.epic[1] : "") : "none"], ["Working dir", s.cwd, 1],
+  ]) kv.append(el("dt", null, k), el("dd", mono ? "mono" : null, v == null ? none : String(v)));
+  const links = el("div", "links");
+  // A row with a link offers Open, which opens it, and Copy, which copies
+  // that same link, never a command. A target with no link yet (attach and
+  // peek, until the mux has one) reads as plain text with no buttons.
+  const row = (title, code, href) => {
+    const d = el("div", "lk"), t = el("span", "lt");
+    t.append(el("b", null, title), el("code", null, code));
+    d.append(t);
+    if (href) {
+      // Open keeps the bridge token; Copy never carries it, so a pasted
+      // link grants nothing.
+      const u = new URL(href, location.href), url = u.href, open = el("a", "lkb", "Open"), copy = el("button", "lkb", "Copy");
+      open.href = url;
+      if (u.protocol.startsWith("http")) u.searchParams.delete("t");
+      const shared = u.href;
+      if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
+      // The label never changes; a toast reports the result. Plain http
+      // off loopback has no clipboard API, so the failure toast names it and
+      // the row shows the link, selected, for a manual copy.
+      copy.onclick = () => {
+        const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(shared) : Promise.reject(new Error("no clipboard"));
+        write.then(() => toast("Link copied"), () => {
+          const code = t.querySelector("code"), range = document.createRange();
+          code.textContent = shared;
+          range.selectNodeContents(code);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          toast("Copy failed");
+        });
+      };
+      d.append(open, copy);
+    }
+    links.append(d);
+  };
+  // The bridge follows config: an obsidian:// link for a plan in the vault, else a file link.
+  if (s.plan_uri && s.plan_uri.startsWith("obsidian://")) row("Plan in Obsidian", w.plan, s.plan_uri);
+  else if (w.plan) row("Plan", w.plan, s.plan_file && s.plan_file.startsWith("file://") ? s.plan_file : null);
+  else if (w.id) row("Plan", "no plan_path on " + w.id);
+  if (w.pr) row("Pull request #" + w.pr, w.pr_url ? w.pr_url.replace(/^https?:\/\//, "") : "no URL recorded on " + w.id, w.pr_url && /^https:\/\//.test(w.pr_url) ? w.pr_url : null);
+  const seat = s.short || s.name;
+  row("Attach in the mux" + (r.local ? "" : " on " + r.machine), seat + " · mux link comes later");
+  row("Peek without attaching", seat + " · mux link comes later");
+  if (w.id) row("Node in the backlog", "backlog · " + w.id, (nav ? nav.dataset.base : "./") + "backlog?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(w.id));
+  const sec = (title, body) => { const d = el("div", "sec"); d.append(el("h3", null, title), body); return d; };
+  const msgAge = s.last_message_at ? " · " + ago(since(s.last_message_at)) + " ago" : "";
+  document.getElementById("dbody").replaceChildren(...[
+    w.id && sec("Node description", box(w.details)), sec("Session", kv), sec("Last message" + msgAge, box(s.last_message)),
+    sec("Last prompt it received", box(s.last_prompt)), sec("Open", links)].filter(Boolean));
+  if (!drawer.classList.contains("on")) {
+    drawer.classList.add("on");
+    drawer.setAttribute("aria-hidden", "false");
+    document.getElementById("dclose").focus();
+  }
+}
+function closeSeat() {
+  openKey = null;
+  drawer.classList.remove("on");
+  drawer.setAttribute("aria-hidden", "true");
+}
+document.getElementById("dclose").onclick = closeSeat;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSeat(); });
+document.getElementById("filter").oninput = paint;
+
+// The Synapse canvas and the machine orb, ported from the fleet-synapse mockup.
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d"), stage = cv.parentElement, tip = document.getElementById("tip");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const UI = css("--font-ui"), DATA = css("--font-data");
+// The canvas paints in the house tokens: grays for stars, links and hubs, the
+// muted accents only for state and the hover lightning. A theme flip re-reads them.
+const COL = {}, T = {}, TCOL = [];
+const A = (c, a) => c + Math.round(a * 255).toString(16).padStart(2, "0");
+function readTokens() {
+  for (const k of ["text", "subtext0", "overlay1", "surface2", "surface0", "base", "mantle", "blue"]) T[k] = css("--" + k);
+  ORDER.forEach((st) => { COL[st] = css("--" + st); });
+  TCOL.splice(0, TCOL.length, T.subtext0, T.overlay1, T.surface2, T.text);
+  Object.keys(tcolor).forEach((p, i) => { tcolor[p] = TCOL[i % TCOL.length]; });
+}
+let nodes = [], links = [], byId = {}, hosts = [], tcolor = {}, W = 0, H = 0, TOP = 84, BOT = 48, DPR = 1, layout = "constellation", hover = null, drag = null, born = performance.now(), pulses = [], lastSpark = 0;
+const cam = {x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1, ox: 0, oy: 0, tox: 0, toy: 0, sx: 1, tsx: 1, auto: true};
+readTokens(); matchMedia("(prefers-color-scheme: light)").addEventListener("change", readTokens);
+const proj = (r) => r.s.project || "unassigned";
+const epic = (r) => r.s.work && r.s.work.epic;
+const leadName = (r) => r.s.role ? r.s.short || r.s.name : null;
+const visible = (r) => !hiddenHosts.has(r.host) && !hiddenStates.has(r.s.status);
+const AR = () => W && H > TOP + 100 ? Math.min(2.4, Math.max(.7, W / (H - TOP))) : 1.6;
+const hx = (host) => { const i = hosts.findIndex((h) => h.host === host), n = hosts.length; return n < 2 ? 0 : i / (n - 1) * 2 - 1; };
+const LNOTE = {constellation: () => "Each project is a galaxy" + (hosts.length > 1 ? ". A star's shape names its machine, as the legend shows." : ", and each star is a session."), hemispheres: () => "Each machine is a galaxy. Its colored arms are the projects it runs.", transit: () => "Each project is a subway line from a machine to the project interchange in the middle."};
+
+function graph(model) {
+  const old = byId, first = !nodes.length;
+  nodes = []; links = []; byId = {}; hosts = model.machines;
+  const add = (n) => { const o = old[n.id]; if (o) { n.x = o.x; n.y = o.y; } n.vx = n.vy = 0; byId[n.id] = n; nodes.push(n); return n; };
+  const projects = [...new Set(rows.map(proj))];
+  projects.forEach((p, i) => { tcolor[p] = TCOL[i % TCOL.length]; add({id: "P:" + p, kind: "territory", label: p, homeY: (i - (projects.length - 1) / 2) * 150}); });
+  for (const r of rows) {
+    const e = epic(r);
+    if (e && !byId["E:" + e[0]]) links.push({a: add({id: "E:" + e[0], kind: "epic", label: e[0], title: e[1], project: proj(r)}), b: byId["P:" + proj(r)], kind: "epic"});
+  }
+  for (const h of hosts) h._n = add({id: "H:" + h.host, kind: "host", h});
+  document.getElementById("lhosts").replaceChildren(...(hosts.length > 1 ? hosts.map((h) => { const sp = el("span"); sp.append(el("i", "shp " + shapeOf(h.host)), h.display_name || h.host); return sp; }) : []));
+  for (const r of rows) {
+    const e = epic(r), n = r._n = add({id: "S:" + keyOf(r), kind: "session", r});
+    links.push({a: n, b: e ? byId["E:" + e[0]] : byId["P:" + proj(r)], kind: "session"}, {a: n, b: byId["H:" + r.host], kind: "axon"});
+  }
+  for (const n of nodes) {
+    if (n.x != null) continue;
+    if (n.kind === "territory") { n.x = 0; n.y = n.homeY; }
+    else if (n.kind === "host") { n.x = hx(n.h.host) * 470; n.y = 0; }
+    else if (n.kind === "epic") { n.x = (Math.random() - .5) * 80; n.y = byId["P:" + n.project].homeY + (Math.random() - .5) * 60; }
+    else { n.x = hx(n.r.host) * (240 + Math.random() * 120); n.y = (Math.random() - .5) * 380; }
+  }
+  setTargets();
+  if (still && !first) settle();
+  if (first) {
+    try { const l = localStorage.getItem("fnoCommandLayout"); if (LNOTE[l]) layout = l; } catch (e) { /* quiet-ok: no storage keeps the default layout */ }
+    resize(); setLayout(layout);
+    nodes.forEach((n) => { if (n.tx != null && (n.kind === "territory" || n.kind === "host")) { n.x = n.tx; n.y = n.ty; } });
+    for (let i = 0; i < 320; i++) tick(1);
+    cam.k = cam.tk = fitK() * .6; cam.ox = cam.tox; cam.oy = cam.toy; cam.sx = cam.tsx; setTimeout(() => { cam.tk = fitK(); }, 50);
+  }
+}
+function capBottom() { const c = document.getElementById("lnote"), lg = stage.querySelector(".legend"); TOP = c.offsetTop + c.offsetHeight + 12; BOT = stage.clientHeight - lg.offsetTop + 8; }
+function resize() { const b = cv.getBoundingClientRect(); if (!b.width) return; capBottom(); DPR = Math.min(2, devicePixelRatio || 1); W = b.width; H = b.height; cv.width = W * DPR; cv.height = H * DPR; if (nodes.length) { setTargets(); if (still) settle(); } }
+addEventListener("resize", resize);
+document.getElementById("tab-synapse").addEventListener("click", () => requestAnimationFrame(resize));
+if (matchMedia("(max-width:640px)").matches) document.getElementById("tab-table").click();
+function setTargets() {
+  const terrs = nodes.filter((n) => n.kind === "territory"), hns = nodes.filter((n) => n.kind === "host");
+  if (layout === "hemispheres") {
+    terrs.concat(nodes.filter((n) => n.kind === "epic")).forEach((n) => { n.tx = n.x; n.ty = n.y; });
+    const cols = Math.min(hosts.length, Math.max(1, Math.round(Math.sqrt(hosts.length * AR() / 1.2)))), nr = Math.ceil(hosts.length / cols);
+    hosts.forEach((h, i) => { const row = Math.floor(i / cols), inRow = row < nr - 1 ? cols : hosts.length - cols * (nr - 1), cx = (i - row * cols - (inRow - 1) / 2) * 560, cy = (row - (nr - 1) / 2) * 520, s = rows.filter((r) => r.host === h.host); let a = -Math.PI / 2; h._n.tx = cx; h._n.ty = cy; h.arms = [];
+      [...new Set(s.map(proj))].forEach((t) => { const ss = s.filter((r) => proj(r) === t).sort((x, y) => !!leadName(y) - !!leadName(x)), span = ss.length / s.length * Math.PI * 2; h.arms.push({t, a0: a, a1: a + span});
+        ss.forEach((r, k) => { const ang = a + span * (k + .5) / ss.length, R = 130 + (k % 2) * 48; r._n.tx = cx + Math.cos(ang) * R; r._n.ty = cy + Math.sin(ang) * R; }); a += span; }); });
+  }
+  if (layout === "constellation") { terrs.forEach((n, i) => { const a = -Math.PI / 2 + i / terrs.length * Math.PI * 2; n.tx = Math.cos(a) * 520 * AR(); n.ty = Math.sin(a) * 520; }); hns.forEach((n) => { n.tx = hx(n.h.host) * 70; n.ty = 0; }); }
+  if (layout === "transit") {
+    const band = (i) => (i - (terrs.length - 1) / 2) * 120;
+    terrs.forEach((n, i) => { n.tx = 0; n.ty = n.band = band(i); });
+    const ry = Math.max(260, (terrs.length - 1) * 60 + 200), rx = Math.max(ry, 350 * AR());
+    hns.forEach((n, i) => { const a = Math.PI + i / hns.length * Math.PI * 2; n.tx = Math.cos(a) * rx; n.ty = hosts.length < 3 ? 0 : Math.sin(a) * ry; });
+    terrs.forEach((t) => hosts.forEach((h) => { const s = rows.filter((r) => proj(r) === t.label && r.host === h.host).sort((a, b) => (since(a.s.started_at) || 0) - (since(b.s.started_at) || 0));
+      s.forEach((r, k) => { const f = .12 + .6 * (k + 1) / (s.length + 1); r._n.tx = h._n.tx * f; r._n.ty = t.band + (h._n.ty - t.band) * f + Math.sin(f * Math.PI * 2 + t.band) * 18; }); }));
+    nodes.filter((n) => n.kind === "epic").forEach((n) => { const t = byId["P:" + n.project]; n.tx = 0; n.ty = (t ? t.band : 0) + 44; });
+  }
+}
+// Reduced motion draws no easing frames, so the stars move to a new layout here, at once.
+function settle() { for (let i = 0; i < (layout === "constellation" ? 320 : 120); i++) tick(1); }
+function setLayout(l) {
+  layout = l; stage.dataset.layout = l; document.getElementById("lnote").textContent = LNOTE[l](); capBottom();
+  setTargets(); if (still) settle(); born = performance.now() - 900; cam.tx = cam.ty = 0; cam.auto = true;
+  stage.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.layout === l)));
+  try { localStorage.setItem("fnoCommandLayout", l); } catch (e) { /* quiet-ok: no storage only loses the saved layout */ }
+}
+stage.querySelectorAll("[data-layout]").forEach((b) => { b.onclick = () => setLayout(b.dataset.layout); });
+const radius = (n) => n.kind === "host" ? 24 : n.kind === "territory" ? 14 : n.kind === "epic" ? 7 : leadName(n.r) ? 11 : 8;
+const inLayout = (n) => n.kind === "host" ? layout !== "constellation" : n.kind === "territory" || n.kind === "epic" ? layout !== "hemispheres" : true;
+const shown = (n) => inLayout(n) && (n.kind === "session" ? visible(n.r) : n.kind === "host" ? !hiddenHosts.has(n.h.host) : true);
+function tick(alpha) {
+  if (layout !== "constellation") { nodes.forEach((n) => { n.x += ((n.tx ?? n.x) - n.x) * .08; n.y += ((n.ty ?? n.y) - n.y) * .08; }); return; }
+  for (let i = 0; i < nodes.length; i++) { const a = nodes[i]; if (!inLayout(a)) continue;
+    for (let j = i + 1; j < nodes.length; j++) { const b = nodes[j]; if (!inLayout(b)) continue; let dx = b.x - a.x, dy = b.y - a.y; const d2 = dx * dx + dy * dy + .01, min = (radius(a) + radius(b)) * 2.6, f = 1400 / d2 * alpha;
+      dx *= f; dy *= f; a.vx -= dx; a.vy -= dy; b.vx += dx; b.vy += dy;
+      const d = Math.sqrt(d2); if (d < min) { const q = (min - d) / d * .25, ox = (b.x - a.x) * q, oy = (b.y - a.y) * q; a.x -= ox; a.y -= oy; b.x += ox; b.y += oy; } } }
+  links.forEach((l) => { if (!inLayout(l.a) || !inLayout(l.b)) return; const dx = l.b.x - l.a.x, dy = l.b.y - l.a.y, d = Math.hypot(dx, dy) || 1, target = l.kind === "epic" ? 70 : l.kind === "axon" ? 170 : 130, k = (d - target) / d * (l.kind === "axon" ? .012 : .04) * alpha;
+    l.a.vx += dx * k; l.a.vy += dy * k; if (l.b.kind !== "territory" && l.b.kind !== "host") { l.b.vx -= dx * k; l.b.vy -= dy * k; } });
+  nodes.forEach((n) => { if (n.kind === "territory" || n.kind === "host") { n.x += ((n.tx ?? n.x) - n.x) * .1; n.y += ((n.ty ?? n.y) - n.y) * .1; n.vx = n.vy = 0; return; }
+    n.vx += -n.x * .002 * alpha; n.vy += -n.y * .002 * alpha; n.vx *= .82; n.vy *= .82; n.x += n.vx; n.y += n.vy; });
+}
+const toScreen = (n) => ({x: (n.x - cam.ox) * cam.k * cam.sx + cam.x + W / 2, y: (n.y - cam.oy) * cam.k + cam.y + (H + TOP - BOT) / 2});
+const SHAPES = {circle: null, diamond: [4, 1.25, -Math.PI / 2], square: [4, 1.25, -Math.PI / 4], triangle: [3, 1.4, -Math.PI / 2], down: [3, 1.4, Math.PI / 2]};
+const shapeOf = (host) => Object.keys(SHAPES)[Math.max(0, hosts.findIndex((h) => h.host === host)) % 5];
+function star(x, y, r, host) { ctx.beginPath(); const k = SHAPES[shapeOf(host)]; if (!k) { ctx.arc(x, y, r, 0, 7); return; }
+  for (let i = 0; i < k[0]; i++) { const a = k[2] + i / k[0] * Math.PI * 2; ctx[i ? "lineTo" : "moveTo"](x + Math.cos(a) * r * k[1], y + Math.sin(a) * r * k[1]); } ctx.closePath(); }
+function pick(mx, my) { let best = null, bd = 1e9; nodes.forEach((n) => { if (!shown(n)) return; const p = toScreen(n), d = Math.hypot(p.x - mx, p.y - my); if (d < radius(n) * cam.k + 8 && d < bd) { bd = d; best = n; } }); return best; }
+// The zoom that fits every shown node, and the box center the camera eases to.
+// The force-laid Projects map is round, so there the camera also stretches it
+// sideways to the canvas width; stars stay round, only their places spread.
+function fitK() { let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; nodes.forEach((n) => { if (!shown(n)) return; x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); });
+  if (x0 > x1) return cam.tk; cam.tox = (x0 + x1) / 2; cam.toy = (y0 + y1) / 2;
+  const kx = (W - 2 * Math.min(110, W * .08)) / Math.max(2, x1 - x0), ky = (H - TOP - BOT - 140) / Math.max(2, y1 - y0), k = Math.min(1.6, Math.max(.02, Math.min(kx, ky)));
+  cam.tsx = layout === "constellation" ? Math.min(2.2, Math.max(1, kx / k)) : 1; return k; }
+function tipLines(n) {
+  if (n.kind === "host") { const h = n.h; return [h.host, rows.filter((r) => r.host === h.host).length + " sessions · spawn cap " + (h.cap ?? "?") + " · memory " + (h.mem_used == null ? "not sampled" : Math.round(h.mem_used * 100) + "%"), (h.fresh ? "online" : "stale") + " · beat " + ago(h.age_s) + " ago · " + (h.takes_work ? "takes work" : "no new work")]; }
+  if (n.kind === "territory") { const c = rows.filter((r) => proj(r) === n.label); return ["Project · " + n.label, c.length + " sessions · " + c.filter((r) => r.s.status === "writing").length + " writing"]; }
+  if (n.kind === "epic") return [n.title || n.label, "epic " + n.label + " · " + rows.filter((r) => { const e = epic(r); return e && e[0] === n.label; }).length + " sessions"];
+  const r = n.r; return [(leadName(r) ? leadName(r) + " · " : "") + (work(r, "title") || r.s.name), (work(r, "id") || "no node") + " · " + r.s.status + " · " + r.host, (model_(r) || r.s.harness || "") + " · alive " + ago(since(r.s.started_at)) + " · last msg " + ago(since(r.s.last_message_at)) + " ago"];
+}
+cv.addEventListener("pointermove", (e) => { const b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
+  if (drag) { cam.tx = drag.cx + e.clientX - drag.x; cam.ty = drag.cy + e.clientY - drag.y; drag.moved = true; return; }
+  hover = pick(mx, my); cv.style.cursor = hover ? "pointer" : "grab";
+  if (!hover) { tip.classList.remove("on"); return; }
+  tip.replaceChildren(...tipLines(hover).map((t, i) => el("div", i ? "t2" : "t1", t)));
+  tip.style.left = Math.min(W - tip.offsetWidth - 10, Math.max(10, mx + 16)) + "px"; tip.style.top = Math.min(H - tip.offsetHeight - 10, Math.max(10, my + 16)) + "px"; tip.classList.add("on"); });
+cv.addEventListener("pointerleave", () => { hover = null; tip.classList.remove("on"); });
+cv.addEventListener("pointerdown", (e) => { drag = {x: e.clientX, y: e.clientY, cx: cam.tx, cy: cam.ty, moved: false}; cv.classList.add("dragging"); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointerup", (e) => { cv.classList.remove("dragging"); const moved = drag && drag.moved; drag = null; if (moved) return;
+  const b = cv.getBoundingClientRect(), n = pick(e.clientX - b.left, e.clientY - b.top); if (n && n.kind === "session") openSeat(n.r); });
+cv.addEventListener("wheel", (e) => { e.preventDefault(); cam.auto = false; cam.tk = Math.min(3, Math.max(Math.min(.3, cam.tk), cam.tk * Math.exp(-e.deltaY * .0015))); }, {passive: false});
+cv.addEventListener("dblclick", () => { cam.tx = cam.ty = 0; cam.auto = true; });
+function arc(x, cx, cy, r, a0, a1, color, w) { x.strokeStyle = color; x.lineWidth = w; x.lineCap = "round"; x.beginPath(); x.arc(cx, cy, r, a0, a1); x.stroke(); }
+// The machine orb: a memory ring, a ring split by seat state, and, on the card, one dot per seat in orbit.
+function drawHost(x, h, cx, cy, r, now, inGraph) {
+  const t = still ? 0 : now / 1000, seats = rows.filter((q) => q.host === h.host), n = Math.max(1, seats.length), mem = h.mem_used, w = Math.max(2, r * .14), s = -Math.PI / 2;
+  const g = x.createRadialGradient(cx, cy, 0, cx, cy, r * 2.6); g.addColorStop(0, A(T.text, .1)); g.addColorStop(1, A(T.text, 0)); x.fillStyle = g; x.beginPath(); x.arc(cx, cy, r * 2.6, 0, 7); x.fill();
+  const core = x.createRadialGradient(cx - r * .3, cy - r * .3, 1, cx, cy, r); core.addColorStop(0, T.surface0); core.addColorStop(1, T.mantle); x.fillStyle = core; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fill();
+  x.strokeStyle = A(T.overlay1, .6); x.lineWidth = 1; x.stroke();
+  arc(x, cx, cy, r + w * 1.2, 0, 7, T.surface0, w); if (mem != null) arc(x, cx, cy, r + w * 1.2, s, s + mem * Math.PI * 2, mem > .85 ? COL.parked : css("--ok"), w);
+  const R2 = r + w * 2.9; let a = s; arc(x, cx, cy, R2, 0, 7, T.surface0, w);
+  for (const st of ORDER) { const k = seats.filter((q) => q.s.status === st).length; if (k) { const sw = k / n * Math.PI * 2; arc(x, cx, cy, R2, a + .04, a + sw - .04, COL[st], w); a += sw; } }
+  if (!inGraph) seats.forEach((q, i) => { const st = q.s.status, ang = t * ({writing: .9, parked: .35}[st] || .2) + i / n * Math.PI * 2, R3 = st === "writing" ? R2 + w * 2.2 : R2 + w * 3.4;
+    x.fillStyle = COL[st]; x.globalAlpha = st === "unknown" ? .5 : 1; x.beginPath(); x.arc(cx + Math.cos(ang) * R3, cy + Math.sin(ang) * R3, leadName(q) ? 2.8 : 2, 0, 7); x.fill(); x.globalAlpha = 1; });
+  x.fillStyle = T.text; x.textAlign = "center"; x.font = "600 " + Math.max(10, r * .42) + "px " + UI; x.fillText(seats.length, cx, cy + r * .16);
+  x.fillStyle = T.overlay1; x.font = "500 " + Math.max(8, r * .22) + "px " + DATA; x.fillText("sessions", cx, cy + r * .5);
+  // On the Subway ring a machine above the middle puts its label above the orb, clear of the lines that leave it downward.
+  if (inGraph) { const up = layout === "transit" && h._n && h._n.y < -1, ly = up ? cy - R2 - 30 : cy + R2 + 26; x.fillStyle = T.text; x.font = "600 14px " + UI; x.fillText(h.display_name || h.host, cx, ly); x.fillStyle = T.overlay1; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + (mem == null ? "?" : Math.round(mem * 100) + "%"), cx, ly + 16); }
+}
+function lightning(x1, y1, x2, y2, disp, out) { if (disp < 4) { out.push([x2, y2]); return; } const mx = (x1 + x2) / 2 + (Math.random() - .5) * disp, my = (y1 + y2) / 2 + (Math.random() - .5) * disp; lightning(x1, y1, mx, my, disp / 2, out); lightning(mx, my, x2, y2, disp / 2, out); }
+function curve(a, b) { const p = toScreen(a), q = toScreen(b); return [p, {x: (p.x + q.x) / 2 - (q.y - p.y) * .12, y: (p.y + q.y) / 2 + (q.x - p.x) * .12}, q]; }
+function qpt(c, t) { const [p, m, q] = c, u = 1 - t; return {x: u * u * p.x + 2 * u * t * m.x + t * t * q.x, y: u * u * p.y + 2 * u * t * m.y + t * t * q.y}; }
+function related(n) { if (!n) return new Set(); const s = new Set([n]); links.forEach((l) => { if (l.a === n) s.add(l.b); if (l.b === n) s.add(l.a); }); if (n.kind !== "territory") links.forEach((l) => { if (s.has(l.b) && l.a.kind === "session") s.add(l.a); }); return s; }
+function drawTransit(now, grow, focus, rel) {
+  ctx.lineJoin = ctx.lineCap = "round";
+  nodes.filter((n) => n.kind === "territory").forEach((t, ti) => hosts.forEach((h) => { if (hiddenHosts.has(h.host)) return;
+    const st = rows.filter((r) => proj(r) === t.label && r.host === h.host && visible(r)).map((r) => r._n).sort((a, b) => Math.hypot(b.x - t.x, b.y - t.y) - Math.hypot(a.x - t.x, a.y - t.y)); if (!st.length) return;
+    const pts = [h._n, ...st, t].map(toScreen), hot = focus && (rel.has(t) || st.some((x) => rel.has(x))), L = Math.max(2, pts.length * Math.min(1, grow * 1.3 - ti * .08));
+    ctx.strokeStyle = tcolor[t.label]; ctx.globalAlpha = focus && !hot ? .25 : .9; ctx.lineWidth = (hot ? 7 : 5) * Math.max(.7, cam.k);
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < L && i < pts.length; i++) { const a = pts[i - 1], b = pts[i], mx = (a.x + b.x) / 2; ctx.bezierCurveTo(mx, a.y, mx, b.y, b.x, b.y); } ctx.stroke(); ctx.globalAlpha = 1;
+    if (!still && grow >= 1) { const k = (now / 2600 + ti * .3 + hosts.indexOf(h) * .5) % 1, seg = Math.floor(k * (pts.length - 1)), f = k * (pts.length - 1) - seg, a = pts[seg], b = pts[seg + 1] || a, x = a.x + (b.x - a.x) * f, y = a.y + (b.y - a.y) * f;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 9); g.addColorStop(0, A(T.text, .9)); g.addColorStop(1, A(T.text, 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill(); } }));
+}
+function drawGraph(now) {
+  if (cam.auto) cam.tk = fitK(); cam.x += (cam.tx - cam.x) * .12; cam.y += (cam.ty - cam.y) * .12; cam.k += (cam.tk - cam.k) * .1; cam.ox += (cam.tox - cam.ox) * .1; cam.sx += (cam.tsx - cam.sx) * .1; cam.oy += (cam.toy - cam.oy) * .1;
+  if (!still) tick(.06);
+  const grow = still ? 1 : Math.min(1, (now - born) / 1800), sel = rows.find((r) => keyOf(r) === openKey), focus = hover || (sel && sel._n) || null, rel = related(focus);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H); const pills = [];
+  if (layout === "transit") drawTransit(now, grow, focus, rel);
+  if (layout === "constellation") nodes.forEach((n) => { if (n.kind !== "territory") return; const c = toScreen(n), R = 200 * cam.k, g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, R); g.addColorStop(0, tcolor[n.label] + "22"); g.addColorStop(1, tcolor[n.label] + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, R, 0, 7); ctx.fill(); });
+  if (layout === "hemispheres") hosts.forEach((h) => { if (hiddenHosts.has(h.host) || !h._n) return; const hc = toScreen(h._n), g = ctx.createRadialGradient(hc.x, hc.y, 0, hc.x, hc.y, 320 * cam.k);
+    g.addColorStop(0, A(T.text, .05)); g.addColorStop(1, A(T.text, 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(hc.x, hc.y, 320 * cam.k, 0, 7); ctx.fill();
+    const placed = []; (h.arms || []).forEach((arm) => { if (arm.a1 - arm.a0 < .12) return; const col = tcolor[arm.t], m = (arm.a0 + arm.a1) / 2, cs = Math.cos(m); arc(ctx, hc.x, hc.y, 205 * cam.k, arm.a0 + .05, arm.a1 - .05, col + "99", 3 * Math.max(.7, cam.k));
+      if (arm.a1 - arm.a0 < .35) return; ctx.fillStyle = col; ctx.font = "600 12px " + UI; ctx.textAlign = cs > .2 ? "left" : cs < -.2 ? "right" : "center"; const tw = ctx.measureText(arm.t).width; let lr = 222 * cam.k, lx, ly;
+      // Arms that meet, the last and the first included, push their labels outward until clear.
+      for (let k = 0; k < 6; k++, lr += 16) { lx = hc.x + cs * lr - (ctx.textAlign === "right" ? tw : ctx.textAlign === "center" ? tw / 2 : 0); ly = hc.y + Math.sin(m) * lr; if (!placed.some((b) => lx < b.x + b.w && b.x < lx + tw && Math.abs(ly - b.y) < 15)) break; }
+      placed.push({x: lx, y: ly, w: tw}); ctx.fillText(arm.t, hc.x + cs * lr, ly + 4); }); });
+  if (layout !== "transit") links.forEach((l, i) => { if (!shown(l.a) || !shown(l.b)) return; const c = curve(l.b, l.a), local = Math.min(1, Math.max(0, grow * 1.6 - i / links.length * .6)); if (local <= 0) return;
+    const hot = focus && rel.has(l.a) && rel.has(l.b), st = l.a.kind === "session" ? l.a.r.s.status : "quiet";
+    ctx.lineWidth = (l.kind === "epic" ? 2.2 : 1.2) * Math.max(.7, cam.k) * (hot ? 1.6 : 1) * (l.kind === "axon" && !hot ? .8 : 1);
+    ctx.strokeStyle = hot ? A(T.blue, .7) : l.kind === "axon" ? (layout === "hemispheres" ? tcolor[proj(l.a.r)] + "44" : A(T.overlay1, .12)) : st === "writing" ? A(T.subtext0, .32) : A(T.overlay1, .2);
+    ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let s = 1; s <= 24 * local; s++) { const p = qpt(c, s / 24); ctx.lineTo(p.x, p.y); } ctx.stroke();
+    if (!still && grow >= 1 && st === "writing" && (l.kind !== "axon" || layout === "hemispheres") && Math.random() < .02) pulses.push({l, t: 0, sp: .006 + Math.random() * .008}); });
+  for (let i = pulses.length - 1; i >= 0; i--) { const p = pulses[i]; p.t += p.sp; if (p.t >= 1 || !nodes.includes(p.l.a)) { pulses.splice(i, 1); continue; } if (!visible(p.l.a.r)) continue;
+    const q = qpt(curve(p.l.a, p.l.b), p.t), g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, 7); g.addColorStop(0, A(T.text, .9)); g.addColorStop(1, A(T.text, 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(q.x, q.y, 7, 0, 7); ctx.fill(); }
+  if (focus && !still) { if (now - lastSpark > 55) { lastSpark = now; focus._bolts = [...rel].filter((n) => n !== focus && shown(n)).slice(0, 14).map((n) => { const a = toScreen(focus), b = toScreen(n), pts = [[a.x, a.y]]; lightning(a.x, a.y, b.x, b.y, Math.min(60, Math.hypot(b.x - a.x, b.y - a.y) / 4), pts); return pts; }); }
+    (focus._bolts || []).forEach((pts) => { ctx.save(); ctx.shadowColor = A(T.blue, .9); ctx.shadowBlur = 14; ctx.strokeStyle = T.blue; ctx.lineWidth = 1.3; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.stroke(); ctx.restore(); }); }
+  nodes.forEach((n, i) => { if (!shown(n)) return; const appear = Math.min(1, Math.max(0, grow * 1.4 - i / nodes.length * .4)); if (appear <= 0) return;
+    const p = toScreen(n), r = radius(n) * Math.max(.7, cam.k) * (.4 + .6 * appear); ctx.globalAlpha = (focus && !rel.has(n) ? .28 : 1) * appear;
+    if (n.kind === "host") drawHost(ctx, n.h, p.x, p.y, r, now, true);
+    else if (n.kind === "territory" && layout === "transit") { const c = tcolor[n.label]; ctx.font = "600 13px " + UI; const tw = ctx.measureText(n.label).width + 26; ctx.fillStyle = T.base; ctx.strokeStyle = c; ctx.lineWidth = 2.5;
+      pills.push({x: p.x - tw / 2, y: p.y - 14, w: tw, h: 28});
+      ctx.beginPath(); ctx.roundRect(p.x - tw / 2, p.y - 14, tw, 28, 14); ctx.fill(); ctx.stroke(); ctx.fillStyle = c; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + 4.5); }
+    else if (n.kind === "territory") { const tc = tcolor[n.label], g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.2); g.addColorStop(0, A(T.text, .95)); g.addColorStop(.25, tc + "66"); g.addColorStop(1, tc + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, 7); ctx.fill();
+      ctx.fillStyle = T.text; ctx.font = "600 13px " + UI; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + r + 20);
+      const hw = ctx.measureText(n.label).width; pills.push({x: p.x - hw / 2, y: p.y + r + 7, w: hw, h: 16}); }
+    else if (n.kind === "epic") { if (layout !== "transit") { ctx.fillStyle = A(T.subtext0, .9); ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); ctx.strokeStyle = A(T.text, .2); ctx.lineWidth = 4; ctx.stroke();
+      if (cam.k > .8 || focus && rel.has(n)) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y - r - 8); } } }
+    else { const st = n.r.s.status, c = COL[st], lead = leadName(n.r), breathe = st === "writing" && !still ? 1 + .18 * Math.sin(now / 380 + i) : 1;
+      if (st !== "unknown") { const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.4 * breathe); g.addColorStop(0, A(T.text, .22)); g.addColorStop(1, A(T.text, 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.4 * breathe, 0, 7); ctx.fill(); ctx.fillStyle = T.subtext0; star(p.x, p.y, r, n.r.host); ctx.fill(); ctx.strokeStyle = c; ctx.lineWidth = 2; star(p.x, p.y, r + 1.5, n.r.host); ctx.stroke(); }
+      else { ctx.strokeStyle = c; ctx.lineWidth = 1.6; star(p.x, p.y, r, n.r.host); ctx.stroke(); }
+      if (lead) { ctx.strokeStyle = T.text; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, 7); ctx.stroke(); ctx.fillStyle = T.text; ctx.font = "600 12px " + UI; ctx.textAlign = "center";
+        // A name that would land on a pill, a hub name or another lead's name goes below its star.
+        const lw = ctx.measureText(lead).width / 2 + 4, hit = (y) => pills.some((b) => p.x + lw > b.x && p.x - lw < b.x + b.w && y > b.y - 2 && y - 12 < b.y + b.h + 2);
+        const ly = hit(p.y - r - 11) ? p.y + r + 20 : p.y - r - 11; ctx.fillText(lead, p.x, ly); pills.push({x: p.x - lw, y: ly - 12, w: lw * 2, h: 14}); }
+      else if (focus === n || cam.k > 1.3) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(work(n.r, "id") || n.r.s.short || n.r.s.name, p.x, p.y - r - 9); }
+      if (sel === n.r) { ctx.strokeStyle = T.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 9 + (still ? 0 : 2 * Math.sin(now / 250)), 0, 7); ctx.stroke(); } }
+    ctx.globalAlpha = 1; });
+}
+function frame(now) {
+  requestAnimationFrame(frame);
+  cards.forEach((c) => { const x = c.cv.getContext("2d"); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, 240, 240); x.setTransform(2, 0, 0, 2, 0, 0); drawHost(x, c.h, 60, 60, 22, now, false); });
+  if (W && nodes.length && !document.getElementById("view-synapse").hidden) drawGraph(now);
+}
+requestAnimationFrame(frame);
+
+const nav = document.querySelector("nav.fno-nav");
+const token = new URLSearchParams(location.search).get("t") || "";
+const url = (nav ? nav.dataset.base : "./") + "command/model.json?t=" + encodeURIComponent(token);
+async function load() {
+  let res;
+  try { res = await fetch(url, {cache: "no-store"}); } catch (e) { res = {ok: false, status: e.message}; }
+  if (!res.ok) {
+    document.getElementById("banners").replaceChildren(el("div", "banner", "model.json not reachable: " + res.status));
+    return;
+  }
+  const model = await res.json();
+  header(model); banners(model); waiting(model); machines(model); seats(model);
+}
+load();
+setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
+})();
+</script>
+</body>
+</html>

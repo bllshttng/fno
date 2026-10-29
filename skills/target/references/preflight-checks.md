@@ -104,18 +104,6 @@ PREFLIGHT_RUN_TESTS=1 bash run-checks.sh
 
 ---
 
-### codemap-fresh
-
-**Purpose:** Check if the structural codebase map is current.
-
-**Pass:** the codemap in the repo's space (resolved by `fno-agents state path codemap`) exists and was modified within the last 24 hours.
-
-**Warn:** File missing, or older than 24 hours. Includes age in the message.
-
-**Why it matters:** target uses codemap for structural context. A stale codemap can cause target to misunderstand the codebase layout and generate code that doesn't fit the project structure.
-
----
-
 ### auth-valid
 
 **Purpose:** Verify GitHub CLI authentication before target tries to create a PR.

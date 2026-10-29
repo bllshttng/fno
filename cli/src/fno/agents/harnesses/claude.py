@@ -469,7 +469,7 @@ def headless_create(
             from fno.agents.spawn_overlay_client import compose_credentials
 
             spawn_env = compose_credentials(account_env, route_env, spawn_env)["env"]
-    from fno.setup.github_cli import worker_environment
+    from fno.harness_identity import worker_environment
 
     proxy_env = worker_environment(spawn_env or os.environ)
     if spawn_env is not None or proxy_env != dict(os.environ):
@@ -702,7 +702,7 @@ def bg_create(
 
         spawn_env = compose_credentials(account_env, route, spawn_env)["env"]
 
-    from fno.setup.github_cli import worker_environment
+    from fno.harness_identity import worker_environment
 
     spawn_env = worker_environment(spawn_env)
     from fno.harness_identity import stamp_child_harness_identity

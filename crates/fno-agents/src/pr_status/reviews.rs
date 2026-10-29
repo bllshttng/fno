@@ -816,7 +816,7 @@ pub(crate) fn payload_is_code(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     };
     // `@` cannot occur in a GitHub owner or repo name, so PR 7 of `o/r`
     // never shares a prefix with PR 1 of `o/r-7`.
-    let prefix = format!("{}@{pr}@", slug.replace('/', "--"));
+    let prefix = super::memo::memo_prefix(&slug, pr);
     let memo = head
         .filter(|h| !h.is_empty())
         .map(|h| format!("{prefix}{h}"));

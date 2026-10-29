@@ -1,5 +1,6 @@
-//! The codex collectors: app-server probe, hooks inspection, context-window
-//! arithmetic, and the plugin freshness verdict.
+//! The codex collectors: app-server probe, hooks inspection and
+//! context-window arithmetic. The plugin freshness verdict reads from
+//! `fno-agents plugin-install codex --status` (one owner).
 
 mod context_window;
 mod hooks;

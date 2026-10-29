@@ -859,6 +859,7 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         cwd: Some(target.root.display().to_string()),
         asker: None,
         laws: Vec::new(),
+        rung: None,
         storage_root: target.root.clone(),
         index_path: None,
         // This line only names the question-intake door's append target,

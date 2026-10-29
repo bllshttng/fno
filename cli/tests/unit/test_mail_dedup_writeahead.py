@@ -91,7 +91,10 @@ def test_staged_row_rescues_a_missed_live_inject(runner, tmp_path, monkeypatch):
     res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
     assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
 
-    rows = [m for m in read_rows() if m["to"] == recipient]
+    # The send also appends its delivery-state row; only messages count here.
+    rows = [
+        m for m in read_rows() if m["to"] == recipient and m.get("kind") != "state"
+    ]
     assert len(rows) == 2, "expected the staged row and its durable fallback"
     assert len({m["id"] for m in rows}) == 1, "the twins stopped sharing an id"
     assert all("hi" in m.get("body", "") for m in rows)

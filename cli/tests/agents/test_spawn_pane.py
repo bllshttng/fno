@@ -16,7 +16,6 @@ socket); these tests pin the Python contract:
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -26,8 +25,6 @@ from types import SimpleNamespace
 import pytest
 
 from fno.paths_testing import use_tmpdir
-from fno.agents.mux_spawn import MuxSpawnResult
-from tests.agents._fake_claude import stub_codex_sandbox_probe  # noqa: F401  re-exported for test_spawn_pane_codex_receipt
 
 
 from tests.agents._route_overlay_stub import claude_route_overlay_stub
@@ -509,8 +506,7 @@ def _happy_on_path(monkeypatch, found: Optional[str]) -> None:
     """Answer `shutil.which("happy")` with `found`; every other lookup stays real.
 
     mux_spawn.shutil is the global module, so a patch that answered for every
-    binary would also answer the spawn gate's fno-agents lookup and become
-    github_cli's import-time `_WHICH` for every later test.
+    binary would also answer the spawn gate's fno-agents lookup.
     """
     import fno.agents.mux_spawn as mux_spawn
 
@@ -763,37 +759,6 @@ def test_bounded_post_spawn_failure_reaps_pane_and_writes_no_row(
         _spawn(monkeypatch, tmp_path, tab_id="id:12", runner=runner)
     assert runner.kill_calls
     assert load_registry() == []
-
-
-def test_cmd_spawn_pane_uses_global_bounded_dispatch(monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
-
-    captured = {}
-
-    def fake_bounded(**kwargs):
-        captured.update(kwargs)
-        return MuxSpawnResult(
-            name=kwargs["name"], provider=kwargs["provider"], session="main",
-            pane_id=2, child_pid=None, session_uuid="claude-session",
-        )
-
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_bounded)
-    monkeypatch.setattr(
-        mux_spawn, "dispatch_spawn_pane",
-        lambda **_kwargs: pytest.fail("default pane bypassed placement lease"),
-    )
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "ordinary", "--as", "pane", "--split", "left", "do work"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert captured["workspace"] is None
 
 
 class SquadAwareRunner(FakeRunner):
@@ -1272,7 +1237,6 @@ def test_happy_pane_wrapped_argv_holds_the_union_invariant(monkeypatch) -> None:
     secret moved to the wrapper" (correct) from "the secret was dropped"
     (a 401 in production, and silent here).
     """
-    import fno.agents.mux_spawn as mux_spawn
     from fno.agents.spawn_overlay_client import compose_credentials
 
     _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
@@ -1323,7 +1287,6 @@ def test_inject_route_model_argv_pins_the_route_before_the_seed_fence() -> None:
 def test_explicit_happy_monitor_refuses_when_happy_is_absent_before_runner(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import fno.agents.mux_spawn as mux_spawn
     from fno.agents.dispatch import DispatchAskError
     from fno.agents.model_routing import resolve_explicit_route
 
@@ -1685,7 +1648,6 @@ def test_ac3_passthrough_hits_the_happy_refusals(
     happy discards a pinned --session-id, so the receipt would name a session
     that never exists; the --settings refusal is pinned on happy_pane_argv."""
     tok = ["--session-id", "u"]
-    import fno.agents.mux_spawn as mux_spawn
     from fno.agents.dispatch import DispatchAskError
     from fno.agents.model_routing import resolve_explicit_route
 
@@ -1731,76 +1693,6 @@ def test_ac5_headless_form_tokens_refused_on_the_composed_argv(
     assert exc.value.exit_code == 2
     assert "headless" in str(exc.value)
     assert runner.calls == []
-
-
-def test_ac1_cli_passthrough_reaches_dispatch(tmp_path: Path, monkeypatch) -> None:
-    """AC1 at the public surface: the tokens parse into the variadic positional
-    and travel to the bounded default pane dispatcher as `passthrough`."""
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
-
-    use_tmpdir(monkeypatch, tmp_path)
-    captured: dict = {}
-
-    def fake_dispatch(**kwargs):
-        captured.update(kwargs)
-        return MuxSpawnResult(
-            name=kwargs["name"],
-            provider=kwargs["provider"],
-            session="main",
-            pane_id=1,
-            child_pid=None,
-            session_uuid="u",
-        )
-
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    monkeypatch.setenv("FNO_REPO_ROOT", os.getcwd())
-
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "peer", "--harness", "claude", "--as", "pane", "hi", "--", "--verbose"],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["message"] == "hi"
-    assert captured["passthrough"] == ["--verbose"]
-
-
-def test_ac7_claude_off_pane_forwards_fenced_tokens(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The off-pane lanes forward fenced tokens; the pane lane never runs."""
-    import typer
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-    import fno.agents.mux_spawn as mux_spawn
-    from fno.agents import dispatch as _dispatch
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    monkeypatch.setattr(
-        mux_spawn,
-        "dispatch_spawn_pane",
-        lambda **_kwargs: pytest.fail("pane dispatch must not run"),
-    )
-    sent: dict = {}
-
-    def recorder(**kwargs):
-        sent.update(kwargs)
-        raise typer.Exit(code=0)
-
-    monkeypatch.setattr(_dispatch, "dispatch_spawn", recorder)
-    result = CliRunner().invoke(
-        agents_cli.agents_app,
-        ["spawn", "--name", "peer", "--once", "hi", "--", "--verbose", "x"],
-    )
-    assert sent.get("passthrough") == ["--verbose", "x"], (
-        f"the fenced tokens must ride the off-pane dispatch: {result.output}"
-    )
-    assert "pane-only" not in result.output, result.output
 
 
 # -- an unanswered control read is reconciled, never asserted absent --
@@ -2456,22 +2348,6 @@ def test_explicit_happy_monitor_refuses_route_that_does_not_match_zai(
 
     assert exc.value.exit_code == 2
     assert runner.calls == []
-
-
-def test_cmd_spawn_refuses_a_monitor_other_than_happy(tmp_path: Path, monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    import fno.agents.cli as agents_cli
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
-    args = [
-        "spawn", "--name", "peer", "--harness", "claude", "--monitor", "other", "hello",
-    ]
-    result = CliRunner().invoke(agents_cli.agents_app, args)
-
-    assert result.exit_code == 2, result.output
-    assert "happy" in result.output
 
 
 def test_an_unconfirmed_send_is_never_retried(tmp_path: Path, monkeypatch) -> None:

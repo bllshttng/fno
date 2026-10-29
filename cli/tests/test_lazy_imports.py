@@ -112,7 +112,7 @@ _ADVERTISED_SUBCOMMANDS = [
 # which render nowhere after d-26002be8; do is unusable for the leak-check
 # (substring of "doctor"), so the hidden REAL roots worth pinning are these.
 _HIDDEN_SUBCOMMANDS = [
-    "inbox", "update",
+    "inbox",
 ]
 
 
@@ -626,7 +626,7 @@ def test_fno_py_entrypoint_is_main():
 
 def test_plain_click_action_help_exits_clean():
     """A plain-click action's --help behind the lazy group (a
-    collapsed forward or a lazy stub) prints its help and exits 0. The
+    lazy stub) prints its help and exits 0. The
     plain-click Exit used to escape typer's vendored-click main as a
     traceback ending in click.exceptions.Exit: 0."""
     from typer.testing import CliRunner
@@ -634,8 +634,7 @@ def test_plain_click_action_help_exits_clean():
     from fno import cli as fno_cli
 
     runner = CliRunner()
-    for argv in (["doctor", "test", "--help"], ["test", "--help"]):
-        result = runner.invoke(fno_cli.app, argv)
-        assert result.exit_code == 0, result.output
-        assert "Usage" in result.output
-        assert result.exception is None or isinstance(result.exception, SystemExit)
+    result = runner.invoke(fno_cli.app, ["doctor", "test", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "Usage" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)

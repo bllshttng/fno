@@ -2051,7 +2051,14 @@ refusing to assume no review is running"
             "pr": pr,
         });
         let (_code, stdout, _stderr) = crate::pr_status::cache::run_door("status-read", &payload);
-        parse_checks_read(stdout.as_bytes())
+        let checks = parse_checks_read(stdout.as_bytes());
+        // The green carry: a pending read at a head that only merged main in
+        // since a recorded green consults that green. Every probe miss keeps
+        // the pending verdict.
+        let head = serde_json::from_slice::<Value>(stdout.as_bytes())
+            .ok()
+            .and_then(|v| v.get("head").and_then(Value::as_str).map(str::to_owned));
+        crate::green_carry::carried_checks(cwd, pr, head.as_deref(), checks)
     }
 
     fn fno_shell(
@@ -2361,16 +2368,37 @@ pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
         .is_some_and(|tags| tags.iter().filter_map(Value::as_str).any(|t| t == tag))
 }
 
-/// The graph entry bound to this PR by its recorded `pr_number`. `None` on an
-/// unreadable graph or no bound node: callers above treat absent as "not
-/// bound", which for every gate here must hold rather than release.
+/// The graph entry bound to this PR: the node whose `pr_number` it is, else
+/// the node that lists it in `additional_prs`, as the later half of a split
+/// PR does. `None` on an unreadable graph or no bound node: callers above
+/// treat absent as "not bound", which for every gate here must hold rather
+/// than release.
 pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let store = GraphStore::new(&graph_path);
     let entries = backlog_api::rows(&store).ok()?;
-    entries
-        .into_iter()
-        .find(|e| e.get("pr_number").and_then(Value::as_i64) == Some(pr as i64))
+    let here = crate::pr_list::origin_slug(cwd, None).ok();
+    let at = pr_bound_index(&entries, pr, here.as_deref())?;
+    entries.into_iter().nth(at)
+}
+
+/// The pure half of [`pr_bound_entry`]. PR numbers collide across
+/// repositories, and `additional_prs` may name any of them, so a ref whose
+/// URL names a repository other than `here` belongs to that repository. A
+/// ref with no URL, or no known `here`, still binds by number.
+pub(crate) fn pr_bound_index(entries: &[Value], pr: u64, here: Option<&str>) -> Option<usize> {
+    let ours = |url: Option<&str>| match (here, crate::backlog::pr_link::repo_slug_from_url(url)) {
+        (Some(here), Some(theirs)) => theirs.eq_ignore_ascii_case(here),
+        _ => true,
+    };
+    let bound = |primary: bool| {
+        entries.iter().position(|e| {
+            crate::merge_gates::pr_refs_of(e)
+                .iter()
+                .any(|r| r.number == pr && r.primary == primary && ours(r.url.as_deref()))
+        })
+    };
+    bound(true).or_else(|| bound(false))
 }
 
 /// The main-repair exemption probe over the live graph: `None` when this

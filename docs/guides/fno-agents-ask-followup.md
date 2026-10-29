@@ -13,7 +13,7 @@ Both lanes inject the message into the live session the same way; everything aft
 | | `fno agents mail ask <name> "..."` | `fno agents mail send <name> "..."` |
 |---|---|---|
 | Contract | synchronous request-reply | asynchronous fire-and-receipt |
-| Returns | the recipient's REPLY on stdout (pipeable) | a delivery receipt (`delivered (hosted)` / `queued (durable)`) |
+| Returns | the recipient's REPLY on stdout (pipeable) | a delivery receipt (`accepted-new-turn`, `parked`, ..., or `queued (durable)`) |
 | Waits | yes - reply-wait poll, `--timeout` (default 600s) | no - returns at delivery; the reply arrives later as its own mail |
 | Nobody live | exit 13 - spawn or wake first | durable bus (`queued`), drained at the recipient's next boundary |
 | Use when | a script or orchestrator needs the answer inline | agents coordinating across turns; delivery must survive an idle peer |

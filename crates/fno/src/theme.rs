@@ -135,6 +135,9 @@ pub enum Role {
     PanelTab,
     /// A thin rule under a heading or lane name: the index-8 dim slot.
     PanelRule,
+    /// A panel line that needs the reader (a failed delivery): the
+    /// emulator's index-1 red slot, on the terminal's own bg.
+    PanelWarn,
     /// A literal-color span (the colors tab's swatches). The color IS the
     /// content, so it resolves above the theme split and never shifts with
     /// the theme.
@@ -227,6 +230,7 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // out on a disagreeing palette.
         Role::PanelHead => return (Color::Default, Color::Default, cell_flags::BOLD),
         Role::PanelLabel | Role::PanelPill => return (Color::Indexed(3), Color::Default, 0),
+        Role::PanelWarn => return (Color::Indexed(1), Color::Default, 0),
         Role::PanelTab => return (Color::Default, Color::Default, cell_flags::INVERSE),
         // Index 8, not the DIM flag: the merged band evidence showed DIM
         // washing the default fg out on a light terminal, while index 8 stays

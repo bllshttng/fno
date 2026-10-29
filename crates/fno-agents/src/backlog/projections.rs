@@ -730,7 +730,7 @@ const BOARD_RENDER_TIMEOUT_SECS: u64 = 600;
 fn board_render(request: &Value) -> Result<std::process::Output, String> {
     // The front binary: the `FNO_BIN` pin, else the sibling or installed `fno`.
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
-    cmd.arg("board-render");
+    cmd.args(["backlog", "publish", "--local-snapshot"]);
     crate::bounded_cmd::output_with_timeout_stdin(
         cmd,
         BOARD_RENDER_TIMEOUT_SECS,
@@ -772,14 +772,12 @@ pub(crate) fn render_local_targets() -> usize {
     };
     let stderr = String::from_utf8_lossy(&done.stderr).trim().to_string();
     if !done.status.success() {
-        if stderr.contains("No such command 'board-render'")
-            || stderr.contains("No such command \"board-render\"")
-        {
+        if stderr.contains("unknown argument --local-snapshot") {
             // Install lag, not a failed render: the keeper's next settled
             // tick retries after the update.
             eprintln!(
                 "Warning: local board render skipped: the installed fno predates \
-                 board-render; run `fno doctor update --rust`"
+                 the local-snapshot door; run `fno doctor update --rust`"
             );
             return 0;
         }

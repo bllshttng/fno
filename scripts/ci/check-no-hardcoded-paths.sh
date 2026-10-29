@@ -15,7 +15,6 @@
 # Python (entire-file exclusions):
 #   - fno/paths.py, paths_cli.py - canonical accessor defs
 #   - fno/config/__init__.py    - bootstrap fallback (load before paths available)
-#   - fno/setup/migrate_paths.py - migration command
 #   - fno/update.py             - has try/except fallback for source-path cache
 #   - fno/adapters/providers/dispatch.py - has try/except fallback for providers
 #   - fno/adapters/providers/staging.py  - has try/except fallback for providers
@@ -80,7 +79,6 @@ add_violation() {
 #   paths.py, paths_cli.py, config/__init__.py,
 #   config_io.py (bootstrap: _global_settings_path defines where ~/.fno is,
 #     so it predates and cannot route through fno.paths),
-#   setup/migrate_paths.py,
 #   update.py (try/except),
 #   adapters/providers/dispatch.py (try/except), adapters/providers/staging.py (try/except),
 #   adapters/providers/loader.py (bootstrap: settings loader self-reference)
@@ -97,7 +95,6 @@ PY_HITS=$(
         --exclude='paths_cli.py' \
         --exclude='test_*.py' \
         2>/dev/null \
-    | grep -v 'setup/migrate_paths\.py' \
     | grep -v 'config/__init__\.py' \
     | grep -v 'config_io\.py' \
     | grep -v 'graph/_constants\.py' \

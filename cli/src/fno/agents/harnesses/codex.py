@@ -585,7 +585,7 @@ def _run_codex(
         # model_provider's env_key. The base_url/model ride the -c config.
         spawn_env.update(route_env)
 
-    from fno.setup.github_cli import worker_environment
+    from fno.harness_identity import worker_environment
 
     proxy_env = worker_environment(spawn_env or os.environ)
     spawn_env = proxy_env
