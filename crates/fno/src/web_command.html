@@ -307,10 +307,14 @@ function openSeat(r) {
     t.append(el("b", null, title), el("code", null, code));
     d.append(t);
     if (href) {
-      const url = new URL(href, location.href).href, open = el("a", "lkb", "Open"), copy = el("button", "lkb", "Copy");
+      // Open keeps the bridge token; Copy never carries it, so a pasted
+      // link grants nothing.
+      const u = new URL(href, location.href), url = u.href, open = el("a", "lkb", "Open"), copy = el("button", "lkb", "Copy");
       open.href = url;
+      if (u.protocol.startsWith("http")) u.searchParams.delete("t");
+      const shared = u.href;
       if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
-      copy.onclick = () => navigator.clipboard.writeText(url).then(() => { copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy", 1300); }, () => {});
+      copy.onclick = () => navigator.clipboard.writeText(shared).then(() => { copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy", 1300); }, () => {});
       d.append(open, copy);
     }
     links.append(d);
@@ -320,8 +324,9 @@ function openSeat(r) {
   else if (w.plan) row("Plan", w.plan, s.plan_file && s.plan_file.startsWith("file://") ? s.plan_file : null);
   else if (w.id) row("Plan", "no plan_path on " + w.id);
   if (w.pr) row("Pull request #" + w.pr, w.pr_url ? w.pr_url.replace(/^https?:\/\//, "") : "no URL recorded on " + w.id, w.pr_url && /^https:\/\//.test(w.pr_url) ? w.pr_url : null);
-  if (s.attach) row("Attach in the mux" + (r.local ? "" : " on " + r.machine), s.attach);
-  row("Peek without attaching", "fno agents session peek " + (s.short || s.name));
+  const seat = s.short || s.name;
+  row("Attach in the mux" + (r.local ? "" : " on " + r.machine), seat + " · mux link comes later");
+  row("Peek without attaching", seat + " · mux link comes later");
   if (w.id) row("Node in the backlog", "backlog · " + w.id, (nav ? nav.dataset.base : "./") + "backlog?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(w.id));
   const sec = (title, body) => { const d = el("div", "sec"); d.append(el("h3", null, title), body); return d; };
   const msgAge = s.last_message_at ? " · " + ago(since(s.last_message_at)) + " ago" : "";

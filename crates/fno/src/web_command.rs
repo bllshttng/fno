@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::backlog_model::Inputs;
-use crate::client::org_pages::attach_command;
 use crate::client::org_seats::{self, Fleet};
 use crate::digest_overlay::ObsidianCfg;
 use crate::link::{plan_link, PlanLink};
@@ -119,8 +118,7 @@ impl CommandCache {
     }
 }
 
-/// The machines with each seat's attach command and its plan link, so the
-/// page builds neither. With obsidian on, a plan in the vault gets its
+/// The machines with each seat's plan link, so the page builds none. With obsidian on, a plan in the vault gets its
 /// `obsidian://` link; any other plan gets a plain `file://` link.
 fn machines_json(fleet: &Fleet, obsidian: &ObsidianCfg) -> Value {
     let mut machines = json!(fleet.machines);
@@ -131,7 +129,6 @@ fn machines_json(fleet: &Fleet, obsidian: &ObsidianCfg) -> Value {
         .flat_map(|m| m["leads"].as_array_mut().into_iter().flatten())
         .flat_map(|l| l["seats"].as_array_mut().into_iter().flatten());
     for (row, seat) in rows.zip(fleet.seats()) {
-        row["attach"] = json!(attach_command(seat));
         let plan = seat.work.as_ref().and_then(|w| w.plan.as_deref());
         match (plan_link(plan.map(Path::new), obsidian), plan) {
             (PlanLink::Obsidian { uri }, _) => row["plan_uri"] = json!(uri),
@@ -249,9 +246,10 @@ mod tests {
             .is_none());
         let imac = &m["machines"][1]["leads"][0]["seats"][0];
         assert_eq!(imac["name"], "t-two");
-        assert!(imac["attach"]
-            .as_str()
-            .is_some_and(|a| a.starts_with("fno agents session attach ")));
+        assert!(
+            imac.get("attach").is_none(),
+            "the page hands out no command"
+        );
         assert_eq!(m["waiting"]["questions"][1]["host"], "iMac2D2");
         assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 3);
         assert_eq!(
