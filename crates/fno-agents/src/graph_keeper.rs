@@ -1204,6 +1204,9 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
         // external-tracker backend's joined candidates); without, it reads
         // the graph this keeper owns.
         "ready" => handle_ready(state, &params),
+        // The assembled rule set for the caller's cwd, served so a resident
+        // harness decides in process and no second assembly leg exists.
+        "rules" => handle_rules(state, &params),
         // The plan-doc writer (codec + projection + stamp), served so the
         // Python callers are clients and no second writer leg exists.
         "plan_docs" => crate::plan_doc::keeper::handle_plan_docs(state, &params),
@@ -1472,6 +1475,30 @@ fn handle_ready(state: &StoreState, params: &Value) -> Result<Value, StoreError>
         }
         Err(NoSuchParent(parent)) => Err(StoreError::Invalid(format!("no such node '{parent}'"))),
     }
+}
+
+/// The assembled rule set (`rules_source::rule_set_in`) against the graph
+/// this keeper owns, for the caller's `cwd`. A resident harness asks once
+/// per prompt, caches by `version`, and decides in process, so no second
+/// assembly leg exists. An unreadable store answers `unreadable` and the
+/// client fails open.
+fn handle_rules(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let cwd = match params.get("cwd").and_then(Value::as_str) {
+        Some(c) if !c.is_empty() => std::path::PathBuf::from(c),
+        _ => return Err(StoreError::Invalid("rules needs the caller's cwd".into())),
+    };
+    let set = crate::rules_source::rule_set_in(&state.graph, &cwd)
+        .map_err(|reason| StoreError::Unreadable(state.graph.display().to_string(), reason))?;
+    // The caller stamps the event's project from this, so scope
+    // `project:` rules judge the same project the doors see.
+    let project =
+        crate::law_match::resolve_project(Some(&cwd), &crate::law_match::settings_sources()).ok();
+    Ok(json!({
+        "rules": set.rules,
+        "unread": set.unread,
+        "version": set.version,
+        "project": project,
+    }))
 }
 
 /// The one status read only the display surfaces carry: a live WORK claim
@@ -3924,6 +3951,110 @@ mod tests {
             assert_eq!(reply["ok"], json!(false));
             assert_eq!(reply["error"]["kind"], json!("unreadable"));
         }
+    }
+
+    fn rules_envelope(ts: &str, data: Value) -> String {
+        json!({"ts": ts, "type": "operator_decision", "source": "backlog", "data": data})
+            .to_string()
+    }
+
+    #[test]
+    fn a_rules_ask_without_a_store_answers_unreadable() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", td.path().join("fno-home"));
+        let (_dir, state) = sqlite_state(json!({
+            "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
+        }));
+        let payload = serde_json::to_vec(&json!({
+            "id": 9, "method": "rules", "params": {"cwd": "/"}
+        }))
+        .unwrap();
+        let reply = handle_request(&state, &payload);
+        match prev {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        assert_eq!(reply["ok"], json!(false));
+        assert_eq!(reply["error"]["kind"], json!("unreadable"));
+    }
+
+    #[test]
+    fn a_rules_ask_answers_the_assembled_set_for_the_caller_cwd() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", td.path().join("fno-home"));
+        let jsonl = td.path().join("fno-home").join("decisions.jsonl");
+        std::fs::create_dir_all(jsonl.parent().unwrap()).unwrap();
+        let mut text = rules_envelope(
+            "2026-10-24T00:00:00Z",
+            json!({
+                "decision_id": "d-aaaa1111",
+                "subject": "graph writes",
+                "decision": "write the graph through fno backlog only",
+                "authority_source": "operator",
+                "scope": "project:fno",
+            }),
+        );
+        text.push('\n');
+        text.push_str(
+            &json!({
+                "ts": "2026-10-24T02:00:00Z",
+                "type": "law_trigger",
+                "source": "backlog",
+                "data": {
+                    "decision_id": "d-aaaa1111",
+                    "trigger_kind": "rule",
+                    "rule_toml": "id = \"law-triggered\"\nlaw = \"d-aaaa1111\"\ntext = \"graph writes\"\naction = \"warn\"\nscope = \"project:fno\"\n[rule.when]\nevents = [\"pre-tool\"]\ntools = [\"Bash\"]\ncommands = [\"cargo build*\"]",
+                },
+            })
+            .to_string(),
+        );
+        text.push('\n');
+        std::fs::write(&jsonl, text).unwrap();
+        let (_dir, state) = sqlite_state(json!({
+            "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
+        }));
+        let payload = serde_json::to_vec(&json!({
+            "id": 10, "method": "rules", "params": {"cwd": "/"}
+        }))
+        .unwrap();
+        let reply = handle_request(&state, &payload);
+        match prev {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        assert_eq!(reply["ok"], json!(true));
+        let rules = reply["result"]["rules"].as_array().expect("rules array");
+        assert!(
+            rules.iter().any(|r| r["id"] == json!("law-triggered")),
+            "the imported trigger rule ships: {}",
+            reply["result"]
+        );
+        assert!(
+            !reply["result"]["version"].as_str().unwrap_or("").is_empty(),
+            "the version rides the reply"
+        );
+    }
+
+    #[test]
+    fn a_rules_ask_without_a_cwd_answers_invalid() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, state) = sqlite_state(json!({
+            "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
+        }));
+        let payload = serde_json::to_vec(&json!({
+            "id": 11, "method": "rules", "params": {}
+        }))
+        .unwrap();
+        let reply = handle_request(&state, &payload);
+        assert_eq!(reply["ok"], json!(false));
+        assert_eq!(reply["error"]["kind"], json!("invalid"));
     }
 
     #[test]
