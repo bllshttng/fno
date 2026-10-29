@@ -161,8 +161,6 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         "duration_s": started.iter().min().zip(ended.iter().max()).map(|(s, e)| (e - s).max(0) / 1000),
         "cost_usd": inp.cost_usd,
         "sessions": sessions.len(),
-        "ai_turns": sum_scans(&sessions, inp, |s| s.ai_turns),
-        "tool_calls": sum_scans(&sessions, inp, |s| s.tool_calls),
     });
     if inp.cost_usd.is_none() {
         header["cost_reason"] = json!("no cost recorded");
@@ -180,11 +178,12 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
     })
 }
 
-fn sum_scans(sessions: &[&Value], inp: &Inputs, f: fn(&SessionScan) -> Option<u64>) -> Option<u64> {
-    sessions.iter().try_fold(0u64, |acc, s| {
-        let scan = inp.scans.get(str_of(s, "session_id").unwrap_or_default())?;
-        Some(acc + f(scan)?)
-    })
+/// A session row's window; an open end or a missing start reads unbounded.
+fn window_of(s: &Value) -> (i64, i64) {
+    (
+        str_of(s, "started_at").and_then(ms_of).unwrap_or(i64::MIN),
+        str_of(s, "ended_at").and_then(ms_of).unwrap_or(i64::MAX),
+    )
 }
 
 /// One session's counts inside its phase window. A transcript that lies
@@ -291,22 +290,15 @@ fn phase_row(phase: &str, sessions: &[&Value], inp: &Inputs) -> Value {
     let mut counts = Map::new();
     let mut reasons = Map::new();
     for s in &rows {
-        let window = (
-            str_of(s, "started_at").and_then(ms_of).unwrap_or(i64::MIN),
-            str_of(s, "ended_at").and_then(ms_of).unwrap_or(i64::MAX),
-        );
-        let missing;
-        let found = inp.scans.get(str_of(s, "session_id").unwrap_or_default());
-        let scan = match found {
-            Some(scan) => scan,
-            None => {
-                missing = SessionScan {
-                    reason: Some("not on this host".into()),
-                    ..Default::default()
-                };
-                &missing
-            }
+        let window = window_of(s);
+        let missing = SessionScan {
+            reason: Some("not on this host".into()),
+            ..Default::default()
         };
+        let scan = inp
+            .scans
+            .get(str_of(s, "session_id").unwrap_or_default())
+            .unwrap_or(&missing);
         for (kind, n, reason) in session_counts(scan, window) {
             add(&mut counts, kind, n);
             if let Some(reason) = reason {
