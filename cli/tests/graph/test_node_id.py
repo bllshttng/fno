@@ -73,15 +73,14 @@ def test_has_prefix_rejects_obvious_non_id(monkeypatch):
 
 
 def _patch_settings(monkeypatch, *, state_dir=None, **backlog):
-    """Patch ``load_settings`` directly to a fixed model.
+    """Patch the two config channels the id machinery reads.
 
     ``state_dir`` is a distinct kwarg, not folded into ``backlog``: it must
     land in ``config.state_dir``, a sibling of ``config.backlog``, not inside
-    it. Passing it lets a caller combine backlog config (id_prefix etc.) with
-    filesystem isolation in ONE patched settings object - composing this with
-    ``paths_testing.use_tmpdir`` instead does not work, because whichever of
-    the two monkeypatches ``fno.config.load_settings`` LAST wins outright and
-    silently drops the other's config.
+    it. The knobs read the binary door (``rust_binary.settings_read``), while
+    the paths readers (the archive path under mint) still resolve through
+    ``load_settings``, so a fixed receipt is patched beside the fixed model
+    and the two channels cannot disagree.
     """
     config: dict = {"backlog": backlog}
     if state_dir is not None:
@@ -90,14 +89,19 @@ def _patch_settings(monkeypatch, *, state_dir=None, **backlog):
     monkeypatch.setattr("fno.config.load_settings", lambda: model)
     # paths._settings() is an uncached delegation to load_settings(), so the
     # patch above reaches every paths reader directly - no cache swap needed.
+    # The knobs read the door, so the receipt carries the same model values.
+    monkeypatch.setattr(
+        "fno.rust_binary.settings_read",
+        lambda detect=None: {
+            "prefix": model.backlog.id_prefix,
+            "hex_width": model.backlog.id_hex_width,
+        },
+    )
 
 
-def test_accessors_fall_back_when_load_raises(monkeypatch):
-    # AC2-ERR: a malformed settings load must not crash the accessor.
-    def boom():
-        raise RuntimeError("malformed settings.yaml")
-
-    monkeypatch.setattr("fno.config.load_settings", boom)
+def test_accessors_fall_back_when_the_door_fails(monkeypatch):
+    # AC2-ERR: a failed settings read must not crash the accessor.
+    monkeypatch.setattr("fno.rust_binary.settings_read", lambda detect=None: None)
     assert c.node_id_prefix() == "ab-"
     assert c.node_id_hex_width() == 8
 
