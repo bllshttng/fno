@@ -4,8 +4,10 @@
 # joined fno only.
 #
 # A session joins at its first fno skill or command (crates/fno-agents/src/
-# join_marker.rs). An unjoined session gets no preamble. A joined one gets it
-# once, and again after each compaction: `fno-agents report --kind join
+# join_marker.rs). An unjoined session gets no preamble once any session on
+# the machine has joined; before that (a fresh install), the install itself
+# is the opt-in and every session reads due. A joined one gets it once, and
+# again after each compaction: `fno-agents report --kind join
 # --preamble-due --mark` answers `due` and stamps it taught.
 #
 # Usage: session-start-using-fno.sh [EVENT] [join]
@@ -83,9 +85,9 @@ TRANSCRIPT="$(payload_field transcript_path)"
 [[ -n "$TRANSCRIPT" ]] && ARGS+=(--transcript "$TRANSCRIPT")
 [[ "$(payload_field source)" == "compact" || "$EVENT" == "PostCompact" ]] && ARGS+=(--compacted)
 if [[ "$JOIN" == "join" ]]; then
-    DUE="$( unset FNO_HOOK_CONTEXT; with_timeout 3 "$BIN" "${ARGS[@]}" 2>/dev/null </dev/null || true )"
+    DUE="$( unset FNO_HOOK_CONTEXT; with_timeout "${FNO_JOIN_BUDGET_SECS:-3}" "$BIN" "${ARGS[@]}" 2>/dev/null </dev/null || true )"
 else
-    DUE="$( with_timeout 3 "$BIN" "${ARGS[@]}" --check 2>/dev/null </dev/null || true )"
+    DUE="$( with_timeout "${FNO_JOIN_BUDGET_SECS:-3}" "$BIN" "${ARGS[@]}" --check 2>/dev/null </dev/null || true )"
 fi
 [[ "$DUE" == "due" ]] || noop
 
