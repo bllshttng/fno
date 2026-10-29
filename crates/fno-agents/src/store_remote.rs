@@ -658,10 +658,18 @@ pub fn configured() -> Result<Option<Remote>, String> {
     }
 }
 
-/// `store.remote_token`: this machine's own credential on the primary. The
-/// `--url` export path reads it too, so a token-guarded primary answers it.
+/// `store.remote_token`: this machine's own credential on the primary.
 pub fn configured_token() -> Option<String> {
     store_string("remote_token")
+}
+
+/// The token for an explicit `url`: the configured token only when `url`
+/// names the configured primary. Any other server never sees it.
+pub fn token_for_url(url: &str) -> Option<String> {
+    let same = |a: &str, b: &str| a.trim().trim_end_matches('/') == b.trim().trim_end_matches('/');
+    store_string("remote_url")
+        .filter(|configured| same(configured, url))
+        .and_then(|_| configured_token())
 }
 
 fn store_string(key: &str) -> Option<String> {

@@ -9,6 +9,7 @@
 //! (edge 7), and the expire that flips rows past their TTL (edge 2). With
 //! no primary set, the beat returns at once and opens no socket.
 
+use crate::machine_key::Refusal;
 use crate::mail_bus::{self, BusRow};
 use crate::mail_remote::{local_send_argv, outbox_path, seen_path};
 use crate::store_remote::Remote;
@@ -164,14 +165,25 @@ pub(crate) fn pull_rows_with(
         if !retry_due(&retries, &row.msg_id) {
             continue;
         }
-        if let Err(reason) = sender_trusted(home, &row) {
-            eprintln!("mail-arm: refused {}: {reason}", row.msg_id);
-            if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
-                eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+        let trusted = match sender_trusted(home, &row) {
+            Ok(()) => true,
+            Err(Refusal::Untrusted(reason)) => {
+                eprintln!("mail-arm: refused {}: {reason}", row.msg_id);
+                if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                    eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+                }
+                continue;
             }
-            continue;
-        }
-        if inject(&row) {
+            // The pin file failed here, not the row: it waits on the ladder.
+            Err(Refusal::Store(e)) => {
+                eprintln!(
+                    "mail-arm: pin store for {}: {e}; the row stays pending",
+                    row.msg_id
+                );
+                false
+            }
+        };
+        if trusted && inject(&row) {
             retries.remove(&row.msg_id);
             save_retries(home, &retries);
             delivered += 1;
@@ -192,7 +204,7 @@ pub(crate) fn pull_rows_with(
 /// key must match the one pinned for its host (first use pins it), and the
 /// host inside `from_id` (`<user>:<host>/<name>`), the sender a receiver
 /// reads, must be the host the key signed for.
-fn sender_trusted(home: &std::path::Path, row: &BusRow) -> Result<(), String> {
+fn sender_trusted(home: &std::path::Path, row: &BusRow) -> Result<(), Refusal> {
     let signed = row.pubkey.as_deref().zip(row.sig.as_deref());
     if signed.is_some() {
         let claimed = row
@@ -202,10 +214,10 @@ fn sender_trusted(home: &std::path::Path, row: &BusRow) -> Result<(), String> {
             .and_then(|head| head.rsplit([':', '@']).next())
             .map(mail_bus::normalize_host);
         if claimed.as_deref() != Some(row.from_host.as_str()) {
-            return Err(format!(
+            return Err(Refusal::Untrusted(format!(
                 "from_id {:?} names a host other than the signing host {:?}",
                 row.from_id, row.from_host
-            ));
+            )));
         }
     }
     crate::machine_key::check(

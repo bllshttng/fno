@@ -4,7 +4,7 @@ Two or more machines run one fleet. Each machine dials out to one libSQL server 
 
 ## The key
 
-`store.remote_url` in the per-machine global config (`~/.fno/config.toml`) turns it on. It holds the primary's URL, for example `https://r2d2.tailnet.ts.net` or `http://r2d2:18080` on the tailnet. `store.remote_token` is optional. When it is set, each request carries it as a bearer token. Give each machine its own token, as [One token per machine](#one-token-per-machine) says. `store.remote_addrs` is optional too. It lists IPs, such as `["100.101.102.103"]`, the primary's Tailscale IP. When the host name does not resolve or answer, the client dials each one in order. A bare IP takes the URL's port. Only the connect moves to the next address, so a request is never sent twice. The key is per machine and never enters git. A project config cannot set it, because the reader reads the global file only.
+`store.remote_url` in the per-machine global config (`~/.fno/config.toml`) turns it on. It holds the primary's URL, for example `https://r2d2.tailnet.ts.net` or `http://r2d2:18080` on the tailnet. `store.remote_token` is optional. When it is set, each request carries it as a bearer token. [One token per machine](#one-token-per-machine) says what a per-machine token does and does not give. `store.remote_addrs` is optional too. It lists IPs, such as `["100.101.102.103"]`, the primary's Tailscale IP. When the host name does not resolve or answer, the client dials each one in order. A bare IP takes the URL's port. Only the connect moves to the next address, so a request is never sent twice. The key is per machine and never enters git. A project config cannot set it, because the reader reads the global file only.
 
 Unset is the stock install. Every store stays a local file and no fno process opens a socket for it. That holds forever: a machine with no account and no network keeps working.
 
@@ -113,13 +113,15 @@ Only the user changes a key, by rotating it. `fno-agents mail-remote key rotate`
 
 ### One token per machine
 
-One shared token lets any writer act as any machine on the primary. Give each machine its own token instead, all signed by one key the user holds. Start sqld with `--auth-jwt-key-file <user key>.pub.pem`. Then mint a token per machine:
+Each machine can carry its own token, all signed by one key the user holds. Start sqld with `--auth-jwt-key-file <user key>.pub.pem`. Then mint a token per machine:
 
 ```bash
 fno-agents mail-remote key token ~/keys/fleet-user.pk8 imac2d2
 ```
 
 The first run makes the user key, and each run writes the `.pub.pem` file beside it. The token prints on stdout. Set it as `store.remote_token` on that machine only. Keep the user key off the machines that run the fleet.
+
+Know the limit. sqld reads no machine from the token: it ignores the `sub` claim, and a token with no access claim has full write access. So every token can still write any row, claim or attestation as any machine. One token cannot be revoked alone. A new user key revokes them all. The per-machine token keeps the user key off the fleet, and it lets the user cut every token at once. The proof of who sent a mail row is the machine key above, not the token.
 
 Host spellings normalize on write and on pull. Lowercase, and a trailing `.local` drops, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
 

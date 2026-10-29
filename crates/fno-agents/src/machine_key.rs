@@ -8,6 +8,8 @@
 //!
 //! The same module mints the per-machine store token: an EdDSA JWT signed by
 //! one key the user holds, which sqld checks with `--auth-jwt-key-file`.
+//! sqld ignores `sub` and grants full access to a token with no access
+//! claim, so the token does not limit what a machine may write.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine;
@@ -152,6 +154,16 @@ pub enum Trust {
     Unsigned,
 }
 
+/// Why a row was not trusted. `Untrusted` is the row's fault and final:
+/// a bad signature, a key that disagrees with the pin, an unsigned row from
+/// a pinned host. `Store` is this machine's pin file failing to read or
+/// write; the row itself may be genuine, so it waits for a later beat.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refusal {
+    Untrusted(String),
+    Store(String),
+}
+
 type Pins = BTreeMap<String, String>;
 
 fn load_pins(path: &Path) -> Result<Pins, String> {
@@ -184,41 +196,40 @@ pub fn pin(pins_file: &Path, host: &str, public_key: &str) -> Result<(), String>
 }
 
 /// Decide whether a row from `host` is trusted. `signed` is the row's
-/// public key and signature over `bytes`. An `Err` names the reason the row
-/// is refused, with both fingerprints when a pin and the row disagree.
+/// public key and signature over `bytes`.
 pub fn check(
     pins_file: &Path,
     host: &str,
     signed: Option<(&str, &str)>,
     bytes: &[u8],
-) -> Result<Trust, String> {
-    let pins = load_pins(pins_file)?;
+) -> Result<Trust, Refusal> {
+    let pins = load_pins(pins_file).map_err(Refusal::Store)?;
     let pinned = pins.get(host);
     let Some((public_key, signature)) = signed else {
         return match pinned {
-            Some(key) => Err(format!(
+            Some(key) => Err(Refusal::Untrusted(format!(
                 "unsigned row from {host}, which is pinned to key {}",
                 fingerprint(key)
-            )),
+            ))),
             None => Ok(Trust::Unsigned),
         };
     };
     if !verify(public_key, bytes, signature) {
-        return Err(format!(
+        return Err(Refusal::Untrusted(format!(
             "the signature from {host} (key {}) does not verify",
             fingerprint(public_key)
-        ));
+        )));
     }
     match pinned {
         Some(key) if key == public_key => Ok(Trust::Pinned),
-        Some(key) => Err(format!(
+        Some(key) => Err(Refusal::Untrusted(format!(
             "{host} is pinned to key {} but this row carries key {}. If {host} rotated its \
              key, re-pin it here: fno-agents mail-remote key pin {host} {public_key}",
             fingerprint(key),
             fingerprint(public_key)
-        )),
+        ))),
         None => {
-            pin(pins_file, host, public_key)?;
+            pin(pins_file, host, public_key).map_err(Refusal::Store)?;
             Ok(Trust::FirstUse)
         }
     }
@@ -237,7 +248,8 @@ fn public_pem(public_key: &[u8]) -> String {
 }
 
 /// An EdDSA JWT for `machine`, signed by `key`: one sqld access token per
-/// machine, all from the one key the user holds.
+/// machine, all from the one key the user holds. `sub` names the machine
+/// for the reader only; sqld does not scope the token by it.
 pub fn mint_token(key: &MachineKey, machine: &str, issued_at: u64) -> String {
     let header = B64.encode(br#"{"alg":"EdDSA","typ":"JWT"}"#);
     let claims = B64.encode(serde_json::json!({"sub": machine, "iat": issued_at}).to_string());
@@ -359,16 +371,25 @@ mod tests {
             Ok(Trust::Pinned)
         );
         // Edited bytes after signing never verify.
-        assert!(check(&pins, "imac", Some((&pk, &sig)), b"edited").is_err());
+        let untrusted = |r| matches!(r, Err(Refusal::Untrusted(_)));
+        assert!(untrusted(check(
+            &pins,
+            "imac",
+            Some((&pk, &sig)),
+            b"edited"
+        )));
         // A pinned host's unsigned row refuses; an unpinned host's passes.
-        assert!(check(&pins, "imac", None, bytes).is_err());
+        assert!(untrusted(check(&pins, "imac", None, bytes)));
         assert_eq!(check(&pins, "r2d2", None, bytes), Ok(Trust::Unsigned));
 
         // A rotated key refuses, naming the host and both fingerprints,
         // until the user re-pins.
         let rotated = MachineKey::rotate(&path).unwrap();
         let (pk2, sig2) = signed(&rotated);
-        let error = check(&pins, "imac", Some((&pk2, &sig2)), bytes).unwrap_err();
+        let Err(Refusal::Untrusted(error)) = check(&pins, "imac", Some((&pk2, &sig2)), bytes)
+        else {
+            panic!("a rotated key must refuse");
+        };
         assert!(
             error.contains("imac")
                 && error.contains(&fingerprint(&pk))
@@ -380,6 +401,12 @@ mod tests {
             check(&pins, "imac", Some((&pk2, &sig2)), bytes),
             Ok(Trust::Pinned)
         );
+        // An unreadable pin file is this machine's fault: the row waits.
+        std::fs::write(&pins, "not json").unwrap();
+        assert!(matches!(
+            check(&pins, "imac", Some((&pk2, &sig2)), bytes),
+            Err(Refusal::Store(_))
+        ));
 
         // The store token verifies against the key that minted it.
         let token = mint_token(&rotated, "imac", 1);
