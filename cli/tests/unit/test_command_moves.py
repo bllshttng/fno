@@ -193,7 +193,11 @@ def test_every_moved_spelling_is_hidden():
         # that never reaches it. `observer` joined the same way: the front
         # door claims both spellings and execs the native ops. `lead` joined
         # when the lead family ported: the front door claims `lead <command>`
-        # and prints the move notice itself. Every OTHER moved
+        # and prints the move notice itself. `scoreboard` joined when the
+        # scoreboard family ported: the front door claims the root spelling,
+        # prints the move notice, and execs the native scoreboard door, so a
+        # python registration would sit behind an intercept that never
+        # reaches it. Every OTHER moved
         # spelling keeps a one-release registration, and any registration
         # that exists must be hidden: an advertised moved name teaches a
         # doomed spelling.
@@ -206,7 +210,7 @@ def test_every_moved_spelling_is_hidden():
             # the front door claims both spellings (classify_test_command),
             # the tail byte-verbatim, so a python registration would forward
             # into nothing.
-            "test",
+            "test", "scoreboard",
             # `context` joined when the diag family ported: the front door
             # claims both spellings (classify_context: root and whoami
             # context) and execs context-run --probe, so a python

@@ -37,7 +37,6 @@ pub(super) struct FleetArms {
     symptom_recheck: crate::symptom_recheck::Arm,
     team_ledger: crate::rundown::Arm,
     lead_eval: crate::lead_eval::Arm,
-    fleet_page: crate::fleet_page::Arm,
     fleet_beacon: crate::fleet_beacon::Arm,
     arm_watch: crate::arm_watch::Arm,
     provider_cap: crate::provider_cap_commands::Arm,
@@ -50,6 +49,7 @@ pub(super) struct FleetArms {
     ci_cadence: crate::ci_cadence::Arm,
     main_revert: crate::main_revert::Arm,
     ci_tier: crate::ci_tier::Arm,
+    merge_queue: crate::merge_queue::Arm,
     pr_idle: crate::pr_idle::Arm,
     codex_watch: crate::codex_watch::Arm,
     lead_wake: crate::lead_wake::Arm,
@@ -130,7 +130,6 @@ impl FleetArms {
             symptom_recheck: crate::symptom_recheck::Arm::default(),
             team_ledger: crate::rundown::Arm::default(),
             lead_eval: crate::lead_eval::Arm::default(),
-            fleet_page: crate::fleet_page::Arm::new(opts.agents_config_cwd.clone()),
             fleet_beacon: crate::fleet_beacon::Arm::default(),
             arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
             provider_cap: crate::provider_cap_commands::Arm::new(opts.agents_config_cwd.clone()),
@@ -143,6 +142,7 @@ impl FleetArms {
             ci_cadence: crate::ci_cadence::Arm::default(),
             main_revert: crate::main_revert::Arm::default(),
             ci_tier: crate::ci_tier::Arm::default(),
+            merge_queue: crate::merge_queue::Arm::default(),
             pr_idle: crate::pr_idle::Arm::default(),
             codex_watch: crate::codex_watch::Arm::default(),
             lead_wake: crate::lead_wake::Arm::new(opts.agents_config_cwd.clone()),
@@ -336,7 +336,6 @@ impl FleetArms {
         crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());
         crate::rundown::maybe_tick(&self.team_ledger, ctx.home.clone());
         crate::lead_eval::maybe_tick(&self.lead_eval, ctx.home.clone());
-        crate::fleet_page::maybe_tick(&self.fleet_page, ctx.home.clone());
         crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
         crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
         crate::provider_cap_commands::maybe_tick(&self.provider_cap, ctx.home.clone());
@@ -355,6 +354,9 @@ impl FleetArms {
         crate::main_revert::maybe_tick(&self.main_revert, ctx.home.clone());
         // The CI tier: open PRs run CI six at a time (opt-in, ci_tier.rs).
         crate::ci_tier::maybe_tick(&self.ci_tier, ctx.home.clone());
+        // The merge queue: green PRs land in batches tested on main (opt-in,
+        // merge_queue.rs).
+        crate::merge_queue::maybe_tick(&self.merge_queue, ctx.home.clone());
         // A PR green, mergeable and reviewed past 2h alarms every lead and the phone.
         crate::pr_idle::maybe_tick(&self.pr_idle, ctx.home.clone());
         // The settle waker: on CI settle it wakes the parked session

@@ -553,7 +553,6 @@ fn run_release_stopped(args: &[String]) -> i32 {
     }
 }
 
-#[allow(dead_code)]
 fn claim_status_value_with_witness(
     rec: &crate::claims::ClaimRecord,
     witness: Option<crate::claims::SessionWitness<'_>>,

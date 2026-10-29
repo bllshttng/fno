@@ -183,7 +183,7 @@ fn py_str_or_empty(value: Option<&Value>) -> String {
     }
 }
 
-/// Python `repr` for the config values a warning names.
+/// For the config values a warning names.
 fn py_repr(value: &Value) -> String {
     match value {
         Value::String(s) => format!("'{s}'"),
@@ -963,7 +963,7 @@ fn write_validity_deck(
     let json_tmp = out_dir.join(format!(".{deck_id}.json.tmp"));
     std::fs::write(
         &json_tmp,
-        crate::graph_store::to_python_json(&sidecar) + "\n",
+        crate::graph_store::to_python_pretty_json(&sidecar) + "\n",
     )?;
     std::fs::rename(&json_tmp, &json_path)?;
     Ok((md_path, json_path))

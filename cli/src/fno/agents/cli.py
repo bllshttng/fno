@@ -1768,11 +1768,13 @@ def cmd_spawn(
                 from fno.agents.spawn_lineage import _capture_parent_edge
 
                 launcher_session, launcher_harness, launcher_cwd = _capture_parent_edge()
+                from fno.agents.spawn_lineage import _lineage_reason
                 from fno.agents.spawn_defaults import SPAWN_PERMISSION_BUILTIN
                 from fno.config._dispatch_commands import is_command_seed
 
                 if not launcher_session:
                     print("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.", file=sys.stderr)
+                    print(f"parent edge NOT recorded ({_lineage_reason(launcher_session)}).", file=sys.stderr)
                 else:
                     from fno.rust_binary import resolve_binary
                     import subprocess as _subprocess
@@ -1976,12 +1978,6 @@ def cmd_spawn(
         sys.stdout.flush()
 
 
-#: Exit status `fno agents name` uses for a naming refusal. Deliberately not 2:
-#: Click already spends 2 on usage errors including "no such command", so a
-#: shell caller cannot distinguish a refusal from a stale `fno` at exit 2.
-NAME_REFUSED_EXIT = 3
-
-
 @agents_app.command("name", hidden=True)
 def cmd_name(
     prefix: Optional[str] = typer.Argument(None, help="Legacy operation prefix (target|think|...); omit with --command."),
@@ -1994,38 +1990,15 @@ def cmd_name(
 ) -> None:
     """Mechanical bridge to the canonical agent-name owner, for shell dispatchers.
 
-    Prints one name on stdout. Exit 3 (NOT 2) is the naming refusal; 2 is Click's usage
-    error, which an `fno` too old to know this command also returns - reading 2 as a refusal
-    refuses the fleet on a stale install.
-
-    The model rides $FNO_AGENTS_NAME_MODEL, not a flag: the flag-registry gate
-     refuses Python typer-flag growth, and a shell dispatcher carries an
-    env var as cheaply as a flag.
+    The Rust client owns the bridge (one name on stdout; exit 3 is the naming
+    refusal, 2 a usage error) and reads the model from $FNO_AGENTS_NAME_MODEL;
+    with an installed binary the runtime router execs it before this function
+    runs. There is no Python name left: a missing binary is refused here.
     """
-    from fno.agents.naming import AgentNameError, BridgeUsageError, bridge_name
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    # One positional binds to PREFIX by Click's left-to-right rule; read it as the node.
-    if node_id is None:
-        prefix, node_id = None, prefix
-    if not node_id:
-        typer.echo("error: a node id is required: fno agents name [prefix] <node-id>", err=True)
-        raise typer.Exit(2)
-    model = (os.environ.get("FNO_AGENTS_NAME_MODEL") or "").strip() or None
-    try:
-        name = bridge_name(
-            prefix or "",
-            node_id,
-            slug=slug or None,
-            qualifier=qualifier or None,
-            discriminator=discriminator or None,
-            source=source or None,
-            command=command or None,
-            model=model,
-        )
-    except (BridgeUsageError, AgentNameError) as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(NAME_REFUSED_EXIT if isinstance(exc, AgentNameError) else 2)
-    typer.echo(name)
+    _ = (prefix, node_id, slug, qualifier, discriminator, source, command)
+    refuse_without_binary("name")
 
 
 # `rename` moved to the Rust client (`agent.rename` over the daemon RPC; rust_runtime's router
@@ -2392,46 +2365,20 @@ def cmd_registry_repair(
 ) -> None:
     """Internal: roll a poisoned registry's schema_version back down.
 
-    Holds the registry lock, refuses unless the on-disk version is strictly
-    above ``--to``, refuses if any row carries a newer-schema field with a real
-    value, backs the file up, then drops the empty unknown keys and replaces
-    atomically. Dry run by default, matching `fno agents watchdog` and
-    `fno backlog maintain`.
+    The Rust client owns the repair: it holds the registry lock, refuses unless
+    the on-disk version is strictly above ``--to``, refuses if any row carries a
+    newer-schema field with a real value, backs the file up, then drops the
+    empty unknown keys and replaces atomically. Dry run by default. There is no
+    Python registry-repair left: a missing binary is refused here.
     """
-    from pathlib import Path as _Path
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    from fno.agents.registry import RegistryRepairRefused, repair_registry_schema
-
-    try:
-        plan = repair_registry_schema(
-            to, path=_Path(path) if path else None, apply=apply
-        )
-    except RegistryRepairRefused as exc:
-        sys.stderr.write(f"{exc}\n")
-        raise typer.Exit(1) from exc
-
-    command = "repaired" if apply else "would repair"
-    sys.stdout.write(
-        f"{command} {plan.path}: schema_version {plan.on_disk} -> {plan.to_version}\n"
-    )
-    for name in sorted(plan.dropped):
-        keys = ", ".join(plan.dropped[name])
-        sys.stdout.write(f"  {name}: drop {keys} (empty)\n")
-    if not plan.dropped:
-        sys.stdout.write("  no rows carry keys this fno does not know\n")
-    if plan.backup is not None:
-        sys.stdout.write(f"  backup: {plan.backup}\n")
-    if not apply:
-        sys.stdout.write("  dry run; pass --apply to perform it\n")
+    _ = (to, path, apply)
+    refuse_without_binary("registry-repair")
 
 
-#: `heal-token` exit codes. 13 mirrors the lifecycle commands' not-found code; the
-#: ambiguity code is distinct from BOTH that and typer's internal-error 1 so the
-#: Rust caller can tell "refuse loudly with these candidates" from "degrade to
-#: the original not-found error".
+#: The not-found exit the lifecycle commands share.
 HEAL_TOKEN_MISS_EXIT = 13
-HEAL_TOKEN_AMBIGUOUS_EXIT = 3
-HEAL_TOKEN_UNAVAILABLE_EXIT = 12
 
 
 @agents_app.command("heal-token", hidden=True)
@@ -2457,60 +2404,16 @@ def cmd_heal_token(
 ) -> None:
     """Internal: adopt the session TOKEN names from its harness store, as JSON.
 
-    The one healer behind ``registry.resolve_agent``, exposed so the Rust
-    lifecycle commands (logs/attach/resume) use the SAME probes rather than growing
-    a second implementation. ``--all-sources`` also includes registry rows in
-    the uniqueness decision. Exit 0 with the resolved row on stdout; 13 on a
-    miss or a non-session-shaped token; 3 with the candidate list on stderr when
-    the token is ambiguous; 12 when identity evidence is unavailable.
-
-    ``--registry`` exists because the two runtimes resolve the registry
-    differently -- Rust honors ``FNO_AGENTS_HOME``, this side does not -- so a
-    caller that read one file would otherwise heal into another and re-heal on
-    every later call. The caller names the file it read from; agreement is then
-    by construction rather than by two resolvers happening to match.
-
-    Python-only by construction: keeping it out of ``RUST_CLIENT_COMMANDS`` is what
-    stops the Rust shellout from re-entering the Rust client.
+    The Rust client owns the healer (crates/fno-agents/src/store_heal.rs) and
+    the lifecycle commands call it in process. Exit 0 with the row; 13 on a
+    miss; 3 with the candidates when ambiguous; 12 when identity evidence is
+    unreadable. There is no Python heal-token left: a missing binary is
+    refused here.
     """
-    import json as _json
-    from dataclasses import asdict
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    from fno.agents.registry import AgentResolutionError, resolve_from_harness_store
-
-    if all_sources:
-        from fno.agents.registry import resolve_agent
-
-        try:
-            resolved = resolve_agent(
-                token,
-                path=Path(registry) if registry else None,
-            )
-            resolved_entry = resolved.entry
-        except AgentResolutionError as exc:
-            if exc.ambiguous:
-                sys.stderr.write(f"{exc}\n")
-                raise typer.Exit(code=HEAL_TOKEN_AMBIGUOUS_EXIT)
-            if exc.unavailable:
-                sys.stderr.write(f"{exc}\n")
-                raise typer.Exit(code=HEAL_TOKEN_UNAVAILABLE_EXIT)
-            raise typer.Exit(code=HEAL_TOKEN_MISS_EXIT)
-        sys.stdout.write(_json.dumps(asdict(resolved_entry)))
-        sys.stdout.write("\n")
-        return
-
-    try:
-        entry = resolve_from_harness_store(
-            token,
-            registry_path=Path(registry) if registry else None,
-        )
-    except AgentResolutionError as exc:
-        sys.stderr.write(f"{exc}\n")
-        raise typer.Exit(code=HEAL_TOKEN_AMBIGUOUS_EXIT)
-    if entry is None:
-        raise typer.Exit(code=HEAL_TOKEN_MISS_EXIT)
-    sys.stdout.write(_json.dumps(asdict(entry)))
-    sys.stdout.write("\n")
+    _ = (token, registry, all_sources, _cross_project)
+    refuse_without_binary("heal-token")
 
 
 @agents_app.command("codex-session-for-pid", hidden=True)
@@ -2574,77 +2477,15 @@ def cmd_whoami(
 ) -> None:
     """Print THIS mesh worker's own registered name (+ registry enrichment).
 
-    The derived-name peers use to address you via ``fno agents mail send <name>``.
-    Resolves identity from ``FNO_AGENT_SELF`` (the env the spawn path
-    injects), falling back to a registry row matching the active harness's
-    session marker when the env is absent. Read-only: it never
-    mutates the registry, emits an event, or writes state.
-
-    Exit 0 when a name is resolved; exit 3 ("not a registered mesh agent")
-    for a human / top-level session with no mesh identity. Distinct from
-    ``fno whoami`` (top-level), which reports operating CONTEXT
-    (fleet -> walker -> session -> harness), not the mesh name.
+    The Rust client owns whoami: identity from ``FNO_AGENT_SESSION``, else the
+    active harness's session marker, matched against the registry; read-only.
+    Exit 0 when a name resolves, 3 for a session with no mesh identity. There
+    is no Python whoami left: a missing binary is refused here.
     """
-    from fno.agents import whoami as whoami_mod
-    from fno.agents.registry import RegistryVersionError, load_registry
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    registry: list = []
-    registry_error: str | None = None
-    try:
-        registry = load_registry()
-    except RegistryVersionError as exc:
-        registry_error = str(exc)
-
-    # claude_agents_json() returns ({}, [warnings]) on a shellout failure
-    # (missing binary / timeout / non-zero / parse) WITHOUT raising, so the
-    # closure must forward those warnings out-of-band to be surfaced — else a
-    # failed shellout would yield live_status: null with no WARN (the design
-    # requires both).
-    # Resolve THIS process's session id from whichever harness marker is set
-    #: a codex/gemini worker resolves its own row via harness_session_id,
-    # not just CLAUDE_CODE_SESSION_ID.
-    from fno.agents.self_stamp import identity_ambiguity_message, resolve_self_identity
-
-    _ident = resolve_self_identity(os.environ)
-    if not (os.environ.get("FNO_AGENT_SELF") or "").strip() and _ident.disposition == "ambiguous":
-        print(f"error: {identity_ambiguity_message(_ident)}", file=sys.stderr)
-        raise typer.Exit(code=4)
-    session_uuid = _ident.session_id
-    # Scope registry matching to this process's harness so a provider-local session
-    # id can't match a same-id row of another harness.
-    session_harness = _ident.harness or ("claude" if session_uuid else None)
-    live_warnings: list[str] = []
-
-    def _live_status_fn(short_id: str) -> str | None:
-        from fno.agents.harnesses import claude as claude_mod
-
-        live_map, warns = claude_mod.claude_agents_json()
-        live_warnings.extend(warns)
-        return (live_map.get(short_id) or {}).get("live_status")
-
-    result = whoami_mod.resolve_self(
-        env=os.environ,
-        registry=registry,
-        registry_error=registry_error,
-        session_uuid=session_uuid,
-        live_status_fn=_live_status_fn,
-        node_fn=lambda: whoami_mod.find_held_node(session_uuid=session_uuid),
-        harness=session_harness,
-    )
-
-    for warn in (*result.warnings, *live_warnings):
-        sys.stderr.write(f"WARN: {warn}\n")
-
-    is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    if json_out or not is_tty:
-        sys.stdout.write(whoami_mod.render_json(result) + "\n")
-    elif result.registered:
-        sys.stdout.write(whoami_mod.render_human(result) + "\n")
-    else:
-        sys.stderr.write("not a registered mesh agent (human / top-level session)\n")
-
-    if result.exit_code != 0:
-        raise typer.Exit(code=result.exit_code)
+    _ = json_out
+    refuse_without_binary("whoami")
 
 
 @agents_app.command("register", hidden=True)

@@ -1615,7 +1615,8 @@ PYEOF
         # its beneficiary, and the identity resolver proves a name is this
         # session's own; only an exact match adopts the handover, so a
         # bystander's init cannot take a live claim it was never minted for.
-        _DISK_HOLDER="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:${_NODE_ID}" --json --no-roster 2>/dev/null \
+        _DISK_CLAIM_JSON="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:${_NODE_ID}" --json --no-roster 2>/dev/null || true)"
+        _DISK_HOLDER="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
           | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
         case "${_DISK_HOLDER:-}" in
           spawn-handover:*)
@@ -1623,7 +1624,7 @@ PYEOF
             # name export first, then the registry binding whoami exposes.
             _SELF_NAME="${FNO_WORKER_NAME:-}"
             if [[ -z "$_SELF_NAME" ]]; then
-              # `fno agents whoami` (the Python family command) emits the
+              # `fno agents whoami` (the native fno-agents door) emits the
               # canonical JSON shape whenever stdout is not a tty, which
               # command substitution always is. Top-level `fno whoami` is the
               # Rust front's native command: it ignores --json and prints
@@ -1635,6 +1636,27 @@ PYEOF
             fi
             if [[ -n "${_SELF_NAME:-}" && "${_DISK_HOLDER}" == "spawn-handover:${_SELF_NAME}" ]]; then
               _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
+            fi
+            if [[ -z "${_HANDOVER_FLAGS:-}" ]]; then
+              # A launch window that outlived its launcher: the recorded pid
+              # is the spawner's, the pid probe proves it gone (basis
+              # pid-absent), and the TTL grace still runs (state suspect), so
+              # the named worker never reached init and nobody is mid-launch.
+              # The builder dispatched for this node adopts the window through
+              # the takeover door - naming the holder is the takeover's own
+              # proof, and the rebind still refuses an off-host or
+              # changed-underneath row. A live window and a pid-unavailable
+              # suspect (death unproven) keep the bystander refusal above: the
+              # named worker may still be coming (measured live 2026-10-28:
+              # a builder parked on an earlier spawn leg's suspect window and
+              # reached PR holding no claim).
+              _DISK_STATE="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              _DISK_BASIS="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                | sed -n 's/.*"basis"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              if [[ "${_DISK_STATE:-}" == "suspect" && "${_DISK_BASIS:-}" == "pid-absent" ]]; then
+                _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
+              fi
             fi
             ;;
         esac

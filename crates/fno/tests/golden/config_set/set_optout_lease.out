@@ -1,0 +1,2 @@
+set review.self_review_required = False (global: <FIXTURE>/fake_home/.fno/config.toml)
+lease: review.self_review_required held by sess-fixture, expires at 1700003600000; release: fno config set review.self_review_required true

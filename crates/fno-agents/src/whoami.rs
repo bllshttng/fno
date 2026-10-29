@@ -1659,7 +1659,11 @@ fn row_harness(row: &Value) -> String {
 /// The registry row matching this session id, scoped to its harness; the
 /// claude short-id prefix is the second pass. The same match `fno agents
 /// whoami` makes, so "who am I" has one answer.
-fn find_by_session<'a>(rows: &'a [Value], session_uuid: &str, harness: &str) -> Option<&'a Value> {
+pub(crate) fn find_by_session<'a>(
+    rows: &'a [Value],
+    session_uuid: &str,
+    harness: &str,
+) -> Option<&'a Value> {
     let harness = harness.to_ascii_lowercase();
     for row in rows {
         if row_harness(row) != harness {
@@ -1763,20 +1767,14 @@ fn manifest_identity_values(project_root: &Path) -> Vec<String> {
     out
 }
 
-/// The one role rendering, or None: the row's role label plus its grantor.
+/// The one role rendering, or None: `L{level} {scope}` plus its grantor.
 fn role_text(ident: &crate::spawn_context::OwnedIdentity, home: &AgentsHome) -> Option<String> {
     let (Some(sid), Some(harness)) = (&ident.session_id, &ident.harness) else {
         return None;
     };
     let rows = registry_rows(home);
-    let row = find_by_session(&rows, sid, harness)?;
-    let label = row.get("role_label").and_then(Value::as_str)?;
-    let grantor = row
-        .get("role_grantor")
-        .and_then(Value::as_str)
-        .filter(|g| !g.is_empty())
-        .unwrap_or("human");
-    Some(format!("{label} (by {grantor})"))
+    // The label derives from role_level and role_scope; no row stores it.
+    crate::registry_commands::role_text(find_by_session(&rows, sid, harness)?)
 }
 
 // -------------------------------------------------------------------------

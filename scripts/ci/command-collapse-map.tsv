@@ -351,7 +351,6 @@ pr-watch uninstall	T1	pr-watch uninstall	1
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
-scoreboard	KEEP	scoreboard	13	single-leaf group
 config plugin	T1	config plugin	0
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group

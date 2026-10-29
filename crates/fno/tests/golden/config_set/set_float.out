@@ -1,0 +1,1 @@
+set agents.min_free_gb = 2.5 (global: <FIXTURE>/fake_home/.fno/config.toml)

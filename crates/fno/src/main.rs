@@ -72,11 +72,10 @@ enum Role {
     ConfigDefaults(Vec<OsString>),
     ConfigRoute(Vec<OsString>),
     ConfigSchema(Vec<String>),
-    /// The native read-side `config` doors (get, history, build-dir,
-    /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
-    /// One classify, bodies in `config_cli::`; the writer stays with the
-    /// config hub's write surface and the doctor command beside the setup
-    /// family's engine.
+    /// The native `config` doors (get, history, build-dir,
+    /// assert-subagent-budget, status-sinks, active-backlog, plugin install,
+    /// set, unset, rm). One classify and one dispatch in `config_cli::`; the
+    /// doctor command stays beside the setup family's engine.
     ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
@@ -223,6 +222,13 @@ enum Role {
     AgentsLeadRefreshCanon(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
+    /// `fno whoami scoreboard ...`: the telemetry views, native via the
+    /// binary-direct `fno-agents scoreboard` door.
+    WhoamiScoreboard(Vec<OsString>),
+    /// The retired root `fno scoreboard ...`: the move notice the Python
+    /// forwarder printed lands on stderr (byte-identical), then the same
+    /// exec as `fno whoami scoreboard`.
+    ScoreboardAlias(Vec<OsString>),
     /// `fno agents claim backlog|export ...`: the shared-store commands, run
     /// by `fno-agents claim`.
     ClaimStore(Vec<OsString>),
@@ -668,6 +674,40 @@ fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
     None
 }
 
+/// `fno whoami scoreboard ...`: the telemetry views claim natively; the
+/// tail rides verbatim to the binary-direct door. A bare `fno whoami`
+/// scoreboard leaf also claims (its Python leg dies in this port).
+fn classify_whoami_scoreboard(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first().and_then(|a| a.to_str()) == Some("whoami")
+        && args.get(1).and_then(|a| a.to_str()) == Some("scoreboard")
+    {
+        return Some(args[2..].to_vec());
+    }
+    None
+}
+
+/// The retired root `fno scoreboard ...`: claimed here so the move notice
+/// prints and the native door serves the call, the same shape the retired
+/// root `fno status` took when its destination went native.
+fn classify_root_scoreboard(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first().and_then(|a| a.to_str()) == Some("scoreboard") {
+        return Some(args[1..].to_vec());
+    }
+    None
+}
+
+/// The one scoreboard exec: the front-door stats handoff rides as env, then
+/// the binary-direct door serves the call.
+fn run_scoreboard_door(rest: &[OsString]) -> i32 {
+    // The emission counter rides as data over one wire read here, never a
+    // nested `fno` spawn inside the door (the seam budget bars a second
+    // crossing site).
+    if let Some(stats) = fno::server_stats::snapshot_for_scoreboard() {
+        std::env::set_var("FNO_MUX_STATS_JSON", stats);
+    }
+    fno_agents_exec("fno whoami scoreboard", &["scoreboard"], rest)
+}
+
 fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Option<Vec<OsString>> {
     if args.len() < 2 || args[0].to_str()? != group || args[1].to_str()? != command {
         return None;
@@ -725,16 +765,17 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// The leaves still owned by other families' Python legs: `fno whoami
-/// ledger|scoreboard|cost` forward to them.
-const PYTHON_LEAVES: [&str; 3] = ["ledger", "scoreboard", "cost"];
+/// ledger|cost` forward to them. `context` answered natively when the diag
+/// family ported; `scoreboard` did when the scoreboard family did.
+const PYTHON_LEAVES: [&str; 2] = ["ledger", "cost"];
 
 /// `fno whoami ...` and the retired root `fno status ...`: the summary
 /// render and the status read, exec'd as `fno-agents spawn-overlay whoami`.
-/// The four leaves other families still own (context / ledger / scoreboard /
-/// cost) forward to the Python leg byte-verbatim; the retired `fno status`
-/// root prints the move notice the Python forwarder printed, on the same
-/// stream, before the same exec. A root `-J` before either folds into the
-/// group's own `-J`, byte-for-byte what `fno -J whoami` answered before.
+/// The leaves other families still own (context / ledger / cost) forward to
+/// the Python leg byte-verbatim; the retired `fno status` root prints the
+/// move notice the Python forwarder printed, on the same stream, before the
+/// same exec. A root `-J` before either folds into the group's own `-J`,
+/// byte-for-byte what `fno -J whoami` answered before.
 fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
@@ -1289,6 +1330,12 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_transcript(args) {
         return Role::AgentsTranscript(rest);
     }
+    if let Some(rest) = classify_whoami_scoreboard(args) {
+        return Role::WhoamiScoreboard(rest);
+    }
+    if let Some(rest) = classify_root_scoreboard(args) {
+        return Role::ScoreboardAlias(rest);
+    }
     if let Some(rest) = classify_claim_store(args) {
         return Role::ClaimStore(rest);
     }
@@ -1709,7 +1756,11 @@ fn main() {
         }
     }
     fno::join_marker::join_if_needed();
-    match decide_role(&args, is_tty) {
+    let role = decide_role(&args, is_tty);
+    if !matches!(role, Role::RemoteMail(_)) {
+        std::env::remove_var(fno::remote_target::MAIL_HOP_ENV);
+    }
+    match role {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
@@ -1740,21 +1791,7 @@ fn main() {
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::ConfigRoute(rest) => std::process::exit(config_route_cli::run(&rest)),
         Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
-        Role::ConfigCli(door) => std::process::exit(match door {
-            fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),
-            fno::config_cli::Door::History(rest) => fno::config_cli::history::run(&rest),
-            fno::config_cli::Door::BuildDir => fno::config_cli::leaves::run_build_dir(&[]),
-            fno::config_cli::Door::Budget(rest) => fno::config_cli::leaves::run_budget(&rest),
-            fno::config_cli::Door::StatusSinks(rest) => {
-                fno::config_cli::leaves::run_status_sinks(&rest)
-            }
-            fno::config_cli::Door::ActiveBacklog => {
-                fno::config_cli::leaves::run_active_backlog(&[])
-            }
-            fno::config_cli::Door::PluginInstall(rest) => {
-                fno::config_cli::plugin_install::run(&rest)
-            }
-        }),
+        Role::ConfigCli(door) => std::process::exit(fno::config_cli::run(door)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
@@ -1836,6 +1873,11 @@ fn main() {
             std::process::exit(fno::lead_refresh_canon::run(&rest))
         }
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
+        Role::WhoamiScoreboard(rest) => std::process::exit(run_scoreboard_door(&rest)),
+        Role::ScoreboardAlias(rest) => {
+            eprintln!("fno scoreboard is now fno whoami scoreboard");
+            std::process::exit(run_scoreboard_door(&rest))
+        }
         Role::MailShow(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail show",
             &["chats", "show"],

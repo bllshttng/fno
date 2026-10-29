@@ -51,7 +51,7 @@ pub(crate) async fn entry_for_lifecycle(
                 })));
             }
         }
-        crate::client_commands::resolve_entry_with_heal_scoped(&rows, &worker_token, &path, None)
+        crate::client_commands::resolve_entry_with_heal(&rows, &worker_token, &path)
             .map(Some)
             .map_err(|err| err.message())
     })

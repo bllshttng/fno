@@ -3383,42 +3383,6 @@ pub fn write_state_atomic(path: &Path, state: &AgentState) -> Result<(), StateEr
     Ok(())
 }
 
-/// Read-modify-write a per-agent `state.json` while holding the exclusive
-/// sidecar lock across the WHOLE operation, so concurrent writers cannot
-/// interleave between the read and the write (the lost-update footgun a
-/// `load_state` + `write_state_atomic` pair has).
-///
-/// Returns `Ok(false)` without calling `f` when the file is absent or partial:
-/// drive window mutations must never fabricate a `state.json` on the worker's
-/// behalf (recovery distinguishes "registry entry without state.json"). The
-/// drive admit / cleanup paths route their window writes through here so a
-/// stale-driver takeover cannot drop the authority window via a read that
-/// predates the new driver's write.
-pub fn update_state_atomic<F>(path: &Path, f: F) -> Result<bool, StateError>
-where
-    F: FnOnce(&mut AgentState),
-{
-    let lock = acquire_exclusive(&lock_path(path))?;
-    let existing = match OpenOptions::new().read(true).open(path) {
-        Ok(file) => read_json::<AgentState>(&file).ok(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            let _ = lock.unlock();
-            return Err(e.into());
-        }
-    };
-    let result = match existing {
-        Some(mut st) => {
-            f(&mut st);
-            write_json_atomic(path, &st)?;
-            true
-        }
-        None => false,
-    };
-    let _ = lock.unlock();
-    Ok(result)
-}
-
 pub(crate) fn lock_path(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_os_string();
     s.push(".lock");

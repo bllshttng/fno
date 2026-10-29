@@ -305,6 +305,14 @@ fn case_env(root: &Path, stamps: &[(&str, &str)]) -> Vec<(String, String)> {
                 .to_string(),
         ),
     ];
+    // The spawned binary may write shims or scratch under the temp root; a
+    // scrubbed TMPDIR would move its tempdir to /tmp and misjudge fixture
+    // paths the OS temp root owns.
+    for key in ["TMPDIR", "TEMPDIR"] {
+        if let Ok(value) = std::env::var(key) {
+            env.push((key.to_string(), value));
+        }
+    }
     for (key, value) in stamps {
         env.push((
             key.to_string(),

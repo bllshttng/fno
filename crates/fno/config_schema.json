@@ -4111,7 +4111,7 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "",
-   "doc": "Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off)."
+   "doc": "Seconds an open local board or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off)."
   },
   {
    "path": "batch.enabled",

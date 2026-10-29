@@ -35,7 +35,7 @@ impl PrRowBindResult {
         }
     }
 
-    /// The ids this bind actually bound (the Python `bound_ids` property).
+    /// The ids this bind actually bound.
     pub fn bound_ids(&self) -> Vec<String> {
         self.bindings
             .iter()

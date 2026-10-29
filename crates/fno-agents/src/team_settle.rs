@@ -432,7 +432,7 @@ fn plan_with_projects(
             (
                 "--take-over",
                 "the colleague takes",
-                "; the name is required, none is drawn",
+                "; or pass --name redraw to take the machine's draw",
             )
         };
         return Ok(plan_answer(
@@ -564,7 +564,7 @@ fn plan_with_projects(
                     occupancy,
                     Vec::new(),
                     json!(format!(
-                        "--take-over refused: your team over {mine:?} does not contain {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead, or the user from an attended shell."
+                        "--take-over refused: your team over {mine:?} does not contain {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead."
                     )),
                     caller_value,
                 ));
@@ -575,21 +575,26 @@ fn plan_with_projects(
                     occupancy,
                     Vec::new(),
                     json!(format!(
-                        "--take-over refused: no live team answers {by:?}, so no seat contains {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead, or the user from an attended shell."
+                        "--take-over refused: no live team answers {by:?}, so no seat contains {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead."
                     )),
                     caller_value,
                 ));
             }
             TakeOverVerdict::Contains => {}
         }
-        if proposed_name.is_empty() {
+        let redraw = payload
+            .get("redraw")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if proposed_name.is_empty() && !redraw {
             // The colleague is a person, never a drawn slug: a take-over
             // without --name must not launch and let the entry mint pick.
+            // `--name redraw` asks the settle draw for the name.
             return Ok(plan_answer(
                 "declined",
                 occupancy,
                 Vec::new(),
-                json!("--take-over requires --name <Name>: the colleague takes a fresh person name, distinct from every live lead; the name is required, none is drawn"),
+                json!("--take-over requires --name <Name> or --name redraw: the colleague takes a fresh person name, distinct from every live lead"),
                 caller_value,
             ));
         }
@@ -675,8 +680,8 @@ fn plan_with_projects(
                 format!(
                     "scope {scope:?} is held by live row(s) {holders:?}, not by this session, so \
                      this session cannot hand it down. Only the holder (spawn --promote \
-                     --hand-off from its own session) or an attended shell (spawn --promote \
-                     --hand-off) can transfer it."
+                     --hand-off from its own session) or a lead whose team contains it \
+                     can transfer it."
                 )
             }
         }
@@ -1280,21 +1285,25 @@ mod tests {
         assert_eq!(out["outcome"], "succeeded");
         assert_eq!(out["take_over"]["by"], json!("the user"));
 
-        // The name is required, none is drawn: a contained superior with no
-        // --name declines before launch instead of launching a minted name.
-        let out = settle(
-            json!({
-                "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
-                "take_over": {"reason": "r"},
-                "caller": {"kind": "agent", "name": "vellum"},
-                "rows": take_over_rows(),
-            }),
-            take_over_projects(),
-        );
+        // A contained superior with no --name declines before launch instead
+        // of launching a minted name; `--name redraw` passes to the draw.
+        let ask = |redraw: bool| {
+            settle(
+                json!({
+                    "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+                    "take_over": {"reason": "r"}, "redraw": redraw,
+                    "caller": {"kind": "agent", "name": "vellum"},
+                    "rows": take_over_rows(),
+                }),
+                take_over_projects(),
+            )
+        };
+        let out = ask(false);
         assert_eq!(out["outcome"], "declined");
         let refusal = out["refusal"].as_str().unwrap();
         assert!(refusal.contains("requires --name"), "{refusal}");
-        assert!(refusal.contains("none is drawn"), "{refusal}");
+        assert!(refusal.contains("--name redraw"), "{refusal}");
+        assert_eq!(ask(true)["outcome"], "succeeded");
 
         // AC2-ERR + AC3-ERR + AC4-HP (incumbent side): an unrelated L2's
         // take-over declines with the not-contained text (and the no-key

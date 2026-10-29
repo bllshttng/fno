@@ -735,6 +735,99 @@ fn journal_text_checked_errs_on_a_broken_store_and_journal_text_falls_back() {
     );
 }
 
+/// One review-axis attestation envelope, the shape the coverage gate scans.
+fn attestation(ts: &str, head: &str, verdict: &str) -> String {
+    json!({"ts": ts, "type": "review_attestation", "source": "hook",
+           "data": {"reviewer": "r1", "session_id": "s1", "node": "x-test",
+                    "head_sha": head, "verdict": verdict}})
+    .to_string()
+}
+
+#[test]
+fn journal_text_serves_a_rotated_generation_the_store_never_ingested() {
+    // The union read covered the store plus the LIVE tail alone, so
+    // un-ingested bytes a rotation moved into `events.jsonl.1` vanished from
+    // every answer and the review chain flapped covered to zero-verdicts
+    // between two reads of the same head. The read covers every generation
+    // the store has not taken, hash-deduped like the live tail.
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("events.jsonl");
+    // Two distinguishable rows under the judge's allowed verdicts: the
+    // legacy `fail` rides the un-ingested generation, the committed `pass`
+    // rides the store.
+    let legacy = attestation("2026-09-17T12:00:00Z", "h1", "fail");
+    // One store-committed row, then the retired-rotation shape: the legacy
+    // bytes sit in the `.1` generation with no cursor for their inode and
+    // the live file restarts empty. Neither the store nor the live tail
+    // holds the chain.
+    append_envelope(
+        &live,
+        &attestation("2026-09-17T12:01:00Z", "h1", "pass"),
+        None,
+    )
+    .unwrap();
+    append(
+        &dir.path().join("events.jsonl.1"),
+        &[serde_json::from_str::<serde_json::Value>(&legacy).unwrap()],
+    );
+    std::fs::write(&live, b"").unwrap();
+    let text = journal_text(&live, &["review_attestation"]);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "both rows answer: {text}");
+    assert!(
+        lines[0].contains("fail") && lines[1].contains("pass"),
+        "legacy generation first, committed row second: {text}"
+    );
+}
+
+#[test]
+fn journal_text_degrade_answers_from_the_whole_family_oldest_first() {
+    // A store read failure degrades to the whole journal family, never the
+    // live file alone: a live-only answer dropped every committed row and
+    // read zero verdicts while the journals held the chain.
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("events.jsonl");
+    let older = attestation("2026-09-17T12:00:00Z", "h1", "older");
+    let newer = attestation("2026-09-17T12:00:01Z", "h1", "newer");
+    let tail = attestation("2026-09-17T12:00:02Z", "h1", "tail");
+    // Numeric rotation is logrotate-shaped: a higher suffix is an older
+    // file, so `.2` precedes `.1` in the oldest-first answer.
+    append(
+        &dir.path().join("events.jsonl.1"),
+        &[serde_json::from_str::<serde_json::Value>(&newer).unwrap()],
+    );
+    append(
+        &dir.path().join("events.jsonl.2"),
+        &[serde_json::from_str::<serde_json::Value>(&older).unwrap()],
+    );
+    append(
+        &live,
+        &[serde_json::from_str::<serde_json::Value>(&tail).unwrap()],
+    );
+    // A file at the store path that is long enough to pass the truncated
+    // check and not a database: the read errors naming the store.
+    std::fs::write(dir.path().join("events.db"), [b'x'; 200]).unwrap();
+    let err =
+        journal_text_checked(&live, &EventQuery::of_types(&["review_attestation"])).unwrap_err();
+    assert!(err.contains("events.db"), "err names the store path: {err}");
+    let text = journal_text(&live, &["review_attestation"]);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "every generation and the live tail: {text}");
+    assert!(
+        lines[0].contains("older") && lines[1].contains("newer") && lines[2].contains("tail"),
+        "family order is oldest generation first: {text}"
+    );
+    let notice = degrade_notice(
+        &dir.path().join("events.db"),
+        &err,
+        &dir.path().join("events.jsonl"),
+    );
+    assert!(
+        notice.contains("events.db") && notice.contains("events.jsonl"),
+        "the degrade names the failed store and the answering family: {notice}"
+    );
+}
+
 #[test]
 fn journal_text_checked_stale_cursor_falls_back_to_the_full_scan() {
     // AC1-EDGE: the head line changed under the cursor, so the prefix is not

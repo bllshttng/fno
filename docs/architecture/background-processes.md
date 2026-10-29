@@ -83,7 +83,6 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 | `board_render` | `daemon` | `fno-agents-daemon` | renders graph.md plus every configured board target once per moved store version, the render-views command bounded at 300 s | 300 s |
 | `team_ledger` | `daemon` | `fno-agents-daemon` | renders rundown.html | 300 s |
 | `lead_eval` | `daemon` | `fno-agents-daemon` | writes missing eval parts for ended Claude leads | 600 s |
-| `fleet_page` | `daemon` | `fno-agents-daemon` | renders fleet.html | 1800 s |
 | `attention` | `daemon` | `fno-agents-daemon` | selects attention rows into the status payload | 30 s |
 | `notice_route` | `daemon` | `fno-agents-daemon` | routes reconcile warnings to the owning lead and folds repeated failures into one node | 300 s |
 | `otlp_export` | `daemon` | `fno-agents-daemon` | exports the tick ledger's control-plane rows to the configured OTLP endpoint when `telemetry.otlp.enabled` is on | 300 s |

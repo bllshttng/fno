@@ -354,3 +354,50 @@ async fn rm_refusal_on_a_claude_row_without_a_row_id_names_no_stop_and_no_force(
     );
     std::fs::remove_dir_all(home.root()).ok();
 }
+
+/// The user's pin outranks every machine rm, `--force` included: a named
+/// reason meets the keep mark and holds before any stop or teardown arm runs.
+#[tokio::test]
+async fn a_machine_rm_holds_on_a_pinned_row_even_forced() {
+    let home = short_home("rmpinned");
+    let row = claude_rm_row(
+        "pinned-worker",
+        "eeee5555",
+        "eeee5555-1111-2222-3333-444444444444",
+    );
+    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
+    crate::keep_mark::set(
+        &home,
+        "eeee5555-1111-2222-3333-444444444444",
+        "pinned-worker",
+    )
+    .unwrap();
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+    let request = Request::new(
+        1,
+        "agent.rm",
+        json!({"name": "pinned-worker", "force": true, "audit_reason": "codex-sandbox-blocked"}),
+    );
+    let response = handle_rm_with(
+        &ctx,
+        &request,
+        &|| panic!("the hold returns before the roster read"),
+        &|_| panic!("the hold returns before the harness cascade"),
+        &|_, _| panic!("the hold returns before the stop leg"),
+        &|_, _| panic!("the hold returns before the pane arms"),
+        &|_, _| PaneProbe::Unknown,
+    )
+    .await;
+
+    let message = &response.error().unwrap().message;
+    assert!(message.contains("held: keep mark: set "), "{message}");
+    assert!(message.contains("--unkeep pinned-worker"), "{message}");
+    assert_eq!(
+        state::load_registry(&home.registry_json())
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+}

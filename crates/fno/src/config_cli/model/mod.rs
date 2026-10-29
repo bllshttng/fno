@@ -58,6 +58,26 @@ pub struct Error {
     pub loc: Vec<Loc>,
     pub input: Value,
     pub text: String,
+    /// The text is a literal's expected set, which pydantic's `msg` prefixes
+    /// with `Input should be ` (the refusal text prints the set alone).
+    pub literal: bool,
+}
+
+impl Error {
+    /// pydantic's `msg` for this error, the text `fno config set` prints.
+    pub fn msg(&self) -> String {
+        if self.literal {
+            format!("Input should be {}", self.text)
+        } else {
+            self.text.clone()
+        }
+    }
+
+    /// The dotted `loc`, the way the writer names the refused field.
+    pub fn dotted_loc(&self) -> String {
+        let parts: Vec<String> = self.loc.iter().map(Loc::render).collect();
+        parts.join(".")
+    }
 }
 
 /// A validator's failure. `Value` renders `Value error, <text>` (a raised
@@ -228,6 +248,7 @@ impl<'a> Walk<'a> {
             loc: loc.to_vec(),
             input: input.clone(),
             text: text.into(),
+            literal: false,
         });
     }
 
@@ -497,6 +518,9 @@ impl<'a> Walk<'a> {
             None => String::new(),
         };
         self.push(loc, &value, expected);
+        if let Some(last) = self.errors.last_mut() {
+            last.literal = true;
+        }
         None
     }
 
@@ -565,6 +589,66 @@ pub fn validates_as(name: &str, value: &Value) -> bool {
         reg: registry(),
     };
     walk.model(name, value.clone(), &[]).is_some() && walk.errors.is_empty()
+}
+
+/// `<name>.model_validate(value)` for the writer: the validated value or
+/// every error in pydantic's order, plus the lines the validators printed.
+pub fn validate_model(name: &str, value: &Value) -> (Result<Value, Vec<Error>>, Vec<String>) {
+    let mut walk = Walk {
+        ctx: Ctx::default(),
+        errors: Vec::new(),
+        reg: registry(),
+    };
+    let done = walk.model(name, value.clone(), &[]);
+    let result = match done {
+        Some(value) if walk.errors.is_empty() => Ok(value),
+        _ => Err(walk.errors),
+    };
+    (result, walk.ctx.notes)
+}
+
+/// The settings root's model name, where every dotted key starts.
+pub const ROOT_MODEL: &str = ROOT;
+
+/// The JSON-schema node of `model`'s field named `field` (its Python name,
+/// not its alias): the key resolution the writer walks. `None` when the
+/// model has no such field.
+pub fn field_node(model: &str, field: &str) -> Option<Value> {
+    let spec = models().get(model)?;
+    let row = spec.fields.iter().find(|f| f.name == field)?;
+    let key = row.alias.as_deref().unwrap_or(&row.name);
+    Some(
+        model_props(model)
+            .and_then(|props| props.get(key))
+            .cloned()
+            .unwrap_or(Value::Object(Map::new())),
+    )
+}
+
+/// The field's dumped default (a factory called once), `None` when required.
+pub fn field_default(model: &str, field: &str) -> Option<Value> {
+    let spec = models().get(model)?;
+    spec.fields
+        .iter()
+        .find(|f| f.name == field)?
+        .default
+        .clone()
+}
+
+/// A default-constructed `model`, dumped: every field with a default, in
+/// field order.
+pub fn model_defaults(model: &str) -> Value {
+    let mut out = Map::new();
+    for field in models()
+        .get(model)
+        .map(|m| m.fields.as_slice())
+        .unwrap_or(&[])
+    {
+        if let Some(default) = &field.default {
+            out.insert(field.name.clone(), default.clone());
+        }
+    }
+    Value::Object(out)
 }
 
 /// Registry keys are `&'static str`; resolve the walk's names onto them.
@@ -792,13 +876,13 @@ pub fn load_validated(repo_root: &Path) -> Result<Value, String> {
 
 /// Merge-gating opt-outs (`fno/config/optouts.py`): the opt-out value, and
 /// the resolved default the revocation note names.
-const MERGE_GATING_OPTOUTS: [(&str, &str); 3] = [
+pub const MERGE_GATING_OPTOUTS: [(&str, &str); 3] = [
     ("review.self_review_required", "True"),
     ("review.optional_apps", "'built-in optional reviewer list'"),
     ("auto_merge.require_checks_pass", "True"),
 ];
 
-fn is_optout_value(key: &str, value: &Value) -> bool {
+pub fn is_optout_value(key: &str, value: &Value) -> bool {
     if key == "review.optional_apps" {
         return value.as_array().is_some_and(Vec::is_empty);
     }
@@ -924,10 +1008,10 @@ fn path_held(node: &Value, loc: &[Loc]) -> bool {
 }
 
 /// Retired dispatch keys leave disk on every load, once
-/// (`writer.drop_retired_dispatch_keys`): a TOML file whose text names one
-/// has the key removed, an emptied table with it, and each removal returns
-/// one receipt line. The Python writer only rewrites TOML, so a YAML file
-/// keeps the key and prints nothing.
+/// (the loader's one disk dropper): a TOML file whose text names one has
+/// the key removed, an emptied table with it, and each removal returns one
+/// receipt line. The writer only rewrites TOML, so a YAML file keeps the
+/// key and prints nothing.
 pub const RETIRED_DISPATCH_KEYS: [&str; 2] = ["dispatch.allowed_verbs", "dispatch.verb_registry"]; // verb-wording: allow
 
 pub fn drop_retired_dispatch_keys(paths: &[PathBuf]) -> Vec<String> {
@@ -964,28 +1048,15 @@ pub fn drop_retired_dispatch_keys(paths: &[PathBuf]) -> Vec<String> {
     gone
 }
 
-/// The drop under the writer's lock (`<file>.lock`, flock, the 2 s budget
-/// `_locked_update` gets here): re-read under the lock, then replace the
-/// file atomically, so a concurrent `config set` is never clobbered and a
-/// failed write never truncates. A busy lock skips the drop this load.
+/// The drop under the writer's lock (`<file>.lock`, flock, a 2 s budget):
+/// re-read under the lock, then replace the file atomically, so a
+/// concurrent `config set` is never clobbered and a failed write never
+/// truncates. A busy lock skips the drop this load.
 fn locked_drop(path: &Path) -> Vec<&'static str> {
-    use std::os::unix::io::AsRawFd;
-    let mut lock_name = path.as_os_str().to_owned();
-    lock_name.push(".lock");
-    let Ok(lock) = std::fs::File::create(PathBuf::from(lock_name)) else {
+    let budget = Some(std::time::Duration::from_secs(2));
+    let Ok(lock) = super::write::lock_file(&super::write::lock_path(path), budget) else {
         return Vec::new();
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        // SAFETY: the fd belongs to `lock`, which outlives the call.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Vec::new();
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
     let removed = match std::fs::read_to_string(path) {
         Ok(text) => drop_from_toml(path, &text),
         Err(_) => Vec::new(),

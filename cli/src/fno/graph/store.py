@@ -900,6 +900,29 @@ def request_scoreboard_classify(
     )
 
 
+def request_scoreboard_plan_fidelity(
+    rows: list[dict],
+    entries: list[dict],
+    since_days: int,
+    now=None,
+    unmeasurable: str = "refuse",
+) -> dict:
+    """The plan-fidelity join (scoreboard::plan_join in fno-agents) over
+    client-shipped rows. The gate ships its pre-filtered rows + entries and
+    its ``unmeasurable`` disposition; ``now`` rides as ISO. One join, two
+    readers: the scoreboard view and this gate both consume its answer."""
+    return _client_for(GRAPH_JSON).request(
+        "scoreboard_plan_fidelity",
+        {
+            "rows": rows,
+            "entries": entries,
+            "since_days": since_days,
+            "now": now.isoformat() if now is not None else None,
+            "unmeasurable": unmeasurable,
+        },
+    )
+
+
 def _plan_rung_map(entries: list[dict]) -> "dict[str, str]":
     """Node id -> the rung of the node's linked plan, computed client-side.
 

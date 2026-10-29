@@ -4459,14 +4459,13 @@ def _a2a_first_use_gate(
     keep_on = answer in ("", "y", "yes")
 
     try:
-        from fno.config.writer import set_config_value
+        from fno.rust_binary import resolve_front_binary
 
-        set_config_value(
-            "config.agents.a2a.auto",
-            "true" if keep_on else "false",
-            scope="global",
-            lock_timeout=config_lock_timeout_seconds,
-        )
+        argv = ["config", "set", "config.agents.a2a.auto", "true" if keep_on else "false"]
+        # The budget bounds the lock wait only; the run bound covers startup.
+        env = {**os.environ, "FNO_CONFIG_LOCK_TIMEOUT": str(config_lock_timeout_seconds)}
+        subprocess.run([str(resolve_front_binary() or "fno"), *argv], check=True,
+                       capture_output=True, env=env, timeout=config_lock_timeout_seconds + 30)
     except Exception as exc:
         sys.stderr.write(
             f"\nfno-agents a2a: could not persist confirmation ({exc}); "

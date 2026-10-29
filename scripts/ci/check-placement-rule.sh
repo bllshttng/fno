@@ -374,7 +374,9 @@ cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
-cli/src/fno/scoreboard/fold.py
+cli/src/fno/runtime/cli.py
+cli/src/fno/runtime/worktree.py
+crates/fno-agents/src/scoreboard/views.rs
 cli/src/fno/setup/doctor.py
 cli/src/fno/setup/integration.py
 crates/fno/src/setup_autowire.rs

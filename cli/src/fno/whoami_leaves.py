@@ -2,13 +2,15 @@
 
 ``fno whoami`` itself is native (the agent family's port deleted the Python
 render), but its hidden leaves still register here: ``ledger`` serves
-``fno.agents.history``, ``scoreboard`` serves ``fno.scoreboard.cli``, and
-``cost`` forwards to the native session-cost leg. Each is the same one-line
-re-registration the deleted group mounted, so the retired roots
-(``fno cost`` -> ``whoami cost``) keep a registered destination and every
-spelling stays invocable one release out. The ``context`` leaf is gone:
-the diag family's port claimed it natively (``context-run --probe
---summary``).
+``fno.agents.history`` and ``cost`` forwards to the native session-cost
+leg. Each is the same one-line re-registration the deleted group mounted,
+so the retired roots (``fno cost`` -> ``whoami cost``) keep a registered
+destination and every spelling stays invocable one release out. The
+``context`` leaf is gone: the diag family's port claimed it natively
+(``context-run --probe --summary``). The ``scoreboard`` views are native
+(``fno whoami scoreboard``); the retired root spelling prints the
+``command_moves`` notice at the front door and re-spells to the native
+command.
 """
 from __future__ import annotations
 
@@ -50,7 +52,5 @@ whoami_app.command(
 )(cost_command)
 
 from fno.agents.history import history_command  # noqa: E402
-from fno.scoreboard.cli import scoreboard_command  # noqa: E402
 
 whoami_app.command("ledger", hidden=True)(history_command)
-whoami_app.command("scoreboard", hidden=True)(scoreboard_command)

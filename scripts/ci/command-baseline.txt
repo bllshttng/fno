@@ -90,10 +90,8 @@ paths
 plan
 pr-watch
 resume
-scoreboard
 uninstall
 update
 version
 whoami cost
 whoami ledger
-whoami scoreboard
