@@ -1405,6 +1405,7 @@ EOF
 # 6a. AC8-HP: all-inert stub releases the tree in dry run: would-archive plus
 # one indented row per pid, Summary counts it under "would archive".
 S=$(new_merged_tree)
+wt_cache_pin
 STUB=$(mktemp -d -t occ-stub.XXXXXX)
 OCCLOG="$STUB/calls.log"; : > "$OCCLOG"
 make_occupancy_stub "$STUB"
@@ -1430,6 +1431,7 @@ fi
 
 # 6b. AC9-HP: one holds + one inert -> kept with both rows, counted as processes.
 S=$(new_merged_tree)
+wt_cache_pin
 OCCLOG="$STUB/mixed.log"; : > "$OCCLOG"
 ( cd "$S/wt" && exec sleep 301 ) & HOLD1=$!
 ( cd "$S/wt" && exec sleep 302 ) & HOLD2=$!
@@ -1451,6 +1453,7 @@ echo "$out" | grep -qE "^Summary:.* 1 processes" && pass "Summary processes coun
 # 6c. AC10-EDGE: stub exits 2, or prints fewer rows than pids -> fail closed.
 for badmode in exit2 short; do
     S=$(new_merged_tree)
+    wt_cache_pin
     OCCLOG="$STUB/$badmode.log"; : > "$OCCLOG"
     ( cd "$S/wt" && exec sleep 303 ) & HOLD3=$!
     ( cd "$S/wt" && exec sleep 304 ) & HOLD4=$!
@@ -1486,6 +1489,7 @@ rm -rf "$S"
 
 # 6e. AC12-HP: --kill-orphans is retired: one stderr line, verdicts unchanged.
 S=$(new_merged_tree)
+wt_cache_pin
 OCCLOG="$STUB/retired.log"; : > "$OCCLOG"
 ( cd "$S/wt" && exec sleep 305 ) & HOLD5=$!
 disown "$HOLD5" 2>/dev/null || true
@@ -1512,6 +1516,7 @@ echo "== 8. archive-worktree.sh classifies at removal time (x-0396) =="
 # removal proceeds headless with no exit 3. The holder runs in its OWN
 # session (perl setsid) so the archive's self-PGID filter cannot drop it.
 S=$(new_merged_tree)
+wt_cache_pin
 STUB=$(mktemp -d -t occ-stub2.XXXXXX)
 OCCLOG="$STUB/ac13.log"; : > "$OCCLOG"
 make_occupancy_stub "$STUB"
@@ -1534,6 +1539,7 @@ rm -rf "$S"
 
 # 7b. AC14-EDGE: one re-enumerated pid holds -> exit 3 headless, nothing signalled.
 S=$(new_merged_tree)
+wt_cache_pin
 OCCLOG="$STUB/ac14.log"; : > "$OCCLOG"
 ( cd "$S/wt" && exec perl -e 'use POSIX; setsid(); exec "sleep", "300"' ) & HOLD=$!
 disown "$HOLD" 2>/dev/null || true
@@ -1559,6 +1565,7 @@ rm -rf "$S"
 # reapable probe against the sandbox (no venv, no installed fno on CI) and die
 # rc=2 before the occupancy recheck this test exists to exercise.
 S=$(new_merged_tree)
+wt_cache_pin
 mkdir -p "$S/scripts/setup"
 printf '#!/usr/bin/env bash\nexec bash "%s" "$@"\n' "$REPO_ROOT/scripts/setup/archive-worktree.sh" > "$S/scripts/setup/archive-worktree.sh"
 chmod +x "$S/scripts/setup/archive-worktree.sh"
