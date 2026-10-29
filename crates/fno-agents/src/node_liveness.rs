@@ -233,6 +233,13 @@ pub fn run_pass(home: &AgentsHome) -> Result<Value, String> {
     let mut node_claims: BTreeMap<String, ClaimRecord> = BTreeMap::new();
     let mut reconcile: HashMap<String, ClaimRecord> = HashMap::new();
     for rec in claims {
+        // A blueprint lease covers a planning window, never work.
+        if rec
+            .holder
+            .starts_with(crate::claims::BLUEPRINT_HOLDER_PREFIX)
+        {
+            continue;
+        }
         if let Some(id) = rec.key.strip_prefix("node:") {
             node_claims.insert(id.to_string(), rec);
         } else if let Some(id) = rec.key.strip_prefix("reconcile:") {
@@ -413,8 +420,9 @@ fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Fac
     }
 }
 
-/// The node's newest registry worker with a session to resume, unless a
-/// stop someone ran through fno still stands on it.
+/// The node's newest registry worker with a session to resume. A row that
+/// still reads live is never resumed (it may be driving without a claim),
+/// and neither is one a stop through fno still holds down.
 fn restartable_worker(home: &AgentsHome, id: &str) -> Option<String> {
     let registry = crate::state::load_registry(&home.registry_json()).ok()?;
     registry
@@ -426,6 +434,7 @@ fn restartable_worker(home: &AgentsHome, id: &str) -> Option<String> {
                 .as_deref()
                 .is_some_and(|s| s.len() >= 8)
         })
+        .filter(|e| !crate::daemon::is_non_terminal(e.status))
         .filter(|e| !(matches!(e.status, crate::AgentStatus::Exited) && e.stop.is_some()))
         .last()
         .map(|e| e.name.clone())
