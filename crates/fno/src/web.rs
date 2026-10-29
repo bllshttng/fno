@@ -1119,8 +1119,9 @@ async fn refresh_command(st: AppState) {
         crate::needs_overlay::questions_now()
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
+    let agents = layout_agents(&st.snap).unwrap_or_default();
     st.command
-        .record(fleet, questions, &inputs, measured_at)
+        .record(fleet, questions, &inputs, measured_at, &agents)
         .await;
 }
 
@@ -3072,7 +3073,9 @@ console.log("recent searches: 12 cases ok");
         // A recorded, spent first read: the route spawns no fleet read.
         let fleet = serde_json::json!({"machines": [{"host": "bb16", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        command.record(Ok(fleet), Err("x".into()), &none, 1).await;
+        command
+            .record(Ok(fleet), Err("x".into()), &none, 1, &[])
+            .await;
         command.first.set(()).unwrap();
         let state = AppState {
             tx,

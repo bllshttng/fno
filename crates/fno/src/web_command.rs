@@ -45,13 +45,16 @@ impl CommandCache {
         true
     }
 
-    /// Store one refresh. A failed fleet read keeps the last good fold.
+    /// Store one refresh. A failed fleet read keeps the last good fold. The
+    /// local roster joins the asker's session to a pane, so the page can deep
+    /// link the question card to the live session.
     pub(crate) async fn record(
         &self,
         fleet: Result<Value, String>,
         questions: Result<QuestionsFold, String>,
         backlog: &Inputs,
         measured_at: u64,
+        agents: &[crate::proto::AgentRow],
     ) {
         let now = Instant::now();
         let mut st = self.state.lock().await;
@@ -70,6 +73,17 @@ impl CommandCache {
                 .iter()
                 .filter(|q| q.state == "open" && !q.settled)
                 .map(|q| {
+                    let watch_pane = q
+                        .origin
+                        .as_ref()
+                        .and_then(|o| o.session_id.as_deref())
+                        .and_then(|sid| {
+                            agents
+                                .iter()
+                                .filter(|a| !a.exited)
+                                .find(|a| a.harness_session_id.as_deref() == Some(sid))
+                                .and_then(|a| a.pane_id)
+                        });
                     json!({
                         "id": q.id,
                         "kind": q.kind,
@@ -78,6 +92,17 @@ impl CommandCache {
                         "host": q.host,
                         "created_at": q.created_at,
                         "priority": q.priority,
+                        "class": q.class,
+                        "tried": q.tried,
+                        "evidence": q.evidence,
+                        "on_silence": q.on_silence,
+                        "deadline": q.deadline,
+                        "origin": q.origin,
+                        "rung": q.rung,
+                        "via": q.via,
+                        "node_title": q.node_title,
+                        "node_stage": q.node_stage,
+                        "watch_pane": watch_pane,
                     })
                 })
                 .collect()
@@ -205,6 +230,32 @@ mod tests {
                     id: format!("q-{i}"),
                     host: h.map(str::to_string),
                     state: ["open", "answered"][usize::from(*h == Some("answered"))].into(),
+                    origin: (i == 0).then(|| crate::needs_overlay::QuestionOrigin {
+                        handle: "w1".into(),
+                        session_id: Some("aaaa1111-zzzz".into()),
+                        name: Some("t-one".into()),
+                        harness: Some("claude".into()),
+                        host: Some("bb16".into()),
+                    }),
+                    rung: (i == 0).then(|| crate::needs_overlay::QuestionRung {
+                        level: Some("user".into()),
+                        ..Default::default()
+                    }),
+                    via: (i == 0)
+                        .then(|| {
+                            vec![crate::needs_overlay::QuestionHop {
+                                holder_name: Some("tomas".into()),
+                                evidence: Some("read PR 12".into()),
+                                ..Default::default()
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    tried: (i == 0).then(|| "two leads declined".into()),
+                    node_title: (i == 0).then(|| "seat table drawer".into()),
+                    node_stage: (i == 0).then(|| "in_review".into()),
+                    class: (i == 0).then(|| "irreversible".into()),
+                    deadline: (i == 0).then(|| "2026-10-30T09:00:00Z".into()),
+                    on_silence: (i == 0).then(|| "proceed".into()),
                     ..QuestionItem::default()
                 })
                 .collect(),
@@ -218,6 +269,16 @@ mod tests {
         qs: Result<QuestionsFold, String>,
         at: u64,
     ) -> Value {
+        read_with_agents(cache, fleet, qs, at, &[]).await
+    }
+
+    async fn read_with_agents(
+        cache: &CommandCache,
+        fleet: Result<Value, String>,
+        qs: Result<QuestionsFold, String>,
+        at: u64,
+        agents: &[crate::proto::AgentRow],
+    ) -> Value {
         let rows = vec![
             json!({"id": "x-1", "status": "in_review", "pr_number": 7, "merge_status": "",
                 "additional_prs": [{"number": 9}, {"number": 10, "merge_status": "closed"}]}),
@@ -227,7 +288,7 @@ mod tests {
             rows,
             ..Inputs::default()
         };
-        cache.record(fleet, qs, &backlog, at).await;
+        cache.record(fleet, qs, &backlog, at, agents).await;
         cache.model().await
     }
 
@@ -252,6 +313,20 @@ mod tests {
         );
         assert_eq!(m["waiting"]["questions"][1]["host"], "iMac2D2");
         assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 3);
+        // The provenance fields ride through, and an asker whose session
+        // joins no live local pane carries no watch pane.
+        let q0 = &m["waiting"]["questions"][0];
+        assert_eq!(q0["origin"]["name"], "t-one");
+        assert_eq!(q0["origin"]["session_id"], "aaaa1111-zzzz");
+        assert_eq!(q0["via"][0]["holder_name"], "tomas");
+        assert_eq!(q0["rung"]["level"], "user");
+        assert_eq!(q0["tried"], "two leads declined");
+        assert_eq!(q0["node_title"], "seat table drawer");
+        assert_eq!(q0["node_stage"], "in_review");
+        assert_eq!(q0["class"], "irreversible");
+        assert_eq!(q0["deadline"], "2026-10-30T09:00:00Z");
+        assert_eq!(q0["on_silence"], "proceed");
+        assert!(q0["watch_pane"].is_null());
         assert_eq!(
             m["waiting"]["prs"],
             json!([
@@ -263,6 +338,26 @@ mod tests {
             (&m["measured_at"], &m["fleet_error"]),
             (&json!(100), &Value::Null)
         );
+    }
+
+    #[tokio::test]
+    async fn an_asker_on_a_live_local_pane_carries_its_watch_pane() {
+        let agents = vec![crate::proto::AgentRow {
+            name: "t-one".into(),
+            harness_session_id: Some("aaaa1111-zzzz".into()),
+            pane_id: Some(12),
+            ..Default::default()
+        }];
+        let qs = questions(&[None]);
+        let m = read_with_agents(
+            &CommandCache::default(),
+            Ok(two_machines()),
+            Ok(qs),
+            100,
+            &agents,
+        )
+        .await;
+        assert_eq!(m["waiting"]["questions"][0]["watch_pane"], 12);
     }
 
     #[tokio::test]
@@ -291,7 +386,9 @@ mod tests {
             rows_error: Some("graph locked".into()),
             ..Inputs::default()
         };
-        cache.record(fail("x"), Err("x".into()), &locked, 300).await;
+        cache
+            .record(fail("x"), Err("x".into()), &locked, 300, &[])
+            .await;
         let m = cache.model().await;
         assert_eq!(m["waiting"]["prs"].as_array().map(Vec::len), Some(2));
         assert_eq!(m["waiting"]["prs_error"], "graph locked");
