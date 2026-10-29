@@ -136,7 +136,7 @@ fn journal_agent_revived(
 
 /// Resolve `session_id` to one registry row, minting one if needed, through the
 /// plan precedence: an existing registry row; a `.fno/target-state.md` whose
-/// session id matches; then the harness session stores (the heal-token shellout,
+/// session id matches; then the harness session stores (the in-process healer,
 /// which adopts best-effort). Identity only. Returns the row (as JSON), any
 /// `fno_id` carried, and the source.
 pub(crate) fn synthesize_and_adopt(
@@ -164,7 +164,7 @@ pub(crate) fn synthesize_and_adopt(
         return Ok((value, None, AdoptSource::Manifest));
     }
     // 3. Harness session stores (heal-token adopts best-effort and writes the row).
-    match heal_token(session_id, &registry_path, None) {
+    match heal_token(session_id, &registry_path) {
         Ok(Some(row)) => Ok((row, None, AdoptSource::HarnessStore)),
         Ok(None) => Err(AdoptError::NoEvidence),
         Err(msg) => Err(AdoptError::Io(msg)),
@@ -222,7 +222,7 @@ fn refresh_bg_substrate(registry_path: &std::path::Path, e: &Value) -> Option<Va
     .flatten()
 }
 
-/// Manifest-only adoption used as the `resume` fallback: `resolve_entry_with_heal_scoped`
+/// Manifest-only adoption used as the `resume` fallback: `resolve_entry_with_heal`
 /// already consulted the registry + harness stores, so this is just the manifest
 /// path. Returns the minted row (already upserted), `None` when no manifest
 /// matches, or the actual registry/serialization failure.

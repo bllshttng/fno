@@ -136,6 +136,14 @@ RUST_CLIENT_COMMANDS = frozenset(
         # client command (the owned-identity ladder plus the row mint under the
         # shared registry lock). Starts nothing.
         "register",
+        # The registry and store leaves, daemon-free status arguments like
+        # register: the canonical agent-name bridge (the daemon stays the name
+        # validator, the client the generator), the caller's own mesh row, the
+        # poisoned-registry schema repair, and the registry-miss healer.
+        "name",
+        "whoami",
+        "registry-repair",
+        "heal-token",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -389,13 +397,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # The bundle transfer: the Python shim execs the native fno binary's
     # `agents transcript` role (the history pattern, not a client action).
     "transcript",
-    #: the canonical agent-name bridge, the shell twin of the Python
-    # dispatchers' direct `fno.agents.naming` import. Pure Python and purely
-    # computational (no daemon state); there is NO `name` on the Rust client, so
-    # it must never auto-route. The daemon stays the name VALIDATOR at the spawn
-    # boundary and must not become the generator - truncating there would make
-    # the name a caller reasons about differ from the one the runtime registers.
-    "name",
     "retask",
     # The cadence-deadline silence backstop. Pure Python: it reads the registry
     # and each row's transcript truth through fno.agents.sweep, writes nothing,
@@ -406,17 +407,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # Pure Python (fno.agents.history + the shared ledger matcher); there is no
     # Rust port, so it must never auto-route to the daemon.
     "history",
-    #: the registry-miss healer the Rust lifecycle commands shell out to.
-    # Pure Python (fno.agents.store_fallback); no Rust port. Staying out of
-    # RUST_CLIENT_COMMANDS is the recursion guard for that shellout, so listing it
-    # here is documentary - AUTO_ROUTE_COMMANDS already excludes it.
-    "heal-token",
-    #: "what is MY registered mesh name?" - reads FNO_AGENT_SELF + the
-    # registry, read-only. Pure Python (fno.agents.whoami); there is NO
-    # `whoami` on the Rust client, so it must never auto-route to the daemon.
-    # Listing it here is defensive/documentary: whoami is not in
-    # RUST_CLIENT_COMMANDS, so AUTO_ROUTE_COMMANDS already excludes it.
-    "whoami",
     #: the spawn-gate audit surface. The registered Python command is a shim
     # that execs `fno-agents census --workers`; the `fno` front execs it
     # directly. `top` is no client action, so it must never auto-route.
@@ -429,13 +419,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # Read-only, pure Python (fno.agents.session_truth reads the transcript via
     # peek); no Rust client port, so it must never auto-route to the daemon.
     "truth",
-    #: the poisoned-registry repair command (`fno agents registry-repair`).
-    # Pure Python (fno.agents.registry holds the lock, asserts no row carries a
-    # newer-schema field, backs up, and replaces atomically). No Rust client
-    # port, so it must never auto-route. Routing it would also be backwards:
-    # the file it repairs is the one the daemon reads, and it is a hand-run
-    # recovery command, not a daemon operation.
-    "registry-repair",
     # The orphan sweep. The registered Python command is a shim that execs
     # `fno-agents census --orphans` (crates/fno-agents/src/orphans.rs); the
     # body routes in every runtime mode, and `orphans` is no client action, so
@@ -1221,6 +1204,10 @@ _STATUS_ARG_LEAVES = {
     "capabilities": "--capabilities",
     "target-family": "--target-family",
     "register": "--register",
+    "name": "--name",
+    "whoami": "--whoami",
+    "registry-repair": "--registry-repair",
+    "heal-token": "--heal-token",
     "liveness": "--liveness",
 }
 
