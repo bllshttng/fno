@@ -85,11 +85,11 @@ fi
 FAKEBIN="$SBX/fakebin"; EMPTYDIR="$SBX/empty"
 mkdir -p "$FAKEBIN" "$EMPTYDIR"
 cat > "$SBX/fakepy" <<'PY'
-#!/usr/bin/env bash
+#!/bin/sh
 echo "uv-managed-python"
 PY
 chmod +x "$SBX/fakepy"
-printf '#!/usr/bin/env bash\necho "%s"\n' "$SBX/fakepy" > "$FAKEBIN/uv"
+printf '#!/bin/sh\necho "%s"\n' "$SBX/fakepy" > "$FAKEBIN/uv"
 chmod +x "$FAKEBIN/uv"
 
 OUT6="$(env PATH="$FAKEBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("picked-me")')"
