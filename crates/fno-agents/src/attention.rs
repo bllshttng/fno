@@ -355,10 +355,11 @@ pub(crate) fn display_title(question: &str) -> String {
     lines.next().unwrap_or("").to_string()
 }
 
-/// `[<kebab-token>:<key>]` followed by a space or end-of-line: the durable
-/// askers' dedupe bracket (`watchdog-stale`, `reap-hold`, ...). A bracket a
-/// question opens with on purpose - a token that is not kebab-case, a key
-/// with no colon inside - stays untouched.
+/// `[<multiword-kebab-token>:<key>]` followed by a space or end-of-line: the
+/// durable askers' dedupe bracket (`watchdog-stale`, `reap-hold`, ... - every
+/// shipped token is hyphenated). A bracket a question opens with on purpose -
+/// a single-word or uppercase token, a key with no colon inside - stays
+/// untouched.
 fn strip_marker_bracket(line: &str) -> &str {
     let Some(rest) = line.strip_prefix('[') else {
         return line;
@@ -369,7 +370,7 @@ fn strip_marker_bracket(line: &str) -> &str {
     let Some((token, key)) = rest[..close].split_once(':') else {
         return line;
     };
-    let kebab = !token.is_empty()
+    let kebab = token.contains('-')
         && token
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
@@ -1208,6 +1209,11 @@ mod tests {
         assert_eq!(
             display_title("[Not a marker] keep me"),
             "[Not a marker] keep me"
+        );
+        assert_eq!(
+            display_title("[a:b] keep me"),
+            "[a:b] keep me",
+            "a single-word token is not a marker"
         );
         // No text: the row names its asker and node instead of a bare id.
         let silent = row("q-e", "", json!({"asker": "daemon", "node": "x-9f8e"}));
