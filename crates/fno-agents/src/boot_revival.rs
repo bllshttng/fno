@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::claude_roster::ClaudeAgentsSnapshot;
@@ -35,11 +35,11 @@ pub(crate) const SENDER: &str = "fno/boot-revival";
 /// in one boot can differ by a few seconds.
 const BOOT_DRIFT_S: u64 = 120;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ReceiptRow {
     pub(crate) name: String,
     /// "revived", "skipped" or "failed".
-    pub(crate) outcome: &'static str,
+    pub(crate) outcome: String,
     pub(crate) reason: String,
 }
 
@@ -47,11 +47,16 @@ impl ReceiptRow {
     fn new(name: &str, outcome: &'static str, reason: impl Into<String>) -> Self {
         Self {
             name: name.to_string(),
-            outcome,
+            outcome: outcome.to_string(),
             reason: reason.into(),
         }
     }
 }
+
+/// The worker-revive concurrency bound. The 2026-10-29 boot measured twelve
+/// parallel respawns racing one supervisor birth and losing (exit 16); the
+/// batch runs this many at a time behind one upfront birth.
+pub(crate) const REVIVE_CONCURRENCY: usize = 3;
 
 /// Plan the pass once, then revive off the caller's thread. Planning reads
 /// the registry before the startup sweep rewrites a single status, so a row
@@ -84,26 +89,121 @@ pub(crate) fn start(home: &AgentsHome) {
     // fleet again on its next start. The tap is the fallback for a row the
     // pass never reached.
     write_receipt(&receipt, boot, &rows);
-    let home = home.clone();
+    let pass_home = home.clone();
     std::thread::spawn(move || {
-        for name in &leads {
-            rows.push(revive(&home, name));
-        }
-        let handles: Vec<_> = workers
-            .into_iter()
-            .map(|name| {
-                let home = home.clone();
-                std::thread::spawn(move || revive(&home, &name))
-            })
-            .collect();
-        for handle in handles {
-            if let Ok(row) = handle.join() {
-                rows.push(row);
-            }
-        }
+        rows.extend(revive_batch(
+            &pass_home,
+            &leads,
+            &workers,
+            |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
+            |home, name| revive(home, name),
+            |home, name| {
+                crate::reentry::resolve_reentry(
+                    &home.registry_json(),
+                    name,
+                    crate::reentry::ReentryTransition::Resume,
+                    None,
+                    None,
+                )
+            },
+        ));
         write_receipt(&receipt, boot, &rows);
-        notify(&home, &rows);
+        notify(&pass_home, &rows);
     });
+}
+
+/// The config-dir overlay a plan's guard addresses, the dedupe key for the
+/// upfront birth: two plans in one config dir share one supervisor.
+fn plan_env_key(plan: &crate::reentry::ReentryPlan) -> String {
+    plan.env
+        .get("CLAUDE_CONFIG_DIR")
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The pass body: one supervisor birth per distinct plan env before any
+/// respawn, leads sequentially, then the workers through bounded chunks,
+/// then one sequential retry over every failed row. `resolve_fn`, `guard_fn`
+/// and `revive_fn` are injected so tests observe the ordering without
+/// spawning claude.
+fn revive_batch<F, G, R>(
+    home: &AgentsHome,
+    leads: &[String],
+    workers: &[String],
+    guard_fn: G,
+    revive_fn: F,
+    resolve_fn: R,
+) -> Vec<ReceiptRow>
+where
+    G: Fn(&crate::reentry::ReentryPlan),
+    F: Fn(&AgentsHome, &str) -> ReceiptRow + Sync,
+    R: Fn(&AgentsHome, &str) -> Result<crate::reentry::ReentryPlan, String>,
+{
+    let mut rows: Vec<ReceiptRow> = Vec::new();
+    // Resolve each worker once for the upfront birth: the guard is
+    // idempotent, so one call per distinct config dir turns twelve racing
+    // births into one. The batch threads re-resolve inside revive(); the
+    // plans here feed the guard only.
+    let (planned, resolve_failed) = resolve_via(home, workers, &resolve_fn);
+    let mut seen = HashSet::new();
+    for (_, plan) in &planned {
+        if seen.insert(plan_env_key(plan)) {
+            guard_fn(plan);
+        }
+    }
+    for name in leads {
+        rows.push(revive_fn(home, name));
+    }
+    for chunk in workers.chunks(REVIVE_CONCURRENCY) {
+        let revive = &revive_fn;
+        std::thread::scope(|s| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|name| {
+                    let home = home.clone();
+                    s.spawn(move || revive(&home, name))
+                })
+                .collect();
+            for handle in handles {
+                if let Ok(row) = handle.join() {
+                    rows.push(row);
+                }
+            }
+        });
+    }
+    rows.extend(resolve_failed);
+    let failed: Vec<String> = rows
+        .iter()
+        .filter(|r| r.outcome == "failed")
+        .map(|r| r.name.clone())
+        .collect();
+    for name in &failed {
+        let retried = revive_fn(home, name);
+        if let Some(slot) = rows.iter_mut().find(|r| &r.name == name) {
+            *slot = retried;
+        }
+    }
+    rows
+}
+
+/// resolve_targets over an injected resolver, the tests' seam for plans.
+fn resolve_via<R>(
+    home: &AgentsHome,
+    names: &[String],
+    resolve_fn: &R,
+) -> (Vec<(String, crate::reentry::ReentryPlan)>, Vec<ReceiptRow>)
+where
+    R: Fn(&AgentsHome, &str) -> Result<crate::reentry::ReentryPlan, String>,
+{
+    let mut planned = Vec::new();
+    let mut failed = Vec::new();
+    for name in names {
+        match resolve_fn(home, name) {
+            Ok(plan) => planned.push((name.clone(), plan)),
+            Err(reason) => failed.push(ReceiptRow::new(name, "failed", reason)),
+        }
+    }
+    (planned, failed)
 }
 
 /// Post-pass delivery: a failed row reaches its spawned_by lead with the
@@ -389,24 +489,28 @@ pub(crate) fn plan(
 /// One revival through the canonical re-entry plan: the listing lists the
 /// job, so the plan is `claude respawn <job id>`.
 pub(crate) fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
-    let plan = match crate::reentry::resolve_reentry(
+    match crate::reentry::resolve_reentry(
         &home.registry_json(),
         name,
         crate::reentry::ReentryTransition::Resume,
         None,
         None,
     ) {
-        Ok(plan) => plan,
-        Err(reason) => return ReceiptRow::new(name, "failed", reason),
-    };
-    match crate::resume_wake::run_and_confirm_respawn(&plan, name, "revive", "agent_revived", home)
-    {
-        0 => ReceiptRow::new(name, "revived", plan.argv.join(" ")),
-        code => ReceiptRow::new(
+        Ok(plan) => match crate::resume_wake::run_and_confirm_respawn(
+            &plan,
             name,
-            "failed",
-            format!("{} exited {code}", plan.argv.join(" ")),
-        ),
+            "revive",
+            "agent_revived",
+            home,
+        ) {
+            0 => ReceiptRow::new(name, "revived", plan.argv.join(" ")),
+            code => ReceiptRow::new(
+                name,
+                "failed",
+                format!("{} exited {code}", plan.argv.join(" ")),
+            ),
+        },
+        Err(reason) => ReceiptRow::new(name, "failed", reason),
     }
 }
 
@@ -490,6 +594,142 @@ fn write_receipt(receipt: &Path, boot: u64, rows: &[ReceiptRow]) {
     }
 }
 
+struct ReceiptBody {
+    boot: u64,
+    rows: Vec<ReceiptRow>,
+}
+
+fn read_receipt(receipt: &Path) -> Result<ReceiptBody, String> {
+    let raw = std::fs::read_to_string(receipt)
+        .map_err(|e| format!("receipt {} unreadable ({e})", receipt.display()))?;
+    let body: Value = serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "receipt {} does not parse ({e}); a corrupted receipt is a failed reading, never a silent zero",
+            receipt.display()
+        )
+    })?;
+    let boot = body
+        .get("boot")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("receipt {} carries no boot stamp", receipt.display()))?;
+    let rows: Vec<ReceiptRow> =
+        serde_json::from_value(body.get("rows").cloned().unwrap_or(json!([])))
+            .map_err(|e| format!("receipt {} rows unreadable ({e})", receipt.display()))?;
+    Ok(ReceiptBody { boot, rows })
+}
+
+/// Merge a rerun into the receipt rows: every rerun-set row takes its fresh
+/// reading (a revive outcome, else the re-judged skip); rows outside the set
+/// keep the old line. Returns the merged rows and whether any rerun row
+/// still reads failed.
+fn merge_rerun_rows(
+    old: Vec<ReceiptRow>,
+    rerun: &HashSet<String>,
+    revived: Vec<ReceiptRow>,
+    fresh_skips: Vec<ReceiptRow>,
+) -> (Vec<ReceiptRow>, bool) {
+    let fresh: std::collections::HashMap<String, ReceiptRow> = fresh_skips
+        .into_iter()
+        .map(|r| (r.name.clone(), r))
+        .collect();
+    let revived: std::collections::HashMap<String, ReceiptRow> =
+        revived.into_iter().map(|r| (r.name.clone(), r)).collect();
+    let mut any_failed = false;
+    let mut rows = old;
+    for row in rows.iter_mut() {
+        if !rerun.contains(&row.name) {
+            continue;
+        }
+        if let Some(new) = revived.get(&row.name) {
+            *row = new.clone();
+        } else if let Some(skip) = fresh.get(&row.name) {
+            *row = skip.clone();
+        }
+        if row.outcome == "failed" {
+            any_failed = true;
+        }
+    }
+    (rows, any_failed)
+}
+
+/// `fno agents session recover --boot-failed`: re-judge this boot's failed
+/// and skipped rows through the same pass rules, revive the survivors
+/// through the same bounded batch, and rewrite the receipt in place. Exit 0
+/// when no rerun row reads failed at the end, 1 otherwise.
+pub(crate) fn rerun_failed(home: &AgentsHome) -> i32 {
+    let receipt = home.root().join(RECEIPT_FILE);
+    let body = match read_receipt(&receipt) {
+        Ok(body) => body,
+        Err(reason) => {
+            eprintln!("fno agents session recover: {reason}");
+            return 1;
+        }
+    };
+    let boot = body.boot;
+    let old_rows = body.rows;
+    let rerun: HashSet<String> = old_rows
+        .iter()
+        .filter(|r| r.outcome != "revived")
+        .map(|r| r.name.clone())
+        .collect();
+    if rerun.is_empty() {
+        println!("boot revival rerun: no failed or skipped rows this boot");
+        return 0;
+    }
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        eprintln!(
+            "fno agents session recover: registry {} unreadable",
+            home.registry_json().display()
+        );
+        return 1;
+    };
+    let listing = crate::claude_roster::read_all_agents_union();
+    if !listing.is_known() || !listing.warning_text().is_empty() {
+        eprintln!(
+            "fno agents session recover: claude agents --json --all unread ({}); fix the listing and rerun",
+            listing.warning_text()
+        );
+        return 1;
+    }
+    let (closed, merged) = closed_and_merged_nodes();
+    let (mut leads, mut workers, fresh_skips) =
+        plan(&registry.entries, &listing, &closed, &merged, boot);
+    leads.retain(|n| rerun.contains(n));
+    workers.retain(|n| rerun.contains(n));
+    let fresh_skips: Vec<ReceiptRow> = fresh_skips
+        .into_iter()
+        .filter(|r| rerun.contains(&r.name))
+        .collect();
+    let run_rows = revive_batch(
+        home,
+        &leads,
+        &workers,
+        |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
+        |home, name| revive(home, name),
+        |home, name| {
+            crate::reentry::resolve_reentry(
+                &home.registry_json(),
+                name,
+                crate::reentry::ReentryTransition::Resume,
+                None,
+                None,
+            )
+        },
+    );
+    let (merged_rows, any_failed) =
+        merge_rerun_rows(old_rows, &rerun, run_rows.clone(), fresh_skips);
+    write_receipt(&receipt, boot, &merged_rows);
+    for row in merged_rows.iter().filter(|r| rerun.contains(&r.name)) {
+        println!("{}: {} ({})", row.name, row.outcome, row.reason);
+    }
+    notify(home, &run_rows);
+    if any_failed {
+        1
+    } else {
+        0
+    }
+}
+
 /// This boot's start, in epoch seconds.
 fn boot_time() -> Option<u64> {
     if cfg!(target_os = "linux") {
@@ -520,6 +760,8 @@ mod tests {
     use super::*;
     use crate::claude_roster::ClaudeAgentRow;
     use crate::AgentStatus;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     const BOOT: u64 = 1_790_338_000;
 
@@ -712,5 +954,143 @@ mod tests {
         // A clock step nudges kern.boottime; it is still the same boot.
         assert!(ran_this_boot(recorded_boot(&receipt), BOOT + 3));
         assert!(!ran_this_boot(recorded_boot(&receipt), BOOT + 86_400));
+    }
+
+    fn plan_fixture(name: &str, config_dir: Option<&str>) -> crate::reentry::ReentryPlan {
+        crate::reentry::ReentryPlan {
+            resolved: true,
+            transition: "resume".into(),
+            mechanism: "respawn".into(),
+            name: name.into(),
+            fno_id: None,
+            node: None,
+            session_id: "123e4567-0000-0000-0000-000000000000".into(),
+            short_id: "123e4567".into(),
+            launch_account: "default".into(),
+            claude_config_dir: config_dir.map(str::to_string),
+            route_settings_path: None,
+            cwd: "/tmp/wt".into(),
+            substrate: "thread".into(),
+            mux: None,
+            argv: vec!["claude".into(), "--resume".into(), "123e4567".into()],
+            env: Default::default(),
+        }
+    }
+
+    #[test]
+    fn the_worker_batch_runs_three_at_a_time_behind_one_birth_per_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        let workers: Vec<String> = (0..7).map(|i| format!("w{i}")).collect();
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let max_inflight = Arc::new(AtomicUsize::new(0));
+        let g_log = log.clone();
+        let r_log = log.clone();
+        let i_inflight = inflight.clone();
+        let m_inflight = max_inflight.clone();
+        let rows = revive_batch(
+            &home,
+            &[],
+            &workers,
+            move |_plan| {
+                g_log.lock().unwrap().push("guard".into());
+            },
+            move |_home, name| {
+                let n = i_inflight.fetch_add(1, Ordering::SeqCst) + 1;
+                m_inflight.fetch_max(n, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                r_log.lock().unwrap().push(format!("revive:{name}"));
+                i_inflight.fetch_sub(1, Ordering::SeqCst);
+                ReceiptRow::new(name, "revived", "")
+            },
+            |_home, name| Ok(plan_fixture(name, Some("/cfg"))),
+        );
+        assert_eq!(rows.len(), 7);
+        assert!(rows.iter().all(|r| r.outcome == "revived"), "{rows:?}");
+        assert_eq!(max_inflight.load(Ordering::SeqCst), 3);
+        let lg = log.lock().unwrap();
+        assert_eq!(lg.iter().filter(|e| *e == "guard").count(), 1, "{lg:?}");
+        assert_eq!(lg[0], "guard", "the birth precedes every revive: {lg:?}");
+    }
+
+    #[test]
+    fn a_failed_row_is_retried_once_and_the_retry_replaces_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        let workers = vec!["flaky".to_string(), "down".to_string()];
+        let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let c1 = calls.clone();
+        let c2 = calls.clone();
+        let rows = revive_batch(
+            &home,
+            &[],
+            &workers,
+            |_plan| {},
+            move |_home, name| {
+                c1.lock().unwrap().push(name.to_string());
+                if name == "flaky" {
+                    let count = {
+                        let log = c2.lock().unwrap();
+                        log.iter().filter(|n| n.as_str() == "flaky").count()
+                    };
+                    if count == 1 {
+                        return ReceiptRow::new(name, "failed", "exited 16");
+                    }
+                }
+                ReceiptRow::new(name, "revived", "")
+            },
+            |_home, name| Ok(plan_fixture(name, None)),
+        );
+        let flaky: Vec<&ReceiptRow> = rows.iter().filter(|r| r.name == "flaky").collect();
+        assert_eq!(
+            flaky.len(),
+            1,
+            "one row per worker, not one per attempt: {rows:?}"
+        );
+        assert_eq!(flaky[0].outcome, "revived", "{rows:?}");
+        let log = calls.lock().unwrap();
+        assert_eq!(log.iter().filter(|n| n.as_str() == "flaky").count(), 2);
+        assert_eq!(log.iter().filter(|n| n.as_str() == "down").count(), 1);
+    }
+
+    #[test]
+    fn rerun_merge_keeps_rows_outside_the_set_and_reports_surviving_failures() {
+        let old = vec![
+            ReceiptRow::new("a", "revived", "kept"),
+            ReceiptRow::new("b", "failed", "exited 16"),
+            ReceiptRow::new("c", "failed", "exited 16"),
+            ReceiptRow::new("d", "skipped", "listed as working"),
+        ];
+        let rerun: HashSet<String> = ["b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let (merged, any_failed) = merge_rerun_rows(
+            old,
+            &rerun,
+            vec![ReceiptRow::new("b", "revived", "claude respawn 1111")],
+            vec![ReceiptRow::new("d", "skipped", "node x done")],
+        );
+        let find = |name: &str| merged.iter().find(|r| r.name == name).unwrap();
+        assert_eq!(find("a").outcome, "revived", "{merged:?}");
+        assert_eq!(find("a").reason, "kept");
+        assert_eq!(find("b").outcome, "revived", "{merged:?}");
+        assert_eq!(
+            find("c").outcome,
+            "failed",
+            "no fresh reading keeps the failure"
+        );
+        assert_eq!(find("d").outcome, "skipped");
+        assert_eq!(find("d").reason, "node x done");
+        assert!(any_failed, "c keeps its failure");
+    }
+
+    #[test]
+    fn boot_failed_refuses_a_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        let code = crate::client_commands::run_recover(
+            &["--boot-failed".to_string(), "somename".to_string()],
+            &home,
+        );
+        assert_eq!(code, 2);
     }
 }
