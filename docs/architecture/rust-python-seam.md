@@ -164,7 +164,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 15 | paths_testing (leaf) | 75 | 0 | 6/- | 0 | 2 |
 | 16 | __init__ (leaf) | 279 | 0 | 7/- | 0 | 0 |
 | 17 | paths_cli (leaf) | 187 | 0 | 7/- | 0 | 5 |
-| 18 | plugin_install_cli (leaf) | 79 | 0 | 7/- | 0 | 2 |
+| 18 | plugin_install_cli (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 79 | 0 | 7/- | 0 | 2 |
 | 19 | worker (leaf) | 795 | 0 | 8/1 | 439 | 6 |
 | 20 | autonomy_cli (leaf) | 362 | 0 | 12/- | 0 | 5 |
 | 21 | doctor_cli (leaf) | 136 | 0 | 22/1 | 0 | 22 |

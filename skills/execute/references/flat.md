@@ -74,7 +74,7 @@ For each numbered change under `## Changes`:
 2. **Read** any "Patterns to Reuse" sources referenced
 3. **Make** the change as described
 4. **Test** if a quick check is available (typecheck, related test file)
-5. **Commit** atomically - one commit per numbered change, scoped to that change's files only. Never `git add .` or defer commits to the end.
+5. **Commit** atomically - one commit per numbered change, scoped to that change's files only. Never `git add .` or defer commits to the end. Put a `Task <n>: <title>` line in the message. `<n>` is the plan's task id: the Execution Strategy id, or the change number of a flat plan. The commit hook reads that line and records the task's start and end.
 
 Work sequentially through the numbered changes. If a change depends on a previous one, the numbering handles ordering.
 
@@ -90,12 +90,9 @@ Run every step listed under `## Verification`:
 
 ## 3b. Status-breakpoint emit (best-effort)
 
-After each change lands (or blocks), emit the task-boundary event so observers can track the run. `task_started` already fired from `resolve-executor.sh` at dispatch; `run_summary` fires from `finalize` at the loop terminal. You emit the middle boundary — one non-fatal line per change, never gating anything:
+A change that commits needs no emit. The PostToolUse commit hook (`hooks/diff-budget-commit.sh`) reads the `Task <n>:` line and records `task_started` and `task_done` for that task, with the node and run from the manifest. `run_summary` fires from `finalize` at the loop terminal. If a change cannot commit, emit by hand. Use one non-fatal line that gates nothing:
 
 ```bash
-# SUCCESS / DONE_WITH_CONCERNS after a change commits:
-python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary task_done \
-  --task "<n>" --outcome SUCCESS --data '{"commit":"<sha>","concerns":0}'
 # BLOCKED when a change cannot proceed (also the <help> path):
 python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary blocked \
   --task "<n>" --data '{"reason":"<why>"}'
@@ -103,7 +100,7 @@ python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary blocked \
 
 `--run`/`--node` fall back to the manifest, so they are optional here. Emission is best-effort: a failure prints one stderr note and never stops the run.
 
-The emit also settles the task row when the manifest binds a node, so a flat run stamps `done` on rows it never claimed. That is deliberate rather than an oversight: a flat run is one worker on the whole plan, so there is no peer to guard against and no claim to take. What it does mean is that a later `waves` pass over the same node reads those tasks as shipped and refuses to re-offer them, which is the right answer for work that really did land. A flat run that did NOT finish a task must emit `blocked` for it, not silence, or the row keeps whatever status it had.
+If the manifest binds a node, the commit hook also settles the task row. So a flat run stamps `done` on rows it never claimed. That is deliberate. A flat run is one worker on the whole plan, so it has no peer to guard against and no claim to take. A later `waves` pass over the same node then reads those tasks as shipped. It refuses to re-offer them, which is right for work that really did land. A flat run that did NOT finish a task must emit `blocked` for it, not silence, or the row keeps whatever status it had.
 
 ## 3c. Revision-round crumb (builder trail, best-effort)
 

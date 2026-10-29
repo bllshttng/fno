@@ -105,6 +105,11 @@ NATIVE_SERVED_LEAVES = {
     "config routing",
     "doctor route",
     "config schema",
+    # The doctor and plugin leaves answer through the native classify door
+    # now (config_cli's merged Door); the config group's click tree no
+    # longer mounts them.
+    "config doctor",
+    "config plugin",
     # The observer family (sweep | judge | replay) answers from the native
     # spawn-overlay door now; the doctor group's typer tree no longer mounts it.
     "doctor observer judge",

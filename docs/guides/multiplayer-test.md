@@ -23,6 +23,8 @@ Run this on each machine. Use the primary's tailnet name:
 fno config set store.remote_url http://primary-host:18080
 ```
 
+Keep the primary on a private network such as Tailscale, never on a LAN or public bind. For a real fleet, use `https://primary-host.<tailnet>.ts.net` behind `tailscale serve`, so the token and the rows do not cross the wire in clear. The plain `http://` form is for this drill.
+
 The key goes to the global `~/.fno/config.toml`, the only file the store reads it from. To share the backlog too, also run `fno config set store.share_backlog true`. Do not edit the file by hand: `fno config set` checks the key and writes a real TOML bool.
 
 Release every node claim on a machine before you set the key. A claim in the local file stays there, and the primary never sees it. Restart the daemon after a change, because the daemon reads the key once.

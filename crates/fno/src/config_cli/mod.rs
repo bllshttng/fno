@@ -1,11 +1,8 @@
 //! The `fno config` read-side doors that answer natively on the front door.
 //!
-//! One classify, one dispatch line in `main.rs` ([`run`]), bodies beside
-//! this module: [`get`], [`history`], [`leaves`], [`plugin_install`] and the
-//! writer, [`write`] (`set`, `unset`, `rm`). The doctor command stays
-//! Python: its bare engine (`run_doctor` in `cli/src/fno/setup/doctor.py`)
-//! is the setup family's file, so the command moves with its engine rather
-//! than forking a second doctor leg.
+//! One classify, one dispatch ([`run`]), bodies beside this module:
+//! [`get`], [`history`], [`leaves`], [`plugin_install`], `config doctor` in
+//! `crate::config_doctor`, and the writer, [`write`] (`set`, `unset`, `rm`).
 //!
 //! The reader replays the Python loader's merge: candidate chain, per-layer
 //! legacy alias, deep merge, worktree-local allowlist, then the schema table
@@ -40,6 +37,8 @@ pub enum Door {
     StatusSinks(Vec<OsString>),
     ActiveBacklog,
     PluginInstall(Vec<OsString>),
+    PluginGroup(Vec<OsString>),
+    Doctor(Vec<OsString>),
     Set(Vec<OsString>),
     /// `unset` and its `rm` alias; the command names the usage line.
     Unset(&'static str, Vec<OsString>),
@@ -55,15 +54,16 @@ pub fn run(door: Door) -> i32 {
         Door::StatusSinks(rest) => leaves::run_status_sinks(&rest),
         Door::ActiveBacklog => leaves::run_active_backlog(&[]),
         Door::PluginInstall(rest) => plugin_install::run(&rest),
+        Door::PluginGroup(rest) => plugin_install::run_group(&rest),
+        Door::Doctor(rest) => crate::config_doctor::run(&rest),
         Door::Set(rest) => write::set::run(&rest),
         Door::Unset(command, rest) => write::unset::run(command, &rest),
     }
 }
 
-/// Claim the read-side `config` leaves lexically, before clap, the way
+/// Claim the native `config` leaves lexically, before clap, the way
 /// `config_defaults::classify` does. `None` forwards to the Python shell
-/// untouched: the doctor command, the lazy mounts (accounts, paths, route,
-/// routing) and the codex arm of `plugin install`.
+/// untouched: the lazy mounts (accounts, paths, route, routing).
 pub fn classify(args: &[OsString]) -> Option<Door> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
@@ -88,43 +88,16 @@ pub fn classify(args: &[OsString]) -> Option<Door> {
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
         ["config", "active-backlog"] => Some(Door::ActiveBacklog),
+        ["config", "plugin", "install", ..] => Some(Door::PluginInstall(args[3..].to_vec())),
+        ["config", "plugin", rest @ ..] => Some(Door::PluginGroup(
+            rest.iter().map(|w| OsString::from(*w)).collect(),
+        )),
+        ["config", "doctor", ..] => Some(Door::Doctor(args[2..].to_vec())),
         ["config", "set", ..] => Some(Door::Set(args[2..].to_vec())),
         ["config", "unset", ..] => Some(Door::Unset("unset", args[2..].to_vec())),
         ["config", "rm", ..] => Some(Door::Unset("rm", args[2..].to_vec())),
-        ["config", "plugin", "install", tail @ ..] => {
-            // The codex arm stays on the Python converge engine (ship-phase
-            // ruling, setup family): forward whenever the harness word is or
-            // could be codex, claim every other known word. Flag modes carry
-            // the harness after them (`--stage-only codex`), and `--source`
-            // consumes a value that may legally spell "codex".
-            match harness_word(tail) {
-                Some("codex") | None => None,
-                Some(_) => Some(Door::PluginInstall(args[3..].to_vec())),
-            }
-        }
         _ => None,
     }
-}
-
-/// The harness word of a `plugin install` tail: the first token that is not a
-/// flag-mode flag, not `--force`/`-F`, and not the value of a `--source`.
-/// `None` means no harness word (or only flags) - forward, so Python prints
-/// its usage line byte-identically.
-fn harness_word<'a>(tail: &[&'a str]) -> Option<&'a str> {
-    let mut expect_source_value = false;
-    for token in tail {
-        if expect_source_value {
-            expect_source_value = false;
-            continue;
-        }
-        match *token {
-            "--check" | "--restage" | "--stage-only" | "--env-only" | "--force" | "-F" => {}
-            "--source" => expect_source_value = true,
-            t if t.starts_with('-') => {}
-            t => return Some(t),
-        }
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +197,7 @@ pub fn resolve_path(path: &Path) -> PathBuf {
 // The candidate chain and its layers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn global_settings_path() -> PathBuf {
+pub fn global_settings_path() -> PathBuf {
     if let Some(env) = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         if !env.is_empty() {
             return PathBuf::from(env);
@@ -449,7 +422,7 @@ const WORKTREE_LOCAL_KEYS: [&str; 1] = ["project.id"];
 
 /// `_worktree_local_override`: the local file reduced to the allowlisted
 /// leaves, nested back into blocks.
-pub(super) fn worktree_local_override(local_raw: &Value) -> Option<Value> {
+pub(crate) fn worktree_local_override(local_raw: &Value) -> Option<Value> {
     let mut leaves: Vec<(String, Value)> = Vec::new();
     flatten_leaf_paths(local_raw, "", &mut leaves);
     let mut override_map = Map::new();
@@ -778,18 +751,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn harness_word_skips_flags_and_source_values() {
-        assert_eq!(harness_word(&["claude", "--force"]), Some("claude"));
-        assert_eq!(harness_word(&["--force", "opencode"]), Some("opencode"));
-        assert_eq!(harness_word(&["--source", "codex", "agy"]), Some("agy"));
-        assert_eq!(harness_word(&["codex"]), Some("codex"));
-        assert_eq!(harness_word(&["--stage-only", "codex"]), Some("codex"));
-        assert_eq!(harness_word(&["--force"]), None);
-        assert_eq!(harness_word(&[]), None);
-    }
-
-    #[test]
-    fn classify_claims_the_doors_and_forwards_doctor_and_codex() {
+    fn classify_claims_the_doors_and_forwards_the_lazy_mounts() {
         let os = |words: &[&str]| -> Vec<OsString> { words.iter().map(OsString::from).collect() };
         assert!(matches!(
             classify(&os(&["config", "get", "review.max_rounds"])),
@@ -815,6 +777,20 @@ mod tests {
             classify(&os(&["config", "plugin", "install", "claude", "--dev"])),
             Some(Door::PluginInstall(_))
         ));
+        // Every harness word, codex included, and the harness-less form reach
+        // the one exec door; the Python shim that did the same exec is gone.
+        assert!(matches!(
+            classify(&os(&["config", "plugin", "install", "codex"])),
+            Some(Door::PluginInstall(_))
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "plugin", "install"])),
+            Some(Door::PluginInstall(_))
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "doctor", "--post-merge"])),
+            Some(Door::Doctor(_))
+        ));
         assert!(matches!(
             classify(&os(&["config", "set", "a.b", "1"])),
             Some(Door::Set(_))
@@ -823,13 +799,6 @@ mod tests {
             classify(&os(&["config", "rm", "a.b"])),
             Some(Door::Unset("rm", _))
         ));
-        // The doctor stays Python.
-        assert_eq!(classify(&os(&["config", "doctor", "--post-merge"])), None);
-        // The codex arm stays on the Python converge engine.
-        assert_eq!(
-            classify(&os(&["config", "plugin", "install", "codex"])),
-            None
-        );
         // The bare group and unknown leaves forward.
         assert_eq!(classify(&os(&["config"])), None);
         assert_eq!(classify(&os(&["config", "no-such-leaf"])), None);

@@ -880,7 +880,7 @@ fn config_bash_arm(
 
 /// The paths one call writes: file_path first, then the Bash write-form
 /// targets (or the apply_patch header paths). Paths come back as written.
-fn write_targets(file_path: &str, command: &str) -> Vec<String> {
+pub(crate) fn write_targets(file_path: &str, command: &str) -> Vec<String> {
     let mut out = Vec::new();
     if !file_path.is_empty() {
         out.push(file_path.to_string());
