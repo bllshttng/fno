@@ -189,7 +189,9 @@ fn parse_check(
         let max = max.and_then(|v| v.as_i64()).unwrap_or(0);
         require(
             max > 0,
-            format!("{where_prefix}: kind=tool-budget requires max_tool_calls as a positive integer"),
+            format!(
+                "{where_prefix}: kind=tool-budget requires max_tool_calls as a positive integer"
+            ),
         )?;
         return Ok(GradeCheck {
             kind: kind.to_string(),
@@ -344,13 +346,21 @@ mod tests {
     #[test]
     fn a_tool_budget_without_a_positive_integer_refuses_naming_id_file_and_field() {
         let dir = tempfile::tempdir().unwrap();
-        for (name, field) in [("missing", ""), ("zero", "    max_tool_calls: 0\n"), ("text", "    max_tool_calls: many\n")] {
+        for (name, field) in [
+            ("missing", ""),
+            ("zero", "    max_tool_calls: 0\n"),
+            ("text", "    max_tool_calls: many\n"),
+        ] {
             let body = format!(
                 "id: budget-{name}\ntier: capability\ngrade:\n  - kind: tool-budget\n{field}"
             );
             let p = write_task(dir.path(), &format!("{name}.yaml"), &body);
             let err = load_task(&p).unwrap_err();
-            assert!(err.0.contains(&format!("task 'budget-{name}'")), "{0}", err.0);
+            assert!(
+                err.0.contains(&format!("task 'budget-{name}'")),
+                "{0}",
+                err.0
+            );
             assert!(err.0.contains(&format!("{name}.yaml")), "{0}", err.0);
             assert!(err.0.contains("max_tool_calls"), "{0}", err.0);
         }

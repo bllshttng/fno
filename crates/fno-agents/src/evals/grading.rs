@@ -141,7 +141,10 @@ fn grade_grep(check: &super::bank::GradeCheck, workdir: &std::path::Path) -> Che
 /// attempt alone). A missing or unreadable transcript FAILS the check: an
 /// unmeasured route is never a pass. Codex and opencode workers write no
 /// claude transcript, so they fail here as unmeasured.
-fn grade_tool_budget(check: &super::bank::GradeCheck, transcript_dir: &std::path::Path) -> CheckResult {
+fn grade_tool_budget(
+    check: &super::bank::GradeCheck,
+    transcript_dir: &std::path::Path,
+) -> CheckResult {
     let max = check.max_tool_calls.unwrap_or(0);
     let fail = |why: String| CheckResult {
         kind: "tool-budget".into(),
@@ -154,7 +157,12 @@ fn grade_tool_budget(check: &super::bank::GradeCheck, transcript_dir: &std::path
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
             .collect(),
-        Err(e) => return fail(format!("no transcript dir {}: {e}", transcript_dir.display())),
+        Err(e) => {
+            return fail(format!(
+                "no transcript dir {}: {e}",
+                transcript_dir.display()
+            ))
+        }
     };
     if files.is_empty() {
         return fail(format!("no transcript in {}", transcript_dir.display()));
@@ -274,6 +282,10 @@ mod tests {
         assert!(!r.passed && r.detail.contains("unmeasured"), "{}", r.detail);
         let empty = tempfile::tempdir().unwrap();
         let r = grade_tool_budget(&budget(40), empty.path());
-        assert!(!r.passed && r.detail.contains("no transcript"), "{}", r.detail);
+        assert!(
+            !r.passed && r.detail.contains("no transcript"),
+            "{}",
+            r.detail
+        );
     }
 }
