@@ -186,7 +186,6 @@ impl Col {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChatTab {
     Chats,
-    You,
     System,
     Archive,
 }
@@ -292,9 +291,6 @@ impl MessagesBoard {
 /// chat list, no tree.
 #[derive(Debug)]
 pub(crate) enum TreeRow {
-    /// The operator's own entry, first in the agent list: picking it lists
-    /// every session the user typed into.
-    You,
     /// A broadcast group row (Broadcasts filter), by its scope.
     Channel(String),
     /// One mail participant, live or ended, by name (never a raw session
@@ -323,8 +319,8 @@ pub(crate) enum ChatRow {
         stuck: bool,
         ts: String,
     },
-    /// A You thread: the session whose transcript carries the operator's
-    /// typed Q&A pairs, newest first.
+    /// The Me row: the user's own thread with the selected agent, read from
+    /// the session transcript's typed turns. It heads the Chats tab.
     YouThread {
         session_id: String,
         name: String,
@@ -410,14 +406,6 @@ impl MessagesBoard {
             }
             return rows;
         }
-        let has_you = self
-            .projection()
-            .and_then(|p| p.get("you"))
-            .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty());
-        if has_you && self.list_tab == ListTab::Agents {
-            rows.push(TreeRow::You);
-        }
         let mut seen: HashSet<&str> = HashSet::new();
         for p in self.agent_rows() {
             if !seen.insert(text_of(p, "key")) {
@@ -432,62 +420,81 @@ impl MessagesBoard {
                 live: bool_of(p, "live"),
             });
         }
+        // A session the user typed into but no mail ever named still gets a
+        // row, so its Me thread stays one step down from an agent.
+        if self.list_tab == ListTab::Agents {
+            for t in self.you_threads() {
+                let sid = text_of(t, "session_id");
+                let held = rows.iter().any(|r| {
+                    matches!(r, TreeRow::Agent { key, .. }
+                        if self.you_rows_for(key).iter().any(|y| text_of(y, "session_id") == sid))
+                });
+                if !held && !sid.is_empty() {
+                    let name = match text_of(t, "name") {
+                        "" => sid.chars().take(8).collect(),
+                        name => name.to_string(),
+                    };
+                    rows.push(TreeRow::Agent {
+                        key: sid.to_string(),
+                        name,
+                        live: true,
+                    });
+                }
+            }
+        }
         rows
     }
 
-    /// Column 2's rows for `agent`, per the active tab: the Chats tab lists
-    /// the pair threads whose other party is not reaped, the You tab one row
-    /// per session whose transcript carries typed turns, the System tab one
-    /// entry per system arm, and the Archive tab the threads whose other
-    /// party is reaped.
-    /// The active chat tab's rows: the You tab is session-wide (no column-1
-    /// selection gates it), the others read the selected agent's.
-    pub(crate) fn active_chat_rows(&self) -> Vec<ChatRow> {
-        match self.col2 {
-            ChatTab::You => self.chat_rows(""),
-            _ => self
-                .sel_agent
-                .as_deref()
-                .map(|a| self.chat_rows(a))
-                .unwrap_or_default(),
-        }
+    fn you_threads(&self) -> Vec<&Value> {
+        self.projection()
+            .and_then(|p| p.get("you"))
+            .and_then(Value::as_array)
+            .map(|rows| rows.iter().collect())
+            .unwrap_or_default()
     }
 
+    /// The user's own threads with one agent: the You rows whose session is
+    /// the agent's (its key, session id or fno id), or whose name is its name.
+    fn you_rows_for(&self, agent: &str) -> Vec<&Value> {
+        let p = self
+            .projection()
+            .and_then(|p| p.get("participants"))
+            .and_then(Value::as_array)
+            .and_then(|ps| ps.iter().find(|p| text_of(p, "key") == agent));
+        let ids: Vec<&str> = [
+            Some(agent),
+            p.map(|p| text_of(p, "session_id")),
+            p.map(|p| text_of(p, "fno_id")),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+        let name = p.map(|p| text_of(p, "name")).unwrap_or("");
+        self.you_threads()
+            .into_iter()
+            .filter(|t| {
+                ids.contains(&text_of(t, "session_id"))
+                    || (!name.is_empty() && text_of(t, "name") == name)
+            })
+            .collect()
+    }
+
+    /// The selected agent's rows for the active tab.
+    pub(crate) fn active_chat_rows(&self) -> Vec<ChatRow> {
+        self.sel_agent
+            .as_deref()
+            .map(|a| self.chat_rows(a))
+            .unwrap_or_default()
+    }
+
+    /// Column 2's rows for `agent`, per the active tab: the Chats tab lists
+    /// the user's own thread with the agent first (Me), then the pair
+    /// threads whose other party is not reaped; the System tab one entry per
+    /// system arm; the Archive tab the threads whose other party is reaped.
     pub(crate) fn chat_rows(&self, agent: &str) -> Vec<ChatRow> {
         let proj = self.projection();
         match self.col2 {
-            ChatTab::You => {
-                let marks = crate::view_store::load_messages_read_marks();
-                let mut rows: Vec<ChatRow> = proj
-                    .and_then(|p| p.get("you"))
-                    .and_then(Value::as_array)
-                    .map(|rows| {
-                        rows.iter()
-                            .map(|t| {
-                                let sid = text_of(t, "session_id");
-                                let chat_id = format!("you:{sid}");
-                                let last_ts = text_of(t, "last_ts");
-                                let unread =
-                                    marks.get(&chat_id).map(String::as_str) < Some(last_ts);
-                                ChatRow::YouThread {
-                                    session_id: sid.to_string(),
-                                    name: text_of(t, "name").to_string(),
-                                    last_ts: last_ts.to_string(),
-                                    unread,
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                rows.sort_by(|a, b| match (a, b) {
-                    (
-                        ChatRow::YouThread { last_ts: a, .. },
-                        ChatRow::YouThread { last_ts: b, .. },
-                    ) => b.cmp(a),
-                    _ => std::cmp::Ordering::Equal,
-                });
-                return rows;
-            }
             ChatTab::System => {
                 let mut arms: Vec<String> = proj
                     .and_then(|p| p.get("system"))
@@ -512,6 +519,20 @@ impl MessagesBoard {
         }
         let mut rows: Vec<ChatRow> = Vec::new();
         let marks = crate::view_store::load_messages_read_marks();
+        if self.col2 == ChatTab::Chats {
+            let mut mine = self.you_rows_for(agent);
+            mine.sort_by(|a, b| text_of(b, "last_ts").cmp(text_of(a, "last_ts")));
+            for t in mine {
+                let sid = text_of(t, "session_id");
+                let last_ts = text_of(t, "last_ts");
+                rows.push(ChatRow::YouThread {
+                    session_id: sid.to_string(),
+                    name: "Me".to_string(),
+                    last_ts: last_ts.to_string(),
+                    unread: marks.get(&format!("you:{sid}")).map(String::as_str) < Some(last_ts),
+                });
+            }
+        }
         if let Some(threads) = proj
             .and_then(|p| p.get("threads"))
             .and_then(Value::as_array)
@@ -702,7 +723,6 @@ impl MessagesBoard {
         lines.push(BLine::meta(""));
         for (i, row) in rows.iter().enumerate() {
             let mut line = match row {
-                TreeRow::You => BLine::of(&[seg("  ", BRole::Meta), seg("You", BRole::Label)]),
                 TreeRow::Channel(scope) => {
                     BLine::of(&[seg(format!("fleet:{}", channel_label(scope)), BRole::Label)])
                 }
@@ -723,18 +743,13 @@ impl MessagesBoard {
     fn chats_column(&self, w: usize) -> Vec<BLine> {
         let wrap_w = w.saturating_sub(2).max(1);
         let focused = self.col == Col::Chats;
-        let strip = if self.col2 == ChatTab::You {
-            BLine::of(&[tab_seg("You", true, focused)])
-        } else {
-            BLine::of(&[
-                tab_seg("Chats", self.col2 == ChatTab::Chats, focused),
-                tab_seg("System", self.col2 == ChatTab::System, focused),
-                tab_seg("Archive", self.col2 == ChatTab::Archive, focused),
-            ])
-        };
+        let strip = BLine::of(&[
+            tab_seg("Chats", self.col2 == ChatTab::Chats, focused),
+            tab_seg("System", self.col2 == ChatTab::System, focused),
+            tab_seg("Archive", self.col2 == ChatTab::Archive, focused),
+        ]);
         let mut lines = vec![strip, BLine::meta("")];
-        // The You tab is session-wide: no column-1 selection gates it.
-        if self.col2 != ChatTab::You && self.sel_agent.is_none() {
+        if self.sel_agent.is_none() {
             lines.extend(BLine::meta("(select an agent in column 1)").wrap(wrap_w));
             return lines;
         }
@@ -742,7 +757,6 @@ impl MessagesBoard {
         if rows.is_empty() {
             let empty = match self.col2 {
                 ChatTab::Chats => "(no chats)",
-                ChatTab::You => "(no You threads)",
                 ChatTab::System => "(no system mail)",
                 ChatTab::Archive => "(no archived chats)",
             };
@@ -993,11 +1007,11 @@ impl MessagesBoard {
                 }
             }
             last_ts = ts.to_string();
-            // The operator's typed turn, under its own You label.
+            // The operator's typed turn, under its own Me label.
             let typed = item.get("typed_text").and_then(Value::as_str).unwrap_or("");
             if !typed.is_empty() {
                 push_blank(&mut lines, &mut owners);
-                let mut label = BLine::of(&[seg("You", BRole::Label)]);
+                let mut label = BLine::of(&[seg("Me", BRole::Label)]);
                 label.band = selected;
                 lines.push(label);
                 owners.push(Some(item_index));
@@ -1479,7 +1493,6 @@ pub(crate) async fn keys(
                         ChatTab::Chats => ChatTab::System,
                         ChatTab::System => ChatTab::Archive,
                         ChatTab::Archive => ChatTab::Chats,
-                        ChatTab::You => ChatTab::You,
                     };
                     b.cursors[1] = 0;
                 } else {
@@ -1529,13 +1542,6 @@ async fn act(
                 return Ok(());
             };
             match row {
-                TreeRow::You => {
-                    b.sel_agent = None;
-                    b.sel_thread = None;
-                    b.col2 = ChatTab::You;
-                    b.cursors[1] = 0;
-                    b.col = Col::Chats;
-                }
                 TreeRow::Channel(scope) => {
                     b.sel_thread = Some(format!("channel:{scope}"));
                     b.cursors[2] = b.conversation_rows().len().saturating_sub(1);
@@ -1544,10 +1550,6 @@ async fn act(
                 TreeRow::Agent { key, .. } => {
                     b.sel_agent = Some(key.clone());
                     b.sel_thread = None;
-                    if b.col2 == ChatTab::You {
-                        b.col2 = ChatTab::Chats;
-                        b.cursors[1] = 0;
-                    }
                     b.col = Col::Chats;
                 }
             }
@@ -1902,7 +1904,7 @@ fn retry_notice(stdout: &str, to: &str) -> String {
 fn tree_row_agent_key(row: &TreeRow) -> Option<String> {
     match row {
         TreeRow::Agent { key, .. } => Some(key.clone()),
-        TreeRow::You | TreeRow::Channel(_) => None,
+        TreeRow::Channel(_) => None,
     }
 }
 
@@ -1992,14 +1994,8 @@ pub(crate) async fn mouse(
             }
             Col::Chats => {
                 let rel = (rep.col as usize).saturating_sub(tree_w);
-                let you = view
-                    .messages_board
-                    .as_ref()
-                    .is_some_and(|b| b.col2 == ChatTab::You);
                 let spans = tab_spans(0, &["Chats", "System", "Archive"], 0);
-                let tab = if you {
-                    None
-                } else if hit(spans[0].clone(), rel) {
+                let tab = if hit(spans[0].clone(), rel) {
                     Some(ChatTab::Chats)
                 } else if hit(spans[1].clone(), rel) {
                     Some(ChatTab::System)

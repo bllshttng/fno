@@ -650,9 +650,9 @@ fn fixture_projection() -> serde_json::Value {
     })
 }
 
-/// The You tab: rows read the projection's `you` array
-/// (newest first, one per session, unread off the chat-id read marks) and
-/// the detail paints both turns left-aligned, per item.
+/// The Me thread: picking an agent lists the user's own thread with it
+/// first (unread off the chat-id read marks), and the detail paints both
+/// turns left-aligned, per item.
 #[tokio::test]
 async fn messages_you_tab_contract() {
     use super::super::LayoutView;
@@ -686,27 +686,29 @@ async fn messages_you_tab_contract() {
             {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"mid-turn follow-up","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
         ],
     }));
-    // You is column 1's first row; Enter on it opens the user's chats.
-    assert!(
-        matches!(b.tree_rows().first(), Some(TreeRow::You)),
-        "{:?}",
-        b.tree_rows()
-    );
-    b.cursors[0] = 0;
+    // The drill is Agent, then Me, then the chat: column 1 lists agents
+    // only, so a session no mail named still gets its own row.
+    let rows = b.tree_rows();
+    let gavin = rows
+        .iter()
+        .position(
+            |r| matches!(r, TreeRow::Agent { key, name, .. } if key == "fresh" && name == "gavin"),
+        )
+        .expect("gavin row");
+    b.cursors[0] = gavin;
     b.col = Col::Tree;
     super::keys(&mut view, b"\r", &mut tokio::io::sink())
         .await
         .unwrap();
     let b = view.messages_board.as_mut().unwrap();
-    assert_eq!(b.col2, ChatTab::You);
+    assert_eq!(b.sel_agent.as_deref(), Some("fresh"));
+    assert_eq!(b.col2, ChatTab::Chats);
+    // Me heads the agent's chats: the user's own thread with gavin only.
+    let rows = b.active_chat_rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(
-        b.chats_column(50)[0].text.trim() == "You",
-        "no tab strip under You"
-    );
-    let rows = b.chat_rows("");
-    assert_eq!(rows.len(), 2, "{rows:?}");
-    assert!(
-        matches!(&rows[0], ChatRow::YouThread { name, unread, .. } if name == "gavin" && *unread),
+        matches!(&rows[0], ChatRow::YouThread { name, unread, session_id, .. }
+            if name == "Me" && *unread && session_id == "fresh"),
         "{rows:?}"
     );
     b.cursors[1] = 0;
@@ -730,37 +732,23 @@ async fn messages_you_tab_contract() {
         .iter()
         .position(|t| t.as_str() == "  why did the gate refuse?")
         .expect("typed bubble");
-    assert_eq!(texts[typed_i - 1], "You", "{texts:?}");
+    assert_eq!(texts[typed_i - 1], "Me", "{texts:?}");
     assert!(
         texts
             .iter()
             .any(|t| t.as_str() == "  Because the base was stale."),
         "{texts:?}"
     );
-    // Navigation needs no column-1 selection: the You tab is session-wide,
-    // and the detail's j/k walks the item bubbles, not conversation rows.
+    // The detail's j/k walks the item bubbles, not conversation rows.
     let b = view.messages_board.as_mut().unwrap();
-    b.sel_agent = None;
-    b.col = Col::Chats;
-    b.cursors[1] = 0;
-    super::keys(&mut view, b"j", &mut tokio::io::sink())
-        .await
-        .unwrap();
-    assert_eq!(
-        view.messages_board.as_ref().unwrap().cursors,
-        [0, 1, 1],
-        "j moves on the You tab"
-    );
-    let b = view.messages_board.as_mut().unwrap();
-    b.sel_thread = Some("you:fresh".into());
     b.col = Col::Thread;
     b.cursors[2] = 1;
     super::keys(&mut view, b"k", &mut tokio::io::sink())
         .await
         .unwrap();
     assert_eq!(
-        view.messages_board.as_ref().unwrap().cursors,
-        [0, 1, 0],
+        view.messages_board.as_ref().unwrap().cursors[2],
+        0,
         "k walks the You thread's items"
     );
 }

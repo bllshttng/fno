@@ -638,8 +638,8 @@ fn live_frame(
         Some(ViewKind::MessagesThread) => Some((Col::Thread, ChatTab::Chats)),
         Some(ViewKind::MessagesSystem) => Some((Col::Chats, ChatTab::System)),
         Some(ViewKind::MessagesArchive) => Some((Col::Chats, ChatTab::Archive)),
-        Some(ViewKind::MessagesYou) => Some((Col::Chats, ChatTab::You)),
-        Some(ViewKind::MessagesYouThread) => Some((Col::Thread, ChatTab::You)),
+        Some(ViewKind::MessagesYou) => Some((Col::Chats, ChatTab::Chats)),
+        Some(ViewKind::MessagesYouThread) => Some((Col::Thread, ChatTab::Chats)),
         _ => None,
     };
     let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
@@ -662,13 +662,15 @@ fn live_frame(
             .is_none_or(|t| t.is_empty());
         // The You views refuse the same way: a gather with no `you` rows
         // paints "(no You threads)" and proves nothing (law d-9f18c4d5).
-        let you_empty = matches!(messages_shot, Some((_, ChatTab::You)))
-            && mail
-                .as_ref()
-                .ok()
-                .and_then(|p| p.get("you"))
-                .and_then(Value::as_array)
-                .is_none_or(|t| t.is_empty());
+        let you_empty = matches!(
+            kind,
+            Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread)
+        ) && mail
+            .as_ref()
+            .ok()
+            .and_then(|p| p.get("you"))
+            .and_then(Value::as_array)
+            .is_none_or(|t| t.is_empty());
         crate::client::messages_view::apply_gather(&mut view, gen, mail, Err("no org tree".into()));
         if board_empty || you_empty {
             return Err(
@@ -681,8 +683,29 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
             b.col = col;
             b.col2 = tab;
         }
-        // The You detail opens on the newest thread: one shot shows the typed
-        // bubble right and the reply left.
+        // The You views select the first agent with a Me row (the user's own
+        // thread one step down); the thread view then opens that Me thread.
+        let you_view = matches!(
+            kind,
+            Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread)
+        );
+        if let (true, Some(b)) = (you_view, view.messages_board.as_mut()) {
+            let rows = b.tree_rows();
+            let pick = rows.iter().enumerate().find_map(|(i, r)| match r {
+                crate::client::messages_view::TreeRow::Agent { key, .. }
+                    if b.chat_rows(key).iter().any(|c| {
+                        matches!(c, crate::client::messages_view::ChatRow::YouThread { .. })
+                    }) =>
+                {
+                    Some((i, key.clone()))
+                }
+                _ => None,
+            });
+            if let Some((i, key)) = pick {
+                b.cursors[0] = i;
+                b.sel_agent = Some(key);
+            }
+        }
         if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
             if let Some(sid) = b.active_chat_rows().into_iter().find_map(|row| match row {
                 crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
