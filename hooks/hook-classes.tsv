@@ -29,6 +29,7 @@ claude	Stop	session-state.sh	wait	-
 claude	Stop	target-stop-hook.sh	block	open
 claude	Stop	context-nudge.sh	block	open
 claude	Stop	operator-capture-nudge.sh	wait	-
+claude	Stop	transcript-push.sh	wait	-
 claude	PostModelSwitch	session-state.sh	wait	-
 claude	StopFailure	target-stopfailure.sh	wait	-
 claude	PostToolUse	format-on-edit.sh	wait	-
