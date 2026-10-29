@@ -44,4 +44,4 @@ The allowance no longer re-runs the parent. It forks a child with the given scop
 
 ## Placement
 
-`fno agents workspace worktree ensure` lands the worktree at the conductor location (`~/conductor/workspaces/<repo>/<name>`), so `start` inherits that placement. See [.claude/rules/worktrees.md](../../.claude/rules/worktrees.md) for the full worktree-location contract.
+`fno agents workspace worktree ensure` lands the worktree at the conductor location (`~/conductor/workspaces/<repo>/<name>`), so `start` inherits that placement. See [worktree-mechanics.md](worktree-mechanics.md) (Placement) for the full worktree-location contract.

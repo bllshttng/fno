@@ -90,6 +90,9 @@ EXIT_GATE_UNAVAILABLE = 87
 # Rust gate only (crates/fno-agents/src/spawn_gate.rs): fleet top shows a
 # live worker on the spawn's node.
 EXIT_NODE_OCCUPIED = 92
+# Rust gate only (crates/fno-agents/src/spawn_gate.rs): the rule engine's
+# door:spawn read refused the spawn.
+EXIT_RULE_REFUSED = 93
 
 
 QUEUE_TIMEOUT_S = 600.0

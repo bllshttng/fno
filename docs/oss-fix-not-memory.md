@@ -12,7 +12,7 @@ footnote is open source: users inherit the code, docs, and runtime behavior - ne
 
 1. The fix itself - a guard, gate, corrected default, or command that makes the trap impossible.
 2. Self-teaching runtime text - a refusal message, receipt line, or `--help` string. It cannot drift from behavior. It drifts from POLICY freely. A ruling retiring a command leaves every string still teaching it, and `scripts/ci/check-retired-command-strings.sh` closes that gap.
-3. A doc (`docs/`) or rule (`.claude/rules/`). If it is load-bearing enough, add an `AGENTS.md` pointer.
+3. A doc (`docs/`) or a project rule (`.fno-rules/*.toml`, wired through decide at prompt and pre-tool events). If it is load-bearing enough, add an `AGENTS.md` pointer.
 4. A test. When the invariant breaks, it fails loudly.
 5. A filed node whose details name the concrete fix path (`fno backlog idea` - the command, file, gate).
 

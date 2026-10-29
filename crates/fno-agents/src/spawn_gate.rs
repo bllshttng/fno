@@ -81,6 +81,10 @@ pub const EXIT_GATE_UNAVAILABLE: i32 = 87;
 /// not busyness, so no bypass excuses the named-worker refusal; the
 /// roster-down variant names the broken read and yields to `--force`.
 pub const EXIT_NODE_OCCUPIED: i32 = 92;
+/// The rule engine's door:spawn read refused the spawn. Retryable by
+/// flipping or expiring the rule (`event_rules.<id>` config, expiry, or a
+/// lifted cap), never by `--force`.
+pub const EXIT_RULE_REFUSED: i32 = 93;
 
 /// The prefix every PASS-path gate line carries. Only a refusal may start
 /// `spawn-gate: ` - the verdict line and the refusal sentences - so the
@@ -1316,6 +1320,56 @@ pub struct GateInput {
 const REVIEW_SESSION_REMEDY: &str = "run the review in the session that did the work: \
      /fno:review <level> ($fno:review <level> on codex), or fno do target request-self-review";
 
+/// The rule engine's read of one spawn: one `door:spawn` event from the
+/// gate input. A block refuses on the `rule` axis; a warn or unread source
+/// prints and the spawn proceeds. Sits after the `FNO_SPAWN_GATE=0` bypass,
+/// so test suites that disable the gate never read a rule store.
+fn rules_gate(config_cwd: &Path, input: &GateInput) -> Result<(), Refusal> {
+    let ev = crate::rules::Event {
+        kind: "door:spawn".to_string(),
+        harness: Some(
+            if std::env::var_os("CODEX_THREAD_ID").is_some() {
+                "codex"
+            } else {
+                "claude"
+            }
+            .to_string(),
+        ),
+        model: input.route_provider.clone(),
+        node: input.node.clone(),
+        phase: input.session_phase.clone().or_else(|| {
+            input
+                .seed
+                .as_deref()
+                .and_then(crate::spawn_phase::seed_phase)
+                .map(str::to_owned)
+        }),
+        project: crate::law_match::resolve_project(
+            Some(config_cwd),
+            &crate::law_match::settings_sources(),
+        )
+        .ok(),
+        ..crate::rules::Event::default()
+    };
+    let ruling = crate::rules_source::rule(config_cwd, &ev);
+    if let Some(sentence) = crate::rules_source::block_sentence(&ruling) {
+        return Err(Refusal::with_receipt(
+            EXIT_RULE_REFUSED,
+            serde_json::json!({
+                "status": "refused",
+                "reason": "rule",
+                "remedy": "flip or expire the rule (event_rules.<id> in fno config, expiry, or a lifted cap); --force does not clear a rule",
+            }),
+        )
+        .ev("axis", serde_json::json!("rule"))
+        .ev("reason", serde_json::json!(sentence)));
+    }
+    for line in crate::rules_source::advisory_lines(&ruling) {
+        eprintln!("{line}");
+    }
+    Ok(())
+}
+
 /// Refuse before `--force` and `FNO_SPAWN_GATE=0`: a review runs in the
 /// session that did the work, never in a new one.
 fn review_session_gate(input: &GateInput) -> Option<Refusal> {
@@ -1407,11 +1461,14 @@ fn decide_gate(
 
     // FNO_SPAWN_GATE=0 disables the gate entirely (the FNO_THINK_SPAWN=0
     // precedent): test suites exercising spawn plumbing must not queue behind
-    // the REAL machine's live workers, and it doubles as an operator escape.
+    // the REAL machine's live workers, and it sets the rules door aside too.
     if std::env::var_os("FNO_SPAWN_GATE").is_some_and(|v| v == "0") {
         maybe_emit_spawn_cap_escape();
         return Ok(GateGuard::default());
     }
+    // The rule engine's read of this spawn: a block refuses on the `rule`
+    // axis (exit 93), a warn prints and the spawn proceeds.
+    rules_gate(config_cwd, &input)?;
     let floor_gb = agents_config::min_free_gb(config_cwd);
     let swap_cap = agents_config::max_swap_pct(config_cwd);
     // AC7: the retired trigger (max_load_per_cpu) is not read here;
