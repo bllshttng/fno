@@ -57,16 +57,13 @@ impl World {
         )
     }
 
+    /// A row as the registry reads it now: a write imports the seeded file
+    /// into the graph store, so the file path is no longer the data.
     fn row(&self, name: &str) -> Value {
-        let text = std::fs::read_to_string(self.root.join("agents/registry.json")).unwrap();
-        let doc: Value = serde_json::from_str(&text).unwrap();
-        doc["agents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["name"] == name)
-            .cloned()
-            .unwrap()
+        let reg =
+            fno_agents::state::load_registry(&self.root.join("agents/registry.json")).unwrap();
+        let row = reg.entries.into_iter().find(|r| r.name == name).unwrap();
+        serde_json::to_value(row).unwrap()
     }
 }
 
