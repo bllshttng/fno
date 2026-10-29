@@ -41,7 +41,7 @@ ALLOW_FILES+='|^(cli/src/fno/events/schema\.yaml|skills/target/cli/src/fno/event
 ALLOW_FILES+='|^(crates/fno-agents/src/harness_capabilities\.toml|crates/fno/src/harness_capabilities\.toml|cli/src/fno/agents/harness_capabilities\.toml)$'
 ALLOW_FILES+='|^(crates/fno-agents/src/event_store/events_schema\.json|crates/fno/src/event_store/events_schema\.json)$'
 ALLOW_FILES+='|^(crates/fno-agents/src/role_migration\.rs|crates/fno/src/role_migration\.rs)$'
-ALLOW_FILES+='|^((crates/fno-agents/src|cli/src/fno/agents)/(spawn_phase|merge_posture|registry_schema)\.toml)$'
+ALLOW_FILES+='|^(crates/fno-agents/src/spawn_phase\.toml|(crates/fno-agents/src|cli/src/fno/agents)/(merge_posture|registry_schema)\.toml)$'
 ALLOW_FILES+='|^(crates/(fno-agents|fno)/src/(event_store|effect_map|tick_ledger|help_router)\.rs|crates/(fno-agents|fno)/src/event_store/observation\.rs)$'
 ALLOW_FILES+='|^(docs/harnesses/command-matrix\.md|docs/loops\.md|docs/architecture/help-routing\.md|skills/agent/references/launch-[a-z-]+\.md)$'
 # A recorded transcript: what the agent typed, kept byte for byte.

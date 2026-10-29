@@ -16,8 +16,8 @@ from typing import Mapping, Optional
 
 
 def _defaults_applied_marker() -> str:
-    """The seam marker both bridges carry; it keeps the binary's seam
-    gate from bouncing an already-configured spawn back to the front door.
+    """The seam marker both bridges carry; the client seam strips it and
+    skips admission, since the bridge's caller already composed the argv.
     """
     from fno.agents.spawn_defaults import spawn_seam_marker
 
