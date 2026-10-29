@@ -344,8 +344,7 @@ pub fn rules_report(since: Option<&str>) -> Value {
                 if data.get("span_kind").and_then(Value::as_str) != Some("rule") {
                     continue;
                 }
-                let Some(id) = data.get("rule").and_then(Value::as_str).map(str::to_owned)
-                else {
+                let Some(id) = data.get("rule").and_then(Value::as_str).map(str::to_owned) else {
                     continue;
                 };
                 let ts = row.get("ts").and_then(Value::as_str).unwrap_or("");
@@ -358,9 +357,9 @@ pub fn rules_report(since: Option<&str>) -> Value {
                         continue;
                     }
                 }
-                let entry = fired
-                    .entry(id)
-                    .or_insert_with(|| json!({"fires": 0, "blocks": 0, "warns": 0, "last_fired": ""}));
+                let entry = fired.entry(id).or_insert_with(
+                    || json!({"fires": 0, "blocks": 0, "warns": 0, "last_fired": ""}),
+                );
                 let obj = entry.as_object_mut().expect("shaped above");
                 let mut bump = |key: &str| {
                     let n = obj.get(key).and_then(Value::as_i64).unwrap_or(0);
@@ -473,12 +472,7 @@ fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
     let trace_id = crate::decision_trace::new_span_id();
     for fire in &decision.fires {
         if let Some(seen_set) = seen.as_mut() {
-            let key = format!(
-                "span:{}:{}:{}",
-                fire.rule,
-                ev.kind,
-                ev.subjects.join(",")
-            );
+            let key = format!("span:{}:{}:{}", fire.rule, ev.kind, ev.subjects.join(","));
             if !seen_set.insert(key) {
                 continue;
             }
@@ -673,12 +667,13 @@ mod tests {
             why: String::new(),
             instead: "lift the freeze".into(),
         };
-        let decision = |verdict: &'static str, fires: Vec<crate::rules::Fire>| crate::rules::Decision {
-            verdict,
-            fires,
-            reasons: vec!["r-hold: the freeze is on".to_string()],
-            unevaluated: Vec::new(),
-        };
+        let decision =
+            |verdict: &'static str, fires: Vec<crate::rules::Fire>| crate::rules::Decision {
+                verdict,
+                fires,
+                reasons: vec!["r-hold: the freeze is on".to_string()],
+                unevaluated: Vec::new(),
+            };
         let block = Ruling {
             decision: decision("block", vec![fire("block")]),
             unread: Vec::new(),

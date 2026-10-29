@@ -99,7 +99,10 @@ fn event_of(kind: &str, hook: &Value, cwd: &Path) -> Option<Event> {
         }
         _ => return None,
     }
-    ev.node = ev.text.as_deref().and_then(crate::rules_source::node_in_text);
+    ev.node = ev
+        .text
+        .as_deref()
+        .and_then(crate::rules_source::node_in_text);
     ev.project =
         crate::law_match::resolve_project(Some(cwd), &crate::law_match::settings_sources()).ok();
     Some(ev)

@@ -1603,19 +1603,49 @@ fn preview_blockers(fake: &Fake, req: &Request) -> Vec<Blocker> {
 fn a_door_merge_rule_holds_one_pr_and_clears_the_next() {
     let sentence = "Refused by rule: r-release-freeze: the release freeze is on";
     let fake = clean();
-    fake.other_rules.borrow_mut().insert(7, ProbeOutcome::Refused(sentence.to_string()));
+    fake.other_rules
+        .borrow_mut()
+        .insert(7, ProbeOutcome::Refused(sentence.to_string()));
 
-    let held = run(&fake, &Request { require_checks: true, ..request(Effect::Merge) });
+    let held = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Merge)
+        },
+    );
     assert_eq!(held.word(), "held");
-    assert!(held.detail().contains("r-release-freeze"), "{:?}", held.detail());
+    assert!(
+        held.detail().contains("r-release-freeze"),
+        "{:?}",
+        held.detail()
+    );
 
     let blockers = preview_blockers(&fake, &preview_request(7));
     assert_eq!(blockers[0].code, "rule");
-    assert!(blockers[0].detail.contains("r-release-freeze"), "{}", blockers[0].detail);
+    assert!(
+        blockers[0].detail.contains("r-release-freeze"),
+        "{}",
+        blockers[0].detail
+    );
 
     // PR 8 carries no rule fire: the decision clears.
-    fake.other_facts.borrow_mut().insert(8, PrFacts { number: 8, ..open_facts() });
-    let cleared = run(&fake, &Request { require_checks: true, pr: Some(8), decide_only: true, ..request(Effect::Merge) });
+    fake.other_facts.borrow_mut().insert(
+        8,
+        PrFacts {
+            number: 8,
+            ..open_facts()
+        },
+    );
+    let cleared = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            pr: Some(8),
+            decide_only: true,
+            ..request(Effect::Merge)
+        },
+    );
     assert!(matches!(cleared, Outcome::Authorized { .. }), "{cleared:?}");
 }
 

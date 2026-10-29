@@ -220,7 +220,10 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let ev = crate::rules::Event {
         kind: "plan-start".to_string(),
-        node: args.input.as_deref().and_then(crate::rules_source::node_in_text),
+        node: args
+            .input
+            .as_deref()
+            .and_then(crate::rules_source::node_in_text),
         project: crate::law_match::resolve_project(
             Some(&cwd),
             &crate::law_match::settings_sources(),
