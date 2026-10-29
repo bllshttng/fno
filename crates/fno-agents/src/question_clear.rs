@@ -668,6 +668,23 @@ mod tests {
         let result = run_clear(&req);
         assert_eq!(result.exit_code, 3, "{:?}", result.lines);
         assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
+
+        // A question with no asker session is no worker's: refused.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-anon", Some("moot"));
+        req.provenance = json!({"decided_by": "1eadabcd", "authority_source": "role"});
+        req.caller = Some(ClearCaller {
+            ancestry_handle: Some("1eadabcd".to_string()),
+            teamed: true,
+            teams: Vec::new(),
+            scope_nodes: Some(["x-in".to_string()].into_iter().collect()),
+            asker_gone: Some(|_| true),
+        });
+        let mut question = ask("q-anon", "which lane?", None, Some("x-in"));
+        question["data"]["asker"] = json!("");
+        seed_question(&req, &question);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
     }
 
     #[test]
@@ -891,16 +908,17 @@ fn lead_may_withdraw(
     asker_session: Option<&str>,
     node: Option<&str>,
 ) -> bool {
-    let Some(node) = node.filter(|_| caller.teamed) else {
+    // Only a worker's question: an identity-less ask stays the user's.
+    let (Some(node), Some(asker_session)) = (node.filter(|_| caller.teamed), asker_session) else {
         return false;
     };
     if !scope_holds(req, caller, node) {
         return false;
     }
-    let asker_gone = asker_session.is_some_and(|session| match caller.asker_gone {
-        Some(seam) => seam(session),
-        None => crate::claim_commands::session_is_absent(session),
-    });
+    let asker_gone = match caller.asker_gone {
+        Some(seam) => seam(asker_session),
+        None => crate::claim_commands::session_is_absent(asker_session),
+    };
     asker_gone
         || api::node(&Store::new(&req.graph), node).is_ok_and(|found| {
             found.is_some_and(|node| {

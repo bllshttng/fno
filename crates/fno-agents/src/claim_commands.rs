@@ -1172,12 +1172,29 @@ fn row_verdict_live(registry: &SessionRegistryIndex, session: &str) -> bool {
     })
 }
 
-/// Whether both witnesses positively report `session` gone. Unresolved
-/// reads as not gone.
-pub(crate) fn session_is_absent(session: &str) -> bool {
+/// Whether `id` names a session that is gone. A target worktree stores its
+/// manifest `fno_id`, not the harness session id, so the registry resolves
+/// it first: a terminal row is gone, a live row probes its harness session.
+/// Unresolved reads as not gone.
+pub(crate) fn session_is_absent(id: &str) -> bool {
+    let row = crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
+        .ok()
+        .and_then(|registry| {
+            registry.entries.into_iter().find(|e| {
+                e.harness_session_id.as_deref() != Some(id) && e.fno_id.as_deref() == Some(id)
+            })
+        });
+    let session = match &row {
+        Some(e) if crate::lead_state::is_terminal(e) => return true,
+        Some(e) => match e.harness_session_id.as_deref().filter(|s| !s.is_empty()) {
+            Some(sid) => sid.to_string(),
+            None => return false,
+        },
+        None => id.to_string(),
+    };
     let index = std::cell::RefCell::new(None);
     matches!(
-        session_liveness_answer_uncached(session, &index, None),
+        session_liveness_answer_uncached(&session, &index, None),
         crate::claims::SessionLiveness::Absent
     )
 }
