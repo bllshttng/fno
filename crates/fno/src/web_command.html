@@ -73,6 +73,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
   <div class="dhead"><div class="dtop"><span class="pill" id="dstate"></span><span class="mono" id="dhost" style="color:var(--overlay1)"></span><button class="x" id="dclose" aria-label="Close details">×</button></div><h2 id="dtitle"></h2><div class="dnode" id="dnode"></div></div>
   <div class="dbody" id="dbody"></div>
 </aside>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
 (() => {
 const ORDER = ["writing", "parked", "quiet", "unknown"];
@@ -265,7 +266,14 @@ function paint() {
   document.getElementById("rowcount").textContent = shown.length + " of " + rows.length + " seats";
 }
 
-const drawer = document.getElementById("drawer");
+const drawer = document.getElementById("drawer"), toastEl = document.getElementById("toast");
+let toastTimer = 0;
+function toast(text) {
+  toastEl.textContent = text;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1600);
+}
 function openSeat(r) {
   const s = r.s, w = s.work || {}, none = "not published";
   openKey = keyOf(r);
@@ -314,7 +322,20 @@ function openSeat(r) {
       if (u.protocol.startsWith("http")) u.searchParams.delete("t");
       const shared = u.href;
       if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
-      copy.onclick = () => navigator.clipboard.writeText(shared).then(() => { copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy", 1300); }, () => {});
+      // The label never changes; a toast reports the result. Plain http
+      // off loopback has no clipboard API, so the failure toast names it and
+      // the row shows the link, selected, for a manual copy.
+      copy.onclick = () => {
+        const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(shared) : Promise.reject(new Error("no clipboard"));
+        write.then(() => toast("Link copied"), () => {
+          const code = t.querySelector("code"), range = document.createRange();
+          code.textContent = shared;
+          range.selectNodeContents(code);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          toast("Copy failed");
+        });
+      };
       d.append(open, copy);
     }
     links.append(d);
