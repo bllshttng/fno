@@ -1371,6 +1371,10 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
             }
         }
     }
+    // Newest first, once each: `additional_prs` repeats the primary PR.
+    // The stable sort keeps the primary's row (and its merge status) first.
+    prs.sort_by(|a, b| b.number.cmp(&a.number));
+    prs.dedup_by_key(|p| p.number);
     // Notes: progress_notes newest first, EXCEPT thread rows (kind
     // comment, reply, or one of the note kinds), which read oldest
     // first - a thread reads top to bottom. Non-thread rows keep their
