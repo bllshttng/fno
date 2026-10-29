@@ -42,7 +42,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
 .drawer{position:fixed;top:calc(var(--fno-nav-h,0px) + 8px);right:8px;bottom:8px;width:min(440px,calc(100vw - 16px));z-index:20;background:var(--mantle);border:1px solid var(--surface1);transform:translateX(calc(100% + 16px));visibility:hidden;transition:transform .2s ease-out,visibility .2s;display:flex;flex-direction:column;overflow:hidden}.drawer.on{transform:none;visibility:visible}
 .dhead{padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--surface0)}.dtop{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;font-size:11.5px;font-weight:700;border:1px solid var(--surface1)}.x{margin-left:auto;width:26px;height:26px;border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);cursor:pointer;font:inherit;font-size:14px;line-height:1}.x:hover{color:var(--text);border-color:var(--text)}
 .dhead h2{margin:0;font-size:14px;line-height:1.35;font-weight:700}.dnode{font-size:11.5px;color:var(--overlay1)}.dbody{padding:10px 14px 18px;overflow:auto;display:flex;flex-direction:column;gap:14px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--overlay1);font-weight:700}.sec h3::before{content:"## "}
-.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.dbox b{font-weight:700}.dbox code{font:inherit;color:var(--yellow)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}a.lk{color:var(--text);text-decoration:none}a.lk:hover{border-color:var(--text)}.lk button{border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px}.lk button:hover{color:var(--text);border-color:var(--text)}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.dbox b{font-weight:700}.dbox code{font:inherit;color:var(--yellow)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}.lkb{flex:none;border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px;text-decoration:none;display:inline-flex;align-items:center}.lkb:hover{color:var(--text);border-color:var(--text)}
 @media (max-width:640px){.drawer{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:78vh;transform:translateY(calc(100% + 16px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
 </style>
 </head>
@@ -299,28 +299,30 @@ function openSeat(r) {
     ["Epic", w.epic ? w.epic[0] + (w.epic[1] ? " · " + w.epic[1] : "") : "none"], ["Working dir", s.cwd, 1],
   ]) kv.append(el("dt", null, k), el("dd", mono ? "mono" : null, v == null ? none : String(v)));
   const links = el("div", "links");
-  const row = (title, code, href, copy) => {
-    const a = el(href ? "a" : "div", "lk"), t = el("span", "lt");
-    if (href) a.href = href;
-    if (/^https:/.test(href || "")) { a.target = "_blank"; a.rel = "noopener"; }
+  // A row with a link offers Open, which opens it, and Copy, which copies
+  // that same link, never a command. A target with no link yet (attach and
+  // peek, until the mux has one) reads as plain text with no buttons.
+  const row = (title, code, href) => {
+    const d = el("div", "lk"), t = el("span", "lt");
     t.append(el("b", null, title), el("code", null, code));
-    a.append(t);
-    if (copy) {
-      const b = el("button", null, "Copy");
-      b.onclick = (e) => { e.preventDefault(); navigator.clipboard.writeText(copy).then(() => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1300); }, () => {}); };
-      a.append(b);
+    d.append(t);
+    if (href) {
+      const url = new URL(href, location.href).href, open = el("a", "lkb", "Open"), copy = el("button", "lkb", "Copy");
+      open.href = url;
+      if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
+      copy.onclick = () => navigator.clipboard.writeText(url).then(() => { copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy", 1300); }, () => {});
+      d.append(open, copy);
     }
-    links.append(a);
+    links.append(d);
   };
   // The bridge follows config: an obsidian:// link for a plan in the vault, else a file link.
   if (s.plan_uri && s.plan_uri.startsWith("obsidian://")) row("Plan in Obsidian", w.plan, s.plan_uri);
-  else if (w.plan) row("Plan", w.plan, s.plan_file && s.plan_file.startsWith("file://") ? s.plan_file : null, w.plan);
+  else if (w.plan) row("Plan", w.plan, s.plan_file && s.plan_file.startsWith("file://") ? s.plan_file : null);
   else if (w.id) row("Plan", "no plan_path on " + w.id);
-  // A PR opens on GitHub; the row offers no command to paste.
   if (w.pr) row("Pull request #" + w.pr, w.pr_url ? w.pr_url.replace(/^https?:\/\//, "") : "no URL recorded on " + w.id, w.pr_url && /^https:\/\//.test(w.pr_url) ? w.pr_url : null);
-  if (s.attach) row("Attach in the mux" + (r.local ? "" : " on " + r.machine), s.attach, null, s.attach);
-  row("Peek without attaching", "fno agents session peek " + (s.short || s.name), null, "fno agents session peek " + (s.short || s.name));
-  if (w.id) row("Node in the backlog", "fno backlog get " + w.id, null, "fno backlog get " + w.id);
+  if (s.attach) row("Attach in the mux" + (r.local ? "" : " on " + r.machine), s.attach);
+  row("Peek without attaching", "fno agents session peek " + (s.short || s.name));
+  if (w.id) row("Node in the backlog", "backlog · " + w.id, (nav ? nav.dataset.base : "./") + "backlog?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(w.id));
   const sec = (title, body) => { const d = el("div", "sec"); d.append(el("h3", null, title), body); return d; };
   const msgAge = s.last_message_at ? " · " + ago(since(s.last_message_at)) + " ago" : "";
   document.getElementById("dbody").replaceChildren(...[
