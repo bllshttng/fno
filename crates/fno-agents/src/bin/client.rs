@@ -492,6 +492,14 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::backlog::style_check::run_cli(&args[1..]);
     }
 
+    // The settings fact set's hidden binary-direct door: the node-id knobs,
+    // the config candidates, and the work-map walk (with the cwd -> project
+    // detect) in one spawn. Same `matches!` treatment so the parity guard
+    // never sees it.
+    if matches!(command, "settings-read") {
+        return fno_agents::backlog::settings_read::run_settings_read(&args[1..]);
+    }
+
     // The mail receipt renderer's hidden binary-direct door: the send receipt
     // prose moved from Python (file budget) with Python keeping transports.
     // Same `matches!` treatment so the parity guard never sees it.
@@ -1258,6 +1266,10 @@ async fn run(args: Vec<String>) -> i32 {
                 return fno_agents::registry_commands::run_registry_repair(&rest[1..])
             }
             Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
+            Some("--pane-identity") => {
+                return fno_agents::pane_identity::run_pane_identity(&rest[1..])
+            }
+            Some("--watch") => return fno_agents::watch::run_watch(&rest[1..]),
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
@@ -1774,7 +1786,7 @@ async fn run(args: Vec<String>) -> i32 {
                 // filter so no other list pays the app-server round trip; an
                 // unreachable daemon becomes `available: false`, never a list
                 // failure. The await must happen here - format_success is sync.
-                let result = if command_owned == "list"
+                let mut result = if command_owned == "list"
                     && result["filters_applied"]["provider"].as_str() == Some("codex")
                 {
                     let mut with_loaded = result;
@@ -1785,6 +1797,13 @@ async fn run(args: Vec<String>) -> i32 {
                 } else {
                     result
                 };
+                // A registry rename moves fno's label only; the harness
+                // session keeps its old title until the native rename
+                // reaches it. Best-effort: the receipt names a failed push,
+                // the rename still exits 0.
+                if command_owned == "rename" {
+                    fno_agents::rename::stamp_title_push(&home, &mut result);
+                }
                 if let Some(line) = format_success(
                     &command_owned,
                     &agent_name,

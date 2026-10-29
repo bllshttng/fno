@@ -588,16 +588,6 @@ def _resolve(
     return path.resolve()
 
 
-def resolve_configured_path(
-    raw: str,
-    *,
-    project_root: Path,
-    settings: SettingsModel,
-) -> Path:
-    """Resolve a configured path against an explicitly loaded repository."""
-    return _resolve(raw, project_root=project_root, settings=settings)
-
-
 def _guard_state_path(path: Path) -> Path:
     """Judge a resolved state path against the process root declaration.
 
@@ -728,31 +718,6 @@ def state_dir() -> Path:
     return _guard_state_path(_resolve(settings.state_dir))
 
 
-def cargo_build_dir_value() -> str:
-    """The CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``.
-
-    cargo expands the template itself and the hash is per workspace root, so
-    parallel checkouts never share the artifact lock and intermediates never
-    land in a checkout. Base: ``config.paths.cargo_targets_base``, else
-    ``<state_dir>/cargo-build``.
-    """
-    try:
-        override = _settings().paths.cargo_targets_base
-        base = (
-            _resolve(os.path.expanduser(override))
-            if override
-            else state_dir() / "cargo-build"
-        )
-    except Exception:  # noqa: BLE001 - broken settings degrade to the default base
-        base = Path(os.path.expanduser("~/.fno/cargo-build"))
-    return f"{base}/{{workspace-path-hash}}"
-
-
-def graphql_quota_lock() -> Path:
-    """Config-independent machine lock held from quota probe through command."""
-    return locks_dir() / "github-graphql-quota.lock"
-
-
 def github_cli_proxy_dir() -> Path:
     """Installed worker-only `gh` proxy directory."""
     return state_dir() / "bin" / "github-cli"
@@ -791,12 +756,6 @@ def graph_json() -> Path:
 
 def graph_archive_json() -> Path:
     return graph_json().parent / "graph-archive.json"
-
-
-def relatedness_json() -> Path:
-    """Return the path to relatedness.json (node-to-node relatedness sidecar).
-    """
-    return graph_json().parent / "relatedness.json"
 
 
 def _pinned_root_file(name: str) -> Path:
@@ -945,16 +904,6 @@ def root_state_file(name: str) -> Path:
             "state, logs_file() for logs, or an existing folder accessor."
         )
     return state_dir() / name
-
-
-def decisions_jsonl() -> Path:
-    """Return the machine-wide decision index at the pinned state root.
-
-    A separate file from :func:`global_events_json` on purpose: that journal
-    rotates, and a rotated-away ruling is a ruling the operator asked for and
-    cannot get back. This one never rotates and holds nothing else.
-    """
-    return _pinned_root_file("decisions.jsonl")
 
 
 def questions_jsonl() -> Path:
@@ -1392,10 +1341,6 @@ def briefs_dir() -> Path:
     return state_dir() / "briefs"
 
 
-def lead_faqs_dir() -> Path:
-    return briefs_dir() / "lead-faqs"
-
-
 def fleet_dir() -> Path:
     """Return the fleet directory."""
     settings = _settings()
@@ -1412,18 +1357,6 @@ def postmortems_dir() -> Path:
     if override is not None:
         return _guard_state_path(_resolve(override))
     return state_dir() / "postmortems"
-
-
-def latches_dir() -> Path:
-    """Return the session-latch directory (default: ``~/.fno/latches/``).
-
-    Holds the short-lived per-session, per-band sentinel files hooks use to
-    fire a nudge at most once. Deliberately has no ``config.paths`` override:
-    the whole point of the directory is that it tracks ``state_dir`` instead
-    of becoming another independently-placed path. The writing hook owns
-    deletion - a latch keyed to a dead session has no reader.
-    """
-    return state_dir() / "latches"
 
 
 def worktrees_base() -> Path:
@@ -1520,11 +1453,6 @@ def project_log(name: str, project_root: Optional[Path] = None) -> Path:
     space = space_dir(root) / name
     migrate_from_checkout(root / ".fno" / name, space)
     return space.resolve()
-
-
-def status_sinks_dir(project_root: Optional[Path] = None) -> Path:
-    """Per-sink cursors + error logs for the status fanout."""
-    return project_log("status-sinks", project_root=project_root)
 
 
 def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:

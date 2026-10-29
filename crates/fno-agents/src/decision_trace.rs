@@ -9,16 +9,8 @@ use serde_json::{json, Map, Value};
 use std::io::Read;
 use std::path::Path;
 
-/// The decision class a route weighed. The four escalation-page classes plus
-/// the two only a traced decision names: gate-override and none.
-pub const DECISION_CLASSES: &[&str] = &[
-    "public-surface",
-    "irreversible",
-    "money-security",
-    "law-change",
-    "gate-override",
-    "none",
-];
+/// The decision class a route weighed: the question ladder's one list.
+pub const DECISION_CLASSES: &[&str] = crate::question_ladder::CLASSES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Trace {

@@ -25,15 +25,6 @@ pub(crate) const BLOCK_CAP: usize = 3;
 /// can show a judge what the rule fired on. The tail is where asks sit.
 const EXCERPT_CHARS: usize = 600;
 
-/// The four classes only the user decides; `class_user_only` reads them off
-/// a question's escalate route span.
-const USER_CLASSES: &[&str] = &[
-    "public-surface",
-    "irreversible",
-    "money-security",
-    "law-change",
-];
-
 /// Every predicate name a row may name, `not:`-prefixable. An unknown name
 /// fails the table load test, never the runtime match below.
 const PREDICATES: &[&str] = &[
@@ -682,7 +673,9 @@ fn class_user_only(ctx: &Ctx, row: &Value) -> bool {
             .and_then(|d| d.get("class"))
             .and_then(Value::as_str)
             .unwrap_or("none");
-        return USER_CLASSES.contains(&class);
+        return crate::question_ladder::rules_for(ctx.cwd)
+            .unwrap_or_default()
+            .user_only(class);
     }
     false
 }

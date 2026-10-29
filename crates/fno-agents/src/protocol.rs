@@ -369,6 +369,38 @@ pub async fn write_response<W: AsyncWrite + Unpin>(
     write_frame(writer, &body).await
 }
 
+/// One blocking request/response over a unix socket, for a caller with no
+/// runtime. Returns the `result` value; `None` on any transport failure, an
+/// error reply, or a null result. `budget` bounds the write and the read;
+/// std gives a unix socket no connect timeout.
+pub fn blocking_call(
+    sock: &std::path::Path,
+    method: &str,
+    params: Value,
+    budget: std::time::Duration,
+) -> Option<Value> {
+    use std::io::{Read, Write};
+    let mut stream = std::os::unix::net::UnixStream::connect(sock).ok()?;
+    stream.set_read_timeout(Some(budget)).ok()?;
+    stream.set_write_timeout(Some(budget)).ok()?;
+    let body = serde_json::to_vec(&Request::new(1, method, params)).ok()?;
+    stream.write_all(&(body.len() as u32).to_le_bytes()).ok()?;
+    stream.write_all(&body).ok()?;
+    let mut len = [0u8; 4];
+    stream.read_exact(&mut len).ok()?;
+    let len = u32::from_le_bytes(len);
+    if len > MAX_FRAME_BYTES {
+        return None;
+    }
+    let mut reply = vec![0u8; len as usize];
+    stream.read_exact(&mut reply).ok()?;
+    let reply: Value = serde_json::from_slice(&reply).ok()?;
+    if reply.get("error").is_some() {
+        return None;
+    }
+    reply.get("result").filter(|r| !r.is_null()).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

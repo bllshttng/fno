@@ -1049,10 +1049,10 @@ fn generated_target(t: &str, payload_cwd: &str) -> Option<String> {
             "{abs_str} is the installed plugin copy. `fno doctor update` restages it from the footnote source checkout and discards this edit. Edit {inner} in a feature worktree of the source checkout, then run `fno doctor update`."
         )
     };
-    if let Some(i) = abs_str.find("/plugin-stage/fno/") {
-        return Some(plugin_msg(
-            abs_str[i + "/plugin-stage/fno/".len()..].to_string(),
-        ));
+    for prefix in ["/plugin-stage/fno/", "/plugin-stage/fno-pack/"] {
+        if let Some(i) = abs_str.find(prefix) {
+            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
+        }
     }
     // The marketplace dir is "fno", or a "footnote" name on an install made
     // before the rename.
