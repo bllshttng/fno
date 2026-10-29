@@ -8,10 +8,13 @@
 //! The Rust answers come from the live shell stub (`emit_paths_sh_live`,
 //! sourced by bash), `backlog::settings::graph_path` and `paths::space_dir`.
 //! `<case>.out` holds the Python answers, captured by
-//! `paths_hub_golden_driver.py`; with Python present the live hub is compared
-//! too. The stage flips to characterization when the hub is deleted.
+//! `paths_hub_golden_driver.py`; with Python present the live hub is checked
+//! against them too. A case's `divergent` list names the accessors where the
+//! Rust owners still disagree; each one must keep disagreeing, so a fix fails
+//! the test until its entry goes. The stage flips to characterization when
+//! the hub is deleted.
 
-use common::{assert_golden, capture_mode, python_executable, Golden};
+use common::python_executable;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -144,26 +147,39 @@ fn the_doctor_accessors_resolve_alike_in_both_legs() {
         let root = tmp.path().canonicalize().unwrap();
         let proj = build(case, &root);
         let rust = normalize(&rust_leg(&root, &proj), &root);
-        if live && !capture_mode() {
-            let python = python_leg(name, &root);
+        let golden =
+            std::fs::read_to_string(common::golden_dir(SUBJECT).join(format!("{name}.out")))
+                .unwrap();
+        if live {
             assert_eq!(
-                python, rust,
-                "[{name}] the Python hub and the Rust owners disagree"
+                python_leg(name, &root),
+                golden,
+                "[{name}] the Python hub drifted from its golden; recapture with \
+                 paths_hub_golden_driver.py"
             );
         }
-        let oracle = capture_mode().then(|| Golden {
-            exit: None,
-            streams: vec![python_leg(name, &root)],
-        });
-        assert_golden(
-            SUBJECT,
-            name,
-            &Golden {
-                exit: None,
-                streams: vec![rust],
-            },
-            oracle,
+        let divergent: Vec<&str> = case["divergent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            golden.lines().count(),
+            rust.lines().count(),
+            "[{name}] accessor count differs:\n{rust}"
         );
+        for (want, got) in golden.lines().zip(rust.lines()) {
+            let accessor = want.split('=').next().unwrap();
+            if divergent.contains(&accessor) {
+                assert_ne!(
+                    want, got,
+                    "[{name}] {accessor} now agrees with Python; drop it from the case's divergent list"
+                );
+            } else {
+                assert_eq!(want, got, "[{name}] {accessor}: Python and Rust disagree");
+            }
+        }
     }
     std::env::set_current_dir(saved_cwd).unwrap();
 }
