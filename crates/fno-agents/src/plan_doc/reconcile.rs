@@ -130,6 +130,8 @@ fn repair_target(text: &str, status_map: &HashMap<String, String>) -> Option<Str
     let node_status = status_map.get(&link).map(String::as_str);
     super::status::project_plan_status(None, node_status?)
 }
+
+/// Canonical status a drifted `raw` should become, or None to leave it alone.
 /// `node_status` is the linked node's status when the map knows it; None means
 /// absent evidence (no link, or the link resolves to nothing). Tier 1 runs
 /// before the signal and ignores it. Tier 2 on a LIVE node (a status that is
@@ -248,13 +250,14 @@ impl SweepResult {
     /// shaped exactly like a healthy idempotent run, which is how a wedged
     /// graph reads as "nothing to do" to the unattended --apply callers.
     pub fn summary(&self) -> String {
-        let base = format!(
+        let mut base = format!(
             "{} normalized, {} superseded, {} skipped",
             self.normalized, self.superseded, self.skipped
         );
         if self.repaired > 0 {
-            format!("{base}, {} repaired", self.repaired)
-        } else if self.stood_down > 0 {
+            base = format!("{base}, {} repaired", self.repaired);
+        }
+        if self.stood_down > 0 {
             format!("{base}, {} stood down", self.stood_down)
         } else {
             base

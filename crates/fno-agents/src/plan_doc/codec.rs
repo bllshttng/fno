@@ -254,7 +254,9 @@ fn parse_scalar_strict(key: &str, lineno: usize, raw_val: &str) -> Result<String
     }
     if bytes.len() >= 2 && bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'' {
         let inner = &trimmed[1..trimmed.len() - 1];
-        if inner.contains('\'') {
+        // YAML escapes a single quote by doubling it: 'it''s' is legal and
+        // must keep parsing. A stray quote outside a '' pair is the defect.
+        if inner.replace("''", "").contains('\'') {
             return Err(format!(
                 "Malformed frontmatter at line {lineno}: '{key}' opens a quoted \
                  value with an unescaped quote inside it. Offending value: \
@@ -837,9 +839,21 @@ mod tests {
     #[test]
     fn write_plan_file_runs_the_parse_back_gate() {
         let doc = write_tmp("writegate", "plan.md", "---\nstatus: ready\n---\n# body\n");
+        let before = std::fs::read_to_string(&doc).unwrap();
+        // A status outside the vocabulary is refused through the public write
+        // door; the file stays byte-identical.
         let mut fields = Fields::new();
-        fields.insert("status", Value::Scalar("in_review".into()));
-        write_plan_file(&doc, &fields, &"# body\n").unwrap();
+        fields.insert("status", Value::Scalar("in_garbage".into()));
+        let err = write_plan_file(&doc, &fields, &"# body\n").unwrap_err();
+        assert!(
+            err.to_string().contains("not in the plan vocabulary"),
+            "{err}"
+        );
+        assert_eq!(std::fs::read_to_string(&doc).unwrap(), before);
+        // A known status writes through.
+        let mut ok = Fields::new();
+        ok.insert("status", Value::Scalar("in_review".into()));
+        write_plan_file(&doc, &ok, &"# body\n").unwrap();
         let after = std::fs::read_to_string(&doc).unwrap();
         assert!(after.contains("status: in_review"), "{after}");
     }
