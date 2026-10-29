@@ -59,6 +59,7 @@ pub mod gh_proxy;
 #[path = "gh_proxy_tests.rs"]
 mod gh_proxy_tests;
 pub mod git_paths;
+pub mod glob;
 pub mod inbox_user;
 pub mod join_marker;
 pub mod keys;
@@ -114,6 +115,7 @@ pub mod restore_gate;
 pub mod restore_liveness;
 pub mod review_invocation;
 pub mod role_migration;
+pub mod rules;
 pub mod search_query;
 pub mod served_liveness;
 pub mod server;

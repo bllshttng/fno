@@ -4828,7 +4828,7 @@ event_types:
           description: "Optional. Who the law governs: `global`, or `project:<slug>`. A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening to global is an explicit --global, because law is never inherited by silence. Readers filter to global plus the session's project and fail open with a named reason when the project cannot be resolved."
         paths:
           type: array
-          description: "Optional. Repo-relative globs. A live law with paths prints at the first Edit or Write of a matching file in each session (hooks/law-stage-inject.sh)."
+          description: "Optional. Repo-relative globs. A live law with paths becomes a pre-tool rule on Edit and Write of a matching file, printed once per session (hooks/rules-dispatch.sh)."
         trace:
           type: object
           description: "Optional. The traced-decision envelope (shape: decision_span.trace). The answer row carries span_id = decision_id and parent_span_id = the question_id it answers, so one query on trace_id reads the whole chain."
@@ -4846,8 +4846,8 @@ event_types:
       properties:
         span_kind:
           type: string
-          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno]
-          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha). More values land as later surfaces adopt the envelope."
+          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno, rule]
+          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha), rule (fno::rules::decide fired a rule at a hook or door, attrs rule/law/event/verdict/tool). More values land as later surfaces adopt the envelope."
         trace:
           type: object
           required: [trace_id, span_id, actor_kind, comms]
@@ -4902,7 +4902,19 @@ event_types:
           description: "Optional, span_kind=correction. The span id this correction overturns."
         rule:
           type: string
-          description: "Optional, span_kind=block, nudge or notify. The event_rules row id that fired (docs/architecture/event-rules.md)."
+          description: "Optional, span_kind=block, nudge, notify or rule. The rule id that fired (docs/architecture/event-rules.md)."
+        law:
+          type: [string, "null"]
+          description: "Optional, span_kind=rule. The decision id behind a law-sourced rule; null for a shipped or project rule."
+        event:
+          type: string
+          description: "Optional, span_kind=rule. The decision point: prompt, skill, pre-tool, plan-start or door:<name>."
+        verdict:
+          type: string
+          description: "Optional, span_kind=rule. The action decide() applied to this fire: inform, warn or block."
+        tool:
+          type: [string, "null"]
+          description: "Optional, span_kind=rule. The tool name at a pre-tool event; null elsewhere."
         matched_event:
           type: string
           description: "Optional, span_kind=block, nudge or notify. The event id or Stop turn key the row fired on; with rule it is the fire's dedupe ledger entry."
@@ -5280,6 +5292,18 @@ event_types:
         outcome:
           enum: [refused, unanswered]
           description: "refused: the run never started. unanswered: the verb reached the server and no reply came back inside the deadline; the server's side is unknown."
+    consumers: [operator]
+
+  - name: law_trigger
+    description: "One imported trigger for a live law, written by `fno inbox law match rules-import` under operator authority. Append-only: the newest row per decision_id wins and nothing rewrites a law row. Rule rows carry the row's TOML text (rule_toml); disposition rows carry the disposition object."
+    sources: [backlog]
+    data:
+      required: [decision_id, trigger_kind]
+      properties:
+        decision_id: { type: string, description: "The law the trigger governs" }
+        trigger_kind: { type: string, description: "rule or disposition" }
+        rule_toml: { type: string, description: "For trigger_kind rule: the [[rule]] row's TOML text below its header" }
+        disposition: { type: object, description: "For trigger_kind disposition: the [[disposition]] row object" }
     consumers: [operator]
 
   - name: mail_origin_classified
