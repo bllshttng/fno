@@ -87,8 +87,7 @@ pub struct RegistryAgent {
     /// overlay, never by `derive_rows` (the registry doc carries no such
     /// fact); absent on every hand-built row.
     pub held_conversation: bool,
-    /// The user pinned this session (a keep mark on its id or lineage).
-    /// Stamped only by the render-path overlay, like `held_conversation`.
+    /// The user pinned this session; only the render-path overlay stamps it.
     pub pinned: bool,
     /// In-TTL inside-leg badge; `None` = liveness-only. Never a scraped guess.
     pub badge: Option<AgentBadge>,

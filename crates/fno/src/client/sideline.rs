@@ -98,8 +98,8 @@ impl View {
         // description first (d-36438ea4); the message keeps the Fill(3)
         // surplus. Both layouts use the same rule. `Min`, not `Length`: the
         // name keeps the old yield order under deficit (names starve last),
-        // and name_w floors at 22 so the narrow rail solves as it did before
-        // the formula existed.
+        // and name_w floors at 22 (less the pin gutter) so the narrow rail
+        // solves as it did before the formula existed.
         let list_wide = self.sideline_layout == sideline_color::SidelineLayout::List
             && (self.density == Density::Extended || self.sideline_full)
             // Fixed cells and six gaps leave at least eight message columns.
@@ -117,7 +117,7 @@ impl View {
         } else {
             vec![
                 CARD_COLUMNS[0],
-                Constraint::Min(row_meter::name_w(text_w, 17, 4)),
+                Constraint::Min(row_meter::name_w(text_w, 17, 4).saturating_sub(self.pin_gutter())),
                 CARD_COLUMNS[2],
                 CARD_COLUMNS[3],
                 CARD_COLUMNS[4],
@@ -148,8 +148,7 @@ impl View {
         (c == col as usize).then(|| a.clone())
     }
 
-    /// A list row keeps column 0 as the pin gutter on every row, so a pin
-    /// never moves a name. A card pins on line 2 and needs no gutter.
+    /// A list row's column 0 is the pin gutter, so a pin never moves a name.
     pub(super) fn pin_gutter(&self) -> u16 {
         u16::from(self.sideline_layout == sideline_color::SidelineLayout::List)
     }
