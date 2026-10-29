@@ -438,17 +438,26 @@ mod tests {
             "work:\n  workspaces:\n    ws:\n      projects:\n        - name: one\n          path: /repo/one\n        - name: ''\n          path: /repo/empty-name\n",
         )
         .unwrap();
-        let prior = std::env::var_os("FNO_CONFIG");
+        // Pin the global leg to an absent file: candidates() would otherwise
+        // append HOME/.fno/config.toml, and a machine whose real config
+        // carries a work-map pair would join the fixture's.
+        let prior_cfg = std::env::var_os("FNO_CONFIG");
+        let prior_global = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
         std::env::set_var("FNO_CONFIG", &cfg);
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", dir.path().join("absent.yaml"));
 
         let pairs = work_map_pairs();
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].0, "one");
         assert_eq!(pairs[0].1, "/repo/one");
 
-        match prior {
+        match prior_cfg {
             Some(v) => std::env::set_var("FNO_CONFIG", v),
             None => std::env::remove_var("FNO_CONFIG"),
+        }
+        match prior_global {
+            Some(v) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", v),
+            None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
         }
     }
 }
