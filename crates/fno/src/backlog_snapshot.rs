@@ -356,7 +356,10 @@ fn render_one(
     if public {
         payload = to_public_payload(payload);
     }
-    Ok((snapshot_page(&crate::web::house(crate::web::BACKLOG_PAGE), &payload)?, count))
+    Ok((
+        snapshot_page(&crate::web::house(crate::web::BACKLOG_PAGE), &payload)?,
+        count,
+    ))
 }
 
 /// The registry rows the snapshot's roster needs: live promoted agents only.
