@@ -3965,9 +3965,13 @@ mod tests {
         let td = tempfile::TempDir::new().unwrap();
         let prev = std::env::var_os("FNO_HOME");
         std::env::set_var("FNO_HOME", td.path().join("fno-home"));
-        let (_dir, state) = sqlite_state(json!({
+        let (_dir, mut state) = sqlite_state(json!({
             "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
         }));
+        // A missing graph is the unreadable-store case: the sqlite fixture
+        // would otherwise answer from its own rows.
+        let missing = td.path().join("no-such-graph.json");
+        state.graph = missing;
         let payload = serde_json::to_vec(&json!({
             "id": 9, "method": "rules", "params": {"cwd": "/"}
         }))
