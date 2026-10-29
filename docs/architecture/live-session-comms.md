@@ -98,7 +98,7 @@ adopted headless threads. It previously had zero command surface.
 
 ## Send evidence invariant
 
-A peer-mail caller may claim coordination only after `delivered (hosted)`, `delivered (woken)`, a durable `msg-* queued` receipt, or independent recipient-transcript evidence.
+A peer-mail caller can claim coordination only after `accepted-new-turn`, `accepted-steer`, or independent recipient-transcript evidence. `parked`, `injected` and `queued` mean the recipient has not taken the message yet.
 A timeout, interruption, or command with no terminal receipt proves no send outcome; the canonical bus lock is bounded and reports exit 12 with `no durable envelope was written` when it cannot append.
 A completed live delivery cannot be undone by a bounded post-delivery registry-stamp timeout; the command preserves the hosted receipt and warns the caller not to retry.
 Discovery alias-map contention is bounded and falls back to canonical handles before delivery.

@@ -191,7 +191,6 @@ claim refresh	T1	claim refresh	5
 claim release	KEEP	claim release	38	deliberate readability slack for a high-traffic distinct operation
 claim session-pid	T1	claim session-pid	2
 claim status	T1	claim status	32
-codemap	KEEP	codemap	18	single-leaf group
 config accounts	KEEP	config accounts	71	deliberate readability slack for a high-traffic distinct operation
 config active-backlog	T1	config active-backlog	5
 config assert-subagent-budget	T1	config assert-subagent-budget	6
@@ -268,7 +267,6 @@ do review resolve-level	T1	do review resolve-level	10
 do think dispatch	T1	do think dispatch	4
 do think inspect	T1	do think inspect	7
 doctor bundle	T1	doctor bundle	1
-doctor codemap	T1	doctor codemap	18
 doctor evals grade	T1	doctor evals grade	11
 doctor evals export	T1	doctor evals export	0
 doctor evals macro	T1	doctor evals macro	0

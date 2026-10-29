@@ -61,7 +61,6 @@ PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
     "-n": ("--tail", "agents/cli.py"),
     "-f": ("--follow", "agents/cli.py"),
     "-m": ("--note", "done/cli.py"),
-    "-o": ("--output", "codemap_cli/cli.py"),
 }
 
 #: Uppercase shorts outside the global register: still exclusive, i.e. the letter

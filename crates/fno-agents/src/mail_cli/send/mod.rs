@@ -26,6 +26,7 @@
 //! socket's own truth.
 
 use super::send_raw::{agents_binary, run_captured};
+use crate::mail_delivery_state::DeliveryState;
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ use std::path::{Path, PathBuf};
 mod engine;
 pub(crate) mod lanes;
 pub(crate) mod resolve;
+pub(crate) mod retry;
 mod verify;
 
 use lanes::*;
@@ -1705,7 +1707,10 @@ pub fn run(args: &[String]) -> i32 {
                             &result.msg_id,
                             subject.as_deref(),
                             &to,
-                            &format!("delivered (hosted) [project {project}]"),
+                            &crate::mail_delivery_state::receipt(
+                                &result.state,
+                                &format!("[project {project}]"),
+                            ),
                         )
                     );
                 } else {

@@ -5,7 +5,7 @@ Computes a lightweight relatedness map from signals already in ``graph.json``
 title+slug+details - and persists it to a sidecar the offer path and
 ``/triage`` read. Pure logic here; CLI wiring lives in ``graph/cli.py``.
 
-The map is a regenerable artifact (like codemap): last-writer-wins, atomic
+The map is a regenerable artifact: last-writer-wins, atomic
 write, never part of graph.json. ``build_map`` only READS entries.
 """
 from __future__ import annotations

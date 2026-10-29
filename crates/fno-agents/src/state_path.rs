@@ -24,7 +24,7 @@ pub fn run(args: &[String]) -> i32 {
         args
     };
     let Some(name) = args.first() else {
-        eprintln!("usage: fno-agents state path <target-state|run-log|events|plans|inbox|leads|scratchpad|status-sinks|worktree-log|codemap|escalations|questions|plans-dirs|plan-dir|plan-path|migrate|dir|mint-id>");
+        eprintln!("usage: fno-agents state path <target-state|run-log|events|plans|inbox|leads|scratchpad|status-sinks|worktree-log|escalations|questions|plans-dirs|plan-dir|plan-path|migrate|dir|mint-id|settings-read>");
         return 2;
     };
     // `plans-dirs` is not a single-path accessor: it answers with one dir per
@@ -58,6 +58,12 @@ pub fn run(args: &[String]) -> i32 {
     }
     if name == "plan-path" {
         return crate::plans_path::run_plan_path(&args[1..]);
+    }
+    // `settings-read` is the settings fact set's door: the node-id knobs,
+    // the config candidates, and the work-map walk (with the cwd -> project
+    // detect) in one spawn. It answers a receipt, not a path.
+    if name == "settings-read" {
+        return crate::backlog::settings_read::run_settings_read(&args[1..]);
     }
     // `mint-id` is the shell door to the crate's one session-id mint: hooks
     // and Python forwarders call it instead of minting their own, so one
@@ -97,7 +103,7 @@ pub fn run(args: &[String]) -> i32 {
     let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
     let Some(path) = resolve(name, &cwd) else {
         eprintln!(
-            "error: unknown state path {name} (known: codemap, dir, escalations, events, inbox, leads, plan-dir, plan-path, plans, plans-dirs, questions, run-log, scratchpad, status-sinks, target-state, worktree-log)"
+            "error: unknown state path {name} (known: dir, escalations, events, inbox, leads, plan-dir, plan-path, plans, plans-dirs, questions, run-log, scratchpad, status-sinks, target-state, worktree-log)"
         );
         return 2;
     };
@@ -222,7 +228,6 @@ pub(crate) fn resolve(name: &str, cwd: &std::path::Path) -> Option<PathBuf> {
         "scratchpad" => Some(wt.join("scratchpad")),
         "status-sinks" => Some(space.join("status-sinks")),
         "worktree-log" => Some(space.join("worktree-log.jsonl")),
-        "codemap" => Some(wt.join("codemap.md")),
         // Rust-owned: the escalation notes directory (crate::escalation).
         // Nothing in Python reads it, so there is no Python accessor to mirror.
         "escalations" => Some(crate::escalation::dir(cwd)),

@@ -412,20 +412,14 @@ pub(crate) fn record_at(
             }),
         )?;
         Ok(Recorded::Delivery { chat_id })
-    } else if kind == "landed" {
+    } else if is_receipt_kind(kind) {
         let meta = line.get("meta").cloned().unwrap_or(Value::Null);
         let session = meta
             .get("session")
             .and_then(Value::as_str)
             .unwrap_or_else(|| line.get("to").and_then(Value::as_str).unwrap_or(""));
-        let (id, session, how) = (
-            meta.get("landed")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            session.to_string(),
-            "landed".to_string(),
-        );
+        let (id, how) = receipt_of(kind, &meta);
+        let session = session.to_string();
         if id.is_empty() {
             return Ok(Recorded::Skipped);
         }
@@ -440,6 +434,7 @@ pub(crate) fn record_at(
             "id": id,
             "session": session,
             "how": how,
+            "reason": meta.get("reason").and_then(Value::as_str),
             "ts": line.get("ts").and_then(Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(crate::announce::now_iso),
@@ -448,6 +443,27 @@ pub(crate) fn record_at(
         Ok(Recorded::Delivery { chat_id })
     } else {
         Ok(Recorded::Skipped)
+    }
+}
+
+/// The bus kinds that are a receipt about another message: a `landed`
+/// transcript match, or a `state` row naming the delivery state it reached.
+fn is_receipt_kind(kind: &str) -> bool {
+    kind == "landed" || kind == crate::mail_delivery_state::STATE_KIND
+}
+
+/// The message a receipt row is about, and the delivery word it records.
+fn receipt_of(kind: &str, meta: &Value) -> (String, String) {
+    let field = |k: &str| {
+        meta.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    if kind == "landed" {
+        (field("landed"), "landed".to_string())
+    } else {
+        (field("of"), field("state"))
     }
 }
 
@@ -1067,19 +1083,14 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
                 .or_insert_with(|| chat_id.clone());
             stage(&mut chats, &mut order, chat_id, rec);
             receipt.messages += 1;
-        } else if kind == "landed" {
+        } else if is_receipt_kind(kind) {
             let meta = line.get("meta").cloned().unwrap_or(Value::Null);
-            let (id, session, how) = (
-                meta.get("landed")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                meta.get("session")
-                    .and_then(Value::as_str)
-                    .unwrap_or_else(|| line.get("to").and_then(Value::as_str).unwrap_or(""))
-                    .to_string(),
-                "landed".to_string(),
-            );
+            let (id, how) = receipt_of(kind, &meta);
+            let session = meta
+                .get("session")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| line.get("to").and_then(Value::as_str).unwrap_or(""))
+                .to_string();
             if id.is_empty() {
                 receipt.skipped += 1;
                 continue;
@@ -1094,6 +1105,7 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
                 "id": id,
                 "session": session,
                 "how": how,
+                "reason": meta.get("reason").and_then(Value::as_str),
                 "ts": line.get("ts").and_then(Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(crate::announce::now_iso),

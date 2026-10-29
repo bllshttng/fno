@@ -130,7 +130,7 @@ fn note_pointer_receipt(stdout: &[u8]) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or("");
     let msg_id = line.split_whitespace().next().unwrap_or("");
-    if line.contains("delivered (hosted)") {
+    if crate::mail_delivery_state::receipt_reached(line) {
         format!("hosted {msg_id}")
     } else if line.contains("queued (durable)") || line.contains("appended (durable)") {
         format!("durable {msg_id}")
