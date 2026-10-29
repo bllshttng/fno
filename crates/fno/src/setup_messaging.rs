@@ -158,6 +158,11 @@ pub fn step(
                         .push(format!("messaging: {kind}: cannot write {ENV_FILE}: {e}"));
                     continue;
                 }
+                let removed: Vec<Value> = rows
+                    .iter()
+                    .filter(|r| r["type"] == kind && r["machine"] == me.as_str())
+                    .cloned()
+                    .collect();
                 rows.retain(|r| !(r["type"] == kind && r["machine"] == me.as_str()));
                 rows.push(row.clone());
                 match set(&Value::Array(rows.clone()).to_string()) {
@@ -175,6 +180,12 @@ pub fn step(
                         }
                     }
                     Err(e) => {
+                        // The config kept the old rows, so the shared
+                        // buffer must too: a later pick's write would
+                        // otherwise land this row with the restored old
+                        // token.
+                        rows.pop();
+                        rows.extend(removed);
                         out.needs_human.push(format!("messaging: {kind}: {e}"));
                         if let Err(re) = write_env(&env_file, env, old.as_deref()) {
                             out.needs_human.push(format!(
@@ -660,6 +671,56 @@ mod tests {
             std::fs::read_to_string(&env_file).unwrap().trim(),
             "OTHER=keep"
         );
+
+        // A failed write also rolls the shared rows back: a later pick's
+        // successful write must not land the failed channel's row.
+        struct TwoChannel;
+        impl Http for TwoChannel {
+            fn call(
+                &mut self,
+                _m: &str,
+                url: &str,
+                _h: &[(&str, String)],
+                _b: Option<&str>,
+            ) -> Option<(u16, String)> {
+                if url.contains("getUpdates") {
+                    return Some((
+                        200,
+                        r#"{"result":[{"message":{"chat":{"id":100},"from":{"id":42}}}]}"#.into(),
+                    ));
+                }
+                Some((200, "{}".into()))
+            }
+        }
+        std::fs::write(&env_file, "export FNO_CHAT_TELEGRAM_TOKEN=old-tok\n").unwrap();
+        let calls = std::cell::RefCell::new(Vec::<String>::new());
+        let set = |value: &str| -> Result<PathBuf, String> {
+            calls.borrow_mut().push(value.to_string());
+            if calls.borrow().len() == 1 {
+                Err("config write boom".into())
+            } else {
+                Ok(PathBuf::from("/cfg"))
+            }
+        };
+        let out = step(
+            Vec::new(),
+            Some(&["telegram", "discord"]),
+            &mut Answers(vec!["tok-a", "", "tok-d", "chan-1", "user-1"]),
+            &set,
+            &mut TwoChannel,
+            &home,
+        );
+        assert_eq!(
+            out.needs_human,
+            vec!["messaging: telegram: config write boom"]
+        );
+        let calls = calls.into_inner();
+        assert_eq!(calls.len(), 2);
+        assert!(!calls[1].contains("telegram"), "{}", calls[1]);
+        assert!(calls[1].contains("discord"), "{}", calls[1]);
+        let text = std::fs::read_to_string(&env_file).unwrap();
+        assert!(text.contains("FNO_CHAT_TELEGRAM_TOKEN=old-tok"), "{text}");
+        assert!(text.contains("FNO_CHAT_DISCORD_TOKEN=tok-d"), "{text}");
         std::fs::remove_dir_all(&home).ok();
     }
 }
