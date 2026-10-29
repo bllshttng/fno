@@ -473,9 +473,5 @@ mod tests {
             Some(v) => std::env::set_var("FNO_CONFIG", v),
             None => std::env::remove_var("FNO_CONFIG"),
         }
-        match prior_root {
-            Some(v) => std::env::set_var("FNO_CONFIG_SEARCH_ROOT", v),
-            None => std::env::remove_var("FNO_CONFIG_SEARCH_ROOT"),
-        }
     }
 }
