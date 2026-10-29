@@ -89,6 +89,7 @@ pub mod search;
 pub mod session_cli;
 pub mod sessions;
 pub mod settings;
+pub mod settings_read;
 pub mod style_check;
 pub(crate) mod supersession;
 pub mod target_binding;

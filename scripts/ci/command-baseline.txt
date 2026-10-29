@@ -62,7 +62,6 @@ config
 config accounts
 config get
 config set
-context
 cost
 delivery evaluate
 do
@@ -93,6 +92,5 @@ resume
 uninstall
 update
 version
-whoami context
 whoami cost
 whoami ledger

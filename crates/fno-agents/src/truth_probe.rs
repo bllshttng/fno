@@ -458,7 +458,6 @@ fn ask_daemon(
     handles: &[String],
     deadline: Option<Instant>,
 ) -> Option<Vec<(String, serde_json::Value)>> {
-    use std::io::{Read, Write};
     let budget = deadline
         .map(|d| d.saturating_duration_since(Instant::now()))
         .unwrap_or(ASK_BUDGET)
@@ -467,24 +466,13 @@ fn ask_daemon(
         return None;
     }
     let sock = crate::paths::AgentsHome::from_env().supervisor_sock();
-    let mut stream = std::os::unix::net::UnixStream::connect(sock).ok()?;
-    stream.set_read_timeout(Some(budget)).ok()?;
-    stream.set_write_timeout(Some(budget)).ok()?;
-    let req =
-        crate::protocol::Request::new(1, "agent.truth", serde_json::json!({ "handles": handles }));
-    let body = serde_json::to_vec(&req).ok()?;
-    stream.write_all(&(body.len() as u32).to_le_bytes()).ok()?;
-    stream.write_all(&body).ok()?;
-    let mut len = [0u8; 4];
-    stream.read_exact(&mut len).ok()?;
-    let len = u32::from_le_bytes(len);
-    if len > crate::protocol::MAX_FRAME_BYTES {
-        return None;
-    }
-    let mut reply = vec![0u8; len as usize];
-    stream.read_exact(&mut reply).ok()?;
-    let resp: crate::protocol::Response = serde_json::from_slice(&reply).ok()?;
-    let answers = resp.result()?.get("answers")?.as_object()?;
+    let result = crate::protocol::blocking_call(
+        &sock,
+        "agent.truth",
+        serde_json::json!({ "handles": handles }),
+        budget,
+    )?;
+    let answers = result.get("answers")?.as_object()?;
     Some(
         answers
             .iter()

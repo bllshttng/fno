@@ -149,97 +149,6 @@ def _resolve_dispatch_workdir(cwd: str | None, fresh: bool, here: bool) -> Path:
 
 
 
-def _agents_home_dir() -> Path:
-    """The agents home (mirrors dispatch._daemon_rpc resolution)."""
-    env = os.environ.get("FNO_AGENTS_HOME")
-    if env:
-        return Path(env)
-    return Path(os.path.expanduser("~")) / ".fno" / "agents"
-
-
-def _worker_rpc(
-    sock_path: Path,
-    method: str,
-    params: dict,
-    *,
-    connect_timeout: float = 3.0,
-    read_timeout: float = 5.0,
-) -> "dict | None":
-    """One length-prefixed JSON RPC to a worker socket (NEVER raises).
-
-    The shared dispatch.rpc_roundtrip framing, to an arbitrary worker socket
-    (the stream worker serves ``stream.*`` directly). Returns the ``result``
-    dict, or None on any transport/error response.
-    """
-    from fno.agents.dispatch import rpc_roundtrip
-
-    return rpc_roundtrip(
-        sock_path,
-        method,
-        params,
-        connect_timeout=connect_timeout,
-        read_timeout=read_timeout,
-    )
-
-
-def _render_stream_frame(frame: dict) -> "str | None":
-    """Map one stream frame to a display line (None = nothing to show).
-
-    Renders the turn lifecycle visibly (AC2-CLI: never a silent stall):
-    delivered (user-echo receipt) -> streaming (partials) -> reply -> complete.
-    """
-    kind = frame.get("kind")
-    if kind == "system":
-        return f"  · session ready ({frame.get('subtype', '')})"
-    if kind == "user_echo":
-        return "  · delivered (turn received)"
-    if kind == "stream_event":
-        delta = frame.get("delta")
-        return f"  · {delta}" if delta else None
-    if kind == "assistant":
-        return f"  -> {frame.get('text', '')}"
-    if kind == "result":
-        return "  x turn errored" if frame.get("is_error") else "  v turn complete"
-    if kind == "malformed":
-        return "  · (skipped malformed frame)"
-    return None
-
-
-def _watch_loop(read_frames, *, max_polls=None, sleep_fn=None, out=None) -> int:
-    """Poll a thread's frame log and render turns until it exits / max_polls.
-
-    ``read_frames(cursor) -> dict | None`` is injected so the loop is testable
-    without a socket. Returns 0 on a clean exit (child not alive), 1 when the
-    worker is unreachable (thread not live).
-    """
-    out = out or sys.stdout
-    if sleep_fn is None:
-        import time as _time
-
-        def sleep_fn() -> None:
-            _time.sleep(0.25)
-
-    cursor = 0
-    polls = 0
-    while max_polls is None or polls < max_polls:
-        polls += 1
-        res = read_frames(cursor)
-        if res is None:
-            print("fno agents watch: thread not live (worker unreachable)", file=sys.stderr)
-            return 1
-        cursor = res.get("next", cursor)
-        for fr in res.get("frames", []):
-            line = _render_stream_frame(fr)
-            if line is not None:
-                print(line, file=out)
-        if not res.get("child_alive", True):
-            print("  -- thread exited", file=out)
-            return 0
-        if max_polls is None or polls < max_polls:
-            sleep_fn()
-    return 0
-
-
 @agents_app.command("watch")
 def cmd_watch(
     name: str = typer.Argument(..., help="Agent name (a held stream-json thread)."),
@@ -251,35 +160,15 @@ def cmd_watch(
 
     Renders delivered -> streaming -> reply -> complete per turn by polling the
     worker's frame log. Ctrl-C to stop. Exits 0 when the thread is no longer
-    live, 1 when no live worker exists, 2 when the name is unknown.
+    live, 1 when no live worker exists, 2 when the name is unknown. The watch
+    is native (crates/fno-agents/src/watch.rs); with an installed binary the
+    runtime router execs it before this function runs, so this front keeps
+    only its signature for --help and refuses without one.
     """
-    from fno.agents.registry import AgentResolutionError, resolve_agent
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    try:
-        resolved = resolve_agent(name)
-    except AgentResolutionError as exc:
-        print(f"fno agents watch: {exc}", file=sys.stderr)
-        raise typer.Exit(exc.exit_code) from exc
-    short_id = resolved.worker_short_id
-    if short_id is None:
-        print(
-            f"fno agents watch: agent {resolved.entry.name!r} has no worker "
-            "short id on file; nothing to watch",
-            file=sys.stderr,
-        )
-        raise typer.Exit(2)
-    sock = _agents_home_dir() / short_id / "worker.sock"
-    import time as _time
-
-    def _read(cursor: int) -> "dict | None":
-        return _worker_rpc(sock, "stream.read_frames", {"cursor": cursor})
-
-    try:
-        rc = _watch_loop(_read, sleep_fn=lambda: _time.sleep(poll_interval))
-    except KeyboardInterrupt:
-        print("\n  -- watch stopped", file=sys.stderr)
-        rc = 0
-    raise typer.Exit(rc)
+    _ = (name, poll_interval)
+    refuse_without_binary("watch")
 
 
 @agents_app.command("role", hidden=True)
