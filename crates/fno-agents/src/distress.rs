@@ -141,7 +141,9 @@ pub(crate) fn help_distress_held(reason: String, evidence: Option<String>) -> He
 /// spans replaced by a space, so the scan that follows reads identical text
 /// outside code and nothing at all inside it. A backtick-quoted `<help>` is
 /// a worker talking about the protocol, not a distress; a fenced tag is a
-/// quotation the same way.
+/// quotation the same way. The copy is BYTE-length-preserving: a blanked
+/// char becomes as many spaces as its UTF-8 length, so byte offsets into
+/// the copy index the original and a caller can slice the raw text there.
 pub(crate) fn blank_code_spans_and_fences(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_fence = false;
@@ -153,7 +155,13 @@ pub(crate) fn blank_code_spans_and_fences(text: &str) -> String {
         }
         if in_fence {
             for c in line.chars() {
-                out.push(if c == '\n' { '\n' } else { ' ' });
+                if c == '\n' {
+                    out.push('\n');
+                } else {
+                    for _ in 0..c.len_utf8() {
+                        out.push(' ');
+                    }
+                }
             }
             continue;
         }
@@ -180,7 +188,9 @@ pub(crate) fn blank_code_spans_and_fences(text: &str) -> String {
                     out.push('`');
                 }
             } else if open_len > 0 && c != '\n' {
-                out.push(' ');
+                for _ in 0..c.len_utf8() {
+                    out.push(' ');
+                }
             } else {
                 out.push(c);
             }
@@ -223,8 +233,9 @@ pub(crate) fn extract_help_distress(text: &str) -> Option<HelpDistress> {
 
 /// The byte span `(start, past_gt)` of the first real help block's opening
 /// tag, the same parse [`extract_help_distress`] runs. The code-blanking is
-/// length-preserving (one output char per input char), so the span indexes
-/// the ORIGINAL text and a caller can slice the raw block for display.
+/// BYTE-length-preserving (a blanked char becomes as many spaces as its
+/// UTF-8 length), so the span indexes the ORIGINAL text and a caller can
+/// slice the raw block for display.
 pub(crate) fn help_open_span(text: &str) -> Option<(usize, usize)> {
     if !text.contains("<help") {
         return None;
@@ -989,6 +1000,12 @@ mod tests {
         let unclosed = "recovery tail <help reason=\"x\">";
         let (start, tag_end) = help_open_span(unclosed).expect("unclosed still parses");
         assert_eq!(&unclosed[start..tag_end], "<help reason=\"x\">");
+        // A multibyte char inside an earlier span must not shift the span:
+        // the blanking is byte-preserving, so the slice lands on the real
+        // tag and never mid-character.
+        let unicode = "not `<help é界>`-worthy. real: <help reason=\"ci\">down</help>";
+        let (start, tag_end) = help_open_span(unicode).expect("the real block parses");
+        assert_eq!(&unicode[start..tag_end], "<help reason=\"ci\">");
     }
 
     #[test]
