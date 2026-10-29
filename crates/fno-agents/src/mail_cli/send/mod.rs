@@ -1502,7 +1502,11 @@ pub fn run(args: &[String]) -> i32 {
 
     // The rule door: one `door:send` event per addressed send, the recipient
     // the subject. A block exits 3 with the reasons on stderr; a warn prints
-    // and the send proceeds (AC14: an unread source never fails a send).
+    // and the send proceeds. An unread source stays silent at THIS door: the
+    // send surface is byte-pinned by the dual-implementation parity goldens
+    // (tests/capture/mail_send_capture.py), and a store-less CI env would
+    // otherwise print an Unread line the pinned leg never printed. The other
+    // three doors carry the Unread line.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let ev = crate::rules::Event {
         kind: "door:send".to_string(),
@@ -1517,7 +1521,8 @@ pub fn run(args: &[String]) -> i32 {
         .ok(),
         ..crate::rules::Event::default()
     };
-    let ruling = crate::rules_source::rule(&cwd, &ev);
+    let mut ruling = crate::rules_source::rule(&cwd, &ev);
+    ruling.unread.clear();
     if let Some(sentence) = crate::rules_source::block_sentence(&ruling) {
         eprintln!("{sentence}");
         return 3;
