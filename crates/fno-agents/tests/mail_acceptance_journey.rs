@@ -284,8 +284,8 @@ fn painted_draft_without_acceptance_stays_unconfirmed() {
     );
     assert_eq!(
         outcome,
-        Ok(DeliveryState::failed("not-confirmed")),
-        "withdrawn on silence"
+        Ok(DeliveryState::Injected),
+        "an unconfirmable lane types and never withdraws"
     );
     // flatten write + CR + the ONE resubmit CR at half budget; the
     // unconfirmable arm never withdraws and never re-Enters again.
@@ -319,8 +319,8 @@ fn fragmented_paint_stays_unconfirmed() {
     );
     assert_eq!(
         outcome,
-        Ok(DeliveryState::failed("not-confirmed")),
-        "withdrawn on silence"
+        Ok(DeliveryState::Injected),
+        "an unconfirmable lane types and never withdraws"
     );
     // The same 3-write shape: flatten write + CR + the one resubmit CR.
     assert_eq!(submit_count(&handle.join().unwrap()), 3);
@@ -356,8 +356,8 @@ fn same_prefix_paint_stays_unconfirmed() {
     );
     assert_eq!(
         outcome,
-        Ok(DeliveryState::failed("not-confirmed")),
-        "withdrawn on silence"
+        Ok(DeliveryState::Injected),
+        "an unconfirmable lane types and never withdraws"
     );
     // flatten write + CR + the ONE resubmit CR at half budget.
     assert_eq!(submit_count(&handle.join().unwrap()), 3);
