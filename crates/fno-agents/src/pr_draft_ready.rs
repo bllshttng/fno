@@ -11,7 +11,7 @@
 //!
 //! - The gh proxy's delegate path refuses draft-intent argv (`gh pr create
 //!   --draft`, `gh pr ready <n> --draft`) from any Footnote-launched process;
-//!   `worker_environment` puts the shim on every spawned worker's PATH, so
+//!   the front door (`fno::gh_proxy`) puts the shim on every worker's PATH, so
 //!   this is the one door all six harnesses cross.
 //! - The pr-watch sweep flips an open fno-bound draft PR back to ready and
 //!   journals the flip as `pr_watch_draft_flip` (schema.yaml).

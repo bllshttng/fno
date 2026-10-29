@@ -1,0 +1,16 @@
+[doctor] error: no settings.yaml found
+[doctor] run 'fno config set <key> <value>' to write one
+[doctor] post-merge: dormant (no fno activity in this repo)
+
+state roots:
+  class    file             root                                            selector
+  OPERATOR ledger.json      <FIXTURE>/state/ledger.json config.paths.ledger_json, else config.state_dir
+  OPERATOR registry.json    <FIXTURE>/fake_home/.fno/agents/registry.json FNO_AGENTS_HOME, else config.state_dir (Rust runtime home)
+  OPERATOR claims           <FIXTURE>/fake_home/.fno/claims FNO_CLAIMS_ROOT, else $HOME
+  OPERATOR messages.jsonl   <FIXTURE>/state/bus FNO_BUS_DIR, else config.paths.bus_dir, else config.state_dir
+  OPERATOR briefs           <FIXTURE>/state/briefs config.paths.briefs_dir, else config.state_dir
+  PROJECT  events.jsonl     <FIXTURE>/state/spaces/<FIXTURE_SLUG>-project/events.jsonl FNO_EVENTS_PATH, else config.paths.spaces_dir, else state_dir
+  PROJECT  target-state.md  <FIXTURE>/state/spaces/<FIXTURE_SLUG>-project/target-state.md worktree slice of the space
+band routing inactive: config.routing.models declares 0 row(s), and no command slot has a lane that resolves: think, blueprint, target, review, role
+      The built-in rows keep a tier request answerable: none
+      Declare [[routing.models]] rows plus [agents.profiles.<command>] lanes to activate (docs/architecture/role-based-model-routing.md)
