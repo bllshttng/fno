@@ -674,14 +674,43 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
     }
 }
 
+/// The merged-view item for `id`, honoring the same index/fold precedence
+/// `questions_merged` renders with: the healthy projection wins a shared id,
+/// the fresh index wins while the projection is degraded, and an id only one
+/// leg holds comes from wherever it lives. Reads the two legs by reference -
+/// `questions_merged` itself would clone every fold on every row.
+fn question_item<'a>(view: &'a View, id: &str) -> Option<&'a crate::needs_overlay::QuestionItem> {
+    let index = view.questions_index.as_ref();
+    let fold = view.questions_fold.as_ref();
+    let find = |f: Option<&'a crate::needs_overlay::QuestionsFold>| {
+        f.and_then(|f| f.items.iter().find(|q| q.id == id))
+    };
+    let (primary, secondary) = if view.questions_degraded {
+        (index, fold)
+    } else {
+        (fold, index)
+    };
+    find(primary).or_else(|| find(secondary))
+}
+
 fn question_title(view: &View, id: &str) -> String {
-    view.questions_fold
-        .as_ref()
-        .and_then(|f| f.items.iter().find(|q| q.id == id))
-        .map(|q| q.title.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(id)
-        .to_string()
+    let Some(q) = question_item(view, id) else {
+        return id.to_string();
+    };
+    let title = q.title.trim();
+    if !title.is_empty() {
+        return title.to_string();
+    }
+    // A question with no text names its asker and node instead of a bare
+    // id; the id stays the last resort for a row that names neither.
+    let asker = q.asker.as_ref().map(|a| a.handle.as_str()).unwrap_or("");
+    let node = q.node.as_deref().unwrap_or("");
+    match (!asker.is_empty(), !node.is_empty()) {
+        (true, true) => format!("from {asker} on {node}"),
+        (true, false) => format!("from {asker}"),
+        (false, true) => format!("on {node}"),
+        (false, false) => id.to_string(),
+    }
 }
 
 /// Whether the merged fold still lists `id` as an open question: the
@@ -958,7 +987,10 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 bold,
             );
             if start + r - 1 == panel.selected {
-                let (fg, bg, flags) = crate::theme::band_style(&view.theme);
+                // The row about to take Enter inverts like the settings
+                // modal's focused row; the band_style surface read as a
+                // faint gray bar on a named theme.
+                let (fg, bg, flags) = crate::theme::focus_style(&view.theme);
                 for c in (x0 + 1)..cols {
                     let cell = &mut cells[y + c];
                     cell.fg = fg;
@@ -1191,6 +1223,107 @@ mod tests {
         assert!(!stale(&v), "the index backs the list; no stale banner");
         v.questions_index = None;
         assert!(stale(&v), "no index: the banner says so");
+    }
+
+    #[test]
+    fn row_titles_read_the_merged_view_and_name_the_asker_before_the_id() {
+        let item = |id: &str, title: &str| crate::needs_overlay::QuestionItem {
+            id: id.into(),
+            title: title.into(),
+            state: "open".into(),
+            ready: true,
+            ..Default::default()
+        };
+        let mut v = view_with_agents(vec![]);
+        v.term = (24, 100);
+        v.bell.tab = Tab::Questions;
+        v.questions_index = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![
+                item("q-shared", "from the index"),
+                item("q-index-only", "index only"),
+            ],
+            ..Default::default()
+        });
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![
+                item("q-shared", "from the projection"),
+                crate::needs_overlay::QuestionItem {
+                    id: "q-silent".into(),
+                    asker: Some(crate::needs_overlay::QuestionAsker {
+                        handle: "daemon".into(),
+                        ..Default::default()
+                    }),
+                    node: Some("x-9f8e".into()),
+                    state: "open".into(),
+                    ..Default::default()
+                },
+                crate::needs_overlay::QuestionItem {
+                    id: "q-node-only".into(),
+                    node: Some("x-9f8e".into()),
+                    state: "open".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        // The healthy projection wins a shared id; an id only the index
+        // holds still reads its title.
+        assert_eq!(question_title(&v, "q-shared"), "from the projection");
+        assert_eq!(question_title(&v, "q-index-only"), "index only");
+        // A question with no text names its asker and node, never a bare id.
+        assert_eq!(question_title(&v, "q-silent"), "from daemon on x-9f8e");
+        assert_eq!(question_title(&v, "q-node-only"), "on x-9f8e");
+        // Degraded: the fresh index outvotes the stale projection.
+        v.questions_degraded = true;
+        assert_eq!(question_title(&v, "q-shared"), "from the index");
+        // An id no leg holds keeps the honest last resort.
+        assert_eq!(question_title(&v, "q-gone"), "q-gone");
+    }
+
+    #[test]
+    fn the_cursor_row_inverts_like_the_focused_settings_row() {
+        let mut v = view_with_agents(vec![]);
+        v.term = (24, 100);
+        v.bell.open = true;
+        v.bell.tab = Tab::Questions;
+        v.bell.selected = 0;
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![crate::needs_overlay::QuestionItem {
+                id: "q-1".into(),
+                title: "Hold the release until the shot lands?".into(),
+                state: "open".into(),
+                ready: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let cols = 100usize;
+        let rows_n = 24usize;
+        let blank = Cell {
+            c: ' ',
+            fg: Color::Default,
+            bg: Color::Default,
+            flags: 0,
+        };
+        let mut cells = vec![blank; rows_n * cols];
+        draw(&v, &mut cells, rows_n, cols);
+        // The selected row's first body cell carries the focus pair - the
+        // invert the settings modal's focused row uses - not the band pair.
+        // The panel paints at the right edge; row 1 is its first body row.
+        let (efg, ebg, eflags) = crate::theme::focus_style(&v.theme);
+        let x0 = cols - panel_width(&v, cols);
+        let cell = &cells[cols + x0 + 2];
+        assert_eq!(
+            (cell.fg, cell.bg, cell.flags),
+            (efg, ebg, eflags),
+            "the cursor row carries the focus pair"
+        );
+        let (_, bbg, bflags) = crate::theme::band_style(&v.theme);
+        assert_ne!(
+            (cell.bg, cell.flags),
+            (bbg, bflags),
+            "not the faint band pair"
+        );
     }
 
     #[test]
