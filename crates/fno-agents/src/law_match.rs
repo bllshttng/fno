@@ -14,26 +14,9 @@ use std::io::Read;
 /// Lowercase, split on anything outside `[a-z0-9]`, then drop digit-only
 /// tokens, 4-8 character hex tokens that contain a digit (node ids like
 /// `14c8`, `cf6a`), and the stop set. A hex word with no digit (`added`,
-/// `face`) survives.
-pub fn tokens(s: &str) -> BTreeSet<String> {
-    const STOP: [&str; 19] = [
-        "pr", "x", "ab", "q", "d", "a", "an", "the", "of", "to", "and", "or", "for", "on", "in",
-        "is", "it", "no", "not",
-    ];
-    s.to_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .filter(|t| !t.bytes().all(|b| b.is_ascii_digit()))
-        .filter(|t| {
-            let hex_with_digit = (4..=8).contains(&t.len())
-                && t.bytes().all(|b| b.is_ascii_hexdigit())
-                && t.bytes().any(|b| b.is_ascii_digit());
-            !hex_with_digit
-        })
-        .filter(|t| !STOP.contains(t))
-        .map(str::to_owned)
-        .collect()
-}
+/// `face`) survives. Moved to the fno crate with the rule matcher; this
+/// re-export keeps the law-side scorers on the one implementation.
+pub use crate::rules::tokens;
 
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
@@ -140,14 +123,10 @@ struct RecordScopeRequest {
 struct ScopeSplitRequest {
     rows: Vec<Value>,
 }
-/// The raw hook payload, verbatim from the harness event. `paths` carries the
-/// file targets of a PreToolUse Edit|Write payload (the hook reads them off
-/// `tool_input`); non-empty `paths` routes the answer to the edit read.
+/// The raw hook payload, verbatim from the harness event.
 #[derive(Deserialize)]
 struct StageRequest {
     hook: serde_json::Value,
-    #[serde(default)]
-    paths: Vec<String>,
 }
 
 /// The statement `fno inbox law set` wants recorded. `rationale` and
@@ -518,37 +497,6 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
 /// `code-review-attest` and every future skill that merely mentions one.
 const REVIEW_COMMANDS: &[&str] = &["code-review", "review", "review-changes", "sigma-review"];
 
-/// The stage table: a stage's keywords decide WHICH laws surface, never
-/// their order. Measured against the live corpus 2026-09-14: `review` alone
-/// finds 10 of 11 review laws (it misses the one filed under a node id);
-/// adding `attest|findings|max_rounds` finds 11 of 11 with zero false
-/// positives.
-const STAGES: &[(&str, &[&str])] = &[
-    ("review", &["review", "attest", "findings", "max_rounds"]),
-    (
-        "blueprint",
-        &[
-            "blueprint",
-            "plan",
-            "planning",
-            "difficulty",
-            "model",
-            "subagent",
-            "python",
-            "crate",
-            "port",
-            "verb",
-        ],
-    ),
-    (
-        "target",
-        &[
-            "target", "execute", "worktree", "spawn", "review", "merge", "attest", "python",
-            "crate", "port",
-        ],
-    ),
-];
-
 /// The non-review command names each stage classifies, next to REVIEW_COMMANDS.
 /// `/fno:execute` classifies as target: it runs a bound plan, the same
 /// governed ground. Named explicitly for the same reason REVIEW_COMMANDS is.
@@ -557,15 +505,6 @@ const STAGE_COMMANDS: &[(&str, &str)] = &[
     ("target", "target"),
     ("execute", "target"),
 ];
-
-/// A stage's keywords, for the rules-measure baseline; any other name has none.
-fn stage_keywords(stage: &str) -> Vec<&'static str> {
-    STAGES
-        .iter()
-        .find(|(s, _)| *s == stage)
-        .map(|(_, k)| k.to_vec())
-        .unwrap_or_default()
-}
 
 /// Read the named file and the live laws, then answer with `f`. An
 /// unreadable file or store is an `ok: false` answer, never silence, and so
@@ -675,85 +614,23 @@ fn stage_law_line(row: &Value) -> Option<String> {
     ))
 }
 
-/// Which laws a stage block lists: the node's project scope as a FIELD (never
-/// the old substring heuristic, where any law mentioning the slug matched any
-/// node of that project), then a keyword match over `{subject} {decision}` or
-/// the payload node's subjects (node id, epic id) named in either field - minus
-/// rows whose subject equals the node id itself (the think-inspect receipt
-/// already carries the node's own rulings).
-fn stage_matching_lines(
-    index: &decision_index::Index,
-    keywords: &[&str],
-    idents: &[String],
-    node_id: &str,
-    project: Option<&str>,
-) -> Vec<String> {
-    index
-        .rows
-        .iter()
-        .filter(|row| {
-            let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
-            // The node id is carried separately: `idents` is sorted, so its
-            // first element is whichever subject sorts smallest, never
-            // reliably the node id.
-            let node_row = !node_id.is_empty() && subject.trim().eq_ignore_ascii_case(node_id);
-            !node_row
-        })
-        // `None` fails open - the reason rides the unread receipt - because a
-        // missing law is worse than one that does not apply.
-        .filter(|row| project.map_or(true, |slug| decision_index::row_in_scope(row, slug)))
-        .filter_map(|row| {
-            let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
-            let decision = row.get("decision").and_then(Value::as_str).unwrap_or("");
-            let haystack = format!("{subject} {decision}").to_lowercase();
-            let hit = keywords.iter().any(|k| haystack.contains(k))
-                || idents.iter().any(|i| haystack.contains(i));
-            hit.then(|| stage_law_line(row)).flatten()
-        })
-        .collect()
-}
-
-/// Node subjects for a stage payload that names a node: the node id itself and
-/// its epic id (the graph row's `parent`), plus the row's `project` field
-/// returned SEPARATELY, because scope matches as a stamped field now, not as a
-/// substring of law text. An unreadable graph degrades to node-id-only
-/// matching and returns the reason so the stage answer can name the missing scope.
-fn node_subject_idents(
-    node_id: &str,
-    graph_path: Option<&std::path::Path>,
-) -> (Vec<String>, Option<String>, Option<String>) {
-    let mut idents = vec![node_id.to_lowercase()];
-    let default_path = crate::graph_get::default_graph_path();
-    let path = graph_path.unwrap_or(&default_path);
-    if graph_path.is_none() && crate::graph_get::external_backend_selected() {
-        return (
-            idents,
-            None,
-            Some("graph: external backend selected".to_owned()),
-        );
+/// The project a stage payload's node belongs to: the graph row's `project`
+/// field, because scope matches as a stamped field. An unreadable graph
+/// answers the reason so the stage answer can name the missing scope.
+fn node_project(node_id: &str) -> (Option<String>, Option<String>) {
+    if crate::graph_get::external_backend_selected() {
+        return (None, Some("graph: external backend selected".to_owned()));
     }
-    let entries = match crate::backlog::api::rows(&crate::backlog::api::Store::new(path)) {
+    let path = crate::graph_get::default_graph_path();
+    let entries = match crate::backlog::api::rows(&crate::backlog::api::Store::new(&path)) {
         Ok(entries) => entries,
-        Err(error) => return (idents, None, Some(format!("graph: {}", error.0))),
+        Err(error) => return (None, Some(format!("graph: {}", error.0))),
     };
-    let mut project = None;
-    if let Some(entry) = crate::graph_get::find_entry(&entries, node_id) {
-        if let Some(v) = entry.get("parent").and_then(Value::as_str) {
-            let v = v.trim().to_lowercase();
-            if !v.is_empty() {
-                idents.push(v);
-            }
-        }
-        if let Some(v) = entry.get("project").and_then(Value::as_str) {
-            let v = v.trim().to_lowercase();
-            if !v.is_empty() {
-                project = Some(v);
-            }
-        }
-    }
-    idents.sort();
-    idents.dedup();
-    (idents, project, None)
+    let project = crate::graph_get::find_entry(&entries, node_id)
+        .and_then(|entry| entry.get("project").and_then(Value::as_str))
+        .map(|v| v.trim().to_lowercase())
+        .filter(|v| !v.is_empty());
+    (project, None)
 }
 
 /// The context block for a stage with laws: cap 2000 bytes, first law line
@@ -816,112 +693,114 @@ fn short_law_line(full: &str) -> Option<String> {
     Some(format!("- {head}): fno backlog decisions {id}"))
 }
 
-/// The stage answer. A readable index with zero matching laws renders
-/// nothing (`hook_output: null`), which is the correct answer for that
-/// input; a failed read is a report, never silence. A request carrying edit
-/// targets (`paths`) answers from the edit read instead of the command
-/// classifier.
-fn stage_answer_with(
-    req: StageRequest,
-    index_path: Option<&std::path::Path>,
-    graph_path: Option<&std::path::Path>,
-) -> Value {
-    if !req.paths.is_empty() {
-        return edit_answer(req, index_path, None);
-    }
-    let stage = classify_stage(&req.hook);
-    let mut hook_output = None;
+/// The stage answer, backed by `crate::rules::decide` on a skill event. A
+/// law fire renders as its law line; the block keeps the
+/// `- <id> (<subject>):` lines validate-plan.sh parses. A readable set with
+/// no fire renders nothing (`hook_output: null`); a failed read is a report,
+/// never silence.
+fn stage_answer(req: StageRequest) -> Value {
+    let Some(stage_name) = classify_stage(&req.hook) else {
+        return json!({"ok": true, "stage": null, "hook_output": null, "unread": []});
+    };
+    let (raw, text) = stage_input(&req.hook).unwrap_or_default();
+    let hook_event = req
+        .hook
+        .get("hook_event_name")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let cwd = req
+        .hook
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let node = payload_node_id(&req.hook);
     let mut unread = Vec::new();
-    if let Some(stage_name) = stage {
-        let keywords = STAGES
-            .iter()
-            .find(|(s, _)| *s == stage_name)
-            .map(|(_, k)| *k)
-            .unwrap_or(&[]);
-        let node_id = payload_node_id(&req.hook);
-        let (idents, node_project, graph_unread) = node_id
-            .as_deref()
-            .map(|id| node_subject_idents(id, graph_path))
-            .unwrap_or_default();
-        if let Some(reason) = &graph_unread {
-            unread.push(format!("the node's epic and project ({reason})"));
+    // The scope is the NODE's project field, the same stamp the write door
+    // uses; a node row without one falls back to the cwd resolver once.
+    let project = match node.as_deref().map(node_project) {
+        Some((Some(slug), _)) => Some(slug),
+        Some((None, Some(reason))) => {
+            unread.push(format!("the node's project ({reason})"));
+            None
         }
-        // The scope is the NODE's project field: the same stamp the write door
-        // uses, so a stage block and a decisions report cannot disagree about
-        // one row. A node row without the field falls back to the cwd resolver
-        // once; every other unresolvable shape fails OPEN - quietly for a
-        // nodeless hook, and with the graph reason already on the receipt when
-        // the graph read itself failed.
-        let scope_project = match (node_id.as_deref(), node_project.as_deref()) {
-            (_, Some(slug)) => Some(slug.to_owned()),
-            (Some(_), None) => match graph_unread {
-                Some(_) => None,
-                None => match resolve_project(None, &settings_sources()) {
-                    Ok(slug) => Some(slug),
-                    Err(reason) => {
-                        unread.push(format!("the node's project ({reason}; scope filter open)"));
-                        None
-                    }
-                },
-            },
-            (None, _) => None,
-        };
-        let laws = match index_path {
-            Some(p) => decision_index::live_laws(p),
-            // The default path is the STORE read: graph.db plus the JSONL
-            // rows the db lacks. A JSONL default refused d-608344c1, a live
-            // law cited across the fleet, while graph.db held 95 laws to the
-            // JSONL's 9.
-            None => decision_index::default_store_live().map(decision_index::laws_of),
-        };
-        match laws {
-            Ok(index) => {
-                let mut matching = stage_matching_lines(
-                    &index,
-                    keywords,
-                    &idents,
-                    node_id.as_deref().unwrap_or(""),
-                    scope_project.as_deref(),
-                );
-                // Graduated laws ride the stage block: a live law whose
-                // graduation follow-up node has closed asks for its own
-                // retraction by subject. The retraction obligation
-                // is not stage-local, so the check reads every live law -
-                // and pays its graph reads only when such a law exists.
-                // Hermetic callers (an explicit index path) skip it.
-                if index_path.is_none() {
-                    matching.extend(graduated_retraction_lines(&index, scope_project.as_deref()));
-                }
-                if !matching.is_empty() || !unread.is_empty() || index.damaged > 0 {
-                    let additional_context = if matching.is_empty() {
-                        render_read_receipt(index.damaged, &unread)
-                    } else {
-                        render_stage_block(stage_name, &matching, index.damaged, &unread)
-                    };
-                    hook_output = Some(json!({
-                        "hookSpecificOutput": {
-                            "hookEventName": req.hook.get("hook_event_name").cloned().unwrap_or(Value::Null),
-                            "additionalContext": additional_context,
-                        }
-                    }));
-                }
+        _ => match resolve_project(Some(cwd.as_path()), &settings_sources()) {
+            Ok(slug) => Some(slug),
+            Err(reason) if node.is_some() => {
+                unread.push(format!("the node's project ({reason}; scope filter open)"));
+                None
             }
-            Err(reason) => {
-                unread.push(format!("the decision index ({reason})"));
-                let text = format!(
-                    "The decision index could not be read ({reason}), so the rulings that govern this {stage_name} are unknown. Run fno backlog decisions --lane law --state live before you act on {stage_name} policy.\n{}",
-                    render_read_receipt(0, &unread)
-                );
-                hook_output = Some(json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": req.hook.get("hook_event_name").cloned().unwrap_or(Value::Null),
-                        "additionalContext": text,
-                    }
-                }));
-            }
+            Err(_) => None,
+        },
+    };
+    let skill = raw
+        .trim_start_matches(['/', '$'])
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let ev = crate::rules::Event {
+        kind: "skill".into(),
+        skill: Some(skill),
+        text: Some(text),
+        node,
+        project,
+        session: req
+            .hook
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        ..Default::default()
+    };
+    let set = match crate::rules_source::rule_set(&cwd) {
+        Ok(set) => set,
+        Err(reason) => {
+            unread.push(format!("the decision index ({reason})"));
+            let text = format!(
+                "The decision index could not be read ({reason}), so the rulings that govern this {stage_name} are unknown. Run fno backlog decisions --lane law --state live before you act on {stage_name} policy.\n{}",
+                render_read_receipt(0, &unread)
+            );
+            return json!({
+                "ok": true,
+                "stage": stage_name,
+                "hook_output": {"hookSpecificOutput": {"hookEventName": hook_event, "additionalContext": text}},
+                "unread": unread,
+            });
         }
-    }
-    json!({"ok": true, "stage": stage, "hook_output": hook_output, "unread": unread})
+    };
+    unread.extend(set.unread.iter().cloned());
+    let today = chrono::Local::now().date_naive();
+    let decision = crate::rules::decide(&set.rules, &ev, today);
+    let mut matching: Vec<String> = decision
+        .fires
+        .iter()
+        .filter_map(|fire| match fire.law.as_deref() {
+            Some(id) => set
+                .laws
+                .rows
+                .iter()
+                .find(|row| row.get("decision_id").and_then(Value::as_str) == Some(id))
+                .and_then(stage_law_line),
+            None => Some(format!(
+                "- {} (rule): {}",
+                fire.rule,
+                one_line(&fire.text, 160)
+            )),
+        })
+        .collect();
+    // Graduated laws ride the block: their retraction is not stage-local.
+    matching.extend(graduated_retraction_lines(&set.laws, ev.project.as_deref()));
+    let damaged = set.laws.damaged;
+    let hook_output = (!matching.is_empty() || !unread.is_empty() || damaged > 0).then(|| {
+        let additional_context = if matching.is_empty() {
+            render_read_receipt(damaged, &unread)
+        } else {
+            render_stage_block(stage_name, &matching, damaged, &unread)
+        };
+        json!({"hookSpecificOutput": {"hookEventName": hook_event, "additionalContext": additional_context}})
+    });
+    json!({"ok": true, "stage": stage_name, "hook_output": hook_output, "unread": unread})
 }
 
 /// Comma-joined flag values read as separate globs: split on commas, trim,
@@ -939,120 +818,6 @@ fn normalize_paths(raw: &[String]) -> Vec<String> {
 /// `..` component.
 fn glob_is_repo_relative(glob: &str) -> bool {
     !glob.starts_with('/') && glob.split('/').all(|component| component != "..")
-}
-
-/// The state root the edit seen-set lives under: `$FNO_HOME`, else `~/.fno`
-/// (the shared `default_state_path` resolution, taken at its parent).
-fn default_state_root() -> std::path::PathBuf {
-    decision_index::default_state_path("law-edit-seen")
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-}
-
-/// The paths a row names. A row with no non-empty `paths` array never
-/// matches the edit read.
-fn row_paths(row: &Value) -> Vec<String> {
-    row.get("paths")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The edit read: the files a PreToolUse Edit|Write payload is about to
-/// change, matched against live laws that name paths (`paths` globs on the
-/// row, matched with the crate's fnmatch, where `*` crosses `/`). The read
-/// prints once per session per decision id, keyed in
-/// `law-edit-seen/<session>.json`; a payload with no `session_id` prints
-/// every time. An unreadable index is a report naming this edit, never
-/// silence, and zero surviving laws render nothing.
-fn edit_answer(
-    req: StageRequest,
-    index_path: Option<&std::path::Path>,
-    state_root: Option<&std::path::Path>,
-) -> Value {
-    // The hook sends one target per array element already; comma-splitting
-    // here would corrupt a legal path that contains a comma. The record door
-    // owns the comma-joined flag form and normalizes at its own edge.
-    let targets: Vec<String> = req
-        .paths
-        .iter()
-        .map(String::as_str)
-        .map(str::to_owned)
-        .collect();
-    let hook_event = req
-        .hook
-        .get("hook_event_name")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let laws = match index_path {
-        Some(p) => decision_index::live_laws(p),
-        None => decision_index::default_store_live().map(decision_index::laws_of),
-    };
-    let hook_output = match laws {
-        Ok(index) => {
-            let mut hits: Vec<&Value> = index
-                .rows
-                .iter()
-                .filter(|row| {
-                    let globs = row_paths(row);
-                    !globs.is_empty()
-                        && globs.iter().any(|glob| {
-                            targets
-                                .iter()
-                                .any(|t| crate::sync_canonical::fnmatch(t, glob))
-                        })
-                })
-                .collect();
-            let session_id = req.hook.get("session_id").and_then(Value::as_str);
-            if let Some(session_id) = session_id {
-                let fallback;
-                let root = match state_root {
-                    Some(p) => p,
-                    None => {
-                        fallback = default_state_root();
-                        &fallback
-                    }
-                };
-                let mut seen = crate::announce::load_cursor(root, "law-edit-seen", session_id);
-                hits.retain(|row| {
-                    let id = row.get("decision_id").and_then(Value::as_str).unwrap_or("");
-                    !seen.contains(id)
-                });
-                if !hits.is_empty() {
-                    for row in &hits {
-                        if let Some(id) = row.get("decision_id").and_then(Value::as_str) {
-                            seen.insert(id.to_owned());
-                        }
-                    }
-                    crate::announce::save_cursor(root, "law-edit-seen", session_id, &seen);
-                }
-            }
-            let matching: Vec<String> = hits.iter().filter_map(|row| stage_law_line(row)).collect();
-            (!matching.is_empty()).then(|| {
-                json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": hook_event,
-                        "additionalContext": render_stage_block("edit", &matching, index.damaged, &[]),
-                    }
-                })
-            })
-        }
-        Err(reason) => Some(json!({
-            "hookSpecificOutput": {
-                "hookEventName": hook_event,
-                "additionalContext": format!(
-                    "The decision index could not be read ({reason}), so the rulings that govern this edit are unknown. Run `fno backlog decisions --lane law --state live` before you act on the files you are changing.\n"
-                ),
-            }
-        })),
-    };
-    json!({"ok": true, "stage": "edit", "hook_output": hook_output, "unread": []})
 }
 
 /// The statement validator, a word-for-word port of
@@ -3009,9 +2774,7 @@ pub fn run_law_match_str(input: &str) -> i32 {
             let near = near_law_lines(&r.law);
             serde_json::to_string(&law_answer_with(&r, near)).expect("serializes")
         }
-        MatchRequest::Stage(r) => {
-            serde_json::to_string(&stage_answer_with(r, None, None)).expect("serializes")
-        }
+        MatchRequest::Stage(r) => serde_json::to_string(&stage_answer(r)).expect("serializes"),
         MatchRequest::Validate(r) => {
             serde_json::to_string(&validate_answer(&r)).expect("serializes")
         }
@@ -3025,12 +2788,12 @@ pub fn run_law_match_str(input: &str) -> i32 {
             return crate::backlog::decisions_cli::run(&r.argv);
         }
         MatchRequest::RulesCheck(r) => {
-            serde_json::to_string(&rules_answer(&r.file, crate::rules::check_answer))
+            serde_json::to_string(&rules_answer(&r.file, crate::rules_check::check_answer))
                 .expect("serializes")
         }
         MatchRequest::RulesMeasure(r) => {
             serde_json::to_string(&rules_answer(&r.cases, |text, laws| {
-                crate::rules::measure_answer(text, laws, stage_keywords)
+                crate::rules_check::measure_answer(text, laws)
             }))
             .expect("serializes")
         }
@@ -3176,266 +2939,62 @@ pub(crate) mod tests {
         assert_eq!(run_law_match(&extra), 2);
         let bad: Vec<String> = vec![];
         assert_eq!(run_law_match(&bad), 2, "unparsable stdin must exit 2");
+    }
 
+    #[test]
+    fn the_stage_read_lists_the_laws_decide_fires() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("decisions.jsonl");
-        let mut rows: Vec<String> = Vec::new();
-        for i in 0..11 {
-            rows.push(format!(
-                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-10T00:00:{i:02}Z\",\
-                 \"data\":{{\"decision_id\":\"d-rev{i:02}000\",\"subject\":\"review-rounds-sufficient\",\
-                 \"decision\":\"Review rounds are capped. Law {i}.\",\"text\":\"x\",\
-                 \"authority_source\":\"operator\"}}}}"
-            ));
-        }
-        // The three specimens the plan names: texts whose near-miss wording
-        // ("finding", "shrink round") must NOT match the keyword table.
-        for (id, text) in [
-            ("d-10a72d88", "finding a better place for the command"),
-            ("d-5fff6924", "shrink round stands"),
-            ("d-7678146e", "shrink round stands"),
-        ] {
-            rows.push(format!(
-                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-11T00:00:00Z\",\
-                 \"data\":{{\"decision_id\":\"{id}\",\"subject\":\"file-budget-exception\",\
-                 \"decision\":\"{text}\",\"text\":\"x\",\"authority_source\":\"operator\"}}}}"
-            ));
-        }
-        std::fs::write(&path, rows.join("\n") + "\n").expect("writes");
+        let prev = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", dir.path());
         let hook = serde_json::json!({
             "hook_event_name": "PostToolUse",
             "tool_name": "Skill",
-            "tool_input": {
-                "skill": "fno:review",
-                "args": "high https://github.com/o/r/pull/1"
-            }
+            "tool_input": {"skill": "fno:review", "args": "high https://github.com/o/r/pull/1"}
         });
-        let graph = node_graph(&dir);
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        assert_eq!(answer["stage"], "review");
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
+        let unread = stage_answer(StageRequest { hook: hook.clone() });
+        let ctx = unread["hook_output"]["hookSpecificOutput"]["additionalContext"]
             .as_str()
-            .expect("context present");
+            .expect("an unreadable store is said, never silent");
+        assert!(
+            ctx.contains("The decision index could not be read"),
+            "{ctx}"
+        );
+
+        let mut rows = vec![format!(
+            "{{\"type\":\"operator_decision\",\"source\":\"backlog\",\"ts\":\"2026-09-10T00:00:00Z\",\
+             \"data\":{{\"decision_id\":\"d-0fa92eb9\",\"subject\":\"review-rounds-sufficient\",\
+             \"decision\":\"Review rounds are capped at two.\",\"authority_source\":\"operator\"}}}}"
+        )];
+        for i in 0..10 {
+            rows.push(format!(
+                "{{\"type\":\"operator_decision\",\"source\":\"backlog\",\"ts\":\"2026-09-11T00:00:{i:02}Z\",\
+                 \"data\":{{\"decision_id\":\"d-5fff69{i:02}\",\"subject\":\"file-budget-exception\",\
+                 \"decision\":\"shrink round stands for file {i}\",\"authority_source\":\"operator\"}}}}"
+            ));
+        }
+        std::fs::write(dir.path().join("decisions.jsonl"), rows.join("\n") + "\n").expect("writes");
+        let answer = stage_answer(StageRequest { hook });
+        match prev {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        assert_eq!(answer["stage"], "review");
         assert_eq!(
             answer["hook_output"]["hookSpecificOutput"]["hookEventName"],
             "PostToolUse"
         );
-        for i in 0..11 {
-            assert!(
-                ctx.contains(&format!("d-rev{i:02}000")),
-                "law {i} missing: {ctx}"
-            );
-        }
-        assert!(!ctx.contains("d-10a72d88"));
-        assert!(!ctx.contains("d-5fff6924"));
-        assert!(!ctx.contains("d-7678146e"));
-    }
-
-    #[test]
-    fn stage_rows() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("decisions.jsonl");
-        std::fs::write(
-            &path,
-            format!(
-                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-01T00:00:00Z\",\
-                 \"data\":{{\"decision_id\":\"d-0fa92eb9\",\"subject\":\"review-coverage\",\
-                 \"decision\":\"Two reviews maximum.\",\"text\":\"x\",\
-                 \"authority_source\":\"operator\"}}}}\n"
-            ),
-        )
-        .expect("writes");
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "$fno:review low"
-        });
-        let graph = node_graph(&dir);
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        assert_eq!(answer["stage"], "review");
-        assert_eq!(
-            answer["hook_output"]["hookSpecificOutput"]["hookEventName"],
-            "UserPromptSubmit"
-        );
         let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .expect("context present");
-        assert!(ctx.contains("d-0fa92eb9"), "{ctx}");
-
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:review low"
-        });
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(std::path::Path::new("/nonexistent/fno/decisions.jsonl")),
-            None,
-        );
-        assert_eq!(answer["stage"], "review");
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("a failed read still renders the block");
-        assert!(ctx.contains("could not be read"), "{ctx}");
         assert!(
-            ctx.contains("fno backlog decisions --lane law --state live"),
+            ctx.contains("- d-0fa92eb9 (review-rounds-sufficient"),
             "{ctx}"
         );
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("decisions.png");
-        std::fs::write(&path, "").expect("writes");
-        for hook in [
-            serde_json::json!({
-                "hook_event_name": "PostToolUse",
-                "tool_name": "Skill",
-                "tool_input": { "skill": "code-review-attest" }
-            }),
-            serde_json::json!({
-                "hook_event_name": "UserPromptSubmit",
-                "prompt": "please review this PR"
-            }),
-            serde_json::json!({
-                "hook_event_name": "UserPromptSubmit",
-                "prompt": "/fno:reviewer"
-            }),
-        ] {
-            let graph = node_graph(&dir);
-            let answer = stage_answer_with(
-                StageRequest {
-                    hook: hook.clone(),
-                    paths: vec![],
-                },
-                Some(&path),
-                Some(&graph),
-            );
-            assert_eq!(answer["stage"], Value::Null, "{hook}");
-            assert_eq!(answer["hook_output"], Value::Null, "{hook}");
-        }
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("decisions.jsonl");
-        std::fs::write(&path, "").expect("writes");
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:review low"
-        });
-        let graph = node_graph(&dir);
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        assert_eq!(answer["stage"], "review");
-        assert_eq!(answer["hook_output"], Value::Null);
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("decisions.jsonl");
-        let mut rows: Vec<String> = Vec::new();
-        for i in 0..40 {
-            rows.push(format!(
-                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-10T00:00:{i:02}Z\",\
-                 \"data\":{{\"decision_id\":\"d-cap{i:04}000\",\"subject\":\"review-cap-fixture\",\
-                 \"decision\":\"Ruling number {i} stands. {}\",\"text\":\"x\",\
-                 \"authority_source\":\"operator\"}}}}",
-                "x".repeat(90)
-            ));
-        }
-        std::fs::write(&path, rows.join("\n") + "\n").expect("writes");
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:review low"
-        });
-        let graph = node_graph(&dir);
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context present");
-        let overflow: Vec<&str> = ctx.lines().filter(|l| l.starts_with("- and ")).collect();
         assert!(
-            overflow.is_empty(),
-            "no `- and N more` line may remain: {ctx}"
-        );
-        // Every matched law id on its own line, in the validator's
-        // `- <id> (<subject>):` shape, whatever the cap cut.
-        for i in 0..40 {
-            let id = format!("d-cap{i:04}000");
-            let listed = ctx
-                .lines()
-                .any(|l| l.starts_with(&format!("- {id} (review-cap-fixture, project:fno):")));
-            assert!(listed, "{id} missing from the block: {ctx}");
-        }
-        // The summarized body under the cap; short overflow lines excluded.
-        let body_len: usize = ctx
-            .lines()
-            .filter(|l| !l.contains("fno backlog decisions"))
-            .map(|l| l.len() + 1)
-            .sum();
-        assert!(body_len <= 2000, "body {body_len} exceeds the cap");
-        assert_eq!(
-            answer["hook_output"]["hookSpecificOutput"]["hookEventName"],
-            "UserPromptSubmit"
-        );
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_index(
-            dir.path(),
-            // The blueprint stage keeps the old keyword to match the law
-            // corpus's old wording, so this row keeps it.
-            &[stage_row(
-                "d-verbs0001",                         // verb-wording: allow
-                "top-level-verbs",                     // verb-wording: allow
-                "The root menu caps top-level verbs.", // verb-wording: allow
-            )],
-        );
-        let hook = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Skill",
-            "tool_input": {
-                "skill": "fno:blueprint",
-                "args": "x-aaaa"
-            }
-        });
-        let graph = node_graph(&dir);
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context present");
-        assert!(
-            ctx.contains("- d-verbs0001 (top-level-verbs, project:fno):"), // verb-wording: allow
-            "{ctx}"
+            !ctx.contains("d-5fff6900"),
+            "an unrelated law stays out: {ctx}"
         );
     }
 
@@ -3566,373 +3125,6 @@ pub(crate) mod tests {
         // near hit of itself.
         assert!(!line.contains("near live law d-00000001"), "{line}");
         assert!(line.contains("sits near live law d-777e7d1f"), "{line}");
-    }
-
-    /// A hermetic graph naming x-aaaa with project fno, so a stage read's node
-    /// scope resolves from the fixture and never from the live machine graph
-    /// (`default_graph_path` is `$FNO_HOME/graph.json`, or `$HOME/.fno`).
-    fn node_graph(dir: impl AsRef<std::path::Path>) -> std::path::PathBuf {
-        // Seeded into the store, never a raw graph.json: the legacy-json
-        // fold can refuse to retire an unimported file, which reads as an
-        // unread graph and fails the epic lookup.
-        let graph = dir.as_ref().join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[serde_json::json!({"id": "x-aaaa", "parent": "x-bbbb", "project": "fno"})],
-        )
-        .expect("writes");
-        graph
-    }
-
-    fn write_index(dir: &std::path::Path, rows: &[String]) -> std::path::PathBuf {
-        let path = dir.join("decisions.jsonl");
-        std::fs::write(&path, rows.join("\n") + "\n").expect("writes");
-        path
-    }
-
-    fn stage_row(id: &str, subject: &str, decision: &str) -> String {
-        format!(
-            "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-12T00:00:00Z\",\
-             \"data\":{{\"decision_id\":\"{id}\",\"subject\":\"{subject}\",\
-             \"decision\":\"{decision}\",\"text\":\"x\",\"authority_source\":\"operator\"}}}}"
-        )
-    }
-    fn edit_row(id: &str, paths: &str) -> String {
-        format!(
-            "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-12T00:00:00Z\",\
-             \"data\":{{\"decision_id\":\"{id}\",\"subject\":\"path-governed\",\
-             \"decision\":\"the edit-governed ruling\",\"text\":\"x\",\
-             \"authority_source\":\"operator\",\"paths\":{paths}}}}}"
-        )
-    }
-    fn edit_req(session: Option<&str>, targets: &[&str]) -> StageRequest {
-        let mut hook = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Edit",
-            "tool_input": {"file_path": "crates/x.rs"}
-        });
-        if let Some(s) = session {
-            hook["session_id"] = serde_json::json!(s);
-        }
-        StageRequest {
-            hook,
-            paths: targets.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
-    #[test]
-    fn edit_rows() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = tempfile::tempdir().expect("tempdir");
-        let path = write_index(dir.path(), &[edit_row("d-editlaw01", "[\"crates/**\"]")]);
-        let req = edit_req(Some("S"), &["crates/fno-agents/src/lib.rs"]);
-        let answer = edit_answer(req, Some(&path), Some(state.path()));
-        assert_eq!(answer["stage"], "edit");
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context present");
-        assert!(ctx.contains("Law governing edit"), "{ctx}");
-        assert!(ctx.contains("d-editlaw01"), "{ctx}");
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = tempfile::tempdir().expect("tempdir");
-        let path = write_index(dir.path(), &[edit_row("d-editlaw01", "[\"crates/**\"]")]);
-        let first = edit_answer(
-            edit_req(Some("S"), &["crates/fno-agents/src/lib.rs"]),
-            Some(&path),
-            Some(state.path()),
-        );
-        assert!(first["hook_output"].is_object(), "{first}");
-        let second = edit_answer(
-            edit_req(Some("S"), &["crates/fno/src/main.rs"]),
-            Some(&path),
-            Some(state.path()),
-        );
-        assert!(second["hook_output"].is_null(), "{second}");
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = tempfile::tempdir().expect("tempdir");
-        // The row's TEXT contains the word crates; the edit read matches
-        // paths globs only, never keywords.
-        let row = stage_row(
-            "d-textonly1",
-            "new-code-language",
-            "New code goes in crates.",
-        );
-        let path = write_index(dir.path(), &[row]);
-        let answer = edit_answer(
-            edit_req(Some("S"), &["crates/x.rs"]),
-            Some(&path),
-            Some(state.path()),
-        );
-        assert!(answer["hook_output"].is_null(), "{answer}");
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_index(
-            dir.path(),
-            &[stage_row(
-                "d-b6cc1a2a",
-                "new-code-language",
-                "New code goes in crates. Existing Python is shrink-only.",
-            )],
-        );
-        let hook = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Skill",
-            "tool_input": {"skill": "fno:blueprint", "args": "x-aaaa"}
-        });
-        let graph = node_graph(&dir);
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        assert_eq!(answer["stage"], "blueprint");
-
-        let missing = std::path::Path::new("/nonexistent/fno-edit-read/decisions.jsonl");
-        let state = tempfile::tempdir().expect("tempdir");
-        let answer = edit_answer(
-            edit_req(Some("S"), &["crates/x.rs"]),
-            Some(missing),
-            Some(state.path()),
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context present");
-        assert!(ctx.contains("could not be read"), "{ctx}");
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = tempfile::tempdir().expect("tempdir");
-        let path = write_index(dir.path(), &[edit_row("d-editlaw02", "[\"crates/**\"]")]);
-        for _ in 0..2 {
-            let answer = edit_answer(
-                edit_req(None, &["crates/x.rs"]),
-                Some(&path),
-                Some(state.path()),
-            );
-            assert!(answer["hook_output"].is_object(), "{answer}");
-        }
-    }
-
-    #[test]
-    fn blueprint_rows() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_index(
-            dir.path(),
-            &[stage_row(
-                "d-b6cc1a2a",
-                "new-code-language",
-                "New code goes in crates. Existing Python is shrink-only.",
-            )],
-        );
-        let hook = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Skill",
-            "tool_input": {
-                "skill": "fno:blueprint",
-                "args": "x-aaaa"
-            }
-        });
-        let graph = node_graph(&dir);
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        assert_eq!(answer["stage"], "blueprint");
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context present");
-        assert!(ctx.contains("Law governing blueprint"), "{ctx}");
-        assert!(ctx.contains("d-b6cc1a2a"), "{ctx}");
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = write_index(
-            dir.path(),
-            &[
-                stage_row(
-                    "d-epic0001",
-                    "epic-merge-authority",
-                    "The x-bbbb epic keeps merge authority with the team.",
-                ),
-                stage_row("d-node0001", "x-aaaa", "unfindable by topic"),
-                stage_row(
-                    "d-fnos0001",
-                    "fno",
-                    "a ruling named for the project slug stands",
-                ),
-            ],
-        );
-        let hook = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Skill",
-            "tool_input": {
-                "skill": "fno:blueprint",
-                "args": "x-aaaa"
-            }
-        });
-        // Hermetic graph fixture: the epic read must never lean on the
-        // machine's live graph.json.
-        let graph = dir.path().join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[serde_json::json!({"id": "x-aaaa", "parent": "x-bbbb", "project": "fno"})],
-        )
-        .expect("writes");
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&path),
-            Some(&graph),
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context present");
-        assert!(ctx.contains("d-epic0001"), "{ctx}");
-        assert!(
-            !ctx.contains("unfindable by topic"),
-            "node-subject row must be dropped: {ctx}"
-        );
-        assert!(
-            !ctx.contains("d-fnos0001"),
-            "a project-slug SUBJECT is a topic, not a scope: idents no \
-             longer carry the slug, so the row only lists when the node's \
-             epic or a stage keyword names it: {ctx}"
-        );
-    }
-
-    #[test]
-    fn graph_rows() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let index = write_index(
-            dir.path(),
-            &[stage_row(
-                "d-epic0001",
-                "x-bbbb",
-                "The epic ruling is readable.",
-            )],
-        );
-        let graph = dir.path().join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[serde_json::json!({"id": "x-aaaa", "parent": "x-bbbb", "project": "fno"})],
-        )
-        .expect("writes");
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:blueprint x-aaaa"
-        });
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&index),
-            Some(&graph),
-        );
-        assert_eq!(answer["unread"], serde_json::json!([]));
-        assert!(
-            answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-                .as_str()
-                .expect("context")
-                .contains("d-epic0001")
-        );
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let index = write_index(
-            dir.path(),
-            &[stage_row(
-                "d-node0001",
-                "x-aaaa-context",
-                "The node context ruling is readable.",
-            )],
-        );
-        let graph = dir.path().join("graph.json");
-        std::fs::write(&graph, "not json").expect("writes");
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:blueprint x-aaaa"
-        });
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&index),
-            Some(&graph),
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context");
-        assert!(
-            ctx.contains("Unread: the node's epic and project (graph:"),
-            "{ctx}"
-        );
-        assert!(ctx.contains("d-node0001"), "{ctx}");
-        assert_eq!(answer["unread"].as_array().expect("unread").len(), 1);
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let graph = dir.path().join("graph.json");
-        std::fs::write(&graph, "not json").expect("writes");
-        let index = dir.path().join("missing-decisions.jsonl");
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:blueprint x-aaaa"
-        });
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&index),
-            Some(&graph),
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context");
-        assert!(
-            ctx.contains("Unread: the node's epic and project (graph:"),
-            "{ctx}"
-        );
-        assert!(ctx.contains("Unread: the decision index ("), "{ctx}");
-        assert!(!ctx.contains("These live operator rulings govern"), "{ctx}");
-        assert_eq!(answer["unread"].as_array().expect("unread").len(), 2);
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let index = write_index(
-            dir.path(),
-            &[stage_row("d-other0001", "unrelated", "not for this stage")],
-        );
-        let graph = dir.path().join("graph.json");
-        std::fs::write(&graph, "not json").expect("writes");
-        let hook = serde_json::json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "/fno:blueprint x-aaaa"
-        });
-        let answer = stage_answer_with(
-            StageRequest {
-                hook,
-                paths: vec![],
-            },
-            Some(&index),
-            Some(&graph),
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context");
-        assert!(
-            ctx.contains("Unread: the node's epic and project (graph:"),
-            "{ctx}"
-        );
-        assert!(!ctx.contains("These live operator rulings govern"), "{ctx}");
     }
 }
 

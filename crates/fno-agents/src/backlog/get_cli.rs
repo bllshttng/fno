@@ -28,6 +28,10 @@ struct Render {
     field: Option<String>,
     grouped: bool,
     strict: bool,
+    /// `--trace`: the node's history as JSON instead of its row. `--json`
+    /// is accepted beside it and changes nothing.
+    trace: bool,
+    json: bool,
 }
 
 /// The parsed single-get invocation. `None` is the forward shape: an unknown
@@ -50,6 +54,8 @@ impl GetArgs<'_> {
                 }
                 "--grouped" => render.grouped = true,
                 "--strict" => render.strict = true,
+                "--trace" => render.trace = true,
+                flag if crate::json_output::is_flag(flag) => render.json = true,
                 other => {
                     if other.starts_with('-') {
                         return None;
@@ -61,6 +67,10 @@ impl GetArgs<'_> {
                 }
             }
             i += 1;
+        }
+        // `--json` only shapes a trace; alone it stays the unknown-flag forward.
+        if render.json && !render.trace {
+            return None;
         }
         id.map(|id| GetArgs { id, render })
     }
@@ -287,8 +297,42 @@ fn serve_loaded(
     crate::graph_store::apply_readiness_overlay(&mut rows);
     let row = rows.remove(0);
     let out = stamped_annotated(row, archived);
+    if render.trace {
+        println!("{}", trace_out(&connection, &out));
+        return 0;
+    }
     println!("{}", render_out(&out, render));
     0
+}
+
+/// The `--trace` arm: the fold over this node, plus one fold per direct
+/// child when the node has children. A child that fails to load is named,
+/// never dropped.
+fn trace_out(connection: &rusqlite::Connection, row: &Value) -> String {
+    let shared = super::trace::Shared::load(row);
+    let mut inputs = shared.gather(row);
+    for child in row
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(cid) = child.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let folded = match super::nodes::load_with_claim(connection, cid, None, None) {
+            Ok(Some(node)) => {
+                let node = node.to_json();
+                super::trace::fold(&node, &shared.gather(&node))
+            }
+            Ok(None) => {
+                json!({"node": cid, "header": {}, "errors": {}, "reason": "child not loaded"})
+            }
+            Err(e) => json!({"node": cid, "header": {}, "errors": {}, "reason": e}),
+        };
+        inputs.children.push(folded);
+    }
+    py_json_pretty(&super::trace::fold(row, &inputs))
 }
 
 /// The rows the single-node defaults pass can visit for this node: every
@@ -458,5 +502,13 @@ mod tests {
         assert!(GetArgs::parse(&unknown).is_none());
         let ok = vec!["x-1".to_string(), "--grouped".to_string()];
         assert!(GetArgs::parse(&ok).is_some());
+        let bare_json = vec!["x-1".to_string(), "--json".to_string()];
+        assert!(GetArgs::parse(&bare_json).is_none());
+        let trace = vec![
+            "x-1".to_string(),
+            "--trace".to_string(),
+            "--json".to_string(),
+        ];
+        assert!(GetArgs::parse(&trace).is_some_and(|a| a.render.trace && a.render.json));
     }
 }

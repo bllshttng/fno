@@ -15,9 +15,11 @@ const RUN_SUMMARY_DATA_CAP: usize = 500;
 /// envelope-level `run` (the target-run id), so a co-located second run's
 /// events never mix in. tasks_failed counts task_done events whose outcome is
 /// FAILED - the gap (tasks_started > tasks_done) is what exposes a crashed
-/// executor (AC2-FR).
+/// executor (AC2-FR). A task counts once per type: the commit hook and the
+/// waves lead can both report one task, and the later outcome wins.
 pub(crate) fn count_run_tasks(project_events: &Path, run: &str) -> (u64, u64, u64) {
-    let (mut started, mut done, mut failed) = (0u64, 0u64, 0u64);
+    let mut started: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut outcomes: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     if crate::event_store::import_all(project_events).is_err() {
         return (0, 0, 0);
     }
@@ -31,24 +33,32 @@ pub(crate) fn count_run_tasks(project_events: &Path, run: &str) -> (u64, u64, u6
         Ok(rows) => rows,
         Err(_) => return (0, 0, 0),
     };
-    for row in rows {
+    for (seq, row) in rows.iter().enumerate() {
         let Ok(v) = serde_json::from_str::<Value>(&row.line) else {
             continue;
         };
-        if v.get("run").and_then(|r| r.as_str()) == Some(run) {
-            match v.get("type").and_then(|t| t.as_str()) {
-                Some("task_started") => started += 1,
-                Some("task_done") => {
-                    done += 1;
-                    if v.get("outcome").and_then(|o| o.as_str()) == Some("FAILED") {
-                        failed += 1;
-                    }
-                }
-                _ => {}
+        if v.get("run").and_then(|r| r.as_str()) != Some(run) {
+            continue;
+        }
+        // A row with no task id stands alone.
+        let key = v
+            .get("task")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("#{seq}"));
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("task_started") => {
+                started.insert(key);
             }
+            Some("task_done") => {
+                let failed = v.get("outcome").and_then(|o| o.as_str()) == Some("FAILED");
+                outcomes.insert(key, failed);
+            }
+            _ => {}
         }
     }
-    (started, done, failed)
+    let failed = outcomes.values().filter(|f| **f).count() as u64;
+    (started.len() as u64, outcomes.len() as u64, failed)
 }
 
 /// True when this run already has a run_summary carrying `reason`. Finalize

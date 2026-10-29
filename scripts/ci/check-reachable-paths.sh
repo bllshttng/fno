@@ -110,7 +110,7 @@ REGISTRY = [
         "glob": "cli/src/fno/agents/harnesses/*.py",
         "site": r"dict\(os\.environ\)",
         "required": r"worker_environment|scrub_ambient_identity",
-        "why": "every child-env build on a spawn path crosses the worker_environment identity-scrub floor (or scrubs directly)",
+        "why": "every child-env build on a spawn path crosses the harness_identity.worker_environment scrub floor (or scrubs directly)",
     },
     {
         "name": "status-derivation-helper",

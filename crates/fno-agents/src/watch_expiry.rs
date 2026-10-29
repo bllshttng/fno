@@ -417,6 +417,20 @@ fn watches(evidence: &[Evidence]) -> Vec<Watch> {
     latest.into_values().collect()
 }
 
+/// Each session's current `<watching>` bound, past-bound watches included:
+/// the node liveness rule decides whether a bound still holds.
+pub(crate) fn current_watch_bounds(
+    home: &AgentsHome,
+    now_ms: i64,
+) -> Result<std::collections::HashMap<String, i64>, String> {
+    let evidence = read_evidence(home, now_ms)?;
+    Ok(watches(&evidence)
+        .into_iter()
+        .filter(|watch| is_current_watch(watch, &evidence))
+        .map(|watch| (watch.session_id, watch.expires_at_ms))
+        .collect())
+}
+
 pub(crate) fn overdue(home: &AgentsHome) -> Result<Vec<OverdueWatch>, String> {
     let now_ms = millis_now();
     let evidence = read_evidence(home, now_ms)?;

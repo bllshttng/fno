@@ -43,11 +43,11 @@
         ]
       },
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/rules-dispatch.sh\" pre-tool",
             "timeout": 4
           }
         ]
@@ -112,7 +112,7 @@
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/rules-dispatch.sh\" prompt",
             "timeout": 4
           }
         ]
@@ -164,6 +164,12 @@
       {
         "matcher": "^Bash$",
         "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/diff-budget-commit.sh\"",
+            "statusMessage": "reading the diff budget and task boundary",
+            "timeout": 4
+          },
           {
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",

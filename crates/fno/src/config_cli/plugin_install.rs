@@ -1,13 +1,50 @@
 //! `fno config plugin install <harness> [flags]`: the dev-install door.
 //!
-//! The Python leg was already a thin exec over `fno-agents plugin-install`;
-//! the native door claims the non-codex harness words, keeps the captured
-//! usage line and the missing-binary line byte-identical, and forwards the
-//! codex arm to Python, where the converge engine (the setup family's) still
-//! owns it.
+//! The Python leg was a thin exec over `fno-agents plugin-install` for every
+//! harness, codex included, so the native door claims every form and the
+//! Python leg is gone. It keeps the captured usage line, the missing-binary
+//! line and both help pages byte-identical.
 
 use std::ffi::OsString;
 use std::process::Command;
+
+/// `fno config plugin [--help]`: the group page, or click's missing-command
+/// refusal. Any other word is not a command of the group.
+pub fn run_group(args: &[OsString]) -> i32 {
+    let first = args.first().map(|a| a.to_string_lossy().to_string());
+    match first.as_deref() {
+        Some("--help") | Some("-h") => {
+            print!("{GROUP_HELP}");
+            0
+        }
+        None => group_usage_error("Missing command."),
+        Some(word) if word.starts_with('-') => {
+            group_usage_error(&format!("No such option: {word}"))
+        }
+        Some(word) => group_usage_error(&format!("No such command '{word}'.")),
+    }
+}
+
+fn group_usage_error(message: &str) -> i32 {
+    eprintln!("Usage: fno config plugin [OPTIONS] COMMAND [ARGS]...");
+    eprintln!("Try 'fno config plugin --help' for help.");
+    eprintln!();
+    eprintln!("Error: {message}");
+    2
+}
+
+/// The captured group page, byte for byte as typer printed it.
+const GROUP_HELP: &str = concat!(
+    "Usage: fno config plugin [OPTIONS] COMMAND [ARGS]...\n",
+    "\n",
+    "  Install your local checkout of footnote into a harness, for development\n",
+    "\n",
+    "Options:\n",
+    "  --help  Show this message and exit.\n",
+    "\n",
+    "Commands:\n",
+    "  install  Install your local checkout for development.\n",
+);
 
 pub fn run(args: &[OsString]) -> i32 {
     let tokens: Vec<String> = args

@@ -10,6 +10,7 @@ claude	PreToolUse	send-message-guard.sh	block	open
 claude	PreToolUse	pretooluse-bash-dispatch.sh	block	open
 claude	PreToolUse	effect-guard-dispatch.sh	block	open
 claude	PreToolUse	subagent-worktree-guard.sh	block	open
+claude	PreToolUse	rules-dispatch.sh	block	open
 claude	PreToolUse	session-state.sh	wait	-
 claude	PreToolUse	inject-control-drain-tool-boundary.sh	wait	-
 claude	PreToolUse	review-hold.sh	block	open
@@ -22,7 +23,7 @@ claude	UserPromptSubmit	born-with-why-offer-inject.sh	wait	-
 claude	UserPromptSubmit	friction-offer-inject.sh	wait	-
 claude	UserPromptSubmit	inject-mail-notify.sh	wait	-
 claude	UserPromptSubmit	inject-announce.sh	wait	-
-claude	UserPromptSubmit	law-stage-inject.sh	wait	-
+claude	UserPromptSubmit	rules-dispatch.sh	wait	-
 claude	UserPromptSubmit	prompt-outstanding.sh	wait	-
 claude	UserPromptSubmit	node-bind-prompt-submit.sh	wait	-
 claude	Stop	session-state.sh	wait	-
@@ -38,7 +39,6 @@ claude	PostToolUse	claim-heartbeat.sh	wait	-
 claude	PostToolUse	friction-offer-inject.sh	wait	-
 claude	PostToolUse	code-review-attest.sh	block	closed
 claude	PostToolUse	capture-plan-mode.sh	wait	-
-claude	PostToolUse	law-stage-inject.sh	next-turn	-
 claude	PostToolUse	session-join-prompt.sh	wait	-
 claude	PostToolUse	merge-capture.sh	wait	-
 claude	PostToolUse	diff-budget-commit.sh	wait	-
@@ -59,7 +59,7 @@ codex	PreToolUse	write-gate.sh	block	closed
 codex	PreToolUse	worktree-write-protect.sh	block	open
 codex	PreToolUse	plan-location-guard.sh	block	open
 codex	PreToolUse	pretooluse-bash-dispatch.sh	block	open
-codex	PreToolUse	law-stage-inject.sh	wait	-
+codex	PreToolUse	rules-dispatch.sh	block	open
 codex	PreToolUse	lead-delegation-guard.sh	block	open
 codex	PreToolUse	session-state.sh	wait	-
 codex	UserPromptSubmit	session-state.sh	wait	-
@@ -69,7 +69,7 @@ codex	UserPromptSubmit	friction-offer-inject.sh	wait	-
 codex	UserPromptSubmit	inject-mail-notify.sh	wait	-
 codex	UserPromptSubmit	inject-announce.sh	wait	-
 codex	UserPromptSubmit	prompt-outstanding.sh	wait	-
-codex	UserPromptSubmit	law-stage-inject.sh	wait	-
+codex	UserPromptSubmit	rules-dispatch.sh	wait	-
 codex	Stop	code-review-attest.sh	block	closed
 codex	Stop	codex-review-findings.sh	block	open
 codex	Stop	session-state.sh	wait	-
@@ -77,6 +77,7 @@ codex	Stop	target-stop-hook.sh	block	open
 codex	Stop	context-nudge.sh	block	open
 codex	PostToolUse	format-on-edit.sh	wait	-
 codex	PostToolUse	edit-integrity.sh	wait	-
+codex	PostToolUse	diff-budget-commit.sh	wait	-
 codex	PostToolUse	refusal-streak-record.sh	wait	-
 codex	PostToolUse	spend-drift-monitor.sh	wait	-
 codex	PostToolUse	claim-heartbeat.sh	wait	-

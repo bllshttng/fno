@@ -78,8 +78,6 @@ cli/tests/unit/test_keyless_smoke.py::test_keyless_dispatch_to_terminal_reports_
 cli/tests/unit/test_mutex_steal.py::test_threshold_matches_the_rust_constant::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_operator_capture.py::_native_backlog::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_resolve_canonical_worktree.py::<module>::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_setup_integration.py::agy_rust_door::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_setup_integration.py::pi_agent_env::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_generator_fails_on_missing_source::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::marker.requires_shelled_yaml  # on main before this ratchet
