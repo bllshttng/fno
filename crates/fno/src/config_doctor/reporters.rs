@@ -558,15 +558,15 @@ pub fn band_routing(out: &mut String) {
                 row_names.push(name);
             }
         }
-        for verb in answer
+        for command in answer
             .get("verbs")
             .and_then(|v| v.as_array())
             .into_iter()
             .flatten()
         {
-            let verb = py_str(verb);
-            if !verb.is_empty() {
-                commands.push(verb);
+            let command = py_str(command);
+            if !command.is_empty() {
+                commands.push(command);
             }
         }
     }
