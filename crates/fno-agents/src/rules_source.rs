@@ -37,9 +37,14 @@ pub fn rule_set_fast(cwd: &Path) -> Result<RuleSet, String> {
 }
 
 pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
-    let graph = crate::graph_get::default_graph_path();
+    rule_set_in(&crate::graph_get::default_graph_path(), cwd)
+}
+
+/// The set for one named graph, so a keeper serving a non-default graph
+/// assembles against the store it owns, not the layout default.
+pub fn rule_set_in(graph: &Path, cwd: &Path) -> Result<RuleSet, String> {
     let jsonl = decision_index::default_state_path("decisions.jsonl");
-    let (rows, damaged) = decision_index::read_store_rows(&graph, &jsonl)?;
+    let (rows, damaged) = decision_index::read_store_rows(graph, &jsonl)?;
     let laws = decision_index::laws_of(decision_index::derive_rows(rows, damaged));
     let (triggers, unread) = match decision_index::read_law_triggers(&jsonl) {
         Ok(t) => (t, Vec::new()),

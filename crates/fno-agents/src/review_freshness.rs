@@ -347,7 +347,7 @@ pub fn interdiff_lines_between(
 /// identity with empty `lines`: positive evidence that no code is under review.
 /// [`review_freshness`] never carries across a move between that and a
 /// code-bearing identity.
-fn pr_code_diff_identity(
+pub(crate) fn pr_code_diff_identity(
     git_bin: &str,
     cwd: &Path,
     base: &str,
