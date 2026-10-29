@@ -12,10 +12,7 @@ use super::*;
 /// records included.
 pub(super) fn bus_append_row(row: &Value) -> Result<(), String> {
     let live = bus_log_path();
-    let chats_dir = live
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let chats_dir = crate::chats::chats_dir();
     crate::announce::append_line_open(&live, row, &chats_dir)
 }
 
