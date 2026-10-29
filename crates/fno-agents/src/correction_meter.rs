@@ -129,6 +129,33 @@ impl Window {
 /// boundary is one window. The newest window is still open, so its counts
 /// are partial; readers compare the previous, closed one.
 pub(crate) fn correction_meter_text(raw: &str) -> Result<Value, String> {
+    let windows = windows_of(raw);
+    let total = windows.len();
+    let recent: Vec<Value> = windows
+        .iter()
+        .enumerate()
+        .rev()
+        .take(2)
+        .rev()
+        .map(|(i, w)| w.row(i + 1))
+        .collect();
+    Ok(json!({"windows_total": total, "recent": recent}))
+}
+
+/// Whole-transcript sums over every window, for a reader that wants one
+/// session's history rather than the open window.
+pub(crate) fn correction_totals(raw: &str) -> Value {
+    let windows = windows_of(raw);
+    let sum = |f: fn(&Window) -> u64| windows.iter().map(f).sum::<u64>();
+    json!({
+        "retractions": sum(|w| w.self_caught + w.peer_caught + w.operator_caught),
+        "user_corrections": sum(|w| w.operator_caught),
+        "interruptions": sum(|w| w.interrupts),
+        "rejects": sum(|w| w.rejects),
+    })
+}
+
+fn windows_of(raw: &str) -> Vec<Window> {
     let mut windows: Vec<Window> = Vec::new();
     let mut seen_rows: BTreeSet<String> = BTreeSet::new();
     let mut retracted_msgs: BTreeSet<String> = BTreeSet::new();
@@ -200,16 +227,7 @@ pub(crate) fn correction_meter_text(raw: &str) -> Result<Value, String> {
             }
         }
     }
-    let total = windows.len();
-    let recent: Vec<Value> = windows
-        .iter()
-        .enumerate()
-        .rev()
-        .take(2)
-        .rev()
-        .map(|(i, w)| w.row(i + 1))
-        .collect();
-    Ok(json!({"windows_total": total, "recent": recent}))
+    windows
 }
 
 fn count_retraction(

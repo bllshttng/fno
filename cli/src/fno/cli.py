@@ -243,39 +243,6 @@ def _warn_deprecated_alias_if_needed() -> None:
     return
 
 
-def _check_migration() -> None:
-    """Fast-path stat check; runs migration on first invocation post-upgrade.
-
-    The try/except Exception: pass is intentional - this migration is a
-    best-effort startup convenience, not load-bearing.
-
-    Guarded by FNO_SKIP_MIGRATION=1 (explicit opt-out) or PYTEST_CURRENT_TEST
-    (pytest sets this automatically in all test processes) for isolation.
-    """
-    if os.environ.get("FNO_SKIP_MIGRATION") == "1":
-        return
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return
-    try:
-        from fno import paths as _paths
-
-        sentinel = _paths.state_dir() / ".path-migration-done"
-        if sentinel.exists():
-            return
-        # Stale .tmp cleanup is intentionally NOT done here (Finding F /
-        # round 5+6 on the original migration PR). Deleting .tmp files
-        # outside the lock creates a race: process A cleans stale tmps,
-        # process B deletes A's in-flight tmp, then A's os.replace() fails.
-        # run_migration() performs the cleanup INSIDE its FileLock, which
-        # serializes it.
-        from fno.setup.migrate_paths import run_migration
-
-        run_migration(settings_root=_paths.state_dir())
-    except Exception:  # noqa: BLE001
-        # Never block normal fno commands on migration failure - silent fallback.
-        pass
-
-
 # ---------------------------------------------------------------------------
 # App definition
 # ---------------------------------------------------------------------------
@@ -338,53 +305,13 @@ app = typer.Typer(
 )
 
 
-def _protect_process_path(ctx: typer.Context) -> None:
-    """Put the quota proxy in PATH for subprocesses spawned by this command."""
-    from fno.setup.github_cli import (
-        PROXY_DEPTH_ENV,
-        worker_environment,
-    )
-
-    # PROXY_DEPTH_ENV is in the key set so `worker_environment`'s drop reaches
-    # os.environ: this call also prepends the proxy to PATH, and a marker left
-    # beside it makes every bare-`gh` shell-out from this process refuse.
-    keys = ("PATH", "FNO_GH_PROXY_DIR", "FNO_REAL_GH", PROXY_DEPTH_ENV)
-    original = {key: os.environ.get(key) for key in keys}
-    base = dict(os.environ)
-    # Never honor an inherited dir: a requested dir re-raises on a failed
-    # install, and a parent's temp pin would win PATH over the durable home.
-    base.pop("FNO_GH_PROXY_DIR", None)
-    protected = worker_environment(base)
-    changed = False
-    for key in keys:
-        value = protected.get(key)
-        if value != original[key]:
-            changed = True
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-    if changed:
-        def restore_path() -> None:
-            for key, value in original.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-
-        ctx.call_on_close(restore_path)
-
-
 @app.callback()
 def callback(
     ctx: typer.Context,
     json_output: bool = typer.Option(False, "--json", "-J", help="output JSON where supported"),
     version: bool = typer.Option(False, "--version", help="show version and exit", is_eager=True),
 ) -> None:
-    _check_migration()
     _warn_deprecated_alias_if_needed()
-    _protect_process_path(ctx)
     ctx.ensure_object(dict)
     ctx.obj["json"] = json_output
     if version:

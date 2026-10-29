@@ -34,6 +34,7 @@ pub mod clipboard;
 pub mod command_names;
 pub mod config_cli;
 pub mod config_defaults;
+pub mod config_doctor;
 pub mod config_schema;
 pub mod connections_view;
 pub mod context_used;
@@ -53,6 +54,10 @@ pub mod fleet_route;
 pub mod footnote_transcript;
 pub mod frame_ansi;
 pub mod frame_html;
+pub mod gh_proxy;
+#[cfg(test)]
+#[path = "gh_proxy_tests.rs"]
+mod gh_proxy_tests;
 pub mod git_paths;
 pub mod inbox_user;
 pub mod join_marker;
@@ -87,6 +92,10 @@ pub mod pane_argv;
 pub mod pane_border;
 pub mod pane_cwd;
 mod pane_send_audit;
+pub mod path_migration;
+#[cfg(test)]
+#[path = "path_migration_tests.rs"]
+mod path_migration_tests;
 pub mod paths_route;
 pub mod popup;
 pub mod process_admission;

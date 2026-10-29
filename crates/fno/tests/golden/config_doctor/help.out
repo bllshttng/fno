@@ -1,0 +1,19 @@
+Usage: fno config doctor [OPTIONS]
+
+  Inspect resolved paths; flag suspicious values. Read-only.
+
+  With ``--post-merge`` (or ``--json``), instead report whether
+  ``config.post_merge.parking_lot_path`` is set for this repo - the gate the
+  /fno:ship pr merged ritual needs. With ``--review``, report whether every
+  configured local reviewer can run in this session. Bare ``fno config doctor``
+  runs the path diagnostic and appends a one-line post-merge readiness summary
+  plus the resolved ship gates (each probe with its source, each reviewer with
+  the rung it asserts).
+
+Options:
+  --post-merge  Report this repo's post-merge config readiness (read-only).
+  --review      Report whether every config.review.reviewers entry can actually
+                run in this session (read-only). Diagnostic twin of the refusal
+                `fno do target init` performs.
+  -J, --json    With --post-merge, emit the verdict as a single JSON object.
+  --help        Show this message and exit.
