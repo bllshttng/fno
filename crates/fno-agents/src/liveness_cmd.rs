@@ -30,6 +30,9 @@ const SELF_SESSION_ENVS: &[&str] = &[
 
 /// `fno agents liveness <handle...> [-J|--json]`
 pub fn run(rest: &[String], home: &AgentsHome) -> i32 {
+    if rest.iter().any(|a| a == "--nodes") {
+        return crate::node_liveness::run_reader(rest, home);
+    }
     let (self_name, self_sid) = ambient_self();
     run_measured(
         rest,
