@@ -64,7 +64,7 @@ fi
 FNO_BIN="${FNO_BIN:-fno}"
 command -v "$FNO_BIN" >/dev/null 2>&1 || { echo '{}'; exit 0; }
 
-ENVELOPE="$("$FNO_BIN" agents mail admin seed-provenance 2>/dev/null)" || {
+ENVELOPE="$("$FNO_BIN" agents mail seed-provenance 2>/dev/null)" || {
     echo "spawn-seed-provenance: renderer refused; the seed stays unattributed" >&2
     echo '{}'
     exit 0
