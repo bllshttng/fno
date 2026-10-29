@@ -1454,14 +1454,19 @@ stops
                     &format!("## Meanwhile\nstops\n\n## Why user\n{why}\n"),
                 )
         };
-        let answer3 = run_intake(&req(&with_why("product call"), &root), &home);
+        let ask = |why: &str, root: &Path| {
+            let mut r = req(&with_why(why), root);
+            r.node = Some("x-aaaa".to_string());
+            run_intake(&r, &home)
+        };
+        let answer3 = ask("product call", &root);
         assert_eq!(answer3.refusal.as_deref(), Some("decide_yourself"));
         assert!(answer3
             .lines
             .iter()
             .any(|l| l.contains("irreversible, money-security")));
         let taste_root = tmp_root("rule10-taste");
-        let answer4 = run_intake(&req(&with_why("taste"), &taste_root), &home);
+        let answer4 = ask("taste", &taste_root);
         assert_eq!(answer4.exit_code, 0, "lines: {:?}", answer4.lines);
     }
 
