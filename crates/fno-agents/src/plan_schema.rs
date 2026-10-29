@@ -850,7 +850,7 @@ mod tests {
             })
         };
         assert!(validate_block("consolidation", &block("x4d12")).is_empty());
-        assert_eq!(validate_block("consolidation", &block("a3f9c1d2")), vec![]);
+        assert!(validate_block("consolidation", &block("a3f9c1d2")).is_empty());
         let errors = validate_block("consolidation", &block("9abc"));
         assert!(errors
             .iter()
