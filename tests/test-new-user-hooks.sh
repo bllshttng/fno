@@ -31,16 +31,20 @@ export FNO_AGENTS_HOME="$SBX/agents"
 export HOME="$SBX"
 export CLAUDE_PLUGIN_ROOT="$REPO_ROOT"
 export FNO_HOOK_CONTEXT=1
+# The join case measures the hook contract, not this host's load. The 3s
+# production default holds in CI; the test seam only widens the wall a
+# loaded container can eat.
+export FNO_JOIN_BUDGET_SECS=10
 export PATH="$REPO_ROOT/crates/fno-agents/target/debug:$PATH"
 
 pass() { echo "ok - $1"; }
 fail() { echo "FAIL - $1" >&2; exit 1; }
 
-# Warm the binary once: AC2's join path runs the hook's own 3s budget, and a
-# cold debug binary paying first-touch page-in plus first-time graph.db
-# creation can overshoot it on a slow box. That is cold-start cost, not the
-# contract under test.
-"$AGENTS_BIN" version >/dev/null 2>&1 || true
+# Warm the binary AND the state store once: AC2's join path runs the hook's
+# own budget, and first-touch page-in plus first-time graph.db creation are
+# cold-start cost, not the contract under test. A --check pays both reads.
+FNO_HOOK_CONTEXT=1 "$AGENTS_BIN" report --kind join --harness claude \
+    --session-id warmup --preamble-due --mark --check >/dev/null 2>&1 || true
 
 # --- AC1: the fresh-install window ------------------------------------------
 T1="$SBX/t1.jsonl"

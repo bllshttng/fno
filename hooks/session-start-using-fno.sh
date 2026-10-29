@@ -85,9 +85,9 @@ TRANSCRIPT="$(payload_field transcript_path)"
 [[ -n "$TRANSCRIPT" ]] && ARGS+=(--transcript "$TRANSCRIPT")
 [[ "$(payload_field source)" == "compact" || "$EVENT" == "PostCompact" ]] && ARGS+=(--compacted)
 if [[ "$JOIN" == "join" ]]; then
-    DUE="$( unset FNO_HOOK_CONTEXT; with_timeout 3 "$BIN" "${ARGS[@]}" 2>/dev/null </dev/null || true )"
+    DUE="$( unset FNO_HOOK_CONTEXT; with_timeout "${FNO_JOIN_BUDGET_SECS:-3}" "$BIN" "${ARGS[@]}" 2>/dev/null </dev/null || true )"
 else
-    DUE="$( with_timeout 3 "$BIN" "${ARGS[@]}" --check 2>/dev/null </dev/null || true )"
+    DUE="$( with_timeout "${FNO_JOIN_BUDGET_SECS:-3}" "$BIN" "${ARGS[@]}" --check 2>/dev/null </dev/null || true )"
 fi
 [[ "$DUE" == "due" ]] || noop
 
