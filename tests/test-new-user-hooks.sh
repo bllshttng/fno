@@ -88,6 +88,13 @@ fi
 
 FAKEBIN="$SBX/fakebin"; EMPTYDIR="$SBX/empty"
 mkdir -p "$FAKEBIN" "$EMPTYDIR"
+# env execs the resolver under the NEW PATH, so that PATH must still carry
+# the shells: a stub dir with bash/sh symlinks and nothing else keeps
+# python3/python/uv unfindable while `env PATH=... bash` stays runnable.
+STUBBIN="$SBX/stubbin"
+mkdir -p "$STUBBIN"
+ln -sf "$(command -v bash)" "$STUBBIN/bash"
+ln -sf /bin/sh "$STUBBIN/sh"
 cat > "$SBX/fakepy" <<'PY'
 #!/bin/sh
 echo "uv-managed-python"
@@ -96,13 +103,13 @@ chmod +x "$SBX/fakepy"
 printf '#!/bin/sh\necho "%s"\n' "$SBX/fakepy" > "$FAKEBIN/uv"
 chmod +x "$FAKEBIN/uv"
 
-OUT6="$(env PATH="$FAKEBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("picked-me")')"
+OUT6="$(env PATH="$STUBBIN:$FAKEBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("picked-me")')"
 [[ "$OUT6" == "uv-managed-python" ]] || fail "AC3: the uv-managed python was not picked (got: $OUT6)"
 pass "AC3: the uv-managed python resolves when system python3 is absent"
 
 NOBIN="$SBX/nobin"
 mkdir -p "$NOBIN"
-OUT7="$(env PATH="$NOBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("nope")' 2>/dev/null)"
+OUT7="$(env PATH="$STUBBIN:$NOBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("nope")' 2>/dev/null)"
 [[ "$OUT7" == "{}" ]] || fail "AC3: no-interpreter fallback did not emit {} (got: $OUT7)"
 pass "AC3: with no interpreter, the resolver emits {} and exits 0"
 
