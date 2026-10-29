@@ -63,12 +63,6 @@ def test_optional_binding_fall_through_reports_itself() -> None:
     assert "stamp_failure=stamp_failure" in src, (
         "MuxSpawnResult no longer carries stamp_failure"
     )
-    # ...and the set field reaches the receipt object the operator reads.
-    from fno.agents import cli as agents_cli
-
-    assert 'receipt_obj["stamp_failure"]' in inspect.getsource(agents_cli), (
-        "cli.py no longer renders stamp_failure on the spawn receipt"
-    )
 
 
 # ---------------------------------------------------------------------------

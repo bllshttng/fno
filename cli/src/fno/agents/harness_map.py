@@ -34,7 +34,6 @@ Verified facts, each dated where it differs from the 2026-07-13 spike:
 """
 from __future__ import annotations
 
-import json
 import re
 import tomllib
 from copy import deepcopy
@@ -196,37 +195,6 @@ def message_carries_no_merge(message: str) -> bool:
     (round 8, angle A)."""
     _spellings, flag, _legacy = _carrier_vocab()
     return is_target_family(message) and f" {flag} " in f" {message} "
-
-
-def apply_merge_posture_env(message: str, *, note_stream=None) -> str | None:
-    """Set or clear ``TARGET_NO_MERGE`` in ``os.environ`` from the message,
-    and return the prior value (so a caller restoring the process env captured
-    it BEFORE the mutation). Flag arms; a family bare token outside flag
-    position neither arms nor clears (round 11); a family message with no token
-    clears an inherited carrier loudly (round 8); non-family clears NOTHING (a
-    leak errs toward refusing merges, the safe side). The binary's spawn lane
-    answers from the same table."""
-    import os
-    import sys
-
-    _spellings, flag, legacy = _carrier_vocab()
-    if note_stream is None:
-        note_stream = sys.stderr
-    prior = os.environ.get("TARGET_NO_MERGE")
-    if message_carries_no_merge(message):
-        os.environ["TARGET_NO_MERGE"] = "1"
-    elif is_target_family(message) and f" {legacy} " in f" {message} ":
-        pass
-    elif is_target_family(message):
-        if prior:
-            print(
-                "fno agents spawn: inherited TARGET_NO_MERGE cleared; the "
-                "/target-family message carries no --no-merge flag and the "
-                "message is authoritative",
-                file=note_stream,
-            )
-        os.environ.pop("TARGET_NO_MERGE", None)
-    return prior
 
 
 def _refused_reason(harness: str) -> str:
@@ -642,38 +610,6 @@ def normalize_command(command: str, harness: str) -> str:
     return cmd
 
 
-# zsh reads the `:t` in "$fno:target" as a modifier on the empty `$fno`, so the
-# command loses its first letter too. Measured: these letters vanish without an
-# error, `s` fails loudly, and every other letter survives as `:command`.
-_ZSH_EATEN_LETTERS = frozenset("acelqrtu")
-
-
-def lost_command_refusal(message: str) -> Optional[str]:
-    """The refusal for a payload whose ``$fno:`` prefix the calling shell ate,
-    or None when the payload is intact.
-
-    Inside double quotes a shell expands ``$fno`` to nothing before fno runs.
-    bash leaves ``:target``; zsh leaves ``arget``. The worker reads either as
-    prose, and the spawn still returns a live receipt, so the loss shows up
-    an hour later as a worker that did not run the command.
-
-    The zsh shape is matched only for commands longer than four letters: the
-    short remainders (``dd``, ``aw``) are ordinary words."""
-    commands = set(footnote_commands()) | {v[1:] for v in _TARGET_FAMILY_COMMANDS}
-    lost = {":" + v: v for v in commands}
-    lost.update({v[1:]: v for v in commands if len(v) > 4 and v[0] in _ZSH_EATEN_LETTERS})
-    for token in message.split():
-        command = lost.get(token)
-        if command is not None:
-            return (
-                f"the payload has {token!r} where '$fno:{command}' belongs. The shell "
-                "expanded $fno to nothing inside double quotes, and zsh also drops "
-                "the first letter of the command. Single-quote the payload: "
-                f"'$fno:{command} ...'"
-            )
-    return None
-
-
 def cannot_fire_refusal(message: str, harness: str) -> Optional[str]:
     """The refusal for a command-shaped seed whose command cannot expand, or None.
 
@@ -729,19 +665,6 @@ def resolve_seed_node(message: str) -> tuple[Optional[str], Optional[str]]:
                   " id, slug, bare hex, or title word that resolves." % (first[1], nearest))
 
 
-def command_fired_marker(message: str) -> Optional[str]:
-    """The command that proves a ``/fno:target <node>`` seed actually fired.
-
-    The marker is the claim naming the spawned session as holder; a busy worker fired nothing.
-    """
-    first = message.strip().splitlines()[0].split()
-    if len(first) < 2 or first[1].startswith(("-", "/", "$")):
-        return None
-    if parse_command_token(first[0]) != ("target", True):
-        return None
-    return f"fno agents claim status node:{resolve_seed_node(message)[0] or first[1]}"
-
-
 def render_seed(message: str, harness: str) -> str:
     """Prose verbatim; a command-shaped seed gate-checked then normalized by the
     one shared fire-test predicate (``is_command_seed``, x-bbbb)."""
@@ -755,6 +678,7 @@ def render_seed(message: str, harness: str) -> str:
     return normalize_command(message, harness)
 
 
+<<<<<<< HEAD
 def spawn_seed_receipt_fields(effective_message: str) -> dict[str, str]:
     """The receipt fields a delivered seed contributes; prose seeds get none.
 
@@ -815,6 +739,8 @@ def check_loop_participation(harness: str, command: str) -> None:
         raise DispatchResolveError(refusal)
 
 
+=======
+>>>>>>> origin/main
 def dispatch_command(harness: str, allow_merge: bool = False) -> str:
     """Builtin autonomous dispatch command for ``harness``: the per-harness
     normalization of ``/target --no-merge {id}``, or of ``/target {id}`` when
@@ -1125,38 +1051,6 @@ def thread_seatable(harness: str) -> bool:
     return spawn_state(harness) == "native"
 
 
-def fence_uncarried(harness: str, passthrough: list[str] | None) -> str | None:
-    """The first fenced ``--`` token this harness's thread lane cannot carry,
-    or None.
-
-    Reads the ``[harness.<name>.thread]`` carrier row, else the ``keeper``
-    row. The spawn axis flags are retired (the lane template owns the
-    values), so the fence is the only uncarried input left. A non-None
-    answer demotes the spawn to the pane; it never refuses on the substrate.
-    """
-    caps = _BUNDLED_CAPS.get(harness) or {}
-    arm = caps.get("thread") or caps.get("keeper")
-    if not arm:
-        return None
-    covered = set(arm.get("passthrough") or [])
-    if "*" in covered:
-        return None
-    skip_value = False
-    for token in passthrough or []:
-        if skip_value:
-            skip_value = False
-            continue
-        if token in covered:
-            # A carried spelling consumes its value token too: `-c` and
-            # `model_reasoning_effort=high` arrive as two fenced tokens.
-            skip_value = True
-        elif token.split("=", 1)[0] in covered:
-            continue
-        else:
-            return token
-    return None
-
-
 def substrate_default(harness: str) -> str:
     """Per-harness default substrate: ``thread`` where the spawn claim reads
     ``native`` (a journey-proven launch seam), else ``headless``. Pane
@@ -1224,10 +1118,6 @@ _DEFAULT_ALLOWED_COMMANDS = ("/target", "/think", "/blueprint")
 _BRIEF_MAX_BYTES = 8192
 # The default command is per-harness now (each harness's `dispatch_command` in
 # _HARNESS_CAPS), not a single template - see the resolve builtin branch.
-
-
-#: The commands the lifecycle table owns; anything else abstains.
-_TARGET_FAMILY_COMMANDS = ("/target", "/blueprint")
 
 
 def resolve_dispatch(

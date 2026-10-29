@@ -704,7 +704,7 @@ fn client_ask_unknown_name_exits_16() {
         .envs(fno_agents::test_run::self_owner_env())
         .args(["ask", "ghost-client", "hello"])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .output()
         .expect("failed to run fno-agents");
@@ -823,6 +823,7 @@ fn client_spawn_headless_claude_honors_timeout() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "wk",
             "hello",
             "--harness",
@@ -832,7 +833,7 @@ fn client_spawn_headless_claude_honors_timeout() {
             "1",
         ])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("PATH", path_with(&bin_dir))
         .current_dir(&cwd)
@@ -871,6 +872,7 @@ fn client_spawn_permission_mode_and_yolo_mutually_exclusive() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "myagent",
             "hi",
             "--harness",
@@ -919,6 +921,7 @@ fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "myagent",
             "hello",
             "--harness",
@@ -930,7 +933,7 @@ fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
         .current_dir(&caller)
         .env("PWD", &caller)
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("PATH", format!("{}:/usr/bin:/bin", fake_path.display()))
         .output()
@@ -959,7 +962,7 @@ fn run_headless_spawn(
     }
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "reach", "hello", "--harness", harness])
+        .args(["spawn", "--name", "reach", "hello", "--harness", harness])
         .arg("--once")
         .arg("--cwd")
         .arg(tmpdir("headless-cwd"))
@@ -1076,9 +1079,16 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
 
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "myagent", "hello", "--harness", "opencode"])
+        .args([
+            "spawn",
+            "--name",
+            "myagent",
+            "hello",
+            "--harness",
+            "opencode",
+        ])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("PATH", "") // no opencode binary anywhere: serve boot fails, not the substrate guard
         .output()
@@ -1115,6 +1125,7 @@ fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "myagent",
             "hello",
             "--harness",
@@ -1144,7 +1155,7 @@ fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
     );
 }
 
-/// x-9112: `spawn --substrate bg` without --provider no longer exits 2 with a
+/// `spawn --substrate bg` without --provider no longer exits 2 with a
 /// "provider is required" error - it INFERS the invoking harness, mirroring
 /// Python's resolve_dispatch_harness (and the pane arm). Proven deterministically
 /// here via a single CODEX_SESSION_ID marker: inference resolves codex, which then
@@ -1174,9 +1185,9 @@ fn client_spawn_bg_no_provider_infers_harness() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "myagent", "hello"])
+        .args(["spawn", "--name", "myagent", "hello"])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("FNO_AGENTS_NO_STARTUP_RECONCILE", "1")
         .env("PATH", path)
@@ -1240,9 +1251,16 @@ fn client_spawn_bg_claude_happy_path_prints_receipt() {
 
     let out = std::process::Command::new(&bin)
         .envs(fno_agents::test_run::self_owner_env())
-        .args(["spawn", "hp-agent", "hello there", "--harness", "claude"])
+        .args([
+            "spawn",
+            "--name",
+            "hp-agent",
+            "hello there",
+            "--harness",
+            "claude",
+        ])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("HOME", &claude_home)
         .env("FNO_CLAUDE_DAEMON_DIR", &daemon_dir)
@@ -1316,6 +1334,7 @@ fn client_spawn_bg_claude_bootstraps_the_first_daemon_worker() {
         .envs(fno_agents::test_run::self_owner_env())
         .args([
             "spawn",
+            "--name",
             "bootstrap-agent",
             "hello there",
             "--harness",
@@ -1370,7 +1389,7 @@ fn client_host_retired_prints_mux_pointer() {
         .envs(fno_agents::test_run::self_owner_env())
         .args(["host", "host-collide", "--harness", "codex"])
         .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire (x-91b5 AC1-EDGE)
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
         .env("FNO_AGENTS_HOME", &home_dir)
         .env("FNO_AGENTS_DAEMON_BIN", "/usr/bin/false")
         .output()

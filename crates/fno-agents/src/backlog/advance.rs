@@ -299,11 +299,9 @@ pub(crate) fn gate_refusal_reason(code: i32) -> Option<&'static str> {
     }
 }
 
-/// The sandbox probe's exit code lives in the Python runtime
-/// (fno.agents.sandbox_probe.EXIT_SANDBOX_UNREACHABLE = 85); the native
-/// probe shares the constant.
+/// The sandbox probe's exit code, owned by the spawn seam.
 fn sandbox_probe_exit() -> i32 {
-    85
+    crate::spawn_seam::EXIT_SANDBOX_UNREACHABLE
 }
 
 /// The refusal sentence: the LAST `spawn-gate:` or `sandbox-probe:` line

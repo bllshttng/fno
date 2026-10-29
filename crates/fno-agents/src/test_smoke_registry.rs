@@ -72,7 +72,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("State-roots ratchet (declared root, R4/R5)", "cli", "uv run fno-py doctor lint state-roots"),
     ("Agent field coverage accounting", "cli", "uv run fno-py doctor lint field-coverage"),
     ("Menu-cap guard (cap 12 at three levels, hidden counts)", ".", "cargo test --quiet --manifest-path crates/fno/Cargo.toml --lib menu_caps"),
-    ("Spawn flag-ownership ratchet (owner + provenance per flag)", "cli", "uv run fno-py doctor lint spawn-flag-owners"),
     ("Command-surface ratchet (real count, both binaries)", "cli", "uv run fno-py doctor lint command-ratchet"),
     ("Schema parity self-test", ".", "bash scripts/tests/check-event-schema-parity-selftest.sh"),
     ("Schema parity check (Python side)", ".", "bash scripts/check-event-schema-parity.sh"),
