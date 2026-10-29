@@ -138,7 +138,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `notes/` | `crates/fno-agents/src/research/engine.rs` (`notes/research`) | permanent research notes |
 | `nudge-cursors/` | `cli/src/fno/agents/nudge.py` | one cursor per nudge target, overwritten |
 | `state/announce-cursors/` | `fno-agents announce` (`crates/fno-agents/src/announce.rs`) | one seen-id set per session; pruned to ids still on retained bus segments |
-| `law-edit-seen/` | `fno inbox law` edit read (`crates/fno-agents/src/law_match.rs` `edit_answer`, via the shared cursor in `announce.rs`) | one seen-id set per session; tiny, never cleaned |
+| `rules-seen/` | the rules hook (`crates/fno-agents/src/hook/rules.rs`, via the shared cursor in `announce.rs`): an inform rule prints once per session at a pre-tool event | one seen-id set per session; tiny, never cleaned |
 | `observer-reports/` | the observer fold, via the `paths` accessor | one report per observation run |
 | `operator-capture/` | `cli/src/fno/inbox/operator_turns.py` writes `<session-id>.jsonl`, the ack ledger and receipt; `fno-agents compaction operator-turns` (`crates/fno-agents/src/operator_turns.rs`) writes `<session-id>.scan.json` | per session, the ack ledger is permanent. The scan cursor cache is safe to delete, the next read rescans from byte 0 |
 | `postmortems/` | the retro routine and stuck-terminal postmortem writer, via the `paths` accessor | permanent |

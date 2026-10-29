@@ -18,6 +18,7 @@ pub mod pipe_guard;
 pub mod pretooluse_bash;
 pub mod prompt;
 pub mod refusal_streak;
+pub mod rules;
 pub mod send_message_guard;
 pub mod session_state;
 pub mod stop;

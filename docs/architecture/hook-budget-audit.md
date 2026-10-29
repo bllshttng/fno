@@ -78,7 +78,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `inject-mail-notify.sh` | Claude and Codex UserPromptSubmit | Injects unread mail notifications. |
 | `inject-announce.sh prompt` | Claude and Codex UserPromptSubmit | Injects queued announcements at the prompt boundary. |
 | `inject-announce.sh compact` | Codex PostCompact | Re-injects queued announcements after compaction. |
-| `law-stage-inject.sh` | Claude UserPromptSubmit, PostToolUse (`Skill`, `Edit|Write`); Codex UserPromptSubmit, PreToolUse (`Edit|Write`) | Injects the live ruling relevant to the current operation. |
+| `rules-dispatch.sh` | Claude UserPromptSubmit, PreToolUse (`Edit|Write|Bash|Skill`); Codex UserPromptSubmit, PreToolUse (`Edit|Write|Bash`) | Decides the event against the rule set: a deny, the governing rules as context, or nothing. |
 | `prompt-outstanding.sh` | Claude and Codex UserPromptSubmit | Surfaces unresolved operator turns and questions. |
 | `target-stop-hook.sh` | Claude and Codex Stop | Runs the target completion gate and holds the session when the mission is incomplete. |
 | `context-nudge.sh` | Claude and Codex Stop | Injects the context-budget nudge. |

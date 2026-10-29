@@ -34,6 +34,8 @@ fn main() {
     sync_module_copy("registry_read");
     sync_module_copy("effect_map");
     sync_module_copy("footnote_transcript");
+    sync_module_copy("rules");
+    sync_module_copy("glob");
     sync_merge_posture();
     sync_ambient_vocab();
     sync_page_reload();
