@@ -36,14 +36,10 @@ It is gone from the text on purpose, not by oversight.
 None of that text was run while designing this change, and the design held.
 The reasoning already lives in the model, so prose that reads well but changes no plan stays deleted.
 
-One part earned a place in `/blueprint`: the deterministic discovery receipt.
-It changes the plan a deterministic step can produce. A plan grounded on duplicate candidates, schema status, and the active pitfalls differs from one guessed from questions alone.
-Everything else stayed deleted. The depth ladder and the four-label failure vocabulary carried a scale-to-risk escape hatch or changed nothing.
+One part earned a place in `/blueprint`: the deterministic discovery receipt. It changes the plan a deterministic step can produce. A plan grounded on duplicate candidates, database signals, and the active pitfalls differs from one guessed from questions alone. Everything else stayed deleted. The depth ladder and the four-label failure vocabulary carried a scale-to-risk escape hatch or changed nothing.
 
 ## Truth boundary
 
-The receipt reports source status, not a conclusion.
-An unavailable GitHub search is not “no matching PR,” missing or stale schema evidence is not “no database change,” and a graph read failure is not “no duplicate.”
-The model decides relevance only after inspecting the cited evidence.
+The receipt reports source status, not a conclusion. An unavailable GitHub search does not mean that no PR matches. A graph read failure does not mean that no duplicate exists. The model decides relevance only after inspecting the cited evidence.
 
 The receipt is derived and read-only. Backlog changes still go through `fno backlog`, and target manifest first-fill still goes through `fno do state set`.

@@ -620,20 +620,6 @@
       "fn": "database",
       "input": {
         "files": {
-          "prisma/schema.prisma": "model A {}\n"
-        }
-      },
-      "output": {
-        "detected": true,
-        "signals": [
-          "prisma/schema.prisma"
-        ]
-      }
-    },
-    {
-      "fn": "database",
-      "input": {
-        "files": {
           ".env.development": "DATABASE_URL=a\n"
         }
       },

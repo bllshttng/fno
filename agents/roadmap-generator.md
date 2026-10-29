@@ -112,7 +112,7 @@ Heuristic:
 - Shared dependencies -> different batches (sequential)
 - No batch flag -> sequential (always safe, the default)
 
-Use `codegraph explore` to check file overlap between features.
+Ask the code index (docs/code-index-providers.md) to check file overlap between features.
 
 ### Step 4: Write Tasks
 
