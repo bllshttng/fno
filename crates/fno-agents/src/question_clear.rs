@@ -615,6 +615,79 @@ mod tests {
     }
 
     #[test]
+    fn the_scope_lead_withdraws_a_gone_workers_moot_question_and_no_other_lead_does() {
+        let lead_req = |tmp: &TempDir, qid: &str, scope: &[&str], gone: fn(&str) -> bool| {
+            let mut req = request(tmp, qid, Some("moot: ruled on the node, PR merged"));
+            req.provenance = json!({"decided_by": "1eadabcd", "authority_source": "role"});
+            req.closed_by = Some("1eadabcd-aaaa-4482-9135-37ba1cb0f0d2".to_string());
+            req.caller = Some(ClearCaller {
+                ancestry_handle: Some("1eadabcd".to_string()),
+                teamed: true,
+                teams: Vec::new(),
+                scope_nodes: Some(scope.iter().map(|s| s.to_string()).collect()),
+                asker_gone: Some(gone),
+            });
+            let mut question = ask("q-moot", "which lane?", None, Some("x-in"));
+            question["data"]["asker"] = json!("e49583f3");
+            question["data"]["session_id"] = json!("e49583f3-bbbb-4482-9135-37ba1cb0f0d2");
+            seed_question(&req, &question);
+            req
+        };
+
+        // A question filed by a stopped worker on a node in scope S: S's
+        // lead withdraws it as coordination, with no decision and no mail.
+        let tmp = tempfile::tempdir().unwrap();
+        let req = lead_req(&tmp, "q-moot", &["x-in"], |_| true);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(result.deliveries.is_empty());
+        assert!(rows(&req.decisions_path, &["operator_decision"]).is_empty());
+        let closed = rows(&req.journal_path, &["operator_question_closed"]);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(
+            closed[0]["data"]["reason"],
+            "withdrawn by lead 1eadabcd: moot: ruled on the node, PR merged"
+        );
+        assert!(closed[0]["data"].get("answer").is_none());
+
+        // A lead outside S: refused, the question stays open.
+        let tmp = tempfile::tempdir().unwrap();
+        let req = lead_req(&tmp, "q-moot", &["x-other"], |_| true);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(
+            result.lines[0].contains(LEAD_WITHDRAW_LINE),
+            "{:?}",
+            result.lines
+        );
+        assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
+
+        // S's lead while the asker still lives and the node is open: refused.
+        let tmp = tempfile::tempdir().unwrap();
+        let req = lead_req(&tmp, "q-moot", &["x-in"], |_| false);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
+
+        // A question with no asker session is no worker's: refused.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-anon", Some("moot"));
+        req.provenance = json!({"decided_by": "1eadabcd", "authority_source": "role"});
+        req.caller = Some(ClearCaller {
+            ancestry_handle: Some("1eadabcd".to_string()),
+            teamed: true,
+            teams: Vec::new(),
+            scope_nodes: Some(["x-in".to_string()].into_iter().collect()),
+            asker_gone: Some(|_| true),
+        });
+        let mut question = ask("q-anon", "which lane?", None, Some("x-in"));
+        question["data"]["asker"] = json!("");
+        seed_question(&req, &question);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+    }
+
+    #[test]
     fn the_asker_withdraws_its_own_question_by_the_full_session_id_pair() {
         // The incident: the handle comparison failed while the full session
         // ids matched, so the asker's own moot withdrawal was refused and
@@ -823,6 +896,7 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -835,6 +909,12 @@ pub struct ClearCaller {
     pub ancestry_handle: Option<String>,
     /// Whether the caller's handle holds a live team.
     pub teamed: bool,
+    /// The live teams the caller holds.
+    pub teams: Vec<crate::territory::Team>,
+    /// Test seam for the scope read; `None` compiles `teams` on first need.
+    pub scope_nodes: Option<BTreeSet<String>>,
+    /// Test seam for the asker-gone read; `None` reads session liveness.
+    pub asker_gone: Option<fn(&str) -> bool>,
 }
 
 #[derive(Deserialize)]
@@ -934,22 +1014,78 @@ fn resolve_clear_caller(req: &ClearRequest) -> ClearCaller {
         req,
         &ClearCaller {
             ancestry_handle: ancestry_handle.clone(),
-            teamed: false,
+            ..ClearCaller::default()
         },
     );
-    let teamed = handle.as_deref().is_some_and(handle_holds_live_team);
+    let teams: Vec<crate::territory::Team> = handle
+        .as_deref()
+        .and_then(|handle| {
+            crate::territory::live_teams(&crate::paths::AgentsHome::from_env().registry_json())
+                .ok()
+                .map(|teams| {
+                    teams
+                        .into_iter()
+                        .filter(|team| holds_team(std::slice::from_ref(team), handle))
+                        .collect()
+                })
+        })
+        .unwrap_or_default();
     ClearCaller {
         ancestry_handle,
-        teamed,
+        teamed: !teams.is_empty(),
+        teams,
+        scope_nodes: None,
+        asker_gone: None,
     }
 }
 
-/// Whether `handle` holds a live team in this machine's registry. A registry
-/// read error reads as no team (fail closed).
-pub(crate) fn handle_holds_live_team(handle: &str) -> bool {
-    crate::territory::live_teams(&crate::paths::AgentsHome::from_env().registry_json())
-        .map(|teams| holds_team(&teams, handle))
-        .unwrap_or(false)
+/// Whether `node` sits in a scope of a team the caller holds. A scope that
+/// does not compile holds nothing (fail closed).
+fn scope_holds(req: &ClearRequest, caller: &ClearCaller, node: &str) -> bool {
+    if let Some(seam) = &caller.scope_nodes {
+        return seam.contains(node);
+    }
+    caller.teams.iter().any(|team| {
+        crate::lead_answers::scope_node_ids(
+            &req.graph,
+            &req.repo_root,
+            &team.scope,
+            Some(i64::from(team.level)),
+        )
+        .is_ok_and(|ids| ids.contains(node))
+    })
+}
+
+/// The moot withdrawal a scope lead may make for a worker's question: the
+/// caller holds a live team whose scope holds the question's node, and the
+/// asker is gone (its session reads absent) or the node is done. Unresolved
+/// liveness never counts as gone.
+fn lead_may_withdraw(
+    req: &ClearRequest,
+    caller: &ClearCaller,
+    asker_session: Option<&str>,
+    node: Option<&str>,
+) -> bool {
+    // Only a worker's question: an identity-less ask stays the user's.
+    let (Some(node), Some(asker_session)) = (node.filter(|_| caller.teamed), asker_session) else {
+        return false;
+    };
+    if !scope_holds(req, caller, node) {
+        return false;
+    }
+    let asker_gone = match caller.asker_gone {
+        Some(seam) => seam(asker_session),
+        None => crate::claim_commands::session_is_absent(asker_session),
+    };
+    asker_gone
+        || api::node(&Store::new(&req.graph), node).is_ok_and(|found| {
+            found.is_some_and(|node| {
+                matches!(
+                    node.status,
+                    crate::backlog::model::Status::Done | crate::backlog::model::Status::Superseded
+                )
+            })
+        })
 }
 
 /// Whether `handle` holds a live team: the team-name store binds by session
@@ -962,6 +1098,8 @@ pub(crate) fn holds_team(teams: &[crate::territory::Team], handle: &str) -> bool
             .is_some_and(|session| crate::identity::canonical_handle(session) == handle)
     })
 }
+
+const LEAD_WITHDRAW_LINE: &str = "A lead whose live team scope holds the question's node withdraws it once the asker is gone or the node is done, with --answer naming the ruling.";
 
 fn default_cap() -> usize {
     crate::question_intake::QUESTION_CAP
@@ -1080,6 +1218,13 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             .and_then(|data| data.get("session_id"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty());
+        let node = question_event
+            .get("data")
+            .and_then(|data| data.get("node"))
+            .and_then(Value::as_str);
+        // A scope lead's moot withdrawal names its ruling in --answer and
+        // closes as coordination: no decision row, no answer mail.
+        let mut lead_reason: Option<String> = None;
         if let Some(agent) = closer.as_deref() {
             let own_ask = is_own_ask(req, asker, asker_session, closer.as_deref());
             let authority = req
@@ -1097,17 +1242,27 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             } else {
                 own_ask
             };
-            if !allowed {
+            if !allowed && !own_ask {
+                if let Some(ruling) = req.answer.as_deref() {
+                    if lead_may_withdraw(req, &caller, asker_session, node) {
+                        lead_reason = Some(format!(
+                            "withdrawn by lead {agent}: {}",
+                            cut(ruling, req.cap)
+                        ));
+                    }
+                }
+            }
+            if !allowed && lead_reason.is_none() {
                 refused += 1;
                 answer.lines.push(if req.answer.is_some() {
                     format!(
-                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. {} A teamed asker answers only its own question, with --authority role.",
+                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. {} A teamed asker answers only its own question, with --authority role. {LEAD_WITHDRAW_LINE}",
                         chat_answer_line(qid)
                     )
                 } else {
                     let shown = if asker.is_empty() { "the user" } else { asker };
                     format!(
-                        "outstanding: refused: {qid} was asked by {shown}, and this session is agent {agent}. Only the asker withdraws a question. Nothing was closed; the user answers it on the question board (fno-agents state path questions)."
+                        "outstanding: refused: {qid} was asked by {shown}, and this session is agent {agent}. Only the asker withdraws a question. Nothing was closed; the user answers it on the question board (fno-agents state path questions). {LEAD_WITHDRAW_LINE}"
                     )
                 });
                 continue;
@@ -1129,7 +1284,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             ));
             continue;
         }
-        if let Some(text) = req.answer.as_deref() {
+        if let Some(text) = req.answer.as_deref().filter(|_| lead_reason.is_none()) {
             let text = cut(text, req.cap);
             let current = match live_decision(req, qid) {
                 Ok(current) => current,
@@ -1345,7 +1500,9 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         } else {
             // The reason names who retired it: the asker's own withdrawal
             // is moot; the user's reads plainly "withdrawn".
-            let withdrawn_reason = if is_own_ask(req, asker, asker_session, closer.as_deref()) {
+            let withdrawn_reason = if let Some(reason) = lead_reason.as_deref() {
+                reason
+            } else if is_own_ask(req, asker, asker_session, closer.as_deref()) {
                 "withdrawn by asker: moot"
             } else {
                 "withdrawn"
