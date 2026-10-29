@@ -593,6 +593,15 @@ fn scan_claude(raw: &str) -> SessionScan {
     scan
 }
 
+/// The node's own project store, from its `project` root in the work map,
+/// else this checkout's store.
+fn store_of(node: &Value) -> std::path::PathBuf {
+    str_of(node, "project")
+        .and_then(super::settings::project_root)
+        .map(|root| crate::paths::events_path(std::path::Path::new(&root)))
+        .unwrap_or_else(crate::paths::project_events_path)
+}
+
 /// Shared reads for one trace call: the store, the ledger and each session
 /// transcript, read once even when an epic folds many children.
 pub(crate) struct Shared {
@@ -606,8 +615,8 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub(crate) fn load() -> Shared {
-        let events_path = crate::paths::project_events_path();
+    pub(crate) fn load(root: &Value) -> Shared {
+        let events_path = store_of(root);
         let store_ok = crate::event_store::import_all(&events_path).map(|_| ());
         let reviews = crate::event_store::query_events(
             &events_path,
