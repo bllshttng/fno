@@ -43,11 +43,6 @@ pub(crate) fn watching_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r"<watching[>\s]").unwrap())
 }
 
-pub(crate) fn help_re() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"<help[>\s]").unwrap())
-}
-
 pub(crate) fn api_error_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"^API Error\b").unwrap())
@@ -102,7 +97,10 @@ impl Signal {
         }
         let stripped = text.trim_end();
         if stripped.ends_with('?')
-            || help_re().is_match(text)
+            // The shared distress parser, not a bare opener regex: a tag the
+            // turn merely quotes in code is prose, so truth and the loop
+            // runtime (which blanks before its own match) agree.
+            || crate::distress::extract_help_distress(text).is_some()
             || option_prompt_re().is_match(stripped)
         {
             return Signal::Question;
@@ -1510,6 +1508,17 @@ mod tests {
             "<local-command-stdout>ok</local-command-stdout>"
         ));
         assert!(!injected_record_text("RESULT: SUCCESS shipped the fix"));
+    }
+
+    /// The question signal reads only a REAL help block: a turn quoting the
+    /// tag in inline code stays plain, a real block asks for the lead's move.
+    #[test]
+    fn a_quoted_help_tag_is_not_a_question_but_a_real_block_is() {
+        let quoted = "Re-arming; `<help class=\"held\">` only if this wedges";
+        assert_eq!(Signal::of(quoted), Signal::Plain);
+        let real =
+            "blocked on the ruling: <help class=\"question\" reason=\"grid\">which band?</help>";
+        assert_eq!(Signal::of(real), Signal::Question);
     }
 
     /// Until the warm pass rebuilds a session, truth answers `warming`, and
