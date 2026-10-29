@@ -30,10 +30,10 @@ _UNMODELED_BLOCKS = frozenset({"kanban", "providers"})
 #: key the loader would lift must not report as unknown: warning on a working
 #: key is cried wolf.
 _HONORED_LEGACY_KEYS = frozenset({"recovery.retire_grace_s"})
-#: Keys only the Rust leg reads (agents_config.rs `visual_paint_paths`). The
+#: Keys only the Rust leg reads (agents_config.rs, look_hold.rs). The
 #: Python model does not carry them, and they work, so they never report as
 #: unknown.
-_RUST_READ_KEYS = frozenset({"merge.visual_paint_paths"})
+_RUST_READ_KEYS = frozenset({"merge.visual_paint_paths", "merge.visual_shot_workflows"})
 #: Top-level blocks retired with the md attention arm (attention-items.md
 #: "Config keys"): a leftover row is dead config, named as retired.
 _RETIRED_BLOCKS = frozenset({"reach_me"})
