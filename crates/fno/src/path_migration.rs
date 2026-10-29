@@ -40,7 +40,7 @@ fn state_root() -> Option<PathBuf> {
 /// carries none, and a worktree spells `.git` as a file). The fast path may
 /// only shortcut when this is false - a sentinel at the default root proves
 /// nothing about a root a config file names.
-fn config_may_repoint(
+pub(crate) fn config_may_repoint(
     fno_config: bool,
     fno_repo_root: bool,
     cwd: &Path,

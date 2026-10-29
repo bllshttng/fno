@@ -107,7 +107,7 @@ pub fn is_wrapper(path: &Path) -> bool {
     Path::new(&binary).file_name().and_then(|n| n.to_str()) == Some("fno-agents")
 }
 
-fn is_executable(path: &Path) -> bool {
+pub(crate) fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
@@ -150,7 +150,7 @@ fn temp_bases() -> Vec<PathBuf> {
 /// The path's own spellings, raw and resolved, strictly under a base: the
 /// caller's tempdir need not be the binary's, and a sibling sharing the
 /// prefix string is not under it.
-fn in_temp(path: &Path) -> bool {
+pub(crate) fn in_temp(path: &Path) -> bool {
     let raw = path.to_path_buf();
     let resolved = resolve(path);
     temp_bases().iter().any(|base| {
