@@ -2491,7 +2491,8 @@ fn the_commit_gate_drops_an_order_whose_obligation_opened() {
     let entries = state::load_registry(&home.registry_json()).unwrap();
     let entry = entries.entries.first().unwrap();
     let mut receipt =
-        crate::receipt::build_reap_receipt(entry, None, crate::receipt::Writer::GcSweep).unwrap();
+        crate::receipt::build_reap_receipt(entry, None, crate::receipt::Writer::GcSweep, &|_| None)
+            .unwrap();
     receipt.effects = vec![crate::gc_native::stop_outcome_effect(true, None)];
     let mut receipts = std::collections::BTreeMap::new();
     receipts.insert(entry.name.clone(), receipt);
@@ -2566,11 +2567,12 @@ fn the_archived_session_record_survives_cwd_deletion_and_resolves() {
     e.cwd = cwd.to_string_lossy().to_string();
     e.created_at = "2026-09-01T00:00:00Z".into();
     // The record: built through the REAL capability table (resume form
-    // rendered, locator staged), then localized to the fixture store the
-    // way the harness's own index resolves a live session.
+    // rendered, locator staged) from the fixture's transcript store.
     let mut receipt =
-        crate::receipt::build_reap_receipt(&e, None, crate::receipt::Writer::GcSweep).unwrap();
-    receipt.native_locator = Some(json!({ "transcripts": [transcript.to_string_lossy()] }));
+        crate::receipt::build_reap_receipt(&e, None, crate::receipt::Writer::GcSweep, &|_| {
+            Some(vec![transcript.clone()])
+        })
+        .unwrap();
     receipt.effects = vec![
         crate::gc_native::stop_outcome_effect(true, None),
         crate::daemon::CascadeOutcome::Removed.effect_record("active-surface"),
@@ -2823,6 +2825,7 @@ fn stage_direct(
         &|_| crate::daemon::CascadeOutcome::NotApplicable,
         &|_| crate::daemon::CascadeOutcome::NotApplicable,
         &mut receipts,
+        &|_| None,
     )
 }
 

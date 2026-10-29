@@ -803,7 +803,14 @@ pub(crate) fn run_with_scope_workers(
                 } else {
                     let outcome = remove(&c.entry);
                     if outcome.satisfies_applied() {
-                        write_receipt(home, &c.entry, &outcome, node.as_deref(), &basis);
+                        write_receipt(
+                            home,
+                            &c.entry,
+                            &outcome,
+                            node.as_deref(),
+                            &basis,
+                            transcripts,
+                        );
                         summary
                             .retired
                             .push(judgement_class(&ident, node, basis, true, class));
@@ -837,25 +844,30 @@ fn write_receipt(
     outcome: &CascadeOutcome,
     node: Option<&str>,
     basis: &str,
+    transcripts: &dyn Fn(&RegistryEntry) -> Option<Vec<PathBuf>>,
 ) {
     // The event's `resumable` is the receipt's measured resume-evidence
     // verdict (the same basis the retirement sweep emits), never the fact
     // that a receipt happened to stage: a transcript gone from the store
     // reports `no-transcript` even though the receipt itself staged fine.
-    let (receipt_staged, evidence) =
-        match crate::receipt::build_reap_receipt(entry, None, crate::receipt::Writer::RosterReap) {
-            Ok(mut receipt) => {
-                let evidence = crate::gc_sweep::resume_evidence_effect(&receipt);
-                if crate::receipt::reap_receipt_path(home, &receipt).exists() {
-                    (true, evidence)
-                } else {
-                    receipt.effects = vec![outcome.effect_record("active-surface")];
-                    let staged = crate::receipt::write_reap_receipt(home, &receipt).is_ok();
-                    (staged, evidence)
-                }
+    let (receipt_staged, evidence) = match crate::receipt::build_reap_receipt(
+        entry,
+        None,
+        crate::receipt::Writer::RosterReap,
+        transcripts,
+    ) {
+        Ok(mut receipt) => {
+            let evidence = crate::gc_sweep::resume_evidence_effect(&receipt);
+            if crate::receipt::reap_receipt_path(home, &receipt).exists() {
+                (true, evidence)
+            } else {
+                receipt.effects = vec![outcome.effect_record("active-surface")];
+                let staged = crate::receipt::write_reap_receipt(home, &receipt).is_ok();
+                (staged, evidence)
             }
-            Err(_) => (false, crate::gc_sweep::resume_evidence_effect_unbuilt()),
-        };
+        }
+        Err(_) => (false, crate::gc_sweep::resume_evidence_effect_unbuilt()),
+    };
     let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
     let _ = emitter.emit(
         "agent_row_reaped",
@@ -1244,20 +1256,19 @@ mod tests {
             row("9f8e7d6c", Some("sid-3"), Some("hand-typed-3")),
             row("5a4b3c2d", Some("sid-4"), Some("hand-typed-4")),
         ];
-        // Stage the receipt under a hermetic HOME: the receipt builder reads
-        // the harness store index for the resume locator.
-        let store_home = tempfile::tempdir().unwrap();
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", store_home.path());
         let mut entry = RegistryEntry::new(
             Some("sid-1".into()),
             crate::state::Lineage::unproven("test receipt staging"),
         );
         entry.harness = Some("claude".into());
         entry.short_id = "ab12cd34".into();
-        let receipt =
-            crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
-                .expect("receipt builds");
+        let receipt = crate::receipt::build_reap_receipt(
+            &entry,
+            None,
+            crate::receipt::Writer::RosterReap,
+            &|_| None,
+        )
+        .expect("receipt builds");
         crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
         let mut entry = RegistryEntry::new(
             Some("sid-2".into()),
@@ -1265,9 +1276,13 @@ mod tests {
         );
         entry.harness = Some("claude".into());
         entry.short_id = "ef56ab78".into();
-        let receipt =
-            crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
-                .expect("receipt builds");
+        let receipt = crate::receipt::build_reap_receipt(
+            &entry,
+            None,
+            crate::receipt::Writer::RosterReap,
+            &|_| None,
+        )
+        .expect("receipt builds");
         crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
         crate::keep_mark::set(&home, "sid-2", "hand-typed-2").unwrap();
         // The claimed launch record is the third marker: written only by a
@@ -1308,10 +1323,6 @@ mod tests {
             crate::daemon::now_epoch_secs(),
             &|_| CascadeOutcome::NotApplicable,
         );
-        match &old_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
         assert_eq!(summary.retired.len(), 2, "{summary:?}");
         assert!(
             summary

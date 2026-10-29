@@ -317,8 +317,13 @@ fn send_recovery(entry: &RegistryEntry, sid: &str, text: &str) -> Result<(), Str
 }
 
 fn restore(entry: &RegistryEntry, sid: &str, text: &str) -> Result<(), String> {
-    let receipt =
-        crate::receipt::build_reap_receipt(entry, None, crate::receipt::Writer::RegistryWrite)?;
+    // Recovery consumes only the resume recipe, not a persisted native locator.
+    let receipt = crate::receipt::build_reap_receipt(
+        entry,
+        None,
+        crate::receipt::Writer::RegistryWrite,
+        &|_| None,
+    )?;
     if !Path::new(&receipt.cwd).is_dir() {
         return Err(format!(
             "recorded worktree is gone; resume: {}",
@@ -614,6 +619,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                         entry,
                         None,
                         crate::receipt::Writer::RegistryWrite,
+                        &|_| None,
                     )?;
                     let text = if stage == 1 {
                         if tail.failed {

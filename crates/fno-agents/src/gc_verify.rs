@@ -582,7 +582,8 @@ mod tests {
         // contracts' receipts - and the audit fails on empty evidence,
         // with the window itself naming why.
         let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("old"), None, Writer::GcSweep).unwrap();
+        let mut receipt =
+            build_reap_receipt(&row("old"), None, Writer::GcSweep, &|_| None).unwrap();
         stamp(
             &mut receipt,
             Some("native-stop,active-surface,resume-evidence"),
@@ -633,7 +634,8 @@ mod tests {
         // build and confirmed effects - and the audit passes.
         let home = temp_home();
         for name in ["a", "b"] {
-            let mut receipt = build_reap_receipt(&row(name), None, Writer::GcSweep).unwrap();
+            let mut receipt =
+                build_reap_receipt(&row(name), None, Writer::GcSweep, &|_| None).unwrap();
             stamp(&mut receipt, Some(retirement_contract().as_str()));
             receipt.effects = confirmed_effects();
             write_reap_receipt(&home, &receipt).unwrap();
@@ -654,7 +656,8 @@ mod tests {
     #[test]
     fn an_older_build_on_the_current_contract_without_mux_member_refuses() {
         let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("older"), None, Writer::GcSweep).unwrap();
+        let mut receipt =
+            build_reap_receipt(&row("older"), None, Writer::GcSweep, &|_| None).unwrap();
         stamp(&mut receipt, Some(retirement_contract().as_str()));
         receipt.writer_build =
             Some("fno-agents 0.3.2 rev cf7e0875703610d488e3ee2b2bdecdfc3f39fdb0".into());
@@ -684,7 +687,8 @@ mod tests {
         // receipt carries the full op set with one op unconfirmed, so the
         // refusal is the unconfirmed-outcome one, not the missing-op one.
         let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("part"), None, Writer::GcSweep).unwrap();
+        let mut receipt =
+            build_reap_receipt(&row("part"), None, Writer::GcSweep, &|_| None).unwrap();
         stamp(&mut receipt, Some(retirement_contract().as_str()));
         receipt.effects = vec![
             effect("native-stop", "confirmed-removed"),
@@ -712,7 +716,8 @@ mod tests {
     #[test]
     fn ac1_hp_a_single_op_receipt_is_refused() {
         let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("synthetic"), None, Writer::GcSweep).unwrap();
+        let mut receipt =
+            build_reap_receipt(&row("synthetic"), None, Writer::GcSweep, &|_| None).unwrap();
         stamp(&mut receipt, Some(retirement_contract().as_str()));
         receipt.effects = vec![confirmed_effect()];
         write_reap_receipt(&home, &receipt).unwrap();
@@ -755,7 +760,8 @@ mod tests {
         );
         // A live unrelated receipt so the window is not empty-shaped: the
         // assertion targets the events problem specifically.
-        let mut receipt = build_reap_receipt(&row("live"), None, Writer::GcSweep).unwrap();
+        let mut receipt =
+            build_reap_receipt(&row("live"), None, Writer::GcSweep, &|_| None).unwrap();
         stamp(&mut receipt, Some(retirement_contract().as_str()));
         receipt.effects = confirmed_effects();
         write_reap_receipt(&home, &receipt).unwrap();
@@ -807,7 +813,7 @@ mod tests {
     #[test]
     fn ac2_hp_the_cohort_names_missing_sessions() {
         let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("a"), None, Writer::GcSweep).unwrap();
+        let mut receipt = build_reap_receipt(&row("a"), None, Writer::GcSweep, &|_| None).unwrap();
         stamp(&mut receipt, Some(retirement_contract().as_str()));
         receipt.effects = confirmed_effects();
         write_reap_receipt(&home, &receipt).unwrap();
@@ -834,7 +840,8 @@ mod tests {
     #[test]
     fn a_receipt_outside_the_window_is_not_audited() {
         let home = temp_home();
-        let mut receipt = build_reap_receipt(&row("old"), None, Writer::GcSweep).unwrap();
+        let mut receipt =
+            build_reap_receipt(&row("old"), None, Writer::GcSweep, &|_| None).unwrap();
         stamp(
             &mut receipt,
             Some("native-stop,active-surface,resume-evidence"),
