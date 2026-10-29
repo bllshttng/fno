@@ -24,6 +24,14 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1 :: $2"; FAIL=$((FAIL + 1)); }
 
+# Each case pins its own empty cwd-cache dir: a subprocess serving the
+# previous case's <=30s-old snapshot would miss a holder this case just
+# spawned (the archive tests assert exactly that window).
+wt_cache_pin() {
+    FNO_CWD_CACHE_DIR="$(mktemp -d -t wt-cwd-cache-pin.XXXXXX)"
+    export FNO_CWD_CACHE_DIR
+}
+
 # Sandbox git repo with a hook-created worktree.
 new_sandbox() {
     local tmp
@@ -47,18 +55,21 @@ echo "== 1. worktree-remove.sh delegation contract =="
 
 # 1a. Refuse the canonical checkout (exit 1, no fs change).
 S=$(new_sandbox)
+wt_cache_pin
 out=$(cd "$S" && echo "{\"worktree_path\":\"$S\"}" | bash "$HOOK" 2>&1); rc=$?
 if [[ $rc -eq 1 && -d "$S/.git" ]] && echo "$out" | grep -q 'main checkout'; then pass "canonical refused (exit 1, untouched)"; else fail "canonical refuse" "rc=$rc out=$out"; fi
 rm -rf "$S"
 
 # 1b. Already-gone path -> prune + exit 0.
 S=$(new_sandbox)
+wt_cache_pin
 out=$(cd "$S" && echo "{\"worktree_path\":\"$S/never-existed\"}" | bash "$HOOK" 2>&1); rc=$?
 [[ $rc -eq 0 ]] && pass "already-gone exit 0" || fail "already-gone" "rc=$rc out=$out"
 rm -rf "$S"
 
 # 1c. Merged clean hook-created worktree -> removed (exit 0, path gone).
 S=$(new_sandbox)
+wt_cache_pin
 ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 )
 out=$(cd "$S" && echo "{\"worktree_path\":\"$S/wt\"}" | bash "$HOOK" 2>&1); rc=$?
 if [[ $rc -eq 0 && ! -d "$S/wt" ]]; then pass "clean worktree removed (exit 0, gone)"; else fail "clean remove" "rc=$rc wt-exists=$([[ -d "$S/wt" ]] && echo y || echo n) out=$out"; fi
@@ -66,6 +77,7 @@ rm -rf "$S"
 
 # 1d. Dirty worktree -> refused (exit 1, kept).
 S=$(new_sandbox)
+wt_cache_pin
 ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 && echo dirty > "wt/uncommitted.txt" )
 out=$(cd "$S" && echo "{\"worktree_path\":\"$S/wt\"}" | bash "$HOOK" 2>&1); rc=$?
 if [[ $rc -eq 1 && -d "$S/wt" ]]; then pass "dirty worktree refused (exit 1, kept)"; else fail "dirty refuse" "rc=$rc wt-exists=$([[ -d "$S/wt" ]] && echo y || echo n) out=$out"; fi
@@ -78,6 +90,7 @@ rm -rf "$S"
 # record, which would orphan the very worktree this branch is protecting.
 # Matches the other two did-not-remove branches (main checkout, dirty).
 S=$(new_sandbox)
+wt_cache_pin
 ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 )
 mkdir -p "$S/wt/.fno"
 ( exec sleep 30 ) & LIVE=$!
@@ -89,6 +102,7 @@ rm -rf "$S"
 
 # 1f. Modern manifest with a DEAD owner_pid -> not preserved (removed, exit 0).
 S=$(new_sandbox)
+wt_cache_pin
 ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 )
 mkdir -p "$S/wt/.fno"
 ( exec true ) & DEAD=$!; wait "$DEAD" 2>/dev/null   # pid now dead
@@ -103,6 +117,7 @@ rm -rf "$S"
 # fail. The log file exists beforehand so the append is not blocked by the
 # parent's mode.
 S=$(new_sandbox)
+wt_cache_pin
 mkdir -p "$S/leftover" "$S/.fno"
 : > "$S/.fno/worktree-log.jsonl"
 chmod 555 "$S"
@@ -141,6 +156,7 @@ fi
 echo "== 3. archive-worktree.sh declines cleanly without a tty =="
 
 S=$(new_sandbox)
+wt_cache_pin
 ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 )
 WT="$S/wt"
 # The tty-decline test needs a finished-candidate tree: a fresh worktree on an
@@ -174,6 +190,7 @@ echo "== 3b. archive: an unborn tree named by a human goes, named by a sweep it 
 # refusal must not stand in front of it; an automatic leg (the sweep or the
 # ritual passes FNO_WT_REMOVE_CALLER) keeps the refusal.
 S=$(new_sandbox)
+wt_cache_pin
 ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 )
 WT="$S/wt"
 out=$(bash "$ARCHIVE" "$WT" --yes 2>&1); rc=$?
@@ -181,6 +198,7 @@ if [[ $rc -eq 0 && ! -d "$WT" ]]; then pass "manual archive removes an unborn tr
 rm -rf "$S"
 
 S=$(new_sandbox)
+wt_cache_pin
 ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 )
 WT="$S/wt"
 out=$(FNO_WT_REMOVE_CALLER="cleanup --merged" bash "$ARCHIVE" "$WT" --yes 2>&1); rc=$?
@@ -218,6 +236,7 @@ echo "== 5. sweep lock + O(1) ps per worktree (x-a1a5) =="
 # a linked worktree exit immediately. The common-dir location is the invariant:
 # git rev-parse --show-toplevel differs across worktrees in the same repository.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" worktree add -q "$S/wt" >/dev/null 2>&1
 COMMON=$(git -C "$S" rev-parse --git-common-dir)
 case "$COMMON" in /*) ;; *) COMMON="$S/$COMMON" ;; esac
@@ -255,6 +274,7 @@ rm -rf "$S"
 # machine-local pre-push hook here refuses for a branch named "main") a
 # bare remote from the sandbox itself so the fetch step succeeds.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -462,6 +482,7 @@ fi
 # 5g. Apply mode refreshes after inventory and before deletion. A process that
 # appears only in the second snapshot protects the selected target.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" worktree add -q "$S/wt" >/dev/null 2>&1
 mkdir -p "$S/wt/target"
 printf 'artifact' > "$S/wt/target/file"
@@ -492,7 +513,10 @@ printf '401 holder\n'
 EOF
 chmod +x "$STUBDIR/lsof" "$STUBDIR/pgrep" "$STUBDIR/ps"
 export COUNTFILE PROTECTED_WT
-out=$(cd "$S" && PATH="$STUBDIR:$PATH" bash "$LIFECYCLE" cleanup --cargo-targets --apply --cap-bytes 1 --target-max-age 0 2>&1); rc=$?
+# The count-gated stub paces the in-process refresh sequence, so this run
+# gets its own empty cache dir: a served snapshot would skip a counted call
+# and shift every gate by one.
+out=$(cd "$S" && FNO_CWD_CACHE_DIR="$STUBDIR/cache" PATH="$STUBDIR:$PATH" bash "$LIFECYCLE" cleanup --cargo-targets --apply --cap-bytes 1 --target-max-age 0 2>&1); rc=$?
 N_LSOF=$(wc -l < "$COUNTFILE" | tr -d ' ')
 if [[ "$rc" -eq 1 && "$N_LSOF" -eq 3 && -d "$S/wt/target" ]] && echo "$out" | grep -q 'reason=process-recheck' && echo "$out" | grep -q 'status=over-cap-protected'; then
     pass "apply recheck refresh protects newly rooted worktree"
@@ -502,9 +526,173 @@ fi
 unset COUNTFILE PROTECTED_WT
 rm -rf "$STUBDIR" "$S"
 
+# 5j. The machine-wide cwd cache (worktree-cwd-cache.sh): one read per 30s
+# across invocations, a same-process second refresh goes live (the apply
+# recheck's contract above), a failed store degrades to the uncached read,
+# and the archive classifies from a served snapshot.
+CACHELIB="$REPO_ROOT/scripts/lib/worktree-cwd-cache.sh"
+if [[ -f "$CACHELIB" ]]; then
+    source "$CACHELIB"
+    eval "$(sed -n '/^_wt_refresh_cwd_snapshot()/,/^}/p; /^_wt_pids()/,/^}/p' "$LIFECYCLE")"
+
+    # 5j-1. A fresh cache serves the snapshot with zero lsof spawns.
+    STUBDIR=$(mktemp -d -t cwd-cache-hit.XXXXXX)
+    COUNTFILE="$STUBDIR/lsof.log"; : > "$COUNTFILE"
+    WT="$STUBDIR/wt"; mkdir -p "$WT"
+    export FNO_CWD_CACHE_DIR="$STUBDIR/cache" COUNTFILE
+    unset _WT_CWD_CACHE_SERVED 2>/dev/null || true
+    cat > "$STUBDIR/lsof" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$COUNTFILE"
+exit 0
+EOF
+    chmod +x "$STUBDIR/lsof"
+    printf 'p401\nfcwd\nn%s\n' "$WT" | wt_cwd_cache_store
+    _wt_refresh_cwd_snapshot
+    FOUND=$(_wt_pids "$WT")
+    N_LSOF=$(wc -l < "$COUNTFILE" | tr -d ' ')
+    if [[ "$N_LSOF" -eq 0 ]] && printf '%s\n' "$FOUND" | grep -qx "401"; then
+        pass "fresh cache serves the snapshot with zero lsof spawns"
+    else
+        fail "cache hit" "lsof_calls=$N_LSOF found=[$FOUND]"
+    fi
+    rm -rf "$STUBDIR"
+
+    # 5j-2. A stale cache falls through to the live read and re-stores it.
+    STUBDIR=$(mktemp -d -t cwd-cache-stale.XXXXXX)
+    COUNTFILE="$STUBDIR/lsof.log"; : > "$COUNTFILE"
+    WT="$STUBDIR/wt"; mkdir -p "$WT"
+    export FNO_CWD_CACHE_DIR="$STUBDIR/cache" COUNTFILE
+    unset _WT_CWD_CACHE_SERVED 2>/dev/null || true
+    cat > "$STUBDIR/lsof" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$COUNTFILE"
+printf 'p402\nfcwd\nn%s\n' "\$CACHE_ROWS_WT"
+EOF
+    chmod +x "$STUBDIR/lsof"
+    printf 'p401\nfcwd\nn%s\n' "$WT" | wt_cwd_cache_store
+    touch -t 200101010000 "$(wt_cwd_cache_file)"
+    CACHE_ROWS_WT="$WT"
+    export CACHE_ROWS_WT
+    PATH="$STUBDIR:$PATH" _wt_refresh_cwd_snapshot
+    FOUND=$(_wt_pids "$WT")
+    N_LSOF=$(wc -l < "$COUNTFILE" | tr -d ' ')
+    RESTORED="$(wt_cwd_cache_load | awk '/^n/ { print substr($0, 2) }')"
+    if [[ "$N_LSOF" -eq 1 && "$FOUND" == *"402"* && "$RESTORED" == "$WT" ]]; then
+        pass "stale cache falls through to the live read and re-stores it"
+    else
+        fail "stale cache" "lsof_calls=$N_LSOF found=[$FOUND] restored=[$RESTORED]"
+    fi
+    unset CACHE_ROWS_WT
+    rm -rf "$STUBDIR"
+
+    # 5j-3. A failed store degrades to the uncached read; nothing is lost.
+    STUBDIR=$(mktemp -d -t cwd-cache-ro.XXXXXX)
+    COUNTFILE="$STUBDIR/lsof.log"; : > "$COUNTFILE"
+    WT="$STUBDIR/wt"; mkdir -p "$WT"
+    mkdir -p "$STUBDIR/ro-cache"; chmod 000 "$STUBDIR/ro-cache"
+    export FNO_CWD_CACHE_DIR="$STUBDIR/ro-cache" COUNTFILE
+    unset _WT_CWD_CACHE_SERVED 2>/dev/null || true
+    cat > "$STUBDIR/lsof" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$COUNTFILE"
+printf 'p403\nfcwd\nn%s\n' "\$CACHE_ROWS_WT"
+EOF
+    chmod +x "$STUBDIR/lsof"
+    CACHE_ROWS_WT="$WT"
+    export CACHE_ROWS_WT
+    PATH="$STUBDIR:$PATH" _wt_refresh_cwd_snapshot
+    SNAPSHOT_RC=$?
+    FOUND=$(_wt_pids "$WT")
+    if [[ "$SNAPSHOT_RC" -eq 0 && "$FOUND" == *"403"* ]]; then
+        pass "failed store degrades to the uncached read"
+    else
+        fail "store failure" "snapshot_rc=$SNAPSHOT_RC found=[$FOUND]"
+    fi
+    unset CACHE_ROWS_WT
+    chmod 700 "$STUBDIR/ro-cache" 2>/dev/null
+    rm -rf "$STUBDIR"
+
+    # 5j-4. A same-process second refresh goes live: the apply recheck exists
+    # to catch a process rooted after the first pass, so it must never serve
+    # the read it supersedes - cache or not.
+    STUBDIR=$(mktemp -d -t cwd-cache-recheck.XXXXXX)
+    COUNTFILE="$STUBDIR/lsof.log"; : > "$COUNTFILE"
+    WT="$STUBDIR/wt"; mkdir -p "$WT"
+    export FNO_CWD_CACHE_DIR="$STUBDIR/cache" COUNTFILE
+    unset _WT_CWD_CACHE_SERVED 2>/dev/null || true
+    cat > "$STUBDIR/lsof" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$COUNTFILE"
+printf 'p404\nfcwd\nn%s\n' "\$CACHE_ROWS_WT"
+EOF
+    chmod +x "$STUBDIR/lsof"
+    printf 'p401\nfcwd\nn%s\n' "$WT" | wt_cwd_cache_store
+    CACHE_ROWS_WT="$WT"
+    export CACHE_ROWS_WT
+    PATH="$STUBDIR:$PATH" _wt_refresh_cwd_snapshot
+    FOUND_FIRST=$(_wt_pids "$WT")
+    N_LSOF_FIRST=$(wc -l < "$COUNTFILE" | tr -d ' ')
+    PATH="$STUBDIR:$PATH" _wt_refresh_cwd_snapshot
+    FOUND_SECOND=$(_wt_pids "$WT")
+    N_LSOF_BOTH=$(wc -l < "$COUNTFILE" | tr -d ' ')
+    if [[ "$N_LSOF_FIRST" -eq 0 && "$FOUND_FIRST" == *"401"* && "$N_LSOF_BOTH" -eq 1 && "$FOUND_SECOND" == *"404"* ]]; then
+        pass "second refresh in one process goes live past the cache"
+    else
+        fail "recheck bypass" "first=[$FOUND_FIRST]x$N_LSOF_FIRST second=[$FOUND_SECOND]x$((N_LSOF_BOTH - N_LSOF_FIRST))"
+    fi
+    unset CACHE_ROWS_WT
+    rm -rf "$STUBDIR"
+
+    # 5j-5. The archive classifies from a served snapshot: with the live read
+    # failing outright, only the cache stands between the holder and the
+    # refuse path, so a ttyless decline proves the cached rows landed.
+    if ! command -v lsof >/dev/null 2>&1; then
+        echo "  SKIP: real lsof unavailable (needed once, to read the holder's cwd)"
+    else
+    S=$(new_sandbox)
+    wt_cache_pin
+    ( cd "$S" && git worktree add -q wt >/dev/null 2>&1 )
+    WT="$S/wt"
+    ( cd "$WT" && printf 'x = 1\n' > f.py \
+      && git -c user.email=t@t -c user.name=t add f.py \
+      && git -c user.email=t@t -c user.name=t commit -qm work ) >/dev/null 2>&1
+    ( cd "$WT" && exec sleep 300 ) & HOLD=$!
+    disown "$HOLD" 2>/dev/null || true
+    CACHE_DIR="$S/cache"; mkdir -p "$CACHE_DIR"
+    export FNO_CWD_CACHE_DIR="$CACHE_DIR"
+    unset _WT_CWD_CACHE_SERVED 2>/dev/null || true
+    STUBDIR=$(mktemp -d -t cwd-cache-arch.XXXXXX)
+    cat > "$STUBDIR/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+    chmod +x "$STUBDIR/lsof"
+    sleep 0.6
+    HOLD_CWD="$(lsof -a -p "$HOLD" -d cwd -Fn 2>/dev/null | awk '/^n/ { print substr($0, 2) }')"
+    printf 'p%s\nfcwd\nn%s\n' "$HOLD" "$HOLD_CWD" | wt_cwd_cache_store
+    if command -v perl >/dev/null 2>&1; then
+        out=$(perl -e 'use POSIX; setsid(); open(STDIN,"<","/dev/null"); exec @ARGV' env FNO_CWD_CACHE_DIR="$CACHE_DIR" PATH="$STUBDIR:$PATH" bash "$ARCHIVE" "$WT" 2>&1); rc=$?
+        if [[ $rc -eq 3 ]] && echo "$out" | grep -q 'no tty for confirmation'; then
+            pass "archive classifies the holder from the served cache"
+        else
+            fail "archive cache" "rc=$rc (live-read refuse would be rc=2) out=[$out]"
+        fi
+    else
+        echo "  SKIP: perl unavailable (needed for setsid)"
+    fi
+    kill "$HOLD" 2>/dev/null
+    rm -rf "$S" "$STUBDIR"
+    unset FNO_CWD_CACHE_DIR COUNTFILE
+    fi
+else
+    echo "  SKIP: worktree-cwd-cache.sh missing (partial deploy keeps the uncached read)"
+fi
+
 # 5h. Two sweeps racing to reclaim the same dead-holder lock: exactly one
 # proceeds, the other backs off - never both, and never neither.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -560,6 +748,7 @@ rm -rf "$RACESTUB" "$LOCKDIR" "$S" "$BARE"
 # failed against the mv-only reclaim, and passes against the steal that
 # compares the moved directory's pid stamp against the one it observed.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare2.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -632,6 +821,7 @@ rm -rf "$STUBDIR" "$LOCKDIR" "$S" "$BARE"
 # swap-in directory whose stamp names pid 1 (alive on every platform this
 # suite targets).
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare3.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -703,6 +893,7 @@ rm -rf "$STUBDIR" "$LOCKDIR" "$S" "$BARE" "$LOCKDIR".stale.* 2>/dev/null
 # its own pid as "another sweep is already running" and exits, stranding a
 # live-pid lock that only a later sweep can reclaim.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare4.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -749,6 +940,7 @@ rm -rf "$STUBDIR" "$LOCKDIR" "$S" "$BARE"
 # this test's pid as its stamp, so the moved copy mismatches the observed
 # dead pid and the restore arm is the one that runs.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare5.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -817,6 +1009,7 @@ rm -rf "$STUBDIR" "$LOCKDIR" "$S" "$BARE" "$LOCKDIR".stale.* 2>/dev/null
 # process stays. No stubs: two leftovers are planted by hand and a normal
 # sweep does the reaping.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare6.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -871,6 +1064,7 @@ rm -rf "$STUBDIR" "$LOCKDIR" "$S" "$BARE" "$LOCKDIR".stale.* "$COMMON"/.fno-wt-s
 # itself (find -newer against the sweep's birth certificate), so sweep one
 # gives up and sweep two acquires. No stubs; two ordinary sweeps.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare7.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -908,6 +1102,7 @@ rm -rf "$LOCKDIR" "$S" "$BARE"
 # directory. Staged with a stub `ls` that reports the dir EMPTY once while
 # planting a live peer's pid file inside it.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare8.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -958,6 +1153,7 @@ rm -rf "$STUBDIR" "$LOCKDIR" "$S" "$BARE"
 # comparison must read the stamp as reused, reclaim the lock, and proceed.
 # No stubs: the mismatch is planted, not raced.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare9.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -990,6 +1186,7 @@ rm -rf "$LOCKDIR" "$S" "$BARE"
 source "$REPO_ROOT/scripts/lib/events-lock.sh"
 eval "$(sed -n '/^_wt_stamp_identity()/,/^}/p' "$LIFECYCLE")"
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare10.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -1026,6 +1223,7 @@ rm -rf "$LOCKDIR" "$S" "$BARE"
 # still alive, recomputes the identity of the stamped pid from the same
 # primitive. Fails while the writer stamps only $$.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare11.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -1086,6 +1284,7 @@ echo "== 6. the sweep lock resolves its own directory, honestly =="
 # path is `git rev-parse --path-format=absolute --git-common-dir`; a join of
 # the raw relative answer onto the toplevel only holds at the toplevel.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare6.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -1122,6 +1321,7 @@ rm -rf "$NONREPO"
 # by pid and exits 0, so the honest refusal above can never collapse every
 # lock outcome into one message.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE=$(mktemp -d -t wt-bare6c.XXXXXX); rmdir "$BARE"
 git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -1152,6 +1352,7 @@ echo "== 7. cleanup --merged consumes the occupancy classifier (x-0396) =="
 new_merged_tree() {
     local S BARE
     S=$(new_sandbox)
+    wt_cache_pin
     git -C "$S" branch -M main >/dev/null 2>&1
     BARE=$(mktemp -d -t wt-occ-bare.XXXXXX); rmdir "$BARE"
     git clone -q --bare "$S" "$BARE" >/dev/null 2>&1
@@ -1204,6 +1405,7 @@ EOF
 # 6a. AC8-HP: all-inert stub releases the tree in dry run: would-archive plus
 # one indented row per pid, Summary counts it under "would archive".
 S=$(new_merged_tree)
+wt_cache_pin
 STUB=$(mktemp -d -t occ-stub.XXXXXX)
 OCCLOG="$STUB/calls.log"; : > "$OCCLOG"
 make_occupancy_stub "$STUB"
@@ -1229,6 +1431,7 @@ fi
 
 # 6b. AC9-HP: one holds + one inert -> kept with both rows, counted as processes.
 S=$(new_merged_tree)
+wt_cache_pin
 OCCLOG="$STUB/mixed.log"; : > "$OCCLOG"
 ( cd "$S/wt" && exec sleep 301 ) & HOLD1=$!
 ( cd "$S/wt" && exec sleep 302 ) & HOLD2=$!
@@ -1250,6 +1453,7 @@ echo "$out" | grep -qE "^Summary:.* 1 processes" && pass "Summary processes coun
 # 6c. AC10-EDGE: stub exits 2, or prints fewer rows than pids -> fail closed.
 for badmode in exit2 short; do
     S=$(new_merged_tree)
+    wt_cache_pin
     OCCLOG="$STUB/$badmode.log"; : > "$OCCLOG"
     ( cd "$S/wt" && exec sleep 303 ) & HOLD3=$!
     ( cd "$S/wt" && exec sleep 304 ) & HOLD4=$!
@@ -1267,6 +1471,7 @@ done
 
 # 6d. AC11-EDGE: an unpushed tree is decided at step 2; the stub never runs.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" branch -M main >/dev/null 2>&1
 BARE11=$(mktemp -d -t wt-occ-bare.XXXXXX); rmdir "$BARE11"
 git clone -q --bare "$S" "$BARE11" >/dev/null 2>&1
@@ -1284,6 +1489,7 @@ rm -rf "$S"
 
 # 6e. AC12-HP: --kill-orphans is retired: one stderr line, verdicts unchanged.
 S=$(new_merged_tree)
+wt_cache_pin
 OCCLOG="$STUB/retired.log"; : > "$OCCLOG"
 ( cd "$S/wt" && exec sleep 305 ) & HOLD5=$!
 disown "$HOLD5" 2>/dev/null || true
@@ -1310,6 +1516,7 @@ echo "== 8. archive-worktree.sh classifies at removal time (x-0396) =="
 # removal proceeds headless with no exit 3. The holder runs in its OWN
 # session (perl setsid) so the archive's self-PGID filter cannot drop it.
 S=$(new_merged_tree)
+wt_cache_pin
 STUB=$(mktemp -d -t occ-stub2.XXXXXX)
 OCCLOG="$STUB/ac13.log"; : > "$OCCLOG"
 make_occupancy_stub "$STUB"
@@ -1332,6 +1539,7 @@ rm -rf "$S"
 
 # 7b. AC14-EDGE: one re-enumerated pid holds -> exit 3 headless, nothing signalled.
 S=$(new_merged_tree)
+wt_cache_pin
 OCCLOG="$STUB/ac14.log"; : > "$OCCLOG"
 ( cd "$S/wt" && exec perl -e 'use POSIX; setsid(); exec "sleep", "300"' ) & HOLD=$!
 disown "$HOLD" 2>/dev/null || true
@@ -1357,6 +1565,7 @@ rm -rf "$S"
 # reapable probe against the sandbox (no venv, no installed fno on CI) and die
 # rc=2 before the occupancy recheck this test exists to exercise.
 S=$(new_merged_tree)
+wt_cache_pin
 mkdir -p "$S/scripts/setup"
 printf '#!/usr/bin/env bash\nexec bash "%s" "$@"\n' "$REPO_ROOT/scripts/setup/archive-worktree.sh" > "$S/scripts/setup/archive-worktree.sh"
 chmod +x "$S/scripts/setup/archive-worktree.sh"
@@ -1426,6 +1635,7 @@ new_hash_dir() {
 # 9a. AC1-HP: the build-base half is the Rust lane; the sweep delegates and
 # prints its lines, and the bash sweep never rm's a hash dir itself.
 S=$(new_sandbox)
+wt_cache_pin
 STUB=$(mktemp -d -t srm-sweep.XXXXXX)
 RM_LOG="$STUB/rm.log"
 new_rm_stub "$STUB/bin" "$RM_LOG"
@@ -1493,6 +1703,7 @@ EOF
 # workspace resolves to a planted hash dir under a managed base.
 new_removal_fixture() {
     S=$(new_sandbox)
+    wt_cache_pin
     git -C "$S" worktree add -q "$S/wt" >/dev/null 2>&1
     mkdir -p "$S/wt/crates/x" "$S/base/ab/c002"
     : > "$S/wt/crates/x/Cargo.toml"
@@ -1536,6 +1747,7 @@ rm -rf "$S" "$STUB"
 # 9d. AC2-EDGE: a resolution OUTSIDE the managed base is never ours to
 # delete, even tagged; the worktree still goes.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" worktree add -q "$S/wt" >/dev/null 2>&1
 mkdir -p "$S/wt/crates/x" "$S/outside/c003"
 : > "$S/wt/crates/x/Cargo.toml"
@@ -1558,6 +1770,7 @@ rm -rf "$S" "$STUB"
 # 9e. AC2-EDGE: cargo failing to answer is best-effort - removal proceeds,
 # the unresolved dir stays for the sweep.
 S=$(new_sandbox)
+wt_cache_pin
 git -C "$S" worktree add -q "$S/wt" >/dev/null 2>&1
 mkdir -p "$S/wt/crates/x" "$S/base/ab/c004"
 : > "$S/wt/crates/x/Cargo.toml"
