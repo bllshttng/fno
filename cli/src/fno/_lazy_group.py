@@ -33,7 +33,6 @@ Usage (via the factory)
 from __future__ import annotations
 
 import importlib
-import sys
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -434,40 +433,6 @@ class LazyTypeGroup(typer.core.TyperGroup):
     def resolve_command(
         self, ctx: click.Context, args: list[str]
     ) -> tuple[str | None, click.Command | None, list[str]]:
-        # A moved top-level spelling forwards here, before any resolution:
-        # rewriting the argv and falling through to the normal path makes the
-        # destination parse its own arguments exactly as a direct invocation
-        # would, so stdout is byte-identical. The forward is gated on the
-        # destination root being registered, so a wave can seed COMMAND_MOVES
-        # before it mints the destination; until then the OLD registration
-        # serves the call without advertising a command that cannot resolve.
-        # The gate is a
-        # registry membership test, not get_command: a probe would import
-        # fno.tombstones and build a stub only to throw it away, on the hot
-        # leaf path, and would raise the tombstone refusal should a
-        # destination name ever be removed.
-        if args:
-            from fno.command_moves import (
-                deprecation_line,
-                destination_is_registered,
-                forwarding_args,
-                move_for,
-            )
-
-            move = move_for(args[0])
-            roots = {*self.commands, *self._lazy}
-            if move is not None:
-                forwarded = forwarding_args(args[1:], move)
-                if forwarded is None:
-                    leaf = f" {args[1]}" if len(args) > 1 else ""
-                    raise click.UsageError(
-                        f"fno {args[0]}{leaf} was removed; use fno {move.to}{leaf}"
-                    )
-                if destination_is_registered(move, roots, args[1:]):
-                    line = deprecation_line(args[0], args[1:], move)
-                    if line is not None:
-                        print(line, file=sys.stderr)
-                    args = forwarded
         try:
             return super().resolve_command(ctx, args)
         except click.UsageError as exc:

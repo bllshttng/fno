@@ -46,7 +46,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/daemon.rs:2093 |
 | `FNO_AGENTS_FIXTURES` | rs | Overrides the scratch sweep fixtures directory. |
 | `FNO_AGENTS_FRONT` | py+rs | unclear: cli/src/fno/graph/store.py:213 |
-| `FNO_AGENTS_HOME` | py+rs | unclear: cli/src/fno/agents/cli.py:801 |
+| `FNO_AGENTS_HOME` | py+rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. |
 | `FNO_AGENTS_IDLE_EXIT_SECS` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:67 |
 | `FNO_AGENTS_NAME_MODEL` | rs | Raw model string; the agent-name mint appends its short code to the worker name. |
 | `FNO_AGENTS_NO_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:87 |
@@ -85,7 +85,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CARGO_MAX_HOLD_SECS` | rs | The longest time in seconds that an agent cargo can hold an admission claim. After this time, the next cargo frees the claim and stops the holder. The default is 3600. A whole-suite run is exempt. |
 | `FNO_CARGO_RUN_PROGRAM` | rs | The program cargo is about to start, which the rustc wrapper passes to the run door only. The door refuses an agent session's test binary or doctest with exit 86. The program itself never sees the variable. |
 | `FNO_CARGO_TARGETS_BASE` | rs | Overrides the managed fno cargo build base the `cargo_build_dirs` lane sweeps and the tree-removal reclaim deletes under; test escape hatch. |
-| `FNO_CC_DAEMON_RV_ROOT` | py | unclear: cli/src/fno/agents/session_procs.py:40 |
+| `FNO_CC_DAEMON_RV_ROOT` | py+rs | unclear: cli/src/fno/agents/session_procs.py:40 |
 | `FNO_CHROME` | rs | The Chrome or Chromium binary `fno mux serve --snapshot --format png` runs. |
 | `FNO_CLAIMS_ROOT` | py+rs | The global claims tree root, else `$HOME`. `accounts::credentials::seal` pins it around a moved HOME so a worker's claims stay on the parent's root. |
 | `FNO_CLAUDE_DAEMON_DIR` | py+rs | unclear: cli/src/fno/agents/discover.py:2353 |
@@ -93,6 +93,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CLAUDE_SESSIONS_DIR` | py | Overrides Claude Code's per-session registry directories on this host. |
 | `FNO_CLAUDE_SESSION_RECENCY_SECONDS` | py | Transcript-mtime liveness window in seconds (positive only; default 600). |
 | `FNO_CLAUDE_THEME` | py+rs | The Claude Code theme (`custom:fno:footnote-*`) the mux pins for a worker pane. A `claude --bg` spawn from that pane writes it into the thread's settings file. |
+| `FNO_FRONT_DOOR` | rs | Overrides the fno binary the footprint cause's rv-pane check runs, for tests; PATH order otherwise. |
 | `FNO_CODEX_ASK_WAIT_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:56 |
 | `FNO_CODEX_BIN` | rs | Overrides the codex CLI the readiness and upgrade paths resolve, for private roots and tests; PATH order otherwise. |
 | `FNO_CODEX_INTERRUPT_BOUND_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:80 |

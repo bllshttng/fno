@@ -1,0 +1,8 @@
+  · session ready (init)
+  · delivered (turn received)
+  · hel
+  -> hello
+  v turn complete
+  · (skipped malformed frame)
+  x turn errored
+  -- thread exited
