@@ -91,6 +91,10 @@ pub struct IntakeRequest {
     pub asker: Option<String>,
     #[serde(default)]
     pub laws: Vec<crate::law_match::LawRow>,
+    /// The ladder rung the asker placed the row on (`question_ladder::place`);
+    /// absent is the user rung.
+    #[serde(default)]
+    pub rung: Option<Value>,
     pub storage_root: PathBuf,
     /// The machine index, resolved by the Python side (`paths.questions_jsonl()`)
     /// so the caller's sandbox stays the single path authority. Falls back to
@@ -925,6 +929,9 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     if let Some(n) = node {
         data.insert("node".into(), json!(n));
     }
+    if let Some(rung) = &req.rung {
+        data.insert("rung".into(), rung.clone());
+    }
     if !req.blocks.is_empty() {
         data.insert("blocks".into(), json!(req.blocks));
     }
@@ -1211,6 +1218,7 @@ mod tests {
             cwd: Some("/repo/fno".to_string()),
             asker: Some("worker-1".to_string()),
             laws: vec![],
+            rung: None,
             storage_root: root.to_path_buf(),
             index_path: None,
             journal_path: None,
@@ -1468,6 +1476,24 @@ stops
         let taste_root = tmp_root("rule10-taste");
         let answer4 = ask("taste", &taste_root);
         assert_eq!(answer4.exit_code, 0, "lines: {:?}", answer4.lines);
+    }
+
+    #[test]
+    fn a_ladder_ask_carries_its_rung_and_stays_off_the_board() {
+        let home = tmp_home("ladder-rung");
+        let root = tmp_root("ladder-rung");
+        let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.rung = Some(json!({"level": "lead", "holder_session": "s-lead", "holder_name": "tomas"}));
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let journal = journal_text(&root);
+        assert!(
+            journal.contains("\"holder_session\":\"s-lead\""),
+            "{journal}"
+        );
+        // Fresh, the row sits with the lead: the board fold does not list it.
+        assert!(crate::outstanding::fold_questions(&journal).is_empty());
     }
 
     #[test]

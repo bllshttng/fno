@@ -1121,6 +1121,13 @@ fn run_ask(args: &[String]) -> i32 {
         live_law_rows()
     };
     let who = crate::backlog::birth::display_name(&crate::paths::worktree_repo_root(&cwd));
+    // Under the ladder the row sits with the asker's lead first; no lead with
+    // a session to wake is the user rung, today's behavior.
+    let rung = (!template && crate::question_ladder::ladder_on(&cwd))
+        .then(|| crate::question_ladder::place(&cwd, node.as_deref(), ident.session_id.as_deref()))
+        .flatten();
+    let wake_node = node.clone();
+    let wake_question = text.clone();
     let request = crate::question_intake::IntakeRequest {
         question: text,
         template,
@@ -1133,6 +1140,7 @@ fn run_ask(args: &[String]) -> i32 {
         cwd: Some(cwd.to_string_lossy().into_owned()),
         asker,
         laws,
+        rung: rung.clone(),
         storage_root: crate::outstanding::storage_root(&cwd),
         index_path: Some(crate::provider_cap::questions_path(&home)),
         journal_path: Some(crate::paths::events_path(&cwd)),
@@ -1158,6 +1166,9 @@ fn run_ask(args: &[String]) -> i32 {
     if let Some(qid) = &answer.qid {
         if !template {
             println!("{qid}");
+        }
+        if let Some(rung) = &rung {
+            crate::question_ladder::wake_holder(rung, qid, wake_node.as_deref(), &wake_question);
         }
     }
     0

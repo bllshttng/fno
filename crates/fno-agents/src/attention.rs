@@ -672,7 +672,11 @@ pub fn project(
         match kind {
             "operator_question" => {
                 if let Some(qid) = str_field(&v, "question_id") {
-                    asked.insert(qid.to_string(), v);
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asked.insert(qid.to_string(), v);
+                    } else {
+                        asked.remove(qid);
+                    }
                 }
             }
             "operator_question_closed" => {
@@ -790,7 +794,11 @@ pub fn answered(journals_raw: &str, now: u64) -> Vec<Answered> {
         match v.get("type").and_then(Value::as_str).unwrap_or("") {
             "operator_question" => {
                 if let Some(qid) = str_field(&v, "question_id") {
-                    asks.insert(qid.to_string(), v.clone());
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asks.insert(qid.to_string(), v.clone());
+                    } else {
+                        asks.remove(qid);
+                    }
                 }
             }
             "attention_answer" => {

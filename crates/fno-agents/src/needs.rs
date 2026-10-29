@@ -194,6 +194,10 @@ pub fn fold(events_raw: &str, ledger_raw: &str, since: u64, fires_floor: u64) ->
             let Some(qid) = str_field(&v, "question_id") else {
                 continue;
             };
+            if !crate::question_ladder::envelope_on_board(&v) {
+                questions.remove(qid);
+                continue;
+            }
             let question = str_field(&v, "question").unwrap_or("");
             let evidence = str_field(&v, "ask").unwrap_or(question);
             let node = str_field(&v, "node").map(str::to_string);
