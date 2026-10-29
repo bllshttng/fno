@@ -151,19 +151,14 @@ fn grade_tool_budget(
         passed: false,
         detail: format!("tool-budget: unmeasured, {why}"),
     };
-    let files: Vec<std::path::PathBuf> = match std::fs::read_dir(transcript_dir) {
-        Ok(rd) => rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
-            .collect(),
-        Err(e) => {
-            return fail(format!(
-                "no transcript dir {}: {e}",
-                transcript_dir.display()
-            ))
-        }
-    };
+    if let Err(e) = std::fs::read_dir(transcript_dir) {
+        return fail(format!(
+            "no transcript dir {}: {e}",
+            transcript_dir.display()
+        ));
+    }
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    collect_jsonl(transcript_dir, &mut files);
     if files.is_empty() {
         return fail(format!("no transcript in {}", transcript_dir.display()));
     }
@@ -188,6 +183,21 @@ fn grade_tool_budget(
         kind: "tool-budget".into(),
         passed: calls <= max,
         detail: format!("tool-budget: {calls} tool calls (max {max})"),
+    }
+}
+
+/// Every `.jsonl` under the dir, subagent transcripts
+/// (`<session>/subagents/agent-*.jsonl`) included.
+fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for p in rd.flatten().map(|e| e.path()) {
+        if p.is_dir() {
+            collect_jsonl(&p, out);
+        } else if p.extension().is_some_and(|e| e == "jsonl") {
+            out.push(p);
+        }
     }
 }
 
@@ -273,6 +283,16 @@ mod tests {
         let r = grade_tool_budget(&budget(2), dir_with(&[tool_line(&["a", "b", "c"])]).path());
         assert!(!r.passed);
         assert!(r.detail.contains("3 tool calls"), "{}", r.detail);
+    }
+
+    #[test]
+    fn subagent_transcripts_count_toward_the_budget() {
+        let d = dir_with(&[tool_line(&["a"])]);
+        let sub = d.path().join("sess").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("agent-1.jsonl"), tool_line(&["b", "c"]) + "\n").unwrap();
+        let r = grade_tool_budget(&budget(40), d.path());
+        assert_eq!(r.detail, "tool-budget: 3 tool calls (max 40)");
     }
 
     #[test]

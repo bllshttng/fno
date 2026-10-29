@@ -364,11 +364,6 @@ mod tests {
             assert!(err.0.contains(&format!("{name}.yaml")), "{0}", err.0);
             assert!(err.0.contains("max_tool_calls"), "{0}", err.0);
         }
-    }
-
-    #[test]
-    fn a_tool_budget_with_a_positive_integer_loads() {
-        let dir = tempfile::tempdir().unwrap();
         let p = write_task(
             dir.path(),
             "ok.yaml",

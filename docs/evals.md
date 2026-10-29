@@ -32,7 +32,7 @@ grade:                      # >=1 mechanical check; a gradeless task is rejected
   - kind: file-exists       # a workdir-relative path must exist
     path: "out/report.md"
   - kind: tool-budget       # the worker's claude transcript must hold at most N tool calls
-    max_tool_calls: 120     # a missing transcript (codex, opencode) fails as unmeasured
+    max_tool_calls: 120     # a missing transcript (codex, opencode, or a lane account with its own CLAUDE_CONFIG_DIR) fails as unmeasured
 timeout_minutes: 20
 tags: [cli, greenfield]
 ```
