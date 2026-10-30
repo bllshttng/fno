@@ -2,7 +2,7 @@
 //! `fno-agents mail-remote`. Each half has unit tests of its own, and the
 //! plain-name recursion still shipped because no test ran a send through
 //! both. Wrapper scripts stand in front of each binary and log every exec,
-//! and a stub `fno-py` plays the local command, so the test reads the real
+//! and the native `mail send` is the local command, so the test reads the real
 //! process chain a send builds.
 //!
 //! The chain is bounded twice: the wrappers refuse past a fixed line count,
@@ -102,7 +102,6 @@ fn send(root: &Path, args: &[&str], drop_marker: bool) -> Chain {
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("FNO_BIN", root.join("bin/fno"))
         .env("FNO_AGENTS_BIN", root.join("bin/fno-agents"))
-        .env("FNO_PY", root.join("bin/fno-py"))
         .env("REAL_FNO", real_fno())
         .env("REAL_AGENTS", env!("CARGO_BIN_EXE_fno-agents"))
         .env("HOP_LOG", &log);
@@ -131,10 +130,6 @@ fn a_real_send_crosses_both_binaries_in_at_most_two_hops() {
         &root.join("bin/fno-agents"),
         &wrapper("agents", "$REAL_AGENTS"),
     );
-    script(
-        &root.join("bin/fno-py"),
-        "#!/bin/sh\nprintf 'local %s\\n' \"$*\" >> \"$HOP_LOG\"\n",
-    );
     let host = Command::new("hostname").output().unwrap();
     let host = fno_agents::mail_bus::normalize_host(&String::from_utf8_lossy(&host.stdout));
     let at_self = format!("quinlan@{host}");
@@ -149,11 +144,9 @@ fn a_real_send_crosses_both_binaries_in_at_most_two_hops() {
         );
         assert_eq!(c.count("agents mail-remote"), 1, "{why}");
         assert_eq!(c.count("fno "), 1, "{why}");
-        assert_eq!(c.count("local "), 1, "{why}");
+        assert_eq!(c.count("agents mail send "), 1, "{why}");
         assert!(
-            c.log
-                .iter()
-                .any(|l| l.starts_with("local ") && l.ends_with("send quinlan hello")),
+            c.log.iter().any(|l| l == "agents mail send quinlan hello"),
             "{why}"
         );
     }
@@ -187,7 +180,7 @@ fn a_real_send_crosses_both_binaries_in_at_most_two_hops() {
         c.exit, c.log, c.stderr
     );
     assert_eq!(c.count("agents mail-remote"), 3, "{why}");
-    assert_eq!(c.count("local "), 0, "{why}");
+    assert_eq!(c.count("agents mail send "), 0, "{why}");
     assert_eq!(c.exit, 2, "{why}");
     assert!(c.stderr.contains("relay hop limit"), "{why}");
 
