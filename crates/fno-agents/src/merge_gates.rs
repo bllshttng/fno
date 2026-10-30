@@ -774,11 +774,52 @@ fn approval_carries<P: Probes>(
     }
 }
 
+/// One changed patch line with its direction marker and its string-literal
+/// contents dropped, so the `-` and `+` sides of a pair that differs only
+/// inside literals compare equal: copy is not a look, and a copy edit must
+/// not void an approved carry (user ruling 2026-10-30). Masking never
+/// erases code outside quotes, so a scanner miss fails toward holding.
+fn mask_copy(line: &str) -> String {
+    if !line.starts_with('+') && !line.starts_with('-') {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len());
+    out.push(' ');
+    let mut in_string = false;
+    for c in line.chars().skip(1) {
+        match (in_string, c) {
+            (true, '\\') => {}
+            (true, '"') => {
+                in_string = false;
+                out.push('"');
+            }
+            (true, _) => {}
+            (false, '"') => {
+                in_string = true;
+                out.push('"');
+            }
+            (false, _) => out.push(c),
+        }
+    }
+    out
+}
+
+/// The patch body the carry compares: status, then the hunk lines with
+/// changed lines copy-masked.
+fn patch_body(status: &str, patch: &str) -> String {
+    let body: Vec<String> = patch
+        .lines()
+        .filter(|l| !l.starts_with("@@"))
+        .map(mask_copy)
+        .collect();
+    format!("{status}\n{}", body.join("\n"))
+}
+
 /// The PR's paint patch at one commit: each paint file the three-dot
 /// compare against the base changes, with its status and its patch body.
 /// Hunk headers drop out, so a main merge that only shifts line numbers
-/// still matches. A file with no patch (binary or too large) keys on its
-/// blob sha instead.
+/// still matches, and copy-only edits mask to the same body. A file with
+/// no patch (binary or too large) keys on its blob sha instead.
 fn paint_patch<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -808,8 +849,7 @@ fn paint_patch<P: Probes>(
         let body = if patch.is_empty() {
             format!("{status} blob {blob}")
         } else {
-            let hunks: Vec<&str> = patch.lines().filter(|l| !l.starts_with("@@")).collect();
-            format!("{status}\n{}", hunks.join("\n"))
+            patch_body(status, patch)
         };
         out.insert(name.clone(), body);
     }
@@ -1316,5 +1356,17 @@ mod tests {
         assert!(!page_names_pr("the PR is 3036", 3036));
         assert!(!page_names_pr("PR 30365", 3036));
         assert!(!page_names_pr("plain 3036", 3036));
+    }
+
+    #[test]
+    fn a_paint_change_only_inside_string_literals_reads_as_no_change() {
+        let was = "\n-    footer(\"Say f[no] to mostly done.\")";
+        let copy = "\n+    footer(\"Say F[no] to mostly done.\")";
+        assert_eq!(patch_body("modified", was), patch_body("modified", copy));
+        let code = "\n+    footer(footer_text())";
+        assert_ne!(patch_body("modified", was), patch_body("modified", code));
+        // Context lines keep their bytes; only changed lines mask.
+        let ctx = " footer(\"unchanged\")";
+        assert_eq!(patch_body("modified", ctx), format!("modified\n{ctx}"));
     }
 }

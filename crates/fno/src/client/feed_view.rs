@@ -928,9 +928,9 @@ impl View {
         let x0 = cols - w;
         let focused = self.input_owner() == super::region_focus::RegionOwner::Feed;
         let span_rows = feed_panel_rows(f, focused, w - 1, rows, self.feed_offset_clamped());
-        // The selected row wears the full-width cursor band while the panel
-        // owns the keyboard: the theme's own band pair (selection surface,
-        // stamp text), the same vocabulary the backlog board bands with.
+        // The driven row inverts like the bell's and the sideline's: the row
+        // about to take Enter reads on both theme families, and the band
+        // pair stays with hover/selection surfaces only.
         let band_row = if focused {
             Some(2 + f.sel.saturating_sub(self.feed_offset_clamped()))
         } else {

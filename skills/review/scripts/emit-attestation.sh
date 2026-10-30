@@ -227,13 +227,28 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
 # whichever algorithm computed it - a binary with an older slug shape would
 # file the attestation in a directory no reader of this source resolves.
 session_id=""; harness_session_id=""; harness=""
-if [[ -f "$repo_root/.fno/target-state.md" ]]; then
-  session_id=$(grep '^session_id:' "$repo_root/.fno/target-state.md" \
+# The manifest greps run once per readable path via the door-resolved list:
+# the checkout copy first, then the space-resolved one. An fno-managed
+# worktree keeps its manifest ONLY at the space path (the state-root
+# inventory), so without the second read the sidecar fallback below finds no
+# session and the row attests UNJOINED - the invocation join then dies even
+# though the hold and the pending sidecar are both intact.
+read_manifest_fields() {
+  session_id=$(grep '^session_id:' "$1" \
     | head -1 | sed 's/^session_id:[[:space:]]*//' | tr -d '[:space:]' || true)
-  harness_session_id=$(grep '^harness_session_id:' "$repo_root/.fno/target-state.md" \
+  harness_session_id=$(grep '^harness_session_id:' "$1" \
     | head -1 | sed 's/^harness_session_id:[[:space:]]*//' | tr -d '[:space:]' || true)
-  harness=$(grep '^harness:' "$repo_root/.fno/target-state.md" \
+  harness=$(grep '^harness:' "$1" \
     | head -1 | sed 's/^harness:[[:space:]]*//' | tr -d '[:space:]' || true)
+}
+if [[ -f "$repo_root/.fno/target-state.md" ]]; then
+  read_manifest_fields "$repo_root/.fno/target-state.md"
+fi
+if [[ -z "$harness_session_id" || -z "$session_id" ]]; then
+  space_manifest="$("${FNO_AGENTS_BIN:-fno-agents}" state path target-state --root "$repo_root" 2>/dev/null || true)"
+  if [[ -n "$space_manifest" && "$space_manifest" != "$repo_root/.fno/target-state.md" && -f "$space_manifest" ]]; then
+    read_manifest_fields "$space_manifest"
+  fi
 fi
 local_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 hold_json=""
@@ -572,7 +587,8 @@ data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdi
   --argjson findings "$findings_json" \
   --arg review_round "$review_round" \
   --arg level "$review_level" \
-  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,execution_context:$execution_context,output_contract:$output_contract,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end) + (if $level == "" or $level == "unset" then {} else {level: $level} end)')"
+  --argjson review_flags "$review_flags" \
+  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,execution_context:$execution_context,output_contract:$output_contract,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end) + (if $level == "" or $level == "unset" then {} else {level: $level} end) + (if ($review_flags | index("--verify-fixes")) then {verify_fixes: true} else {} end)')"
 # FNO overrides the binary (defaults to the mux); tests point it at fno-py,
 # which is on PATH in the uv test env where the mux is not installed.
 "${FNO:-fno}" doctor event emit -t review_attestation -s target -d "$data"
