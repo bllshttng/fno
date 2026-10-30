@@ -1793,26 +1793,32 @@ fn decide_gate(
                         forced_provider,
                     )
                 );
-                if substrate == "headless" || substrate == "cloud" {
+                {
                     // A forced spawn of the reserved name redeems too: force
                     // speaks for the machine being busy, never for keeping a
                     // reservation the spawn itself was promised.
                     release_redeemed_reservation(name, guard.root.as_deref());
-                    // A worker-slot claim fault is not the gate mutex; name the site.
-                    if let Err(fault) = acquire_worker_slot(
-                        &mut guard,
-                        name,
-                        &holder,
-                        holder_pid,
-                        route_provider,
-                        true,
-                    ) {
-                        guard.release();
-                        return Err(gate_fault_refusal(
+                    // The seat claim: headless/cloud hold their only seat here;
+                    // a capped bg spawn takes one because the gate mutex alone
+                    // cannot carry the admit across dispatch (the
+                    // admit-and-reserve rule at the bg return below).
+                    if substrate == "headless" || substrate == "cloud" || provider_cap.is_some() {
+                        // A worker-slot claim fault is not the gate mutex; name the site.
+                        if let Err(fault) = acquire_worker_slot(
+                            &mut guard,
+                            name,
+                            &holder,
+                            holder_pid,
                             route_provider,
-                            "lane_reservation_unavailable",
-                            &fault,
-                        ));
+                            true,
+                        ) {
+                            guard.release();
+                            return Err(gate_fault_refusal(
+                                route_provider,
+                                "lane_reservation_unavailable",
+                                &fault,
+                            ));
+                        }
                     }
                 }
                 return Ok(guard);
@@ -2102,6 +2108,34 @@ fn decide_gate(
                                 // Slot claim is visible to concurrent gates: the mutex has
                                 // done its job for this spawn.
                                 guard.release_gate_mutex();
+                            } else if provider_cap.is_some() {
+                                // Admit-and-reserve: the seat claim, taken
+                                // under the mutex, is what a concurrent count
+                                // reads. The gate mutex alone cannot carry the
+                                // admit across dispatch: its claim TTL lapses
+                                // under a dispatch that outlives it (an
+                                // explicit spawn timeout, a slow `claude
+                                // --bg`), a stealer then reads the lane before
+                                // this spawn's row exists, and the count admits
+                                // one seat past the cap. The claim names the
+                                // worker, so once the row lands the count
+                                // dedups it by name; release drops it with the
+                                // mutex.
+                                if let Err(fault) = acquire_worker_slot(
+                                    &mut guard,
+                                    name,
+                                    &holder,
+                                    holder_pid,
+                                    route_provider,
+                                    true,
+                                ) {
+                                    guard.release();
+                                    return Err(gate_fault_refusal(
+                                        route_provider,
+                                        "lane_reservation_unavailable",
+                                        &fault,
+                                    ));
+                                }
                             }
                             // bg path: keep the mutex until the caller's dispatch returns
                             // (registry/roster row exists) — released via GateGuard.
@@ -3634,6 +3668,246 @@ Swapouts: 3444531.\n";
             elapsed < QUEUE_TIMEOUT,
             "must refuse fast, not queue: took {elapsed:?}"
         );
+    }
+
+    /// Admit-and-reserve: a bg admit at cap-minus-one takes its seat claim
+    /// under the mutex, so a dispatch that outlives the mutex TTL cannot
+    /// lose the seat. A stealer that takes the lapsed mutex counts the
+    /// claim and refuses; release drops the seat and the lane frees again.
+    #[test]
+    fn a_bg_admit_holds_a_seat_claim_that_survives_a_lapsed_gate_mutex() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let dir = std::env::temp_dir().join(format!("fno-gate-seat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("claims-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &root);
+        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+        std::env::remove_var("FNO_SPAWN_GATE");
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n\n\
+             [agents.provider_limits.zai]\nlanes = 2\n",
+        )
+        .unwrap();
+        let me = std::process::id();
+        let start = crate::daemon::process_start_time(me).unwrap_or(0);
+        let reg = dir.join("registry.json");
+        std::fs::write(
+            &reg,
+            format!(
+                r#"{{"schema_version":{},"entries":[{{"name":"zai-live","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{start}}}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        // Spawn A admits at 1 of 2 and keeps its guard: the gate mutex plus,
+        // since this fix, the seat claim naming the worker.
+        let mut guard_a = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-a".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect("1 of 2 admits");
+        let (seat_state, seat_record) = claims::status("worker:seat-a", Some(&root));
+        assert!(
+            matches!(seat_state, claims::ClaimState::Live),
+            "the admit must mint the seat claim, got {seat_state:?}"
+        );
+        assert_eq!(
+            seat_record
+                .as_ref()
+                .and_then(|rec| rec.metadata.get("model_provider"))
+                .and_then(Value::as_str),
+            Some("zai"),
+            "the seat claim names the provider lane"
+        );
+
+        // The dispatch outlives the mutex TTL: age the gate:spawn claim past
+        // its expiry while the live holder keeps the pid. This is the exact
+        // state a stealer finds at admit-plus-TTL.
+        let claims_dir = root.join(".fno").join("claims");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        crate::claim_store::seed_yaml_at_path(
+            &claims_dir.join(format!("{}.lock", claims::encode_key("gate:spawn"))),
+            &format!(
+                "schema_version: {}\nkey: gate:spawn\nholder: spawn-gate:{}:seat-a\nacquired_at: {}\nexpires_at: {}\npid: {}\nhost: {}\n",
+                claims::SCHEMA_VERSION,
+                me,
+                now - 10 * 60_000,
+                now - 5 * 60_000,
+                me,
+                claims::hostname()
+            ),
+        );
+
+        // Spawn B steals the lapsed mutex and counts the seat: 2 of 2 refuses.
+        let refused = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-b".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect_err("the stealer must refuse on the counted seat");
+        assert_eq!(refused.exit_code, EXIT_PROVIDER_CAP);
+        let receipt = refused.receipt.expect("cap refusal carries a receipt");
+        assert_eq!(
+            receipt["count"], 2,
+            "the seat claim held the lane: {receipt}"
+        );
+
+        // Release drops the seat with the mutex; the lane frees for the next
+        // spawn, so the seat never outlives its dispatch.
+        guard_a.release();
+        let (seat_state, _) = claims::status("worker:seat-a", Some(&root));
+        assert!(
+            matches!(seat_state, claims::ClaimState::Free),
+            "release must drop the seat claim, got {seat_state:?}"
+        );
+        let mut guard_c = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-c".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect("the freed lane admits again");
+        guard_c.release();
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        match prior_spawn_gate {
+            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
+            None => std::env::remove_var("FNO_SPAWN_GATE"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The forced arm obeys the same admit-and-reserve rule: a forced bg
+    /// spawn past a full lane still mints the seat the next count reads.
+    #[test]
+    fn a_forced_bg_admit_past_a_full_lane_mints_the_seat() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let dir = std::env::temp_dir().join(format!("fno-gate-seatf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("claims-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &root);
+        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+        std::env::remove_var("FNO_SPAWN_GATE");
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n\n\
+             [agents.provider_limits.zai]\nlanes = 2\n",
+        )
+        .unwrap();
+        let me = std::process::id();
+        let start = crate::daemon::process_start_time(me).unwrap_or(0);
+        let row = |index: usize| {
+            format!(
+                r#"{{"name":"zai-{index}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{start}}}"#
+            )
+        };
+        let reg = dir.join("registry.json");
+        std::fs::write(
+            &reg,
+            format!(
+                r#"{{"schema_version":{},"entries":[{},{}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION,
+                row(0),
+                row(1)
+            ),
+        )
+        .unwrap();
+        let mut guard = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-f".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: true,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect("force admits past the full lane");
+        let (seat_state, seat_record) = claims::status("worker:seat-f", Some(&root));
+        assert!(
+            matches!(seat_state, claims::ClaimState::Live),
+            "the forced admit must mint the seat claim, got {seat_state:?}"
+        );
+        assert_eq!(
+            seat_record
+                .as_ref()
+                .and_then(|rec| rec.metadata.get("model_provider"))
+                .and_then(Value::as_str),
+            Some("zai"),
+            "the forced seat claim names the provider lane"
+        );
+        guard.release();
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        match prior_spawn_gate {
+            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
+            None => std::env::remove_var("FNO_SPAWN_GATE"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// workers hold its full share refuses exit 80 even with a fleet slot
