@@ -132,7 +132,6 @@ A	falling back to registry-only view	py=cli/src/fno/agents/harnesses/claude.py|c
 A	fn retired_command_pointer(command:	py=cli/src/fno/lint_command_ratchet.py;rs=crates/fno/src/menu_caps.rs	# CLASSIFY protocol|msg-twin|data
 A	fno agents mail drain-self	py=cli/src/fno/mail/cli.py;rs=crates/fno/src/main.rs	# CLASSIFY protocol|msg-twin|data
 A	fno agents resume: registry read failed: {exc}	py=cli/src/fno/agents/resume_cli.py;rs=crates/fno-agents/src/client_commands.rs	# CLASSIFY protocol|msg-twin|data
-A	fno agents trace: agent name is required unless --all is set	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_commands.rs	# CLASSIFY protocol|msg-twin|data
 A	fno backlog undispatched --json	py=cli/src/fno/backlog/undispatched.py;rs=crates/fno-agents/src/backlog/next.rs|crates/fno-agents/src/backlog/undispatched.rs|crates/fno-agents/src/org_board.rs	# CLASSIFY protocol|msg-twin|data
 A	fno-agents binary not found	py=cli/src/fno/claims/verdict.py|cli/src/fno/pr_watch/_install.py|cli/src/fno/pr_watch/cli.py|cli/src/fno/rust_binary.py;rs=crates/fno/src/config_cli/leaves.rs|crates/fno/src/doctor/report/collectors.rs	# CLASSIFY protocol|msg-twin|data
 A	fno-agents claim returned a non-object json value	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/merge_command/mod.rs	# CLASSIFY protocol|msg-twin|data
@@ -337,4 +336,3 @@ A	{lane} drops its attach id	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-
 A	{name} {unmeasurable_label_mark} no positive liveness evidence)	py=cli/src/fno/graph/statuses.py;rs=crates/fno-agents/src/backlog/worked.rs	# CLASSIFY protocol|msg-twin|data
 A	{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped	py=cli/src/fno/agents/watchdog.py;rs=crates/fno-agents/src/backlog/worked.rs	# CLASSIFY protocol|msg-twin|data
 A	{task_id} is already done	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
-A	{ts} {kind} {sender} -> {recipient} rid={rid} caller={ck}	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_commands.rs	# CLASSIFY protocol|msg-twin|data
