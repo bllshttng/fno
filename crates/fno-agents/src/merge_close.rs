@@ -205,6 +205,9 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
 /// JSON contract lives in the Rust arm now.
 fn run_reconcile() -> Result<String, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
+        // The launcher stamp: the sweep's closes and outside-merge records
+        // are machine work, so actor_kind reads sweep, not user.
+        .env(crate::decision_trace::ACTOR_KIND_STAMP_ENV, "sweep")
         .args(["backlog", "reconcile", "--json"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -448,5 +451,42 @@ mod tests {
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
         assert!(o.detail.contains("120s left"), "detail: {}", o.detail);
+    }
+
+    #[test]
+    fn reconcile_child_carries_the_sweep_stamp() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let seen = td.path().join("stamp");
+        let script = td.path().join("fake-fno");
+        // The fake fno exits 0 with empty stdout, which reconcile_result
+        // keeps; it dumps the one env the real child must carry.
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$FNO_ACTOR_KIND\" > '{}'\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let prev_bin = std::env::var_os("FNO_BIN");
+        let prev_stamp = std::env::var_os(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
+        std::env::set_var("FNO_BIN", &script);
+        std::env::remove_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
+        let run = run_reconcile();
+        match prev_bin {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+        match prev_stamp {
+            Some(v) => std::env::set_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV, v),
+            None => {}
+        }
+        run.expect("the fake fno exits 0");
+        let stamp = std::fs::read_to_string(&seen).unwrap();
+        assert_eq!(stamp, "sweep");
     }
 }
