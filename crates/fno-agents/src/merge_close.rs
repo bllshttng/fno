@@ -88,8 +88,8 @@ fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
 }
 
 /// Turn one reconcile run into a tick outcome. Pure, so tests drive it with
-/// strings; `brake` is the runaway-brake hold line read by the caller at run
-/// time. The command pretty-prints its JSON across many lines, so the whole
+/// strings; `brake` is the runaway-brake hold line the caller sampled before
+/// the run started. The command pretty-prints its JSON across many lines, so the whole
 /// trimmed stdout parses as one object - never a search for a `{` line. A
 /// run that did not report a readable `closed` array is an error, never a
 /// zero: a fabricated zero reads as "in sync" (the stale-summary rule). A
@@ -310,8 +310,11 @@ fn emit_one(
             detail: format!("GitHub rate limit backoff, {backoff_s}s left; the sweep waits"),
         }
     } else {
-        // The brake line is read here, seconds after the run it explains.
-        outcome_from_reconcile(run(), crate::machine_watch::brake_holds().as_deref())
+        // The brake line is sampled before the run: a bounded sweep can
+        // outlast the brake's hold, and the class must name the load that
+        // starved it, not whatever holds at classification time.
+        let brake = crate::machine_watch::brake_holds();
+        outcome_from_reconcile(run(), brake.as_deref())
     };
     let journal = crate::loop_runtime::Journal::new_raw(
         home.events_jsonl(),
