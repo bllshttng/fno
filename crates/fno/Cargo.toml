@@ -27,10 +27,11 @@ path = "src/main.rs"
 required-features = ["full"]
 
 [features]
-# The contract build is `--no-default-features`: only the four modules an
+# The contract build is `--no-default-features`: only the eight modules an
 # external harness links (footnote_transcript, effect_map, version,
-# provider_key) plus their three light dependencies (serde,
-# serde_json, sha2). `full` is everything the `fno` binary
+# provider_key, rules, glob, store_client, product_boundary) plus their six
+# light dependencies (serde, serde_json, sha2, chrono, libc, toml; the last
+# three are pins fnh already carries). `full` is everything the `fno` binary
 # needs: the mux, the TUI, the server, the web bridge, and the bootstrap
 # python resolver behind version_json's receipt. fnh pins this crate
 # with default-features = false, so a new dependency must either join the
@@ -47,7 +48,6 @@ full = [
     "dep:ratatui-image",
     "dep:image",
     "dep:hayro",
-    "dep:libc",
     "dep:portable-pty",
     "dep:regex",
     "dep:shlex",
@@ -58,10 +58,8 @@ full = [
     "dep:clap",
     "dep:clap_complete",
     "dep:unicode-width",
-    "dep:toml",
     "dep:blake3",
     "dep:rusqlite",
-    "dep:chrono",
     "dep:strsim",
     "dep:thiserror",
     "dep:tempfile",
@@ -99,7 +97,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # The file viewer's PDF pages. Pure Rust (no pdfium dylib shipped beside the
 # binary); renders one page to an RGBA pixmap that rides the image layer.
 hayro = { version = "0.8", optional = true }
-libc = { version = "0.2", optional = true }
+# store_client: uid-keyed temp socket names (getuid) and the exec lane's
+# process-group kill (killpg).
+libc = { version = "0.2" }
 portable-pty = { version = "0.9", optional = true }
 # `pane wait --pattern RE`: regex over a pane's visible grid (script API).
 regex = { version = "1", optional = true }
@@ -134,7 +134,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = { version = "0.10", optional = true }
 # Read the flat `config.toml` (stage 3): the interactive server reads
 # `config.mux.*` directly (digest_overlay Pattern B) instead of shelling `fno`.
-toml = { version = "0.8", optional = true }
+# The generated rules module also parses rule tables with it.
+toml = { version = "0.8" }
 # The spawn floor setter parses and rewrites config.toml keeping comments
 # (spawn_floor.rs); `toml` only reads. Already resolved through `toml`.
 toml_edit = { version = "0.22", optional = true }
@@ -147,7 +148,8 @@ clap_complete = { version = "4", optional = true }
 # alacritty_terminal, so this adds no new build artifact.
 unicode-width = { version = "0.2", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup", "fallible_uint", "functions"], optional = true }
-chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"], optional = true }
+# The generated rules module compares rule review dates through it.
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }
 # `search_query.rs` names the nearest key on an unknown-key error (already
 # locked at 0.11.1 as a transitive dep, so no new download).
 strsim = { version = "0.11", optional = true }

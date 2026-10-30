@@ -211,7 +211,7 @@ pub fn map_bash_command(command: &str) -> Option<MappedEffect> {
             "Bash",
             &input,
         )),
-        ["gcloud", ..] if tokens.iter().any(|t| *t == "delete") => Some(mapped(
+        ["gcloud", ..] if tokens.contains(&"delete") => Some(mapped(
             "infrastructure.destructive",
             "gcp".to_string(),
             "Bash",
