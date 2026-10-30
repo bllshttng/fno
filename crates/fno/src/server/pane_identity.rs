@@ -390,10 +390,8 @@ pub(super) fn reaped_release_for(
     ))
 }
 
-/// The agents home's reap-receipt directory, resolved off the same registry
-/// path the spawn journal reads. `None` when the home cannot be resolved.
+/// The runtime home's reap-receipt directory, where the reapers write.
+/// `None` when the home cannot be resolved.
 pub(super) fn default_reap_receipts_dir() -> Option<std::path::PathBuf> {
-    crate::agents_view::registry_path()
-        .parent()
-        .map(|home| home.join("reap-receipts"))
+    Some(crate::agents_view::runtime_home().join("reap-receipts"))
 }

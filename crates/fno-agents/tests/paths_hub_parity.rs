@@ -1,18 +1,24 @@
 //! parity-stage: differential
 //! parity-oracle: fno.paths
 //!
-//! Differential parity for the path hub: the ten accessors `fno config
+//! Differential parity for the path hub: the eleven accessors `fno config
 //! doctor` prints, resolved by the Python hub and by the Rust owners on the
 //! same fixture. Each case in `tests/golden/paths_hub/cases.json` builds a
 //! HOME, a project dir and an optional settings file under one fixture root.
 //! The Rust answers come from the live shell stub (`emit_paths_sh_live`,
-//! sourced by bash), `backlog::settings::graph_path` and `paths::space_dir`.
+//! sourced by bash), `backlog::settings::graph_path`, `paths::space_dir` and
+//! the fno crate's `agents_view::registry_path` (the mux's registry reader,
+//! pinned to the hub's `agents_registry_path`).
 //! `<case>.out` holds the Python answers, captured by
 //! `paths_hub_golden_driver.py`; with Python present the live hub is checked
 //! against them too. A case's `divergent` list names the accessors where the
 //! Rust owners still disagree; each one must keep disagreeing, so a fix fails
 //! the test until its entry goes. The stage flips to characterization when
 //! the hub is deleted.
+//!
+//! `env_agents_home` marks `space_dir` divergent: the Rust spaces chain keeps
+//! an agents-home leg the Python hub never had, so under that env the two
+//! roots legitimately differ. The entry goes when the leg goes.
 
 use common::python_executable;
 use std::path::{Path, PathBuf};
@@ -117,6 +123,7 @@ fn rust_leg(root: &Path, proj: &Path) -> String {
     assert_eq!(stub_values.len(), 8, "stub printed {stub_values:?}");
     let graph = fno_agents::backlog::settings::graph_path();
     let space = fno_agents::paths::space_dir(proj);
+    let registry = fno::agents_view::registry_path();
     let rows = [
         ("state_dir", stub_values[0].clone()),
         ("graph_json", graph.to_string_lossy().into_owned()),
@@ -128,6 +135,10 @@ fn rust_leg(root: &Path, proj: &Path) -> String {
         ("memory_dir", stub_values[6].clone()),
         ("hook_logs_dir", stub_values[7].clone()),
         ("space_dir", space.to_string_lossy().into_owned()),
+        (
+            "agents_registry_path",
+            registry.to_string_lossy().into_owned(),
+        ),
     ];
     rows.iter().map(|(k, v)| format!("{k}={v}\n")).collect()
 }
