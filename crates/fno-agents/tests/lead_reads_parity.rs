@@ -71,6 +71,18 @@ fn slug(path: &Path) -> String {
     path.to_string_lossy().replace('/', "-")
 }
 
+/// A pid that is dead on every host: spawn a child and reap it.
+fn reaped_pid() -> u32 {
+    let mut child = Command::new("true")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn true for a dead pid");
+    let pid = child.id();
+    child.wait().expect("reap true");
+    pid
+}
+
 /// Replace each wall-clock stamp after `marker` with `<NOW>`.
 fn fold_stamps(text: &str, marker: &str) -> String {
     let mut out = String::new();
@@ -200,6 +212,28 @@ fn manifest_path_matches_the_python_goldens() {
         "---\nscope: epic-y\nharness_session_id: sess-predecessor\n---\n",
     )
     .unwrap();
+    fs::write(
+        state_root.join("leads/epic-orphan.md"),
+        "---\nscope: epic-orphan\nharness_session_id: sess-predecessor\n---\n",
+    )
+    .unwrap();
+    // The Orphaned rows read their crown through the row_verdict door, and
+    // the door rests on a pid probe: no fixture pid is live or dead on every
+    // host, so the test injects its own - this process's pid, which is alive
+    // for the duration of each child run, and a reaped child's, which is
+    // dead on every host.
+    let reg = p.join("home/registry.json");
+    let mut rows: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&reg).unwrap()).unwrap();
+    let dead = reaped_pid();
+    for row in rows["agents"].as_array_mut().unwrap() {
+        match row["harness_session_id"].as_str() {
+            Some("sess-orphan-live") => row["pid"] = serde_json::json!(std::process::id()),
+            Some("sess-orphan-dead") => row["pid"] = serde_json::json!(dead),
+            _ => {}
+        }
+    }
+    fs::write(&reg, rows.to_string()).unwrap();
     let sr = state_root.to_string_lossy().into_owned();
     let cases: &[(&str, &[&str])] = &[
         (
@@ -221,6 +255,14 @@ fn manifest_path_matches_the_python_goldens() {
         (
             "manifest path terminal row",
             &["--harness-session-id", "sess-exited"],
+        ),
+        (
+            "manifest path orphaned live row",
+            &["--harness-session-id", "sess-orphan-live"],
+        ),
+        (
+            "manifest path orphaned dead row",
+            &["--harness-session-id", "sess-orphan-dead"],
         ),
         (
             "manifest path unstamped row",
