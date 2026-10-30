@@ -1166,7 +1166,7 @@ mod tests {
                 "verdict": "pending",
                 "last_settled": {
                     "workflow": "cli-ci", "sha": "mid", "verdict": "green",
-                    "created_at": "2026-09-30T11:00:00Z", "age": "<1h old",
+                    "created_at": "2026-09-30T11:00:00Z", "age": "1h old",
                 },
             })
         );
@@ -1215,7 +1215,7 @@ mod tests {
                 "verdict": "pending",
                 "last_settled": {
                     "workflow": "cli-ci", "sha": "mid", "verdict": "green",
-                    "created_at": "2026-09-30T08:00:00Z", "age": "<1h old",
+                    "created_at": "2026-09-30T08:00:00Z", "age": "4h old",
                 },
             })
         );
