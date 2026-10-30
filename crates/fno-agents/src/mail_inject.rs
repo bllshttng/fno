@@ -1,6 +1,6 @@
 //! `mail-inject`: the one-shot LIVE-DELIVERY command `fno agents mail send` calls to inject
 //! an a2a turn into a LIVE adopted `claude --bg` session over the daemon
-//! `control.sock`. Python's `_deliver_live` runs it as a binary subprocess and
+//! `control.sock`. A caller runs it as a binary subprocess and
 //! falls back to the durable bus queue ONLY when this reports not-delivered
 //! (live-inject-first, durable fallback -- node, epic).
 //!
@@ -1738,7 +1738,7 @@ fn body_cap_decision(text: &str, warn: i64, refuse: i64) -> Option<i32> {
 /// refusal reason was that a second line "rides in as a second submitted
 /// turn" -- and C17 deleted that harm, because the typing layer
 /// ([`inject_with_submit`]) flattens every newline run into one submitted
-/// line. The held-mail drain (hold.py `release` -> `_deliver_live` with no
+/// line. The held-mail drain (the hold release with no
 /// mail context) is the caller this door was stranding: its multi-line
 /// digest was refused with "an unframed payload must be a single line" and
 /// the held messages never reached the session. The digest types now, still

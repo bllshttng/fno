@@ -101,27 +101,27 @@ def _hold_addresses(entry: AgentEntry) -> tuple:
 
 
 def _describe_hold(keys: tuple) -> Optional[dict]:
-    """The native clock read for ``keys``, or None when it has nothing to say."""
+    """The native clock read for ``keys``, or None when there is no clock or the
+    door is down. A clock read never raises into the listing."""
     from fno.rust_binary import resolve_binary
 
-    binary = resolve_binary()
-    if binary is None:
-        raise RuntimeError("no fno-agents binary to read the hold clock")
-    proc = subprocess.run(
-        [str(binary), "mail-hold", "--describe", *keys],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or "fno-agents mail-hold failed").strip()[:200])
-    out = proc.stdout.rstrip("\n")
-    return json.loads(out) if out else None
+    try:
+        proc = subprocess.run(
+            [str(resolve_binary() or "fno-agents"), "mail-hold", "--describe", *keys],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        out = proc.stdout.rstrip("\n")
+        return json.loads(out) if proc.returncode == 0 and out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def _dnd_cell(state: Optional[dict]) -> Optional[str]:
     """The DND cell for a row whose flag IS ``bus-only``: None when a timed hold
-    lapsed, a duration when one is known, else "held"."""
+    lapsed, a duration when one is known, else "held". A down door also reads
+    "held": the column never claims mail flows while the flag stands."""
     if state is None:
         return "held"
     if state.get("lapsed"):

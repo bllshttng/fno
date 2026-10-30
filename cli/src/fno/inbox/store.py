@@ -7,7 +7,6 @@ markdown file is written.
 Public API:
     Kind                    - enum: HEADS_UP, QUESTION, FYI
     DurableOwner            - who drains a durable message, and its TTL
-    write_new_thread        - append one durable envelope, return its msg-id
     generate_msg_id         - generate a unique 'fmail-XXXXXXXXXXXX' id
     resolve_project         - resolve project name from .fno/config.toml
     ProjectIdentificationError
