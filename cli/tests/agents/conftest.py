@@ -74,9 +74,8 @@ def _force_python_runtime(monkeypatch):
     Routing tests (``test_rust_runtime.py``) override this per-test via their own
     ``monkeypatch.delenv``/``setenv`` of ``FNO_AGENTS_RUNTIME`` (monkeypatch
     applies in order, so the test-local override wins). Parity tests
-    (``test_rust_command_parity.py``, ``test_ask_e2e_dispatch.py``) invoke the
-    compiled binary directly via ``subprocess``; the binary ignores the env var,
-    so they are unaffected.
+    (``test_rust_command_parity.py``) invoke the compiled binary directly via
+    ``subprocess``; the binary ignores the env var, so they are unaffected.
     """
     from fno.agents import rust_runtime
 

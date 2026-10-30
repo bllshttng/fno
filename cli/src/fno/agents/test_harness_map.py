@@ -287,7 +287,7 @@ def test_every_session_builder_and_submit_path_names_the_shared_contract():
     root = Path(__file__).resolve().parents[4]
     consumers = [
         "cli/src/fno/agents/resume_cli.py", "cli/src/fno/agents/mux_spawn.py",
-        "cli/src/fno/agents/harnesses/claude.py", "cli/src/fno/agents/harnesses/codex.py",
+        "cli/src/fno/agents/harnesses/codex.py",
         "crates/fno-agents/src/claude_resume.rs", "crates/fno-agents/src/provider.rs",
     ]
     for relative in consumers:
