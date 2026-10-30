@@ -86,6 +86,19 @@ fn auto_wire_pure_contracts_hold() {
     );
     std::fs::remove_dir_all(&home).ok();
 
+    // The footnote receipt line names the link; a failed install stays failed.
+    let linked =
+        |_: &[&str]| Ok("plugin install footnote: linked L -> S; local checkout C\n".into());
+    assert_eq!(
+        footnote_wire(std::path::Path::new("fno-agents"), &linked),
+        Outcome::Installed("linked L -> S; local checkout C".into())
+    );
+    let refused = |_: &[&str]| Err("refused: L is not a symlink".into());
+    assert_eq!(
+        footnote_wire(std::path::Path::new("fno-agents"), &refused),
+        Outcome::Failed("refused: L is not a symlink".into())
+    );
+
     // The codex receipt maps status to outcome; non-JSON reads failed.
     assert_eq!(
         parse_codex_receipt(r#"{"status": "installed", "note": "n1"}"#),
@@ -115,21 +128,4 @@ fn auto_wire_pure_contracts_hold() {
         parse_opencode_receipt(r#"{"status": "failed"}"#),
         Outcome::Failed("0 file(s) (footnote ?) -> ?".into())
     );
-
-    // The agy adapter paths parse three lines; "-" is an absent adapter, not
-    // a missing engine, and fewer than three lines refuse.
-    assert_eq!(
-        parse_agy_paths("/a/stop.sh\n/role.sh\n/guard.sh"),
-        Some([
-            "/a/stop.sh".to_string(),
-            "/role.sh".to_string(),
-            "/guard.sh".to_string()
-        ])
-    );
-    assert_eq!(
-        parse_agy_paths("adapter.sh\n-\n-"),
-        Some(["adapter.sh".to_string(), String::new(), String::new()])
-    );
-    assert_eq!(parse_agy_paths(""), None);
-    assert_eq!(parse_agy_paths("only\ntwo"), None);
 }

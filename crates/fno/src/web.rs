@@ -46,6 +46,14 @@ pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// `/backlog/node.json` and computes nothing the model already answered.
 pub(crate) const BACKLOG_PAGE: &str = include_str!("web_backlog.html");
 pub(crate) const COMMAND_PAGE: &str = include_str!("web_command.html");
+/// The house stylesheet the backlog and command pages share. The CSP allows
+/// inline style only, so [`house`] writes it into each page's `<style>`.
+pub(crate) const HOUSE_CSS: &str = include_str!("web_house.css");
+
+/// `page` with its `/* fno-house */` marker replaced by [`HOUSE_CSS`].
+pub(crate) fn house(page: &str) -> String {
+    page.replacen("/* fno-house */", HOUSE_CSS, 1)
+}
 /// The browser drives nothing, so anything it sends is dropped - but cap it so
 /// a hostile client cannot OOM the bridge with one giant frame.
 const INBOUND_WS_CAP: usize = 64 * 1024;
@@ -1028,10 +1036,11 @@ async fn backlog(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respon
     }
     // The page's write controls exist only when the serving bridge can
     // write: one string replace, no second page.
+    let page = house(BACKLOG_PAGE);
     let page = if st.writable {
-        BACKLOG_PAGE.replacen("<body>", "<body data-writable=\"true\">", 1)
+        page.replacen("<body>", "<body data-writable=\"true\">", 1)
     } else {
-        BACKLOG_PAGE.to_string()
+        page
     };
     html_response(with_nav(&page, NavPage::Backlog))
 }
@@ -1041,7 +1050,7 @@ async fn command(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respon
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
-    html_response(with_nav(COMMAND_PAGE, NavPage::Command))
+    html_response(with_nav(&house(COMMAND_PAGE), NavPage::Command))
 }
 
 fn html_response(body: String) -> Response {

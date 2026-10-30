@@ -56,6 +56,14 @@ else
     wt_refresh_remote_refs() { git -C "${1:-.}" fetch origin main >/dev/null 2>&1; }
 fi
 
+# The machine-wide cwd snapshot cache, shared with archive-worktree.sh. No
+# stub: the refresh below guards on the functions' presence, so a partial
+# deploy or a sed-extracted copy keeps today's uncached read.
+if [[ -f "${_WT_LIFECYCLE_DIR}/worktree-cwd-cache.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${_WT_LIFECYCLE_DIR}/worktree-cwd-cache.sh"
+fi
+
 # The per-hit occupancy classifier over _wt_pids output. A partial
 # deploy that dropped the lib degrades to all-holds: every tree with a
 # process is kept, never killed.
@@ -183,19 +191,35 @@ _wt_refresh_cwd_snapshot() {
     local raw=""
     _WT_CWD_SNAPSHOT=""
     _WT_CWD_SNAPSHOT_OK=0
-    command -v lsof >/dev/null 2>&1 || return 1
-    # lsof runs from / (subshell cd, parent unaffected) so its own pipeline
-    # never lands in the snapshot with the sweep's cwd: run it from the repo
-    # root and the tree the sweep runs in - the canonical checkout - reads
-    # processes:2 with nobody in it, the lsof and its formatting fork. The
-    # awk below runs after raw is captured, so it cannot appear in raw.
-    raw="$(cd / && lsof -a -d cwd -Fpn 2>/dev/null)" || return 1
+    # A fresh machine-wide cache serves the snapshot without the read - but
+    # only ONCE per process, whatever path served it: a later refresh in the
+    # same sweep (the apply pass re-reads to catch a process rooted after
+    # the inventory pass) must go live, or the recheck would serve the very
+    # read it exists to supersede. The presence guard keeps the
+    # sed-extracted partial contexts (which never sourced the cache lib) on
+    # the uncached path below.
+    if declare -F wt_cwd_cache_load >/dev/null 2>&1 && [[ "${_WT_CWD_CACHE_SERVED:-0}" -eq 0 ]]; then
+        raw="$(wt_cwd_cache_load 2>/dev/null)" && _WT_CWD_SNAPSHOT_OK=1
+    fi
+    if [[ "$_WT_CWD_SNAPSHOT_OK" -eq 0 ]]; then
+        command -v lsof >/dev/null 2>&1 || return 1
+        # lsof runs from / (subshell cd, parent unaffected) so its own pipeline
+        # never lands in the snapshot with the sweep's cwd: run it from the repo
+        # root and the tree the sweep runs in - the canonical checkout - reads
+        # processes:2 with nobody in it, the lsof and its formatting fork. The
+        # awk below runs after raw is captured, so it cannot appear in raw.
+        raw="$(cd / && lsof -a -d cwd -Fpn 2>/dev/null)" || return 1
+        if declare -F wt_cwd_cache_store >/dev/null 2>&1; then
+            printf '%s' "$raw" | wt_cwd_cache_store >/dev/null 2>&1 || true
+        fi
+        _WT_CWD_SNAPSHOT_OK=1
+    fi
+    _WT_CWD_CACHE_SERVED=1
     _WT_CWD_SNAPSHOT="$(printf '%s\n' "$raw" | awk '
         /^p[0-9]+$/ { pid = substr($0, 2); next }
         /^n/ && pid != "" { print pid "\t" substr($0, 2) }
     ')"
     _WT_CWD_ROWS="$(printf '%s\n' "${_WT_CWD_SNAPSHOT:-}" | awk 'NF { n++ } END { print n + 0 }')"
-    _WT_CWD_SNAPSHOT_OK=1
 }
 
 _wt_pids() {
@@ -534,7 +558,8 @@ _cargo_free_bytes() {
 _cargo_build_base() {
     # Where cargo intermediates live: paths.cargo_targets_base when set, else
     # ~/.fno/cargo-build. FNO_CARGO_TARGETS_BASE overrides the read so tests
-    # can point the sweep at a sandbox. Mirrors fno.paths.cargo_build_dir_value.
+    # can point the sweep at a sandbox. Mirrors fno_build_base in
+    # crates/fno-agents/src/cargo_build_dirs.rs.
     local raw=""
     if [[ -n "${FNO_CARGO_TARGETS_BASE:-}" ]]; then
         printf '%s\n' "${FNO_CARGO_TARGETS_BASE/#\~/$HOME}"

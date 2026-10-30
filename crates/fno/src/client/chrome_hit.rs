@@ -160,7 +160,13 @@ impl View {
         if !span.contains(&(col as usize)) {
             return None;
         }
-        Some(format!("https://github.com/bllshttng/fno/pull/{}", a.pr?))
+        // The node's stored URL names its own repo. A node in another repo
+        // must never open this repo's PR of the same number, so a missing
+        // URL opens nothing.
+        a.bindings
+            .iter()
+            .find(|b| Some(&b.node) == a.node.as_ref() && b.pr == a.pr)
+            .and_then(|b| b.pr_url.clone())
     }
 
     fn table_header_hit(&self, row: usize, col: u16) -> Option<ChromeHit> {

@@ -1,4 +1,4 @@
-//! The hidden `settings-read` door: the whole settings fact set the Python
+//! The hidden `state settings-read` door: the whole settings fact set the Python
 //! graph leftovers used to read in-process (node-id knobs, config
 //! candidates, the work map, the cwd -> project detect), answered in one
 //! spawn. One JSON request in, one JSON receipt out; every field is
@@ -11,7 +11,8 @@ use std::io::Read;
 
 /// Run the door: read the request from stdin, print the fact-set receipt,
 /// always exit 0. The request is `{"detect": "<cwd>"}` (or `{}`); a missing
-/// or unparseable request simply carries no detect.
+/// or unparseable request simply carries no detect. Dispatches as the
+/// `state settings-read` action argument (state_path.rs pre-table).
 pub fn run_settings_read(args: &[String]) -> i32 {
     let _ = args;
     let mut input = String::new();

@@ -5,12 +5,10 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from fno.company.contracts import CompanyWorkRefs, FunctionRef, RoleRef, WorkOrderRef
 from fno.plan.cli import plan_app
-from fno.plan.schema import PlanFrontmatter
 from fno.graph.store import read_graph_strict
 
 
@@ -27,29 +25,6 @@ def _refs() -> CompanyWorkRefs:
             role_id="operations-lead",
         ),
     )
-
-
-def test_plan_frontmatter_parses_additive_company_work_refs() -> None:
-    plan = PlanFrontmatter(
-        node="x-e9a3",
-        status="ready",
-        created="2026-08-02",
-        company_work=_refs().model_dump(mode="json"),
-        historical_field="preserved-by-byte-writer",
-    )
-
-    assert plan.company_work == _refs()
-
-
-def test_ac_d5_err_unknown_completion_mode_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        PlanFrontmatter(
-            node="x-e9a3",
-            status="ready",
-            created="2026-08-02",
-            completion="marketing",
-            company_work=_refs(),
-        )
 
 
 @pytest.mark.parametrize(("work_order_node", "exit_code"), [("x-other", 1)])

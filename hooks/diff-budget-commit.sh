@@ -38,6 +38,8 @@ for candidate in \
         # 0 or 1 is an answer; forward whatever the entry said (the
         # additionalContext JSON when it fired, silence otherwise).
         cat "$OUT"
+        # The task boundary writes the store, which can outlast the timeout.
+        printf '%s' "$PAYLOAD" | "$candidate" hook task-boundary >/dev/null 2>&1 &
         exit 0
     fi
 done

@@ -82,6 +82,22 @@ pub fn join(root: &Path, harness: &str, session_id: &str) -> Result<JoinOutcome,
     Ok(JoinOutcome::Joined)
 }
 
+/// Whether ANY session on this machine has joined fno: one joined marker
+/// anywhere under sessions/<harness>/<sid>/.
+fn any_joined(root: &Path) -> bool {
+    let Ok(harnesses) = std::fs::read_dir(root.join("sessions")) else {
+        return false;
+    };
+    harnesses.flatten().any(|h| {
+        std::fs::read_dir(h.path())
+            .map(|sids| {
+                sids.flatten()
+                    .any(|sid| sid.path().join("joined").is_file())
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// Whether the using-fno preamble is due: only for a joined session (a
 /// spawned worker counts as joined), then once and again after each
 /// compaction boundary. `record` stamps it taught.
@@ -93,7 +109,11 @@ pub fn preamble_due(
     record: bool,
 ) -> bool {
     if !is_joined(root, harness, session_id) && !env_set("FNO_AGENT_SELF") {
-        return false;
+        // A fresh install has no joined session anywhere: the install itself
+        // is the pointing-at-fno, so the preamble reads due without waiting
+        // for a /fno: prompt to trip the join. The first join on the machine
+        // closes the window and opt-in resumes.
+        return !any_joined(root);
     }
     crate::mail_teach::lesson_due_at(
         root,
@@ -299,9 +319,15 @@ mod tests {
         };
         let t1 = boundary(1_000);
 
-        // AC4: an unjoined session never reads due.
-        assert!(!preamble_due(root, "codex", sid, Some(&t1), true));
-        assert!(!preamble_due(root, "codex", sid, Some(&t1), true));
+        // AC4: an unjoined session reads due only while NO session on the
+        // machine has joined (the fresh-install window); one joined marker
+        // anywhere closes it. All three asserts read only: the window must
+        // not stamp, so AC3's joined flow below stamps fresh at its own
+        // first call.
+        assert!(preamble_due(root, "codex", sid, Some(&t1), false));
+        assert!(preamble_due(root, "codex", sid, Some(&t1), false));
+        write_marker(root, "claude", "s-window-closer").unwrap();
+        assert!(!preamble_due(root, "codex", sid, Some(&t1), false));
 
         // AC3: joined, taught once, due once more after a newer boundary.
         write_marker(root, "codex", sid).unwrap();
@@ -320,5 +346,23 @@ mod tests {
             false
         ));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fresh_install_reads_due_until_any_join() {
+        let _root = crate::paths::DeclaredRoot::declare("fresh-window");
+        let _env = EnvClear::new(&[HOOK_CONTEXT_ENV, "FNO_AGENT_SELF"]);
+        let home = AgentsHome::from_env();
+        let root = home.root();
+
+        // No sessions tree at all: the install window is open and an
+        // unjoined session reads due.
+        assert!(!any_joined(root));
+        assert!(preamble_due(root, "claude", "fresh-1", None, false));
+
+        // A joined marker for ANY harness closes the window for everyone.
+        write_marker(root, "codex", "first-join").unwrap();
+        assert!(any_joined(root));
+        assert!(!preamble_due(root, "claude", "fresh-2", None, false));
     }
 }

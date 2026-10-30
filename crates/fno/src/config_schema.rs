@@ -47,6 +47,10 @@ struct Leaf<'a> {
     doc: &'a str,
 }
 
+pub(crate) fn schema_table() -> Value {
+    table()
+}
+
 fn table() -> Value {
     serde_json::from_str(TABLE).expect("config_schema.json is generated valid JSON")
 }
@@ -103,7 +107,7 @@ fn py_str(s: &str) -> String {
 
 /// `json.dumps(v, indent=indent, sort_keys=sort)` with Python's separators:
 /// `", "` and `": "` inline, `","` and `": "` once an indent is set.
-fn py_dumps(v: &Value, indent: Option<usize>, sort: bool) -> String {
+pub(crate) fn py_dumps(v: &Value, indent: Option<usize>, sort: bool) -> String {
     let mut out = String::new();
     dump(v, indent, sort, 0, &mut out);
     out

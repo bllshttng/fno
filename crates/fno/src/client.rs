@@ -1831,7 +1831,7 @@ pub(crate) use overlay_lines::nav_overlay_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
-mod org_pages;
+pub(crate) mod org_pages;
 pub(crate) mod org_seats;
 mod org_tabs;
 mod overlay_paint;
@@ -4942,7 +4942,7 @@ impl View {
                 Some(projection.selected_line(sel)),
             );
         } else if let Some(yv) = &self.yard {
-            // The yard: the fleet as f[no]nimals. The
+            // The yard: the fleet as F[no]nimals. The
             // crowd is one eye glyph per roster citizen (each glyph computed
             // from that row's own badge/need values); the spotlight is ONE
             // 12-column sprite for the selected citizen, its eye from the
@@ -6843,11 +6843,11 @@ const TAB_LABEL_W: usize = 14;
 /// ordinal stays visible in every span because the `1-9 select tab` keys
 /// key off it (Locked 5).
 /// The mux's home workspace surfaces the bare brand `fno` in the tab strip
-/// (: derived from the cwd basename); render it bracketed as `f[no]`.
+/// (: derived from the cwd basename); render it bracketed as `F[no]`.
 /// Any other workspace name passes through unchanged.
 fn brand_label(name: &str) -> String {
     if name == "fno" {
-        "f[no]".to_string()
+        "F[no]".to_string()
     } else {
         name.to_string()
     }

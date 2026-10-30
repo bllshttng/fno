@@ -61,6 +61,7 @@ pub const EPHEMERAL_EVENT_TYPES: &[&str] = &[
     "mux_pane_counters",
     "orphan_reap_sweep",
     "single_flight_gate",
+    "transcript_record",
 ];
 
 /// Event types the schema declares `retention: gate`: rows merge gates read
@@ -582,6 +583,7 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
     let already_v2: bool = current >= SCHEMA_VERSION && events_table_has_event_id(conn);
     if already_v2 {
         migrate_caused_by(conn)?;
+        backfill_envelope_node(conn)?;
         crate::role_migration::upgrade_event_store(conn)?;
         return stamp_coverage_epoch(conn, store);
     }
@@ -630,8 +632,35 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
     tx.commit()
         .map_err(|e| format!("{}: migration: {e}", store.display()))?;
     migrate_caused_by(conn)?;
+    backfill_envelope_node(conn)?;
     crate::role_migration::upgrade_event_store(conn)?;
     stamp_coverage_epoch(conn, store)
+}
+
+/// Fill `node_id` once on rows imported before [`extract_identity`] read the
+/// envelope-level node. An events_meta row marks it done, so later opens pay
+/// one indexed select.
+fn backfill_envelope_node(conn: &Connection) -> Result<(), String> {
+    const KEY: &str = "envelope_node_backfilled";
+    let done = conn
+        .query_row(
+            "SELECT 1 FROM events_meta WHERE key = ?1",
+            params![KEY],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if done {
+        return Ok(());
+    }
+    conn.execute_batch(&format!(
+        "UPDATE events SET node_id = coalesce(
+             nullif(json_extract(line, '$.node_id'), ''),
+             nullif(json_extract(line, '$.node'), ''))
+         WHERE node_id IS NULL AND json_valid(line)
+           AND (json_type(line, '$.node_id') = 'text' OR json_type(line, '$.node') = 'text');
+         INSERT OR IGNORE INTO events_meta (key, value) VALUES ('{KEY}', '1');"
+    ))
+    .map_err(|e| format!("envelope node backfill: {e}"))
 }
 
 /// The caused_by column on a store created before it existed. The ALTER is
@@ -826,19 +855,24 @@ pub fn extract_identity(line: &str) -> EventIdentity {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return id;
     };
-    let Some(data) = value.get("data") else {
-        return id;
-    };
-    let get_str = |keys: &[&str]| -> Option<String> {
+    let str_at = |obj: &serde_json::Value, keys: &[&str]| -> Option<String> {
         keys.iter().find_map(|k| {
-            data.get(*k)
+            obj.get(*k)
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
         })
     };
+    // `fno doctor event emit --node` and the task-boundary writers put the
+    // node at envelope top level; `data` still wins when both carry one.
+    let envelope_node = str_at(&value, &["node_id", "node"]);
+    let Some(data) = value.get("data") else {
+        id.node_id = envelope_node;
+        return id;
+    };
+    let get_str = |keys: &[&str]| str_at(data, keys);
     id.session_id = get_str(&["session_id"]);
-    id.node_id = get_str(&["node_id", "node"]);
+    id.node_id = get_str(&["node_id", "node"]).or(envelope_node);
     id.head_sha = get_str(&["head_sha"]);
     id.repo = get_str(&["repo"]);
     id.pr_number = ["pr_number", "pr"].iter().find_map(|k| {

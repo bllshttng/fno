@@ -10,7 +10,7 @@ Not for: how the config wizard runs or how the inbox queue is acked. Those live 
 
 The words carry different meanings, and the difference is load-bearing. This page is the one place that says what each word means, so nobody fixes a wording gripe with a repo-wide substitution.
 
-**User** is who we are talking to: the human on the other side. `config.user.name` is what the machine calls them, and `display_name()` in `cli/src/fno/user.py` is the one reader: configured name, else `git config user.name`, else "you". Set the name with `fno config set user.name <name>`. The first-run wizard asks for it. The human's own queue command is `fno inbox user`. The pre-rename spelling `fno inbox operator` still works as a hidden alias.
+**User** is who we are talking to: the human on the other side. `config.user.name` is what the machine calls them, and `display_name()` in `crates/fno-agents/src/backlog/birth.rs` is the one reader: configured name, else `git config user.name`, else "you". Set the name with `fno config set user.name <name>`. The first-run wizard asks for it. The human's own queue command is `fno inbox user`. The pre-rename spelling `fno inbox operator` still works as a hidden alias.
 
 **Superuser** is the authority an agent can never synthesize for itself. Every live string, gate, doc and skill spells it superuser. `--authority operator` stays the wire value that opens the superuser lane.
 
@@ -58,14 +58,14 @@ The user said it on 2026-09-27: "i think of workspaces as an object that houses 
 | Membership | the one resolver in `crates/fno/src/server/thread_workspace.rs`: the recorded member answers first, then the spawner's workspace (the `spawned_by_session` edge), then the project default. A thread's cwd is its own property and decides membership only on the last rung. | New rule, no rename. |
 | Project | one repo, named by `project.id` through git. It is the default workspace for a thread nobody placed. | No. |
 | Project group | the config key `work.workspaces.<name>.projects[]` and the `mux.board_scope = workspace:<name>` value. Called a project group in prose. | No. The key keeps its spelling and its data: it is already in users' config.toml, the same call this page makes for `routing.operator_*`. Migration: none. |
-| `fno agents workspace` | the worktree-lifecycle command group, unrelated to the mux object. `.claude/rules/worktrees.md` names it. | No. |
+| `fno agents workspace` | the worktree-lifecycle command group, unrelated to the mux object. `docs/architecture/worktree-mechanics.md` (Placement) names it. | No. |
 | Squad (company topology) | `direct, loop, squad, pipeline` in `crates/fno-agents/src/plugins/verify.rs` `TOPOLOGIES`: a group of workers as an org shape. | Homonym, like the shell `operator`. Out of scope. |
 
 ## Before you run sed
 
 The address sense in skill prose is `user`. `scripts/ci/check-operator-address.sh` prevents drift.
 
-Read the tables first. Every row except the authority sense, which is done, is out of scope by decision, not by oversight. A rename of the address sense goes through `cli/src/fno/user.py` (`UserBlock`, `display_name()`), the three address strings that import it, and the `fno inbox user` command. It does not touch the reserved senses, the wire values, the graph rows, the shipped config keys, or the shell homonym.
+Read the tables first. Every row except the authority sense, which is done, is out of scope by decision, not by oversight. A rename of the address sense goes through `UserBlock` in `cli/src/fno/config/__init__.py`, the native reader `display_name()` in `crates/fno-agents/src/backlog/birth.rs`, the three address strings that use it, and the `fno inbox user` command. It does not touch the reserved senses, the wire values, the graph rows, the shipped config keys, or the shell homonym.
 
 ## Role vocabulary
 

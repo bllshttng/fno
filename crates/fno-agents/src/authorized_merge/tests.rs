@@ -12,6 +12,9 @@ struct Fake {
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
     merge_freeze: Option<ProbeOutcome>,
+    rules: Option<ProbeOutcome>,
+    /// Per-PR rules answer, so a test can hold one PR and clear the next.
+    other_rules: RefCell<HashMap<u64, ProbeOutcome>>,
     review_posted: Option<ProbeOutcome>,
     /// The `reviewed_head` argument review_posted_gate last passed in, so a
     /// test can prove it threaded the attestation's own head, not a guess.
@@ -54,6 +57,9 @@ struct Fake {
     /// Answer for the REST recovery call alone, so a test can fail the
     /// `gh pr merge` and let the retry succeed.
     gh_recovery_ok: Option<bool>,
+    /// Per-endpoint answers: the first key the joined argv contains wins,
+    /// ahead of `gh_output`.
+    gh_routes: Vec<(String, String)>,
     gh_calls: RefCell<Vec<Vec<String>>>,
     /// Simulated merge-slot claim: `None` is free, `Some(pr)` is held.
     slot: RefCell<Option<u64>>,
@@ -282,6 +288,12 @@ impl Probes for Fake {
     fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.merge_freeze.clone().unwrap_or(ProbeOutcome::Clear)
     }
+    fn rules(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        if let Some(ruling) = self.other_rules.borrow().get(&facts.number) {
+            return ruling.clone();
+        }
+        self.rules.clone().unwrap_or(ProbeOutcome::Clear)
+    }
     fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
         *self.review_posted_head_seen.borrow_mut() = Some(reviewed_head.to_string());
         self.review_posted.clone().unwrap_or(ProbeOutcome::Clear)
@@ -398,6 +410,14 @@ impl Probes for Fake {
             if let Some(ok) = self.gh_recovery_ok {
                 return Ok((ok, String::new()));
             }
+        }
+        let joined = args.join(" ");
+        if let Some((_, out)) = self
+            .gh_routes
+            .iter()
+            .find(|(k, _)| joined.contains(k.as_str()))
+        {
+            return Ok((true, out.clone()));
         }
         Ok((self.gh_ok, self.gh_output.clone()))
     }
@@ -1577,6 +1597,58 @@ fn preview_blockers(fake: &Fake, req: &Request) -> Vec<Blocker> {
     }
 }
 
+/// AC13: a fixture `door:merge` rule holds PR 7 with blocker `rule`
+/// naming the rule id, and PR 8 clears - merge and preview answer alike.
+#[test]
+fn a_door_merge_rule_holds_one_pr_and_clears_the_next() {
+    let sentence = "Refused by rule: r-release-freeze: the release freeze is on";
+    let fake = clean();
+    fake.other_rules
+        .borrow_mut()
+        .insert(7, ProbeOutcome::Refused(sentence.to_string()));
+
+    let held = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert_eq!(held.word(), "held");
+    assert!(
+        held.detail().contains("r-release-freeze"),
+        "{:?}",
+        held.detail()
+    );
+
+    let blockers = preview_blockers(&fake, &preview_request(7));
+    assert_eq!(blockers[0].code, "rule");
+    assert!(
+        blockers[0].detail.contains("r-release-freeze"),
+        "{}",
+        blockers[0].detail
+    );
+
+    // PR 8 carries no rule fire: the decision clears.
+    fake.other_facts.borrow_mut().insert(
+        8,
+        PrFacts {
+            number: 8,
+            ..open_facts()
+        },
+    );
+    let cleared = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            pr: Some(8),
+            decide_only: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(matches!(cleared, Outcome::Authorized { .. }), "{cleared:?}");
+}
+
 #[test]
 fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
     // AC2: for each gate made to refuse in turn, the Merge outcome's
@@ -1645,6 +1717,15 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
             Fake {
                 merge_freeze: Some(ProbeOutcome::Refused(
                     "merge_freeze: PR #7 is off the pin merge-freeze:o/r@prs:6".to_string(),
+                )),
+                ..base()
+            },
+        ),
+        (
+            "rule",
+            Fake {
+                rules: Some(ProbeOutcome::Refused(
+                    "Refused by rule: r-release-freeze: the release freeze is on".to_string(),
                 )),
                 ..base()
             },
@@ -1997,6 +2078,35 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     // A push after the user looked holds again.
     let pushed: String = "b".repeat(40);
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
+    // A main merge or a test-only commit leaves the PR's paint patch alone:
+    // the look carries. Only a hunk header moved, and a test file changed.
+    let paint = |hunk: &str, line: &str| {
+        format!(r#"["crates/fno/src/client/theme.rs","modified","{hunk}\n-old\n+{line}","s1"]"#)
+    };
+    let test_file = r#"["cli/tests/test_x.py","modified","@@ -1 +1 @@\n+t","s2"]"#;
+    let routes = |now: String| {
+        vec![
+            ("/commits".to_string(), format!("{head}\n{pushed}\n")),
+            (".base.ref".to_string(), "main\n".to_string()),
+            (
+                format!("compare/main...{head}"),
+                paint("@@ -1,2 +1,2 @@", "new"),
+            ),
+            (
+                format!("compare/main...{pushed}"),
+                format!("{now}\n{test_file}"),
+            ),
+        ]
+    };
+    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "new"));
+    assert!(
+        crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none(),
+        "an unchanged paint patch carries the look to the new head"
+    );
+    // A real paint change at the new head holds.
+    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "newer"));
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
+    fake.gh_routes.clear();
     // The page archives into done/; the approval must not lapse.
     let donedir = qdir.join("done");
     std::fs::create_dir_all(&donedir).unwrap();

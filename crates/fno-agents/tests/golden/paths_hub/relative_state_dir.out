@@ -1,0 +1,10 @@
+state_dir=<FIXTURE>/proj/.fno
+graph_json=<FIXTURE>/proj/.fno/db/graph.json
+ledger_json=<FIXTURE>/home/.fno/ledger.json
+briefs_dir=<FIXTURE>/proj/.fno/briefs
+fleet_dir=<FIXTURE>/proj/.fno/fleet
+postmortems_dir=<FIXTURE>/proj/.fno/postmortems
+worktrees_base=<FIXTURE>/proj/.fno/worktrees
+memory_dir=<FIXTURE>/proj/.fno/memory
+hook_logs_dir=<FIXTURE>/proj/.fno/hook-logs
+space_dir=<FIXTURE>/proj/.fno/spaces/<FIXTURE_SLUG>-proj

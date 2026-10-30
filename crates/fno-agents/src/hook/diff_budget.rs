@@ -85,7 +85,7 @@ fn build_message(added: u64, removed: u64, budget: u32, branch: &str) -> String 
 
 /// True when this Bash call was a `git commit` that succeeded. The word
 /// check reads the char after the phrase so `git commit-tree` never fires.
-fn committed(payload: &Value) -> bool {
+pub(super) fn committed(payload: &Value) -> bool {
     let Some(command) = payload
         .get("tool_input")
         .and_then(|ti| ti.get("command"))
@@ -122,7 +122,7 @@ fn is_commit_command(command: &str) -> bool {
 /// resolver (space worktree row, legacy in-tree fallback). The resolver
 /// answers even when no manifest exists; the reads downstream treat that as
 /// no budget.
-fn manifest_path(cwd: &Path) -> Option<PathBuf> {
+pub(super) fn manifest_path(cwd: &Path) -> Option<PathBuf> {
     crate::state_path::resolve("target-state", cwd)
 }
 
@@ -138,7 +138,7 @@ fn resolve_budget(manifest: &Path, cwd: &Path) -> Option<u32> {
 /// The manifest's `plan_path` value, unquoted; None while empty. A relative
 /// path resolves against the worktree root, where plans live (the `internal/`
 /// vault link is a checkout child), never against the space root.
-fn plan_path(manifest: &Path, cwd: &Path) -> Option<PathBuf> {
+pub(super) fn plan_path(manifest: &Path, cwd: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(manifest).ok()?;
     for line in text.lines() {
         let Some(value) = line.strip_prefix("plan_path:") else {
@@ -217,7 +217,7 @@ fn branch_numstat(cwd: &Path) -> Option<(u64, u64)> {
     Some((added, removed))
 }
 
-fn git_out(cwd: &Path, args: &[&str]) -> String {
+pub(super) fn git_out(cwd: &Path, args: &[&str]) -> String {
     Command::new("git")
         .args(args)
         .current_dir(cwd)

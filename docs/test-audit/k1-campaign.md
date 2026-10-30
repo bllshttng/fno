@@ -57,7 +57,7 @@ The pass does not reach half. Python lands at 0.64 of its declarations and 0.67 
 
 Each deletion had no caller outside its own tests. The proof is an `rg` over cli/src, hooks, scripts, skills, crates, commands and agents that returns nothing after the delete.
 
-- `worktree_path` and `legacy_worktree_path` in cli/src/fno/worktree_paths.py, with docs/architecture/worktree-paths.md. That doc described the retired `~/.fno/worktrees/{proj}-{slug}` layout and named functions that no longer exist. The live contract is .claude/rules/worktrees.md.
+- `worktree_path` and `legacy_worktree_path` in cli/src/fno/worktree_paths.py, with docs/architecture/worktree-paths.md. That doc described the retired `~/.fno/worktrees/{proj}-{slug}` layout and named functions that no longer exist. The live contract is docs/architecture/worktree-mechanics.md (Placement).
 - `detect_v1_conflict`, `ensure_v2_layout`, `v2_artifacts_dir` and their two private helpers in cli/src/fno/state/v2_paths.py. The one importer reads only the two path functions.
 - scripts/metrics/pr-node-closure-audit.py, scripts/metrics/merge-stray-ledger.py and scripts/diagnostics/classify-user-prompt-payload.py.
 - The impeccable stage-loop model (`ImpeccableStageLoop`, `ImpeccableVerdict` and three constants) in skills/execute/orchestrator.py.

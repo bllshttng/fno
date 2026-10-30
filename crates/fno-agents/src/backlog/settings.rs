@@ -31,13 +31,19 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
         }
     }
     // The project config the FNO_CONFIG redirect names (python's
-    // `config_file()` candidate), then the global file.
+    // `config_file()` candidate), then the global file. The explicit file is
+    // usually its parent's settings.yaml sibling, so the sibling push already
+    // covered it: skip the repeat so one file is read once (a doubled work
+    // map was the symptom; Python's FNO_CONFIG branch reads the file exactly
+    // once).
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         let cfg = PathBuf::from(cfg);
         if let Some(parent) = cfg.parent() {
             push_dir(parent.to_path_buf());
         }
-        out.push(cfg);
+        if !out.contains(&cfg) {
+            out.push(cfg);
+        }
     }
     match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         Some(v) if !v.is_empty() => out.push(PathBuf::from(v)),
@@ -53,6 +59,10 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
             }
         }
     }
+    // A FNO_CONFIG that names `<dir>/settings.yaml` is also its parent's
+    // candidate: read each file once, at its first position.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
     out
 }
 
@@ -240,30 +250,54 @@ pub(crate) fn detect_project(cwd: Option<&str>) -> Option<String> {
         .map(|(name, _)| name)
 }
 
+/// The `state_dir` value of one parsed candidate: the bare key first, then
+/// the legacy settings.yaml envelope (`schema_version:` + `config:`), the
+/// same bare-then-envelope walk live_lookup applies.
+fn state_dir_value(doc: &Value) -> Option<&str> {
+    doc.get("state_dir")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            doc.get("config")
+                .and_then(|c| c.get("state_dir"))
+                .and_then(Value::as_str)
+        })
+        .filter(|s| !s.is_empty())
+}
+
 /// The state directory the porcelain reads serve from: `FNO_STATE_DIR` when
 /// the env names a root (the carrier `fno.paths.state_dir` resolves and
 /// `accounts::credentials::seal` pins, so a sealed read serves the store its parent
 /// wrote), else `FNO_CONFIG`'s `state_dir` when the env names a file, else
 /// the first candidate carrying a `state_dir`, else `~/.fno`. `FNO_HOME`
-/// does not move the backlog.
+/// does not move the backlog. Python's `state_dir()` always answers
+/// absolute: a relative value anchors at the cwd and collapses `.`/`..`.
 pub fn state_dir() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok();
     if let Some(v) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
-        return Some(expand_home(&v.to_string_lossy()));
+        return Some(anchored(expand_home(&v.to_string_lossy()), cwd.as_deref()));
     }
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
-        let cfg = PathBuf::from(cfg);
-        if let Some(sd) = read_flat(&cfg).get("state_dir").and_then(Value::as_str) {
-            return Some(expand_home(sd));
+        if let Some(sd) = state_dir_value(&read_flat(&PathBuf::from(cfg))) {
+            return Some(anchored(expand_home(sd), cwd.as_deref()));
         }
     }
     for path in candidates() {
-        if let Some(sd) = read_flat(&path).get("state_dir").and_then(Value::as_str) {
-            return Some(expand_home(sd));
+        if let Some(sd) = state_dir_value(&read_flat(&path)) {
+            return Some(anchored(expand_home(sd), cwd.as_deref()));
         }
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|h| h.join(".fno"))
+}
+
+/// Anchor at `cwd` through the shared lexical walk; with no cwd (it cannot
+/// be read), the value passes through.
+fn anchored(p: PathBuf, cwd: Option<&std::path::Path>) -> PathBuf {
+    match cwd {
+        Some(base) => crate::paths_cli::anchor_at(base, p),
+        None => p,
+    }
 }
 
 /// The graph file the porcelain reads serve: `<state_dir>/graph.json`,
@@ -440,12 +474,25 @@ mod tests {
         .unwrap();
         let prior = std::env::var_os("FNO_CONFIG");
         std::env::set_var("FNO_CONFIG", &cfg);
+        // The exact-count assertion needs the walk to see ONLY the fixture:
+        // an unset FNO_GLOBAL_SETTINGS_PATH sends candidates() at the real
+        // HOME settings, whose work map joins the count on any configured
+        // machine (measured on a fleet runner: left 2, right 1). An empty
+        // existing file keeps that branch pointed at the tempdir.
+        let empty_global = dir.path().join("empty-global-settings.yaml");
+        std::fs::write(&empty_global, "").unwrap();
+        let prior_global = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &empty_global);
 
         let pairs = work_map_pairs();
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].0, "one");
         assert_eq!(pairs[0].1, "/repo/one");
 
+        match prior_global {
+            Some(v) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", v),
+            None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
+        }
         match prior {
             Some(v) => std::env::set_var("FNO_CONFIG", v),
             None => std::env::remove_var("FNO_CONFIG"),

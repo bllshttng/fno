@@ -287,7 +287,7 @@ mod tests {
         let sent: std::cell::RefCell<Vec<(String, String)>> = Default::default();
         let mut deliver = |argv: &[String], _: &str| {
             sent.borrow_mut().push((argv[8].clone(), argv[9].clone()));
-            (0, "delivered (hosted)".into(), String::new())
+            (0, "accepted-new-turn".into(), String::new())
         };
         let t0 = 1_000_000;
         run_pass_with(&home, t0, &snap, &mut deliver).unwrap();

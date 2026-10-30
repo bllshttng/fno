@@ -28,6 +28,8 @@ const SECTION_REVERSIBLE: &str = "Reversible";
 const SECTION_COST_IF_WRONG: &str = "Cost if wrong";
 const SECTION_MEANWHILE: &str = "Meanwhile";
 const SECTION_WHY_USER: &str = "Why user";
+const SECTION_TRIED: &str = "Tried";
+const SECTION_EVIDENCE: &str = "Evidence";
 
 #[derive(Default, Clone, PartialEq, Debug)]
 pub struct EscalationOption {
@@ -65,6 +67,9 @@ pub struct Escalation {
     /// reaches the user (irreversible, money or credential, outside the
     /// machine, law-change, product or taste). Empty reads as absent.
     pub why_user: String,
+    /// What the asker and each rung checked, and what it read.
+    pub tried: String,
+    pub evidence: String,
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
     pub answers_ask: Option<String>,
@@ -75,7 +80,7 @@ pub struct Escalation {
 
 /// Every section heading a question page carries. The escalation-only
 /// sections parse too, but the question row never stores them.
-pub const QUESTION_SECTIONS: [&str; 11] = [
+pub const QUESTION_SECTIONS: [&str; 13] = [
     SECTION_OPTIONS,
     SECTION_RECOMMENDATION,
     SECTION_BLOCKED_BECAUSE,
@@ -86,6 +91,8 @@ pub const QUESTION_SECTIONS: [&str; 11] = [
     SECTION_COST_IF_WRONG,
     SECTION_MEANWHILE,
     SECTION_WHY_USER,
+    SECTION_TRIED,
+    SECTION_EVIDENCE,
     "Answer",
 ];
 
@@ -256,6 +263,8 @@ pub fn parse(text: &str) -> Escalation {
     esc.reversible = section(SECTION_REVERSIBLE);
     esc.cost_if_wrong = section(SECTION_COST_IF_WRONG);
     esc.meanwhile = section(SECTION_MEANWHILE);
+    esc.tried = section(SECTION_TRIED);
+    esc.evidence = section(SECTION_EVIDENCE);
     let why_user = section(SECTION_WHY_USER);
     if !why_user.is_empty() {
         esc.why_user = why_user;

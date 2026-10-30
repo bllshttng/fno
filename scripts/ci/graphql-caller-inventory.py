@@ -38,17 +38,24 @@ def _disposition(relative: str, source: str, offset: int) -> str:
         return "documentation"
     if relative.startswith("cli/src/"):
         return "fno-process-proxy"
+    if relative.startswith("crates/fno-agents/src/"):
+        # The fno-agents side owns the delegate policy (pr_status/quota.rs):
+        # every gh subprocess it spawns inherits the proxy env the front
+        # door's protect() installed, so the reads are delegate-governed.
+        return "agents-rest-delegate"
     if relative in {
         "crates/fno-agents/src/loopcheck.rs",
         "crates/fno-agents/src/finalize.rs",
     } or relative.startswith("crates/fno-agents/src/loopcheck/"):
         return "fixed-purpose-adapter"
-    if relative == "hooks/git-protection.py":
+    if relative == "hooks/git_protection_impl.py":
         return "operator-guard-definition"
     if relative == "scripts/diagnostics/graphql-quota-soak.py":
         return "quota-soak-broker"
     if relative.startswith("skills/"):
         return "worker-proxy-or-hook"
+    if relative.startswith("scripts/metrics/") or relative.startswith("scripts/release/"):
+        return "operator-one-shot"
     return "unclassified"
 
 

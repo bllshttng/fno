@@ -1918,8 +1918,8 @@ PYEOF
       # before comparing. The key is documented in SKILL.md as
       # `join: <manual|auto>   # who hands out the remaining waves`, so without
       # this the documented shape yields "auto # who hands out..." and never
-      # matches - the doc would describe a trigger it disables. PlanFrontmatter
-      # parses the same file as YAML and reads a bare `auto`, so the two
+      # matches - the doc would describe a trigger it disables. The plan-schema
+      # door parses the same file as YAML and reads a bare `auto`, so the two
       # readers of one key have to agree.
       _jt_fm="$(awk '/^---[[:space:]]*$/{c++; if(c==2) exit; next} c==1' "$_jt_plan" 2>/dev/null | sed -n 's/^join:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]*#.*$//' | tr -d '"' | tr -d "'" | xargs)"
       # The retired spelling is NOT an alias - reviving it would keep a key

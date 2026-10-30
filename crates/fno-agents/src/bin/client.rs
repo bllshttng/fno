@@ -492,14 +492,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::backlog::style_check::run_cli(&args[1..]);
     }
 
-    // The settings fact set's hidden binary-direct door: the node-id knobs,
-    // the config candidates, and the work-map walk (with the cwd -> project
-    // detect) in one spawn. Same `matches!` treatment so the parity guard
-    // never sees it.
-    if matches!(command, "settings-read") {
-        return fno_agents::backlog::settings_read::run_settings_read(&args[1..]);
-    }
-
     // The mail receipt renderer's hidden binary-direct door: the send receipt
     // prose moved from Python (file budget) with Python keeping transports.
     // Same `matches!` treatment so the parity guard never sees it.
@@ -1269,6 +1261,11 @@ async fn run(args: Vec<String>) -> i32 {
             Some("--pane-identity") => {
                 return fno_agents::pane_identity::run_pane_identity(&rest[1..])
             }
+            Some("--watch") => return fno_agents::watch::run_watch(&rest[1..]),
+            Some("--truth") => return fno_agents::truth_cli::run_truth(&rest[1..]),
+            Some("--peek") => return fno_agents::peek::run_peek(&rest[1..]),
+            Some("--team") => return fno_agents::team_read::run_team(&rest[1..]),
+            Some("--role") => return fno_agents::role_grant::run_role(&rest[1..]),
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
@@ -2302,6 +2299,15 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
+    // `[sandbox] provider`: refuse a spawn the box cannot carry before the
+    // guard and the gate; the box itself comes up after the gate admits.
+    let boxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
+        Ok(boxed) => boxed,
+        Err((code, reason)) => {
+            eprintln!("fno-agents spawn: {reason}");
+            return Some(code);
+        }
+    };
 
     // The fleet-law block composes for the WORKER's cwd (a --cwd foreign-repo
     // spawn must not inherit the spawner's repo freezes), after the dispatch
@@ -2454,6 +2460,16 @@ fn maybe_run_spawn(
             }
             Some(outcome.exit_code)
         }};
+    }
+
+    if boxed {
+        if let Err((code, reason)) = fno_agents::sandbox_launch::arm(home, &cwd) {
+            eprintln!("fno-agents spawn: [sandbox] devcontainer refused: {reason}");
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            return Some(code);
+        }
     }
 
     match (provider, substrate) {

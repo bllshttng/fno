@@ -813,6 +813,7 @@ mod tests {
             state: "open".into(),
             settled: false,
             images: vec![],
+            ..Default::default()
         }
     }
 

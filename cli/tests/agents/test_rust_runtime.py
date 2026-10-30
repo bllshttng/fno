@@ -248,6 +248,11 @@ def test_python_agent_commands_match_registered_commands() -> None:
         "registry-repair",
         "heal-token",
         "pane-identity",
+        "watch",
+        "truth",
+        "peek",
+        "team",
+        "role",
         # spawn has no Python command: the group routes its raw argv to the
         # client, whose spawn seam admits it.
         "spawn",

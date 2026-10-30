@@ -107,6 +107,30 @@ impl LedgerIndex {
     }
 }
 
+/// One node's cost: its own cost_sessions sum (a measured sum even at 0),
+/// else the parsed ledger costs, else unmeasured (None), never 0.
+pub(crate) fn node_cost_usd(node: &Value, id: &str, ledger: &LedgerIndex) -> Option<f64> {
+    let cost_sessions: &[Value] = node
+        .get("cost_sessions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if !cost_sessions.is_empty() {
+        return Some(
+            cost_sessions
+                .iter()
+                .filter_map(|s| s.get("cost_usd").and_then(Value::as_f64))
+                .sum::<f64>(),
+        );
+    }
+    let sums: Vec<f64> = ledger
+        .rows_by_node(id)
+        .iter()
+        .filter_map(|r| num_opt(r.get("cost_usd")))
+        .collect();
+    (!sums.is_empty()).then(|| sums.iter().sum())
+}
+
 /// The session's observed model id: an `{"kind": "observed", "model": ...}`
 /// object or a bare string; anything else is unrecorded.
 fn observed_model(session: &Value) -> Option<&str> {
@@ -317,30 +341,7 @@ pub fn build_records(
             }
         }
 
-        // Cost: the node's own cost_sessions coerce unpriced rows to 0.0, so
-        // a non-empty list is a measured sum even when it reads zero. The
-        // ledger is the fallback and only counts when a cost parses. With
-        // neither source the cost is unmeasured, never 0.
-        let cost_sessions: &[Value] = node
-            .get("cost_sessions")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let cost_usd = if !cost_sessions.is_empty() {
-            Some(
-                cost_sessions
-                    .iter()
-                    .filter_map(|s| s.get("cost_usd").and_then(Value::as_f64))
-                    .sum::<f64>(),
-            )
-        } else {
-            let sums: Vec<f64> = ledger
-                .rows_by_node(id)
-                .iter()
-                .filter_map(|r| num_opt(r.get("cost_usd")))
-                .collect();
-            (!sums.is_empty()).then(|| sums.iter().sum())
-        };
+        let cost_usd = node_cost_usd(node, id, ledger);
 
         let merged = node.get("merge_status").and_then(Value::as_str) == Some("merged");
         let shipped_at = node

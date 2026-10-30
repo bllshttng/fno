@@ -51,7 +51,7 @@ graph TB
         DS["Design Skills<br/>think, what-if, audit"]
         EX["Execution Skills<br/>tdd, fix, debug, speculate"]
         RV["Review Skills<br/>review, create-pr,<br/>check-pr"]
-        UT["Utility Skills<br/>setup, codemap,<br/>ship-docs,<br/>git-worktrees"]
+        UT["Utility Skills<br/>setup, ship-docs,<br/>git-worktrees"]
     end
 
     subgraph "Agents Layer (12 agents)"
@@ -590,7 +590,6 @@ footnote/                               # Flat root (plugin.json at .claude-plug
         do/SKILL.md                      # Lightweight executor
         operator/SKILL.md               # Heavy orchestrator
         review/SKILL.md                  # The owned review lane
-        codemap/SKILL.md               # AST structural analysis
         ...
     agents/                              # 17 agents
         archer.md                       # TDD task executor (Sonnet)

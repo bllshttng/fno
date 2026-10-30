@@ -157,6 +157,7 @@ pub mod compaction;
 mod completion_output;
 pub mod component_update;
 pub mod config_route;
+pub mod context_audit;
 pub mod context_run;
 pub mod context_window;
 pub mod convert;
@@ -206,6 +207,7 @@ pub mod finalize_run_summary;
 pub mod first_check;
 pub mod fleet_beacon;
 pub mod fleet_incident;
+pub mod fleet_lanes;
 pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_state;
@@ -215,6 +217,7 @@ pub(crate) mod fnod;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
+pub mod footprint_cause;
 pub mod friction;
 pub mod gate_probes;
 pub mod gc;
@@ -235,9 +238,11 @@ pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
+pub mod glob;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
+pub mod green_carry;
 pub mod grok_ask;
 pub mod grok_store;
 pub mod harness_beat;
@@ -280,6 +285,7 @@ pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
+pub mod law_restore;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub(crate) mod lead_checkin_beat_budget;
@@ -327,6 +333,7 @@ pub mod loop_target;
 pub mod loopcheck;
 pub mod loops_config;
 pub mod loops_pause;
+pub mod machine_key;
 pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
@@ -336,6 +343,7 @@ pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
+pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
@@ -378,6 +386,7 @@ pub mod native_bg_mint;
 pub mod needs;
 pub mod node_bind;
 pub mod node_branch;
+pub mod node_liveness;
 pub mod node_origin;
 pub mod node_reading;
 pub mod node_route;
@@ -418,6 +427,7 @@ pub mod pane_spawn;
 pub mod pane_stop;
 pub mod paths;
 pub mod paths_cli;
+pub mod peek;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
@@ -428,6 +438,7 @@ pub mod pi_transcript;
 mod pi_transcript_tests;
 pub mod plan_carry;
 pub mod plan_doc;
+pub mod plan_schema;
 pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
@@ -525,6 +536,7 @@ pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
 pub mod role_cwd;
+pub mod role_grant;
 pub mod role_migration;
 pub mod roles;
 pub mod roster_progress;
@@ -539,9 +551,12 @@ pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;
 pub mod rules;
+pub mod rules_check;
+pub mod rules_source;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
+pub mod sandbox_launch;
 pub mod sandbox_probe;
 pub mod scoreboard;
 pub mod scoreboard_escalation;
@@ -635,6 +650,7 @@ pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;
 pub mod team_names;
+pub mod team_read;
 pub mod team_reap;
 pub mod team_rescope;
 pub mod team_settle;
@@ -674,6 +690,7 @@ pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
 pub mod transcript_turns;
+pub mod truth_cli;
 pub mod truth_probe;
 pub mod update_journal;
 pub mod usage;
@@ -685,6 +702,7 @@ pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
 pub mod wake_read;
+pub mod watch;
 pub mod watch_expiry;
 pub mod wave;
 pub mod whoami;
@@ -1455,9 +1473,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), five
+        // The allowed files: production binary repair (install_verify), six
         // production dir modes (paths, fleet_incident, chats, the
-        // session-state pin dir, the mcp sidecar's socket-parent tightening),
+        // session-state pin dir, the mcp sidecar's socket-parent tightening,
+        // the daemon's sandbox socket dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -1474,6 +1493,7 @@ mod tests {
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
             ("mcp/sidecar.rs", 1),
+            ("daemon/sandbox_host.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();

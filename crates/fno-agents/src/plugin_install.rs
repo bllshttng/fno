@@ -667,7 +667,11 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         differing_count: differing.len(),
         missing_count: missing.len(),
         sample: combined.into_iter().take(10).collect(),
-        remedy: format!("fno config plugin install claude --source {source_root}"),
+        remedy: if pack {
+            format!("fno-agents plugin-install --restage --source {source_root}")
+        } else {
+            format!("fno config plugin install claude --source {source_root}")
+        },
         detail: None,
         stage_head,
         built_at: stamp_field("built_at"),
@@ -830,6 +834,9 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
     ] {
         push_root(&mut roots, &mut seen, path, "orphan", false);
     }
+    // footnote loads its plugin folder in place, so the link is a live root.
+    let footnote = home.join(".footnote/plugins").join(PLUGIN_LINK_NAME);
+    push_root(&mut roots, &mut seen, footnote, "footnote", true);
 
     (roots, detail)
 }
@@ -1485,6 +1492,8 @@ struct PluginInstallArgs {
     dev: bool,
     /// Converge codex onto the release channel (setup's wiring).
     release: bool,
+    /// Install the pack profile: no mux skills, no mux hooks.
+    pack: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1513,6 +1522,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         dry_run: false,
         dev: false,
         release: false,
+        pack: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1561,6 +1571,10 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
             }
             "--release" => {
                 parsed.release = true;
+                i += 1;
+            }
+            "--pack" => {
+                parsed.pack = true;
                 i += 1;
             }
             "--json" | "-J" => {
@@ -1631,6 +1645,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         dry_run,
         dev,
         release,
+        pack,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1711,6 +1726,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             }
         }
         Some(harness) => {
+            if pack && (matches!(harness, "opencode" | "pi") || release || status) {
+                eprintln!(
+                    "plugin install: --pack filters the staged tree; the opencode and pi \
+                     adapters and the codex --release/--status forms have no pack profile"
+                );
+                return 2;
+            }
             if harness == "codex" && status {
                 return crate::codex_converge::run_status();
             }
@@ -1743,7 +1765,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 return 3;
             }
             let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
-            let outcome = install_harness(harness, force, &source_dir);
+            let profile = if pack { Profile::Pack } else { Profile::Full };
+            let outcome = install_harness(harness, force, &source_dir, profile);
             match outcome {
                 Ok(detail) => {
                     println!("plugin install {harness}: {detail}");
@@ -1771,7 +1794,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok> [--force] [--dev] [--source <dir>]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--source <dir>]"
             );
             eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
@@ -2080,18 +2103,26 @@ fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
     if status {
         let mut installed = dest.is_file();
         if installed {
-            if let Some(src) = extension_src {
-                installed = files_byte_equal(Path::new(src), &dest).unwrap_or(false);
+            if let Some(src) = extension_src
+                .map(PathBuf::from)
+                .or_else(default_pi_extension_src)
+            {
+                installed = files_byte_equal(&src, &dest).unwrap_or(false);
             }
         }
         print_pi_receipt(installed, &dest, agent_dir_source, &skills, json);
         return 0;
     }
-    let Some(src) = extension_src else {
-        eprintln!("plugin install pi: --extension-src <path> is required (or pass --status)");
+    let Some(src) = extension_src
+        .map(PathBuf::from)
+        .or_else(default_pi_extension_src)
+    else {
+        eprintln!(
+            "plugin install pi: no plugin tree carries the pi extension; pass --extension-src <path> (or --status)"
+        );
         return 2;
     };
-    let src_path = Path::new(src);
+    let src_path = src.as_path();
     if !src_path.is_file() {
         eprintln!(
             "plugin install pi: extension source {} is not a file",
@@ -2287,23 +2318,33 @@ fn zcode_install_config(config_path: &Path, stage: &Path) -> Result<String, Stri
 /// tracks it, and the check ignores files HEAD lacks.
 const STAGE_STAMP: &str = ".fno-stage.json";
 
-fn install_harness(harness: &str, force: bool, source_dir: &Path) -> Result<String, String> {
+fn install_harness(
+    harness: &str,
+    force: bool,
+    source_dir: &Path,
+    profile: Profile,
+) -> Result<String, String> {
     let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
-    let (stage, _) = build_stage(&root, &parent)?;
+    let (stage, _) = build_stage_as(&root, &parent, profile)?;
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
         "agy" => install_agy(&stage, force)?,
         "codex" => crate::codex_converge::run_dev(&stage, force)?,
         "grok" => install_grok(&stage, force)?,
         "zcode" => install_zcode(&stage, force)?,
+        "footnote" => install_footnote(&stage)?,
         other => {
             return Err(format!(
-                "unknown harness '{other}'; want claude, codex, opencode, agy, grok or zcode"
+                "unknown harness '{other}'; want claude, codex, opencode, pi, agy, grok, zcode or footnote"
             ))
         }
     };
-    prime_plugin_root_pointer(&stage);
+    // A pack install never moves the machine pointer off a full stage: the
+    // env-less mux readers (the lead skill's fallback) resolve through it.
+    if profile == Profile::Full || !parent.join(Profile::Full.stage_dir()).exists() {
+        prime_plugin_root_pointer(&stage);
+    }
     Ok(format!("{detail}; local checkout {}", root.display()))
 }
 
@@ -2505,6 +2546,20 @@ fn grok_receipt_for(reachability: GrokReachability) -> String {
     }
 }
 
+/// The pi extension shipped in the plugin tree: the session's plugin root,
+/// then the filtered stage. `None` when neither carries it.
+pub(crate) fn default_pi_extension_src() -> Option<PathBuf> {
+    const REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
+    let stage = state_root()
+        .join("plugin-stage")
+        .join(Profile::Full.stage_dir());
+    crate::provider::plugin_root()
+        .into_iter()
+        .chain(std::iter::once(stage))
+        .map(|root| root.join(REL))
+        .find(|path| path.is_file())
+}
+
 /// Whether footnote's loop artifacts reach `harness` on THIS machine: the
 /// machine fact behind the capability row. `None` names a harness with no
 /// fno-installed loop gate (a native row whose loop closes through the
@@ -2544,10 +2599,13 @@ pub(crate) fn loop_install_probe(
             let dest = crate::pi::pi_agent_dir()
                 .join("extensions")
                 .join("footnote.ts");
+            let src = extension_src
+                .map(Path::to_path_buf)
+                .or_else(default_pi_extension_src);
             let mut installed = dest.is_file();
             if installed {
-                if let Some(src) = extension_src {
-                    installed = files_byte_equal(Path::new(src), &dest).unwrap_or(false);
+                if let Some(src) = src {
+                    installed = files_byte_equal(&src, &dest).unwrap_or(false);
                 }
             }
             Some(if installed {
@@ -2724,7 +2782,7 @@ fn parse_grok_inspect(text: &str, grok_home: &Path) -> GrokReachability {
 /// The plugin entry name the install links under `<grok_home>/plugins`; the
 /// name constant also keeps the link-name join out of the seam linter's
 /// porcelain-path scan, which ratchets on the literal `join("fno")`.
-const GROK_PLUGIN_LINK_NAME: &str = "fno";
+const PLUGIN_LINK_NAME: &str = "fno";
 
 /// Link the stage into `<grok_home>/plugins/fno`, then a second status
 /// read: the `linked` receipt prints only when that read is reachable. Why
@@ -2761,7 +2819,7 @@ fn trusted_path_is_copy(read: &GrokReachability, home: &Path) -> bool {
 }
 
 fn migrate_grok_to_link(home: &Path, stage: &Path) -> Result<String, String> {
-    let receipt = link_grok_plugin(home, stage)?;
+    let receipt = link_plugin(home, stage, "grok")?;
     match grok_reachability() {
         GrokReachability::Reachable { path } => Ok(format!("{receipt}, reachable: {path}")),
         GrokReachability::Absent => {
@@ -2776,15 +2834,16 @@ fn migrate_grok_to_link(home: &Path, stage: &Path) -> Result<String, String> {
     }
 }
 
-/// Link `<grok_home>/plugins/fno` to the stage. A real file or directory at
-/// the link path is refused, never deleted. The swap builds the new link as
+/// Link `<home>/plugins/fno` to the stage, for a harness that loads a plugin
+/// folder in place (grok, footnote). A real file or directory at the link
+/// path is refused, never deleted. The swap builds the new link as
 /// `plugins/.fno.new-<pid>` and renames it over the link path, so a reader
 /// never sees a half-made link.
-fn link_grok_plugin(grok_home: &Path, stage: &Path) -> Result<String, String> {
-    let plugins = grok_home.join("plugins");
+fn link_plugin(home: &Path, stage: &Path, harness: &str) -> Result<String, String> {
+    let plugins = home.join("plugins");
     std::fs::create_dir_all(&plugins)
         .map_err(|e| format!("cannot create {}: {e}", plugins.display()))?;
-    let link = plugins.join(GROK_PLUGIN_LINK_NAME);
+    let link = plugins.join(PLUGIN_LINK_NAME);
     let link_str = link.display().to_string();
     let stage_str = stage.display().to_string();
     match std::fs::read_link(&link) {
@@ -2797,7 +2856,7 @@ fn link_grok_plugin(grok_home: &Path, stage: &Path) -> Result<String, String> {
             ))
         }
         Err(_) if link.symlink_metadata().is_ok() => Err(format!(
-            "refused: {link_str} is not a symlink; move it aside, then rerun fno config plugin install grok"
+            "refused: {link_str} is not a symlink; move it aside, then rerun fno config plugin install {harness}"
         )),
         Err(_) => {
             swap_grok_symlink(&plugins, &link, stage)?;
@@ -2820,6 +2879,21 @@ fn lexically_normalized(path: &str) -> PathBuf {
         }
     }
     out
+}
+
+/// footnote loads every folder under `~/.footnote/plugins` with its hooks,
+/// so the install is the grok link with a readback in place of a status read.
+fn install_footnote(stage: &Path) -> Result<String, String> {
+    let home = dirs_home().join(".footnote");
+    let receipt = link_plugin(&home, stage, "footnote")?;
+    let link = home.join("plugins").join(PLUGIN_LINK_NAME);
+    match std::fs::read_link(&link) {
+        Ok(target) if target == stage => Ok(receipt),
+        read => Err(format!(
+            "{receipt}, but {} reads back {read:?}",
+            link.display()
+        )),
+    }
 }
 
 fn swap_grok_symlink(plugins: &Path, link: &Path, stage: &Path) -> Result<(), String> {
@@ -3434,7 +3508,7 @@ mod tests {
     /// AC4-HP/AC5-EDGE/AC6-ERR: the link installs, relinks, and refuses a
     /// real directory without deleting it.
     #[test]
-    fn grok_link_installs_relinks_and_refuses_a_real_dir() {
+    fn plugin_link_installs_relinks_and_refuses_a_real_dir() {
         let base = std::env::temp_dir().join(format!("grok-link-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let gh = base.join("grok-home");
@@ -3443,14 +3517,14 @@ mod tests {
         fs::create_dir_all(&stage).unwrap();
         fs::create_dir_all(&other).unwrap();
 
-        let receipt = link_grok_plugin(&gh, &stage).unwrap();
+        let receipt = link_plugin(&gh, &stage, "footnote").unwrap();
         assert!(receipt.starts_with("linked "), "{receipt}");
         assert_eq!(fs::read_link(gh.join("plugins/fno")).unwrap(), stage);
 
-        let receipt = link_grok_plugin(&gh, &stage).unwrap();
+        let receipt = link_plugin(&gh, &stage, "footnote").unwrap();
         assert!(receipt.starts_with("already linked "), "{receipt}");
 
-        let receipt = link_grok_plugin(&gh, &other).unwrap();
+        let receipt = link_plugin(&gh, &other, "footnote").unwrap();
         assert!(receipt.starts_with("relinked "), "{receipt}");
         assert!(receipt.contains(" from "), "{receipt}");
         assert!(receipt.contains(&stage.display().to_string()), "{receipt}");
@@ -3461,8 +3535,9 @@ mod tests {
         fs::remove_file(&real).unwrap();
         fs::create_dir(&real).unwrap();
         fs::write(real.join("keep.txt"), "keep").unwrap();
-        let err = link_grok_plugin(&gh, &stage).unwrap_err();
+        let err = link_plugin(&gh, &stage, "footnote").unwrap_err();
         assert!(err.starts_with("refused: "), "{err}");
+        assert!(err.ends_with("plugin install footnote"), "{err}");
         assert!(
             real.join("keep.txt").exists(),
             "refused dir must be untouched"

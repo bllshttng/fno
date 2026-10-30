@@ -26,6 +26,7 @@
 //! socket's own truth.
 
 use super::send_raw::{agents_binary, run_captured};
+use crate::mail_delivery_state::DeliveryState;
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ use std::path::{Path, PathBuf};
 mod engine;
 pub(crate) mod lanes;
 pub(crate) mod resolve;
+pub(crate) mod retry;
 mod verify;
 
 use lanes::*;
@@ -1498,6 +1500,36 @@ pub fn run(args: &[String]) -> i32 {
         from_name = Some(crate::identity::canonical_handle(&sid));
     }
 
+    // The rule door: one `door:send` event per addressed send, the recipient
+    // the subject. A block exits 3 with the reasons on stderr; a warn prints
+    // and the send proceeds. An unread source stays silent at THIS door: the
+    // send surface is byte-pinned by the dual-implementation parity goldens
+    // (tests/capture/mail_send_capture.py), and a store-less CI env would
+    // otherwise print an Unread line the pinned leg never printed. The other
+    // three doors carry the Unread line.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let ev = crate::rules::Event {
+        kind: "door:send".to_string(),
+        subjects: name
+            .as_deref()
+            .map(|r| vec![r.to_string()])
+            .unwrap_or_default(),
+        project: crate::law_match::resolve_project(
+            Some(&cwd),
+            &crate::law_match::settings_sources(),
+        )
+        .ok(),
+        ..crate::rules::Event::default()
+    };
+    let mut ruling = crate::rules_source::rule(&cwd, &ev);
+    ruling.unread.clear();
+    if let Some(sentence) = crate::rules_source::block_sentence(&ruling) {
+        eprintln!("{sentence}");
+        return 3;
+    }
+    for line in crate::rules_source::advisory_lines(&ruling) {
+        eprintln!("{line}");
+    }
     let classified_origin = match classify_origin(args.origin.as_deref()) {
         Ok(origin) => origin,
         Err(msg) => {
@@ -1708,7 +1740,10 @@ pub fn run(args: &[String]) -> i32 {
                             &result.msg_id,
                             subject.as_deref(),
                             &to,
-                            &format!("delivered (hosted) [project {project}]"),
+                            &crate::mail_delivery_state::receipt(
+                                &result.state,
+                                &format!("[project {project}]"),
+                            ),
                         )
                     );
                 } else {

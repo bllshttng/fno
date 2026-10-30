@@ -74,8 +74,8 @@ enum Role {
     ConfigSchema(Vec<String>),
     /// The native `config` doors (get, history, build-dir,
     /// assert-subagent-budget, status-sinks, active-backlog, plugin install,
-    /// set, unset, rm). One classify and one dispatch in `config_cli::`; the
-    /// doctor command stays beside the setup family's engine.
+    /// doctor, set, unset, rm). One classify and one dispatch in
+    /// `config_cli::`; the doctor body sits in `config_doctor::`.
     ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
@@ -315,6 +315,10 @@ enum Role {
     /// forwarder printed lands on stderr (byte-identical), then the same
     /// exec as `fno whoami status`.
     WhoamiStatusAlias(Vec<OsString>),
+    /// `fno context` and `fno whoami context`: the retired-root context
+    /// probe, exec'd as `context-run --probe --summary` (the Python shapes
+    /// ride the flag; exit 3 when the transcript is unreadable).
+    ContextProbe(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
@@ -761,8 +765,9 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// The leaves still owned by other families' Python legs: `fno whoami
-/// context|ledger|cost` forward to them.
-const PYTHON_LEAVES: [&str; 3] = ["context", "ledger", "cost"];
+/// ledger|cost` forward to them. `context` answered natively when the diag
+/// family ported; `scoreboard` did when the scoreboard family did.
+const PYTHON_LEAVES: [&str; 2] = ["ledger", "cost"];
 
 /// `fno whoami ...` and the retired root `fno status ...`: the summary
 /// render and the status read, exec'd as `fno-agents spawn-overlay whoami`.
@@ -810,6 +815,33 @@ fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
 fn claimed_tail(tail: &[OsString], root_json: bool) -> Vec<OsString> {
     let json = root_json.then(|| OsString::from("--json"));
     json.into_iter().chain(tail.iter().cloned()).collect()
+}
+
+/// `fno context` and `fno whoami context`: the retired-root context probe,
+/// exec'd as `context-run --probe --summary ...` (the Python byte shapes
+/// ride the flag). Unknown flags refuse here so a foreign flag never execs.
+fn classify_context(args: &[OsString]) -> Option<Vec<OsString>> {
+    let tail: &[OsString] = match args.first()?.to_str()? {
+        "context" => &args[1..],
+        "whoami" if args.get(1)?.to_str()? == "context" => &args[2..],
+        _ => return None,
+    };
+    let mut argv = vec![OsString::from("--summary")];
+    let mut i = 0usize;
+    while i < tail.len() {
+        match tail[i].to_str()? {
+            "--json" | "-J" => argv.push(OsString::from("--json")),
+            "--transcript" => {
+                argv.push(tail[i].clone());
+                i += 1;
+                argv.push(tail.get(i)?.clone());
+            }
+            a if a.starts_with("--transcript=") => argv.push(tail[i].clone()),
+            _ => return None,
+        }
+        i += 1;
+    }
+    Some(argv)
 }
 
 /// `fno config plugins ...` or `fno plugins ...`: the args after the group.
@@ -1283,6 +1315,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
+    }
+    // The context probe claims before the whoami seam: `whoami context`
+    // is a whoami-shaped argv whose leaf the probe owns now.
+    if let Some(rest) = classify_context(args) {
+        return Role::ContextProbe(rest);
     }
     if let Some(rest) = fno::whoami_seam::classify(args) {
         return Role::Whoami(rest);
@@ -1833,6 +1870,11 @@ fn main() {
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
         Role::Whoami(rest) => std::process::exit(fno::whoami_seam::run(&rest)),
+        Role::ContextProbe(rest) => std::process::exit(fno_agents_exec(
+            "fno context",
+            &["context-run", "--probe"],
+            &rest,
+        )),
         Role::AgentsLeadRefreshCanon(rest) => {
             std::process::exit(fno::lead_refresh_canon::run(&rest))
         }

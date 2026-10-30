@@ -174,7 +174,7 @@ def test_ack_refuses_hosted_audit_without_skipping_durable_mail(runner, mailbox)
     )
 
     assert result.exit_code == 2
-    assert "already delivered (hosted)" in (result.stderr or "")
+    assert "already reached the recipient's harness (hosted)" in (result.stderr or "")
     assert read_cursor("web") is None
     assert [m["id"] for m in scan_unread("web")] == [durable]
 

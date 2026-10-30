@@ -1,17 +1,14 @@
 """Tests for accounts configuration resolution.
 
-Tests that `doctor` can see the `[accounts]` namespace (including
-`accounts.quota.defer_dispatch`). The `fno config get` answers, including the
-pre-rename `providers` alias, are the native door's contract, frozen by the
-parity goldens.
+The doctor's accounts findings and the `fno config get` answers, including
+the pre-rename `providers` alias, are the native door's contract, frozen by
+the parity goldens.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-
-from fno.setup.doctor import check_accounts
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -20,45 +17,6 @@ def _write_config(tmp_path: Path, content: str) -> Path:
     f = d / "config.toml"
     f.write_text(content, encoding="utf-8")
     return f
-
-
-def test_doctor_check_accounts_invalid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    cfg = _write_config(tmp_path, '''
-[accounts]
-active = "nonexistent"
-
-[[accounts.records]]
-id = "acc1"
-name = "acc1"
-harness = "claude"
-auth = "oauth_dir"
-credentials_source = "~/.claude"
-''')
-    monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    monkeypatch.setenv("PWD", str(tmp_path))
-    monkeypatch.setenv("FNO_TEST_MODE", "1")
-
-    problems = check_accounts()
-    assert len(problems) > 0
-    assert any("accounts" in p for p in problems)
-
-
-def test_doctor_check_accounts_quota_typo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    cfg = _write_config(tmp_path, '''
-[accounts.quota]
-defer_dispatchh = true
-''')
-    monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    monkeypatch.setenv("PWD", str(tmp_path))
-    monkeypatch.setenv("FNO_TEST_MODE", "1")
-
-    # The unknown-key leg moved to the model-driven walker: check_accounts kept
-    # a hand-copied frozenset of accounts field names, and nothing forced it to
-    # match SettingsModel. The finding now names the file too.
-    from fno.config._readback import check_unknown_keys
-
-    problems = check_unknown_keys()
-    assert any("accounts.quota.defer_dispatchh" in p and str(cfg) in p for p in problems), problems
 
 
 def test_load_providers_preserves_global_records_with_local_leaf_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
