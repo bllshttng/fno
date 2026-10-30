@@ -4,7 +4,8 @@
 //! exit: parse the manifest, build the row from target-state + git + the
 //! native session-cost leg, append it under the shared `/tmp/fno-ledger.lock`
 //! (the lock [`crate::ledger_axes`] holds too), then emit the
-//! `ledger_updated` gate transition event. The append keeps the Python
+//! `ledger_updated` gate transition event and the row's durable
+//! `run_recorded` carrier. The append keeps the Python
 //! writer's recovery contract: a corrupt ledger is backed up to `.json.bak`
 //! and reset - a raised error on the stop-hook completion path is exactly the
 //! silent-skip-registration failure this writer exists to remove.
@@ -1029,23 +1030,57 @@ pub(crate) fn register_target_entry(
     transcript_uuid: &str,
     termination_reason: &str,
     cost_json: Option<&Value>,
+    verifier_verdict: Option<&str>,
 ) -> Result<(), String> {
     let state = parse_target_state(manifest)?;
-    let entry = build_entry(
+    let mut entry = build_entry(
         cwd,
         &state,
         transcript_uuid,
         Some(termination_reason),
         cost_json,
     );
+    if let Some(verdict) = verifier_verdict {
+        entry["verifier_verdict"] = json!(verdict);
+    }
     let ledger = crate::paths_cli::ledger_json(cwd);
     append_to_tasks_json(&ledger, &entry)?;
     emit_ledger_transition(&entry);
+    emit_run_recorded(cwd, "target", &entry);
     println!(
         "{}",
         serde_json::to_string_pretty(&entry).unwrap_or_default()
     );
     Ok(())
+}
+
+/// Emit the run row as a durable `run_recorded` carrier event: the row's
+/// ride out of the ledger file, so the event store is the record once every
+/// reader folds this kind. Best-effort, like the file append's own
+/// transition event; a missed emit is re-carried by the writer's next fire.
+pub(crate) fn emit_run_recorded(cwd: &Path, source: &str, run: &Value) {
+    let project_events = crate::paths::space_dir(cwd).join("events.jsonl");
+    let global_events = crate::paths_cli::global_events_json(cwd);
+    let event = json!({
+        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        "type": "run_recorded",
+        "source": source,
+        "data": { "run": run },
+    });
+    let line = serde_json::to_string(&event).unwrap_or_default();
+    if line.is_empty() {
+        eprintln!("run_recorded: serialize failed; row stays file-only");
+        return;
+    }
+    let mut paths: Vec<&Path> = vec![project_events.as_path()];
+    if global_events != project_events {
+        paths.push(global_events.as_path());
+    }
+    for path in paths {
+        if let Err(e) = crate::event_store::append_envelope(path, &line, None) {
+            eprintln!("run_recorded: emit to {} failed: {e}", path.display());
+        }
+    }
 }
 
 #[cfg(test)]
