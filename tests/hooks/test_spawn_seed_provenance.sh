@@ -35,13 +35,17 @@ check() {
     fi
 }
 
-# Render with the SOURCE fno, not whatever is deployed: this test exists to
+# Render with the SOURCE build, not whatever is deployed: this test exists to
 # check the hook against the tree it ships from, and a stale installed binary
-# would make it pass or fail on the wrong code.
+# would make it pass or fail on the wrong code. The mail command is native, so
+# the shim drops the `agents` word the front would consume.
+AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+[[ -x "$AGENTS_BIN" ]] || AGENTS_BIN="${FNO_AGENTS_FRONT:-fno-agents}"
 SHIM="$(mktemp -d)/fno"
 cat >"$SHIM" <<SHIMEOF
 #!/usr/bin/env bash
-exec env PYTHONPATH="$REPO_ROOT/cli/src" "$PY" -c 'from fno.cli import app; app()' "\$@"
+shift
+exec "$AGENTS_BIN" "\$@"
 SHIMEOF
 chmod +x "$SHIM"
 export FNO_BIN="$SHIM"
