@@ -740,15 +740,23 @@ jobs:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
     runs-on: ubuntu-24.04
-    # Widest of 14 passing runs sampled 2026-09-24: 6.9m. The release build
-    # of fno-agents outgrew the 10m cap on cold runners once the crate grew
-    # the native decisions listing, and the job died inside cargo before any
-    # budget ran. Outgrew the 15m cap the same way twice on 2026-10-08 under
-    # fleet load; died inside cargo both times.
+    # With the shared cache key missing release artifacts, every run paid
+    # the full release build cold: passing runs reached 18.1 to 19.2m by
+    # 2026-10-30 (12.6m release build, 6.1m native build, 0.8m budgets) and
+    # one run was cancelled just past the cap. The dedicated release cache
+    # above should return warm runs to minutes; the cap stays 20m until a
+    # warm run says otherwise. History: the cold release build of fno-agents
+    # outgrew 10m once the crate grew the native decisions listing, then
+    # outgrew 15m twice on 2026-10-08 under fleet load, dying inside cargo
+    # before any budget ran each time.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      # Own key: this job builds --release, but the shared cargo- key is
+      # usually saved first by the debug-profile jobs, so an exact hit
+      # restored a debug tree and the release builds below paid full price
+      # every run. Same pattern as the integration job's cache.
       - uses: actions/cache@v5
         with:
           path: |
@@ -756,9 +764,10 @@ jobs:
             ~/.cargo/git
             ~/.cargo/build
             crates/fno-agents/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+            crates/fno/target
+          key: ${{ runner.os }}-cargo-latency-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-latency-
       - name: Install strace
         # Bounded: apt-get update can hang on the hosted runner for the whole
         # job budget. A stall now fails here in minutes, named.
