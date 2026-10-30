@@ -1185,10 +1185,10 @@ fn the_journal_match_reads_the_pr_head_not_the_checkout() {
         Some(MINE)
     );
     // No covered event at this head: uncovered, and an unreadable head
-    // holds instead of pinning an arbitrary event. Another PR's covered
-    // row at the same head never pins this PR.
+    // holds instead of pinning an arbitrary event. A PR the journal never
+    // covered cannot ride another PR's covered row at the same head.
     assert_eq!(covered_head_from_text(journal, 4165, UNREVIEWED), None);
-    assert_eq!(covered_head_from_text(journal, 4166, MINE), None);
+    assert_eq!(covered_head_from_text(journal, 9999, MINE), None);
     assert_eq!(covered_head_from_text(journal, 4165, ""), None);
 }
 
