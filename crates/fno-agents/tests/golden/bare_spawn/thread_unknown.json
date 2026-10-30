@@ -1,0 +1,5 @@
+{
+  "fenced": [],
+  "harness": "foonote-typo",
+  "line": "fno agents spawn: unknown harness 'foonote-typo'; the capability contract knows: agy, claude, codex, cursor-agent, footnote, gemini, grok, muse, opencode, pi, zcode"
+}
