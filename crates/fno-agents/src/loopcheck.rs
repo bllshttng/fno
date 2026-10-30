@@ -2920,6 +2920,16 @@ pub(crate) use crate::lead_termination::{parse_lead_manifest, LeadManifest};
 
 // ── public entry points ───────────────────────────────────────────────────────
 
+/// The global journal the operator commands write and the question folds
+/// read, when a caller carried no explicit path. The one Rust site of the
+/// hand-built literal; the state-roots baseline row owns draining it.
+pub(crate) fn global_events_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+        .join(".fno/events.jsonl")
+}
+
 fn observe_decision(args: &[String], output: &str) {
     let Ok(parsed) = parse_args(args) else {
         return;
@@ -2959,12 +2969,7 @@ fn observe_decision(args: &[String], output: &str) {
     let project_events = parsed
         .events_path
         .unwrap_or_else(|| crate::paths::events_path(&parsed.cwd));
-    let global_events = parsed.global_events_path.unwrap_or_else(|| {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp"))
-            .join(".fno/events.jsonl")
-    });
+    let global_events = parsed.global_events_path.unwrap_or_else(global_events_path);
     let run_log = crate::paths::worktree_space_dir(&parsed.cwd).join("run-log.jsonl");
     if transition == crate::run_state::RunEvent::TerminalDecided
         && matches!(

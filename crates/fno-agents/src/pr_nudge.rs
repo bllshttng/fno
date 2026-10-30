@@ -946,10 +946,7 @@ fn merge_freeze_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
 fn question_hold(row: &OpenPrRow) -> bool {
     let mut journals = vec![
         crate::paths::events_path(std::path::Path::new(&row.cwd)),
-        std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-            .join(".fno/events.jsonl"),
+        crate::loopcheck::global_events_path(),
     ];
     if let Some(canon) = crate::paths::canonical_repo_root(std::path::Path::new(&row.cwd)) {
         let canonical_journal = crate::paths::events_path(&canon);
