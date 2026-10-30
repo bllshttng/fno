@@ -2,7 +2,6 @@
 crates/fno-agents/src/naming.rs). Argv marshalling and result parsing only."""
 
 import json
-import os
 import re
 import subprocess
 from collections import namedtuple

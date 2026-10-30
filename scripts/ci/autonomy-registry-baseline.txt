@@ -12,7 +12,6 @@
 #
 # Forgetting a gate is refused at runtime by config.autonomy.enabled.
 # Forgetting to REGISTER a new spawner is refused here, at CI.
-cli/src/fno/cli.py::  # NOT a spawn site: LAZY_SUBCOMMANDS declares "agents" as a command group
 cli/src/fno/pr_watch/_dispatch.py::fire_skill  # pr_watch headless PR poll (config.pr_watch.enabled)
 hooks/context-nudge.sh::  # NOT a call site: quotes `fno agents spawn` inside an operator-facing nudge message
 hooks/helpers/init-target-state.sh::  # NOT a call site: a comment naming `fno agents spawn --node` as the OTHER end of the claim handover this script's acquire inherits from. init spawns nothing.
