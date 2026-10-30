@@ -240,7 +240,7 @@ fn move_registry_row(
         }
         Ok(())
     })
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
 }
 
 fn stray_names_in(
