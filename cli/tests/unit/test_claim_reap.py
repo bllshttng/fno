@@ -105,18 +105,16 @@ class TestTheSweepNeverReapsAnUnexpiredDispatchReservation:
 
 
 class TestCliProbeWiring:
-    """The roster join is injected by sweep_verdict's callers: the spawn
-    guard in fno.agents.cli passes abandonment_probe for every suspect
-    claim, and the pre-forward `reap` sweep was the other caller. The command
-    itself now forwards to Rust, whose own roster arms answer fail-closed,
-    so these tests drive the Python wiring directly - a probe that exists
-    but is never passed is a decorative guard."""
+    """The roster join is injected by sweep_verdict's callers. The `reap`
+    command forwards to Rust, whose own roster arms answer fail-closed, so
+    these tests drive the Python wiring directly - a probe that exists but is
+    never passed is a decorative guard."""
 
     def _fake_roster(self, monkeypatch, rows, warnings=()):
         def _fake(*_a, **_kw):
-            return list(rows), list(warnings)
+            return None, {"rows": list(rows), "warnings": list(warnings)}
 
-        monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _fake)
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _fake)
 
 
     def _transcript_says(self, monkeypatch, finished):
@@ -126,15 +124,13 @@ class TestCliProbeWiring:
 
     def test_the_holder_found_and_finished_reaps(self, tmp_path, monkeypatch):
         """Abandonment is proven by FINDING the holder and seeing it stopped."""
-        from fno.agents.watchdog import Row
-
         claim = acquire_claim(
             key="node:x-abandoned", holder="target-session:sid-gone", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
         self._fake_roster(
             monkeypatch,
-            rows=[Row(row_id="sid-gone", name="t-gone", state="done", node="x-abandoned", cwd="")],
+            rows=[{"row_id": "sid-gone", "name": "t-gone", "state": "done", "node": "x-abandoned", "cwd": ""}],
         )
         self._transcript_says(monkeypatch, True)
         (dead, bucket), _probe = _probe_sweep(claim, tmp_path)
@@ -147,15 +143,13 @@ class TestCliProbeWiring:
         carries its own warning that the roster called a WORKING session done
         on 2026-08-15, and archiving on it hands a live worker's node to the
         next dispatcher - the `reaped_a_live_worker` kill criterion."""
-        from fno.agents.watchdog import Row
-
         claim = acquire_claim(
             key="node:x-lying", holder="target-session:sid-busy", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
         self._fake_roster(
             monkeypatch,
-            rows=[Row(row_id="sid-busy", name="t-busy", state="done", node="x-lying", cwd="")],
+            rows=[{"row_id": "sid-busy", "name": "t-busy", "state": "done", "node": "x-lying", "cwd": ""}],
         )
         self._transcript_says(monkeypatch, False)
         (dead, bucket), probe = _probe_sweep(claim, tmp_path)
@@ -173,9 +167,9 @@ class TestExternalDeathEvidence:
 
     def _fake_roster(self, monkeypatch, rows, warnings=()):
         def _fake(*_a, **_kw):
-            return list(rows), list(warnings)
+            return None, {"rows": list(rows), "warnings": list(warnings)}
 
-        monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _fake)
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _fake)
 
     def _handover(self, tmp_path, *, pid=None, key="node:x-c272"):
         return acquire_claim(
@@ -220,25 +214,17 @@ class TestExternalDeathEvidence:
         five pids gone; `claim reap` still reported the roster unconsulted
         because one degraded read answered for the whole pass. One retry on a
         degraded reading resolves it here."""
-        from fno.agents.watchdog import Row
-
         calls = {"n": 0}
 
         def _flaky(*_a, **_kw):
             calls["n"] += 1
             if calls["n"] == 1:
-                return [], ["claude not on PATH"]
-            return (
-                [
-                    Row(
-                        row_id="sid-3f84", name="t-3f84", state="done",
-                        node="x-3f84", cwd="",
-                    )
-                ],
-                [],
-            )
+                return None, {"rows": [], "warnings": ["claude not on PATH"]}
+            row = {"row_id": "sid-3f84", "name": "t-3f84", "state": "done",
+                   "node": "x-3f84", "cwd": ""}
+            return None, {"rows": [row], "warnings": []}
 
-        monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _flaky)
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _flaky)
         monkeypatch.setattr(
             "fno.claims.cli._transcript_says_finished", lambda *_a, **_kw: True
         )
@@ -257,13 +243,11 @@ class TestExternalDeathEvidence:
         )
 
     def _roster_without_holder(self, monkeypatch):
-        from fno.agents.watchdog import Row
-
         self._fake_roster(
             monkeypatch,
             rows=[
-                Row(row_id=f"other-{i}", name=f"t-{i}", state="working",
-                    node=f"x-{i}", cwd="")
+                {"row_id": f"other-{i}", "name": f"t-{i}", "state": "working",
+                 "node": f"x-{i}", "cwd": ""}
                 for i in range(3)
             ],
         )
@@ -359,10 +343,8 @@ class TestRosterWiringOverTheTable:
 
 
     def test_a_holder_absent_from_the_roster_is_never_reaped(self, tmp_path, monkeypatch):
-        """fleet_rows cannot represent a codex or hand-started holder, so its
-        absence there is never read as abandonment."""
-        from fno.agents.watchdog import Row
-
+        """The fleet read cannot represent a codex or hand-started holder, so
+        its absence there is never read as abandonment."""
         claim = acquire_claim(
             key="node:x-codex", holder="target-session:sid-codex", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
@@ -370,7 +352,8 @@ class TestRosterWiringOverTheTable:
         self._fake_roster(
             monkeypatch,
             rows=[
-                Row(row_id=f"other-{i}", name=f"t-{i}", state="working", node=f"x-{i}", cwd="")
+                {"row_id": f"other-{i}", "name": f"t-{i}", "state": "working",
+                 "node": f"x-{i}", "cwd": ""}
                 for i in range(40)
             ],
         )
@@ -383,9 +366,9 @@ class TestRosterWiringOverTheTable:
 
         def _always_degraded(*_a, **_kw):
             calls["n"] += 1
-            return [], ["claude not on PATH"]
+            return None, {"rows": [], "warnings": ["claude not on PATH"]}
 
-        monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _always_degraded)
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _always_degraded)
         claim = acquire_claim(
             key="node:x-dead-roster", holder="target-session:sid-1",
             ttl_ms=3_600_000, pid=_dead_pid(), root=tmp_path,

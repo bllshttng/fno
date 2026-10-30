@@ -1,25 +1,16 @@
-"""`fno agents spawn --promote --substrate bg`: the role rides the bg substrate.
+"""A role refused at the pane door never reaches the runner.
 
-A role is three registry fields (`role_level` / `role_scope` / `role_grantor`)
-and nothing in it needs a PTY. The substrate axis it actually cares about is
-TERM LENGTH: a lead must outlive the grant. `bg` qualifies - a bg worker is a
-full persistent conversation in claude's agent view, attachable and resumable,
-differing from a pane only in who draws it. `headless` does not: it answers once
-and exits, so its role is orphaned at birth.
-
-These tests exercise the END-TO-END CLI path (`spawn --promote --substrate bg`),
-not `_claude_create_path` in isolation. That is deliberate: the original defect
-was a refusal at the CLI seam sitting in front of unplumbed params, so a test
-that called the helper directly would have passed against the broken build.
+A role is three registry fields (`role_level` / `role_scope` / `role_grantor`).
+One live role per scope holds at every in-process spawn door, so a duplicate
+refuses before anything launches.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.agents.registry import AgentEntry, load_registry, update_registry
+from fno.agents.registry import AgentEntry, update_registry
 from fno.paths_testing import use_tmpdir
 
 
@@ -33,39 +24,6 @@ def _clear_parent_markers(monkeypatch):
         "GEMINI_SESSION_ID",
     ):
         monkeypatch.delenv(marker, raising=False)
-
-
-def _spawn(*args: str):
-    from fno.agents.cli import agents_app
-
-    return CliRunner().invoke(agents_app, list(args), catch_exceptions=False)
-
-
-def _row(name: str) -> AgentEntry:
-    entry = next((e for e in load_registry() if e.name == name), None)
-    assert entry is not None, f"no registry row named {name!r}"
-    return entry
-
-
-# --- the role lands on bg ---------------------------------------------------
-
-
-# --- one live role per scope, enforced on bg too ----------------------------
-
-
-# --- headless stays refused --------------------------------------------------
-
-
-# --- in-process callers get the same guards ----------------------------------
-
-
-# --- role values are validated on every writer, not just the CLI ------------
-#
-# The CLI parses `--promote` through _parse_role, but both spawn dispatchers take
-# (level, scope) directly from in-process callers. A value that skips validation
-# is written to the SHARED registry: Rust's role_level is Option<u32>
-# (crates/fno-agents/src/state.rs), so a negative or boolean level breaks
-# registry reads for every reader, not just the caller that wrote it.
 
 
 def test_dispatch_spawn_pane_refuses_a_duplicate_role_before_launch(

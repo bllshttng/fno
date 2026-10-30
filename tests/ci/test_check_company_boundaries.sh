@@ -18,7 +18,7 @@ make_repo() {
         "$root/cli/src/fno/plan" "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
     printf 'from fno.graph._reconcile import resolve_current_repo_slug\n' \
-        > "$root/cli/src/fno/agents/history.py"
+        > "$root/cli/src/fno/agents/role.py"
 }
 
 echo "== mode help is discoverable =="
@@ -48,7 +48,7 @@ grep -q <<<"$out" '3 layers, 2 modules, 0 violations' \
 echo "== a broken scan fails closed =="
 BROKEN="$TMP/broken"
 make_repo "$BROKEN"
-printf 'class SessionHistory:\n    pass\n' > "$BROKEN/cli/src/fno/agents/history.py"
+printf 'class RoleRow:\n    pass\n' > "$BROKEN/cli/src/fno/agents/role.py"
 out="$(bash "$CHECK" --strict "$BROKEN" 2>&1)"; rc=$?
 [[ $rc -eq 2 ]] && ok "missing control exits two" || fail "expected exit 2, got $rc: $out"
 grep -q <<<"$out" "positive control failed" \
@@ -62,12 +62,12 @@ make_repo "$VIOLATION"
 {
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding'
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding' '# padding'
-    printf '%s\n' 'from fno.agents.history import resolve_current_repo_slug'
+    printf '%s\n' 'from fno.agents.role import resolve_current_repo_slug'
 } > "$VIOLATION/cli/src/fno/company/contracts.py"
 out="$(bash "$CHECK" --strict "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "prohibited edge exits one" || fail "expected exit 1, got $rc: $out"
 grep -q <<<"$out" \
-    'cli/src/fno/company/contracts.py:12: L1 core -> L5 runtime / from fno.agents.history import resolve_current_repo_slug' \
+    'cli/src/fno/company/contracts.py:12: L1 core -> L5 runtime / from fno.agents.role import resolve_current_repo_slug' \
     && ok "finding carries exact evidence" || fail "exact evidence missing: $out"
 grep -q <<<"$out" 'layer cycle: L1 core -> L5 runtime -> L1 core' \
     && ok "declared-layer cycle is printed" || fail "cycle missing: $out"
@@ -76,7 +76,7 @@ echo "== baseline mode holds the exact finding set and ratchets downward =="
 FIXTURE_BASELINE="$TMP/fixture-baseline.txt"
 cat > "$FIXTURE_BASELINE" <<'EOF'
 # Human-readable fixture baseline.
-cli/src/fno/company/contracts.py: L1 core -> L5 runtime / from fno.agents.history import resolve_current_repo_slug
+cli/src/fno/company/contracts.py: L1 core -> L5 runtime / from fno.agents.role import resolve_current_repo_slug
 layer cycle: L1 core -> L5 runtime -> L1 core
 EOF
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
@@ -88,7 +88,7 @@ grep -q <<<"$out" 'baseline holds: 1 prohibited dependency and 1 cycle' \
 # line column, so the row survives the shift with no regeneration.
 {
     for _ in {1..12}; do echo '# padding'; done
-    echo 'from fno.agents.history import resolve_current_repo_slug'
+    echo 'from fno.agents.role import resolve_current_repo_slug'
 } > "$VIOLATION/cli/src/fno/company/contracts.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "line move above the import keeps the baseline green" \
