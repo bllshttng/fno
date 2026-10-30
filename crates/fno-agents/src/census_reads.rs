@@ -10,6 +10,7 @@ pub fn dispatch(args: &[String]) -> Option<i32> {
         "watchdog" => crate::watchdog::cli::run(rest),
         "watchdog-tick" => crate::watchdog::tick::run(rest),
         "watchdog-tail" => crate::watchdog::tick::run_tail(rest),
+        "watchdog-arming" => crate::watchdog::tick::run_arming(),
         "sweep" => crate::silence_sweep::run(rest),
         "stale-escalate" => crate::stale_lane::run_stale(rest),
         "friction-escalate" => crate::stale_lane::run_friction(rest),

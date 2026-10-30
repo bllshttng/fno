@@ -250,7 +250,10 @@ impl OutageEvidence {
                 content: text("content")?,
                 content_fingerprint: text("content_fingerprint").unwrap_or_default(),
                 pane_id: nullable("pane_id")?,
-                persisted: map.get("persisted").and_then(Value::as_bool).unwrap_or(true),
+                persisted: map
+                    .get("persisted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
                 snapshot_at: number("snapshot_at")?,
                 reset_at: number("reset_at")?,
             }
@@ -320,11 +323,13 @@ fn message_text(value: Option<&Value>) -> String {
 fn iso_epoch(value: &str) -> Option<f64> {
     use chrono::TimeZone;
     let folded = value.replace('Z', "+00:00");
-    let aware = chrono::DateTime::parse_from_rfc3339(&folded).ok().or_else(|| {
-        ["%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z"]
-            .iter()
-            .find_map(|fmt| chrono::DateTime::parse_from_str(&folded, fmt).ok())
-    });
+    let aware = chrono::DateTime::parse_from_rfc3339(&folded)
+        .ok()
+        .or_else(|| {
+            ["%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z"]
+                .iter()
+                .find_map(|fmt| chrono::DateTime::parse_from_str(&folded, fmt).ok())
+        });
     if let Some(stamp) = aware {
         return Some(stamp.timestamp_micros() as f64 / 1e6);
     }
@@ -709,7 +714,12 @@ pub fn collect_pane_evidence(
             account: identity.account.clone(),
             role: "assistant".to_string(),
             raw_status: status,
-            raw_kind: if status.is_some() { "api_error" } else { "content" }.to_string(),
+            raw_kind: if status.is_some() {
+                "api_error"
+            } else {
+                "content"
+            }
+            .to_string(),
             content: bounded.clone(),
             content_fingerprint: String::new(),
             pane_id: Some(pane_id.clone()),
@@ -772,6 +782,195 @@ fn prune_snapshots(snapshot_dir: &Path) {
     for (_, stale) in snapshots.iter().skip(MAX_PANE_SNAPSHOTS) {
         let _ = std::fs::remove_file(stale);
     }
+}
+
+/// Route identity from the observed model (transcript first, then the spawn-time
+/// intent) when the declared fields are absent, the cap actor's observed-first
+/// precedence. `(None, None)` leaves the named refusal standing.
+fn route_fallback_identity(
+    entry: Option<&crate::state::AgentEntry>,
+    entries: Option<&[Value]>,
+) -> (Option<String>, Option<String>) {
+    let observed = entries.and_then(|records| {
+        records.iter().rev().find_map(|record| {
+            record
+                .get("message")
+                .and_then(|message| message.get("model"))
+                .and_then(Value::as_str)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string)
+        })
+    });
+    let Some(model) = observed.or_else(|| {
+        entry
+            .and_then(|e| e.model_name.clone())
+            .filter(|m| !m.is_empty())
+    }) else {
+        return (None, None);
+    };
+    (
+        entry
+            .and_then(|e| e.route_provider_id.clone())
+            .filter(|p| !p.is_empty())
+            .or_else(|| Some(model.clone())),
+        entry
+            .and_then(|e| e.account_record_id.clone())
+            .filter(|a| !a.is_empty())
+            .or(Some(model)),
+    )
+}
+
+/// Collect durable transcript records, then persist exact pane fallbacks.
+/// `entries` is the tick's shared transcript parse, so no transcript opens here.
+/// An unreadable registry refuses action rather than joining rows to nothing.
+pub(crate) fn measure_provider_outages(
+    rows: &[crate::backlog::worked::FleetRow],
+    now_s: f64,
+    entries: &std::collections::BTreeMap<String, Option<Vec<Value>>>,
+) -> Value {
+    let home = crate::paths::AgentsHome::from_env();
+    let registry = match crate::state::load_registry(&home.registry_json()) {
+        Ok(registry) => registry,
+        Err(exc) => {
+            let mut report =
+                super::unknown_provider_report("provider_identity_registry_unreadable");
+            report["refusals"][0]["detail"] = json!(exc.to_string());
+            return report;
+        }
+    };
+    let by_session: HashMap<&str, &crate::state::AgentEntry> = registry
+        .entries
+        .iter()
+        .filter_map(|e| {
+            e.harness_session_id
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|s| (s, e))
+        })
+        .collect();
+    let mut identities = Vec::with_capacity(rows.len());
+    let mut mux_by_row: HashMap<String, Value> = HashMap::new();
+    for row in rows {
+        let entry = by_session.get(row.row_id.as_str()).copied();
+        let parsed = entries.get(&row.row_id).and_then(|e| e.as_deref());
+        let (fallback_provider, fallback_account) = route_fallback_identity(entry, parsed);
+        identities.push(EvidenceIdentity {
+            row_id: row.row_id.clone(),
+            harness: entry.and_then(|e| e.harness.clone()).unwrap_or_default(),
+            provider: entry
+                .and_then(|e| e.route_provider_id.clone())
+                .filter(|p| !p.is_empty())
+                .or(fallback_provider),
+            account: entry
+                .and_then(|e| e.account_record_id.clone())
+                .filter(|a| !a.is_empty())
+                .or(fallback_account),
+            session_id: entry
+                .and_then(|e| e.harness_session_id.clone())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| row.row_id.clone()),
+            cwd: entry
+                .map(|e| e.cwd.clone())
+                .filter(|c| !c.is_empty())
+                .unwrap_or_else(|| row.cwd.clone()),
+        });
+        if let Some(mux) = entry.and_then(|e| e.mux.as_ref()) {
+            mux_by_row.insert(
+                row.row_id.clone(),
+                json!({"session": mux.session, "pane_id": mux.pane_id}),
+            );
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let policy = OutagePolicy::from_cwd(&cwd);
+    let reset_timezone = reset_timezone_reader(&cwd);
+    let mut entries_for = |row_id: &str| entries.get(row_id).cloned().flatten();
+    let (mut records, mut refusals) = collect_transcript_evidence(
+        &identities,
+        now_s,
+        policy.evidence_freshness_s,
+        &mut entries_for,
+        &resolve_transcript_path,
+        &reset_timezone,
+    );
+    // Both a missing transcript and an unsupported shape leave the pane as the
+    // only instrument that can see a 429 or 529. Without the second reason every
+    // codex or opencode pane row reads as a refusal and the quorum never hears it.
+    const PANE_FALLBACK: [&str; 2] = ["transcript_unreadable", "transcript_shape_unsupported"];
+    let reason_of = |item: &Value| {
+        item.get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let row_of = |item: &Value| {
+        item.get("row_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let unreadable: std::collections::HashSet<String> = refusals
+        .iter()
+        .filter(|item| PANE_FALLBACK.contains(&reason_of(item).as_str()))
+        .map(row_of)
+        .collect();
+    if !unreadable.is_empty() {
+        let snapshot_root = journal_path()
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            .join("provider-pane-snapshots");
+        let fallback: Vec<EvidenceIdentity> = identities
+            .iter()
+            .filter(|identity| unreadable.contains(&identity.row_id))
+            .cloned()
+            .collect();
+        let mut read_pane = |session: &str, pane: &str| pane_read_via_mux(session, pane, 80, 10);
+        let (pane_records, pane_refusals) = collect_pane_evidence(
+            &fallback,
+            &mux_by_row,
+            now_s,
+            &snapshot_root,
+            &mut read_pane,
+            &reset_timezone,
+        );
+        let successful: std::collections::HashSet<&str> =
+            pane_records.iter().map(|r| r.row_id.as_str()).collect();
+        refusals.retain(|item| {
+            !(PANE_FALLBACK.contains(&reason_of(item).as_str())
+                && successful.contains(row_of(item).as_str()))
+        });
+        records.extend(pane_records.iter().cloned());
+        refusals.extend(pane_refusals);
+    }
+    let mut counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for item in &refusals {
+        *counts.entry(reason_of(item)).or_insert(0) += 1;
+    }
+    if records.is_empty() && !refusals.is_empty() {
+        return json!({
+            "instrument": "unknown",
+            "breakers": [],
+            "counts": counts,
+            "refusals": refusals,
+        });
+    }
+    let mut report = measure_and_persist(&records, now_s, None, &policy);
+    if !refusals.is_empty() {
+        let mut merged = report
+            .get("refusals")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        merged.extend(refusals);
+        report["refusals"] = Value::Array(merged);
+        if !report.get("counts").is_some_and(Value::is_object) {
+            report["counts"] = json!({});
+        }
+        for (reason, count) in counts {
+            report["counts"][reason] = json!(count);
+        }
+    }
+    report
 }
 
 /// `<state_dir>/recovery/provider-outages.json`.

@@ -8,6 +8,7 @@ use super::{
     snapshot_signature, ClaimView, NodeObs, Observations, OwnerProbe, PrObs, Snapshot, WorktreeObs,
     DIMENSIONS, UNKNOWN_DIM,
 };
+use crate::watchdog::sweep;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -675,6 +676,37 @@ pub fn build_report_with_deadline(
     classify(&collect_observations(roots, now_s, deadline))
 }
 
+/// `(ok, receipt, signature_to_stamp)`, the change gate keyed on finding identity.
+/// An incomplete snapshot is mailed: withholding it read as "retry next sweep", but
+/// the common cause is a deleted worktree root, which fails the same way forever.
+fn unfinished_mail_gate(snapshot: &Snapshot, to: &str) -> (bool, String, String) {
+    if to.is_empty() {
+        return (
+            true,
+            "no recipient".to_string(),
+            sweep::last_unfinished_signature(),
+        );
+    }
+    let signature = snapshot_signature(snapshot);
+    if snapshot.findings.is_empty() {
+        return (true, "no findings, nothing to say".to_string(), signature);
+    }
+    if signature == sweep::last_unfinished_signature() {
+        return (
+            true,
+            "unchanged since the last sweep, not mailed".to_string(),
+            signature,
+        );
+    }
+    let (ok, receipt) = sweep::send_machine_report(to, &super::snapshot_digest(snapshot));
+    let stamp = if ok {
+        signature
+    } else {
+        sweep::last_unfinished_signature()
+    };
+    (ok, receipt, stamp)
+}
+
 /// The one publish sequence, shared by the manual command and the tick: mail
 /// (change-gated, push not pull), sweep-file stamps (the positive complete marker
 /// only on a fully measured scan), the scan event plus fresh finding events, and
@@ -696,7 +728,7 @@ pub fn publish_report(
 
     // Mail before the sweep-file write: the change gate compares against the
     // previous sweep's stamps, and only a settled-ok mail advances them.
-    let (ok, receipt, signature) = crate::watchdog::unfinished_mail_gate(snapshot, mail_to);
+    let (ok, receipt, signature) = unfinished_mail_gate(snapshot, mail_to);
     if !ok {
         note(format!("watchdog mail: {receipt}"));
     }
@@ -705,7 +737,7 @@ pub fn publish_report(
     // mail outcome: with no recipient configured the mail stamp rightly never
     // moves, and chaining the event gate to it would re-emit every finding on
     // every cadence.
-    let prev_events_sig = crate::watchdog::last_unfinished_events_signature();
+    let prev_events_sig = sweep::last_unfinished_events_signature();
     let events_sig = snapshot_signature(snapshot);
     let stamps = json!({
         "counts": payload["counts"],
@@ -713,7 +745,14 @@ pub fn publish_report(
         "signature": signature,
         "events_signature": events_sig,
     });
-    crate::watchdog::write_sweep_file(source, None, now_s, None, Some(&stamps));
+    sweep::write_sweep_file(
+        source,
+        now_s,
+        sweep::SweepWrite {
+            unfinished: Some(stamps),
+            ..sweep::SweepWrite::default()
+        },
+    );
 
     let unknown: Vec<String> = DIMENSIONS
         .iter()
@@ -730,12 +769,12 @@ pub fn publish_report(
     }
     scan.insert("unknown_dimensions".to_string(), json!(unknown));
     scan.insert("warnings".to_string(), payload["warnings"].clone());
-    crate::watchdog::emit_event("watchdog_unfinished_work_scan", Value::Object(scan));
+    sweep::emit_event("watchdog_unfinished_work_scan", Value::Object(scan));
 
     let fresh = fresh_identities(snapshot, &prev_events_sig);
     for finding in &snapshot.findings {
         if fresh.contains(&finding_identity(finding)) {
-            crate::watchdog::emit_event(
+            sweep::emit_event(
                 "watchdog_unfinished_work_finding",
                 json!({
                     "kind": finding.kind,

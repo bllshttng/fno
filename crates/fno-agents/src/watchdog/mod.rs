@@ -298,9 +298,7 @@ pub(crate) fn branch_commit_count(cwd: &str) -> Option<i64> {
 
 fn help_tag_re() -> &'static regex::Regex {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"(?i)<help(?:\s([^>]*))?>").expect("help tag regex")
-    })
+    RE.get_or_init(|| regex::Regex::new(r"(?i)<help(?:\s([^>]*))?>").expect("help tag regex"))
 }
 
 /// `(?<![\w.])\.git[/\\]`: the `regex` crate has no lookbehind, so the guard is
@@ -340,7 +338,8 @@ pub(crate) fn sandbox_denial_text(facts: Option<&TailFacts>) -> Option<String> {
         .iter()
         .find_map(|value| {
             let (key, val) = value.split_once('=')?;
-            key.eq_ignore_ascii_case("evidence").then(|| val.to_string())
+            key.eq_ignore_ascii_case("evidence")
+                .then(|| val.to_string())
         })
         .unwrap_or_default();
     if evidence.is_empty()
@@ -579,7 +578,11 @@ fn verdict_one(
             );
         };
         if window == "unknown" {
-            let named = if stamp.is_empty() { "no stamp" } else { stamp.as_str() };
+            let named = if stamp.is_empty() {
+                "no stamp"
+            } else {
+                stamp.as_str()
+            };
             return verdict_of(
                 row,
                 LEAVE,
@@ -674,7 +677,9 @@ pub(crate) fn verdicts(
     }
     let mut live_in_tree: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for row in rows {
-        let facts = facts_by_row.get(row.row_id.as_str()).and_then(|f| f.as_ref());
+        let facts = facts_by_row
+            .get(row.row_id.as_str())
+            .and_then(|f| f.as_ref());
         if !row.cwd.is_empty()
             && (seams.worktree_check)(&row.cwd)
             && !finished_with_the_tree(facts, now_s, QUIET_AFTER_S)
@@ -687,12 +692,16 @@ pub(crate) fn verdicts(
     }
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let facts = facts_by_row.get(row.row_id.as_str()).and_then(|f| f.as_ref());
+        let facts = facts_by_row
+            .get(row.row_id.as_str())
+            .and_then(|f| f.as_ref());
         let occupants = live_in_tree.get(row.cwd.as_str());
         let peers: Vec<String> = match occupants {
-            Some(ids) if ids.contains(&row.row_id) => {
-                ids.iter().filter(|id| **id != row.row_id).cloned().collect()
-            }
+            Some(ids) if ids.contains(&row.row_id) => ids
+                .iter()
+                .filter(|id| **id != row.row_id)
+                .cloned()
+                .collect(),
             _ => Vec::new(),
         };
         let mut verdict = verdict_one(

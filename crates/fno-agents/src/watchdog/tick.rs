@@ -94,12 +94,20 @@ fn gate_reason(mode: Option<&str>) -> Option<String> {
     None
 }
 
-pub(crate) fn lane_armed() -> bool {
-    gate_reason(None).is_none()
-}
-
 pub(crate) fn wake_armed() -> bool {
     gate_reason(Some("wake")).is_none()
+}
+
+/// `census watchdog-arming`: one condition, every reader. A freshness reader that
+/// does not share the producer's condition once printed a dead cadence for a lane
+/// that was off on purpose.
+pub fn run_arming() -> i32 {
+    let off = gate_reason(None);
+    println!(
+        "{}",
+        json!({"armed": off.is_none(), "wake_armed": wake_armed(), "off_detail": off})
+    );
+    0
 }
 
 fn apply_and_emit(verdict: &super::Verdict, cwd: &str, agent: &str) {
@@ -173,7 +181,8 @@ fn wake_mode(clock: &Clock, now: f64, roots: &[PathBuf], outages: &Value) -> (i6
             eprintln!("pr-watch: Codex recovery scan stopped after {done} root(s)");
             break;
         }
-        let (_payload, _rows, scan) = run_recoverable_sweep(root, RECOVERY_RECENCY_S, now, None);
+        let (_payload, _rows, scan) =
+            run_recoverable_sweep(root, RECOVERY_RECENCY_S, Some(now), None);
         if !scan.complete {
             eprintln!(
                 "pr-watch: Codex recovery scan refused for {}",
@@ -270,12 +279,13 @@ fn run_leg(clock: &Clock) -> Value {
     // The report honors the deadline by leaving late roots unscanned: their
     // dimensions read unknown, never clean.
     let report_deadline = Instant::now() + Duration::from_secs_f64((clock.left() / 2.0).max(0.0));
-    let snapshot = super::unfinished::build_report(&roots, now, Some(report_deadline));
+    let snapshot =
+        super::unfinished::build_report_with_deadline(&roots, now, Some(report_deadline));
     let mail_to = crate::agents_config::config_lookup(&cwd(), &["recovery", "watchdog", "mail_to"])
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let mut log = |line: &str| eprintln!("pr-watch: {line}");
-    super::unfinished::publish_report(&snapshot, "tick", now, &mail_to, &mut log);
+    let log = |line: &str| eprintln!("pr-watch: {line}");
+    super::unfinished::publish_report(&snapshot, "tick", now, &mail_to, Some(&log));
     if clock.left() < ROSTER_FLOOR_S {
         return json!({
             "armed": true,

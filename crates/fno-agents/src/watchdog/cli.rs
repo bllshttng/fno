@@ -69,25 +69,22 @@ fn print_json(value: &Value) {
 fn run_unfinished_report(now: f64, json_out: bool, mail_to: Option<&str>) -> i32 {
     let mut roots = super::unfinished::report_roots();
     if roots.is_empty() {
-        roots.push(crate::paths_cli::repo_root_or_cwd());
+        roots.push(
+            crate::paths_cli::repo_root()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+        );
     }
-    let snapshot = super::unfinished::build_report(&roots, now, None);
+    let snapshot = super::unfinished::build_report(&roots, now);
     let recipient = mail_to.map_or_else(config_mail_to, str::to_string);
-    let mut note = |line: &str| eprintln!("{line}");
+    let note = |line: &str| eprintln!("{line}");
     let mut payload =
-        super::unfinished::publish_report(&snapshot, "manual", now, &recipient, &mut note);
+        super::unfinished::publish_report(&snapshot, "manual", now, &recipient, Some(&note));
     // The keeper lane rides the default report and is read-only whatever the
     // flags; collection is `--only keeper --apply-all`.
-    let lane_lines: Vec<String> = match super::keeper::discover() {
-        Ok(lane) => {
-            payload["keepers"] = lane.to_json();
-            super::keeper::render(&lane)
-                .lines()
-                .map(str::to_string)
-                .collect()
-        }
-        Err(exc) => vec![format!("keeper lane: crashed: {exc}")],
-    };
+    let lane = super::keeper::discover();
+    payload["keepers"] = lane.to_json();
+    let lane_text = lane.render();
+    let lane_lines: Vec<&str> = lane_text.lines().collect();
     // A -J reader must not need --only to learn a provider lane is down.
     let outages = measure_outages_safe(now);
     payload["provider_outages"] = outages.clone();
@@ -127,34 +124,28 @@ fn measure_outages_safe(now: f64) -> Value {
 }
 
 fn run_keeper_lane(args: &Args, now: f64) -> i32 {
-    let lane = match super::keeper::discover() {
-        Ok(lane) => lane,
-        Err(exc) => {
-            eprintln!("fno agents watchdog: keeper lane crashed: {exc}");
-            return 3;
-        }
-    };
+    let lane = super::keeper::discover();
     if args.json_out {
         let mut payload = json!({"generated_at": utc_stamp(now), "lane": KEEPER});
         if let (Some(target), Value::Object(fields)) = (payload.as_object_mut(), lane.to_json()) {
             target.extend(fields);
         }
         if args.apply_all {
-            let (keepers, children) = super::keeper::reap_keepers(&lane);
+            let (keepers, children) = lane.reap_keepers();
             payload["reaped_keepers"] = json!(keepers);
             payload["reaped_children"] = json!(children);
         }
         print_json(&payload);
-        return if lane.broken { 3 } else { 0 };
+        return if lane.broken() { 3 } else { 0 };
     }
-    println!("{}", super::keeper::render(&lane));
-    if lane.broken {
+    println!("{}", lane.render());
+    if lane.broken() {
         return 3;
     }
     if args.apply && !args.apply_all {
         println!("--apply never kills a keeper (wake lane only); the collect flag is --apply-all");
     } else if args.apply_all {
-        let (keepers, children) = super::keeper::reap_keepers(&lane);
+        let (keepers, children) = lane.reap_keepers();
         println!(
             "reaped {} keeper(s), {} hosted child(ren)",
             keepers.len(),
@@ -184,7 +175,8 @@ fn run_recoverable_lane(args: &Args, now: f64) -> i32 {
         }
     };
     let selected = args.session_id.as_deref().filter(|s| !s.is_empty());
-    let (mut payload, rows, scan) = rec::run_recoverable_sweep(&scope, recency, now, selected);
+    let (mut payload, rows, scan) =
+        rec::run_recoverable_sweep(&scope, recency, Some(now), selected);
     let verdicts = payload_verdicts(&payload);
     let print_verdicts = |verdicts: &[Verdict]| {
         for (verdict, row) in verdicts.iter().zip(rows.iter()) {
@@ -459,23 +451,19 @@ fn run_verdict_lanes(args: &Args, now: f64) -> i32 {
     if args.apply_all && args.only.is_none() {
         // Keeper collection rides --apply-all and the full surface only: a
         // filtered run must not widen its destructive scope.
-        match super::keeper::discover() {
-            Err(exc) => eprintln!("keeper lane crashed: {exc}"),
-            Ok(lane) => {
-                let (keepers, children) = super::keeper::reap_keepers(&lane);
-                if lane.broken {
-                    eprintln!("keeper lane: {}", lane.broken_reason);
-                } else if !keepers.is_empty() || !children.is_empty() {
-                    println!(
-                        "reaped {} keeper(s), {} hosted child(ren)",
-                        keepers.len(),
-                        children.len()
-                    );
-                }
-                document["keepers"] = json!(keepers);
-                document["keeper_children"] = json!(children);
-            }
+        let lane = super::keeper::discover();
+        let (keepers, children) = lane.reap_keepers();
+        if let Some(reason) = &lane.broken_reason {
+            eprintln!("keeper lane: {reason}");
+        } else if !keepers.is_empty() || !children.is_empty() {
+            println!(
+                "reaped {} keeper(s), {} hosted child(ren)",
+                keepers.len(),
+                children.len()
+            );
         }
+        document["keepers"] = json!(keepers);
+        document["keeper_children"] = json!(children);
     }
     if args.json_out {
         print_json(&document);
