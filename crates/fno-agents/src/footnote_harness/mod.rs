@@ -120,6 +120,12 @@ fn spawn(cwd: &Path) -> Result<Child, AskOutcome> {
     for name in crate::claims::AMBIENT_IDENTITY_NAMES {
         cmd.env_remove(name);
     }
+    // fnh resolves its rules store from FNO_GRAPH_JSON; naming it here keeps
+    // the child off the $HOME/.fno fallback its own resolver would take.
+    cmd.env(
+        "FNO_GRAPH_JSON",
+        crate::feed::graph_path(&AgentsHome::from_env()),
+    );
     // SAFETY: setpgid is async-signal-safe; it runs between fork and exec.
     unsafe {
         cmd.pre_exec(|| {
