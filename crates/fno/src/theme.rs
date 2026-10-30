@@ -252,10 +252,6 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // terminal: Default everywhere, the flags carry every distinction. This
         // branch is what keeps pre-theme renders byte-identical.
         return match role {
-            Role::BodySel => (Color::Default, Color::Default, 0),
-            // A plain-body popup's cursor row: the one filled band on the
-            // plain ground (the inverse block's old job, now per-row).
-            Role::BodyCursor => (Color::Default, Color::Default, cell_flags::INVERSE),
             Role::Title | Role::Chip | Role::Tab(true) | Role::ScrollThumb => (
                 Color::Default,
                 Color::Default,
@@ -291,14 +287,6 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
     // rides the theme ground (PanelBody resolved above the split), so
     // content reads in the emulator's own colors under every theme.
     match role {
-        // The selected row's fg is the theme's `title`, not `Color::Default`:
-        // every shipped `sel` is a surface the theme picked to sit under its
-        // own title color, so an explicit fg stays readable regardless of the
-        // emulator's default pair (a dark sel bg on a light terminal would
-        // read dark-on-dark with a Default fg).
-        Role::BodySel => (t.title, t.sel, cell_flags::BOLD),
-        // A plain-body popup's cursor band: the `sel` surface, as BodySel.
-        Role::BodyCursor => (t.title, t.sel, cell_flags::BOLD),
         Role::BodyAccent => (t.brand, Color::Default, cell_flags::BOLD),
         // background. The inverse block it used to sit on turned the light
         // `dim` into the BACKGROUND, so the row rendered light-on-light and

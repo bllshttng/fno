@@ -19,6 +19,17 @@ pub fn cursor_style(t: &Theme) -> (Color, Color, u8) {
     }
 }
 
+/// `(fg, bg, flags)` for a row that is marked but not driven: the focused
+/// agent and the row under the pointer. It is a quiet surface band, never the
+/// cursor, so two rows never both read as the one the keys act on.
+pub fn resting_band_style(t: &Theme) -> (Color, Color, u8) {
+    if t.inherit {
+        (Color::Indexed(3), Color::Indexed(0), 0)
+    } else {
+        (t.stamp, t.sel, 0)
+    }
+}
+
 /// Paint `cells` as cursor cells in place.
 pub fn paint_cursor(cells: &mut [Cell], t: &Theme) {
     let (fg, bg, flags) = cursor_style(t);
