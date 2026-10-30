@@ -513,6 +513,49 @@ mod tests {
     }
 
     #[test]
+    fn quoted_status_survives_stamp_and_reconcile() {
+        // Regression: a plan whose status line arrives quoted.
+        // Stamp must leave a frontmatter the strict reader parses back, and
+        // the reconcile rewrite must land a known token.
+        let dir = tmp_dir("quoted-status");
+        let doc = dir.join("plan.md");
+        std::fs::write(
+            &doc,
+            "---\nclaims: x-regress\nstatus: \"in_progress\"\n---\n# body\n",
+        )
+        .unwrap();
+        let r = cmd_stamp(
+            &doc,
+            "SID-Q",
+            &["https://example.com/pull/9".into()],
+            None,
+            false,
+            None,
+        );
+        assert_eq!(r.exit, 0, "{}", r.message);
+        let text = std::fs::read_to_string(&doc).unwrap();
+        let parsed = super::super::codec::parse_frontmatter(&text).unwrap();
+        assert_eq!(
+            match parsed.fields.get("status") {
+                Some(Fv::Scalar(s)) => s.clone(),
+                other => panic!("status scalar, got {other:?}"),
+            },
+            "in_review"
+        );
+        let rewritten = super::super::reconcile::rewrite_status(&text, "superseded").unwrap();
+        let reparsed = super::super::reconcile::rewrite_status(&rewritten, "in_review").unwrap();
+        let reparsed = super::super::reconcile::rewrite_status(&reparsed, "done").unwrap();
+        let final_parsed = super::super::codec::parse_frontmatter(&reparsed).unwrap();
+        assert_eq!(
+            match final_parsed.fields.get("status") {
+                Some(Fv::Scalar(s)) => s.clone(),
+                other => panic!("status scalar, got {other:?}"),
+            },
+            "done"
+        );
+    }
+
+    #[test]
     fn stamp_then_graduate_contract() {
         let dir = tmp_dir("contract");
         let doc = dir.join("plan.md");

@@ -101,6 +101,34 @@ pub fn plan_link_id(fields: &Fields) -> Option<String> {
     None
 }
 
+/// Repair target for a file whose frontmatter cannot parse: resolve the node
+/// link (`node` / `claims` / `graph_node_id`) by regex, then project the node's
+/// status with the same forward-only projection the tiers use. A live node
+/// whose status writes no plan status holds; no link or node row is None.
+/// Needing no frontmatter parse, it runs where `parse_frontmatter` just failed.
+fn repair_target(text: &str, status_map: &HashMap<String, String>) -> Option<String> {
+    let fm = front_re().captures(text)?["fm"].to_string();
+    let mut link: Option<String> = None;
+    for line in fm.lines() {
+        for key in ["node", "claims", "graph_node_id"] {
+            let prefix = format!("{key}:");
+            if line.starts_with(&prefix) {
+                let v = line[prefix.len()..].trim().trim_matches('"');
+                if !v.is_empty() {
+                    link = Some(v.to_string());
+                    break;
+                }
+            }
+        }
+        if link.is_some() {
+            break;
+        }
+    }
+    let link = link?;
+    let node_status = status_map.get(&link).map(String::as_str);
+    super::status::project_plan_status(None, node_status?)
+}
+
 /// Canonical status a drifted `raw` should become, or None to leave it alone.
 /// `node_status` is the linked node's status when the map knows it; None means
 /// absent evidence (no link, or the link resolves to nothing). Tier 1 runs
@@ -204,9 +232,12 @@ pub struct SweepResult {
     pub superseded: u32,
     /// Already canonical, no frontmatter, unparseable, or locked.
     pub skipped: u32,
-    /// Drift token left alone: no node status was available, or the node is
-    /// live and a terminal write would be a guess.
+    /// Drift token left alone: no node status was available tier2-blind, or
+    /// the node is live and a terminal write would be a guess.
     pub stood_down: u32,
+    /// An unparseable file whose status line was rebuilt from the linked
+    /// node's status (the corrupt-line repair arm).
+    pub repaired: u32,
     /// (path, old, new) per rewrite.
     pub changes: Vec<(String, String, String)>,
     pub warnings: Vec<String>,
@@ -217,10 +248,13 @@ impl SweepResult {
     /// shaped exactly like a healthy idempotent run, which is how a wedged
     /// graph reads as "nothing to do" to the unattended --apply callers.
     pub fn summary(&self) -> String {
-        let base = format!(
+        let mut base = format!(
             "{} normalized, {} superseded, {} skipped",
             self.normalized, self.superseded, self.skipped
         );
+        if self.repaired > 0 {
+            base = format!("{base}, {} repaired", self.repaired);
+        }
         if self.stood_down > 0 {
             format!("{base}, {} stood down", self.stood_down)
         } else {
@@ -284,10 +318,48 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
         let parsed = match codec::parse_frontmatter(&text) {
             Ok(p) => p,
             Err(e) => {
-                res.skipped += 1;
-                res.warnings
-                    .push(format!("skip (unparseable): {name}: {e}"));
-                continue;
+                // Repair arm: an unparseable file whose status line a link
+                // + node status can rebuild. The stance matches tier2/3: a
+                // live node holds, a closed node writes its terminal. The
+                // write runs the same parse-back gate as every other writer.
+                match repair_target(&text, status_map) {
+                    Some(new) => {
+                        let Some(rewritten) = rewrite_status(&text, &new) else {
+                            res.skipped += 1;
+                            res.warnings.push(format!("skip (no frontmatter): {name}"));
+                            continue;
+                        };
+                        let rewritten = if new == "done" {
+                            ensure_done_at(&rewritten, &super::now_stamp())
+                        } else {
+                            rewritten
+                        };
+                        if apply {
+                            if let Err(e) = codec::ensure_canonical(&rewritten)
+                                .map_err(std::io::Error::other)
+                                .and_then(|()| codec::atomic_write(&path, &rewritten))
+                            {
+                                res.warnings.push(format!("write failed: {name}: {e}"));
+                                drop(guard);
+                                continue;
+                            }
+                        }
+                        res.changes.push((
+                            path.to_string_lossy().into_owned(),
+                            "(corrupt)".into(),
+                            new.clone(),
+                        ));
+                        res.repaired += 1;
+                        continue;
+                    }
+                    None => {
+                        res.stood_down += 1;
+                        res.warnings.push(format!(
+                            "repair hold (status line unparseable, node status writes no plan status): {name}: {e}"
+                        ));
+                        continue;
+                    }
+                }
             }
         };
 
@@ -345,7 +417,10 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
         };
 
         if apply {
-            if let Err(e) = codec::atomic_write(&path, &rewritten) {
+            if let Err(e) = codec::ensure_canonical(&rewritten)
+                .map_err(std::io::Error::other)
+                .and_then(|()| codec::atomic_write(&path, &rewritten))
+            {
                 res.warnings.push(format!("write failed: {name}: {e}"));
                 drop(guard);
                 continue;
@@ -468,6 +543,45 @@ mod tests {
         rows.iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    // ------------------------------------------------------------------
+    // corrupt-line repair arm
+    // ------------------------------------------------------------------
+
+    /// The corrupt specimen shape with a claims link.
+    fn corrupt_doc() -> String {
+        "---\nclaims: x-regress\nstatus: \"in_\"in_review\"\n---\n# T\n\nbody\n".to_string()
+    }
+
+    #[test]
+    fn repair_arm_rebuilds_a_corrupt_status_line_from_the_node() {
+        let dir = tmp_dir("repair");
+        write_doc(&dir, "corrupt.md", &corrupt_doc());
+        let res = sweep(&dir, true, &map(&[("x-regress", "done")]));
+        assert_eq!(res.repaired, 1, "{:?}", res.warnings);
+        let text = read_doc(&dir.join("corrupt.md"));
+        assert!(text.contains("status: \"done\""), "{text}");
+        assert!(text.contains("claims: x-regress"), "{text}");
+    }
+
+    #[test]
+    fn repair_arm_holds_when_the_node_writes_no_plan_status() {
+        let dir = tmp_dir("repair-live");
+        write_doc(&dir, "corrupt.md", &corrupt_doc());
+        // An in_progress node maps to no plan-status write: the repair holds
+        // rather than guessing. An in_review node repairs forward to
+        // in_review, never a terminal guess.
+        let res = sweep(&dir, true, &map(&[("x-regress", "in_progress")]));
+        assert_eq!(res.repaired, 0);
+        assert_eq!(res.stood_down, 1, "{:?}", res.warnings);
+        assert!(read_doc(&dir.join("corrupt.md")).contains("in_\"in_review\""));
+
+        let dir2 = tmp_dir("repair-forward");
+        write_doc(&dir2, "corrupt.md", &corrupt_doc());
+        let res2 = sweep(&dir2, true, &map(&[("x-regress", "in_review")]));
+        assert_eq!(res2.repaired, 1, "{:?}", res2.warnings);
+        assert!(read_doc(&dir2.join("corrupt.md")).contains("status: \"in_review\""));
     }
 
     // ------------------------------------------------------------------
@@ -598,11 +712,14 @@ mod tests {
     #[test]
     fn sweep_skips_malformed_body_intact() {
         let dir = tmp_dir("malformed");
-        // An indented continuation line is the codec's parse error.
+        // An indented continuation line is the codec's parse error. No node
+        // evidence: the repair arm stands down, and the file stays
+        // byte-identical.
         let bad = "---\nnode: x-1\nstatus: idea\n  wrapped\n---\nbody\n";
         let p = write_doc(&dir, "bad.md", bad);
         let res = sweep(&dir, true, &map(&[]));
-        assert_eq!(res.skipped, 1);
+        assert_eq!(res.stood_down, 1);
+        assert_eq!(res.skipped, 0);
         assert_eq!(res.normalized, 0);
         assert_eq!(read_doc(&p), bad);
     }
