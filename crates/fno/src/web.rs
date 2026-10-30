@@ -46,6 +46,7 @@ pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// `/backlog/node.json` and computes nothing the model already answered.
 pub(crate) const BACKLOG_PAGE: &str = include_str!("web_backlog.html");
 pub(crate) const COMMAND_PAGE: &str = include_str!("web_command.html");
+const TRACE_PAGE: &str = include_str!("web_trace.html");
 /// The house stylesheet the backlog and command pages share. The CSP allows
 /// inline style only, so [`house`] writes it into each page's `<style>`.
 pub(crate) const HOUSE_CSS: &str = include_str!("web_house.css");
@@ -815,6 +816,8 @@ fn router(state: AppState) -> Router {
         .route("/team", get(team))
         .route("/command", get(command))
         .route("/command/model.json", get(command_model))
+        .route("/trace", get(trace))
+        .route("/trace/model.json", get(trace_model))
         .route("/ws", get(ws_handler))
         .with_state(state)
 }
@@ -1051,6 +1054,43 @@ async fn command(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respon
         return unauthorized();
     }
     html_response(with_nav(&house(COMMAND_PAGE), NavPage::Command))
+}
+
+#[derive(serde::Deserialize)]
+struct TraceQuery {
+    t: Option<String>,
+    node: Option<String>,
+}
+
+/// `GET /trace`: the trace page for one node; it reads `/trace/model.json`.
+async fn trace(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    html_response(with_nav(&house(TRACE_PAGE), NavPage::Command))
+}
+
+/// `GET /trace/model.json`: the fold for `node`, read per request.
+async fn trace_model(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    let node = q.node.as_deref().unwrap_or("");
+    if !crate::web_trace::valid_node(node) {
+        return plain_status(StatusCode::BAD_REQUEST, "node must be a node id");
+    }
+    match crate::web_trace::read_trace(node).await {
+        Ok(body) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            body,
+        )
+            .into_response(),
+        Err(reason) => plain_status(StatusCode::SERVICE_UNAVAILABLE, &reason),
+    }
 }
 
 fn html_response(body: String) -> Response {
@@ -3114,6 +3154,48 @@ console.log("recent searches: 12 cases ok");
         assert!(reply.contains("data-current=\"command\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn router_gates_trace_on_the_token_and_the_node_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (tx, _) = broadcast::channel(4);
+        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let state = AppState {
+            tx,
+            snap: Arc::new(Mutex::new(Snapshot::default())),
+            token: Arc::<str>::from("right"),
+            rundown_html: std::env::temp_dir().join("fno-web-trace-lead.html"),
+            rundown_republish: false,
+            command: Arc::new(crate::web_command::CommandCache::default()),
+            writable: false,
+            model: Default::default(),
+            shutdown,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        let ask = |path: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+        let reply = ask("/trace/model.json?node=x-a141&t=wrong").await;
+        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+        let reply = ask("/trace/model.json?node=--help&t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+        assert!(ask("/trace?node=x-a141").await.starts_with("HTTP/1.1 401"));
+        let reply = ask("/trace?node=x-a141&t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.contains("data-current=\"command\""), "{reply}");
         server.abort();
     }
 

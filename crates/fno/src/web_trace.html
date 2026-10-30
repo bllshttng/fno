@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fno trace</title>
+<style>
+/* fno-house */
+.wrap{padding:12px max(14px,env(safe-area-inset-right,0px)) 32px max(14px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:12px}
+.panel{border:1px solid var(--surface0);background:var(--mantle);padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.panel h2{margin:4px 0 2px;font-size:11px;color:var(--overlay1);font-weight:700}.panel h2::before{content:"## "}
+.title{margin:0;font-size:15px;font-weight:700;overflow-wrap:anywhere}.sub{font-size:11.5px;color:var(--overlay1)}
+.banner{padding:4px 10px;border:1px solid var(--yellow);color:var(--yellow)}.banner:empty{display:none}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.stat{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border:1px solid var(--surface0);background:var(--base)}.stat b{font-size:14px;font-variant-numeric:tabular-nums}.stat span{font-size:11px;color:var(--overlay1)}.stat small{font-size:10.5px;color:var(--yellow)}
+.phase{display:grid;grid-template-columns:96px minmax(0,1fr) auto;gap:8px;align-items:center;font-size:12px}
+.lane{position:relative;height:10px;background:var(--surface0)}.lane i{position:absolute;top:0;bottom:0;background:var(--blue);min-width:2px}
+.row{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;padding:5px 8px;border:1px solid var(--surface0);background:var(--base);font-size:12px}
+.row b{font-weight:600;overflow-wrap:anywhere;flex:1 1 220px}.row a{color:var(--link,var(--blue))}
+.badge{padding:1px 6px;border:1px solid var(--surface1);font-size:11px;font-variant-numeric:tabular-nums}.badge.bad{border-color:var(--red);color:var(--red)}.badge.unread{color:var(--overlay1);border-style:dashed}
+.opts{margin:4px 0 0;padding-left:18px;font-size:12px}
+.empty{color:var(--overlay1);margin:0;font-size:12px}
+</style>
+</head>
+<body>
+<header class="controls bar"><span class="mark">Ｆ<b>[no]</b> trace</span><span id="age" class="sub">reading</span></header>
+<div class="wrap">
+  <div id="banner" class="banner"></div>
+  <section class="panel"><h1 class="title" id="title">reading the trace</h1><span class="sub" id="meta"></span><div class="stats" id="stats"></div></section>
+  <section class="panel"><h2>Phases</h2><div id="phases"></div></section>
+  <section class="panel"><h2>Tasks</h2><div id="tasks"></div></section>
+  <section class="panel" id="kids-panel" hidden><h2>Children</h2><div id="kids"></div></section>
+  <section class="panel"><h2>Waiting on you</h2><div id="waiting"></div></section>
+</div>
+<script>
+(() => {
+const nav = document.querySelector("nav.fno-nav");
+const base = nav ? nav.dataset.base : "./";
+const qs = new URLSearchParams(location.search);
+const token = qs.get("t") || "";
+const node = qs.get("node") || "";
+const q = (path, params) => base + path + "?" + new URLSearchParams(params).toString();
+const $ = id => document.getElementById(id);
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function dur(s) {
+  if (s == null) return null;
+  if (s < 90) return s + "s";
+  if (s < 5400) return Math.round(s / 60) + "m";
+  if (s < 172800) return (s / 3600).toFixed(1) + "h";
+  return (s / 86400).toFixed(1) + "d";
+}
+// A null count prints its reason, never 0.
+function stat(label, value, reason) {
+  const s = el("div", "stat");
+  s.append(el("b", null, value == null ? "unread" : String(value)), el("span", null, label));
+  if (value == null && reason) s.append(el("small", null, reason));
+  return s;
+}
+function header(m) {
+  const h = m.header || {};
+  $("title").textContent = m.title || m.node;
+  $("meta").textContent = m.node + " · " + m.status;
+  const cost = h.cost_usd == null ? null : "$" + h.cost_usd.toFixed(2);
+  $("stats").replaceChildren(
+    stat("duration", dur(h.duration_s), "not finished"),
+    stat("cost", cost, h.cost_reason),
+    stat("sessions", h.sessions),
+    stat("AI turns", h.ai_turns, h.ai_turns_reason),
+    stat("tool calls", h.tool_calls, h.tool_calls_reason),
+    ...["tool_errors", "refusals", "review_findings", "ci_red"].map(k =>
+      stat(k.replace("_", " "), (m.errors || {})[k], ((m.errors || {}).unread || {})[k])),
+  );
+}
+function badges(errors) {
+  const out = [];
+  const unread = (errors || {}).unread || {};
+  for (const [k, v] of Object.entries(errors || {})) {
+    if (k === "unread") continue;
+    if (v == null) { const b = el("span", "badge unread", k.replace("_", " ") + " unread"); b.title = unread[k] || ""; out.push(b); }
+    else if (v > 0) out.push(el("span", "badge bad", k.replace("_", " ") + " " + v));
+  }
+  return out;
+}
+function phases(m) {
+  const list = m.phases || [];
+  const t = x => (x ? Date.parse(x) : NaN);
+  const starts = list.map(p => t(p.started_at)).filter(n => !isNaN(n));
+  const ends = list.map(p => t(p.ended_at)).filter(n => !isNaN(n));
+  const lo = Math.min(...starts), hi = Math.max(...ends, ...starts);
+  const span = hi - lo || 1;
+  const box = $("phases");
+  if (!list.length) { box.replaceChildren(el("p", "empty", "no phases recorded")); return; }
+  box.replaceChildren(...list.map(p => {
+    const r = el("div", "phase");
+    const lane = el("div", "lane");
+    const s = t(p.started_at), e = isNaN(t(p.ended_at)) ? hi : t(p.ended_at);
+    if (!isNaN(s)) {
+      const bar = el("i");
+      bar.style.left = ((s - lo) / span * 100) + "%";
+      bar.style.width = (Math.max(e - s, 0) / span * 100) + "%";
+      lane.append(bar);
+    }
+    const tail = el("span");
+    tail.append(...badges(p.errors));
+    r.append(el("span", null, p.phase), lane, tail);
+    return r;
+  }));
+}
+function tasks(m) {
+  const list = m.tasks || [];
+  const box = $("tasks");
+  if (!list.length) { box.replaceChildren(el("p", "empty", m.tasks_reason || "no plan tasks")); return; }
+  box.replaceChildren(...list.map(k => {
+    const r = el("div", "row");
+    r.append(el("b", null, k.id + "  " + k.title));
+    r.append(el("span", "sub", k.outcome || k.reason || ""), ...badges(k.errors));
+    return r;
+  }));
+}
+function kids(m) {
+  const list = m.children;
+  $("kids-panel").hidden = !list;
+  if (!list) return;
+  $("kids").replaceChildren(...list.map(c => {
+    const r = el("div", "row");
+    const a = el("a", null, c.id);
+    a.href = q("trace", {t: token, node: c.id});
+    r.append(a, el("b", null, c.title), el("span", "sub", c.state || c.status));
+    if (c.waiting) r.append(el("span", "badge bad", "waiting " + c.waiting));
+    r.append(...badges(c.errors));
+    return r;
+  }));
+}
+function waiting(m) {
+  const list = m.waiting || [];
+  const box = $("waiting");
+  if (!list.length) { box.replaceChildren(el("p", "empty", m.waiting_reason || "nothing waiting on you")); return; }
+  box.replaceChildren(...list.map(w => {
+    const r = el("div", "row");
+    r.append(el("b", null, w.question));
+    const a = el("a", null, "open the question");
+    a.href = q("command", {t: token, question: w.id});
+    r.append(a);
+    const ol = el("ol", "opts");
+    for (const o of w.options || []) ol.append(el("li", null, o.text));
+    r.append(ol, el("span", "sub", "the answer goes through the /command question card"));
+    return r;
+  }));
+}
+let last = null;
+async function load() {
+  let reason = null, res;
+  try { res = await fetch(q("trace/model.json", {t: token, node}), {cache: "no-store"}); } catch (e) { reason = e.message; }
+  if (res && !res.ok) reason = (await res.text()) || res.status;
+  $("banner").textContent = reason ? "trace not read: " + reason : "";
+  if (reason) return;
+  last = await res.json();
+  header(last); phases(last); tasks(last); kids(last); waiting(last);
+  $("age").textContent = "read " + new Date().toLocaleTimeString();
+}
+load();
+setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
+})();
+</script>
+</body>
+</html>
