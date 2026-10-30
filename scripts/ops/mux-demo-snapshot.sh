@@ -534,9 +534,9 @@ PY
 # append-only JSONL with a documented row shape, so the seed writes them
 # directly. The projections resolve the stores under the config state dir:
 # <state>/chats/<chat>/messages.jsonl and <state>/questions.jsonl.
-python3 - "$ROOT" <<'PY'
+python3 - "$ROOT" "${SIDS[0]}" "${IDS[0]}" <<'PY'
 import json, os, sys, datetime
-root = sys.argv[1]
+root, scout_sid, rate_limit_node = sys.argv[1], sys.argv[2], sys.argv[3]
 now = datetime.datetime.now(datetime.timezone.utc)
 
 def ts(mins_ago):
@@ -604,8 +604,9 @@ write("chat-demo-broadcast", [
 ])
 
 # Questions journal: the feed's questions leg (operator_question,
-# operator_decision envelopes). The first question carries one screenshot,
-# so the question page shows its screens row.
+# operator_decision envelopes). The first question is the full card: asker,
+# node, options and every context field, so the page shows zero missing.
+# The second is the bare fallback card.
 import struct, zlib
 def png(path, w, h, rgb):
     def chunk(kind, data):
@@ -620,7 +621,30 @@ png(shot, 160, 90, (40, 120, 200))
 qs = [
     {"ts": ts(4), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?",
-              "images": [shot]}},
+              "asker": "scout", "node": rate_limit_node,
+              "options": [
+                  {"n": 1, "text": "Hold the demo for the shot",
+                   "next": "reschedule the slot once the shot lands",
+                   "pros": ["the demo shows the real card"], "cons": ["the slot slips about an hour"]},
+                  {"n": 2, "text": "Run the demo on the old card",
+                   "next": "review the provenance card on the next paint PR",
+                   "pros": ["the slot holds"], "cons": ["the provenance fields stay unreviewed"]}],
+              "origin": {"handle": "scout", "session_id": scout_sid, "name": "scout",
+                         "harness": "claude", "host": "bb16"},
+              "rung": {"level": "user"},
+              "via": [{"level": "lead", "holder_name": "rowan", "evidence": "the demo script reads no machine state"}],
+              "context": {"blocked_because": "the paint gate holds the run until the look clears",
+                          "options_rationale": "holding shows the real pixels; running early demos unreviewed paint",
+                          "recommendation": {"option": 1, "why": "the demo is the only shared audience this week",
+                                             "downside": "the slot slips if the shot overruns"},
+                          "unknowns": "whether the projector renders the dark theme",
+                          "reversible": "costly",
+                          "cost_if_wrong": "the 18:00 slot is lost for the week",
+                          "meanwhile": "stops",
+                          "tried": "Two lead-rung reviews passed; the paint gate still holds the run.",
+                          "evidence": "The 18:00 slot is the only shared window this week.",
+                          "deadline": ts(-3600), "on_silence": "proceed"},
+              "class": "irreversible"}},
     {"ts": ts(14), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
     {"ts": ts(26), "type": "operator_decision", "source": "target",

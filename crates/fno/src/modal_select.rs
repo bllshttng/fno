@@ -5,8 +5,9 @@
 //! body row they put on screen through [`paint_line`]. The recorder keeps the
 //! rows of the last frame as blocks of cells, so a drag works in the modal's
 //! own coordinates: the border, the title and the footer are never part of a
-//! selection. A selection paints with the theme's `sel` surface from the same
-//! call, and [`release`] returns the text to copy.
+//! selection. A selection paints through [`crate::cursor::cursor_style`], the
+//! one cursor style every surface shares, and [`release`] returns the text to
+//! copy.
 //!
 //! A soft wrap is not a line break. A row the layout marked as a
 //! continuation joins back onto the row above: with nothing between when the

@@ -99,6 +99,46 @@ pub struct QuestionAsker {
     pub reach: Option<String>,
 }
 
+/// Who asked, mirroring the projection's `origin`: the session the question
+/// came from, with its registry name, harness and host when known. The
+/// command page re-serializes it, so it also derives Serialize.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+pub struct QuestionOrigin {
+    pub handle: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub harness: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
+}
+
+/// The ladder rung a [`QuestionItem`] sits at, mirroring the projection's
+/// `rung`. `holder_*` are absent at the user rung.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+pub struct QuestionRung {
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub holder_name: Option<String>,
+    #[serde(default)]
+    pub holder_session: Option<String>,
+}
+
+/// One rung a [`QuestionItem`] climbed from, mirroring one `via` hop: the
+/// holder that let it pass, and the evidence they named.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+pub struct QuestionHop {
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub holder_name: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<String>,
+}
+
 /// One open or answered operator question, mirroring the projection item
 /// `fno-agents needs --items --json` prints. This is what the overlay and the
 /// notifications panel render and answer. All fields but `id` are
@@ -157,6 +197,31 @@ pub struct QuestionItem {
     /// was asked here.
     #[serde(default)]
     pub host: Option<String>,
+    /// The session that asked, with its registry name and harness.
+    #[serde(default)]
+    pub origin: Option<QuestionOrigin>,
+    /// The rung the row sits at on the question ladder.
+    #[serde(default)]
+    pub rung: Option<QuestionRung>,
+    /// Every rung the row climbed from, asking lead last.
+    #[serde(default)]
+    pub via: Vec<QuestionHop>,
+    /// What the asker already attempted, required before a climb.
+    #[serde(default)]
+    pub tried: Option<String>,
+    /// Why this row reached this rung: the climb evidence.
+    #[serde(default)]
+    pub evidence: Option<String>,
+    /// The node's title and graph status, joined by the projection at read.
+    #[serde(default)]
+    pub node_title: Option<String>,
+    #[serde(default)]
+    pub node_stage: Option<String>,
+    /// What the row does when its deadline passes with no answer.
+    #[serde(default)]
+    pub on_silence: Option<String>,
+    #[serde(default)]
+    pub deadline: Option<String>,
 }
 
 /// One recently answered item beside the open list, from the payload's
@@ -579,7 +644,13 @@ mod tests {
     fn parses_required_questions_json() {
         // AC4-HP: the projection payload with items and the answered array.
         let json = br#"{"as_of":1000,"items":[
-            {"id":"q-1","kind":"question","title":"which auth?","state":"open","ready":false,"missing":["unknowns"],"priority":"normal","created_at":"2026-09-26T05:00:00Z","options":[{"n":1,"text":"oauth"},{"n":2,"text":"apikey"}],"asker":{"handle":"w1","live":true}},
+            {"id":"q-1","kind":"question","title":"which auth?","state":"open","ready":false,"missing":["unknowns"],"priority":"normal","created_at":"2026-09-26T05:00:00Z","options":[{"n":1,"text":"oauth"},{"n":2,"text":"apikey"}],"asker":{"handle":"w1","live":true},
+             "origin":{"handle":"w1","session_id":"aaaa1111-bbbb","name":"t-one","harness":"claude","host":"bb16"},
+             "rung":{"level":"user"},
+             "via":[{"level":"lead","holder_name":"tomas","evidence":"read PR 12"}],
+             "tried":"two leads declined","evidence":"no owner named","class":"irreversible",
+             "node_title":"seat table drawer","node_stage":"in_review",
+             "on_silence":"proceed","deadline":"2026-10-30T09:00:00Z"},
             {"id":"m-1","kind":"mine","title":"ship tonight","state":"open","ready":true,"missing":[],"priority":"normal","created_at":"","options":[]},
             {"id":"q-2","kind":"pin","title":"publish the crate","state":"open","ready":false,"missing":["node"],"priority":"high","created_at":"","options":[]}
         ],"answered":[{"id":"q-0","title":"old one","asker":"w9","answer":"narrow","rung":"mail","outcome":"landed","at":"2026-09-26T04:00:00Z"}]}"#;
@@ -589,6 +660,22 @@ mod tests {
         assert_eq!(fold.items[0].options[0].text, "oauth");
         assert_eq!(fold.items[0].asker.as_ref().unwrap().live, Some(true));
         assert_eq!(fold.items[0].missing, vec!["unknowns"]);
+        let origin = fold.items[0].origin.as_ref().unwrap();
+        assert_eq!(origin.name.as_deref(), Some("t-one"));
+        assert_eq!(origin.session_id.as_deref(), Some("aaaa1111-bbbb"));
+        assert_eq!(origin.host.as_deref(), Some("bb16"));
+        assert_eq!(
+            fold.items[0].rung.as_ref().unwrap().level.as_deref(),
+            Some("user")
+        );
+        assert_eq!(fold.items[0].via[0].holder_name.as_deref(), Some("tomas"));
+        assert_eq!(fold.items[0].tried.as_deref(), Some("two leads declined"));
+        assert_eq!(
+            fold.items[0].node_title.as_deref(),
+            Some("seat table drawer")
+        );
+        assert_eq!(fold.items[0].node_stage.as_deref(), Some("in_review"));
+        assert_eq!(fold.items[0].on_silence.as_deref(), Some("proceed"));
         assert_eq!(fold.answered.len(), 1);
         assert_eq!(fold.answered[0].rung.as_deref(), Some("mail"));
     }
