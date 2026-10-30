@@ -459,19 +459,18 @@ mod tests {
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let td = tempfile::TempDir::new().unwrap();
         let seen = td.path().join("stamp");
-        let script = td.path().join("fake-fno");
         // The fake fno exits 0 with empty stdout, which reconcile_result
-        // keeps; it dumps the one env the real child must carry.
-        std::fs::write(
-            &script,
-            format!(
+        // keeps; it dumps the one env the real child must carry. The stub
+        // goes through write_exec_stub: a sibling test's fork can hold a
+        // plain write fd open and the exec fails with Text file busy.
+        let script = crate::write_exec_stub(
+            td.path(),
+            "fake-fno",
+            &format!(
                 "#!/bin/sh\nprintf '%s' \"$FNO_ACTOR_KIND\" > '{}'\n",
                 seen.display()
             ),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let prev_bin = std::env::var_os("FNO_BIN");
         let prev_stamp = std::env::var_os(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
         std::env::set_var("FNO_BIN", &script);
