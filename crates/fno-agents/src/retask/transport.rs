@@ -1,8 +1,8 @@
 //! The live retask seams: `fno mux` pane reads/sends under bounded
 //! timeouts, the succession poll over the shared registry, the
 //! rename-with-node registry transaction, the verified-tier projection, the
-//! graph-join source preflight, the claude transcript's live permission
-//! mode, and the stdin-payload door on the `rename` client action.
+//! graph-join source preflight, and the claude transcript's live permission
+//! mode. The front that drives these seams is the `front` module.
 //!
 //! Every subprocess rides the crate's bounded, group-killed budget the way
 //! the Python transport's `subprocess.run(timeout=...)` did; a budget death
@@ -43,115 +43,9 @@ fn timeout_reason(argv: &[String]) -> String {
     .to_string()
 }
 
-/// The stdin-payload door: `fno-agents rename` with no argv reads one JSON
-/// payload and runs the transaction. Exit 0 with the receipt on stdout for
-/// both `retasked` and `refused`; exit 2 with stderr naming the problem for
-/// any usage or payload error.
-pub fn run_payload() -> i32 {
-    let fail = |message: String| {
-        eprintln!("retask: {message}");
-        2
-    };
-    let mut raw = String::new();
-    if std::io::stdin().read_to_string(&mut raw).is_err() {
-        return fail("could not read the payload on stdin".to_string());
-    }
-    let payload: Value = match serde_json::from_str(&raw) {
-        Ok(value) => value,
-        Err(error) => return fail(format!("bad payload: {error}")),
-    };
-    match payload.get("op").and_then(Value::as_str) {
-        Some("retask") => {}
-        other => {
-            return fail(format!(
-                "unsupported op {}; only \"retask\" rides the rename payload",
-                other.unwrap_or("(missing)")
-            ))
-        }
-    }
-    let worker = match payload.get("worker").and_then(Value::as_str) {
-        Some(worker) if !worker.is_empty() => worker.to_string(),
-        _ => return fail("payload needs worker".to_string()),
-    };
-    let node = match payload.get("node").and_then(Value::as_str) {
-        Some(node) if !node.is_empty() => node.to_string(),
-        _ => return fail("payload needs node".to_string()),
-    };
-    let target = match payload.get("target") {
-        Some(value) => match RetaskTarget::from_payload(value) {
-            Ok(target) => target,
-            Err(message) => return fail(message),
-        },
-        None => return fail("payload needs target".to_string()),
-    };
-    let target_command = match payload.get("target_command").and_then(Value::as_str) {
-        Some(command) if !command.is_empty() => command.to_string(),
-        _ => return fail("payload needs target_command".to_string()),
-    };
-    // An absent or unusable mux ref is NOT a door refusal: detect names the
-    // row defect (worker_has_no_mux_ref) byte for byte, so the door passes
-    // the emptiness through and lets the transaction refuse by word.
-    let mux_ref = match payload.get("mux") {
-        None | Some(Value::Null) => None,
-        Some(value) => {
-            let session = value.get("session").and_then(Value::as_str).unwrap_or("");
-            let pane_id = value.get("pane_id").and_then(Value::as_u64).unwrap_or(0);
-            (!session.is_empty() && pane_id != 0).then(|| (session.to_string(), pane_id))
-        }
-    };
-
-    let registry_path = match payload.get("registry").and_then(Value::as_str) {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => crate::paths::AgentsHome::from_env().registry_json(),
-    };
-    let rows = match crate::client_commands::load_registry_entries(&registry_path) {
-        Ok(rows) => rows,
-        Err(message) => return fail(format!("registry read failed: {message}")),
-    };
-    let row_value = match crate::client_commands::find_agent_entry(&rows, &worker) {
-        Ok(row) => row.clone(),
-        Err(error) => return fail(format!("cannot resolve worker {worker:?}: {error:?}")),
-    };
-    let entry: RegistryEntry = match serde_json::from_value(row_value) {
-        Ok(entry) => entry,
-        Err(error) => return fail(format!("registry row {worker:?} does not decode: {error}")),
-    };
-    let row = retask_row_from_entry(&entry);
-    // A thread row without the opened viewport is a producer bug: the Python
-    // front always opens one before building the payload.
-    if row.substrate.as_deref() == Some("thread") && mux_ref.is_none() {
-        return fail("payload needs the opened thread viewport in mux".to_string());
-    }
-    let graph_path = match payload.get("graph").and_then(Value::as_str) {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        // Same fallback as every other client-side read.
-        _ => crate::graph_get::default_graph_path(),
-    };
-
-    let mut seams = LiveSeams::live(row.clone(), mux_ref, node, registry_path, graph_path);
-    let live_mode = live_permission_mode(&entry);
-    let node = seams.node.clone();
-    let receipt = match execute_retask(
-        &row,
-        &target,
-        &node,
-        &target_command,
-        &mut seams,
-        live_mode.as_deref(),
-    ) {
-        Ok(receipt) => receipt,
-        Err(failure) => refused_receipt_from_transport(&row, &seams, failure),
-    };
-    println!(
-        "{}",
-        serde_json::to_string(&receipt).unwrap_or_else(|_| "{}".into())
-    );
-    0
-}
-
 /// The refusal for a pane transport death: the partial transaction state is
 /// preserved, exactly as the Python transport's except arm did.
-fn refused_receipt_from_transport(
+pub(crate) fn refused_receipt_from_transport(
     row: &RetaskRow,
     seams: &LiveSeams,
     failure: TransportFailure,
@@ -174,7 +68,7 @@ fn refused_receipt_from_transport(
 
 /// The row facts the transaction reads, off the registry row resolved at run
 /// time.
-fn retask_row_from_entry(entry: &RegistryEntry) -> RetaskRow {
+pub(crate) fn retask_row_from_entry(entry: &RegistryEntry) -> RetaskRow {
     RetaskRow {
         name: entry.name.clone(),
         harness: entry.harness.clone().unwrap_or_default(),

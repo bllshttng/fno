@@ -1096,8 +1096,10 @@ fn reuse_planner(
             )));
         }
     }
+    // The native front: this binary's own `rename retask` form, execed so
+    // the bounded budget still kills a wedged transaction.
     let argv = [
-        "agents",
+        "rename",
         "retask",
         &candidate.name,
         "--node",
@@ -1105,8 +1107,11 @@ fn reuse_planner(
         "--json",
     ]
     .map(str::to_string);
-    let out =
-        super::advance::bounded_command_env(Path::new(&crate::scrape::fno_bin()), &argv, 600, &[]);
+    let self_bin = std::env::current_exe()
+        .filter(|exe| exe.file_stem().is_some_and(|stem| stem == "fno-agents"))
+        .map(|exe| exe.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "fno-agents".to_string());
+    let out = super::advance::bounded_command_env(Path::new(&self_bin), &argv, 600, &[]);
     let receipt = out
         .as_ref()
         .ok()

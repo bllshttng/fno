@@ -403,6 +403,9 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # The bundle transfer: the Python shim execs the native fno binary's
     # `agents transcript` role (the history pattern, not a client action).
     "transcript",
+    # The retask front: the Python shim execs the native binary's
+    # `rename retask` form (crates/fno-agents/src/retask/front.rs); no
+    # Rust client command of this name exists, so it must never auto-route.
     "retask",
     # The cadence-deadline silence backstop. Pure Python: it reads the registry
     # and each row's transcript truth through fno.agents.sweep, writes nothing,
