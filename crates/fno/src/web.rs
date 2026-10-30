@@ -2565,13 +2565,19 @@ const good = mergeBoard(last, {errors: [], lanes: [{key: "q"}]}, 333);
 eq(good.lanes.length, 1, "a good answer lanes carry");
 eq(good.errors.length, 0, "a good answer clears the errors");
 eq(good.fetched_at, 333, "a good answer is stamped at its fetch time");
-console.log("backlog page helpers: 9 cases ok");
+// hiddenLine: the off-board disclosure line, empty when nothing is hidden.
+eq(hiddenLine(null), "", "no hidden field reads empty");
+eq(hiddenLine({total: 0}), "", "a zero total reads empty");
+eq(hiddenLine({total: 3, deferred: 1, superseded: 1, roadmap: 1}),
+   "off-board 3 (deferred 1, superseded 1, roadmap 1)", "the buckets carry");
+console.log("backlog page helpers: 12 cases ok");
 "#;
         let src = format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
             lift_js_fn(BACKLOG_PAGE, "cellHead"),
             lift_js_fn(BACKLOG_PAGE, "laneTotal"),
             lift_js_fn(BACKLOG_PAGE, "mergeBoard"),
+            lift_js_fn(BACKLOG_PAGE, "hiddenLine"),
             asserts
         );
         let path =
@@ -2596,7 +2602,7 @@ console.log("backlog page helpers: 9 cases ok");
                 // The end-of-harness marker is the whole verdict.
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 assert!(
-                    stdout.contains("backlog page helpers: 9 cases ok"),
+                    stdout.contains("backlog page helpers: 12 cases ok"),
                     "the shipped backlog helpers did not clear every case:\n{}{}",
                     stdout,
                     String::from_utf8_lossy(&o.stderr)
