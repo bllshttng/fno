@@ -2268,8 +2268,6 @@ fn release_update_claim() {
     }
 }
 
-/// Run the command for one argv tail (`doctor update ...` minus the leading
-/// words, or the root `update` spelling). Returns the process exit code.
 /// A release install has no source to rebuild from: the pin resolved nothing
 /// and no source update ever wrote the installed-rev marker. A mistyped
 /// `--source` answers `invalid_override` and stays a refusal.
@@ -2305,6 +2303,8 @@ fn upgrade_release(dry_run: bool) -> i32 {
     }
 }
 
+/// Run the command for one argv tail (`doctor update ...` minus the leading
+/// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let started = Instant::now();
     if rest.iter().any(|a| a == "--help" || a == "-h") {
