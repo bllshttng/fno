@@ -69,6 +69,14 @@ pub(super) fn async_wait_class(
     if pr.ci_has_pending && !matches!(pr.ci_conclusion, CiConclusion::Failure(_)) {
         return Some("ci");
     }
+    // A recorded merge freeze (the authorized-merge hold-set): the user's
+    // hold on the merge. Nothing below this line can move while it holds -
+    // the merge owner refuses the merge, and a keeper may cancel the head's
+    // CI - so the wait is external truth like CI pending. A real red is
+    // still work (fix and push is not merge-scoped), so Failure refuses.
+    if pr.merge_hold.is_some() && !matches!(pr.ci_conclusion, CiConclusion::Failure(_)) {
+        return Some("merge_hold");
+    }
     // Awaiting an EXTERNAL bot review: a real GitHub login WILL post it, so
     // idling until it does is correct. `reviewed == false` with an EMPTY
     // missing_bots is instead a LOCAL-attestation gate (config.review.reviewers,
@@ -188,13 +196,14 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
         format!(
             "background Bash `fno do pr wait {pr_number} --until review --timeout=15m` (wakes when a new review posts, or after ~15m)"
         )
-    } else if blocker == "merge_slot" {
+    } else if blocker == "merge_slot" || blocker == "merge_hold" {
         // No checks are pending on THIS PR, so a settled watcher would exit
         // instantly and the session would just re-block (codex P2, the same
-        // trap the review arm dodges). The slot frees OUTSIDE this PR - the
-        // holder merges, closes, goes red, or its lease ends - so the review
-        // watcher's 15m bound is the honest heartbeat: each wake re-evaluates
-        // the hold and re-arms while it lasts.
+        // trap the review arm dodges). The hold frees OUTSIDE this PR - a
+        // slot holder merges, closes, goes red, or its lease ends; a freeze
+        // lifts by a user ruling - so the review watcher's 15m bound is the
+        // honest heartbeat: each wake re-evaluates the hold and re-arms
+        // while it lasts.
         format!(
             "background Bash `fno do pr wait {pr_number} --until review --timeout=15m` (wakes when a new review posts, or after ~15m; the slot frees outside this PR, so the bound is the heartbeat)"
         )
@@ -293,6 +302,7 @@ mod tests {
             ci_has_pending: true,
             mergeable: "CONFLICTING".to_string(),
             merge_slot_holder: None,
+            merge_hold: None,
             base_behind: false,
             latest_review_ts: "none".to_string(),
             reviewed: false,
@@ -381,6 +391,81 @@ mod tests {
         let mut pr = held_green_pr();
         pr.reviewed = false;
         assert_eq!(async_wait_class(&pr, true, true), None);
+    }
+
+    /// A live merge freeze covers the PR while the user's question is
+    /// open. Fixture line mirrors `holds_pr_line`'s render.
+    fn frozen_pr() -> PrInfo {
+        PrInfo {
+            merge_hold: Some(
+                "a merge freeze holds (hold while the operator rules) - \
+                 merge-freeze:o/r@sha:abc - only the user lifts it"
+                    .to_string(),
+            ),
+            ..held_green_pr()
+        }
+    }
+
+    #[test]
+    fn merge_hold_idles_a_frozen_green_pr() {
+        // The legal wait this node exists to grant: a green, shipped,
+        // finding-free PR under a recorded freeze idles on the hold, instead
+        // of the gate re-invoking a worker the user froze until it
+        // self-cancels.
+        assert_eq!(
+            async_wait_class(&frozen_pr(), true, true),
+            Some("merge_hold")
+        );
+        let reason = build_block_reason(&frozen_pr(), "abc", true, true);
+        assert!(reason.contains("merge freeze holds"), "got: {reason}");
+        assert!(reason.contains("a legal wait"), "got: {reason}");
+        assert!(reason.contains("reason=\"merge_hold\""), "got: {reason}");
+    }
+
+    #[test]
+    fn merge_hold_refuses_a_real_red_and_a_conflicting_head() {
+        // A genuine fail is still work (fix and push is not merge-scoped),
+        // and a conflicting head is rebase work; a freeze lifts neither.
+        let mut pr = frozen_pr();
+        pr.ci_conclusion = CiConclusion::Failure(Some("smoke".to_string()));
+        assert_eq!(async_wait_class(&pr, true, true), None);
+        let reason = build_block_reason(&pr, "abc", true, true);
+        assert!(reason.contains("CI red"), "got: {reason}");
+        assert!(
+            !reason.contains("merge freeze holds"),
+            "the red render owns the message: {reason}"
+        );
+
+        let mut pr = frozen_pr();
+        pr.mergeable = "CONFLICTING".to_string();
+        assert_eq!(async_wait_class(&pr, true, true), None);
+    }
+
+    #[test]
+    fn pending_ci_wins_the_label_over_a_hold() {
+        // A frozen PR whose CI has not settled waits on CI like any other
+        // PR; the freeze matters only once CI has nothing left to say.
+        let mut pr = frozen_pr();
+        pr.ci_conclusion = CiConclusion::Pending;
+        pr.ci_has_pending = true;
+        assert_eq!(async_wait_class(&pr, true, true), Some("ci"));
+    }
+
+    #[test]
+    fn cancelled_only_run_renders_the_legal_wait_not_a_red() {
+        // A keeper-cancelled head reads
+        // Pending beside its cancel-named rows, so the block names the
+        // cancellation and teaches the wait instead of a nonexistent
+        // failure to debug.
+        let mut pr = conflicting_pr();
+        pr.mergeable = "MERGEABLE".to_string();
+        pr.ci_conclusion = CiConclusion::Pending;
+        pr.failing_checks = vec!["rust-ci".to_string(), "smoke".to_string()];
+        let reason = build_block_reason(&pr, "abc", true, true);
+        assert!(reason.contains("were cancelled"), "got: {reason}");
+        assert!(reason.contains("rust-ci"), "got: {reason}");
+        assert!(!reason.contains("CI red"), "got: {reason}");
+        assert!(reason.contains("reason=\"ci\""), "got: {reason}");
     }
 
     #[test]

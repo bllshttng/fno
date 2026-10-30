@@ -277,20 +277,54 @@ fn lift_doors(lift: &str) -> String {
     )
 }
 
+/// The freeze verdict for one PR over this home, or None on an unreadable
+/// store (the shared body of `holds_pr` and `holds_pr_line`).
+fn holds_verdict(home: &AgentsHome, pr: u64, repo: Option<&str>) -> Option<Verdict> {
+    let store = crate::store_remote::configured()
+        .ok()
+        .map(|primary| Store {
+            file: record_path(&home.root()),
+            primary,
+        })?;
+    Some(verdict_for_in(
+        &store,
+        Some(pr),
+        repo,
+        &decision_index::default_store_live,
+    ))
+}
+
 /// True when a live freeze holds this PR. The pr-nudge ladder reads it so
 /// a frozen PR gets no "drive it to merge" retry. An unreadable record
 /// reads false here: the merge owner still fails closed on its own read.
 pub(crate) fn holds_pr(home: &AgentsHome, pr: u64, repo: Option<&str>) -> bool {
-    let store = crate::store_remote::configured().map(|primary| Store {
-        file: record_path(&home.root()),
-        primary,
-    });
-    store.is_ok_and(|store| {
-        matches!(
-            verdict_for_in(&store, Some(pr), repo, &decision_index::default_store_live),
-            Verdict::Frozen { .. }
-        )
-    })
+    matches!(holds_verdict(home, pr, repo), Some(Verdict::Frozen { .. }))
+}
+
+/// The PR-scoped hold line the stop gate renders: the same live-freeze read
+/// as `holds_pr`, carrying the subject and the lift doors so a blocked
+/// worker can name what holds the merge. None on Clear, on no record, and
+/// on an unreadable record or store - an unreadable freeze must not read as
+/// a legal wait, so the gate keeps its status-quo block.
+pub(crate) fn holds_pr_line(home: &AgentsHome, pr: u64, repo: Option<&str>) -> Option<String> {
+    match holds_verdict(home, pr, repo) {
+        Some(Verdict::Frozen {
+            subject,
+            set_by,
+            lift,
+        }) => {
+            let who = if set_by.is_empty() {
+                String::new()
+            } else {
+                format!(", set by {set_by}")
+            };
+            Some(format!(
+                "a merge freeze holds ({subject}{who}) - {lift} - {}",
+                lift_doors(&lift)
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// The spawn-time freeze line for `repo`, or None. Same record + lift read
