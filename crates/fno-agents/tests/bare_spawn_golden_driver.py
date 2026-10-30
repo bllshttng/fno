@@ -41,7 +41,12 @@ def thread_line(harness: str, fenced: list[str]) -> str | None:
     why = f"has no carrier for {uncarried}" if uncarried else ""
     if why or not seatable:
         why = why or "is not seatable"
-        return f"fno agents spawn: the {harness} thread lane {why}; add --as pane"
+        # A seatable harness's pane lane carries what its fence cannot; a
+        # not-seatable one (footnote, muse) seats headless, its resolver
+        # fallback. The thread_footnote/thread_muse goldens were added by
+        # hand after the capture driver lost its cmd_spawn oracle.
+        tail = "add --as pane" if seatable else "add --as headless"
+        return f"fno agents spawn: the {harness} thread lane {why}; {tail}"
     return None
 
 

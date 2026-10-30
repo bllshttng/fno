@@ -109,15 +109,23 @@ pub fn thread_refusal(
     harness: &str,
     fenced: &[String],
 ) -> Option<String> {
+    let seatable = crate::backlog::dispatch_resolve::thread_seatable(contract, harness);
     let why = match fence_uncarried(contract, harness, fenced) {
         Some(token) => format!("has no carrier for {token}"),
-        None if crate::backlog::dispatch_resolve::thread_seatable(contract, harness) => {
-            return None
-        }
+        None if seatable => return None,
         None => "is not seatable".to_string(),
     };
+    // The remediation names a lane that seats. A seatable harness's pane lane
+    // carries what its thread fence cannot; a not-seatable one (footnote, muse)
+    // has no proven thread, so the resolver's own fallback lane is the answer
+    // (muse has no pane lane, and "add --as pane" would dead-end there).
+    let remediation = if seatable {
+        "add --as pane"
+    } else {
+        "add --as headless"
+    };
     Some(format!(
-        "fno agents spawn: the {harness} thread lane {why}; add --as pane"
+        "fno agents spawn: the {harness} thread lane {why}; {remediation}"
     ))
 }
 
