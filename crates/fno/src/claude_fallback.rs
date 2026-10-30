@@ -109,7 +109,8 @@ fn count_in(projects: &Path, args: &Args) -> usize {
     };
     let mut sessions = BTreeSet::new();
     for dir in dirs.flatten() {
-        let Some(name) = dir.file_name().to_str() else {
+        let fname = dir.file_name();
+        let Some(name) = fname.to_str() else {
             continue;
         };
         if !under_base(name, &base_slugs) {
@@ -237,13 +238,17 @@ mod tests {
         base.to_str().unwrap()
     }
 
-    fn at_start() -> u64 {
+    fn start_secs() -> u64 {
         parse_since(SINCE)
             .unwrap()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs()
-            + 60
+    }
+
+    /// A write time `delta` seconds into the window.
+    fn at(delta: u64) -> u64 {
+        start_secs() + delta
     }
 
     #[test]
@@ -259,7 +264,7 @@ mod tests {
                 &projects
                     .join(format!("{variant}-x-aaaa"))
                     .join(format!("{sid}.jsonl")),
-                at_start(),
+                at(0),
             );
         }
         assert_eq!(count_in(projects, &args_for(base, 7)), 1);
@@ -273,11 +278,11 @@ mod tests {
         let dir = projects.join(format!("{}-x-aaaa", slug(base_str(base))));
         write_at(
             &dir.join("aaaaaaaa-1111-2222-3333-444444444444.jsonl"),
-            at_start(),
+            at(0),
         );
         write_at(
             &dir.join("bbbbbbbb-1111-2222-3333-444444444444.jsonl"),
-            at_start(),
+            at(0),
         );
         assert_eq!(count_in(projects, &args_for(base, 7)), 2);
     }
@@ -288,28 +293,23 @@ mod tests {
         let base = Path::new("/wt/fleet");
         let projects = tmp.path();
         let dir = projects.join(format!("{}-x-bbbb", slug("/wt/fleet")));
-        let start = parse_since(SINCE)
-            .unwrap()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
         write_at(
             &dir.join("bbbbbbbb-1111-2222-3333-444444444444.jsonl"),
-            start,
+            at(0),
         );
         write_at(
             &dir.join("cccccccc-1111-2222-3333-444444444444.jsonl"),
-            start + 7 * 86_400 - 1,
+            at(7 * 86_400 - 1),
         );
         assert_eq!(count_in(projects, &args_for(base, 7)), 2);
         // At the window end and a day past it: out.
         write_at(
             &dir.join("dddddddd-1111-2222-3333-444444444444.jsonl"),
-            start + 7 * 86_400,
+            at(7 * 86_400),
         );
         write_at(
             &dir.join("eeeeeeee-1111-2222-3333-444444444444.jsonl"),
-            start + 8 * 86_400,
+            at(8 * 86_400),
         );
         assert_eq!(count_in(projects, &args_for(base, 7)), 2);
         assert_eq!(count_in(projects, &args_for(base, 0)), 0);
@@ -320,14 +320,8 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let base = Path::new("/wt/fleet");
         let projects = tmp.path();
-        let start = parse_since(SINCE)
-            .unwrap()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 30;
         let mk = |dir: &str, sid: &str| {
-            write_at(&projects.join(dir).join(format!("{sid}.jsonl")), start);
+            write_at(&projects.join(dir).join(format!("{sid}.jsonl")), at(30));
         };
         let in_window = "11111111-1111-2222-3333-444444444444";
         // The base dir itself: not a worktree under the base.
@@ -349,22 +343,16 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let base = Path::new("/wt/fleet");
         let projects = tmp.path();
-        let start = parse_since(SINCE)
-            .unwrap()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 30;
         let dir = projects.join(format!("{}-x-dddd", slug("/wt/fleet")));
         write_at(
             &dir.join("aaaaaaaa-1111-2222-3333-444444444444.sync-conflict-1.jsonl"),
-            start,
+            at(30),
         );
         // tool-results live in a uuid subdir, never at the top level.
         write_at(
             &dir.join("bbbbbbbb-1111-2222-3333-444444444444")
                 .join("tool.jsonl"),
-            start,
+            at(30),
         );
         assert_eq!(count_in(projects, &args_for(base, 7)), 0);
         assert_eq!(count_in(&projects.join("nope"), &args_for(base, 7)), 0);
