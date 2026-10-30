@@ -87,7 +87,7 @@ The watchdog is not the only quiet-row driver. The daemon's retire arm runs the 
 
 ## The blueprint-stall lane
 
-A codex blueprint worker that loops in plan verification past 30 minutes with no commit past the base, or whose native goal reads `Paused`, is a stall the quiet ladder never sees (the loop keeps the transcript moving) and a lead peek no longer has to catch (2026-10-10 operator finding, node x-7b66). The lane (`crates/fno-agents/src/codex_watch/stall.rs`) rides the settle arm's tick and one-in-flight gate. One fire: one nudge to the worker, one mail to the owning lead carrying the reseat-on-claude remedy. The episode is terminal once the lead mail lands, because the remedy is a respawn under a new session id, which re-arms the lane on its new row. A goal read that fails or answers no goal is never evidence, and an unreadable checkout holds nothing.
+A codex blueprint worker can loop in plan verification past 30 minutes with no commit past the base. The loop keeps the transcript moving, so the quiet ladder never sees it. A native goal that reads `Paused` is the same stall. Both were once caught only by a lead peeking every 15 minutes (2026-10-10 operator finding). The lane (`crates/fno-agents/src/codex_watch/stall.rs`) rides the settle arm's tick and one-in-flight gate. One fire: one nudge to the worker, one mail to the owning lead carrying the reseat-on-claude remedy. The episode is terminal once the lead mail lands. The remedy is a respawn under a new session id, which re-arms the lane on its new row. A goal read that fails or answers no goal is never evidence, and an unreadable checkout holds nothing.
 
 ## The friction verdicts and their one question
 

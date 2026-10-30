@@ -61,6 +61,17 @@ fn verify_span(text: &str, skip_first_line: bool) -> Option<(i64, i64)> {
         let Ok(row) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        // Only a tool CALL carries the marker: prompt and message rows name
+        // validate-plan.sh too (the skill text rides the seed), and a
+        // mention is not a run.
+        let shape = row
+            .get("payload")
+            .and_then(|p| p.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !matches!(shape, "custom_tool_call" | "function_call") {
+            continue;
+        }
         let Some(at) = row
             .get("timestamp")
             .and_then(Value::as_str)
