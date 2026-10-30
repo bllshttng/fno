@@ -97,6 +97,8 @@ impl CommandCache {
                         "evidence": q.evidence,
                         "on_silence": q.on_silence,
                         "deadline": q.deadline,
+                        "options": q.options.iter().map(|o| json!({"n": o.n, "text": o.text})).collect::<Vec<_>>(),
+                        "recommendation": q.recommendation.as_ref().map(|r| json!({"option": r.option, "why": r.why})),
                         "origin": q.origin,
                         "rung": q.rung,
                         "via": q.via,

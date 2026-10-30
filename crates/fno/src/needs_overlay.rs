@@ -488,6 +488,31 @@ pub enum AnswerPick {
 /// failure, or a nonzero exit (stderr captured) - the operator sees WHY a
 /// write failed, never a silent no-op.
 pub async fn answer(item_id: &str, pick: AnswerPick) -> Result<String, String> {
+    answer_as(item_id, pick, "mux", None)
+        .await
+        .map(|_| "recorded, delivering".to_string())
+        .map_err(|f| f.message)
+}
+
+/// Why the door did not record: its own line, and whether the door refused
+/// (exit 2: the question is closed, the option is out of range, the sink
+/// is not legal) or the call itself failed (a timeout, a spawn error, the
+/// write lock).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DoorFailure {
+    pub(crate) message: String,
+    pub(crate) refused: bool,
+    pub(crate) timed_out: bool,
+}
+
+/// The one spawn path for an answer. `sink` is `mux` or `command_page`, and
+/// `email` rides only with `command_page`. `Ok` is the door's JSON receipt.
+pub(crate) async fn answer_as(
+    item_id: &str,
+    pick: AnswerPick,
+    sink: &str,
+    email: Option<&str>,
+) -> Result<String, DoorFailure> {
     let mut args: Vec<String> = vec!["needs".into(), "--answer".into(), item_id.to_string()];
     match pick {
         AnswerPick::Option(n) => {
@@ -506,11 +531,18 @@ pub async fn answer(item_id: &str, pick: AnswerPick) -> Result<String, String> {
         }
     }
     args.push("--sink".into());
-    args.push("mux".into());
-    run_door(args)
+    args.push(sink.into());
+    if let Some(login) = email {
+        args.push("--email".into());
+        args.push(login.into());
+    }
+    run_door_coded(args)
         .await
-        .map(|_| "recorded, delivering".to_string())
-        .map_err(|(_, msg)| msg)
+        .map_err(|(_, message, code)| DoorFailure {
+            timed_out: message == ANSWER_TIMEOUT_MESSAGE,
+            refused: code == Some(2),
+            message,
+        })
 }
 
 /// Withdraw open questions with no answer through the door - `fno-agents
@@ -564,6 +596,14 @@ pub async fn clear_settled() -> Result<String, String> {
 /// failure, or a nonzero exit, whatever stdout the door printed and the
 /// reason (stderr, else the exit).
 async fn run_door(args: Vec<String>) -> Result<String, (String, String)> {
+    run_door_coded(args)
+        .await
+        .map_err(|(stdout, message, _)| (stdout, message))
+}
+
+/// [`run_door`] plus the exit code, so a caller can tell a refusal (2) from a
+/// failed write.
+async fn run_door_coded(args: Vec<String>) -> Result<String, (String, String, Option<i32>)> {
     let mut command =
         crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
     command
@@ -573,8 +613,8 @@ async fn run_door(args: Vec<String>) -> Result<String, (String, String)> {
     let fut = crate::process_admission::tokio_output(&mut command);
     let output = tokio::time::timeout(WRITE_TIMEOUT, fut)
         .await
-        .map_err(|_| (String::new(), ANSWER_TIMEOUT_MESSAGE.to_string()))?
-        .map_err(|e| (String::new(), e.to_string()))?;
+        .map_err(|_| (String::new(), ANSWER_TIMEOUT_MESSAGE.to_string(), None))?
+        .map_err(|e| (String::new(), e.to_string(), None))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if output.status.success() {
         Ok(stdout)
@@ -587,6 +627,7 @@ async fn run_door(args: Vec<String>) -> Result<String, (String, String)> {
             } else {
                 stderr
             },
+            output.status.code(),
         ))
     }
 }
