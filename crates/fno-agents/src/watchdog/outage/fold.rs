@@ -442,7 +442,7 @@ pub fn fold_provider_outages(
     (report, next_state)
 }
 
-fn unknown_journal(path: &Path) -> Value {
+fn unknown_state(path: &Path) -> Value {
     json!({
         "instrument": "unknown",
         "breakers": [],
@@ -453,7 +453,7 @@ fn unknown_journal(path: &Path) -> Value {
 
 /// The journal's state. `Err` when it exists and is damaged: a damaged journal
 /// reads as an unknown instrument, never as a clean slate.
-fn read_journal(path: &Path) -> Result<Value, ()> {
+fn read_outage_state(path: &Path) -> Result<Value, ()> {
     if !path.exists() {
         return Ok(json!({}));
     }
@@ -466,7 +466,7 @@ fn read_journal(path: &Path) -> Result<Value, ()> {
     }
 }
 
-fn write_journal(path: &Path, state: &Value) -> std::io::Result<()> {
+fn write_outage_state(path: &Path, state: &Value) -> std::io::Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -483,7 +483,7 @@ fn write_journal(path: &Path, state: &Value) -> std::io::Result<()> {
 
 /// `<journal>.lock`, the flock every journal writer serializes on, held until
 /// the returned file drops. None when another writer held it past the bound.
-fn lock_journal(path: &Path) -> Option<std::fs::File> {
+fn lock_outage_state(path: &Path) -> Option<std::fs::File> {
     let mut lock_path = path.as_os_str().to_os_string();
     lock_path.push(".lock");
     let file = std::fs::OpenOptions::new()
@@ -518,18 +518,18 @@ pub fn measure_and_persist(
     let target: &Path = path.unwrap_or(default_path.as_path());
     if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
         if std::fs::create_dir_all(parent).is_err() {
-            return unknown_journal(target);
+            return unknown_state(target);
         }
     }
-    let Some(_guard) = lock_journal(target) else {
-        return unknown_journal(target);
+    let Some(_guard) = lock_outage_state(target) else {
+        return unknown_state(target);
     };
-    let Ok(prior) = read_journal(target) else {
-        return unknown_journal(target);
+    let Ok(prior) = read_outage_state(target) else {
+        return unknown_state(target);
     };
     let (report, state) = fold_provider_outages(records, Some(&prior), now_s, policy);
-    if write_journal(target, &state).is_err() {
-        return unknown_journal(target);
+    if write_outage_state(target, &state).is_err() {
+        return unknown_state(target);
     }
     report
 }
