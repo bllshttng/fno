@@ -681,7 +681,7 @@ assert_contains "gate: miss is not a death claim" "$OUT" 'NOT a claim that you a
 # control.sock lane can answer yes to self - and that needs a real daemon roster
 # this sandbox has no business faking. What is under test here is the hook's
 # BRANCHING on the verdict; which verdict each lane deserves is pinned in
-# cli/tests/test_mail_send_check.py, next to the code that decides it.
+# crates/fno-agents/tests/mail_send_raw_parity.rs, beside the native send.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 check_shim() {  # check_shim <line-to-print> <exit-code>
   SHIMDIR="$(mktemp -d)"
