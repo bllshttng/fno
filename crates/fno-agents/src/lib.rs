@@ -303,6 +303,7 @@ pub mod lead_mail;
 pub mod lead_ops;
 pub mod lead_pushback;
 pub mod lead_reads;
+pub mod lead_rebind;
 pub mod lead_settle;
 pub mod lead_state;
 pub mod lead_term;

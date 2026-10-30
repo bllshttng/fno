@@ -804,7 +804,7 @@ pub(crate) fn write_lead_manifest(
 
 /// Only a full 8-4-4-4-12 session uuid matches a transcript basename, which
 /// is what the stop hook's owner guard compares the manifest id against.
-fn full_session_uuid(value: &str) -> bool {
+pub(crate) fn full_session_uuid(value: &str) -> bool {
     value.len() == 36
         && value.char_indices().all(|(i, c)| match i {
             8 | 13 | 18 | 23 => c == '-',
