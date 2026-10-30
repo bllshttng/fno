@@ -45,6 +45,16 @@ pub(crate) fn run_key(run: &Value) -> Option<String> {
     Some(format!("{node}\u{1f}{pr}"))
 }
 
+/// The `data.run` object of one stored envelope line: the parse the fold
+/// and the history import share.
+pub(crate) fn run_from_line(line: &str) -> Option<Value> {
+    let parsed: Value = serde_json::from_str(line).ok()?;
+    parsed
+        .pointer("/data/run")
+        .filter(|v| v.is_object())
+        .cloned()
+}
+
 fn run_matches(run: &Value, filter: &RunFilter) -> bool {
     if let Some(session) = &filter.session_id {
         let hit = ["fno_id", "session_id"]
@@ -88,13 +98,10 @@ fn fold_rows(rows: &[EventRow], filter: &RunFilter) -> Result<Vec<Value>, String
     let mut order: Vec<String> = Vec::new();
     let mut imported: Vec<(String, i64, Value)> = Vec::new();
     for row in rows {
-        let Ok(line) = serde_json::from_str::<Value>(&row.line) else {
+        let Some(run) = run_from_line(&row.line) else {
             continue;
         };
-        let Some(run) = line.pointer("/data/run").filter(|v| v.is_object()) else {
-            continue;
-        };
-        let Some(key) = run_key(run) else {
+        let Some(key) = run_key(&run) else {
             continue;
         };
         if row.r#type == "run_recorded" {

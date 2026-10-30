@@ -32,14 +32,25 @@ pub fn ledger_history_import(root: &Path, stamp: &str, apply: bool) -> Vec<(Stri
     {
         return Vec::new();
     }
-    let carrier = EventQuery::of_types(&["run_recorded"]);
-    let carrier_keys: HashSet<String> = query_events(&journal, &carrier)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|row| run_row(&row.line))
-        .filter_map(|run| crate::event_store::runs::run_key(&run))
-        .collect();
-    if carrier_keys.is_empty() {
+    // One fold answers the carrier gate and the coverage set together: the
+    // gate needs a run_recorded row with a key, and coverage counts BOTH run
+    // kinds, so a pass that failed partway retries only the rows it never
+    // landed (the marker gate above already refused a completed import).
+    let prior = EventQuery::of_types(&["run_recorded", "run_imported"]);
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut carrier_present = false;
+    for row in query_events(&journal, &prior).unwrap_or_default() {
+        let Some(run) = crate::event_store::runs::run_from_line(&row.line) else {
+            continue;
+        };
+        if row.r#type == "run_recorded" {
+            carrier_present = true;
+        }
+        if let Some(key) = crate::event_store::runs::run_key(&run) {
+            seen.insert(key);
+        }
+    }
+    if !carrier_present {
         return vec![(
             "run-history".to_string(),
             Status::Refused(
@@ -48,7 +59,6 @@ pub fn ledger_history_import(root: &Path, stamp: &str, apply: bool) -> Vec<(Stri
             ),
         )];
     }
-    let mut seen = carrier_keys;
     let mut imported: Vec<Value> = Vec::new();
     let mut refused: Vec<(String, Status)> = Vec::new();
     for file in ledger_files(root) {
@@ -74,18 +84,37 @@ pub fn ledger_history_import(root: &Path, stamp: &str, apply: bool) -> Vec<(Stri
             )),
         }
     }
-    if imported.is_empty() {
-        return refused;
-    }
     if !apply {
+        if imported.is_empty() {
+            return refused;
+        }
         refused.push((
             "run-history".to_string(),
             Status::Pending(format!("import {} rows", imported.len())),
         ));
         return refused;
     }
+    let mut failed = 0usize;
     for row in &imported {
-        append_run_event(&journal, "run_imported", json_run(row));
+        if !append_run_event(&journal, "run_imported", json_run(row)) {
+            failed += 1;
+        }
+    }
+    // The marker only lands on a complete pass: a row whose emit failed or a
+    // file that refused to read stays uncovered, and the next pass retries
+    // exactly what is missing. A fully covered root completes with a zero
+    // count, which is what makes the second pass silent.
+    if failed > 0 || !refused.is_empty() {
+        if failed > 0 {
+            refused.push((
+                "run-history".to_string(),
+                Status::Refused(format!(
+                    "{failed} of {} row emits failed; the import retries them on the next pass",
+                    imported.len()
+                )),
+            ));
+        }
+        return refused;
     }
     append_run_event(
         &journal,
@@ -132,23 +161,15 @@ fn read_entries(file: &Path) -> Result<Vec<Value>, String> {
         .unwrap_or_default())
 }
 
-/// The `data.run` object of one stored envelope line.
-fn run_row(line: &str) -> Option<Value> {
-    let parsed: Value = serde_json::from_str(line).ok()?;
-    parsed
-        .pointer("/data/run")
-        .filter(|v| v.is_object())
-        .cloned()
-}
-
 fn json_run(row: &Value) -> Value {
     serde_json::json!({ "run": row })
 }
 
-/// One durable `migration` envelope into the global journal. Best-effort,
-/// like every store append on the migrate pass: a failed emit retries on the
-/// next pass, because the marker only lands after every row's own emit.
-fn append_run_event(journal: &Path, kind: &str, data: Value) {
+/// One durable `migration` envelope into the global journal. Answers whether
+/// the row landed: the caller holds the marker until every row emit did, and
+/// coverage counts landed `run_imported` rows, so a failed emit retries on
+/// the next pass instead of being lost or duplicated.
+fn append_run_event(journal: &Path, kind: &str, data: Value) -> bool {
     let event = serde_json::json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
         "type": kind,
@@ -158,10 +179,14 @@ fn append_run_event(journal: &Path, kind: &str, data: Value) {
     let line = serde_json::to_string(&event).unwrap_or_default();
     if line.is_empty() {
         eprintln!("{kind}: serialize failed; the import retries on the next pass");
-        return;
+        return false;
     }
-    if let Err(e) = append_envelope(journal, &line, None) {
-        eprintln!("{kind}: emit to {} failed: {e}", journal.display());
+    match append_envelope(journal, &line, None) {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("{kind}: emit to {} failed: {e}", journal.display());
+            false
+        }
     }
 }
 
