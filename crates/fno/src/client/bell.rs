@@ -987,10 +987,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 bold,
             );
             if start + r - 1 == panel.selected {
-                // The row about to take Enter inverts like the settings
-                // modal's focused row; the band_style surface read as a
-                // faint gray bar on a named theme.
-                let (fg, bg, flags) = crate::theme::focus_style(&view.theme);
+                let (fg, bg, flags) = crate::cursor::cursor_style(&view.theme);
                 for c in (x0 + 1)..cols {
                     let cell = &mut cells[y + c];
                     cell.fg = fg;
@@ -1310,7 +1307,7 @@ mod tests {
         // The selected row's first body cell carries the focus pair - the
         // invert the settings modal's focused row uses - not the band pair.
         // The panel paints at the right edge; row 1 is its first body row.
-        let (efg, ebg, eflags) = crate::theme::focus_style(&v.theme);
+        let (efg, ebg, eflags) = crate::cursor::cursor_style(&v.theme);
         let x0 = cols - panel_width(&v, cols);
         let cell = &cells[cols + x0 + 2];
         assert_eq!(
@@ -1318,7 +1315,7 @@ mod tests {
             (efg, ebg, eflags),
             "the cursor row carries the focus pair"
         );
-        let (_, bbg, bflags) = crate::theme::band_style(&v.theme);
+        let (_, bbg, bflags) = crate::cursor::resting_band_style(&v.theme);
         assert_ne!(
             (cell.bg, cell.flags),
             (bbg, bflags),

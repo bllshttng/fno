@@ -10677,7 +10677,7 @@ fn needs_overlay_lines_mark_selection_and_tag_focus_only() {
     v.mine_fold = Some(Vec::new());
     let projection = v.needs_projection();
     let lines = needs_overlay_lines(&projection, 0, NeedsFooter::AsOf, NeedsFooter::AsOf);
-    let selected = lines.iter().find(|l| l.contains('▸')).unwrap();
+    let selected = &lines[projection.selected_line(0)];
     assert!(selected.contains("peer"), "{selected:?}");
     assert!(lines
         .iter()
@@ -10821,7 +10821,7 @@ fn rendered_cursor_indexes_the_same_projection_row() {
     let projection = v.needs_projection();
     let selected = 1;
     let lines = needs_overlay_lines(&projection, selected, NeedsFooter::AsOf, NeedsFooter::AsOf);
-    let selected_line = lines.iter().find(|line| line.contains('▸')).unwrap();
+    let selected_line = &lines[projection.selected_line(selected)];
     assert!(selected_line.contains(projection.rows[selected].label()));
 }
 
@@ -11107,7 +11107,7 @@ fn yard_overlay_renders_one_spotlight_sprite() {
         .iter()
         .any(|l| { l.trim_start() == "\u{b7}@" || l.trim_start().starts_with("\u{b7}@") }));
     // Caption carries identity outcome fields, never a rank or boundary.
-    let caption = lines.iter().find(|l| l.contains('▸')).expect("caption");
+    let caption = lines.iter().find(|l| l.contains("b · cat")).unwrap();
     assert!(caption.contains("b") && caption.contains("cat") && caption.contains("common"));
     assert!(!caption.contains("60") && !caption.contains("boundary"));
     // The sprite: each of the cat's rendered rows WITH CONTENT appears
@@ -11137,7 +11137,7 @@ fn yard_overlay_team_hat_only_when_grounded() {
     let id = yard_item("lead", 0, "rare", 0, true);
     let lines = yard_overlay_lines(&crowd, 0, Some(&id), 0, NeedsFooter::AsOf);
     assert!(lines.iter().any(|l| l.contains("\\^^^/")), "team hat row");
-    let caption = lines.iter().find(|l| l.contains('▸')).unwrap();
+    let caption = lines.iter().find(|l| l.contains("lead ·")).unwrap();
     assert!(caption.contains("team 2"));
     assert!(caption.contains("NEW"));
 }

@@ -171,7 +171,7 @@ fn render_rows() {
         "top row shows the newest: {}",
         lines[3]
     );
-    assert!(lines[3].starts_with(" ▸"));
+    assert!(!lines[3].contains('▸'), "the fill is the cursor");
     assert!(lines[4].contains("x-b"));
     assert!(lines[5].contains("x-a"));
     assert!(lines[6].trim().is_empty(), "below the last item: blank");
@@ -666,7 +666,7 @@ async fn header_rows() {
     let x0 = cols - feed_w;
     let sel = v.feed.as_ref().unwrap().sel;
     let band_cell = frame.cells[(2 + sel) * cols + x0 + 2];
-    let (_, focus_bg, focus_flags) = crate::theme::focus_style(&v.theme);
+    let (_, focus_bg, focus_flags) = crate::cursor::cursor_style(&v.theme);
     assert_eq!(
         (band_cell.bg, band_cell.flags & focus_flags),
         (focus_bg, focus_flags),

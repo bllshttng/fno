@@ -40,7 +40,7 @@ pub(crate) mod search;
 /// arrows while it is focused - the panel consumes keys only then.
 pub(crate) struct FeedOverlay {
     pub(crate) win: page::FeedWindow,
-    /// Hovered row in display order; the `▸` marker paints here.
+    /// Hovered row in display order; the cursor fill paints here.
     pub(crate) sel: usize,
     /// The typed fold failure, if the last fold failed. `Some` renders its
     /// reason verbatim; a success fold clears it.
@@ -431,10 +431,9 @@ pub(crate) fn feed_panel_rows(
             Some(Slot::Item(i)) => {
                 let item = &o.win.items[*i];
                 let selected = focused && d == o.sel;
-                let marker = if d == o.sel { '▸' } else { ' ' };
                 let mut row = Vec::new();
                 row.push(Span {
-                    text: format!(" {marker} "),
+                    text: "   ".to_string(),
                     bold: selected,
                     brand: selected,
                 });
@@ -982,7 +981,7 @@ impl View {
                 }
             }
             if band_row == Some(r) {
-                let (bfg, bbg, bflags) = crate::theme::focus_style(&self.theme);
+                let (bfg, bbg, bflags) = crate::cursor::cursor_style(&self.theme);
                 for c in (x0 + 1)..(x0 + w) {
                     let cell = &mut cells[r * cols + c];
                     cell.fg = bfg;

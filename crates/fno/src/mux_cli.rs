@@ -635,7 +635,6 @@ fn render_picker(p: &Picker) -> String {
     let mut out = String::new();
     out.push_str("fno sessions - \u{2191}\u{2193}/jk move, enter attach, n new, q quit\r\n");
     for (i, row) in p.rows.iter().enumerate() {
-        let marker = if i == p.cursor { '>' } else { ' ' };
         let body = match &row.probe {
             Probe::Live {
                 clients,
@@ -659,7 +658,7 @@ fn render_picker(p: &Picker) -> String {
             (false, false) => ("\x1b[2m", "\x1b[0m"),
             (false, true) => ("", ""),
         };
-        out.push_str(&format!("{marker} {pre}{body}{post}\r\n"));
+        out.push_str(&format!("  {pre}{body}{post}\r\n"));
     }
     if let Some(buf) = &p.naming {
         out.push_str(&format!("new session name: {buf}\r\n"));
@@ -3351,7 +3350,6 @@ fn render_filter_picker(p: &FilterPicker) -> String {
     out.push_str("fno panes - type to filter, \u{2191}\u{2193} move, enter focus, esc quit\r\n");
     out.push_str(&format!("filter: {}\r\n", p.filter));
     for (i, row) in p.visible().iter().enumerate() {
-        let marker = if i == p.cursor { '>' } else { ' ' };
         let age = row
             .age_s
             .map_or_else(|| "-".to_string(), |a| format!("{a}s"));
@@ -3361,7 +3359,7 @@ fn render_filter_picker(p: &FilterPicker) -> String {
             ("", "")
         };
         out.push_str(&format!(
-            "{marker} {pre}{}  {}/{}  updated {age} ago{post}\r\n",
+            "  {pre}{}  {}/{}  updated {age} ago{post}\r\n",
             row.name, row.session, row.pane
         ));
     }
