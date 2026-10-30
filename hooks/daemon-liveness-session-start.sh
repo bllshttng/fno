@@ -8,10 +8,10 @@
 #
 # The probe is a raw socket connect with the client's own down predicate
 # (missing or refused reads down; anything else says nothing), not
-# `fno-agents status`: that verb also scans the tick journals and costs
-# ~1.9s, over the session-start hook budget. The connect never lazy-starts
-# a daemon, no-op aside from a socket connect, so the line is evidence,
-# not a self-heal.
+# `fno-agents status`: the status command also scans the tick journals and
+# costs ~1.9s, over the session-start hook budget. The connect never
+# lazy-starts a daemon, no-op aside from a socket connect, so the line is
+# evidence, not a self-heal.
 set -uo pipefail
 
 # Survive a caller env with no usable PATH (see worktree-write-protect.sh).
