@@ -856,7 +856,7 @@ fn ppid_of(_pid: u32) -> Option<u32> {
 /// uid cannot signal it, which is ALIVE. Reading a bare error as death makes
 /// both the kill control and the reap re-check answer "killed" for a process
 /// still running.
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
     if rc == 0 {
         return true;
@@ -870,7 +870,7 @@ fn pid_alive(pid: u32) -> bool {
 /// Returns whether OUR signal reached the process. A pid that exited on its
 /// own between the scan and the reap must not hand the caller a "reaped: 1"
 /// receipt for a signal nobody sent, so the caller re-checks liveness too.
-fn kill_proc(pid: u32) -> bool {
+pub(crate) fn kill_proc(pid: u32) -> bool {
     if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
         return false;
     }
@@ -1093,7 +1093,7 @@ fn boot_time_epoch_s() -> f64 {
 /// A short read is a process that exited mid-read or a pid this uid cannot
 /// inspect: no cwd, never a verdict.
 #[cfg(target_os = "macos")]
-fn read_cwd(pid: u32) -> Option<String> {
+pub(crate) fn read_cwd(pid: u32) -> Option<String> {
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
     let written = unsafe {
