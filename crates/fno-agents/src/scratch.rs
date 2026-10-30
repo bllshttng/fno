@@ -1154,13 +1154,12 @@ fn default_jobs_dir() -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".claude").join("jobs"))
 }
 
-/// The durable state root: `$FNO_AGENTS_HOME`'s parent (that env names the
-/// spaces dir itself), else `$HOME/.fno` - byte-identical to
-/// `paths::durable_spaces_root`'s derivation.
+/// The durable state root: `FNO_STATE_DIR`, else the configured `state_dir`,
+/// else `$HOME/.fno`. The same chain `paths::durable_spaces_root` uses.
 pub fn fno_state_root() -> PathBuf {
-    if let Some(v) = std::env::var_os(crate::paths::HOME_ENV).filter(|v| !v.is_empty()) {
-        let home = PathBuf::from(&v);
-        return home.parent().map(|p| p.to_path_buf()).unwrap_or(home);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Some(root) = crate::paths_cli::declared_state_dir(&cwd) {
+        return root;
     }
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())

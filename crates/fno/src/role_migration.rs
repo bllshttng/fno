@@ -598,10 +598,10 @@ pub fn run_at(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The roots one migration run walks. Readers find spaces at
-/// `<FNO_AGENTS_HOME parent>/spaces` unless `FNO_SPACES_DIR` names them, so
+/// The roots one migration run walks. An older build wrote spaces at
+/// `<FNO_AGENTS_HOME parent>/spaces` unless `FNO_SPACES_DIR` named them, so
 /// that parent is a root too when it holds spaces; without it a daemon
-/// pinned to its agents home never migrates the space role directories.
+/// pinned to its agents home never migrates that tree's role directories.
 fn state_roots(var: impl Fn(&str) -> Option<PathBuf>) -> BTreeSet<PathBuf> {
     let mut roots = BTreeSet::new();
     for key in ["FNO_STATE_DIR", "FNO_AGENTS_HOME", "FNO_SPACES_DIR"] {
