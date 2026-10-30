@@ -1007,6 +1007,40 @@ Do NOT re-run decide; that records it twice."
             );
         }
     }
+    // The ruling closes the question it names, in the same write: the
+    // check-in that prints the answer command reads the close, not the
+    // decision. The close is bookkeeping on a durable ruling, so a
+    // failed write reports and never fails the record.
+    if let Some(qid) = door
+        .question_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+    {
+        let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        match crate::question_clear::close_with_recorded_answer(
+            &journal,
+            &index,
+            qid,
+            &decision,
+            Some(&provenance.decided_by),
+            crate::question_intake::QUESTION_CAP,
+        ) {
+            Ok(crate::question_clear::AnsweredClose::Closed) => {
+                eprintln!("decide: closed question {qid} (decision {decision_id})")
+            }
+            Ok(crate::question_clear::AnsweredClose::AlreadyClosed) => {}
+            Ok(crate::question_clear::AnsweredClose::Unknown) => eprintln!(
+                "decide: question {qid} is not a question id this machine knows; nothing to close"
+            ),
+            Ok(crate::question_clear::AnsweredClose::Peer(host)) => {
+                eprintln!("decide: question {qid} was asked on {host}; close it there")
+            }
+            Err(e) => eprintln!(
+                "decide: recorded {decision_id}, but the question close for {qid} did not land ({e}); finish it with: fno inbox outstanding clear {qid}"
+            ),
+        }
+    }
     println!("{decision_id}");
     0
 }
@@ -1414,6 +1448,44 @@ mod tests {
         if !machine_id.is_empty() {
             assert_eq!(row["machine_id"], json!(machine_id));
         }
+    }
+
+    #[test]
+    fn decide_with_question_id_closes_the_question_it_names() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        save_node(&crate::graph_get::default_graph_path(), "x-nodeq", "node-q");
+        let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        let ask = json!({
+            "ts": now_iso(),
+            "type": "operator_question",
+            "source": "target",
+            "data": {
+                "question_id": "q-closeaa1",
+                "question": "which lane?",
+                "asker": "robin",
+                "node": "x-nodeq",
+            },
+        });
+        crate::event_store::append_envelope(&index, &ask.to_string(), None).expect("ask");
+
+        let argv = [
+            "x-nodeq",
+            "Ship it",
+            "--authority",
+            "agent",
+            "--question-id",
+            "q-closeaa1",
+        ];
+        let code = decide_door_write(decide_argv(&argv), DecideIdentity::Forced(Some("cl-testq")));
+        assert_eq!(code, 0);
+        let closes = crate::event_store::journal_text(&index, &["operator_question_closed"]);
+        assert!(closes.contains("q-closeaa1"), "{closes}");
+        // A rerun writes no second close: the first close is the close.
+        let code = decide_door_write(decide_argv(&argv), DecideIdentity::Forced(Some("cl-testq")));
+        assert_eq!(code, 0);
+        let closes = crate::event_store::journal_text(&index, &["operator_question_closed"]);
+        assert_eq!(closes.lines().count(), 1, "{closes}");
     }
 
     #[test]

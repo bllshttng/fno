@@ -193,7 +193,7 @@ const FLEET: &[Node] = &[
     command("sweep", &["sweep"], "Workers whose transcripts went quiet past their deadline."),
     command("watchdog", &["watchdog"], "Unfinished work: started nodes nobody holds."),
     command("truth", &["truth"], "A worker's supervision state from its transcript tail."),
-    command("trace", &["trace"], "An agent's dispatch lifecycle from events.jsonl."),
+    command("trace", &["trace"], "An agent's dispatch lifecycle from the event store."),
     command("history", &["history"], "Each matching session's whole story."),
     command("digest", &["digest"], "The catch-up fold over events and ledger for a session."),
     command("feed", &["feed"], "The activity feed over questions and the graph."),

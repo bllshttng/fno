@@ -38,6 +38,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CRON_JOB` | py | unclear: cli/src/fno/agents/context.py:94 |
 | `EDITOR` | rs | The editor the board's full description edit runs in; `vi` when unset. |
 | `EVENTS_FILE` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:932 |
+| `FNO_ACTOR_KIND` | rs | The launcher stamp a machine arm's parent sets on its child so `decision_trace::actor_kind` reads `sweep` for work with no ambient session (merge_close.rs `run_reconcile`, hook/stop.rs `spawn_finalize_detached`). Only the exact value `sweep` is honored; any other value falls through to session resolution. |
 | `FNO_AGENTS_ANSWER_MINUTES` | rs | The conversation mail-hold backstop in minutes: a hold armed on the user's last real message ends this long after it, whichever comes first with the Stop grace. Unset, the global config's `mail.hold.answer_minutes` reads; unset too, the default is 10. A value below 1 coerces to the default, one above 1440 clamps to 1440 (mail_hold.rs answer_minutes). |
 | `FNO_AGENTS_BIN` | py+rs | Explicit override path to the fno-agents binary; unset, empty, or non-executable falls through to the search rather than failing. |
 | `FNO_AGENTS_DAEMON_BIN` | rs | unclear: crates/fno-agents/src/client.rs:125 |
