@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fno hook: SessionStart - daemon liveness
-# The second x-322e gate: with the fno-agents daemon down, nothing wakes a
+# With the fno-agents daemon down, nothing wakes a
 # lead on a daemon beat. The daemon lazy-starts on the next daemon-routed
 # command, so the gap is exactly the quiescent machine: no session, no tick,
 # no lead wake until someone types. SessionStart is the one surface that
