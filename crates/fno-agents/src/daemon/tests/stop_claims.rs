@@ -154,3 +154,44 @@ async fn a_confirmed_stop_releases_the_stopped_holders_dead_claims() {
     std::env::remove_var("FNO_SPACES_DIR");
     std::fs::remove_dir_all(home.root()).ok();
 }
+
+/// A stop of a row the registry already reads terminal still journals the
+/// stop: the claims release treats the `already_exited` response as a
+/// confirmed stop, so quiet recovery must see it too, or the resume ladder
+/// revives a worker its lead stood down on every pass.
+#[tokio::test]
+async fn a_stop_of_an_already_exited_row_still_writes_the_stop_evidence() {
+    let home = short_home("stopalreadyexited");
+    let mut row = claude_rm_row("w1", "aaabbb23", "aaabbb23-1111-2222-3333-444444444444");
+    row.status = AgentStatus::Exited;
+    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+    let response = handle_stop(&ctx, &Request::new(1, "agent.stop", json!({"name": "w1"}))).await;
+    assert!(
+        response
+            .result()
+            .is_some_and(|r| r.get("already_exited").and_then(Value::as_bool) == Some(true)),
+        "the stop answers already_exited"
+    );
+
+    // The full evidence chain the skip arm reads: the journaled row is
+    // visible through read_evidence and stamped to the worker's session.
+    let evidence =
+        crate::watch_expiry::read_evidence(&home, chrono::Utc::now().timestamp_millis()).unwrap();
+    let stopped: Vec<_> = evidence
+        .iter()
+        .filter(|e| e.kind == "agent_stopped")
+        .map(|e| {
+            (
+                e.data.get("name").and_then(Value::as_str),
+                e.session_id.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        stopped,
+        vec![(Some("w1"), Some("aaabbb23-1111-2222-3333-444444444444"))],
+        "the stop evidence is journaled and stamped to the session"
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+}

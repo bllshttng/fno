@@ -203,7 +203,7 @@ A different harness is a handoff doc plus `/fno:agent handoff <doc> <provider>`,
 
 Every lifecycle command writes a structured event to the daemon's own journal, `~/.fno/agents/events.jsonl`, not the global `~/.fno/events.jsonl` the hooks write. Both journals are store-backed, so read them with `fno doctor event find`, which covers every journal:
 
-- `agent_stopped` — `{name, provider, claude_exit?, short_id?, timed_out?, lock_timeout?}`
+- `agent_stopped` — `{name, provider, claude_exit?, short_id?, timed_out?, lock_timeout?, reason?}`
 - `agent_removed` — `{name, provider, claude_exit?, force, registry_changed, short_id?, lock_timeout?, error?}`
 - `reconcile_done` — `{scanned, orphaned, recovered, skipped, errors}`
 - `agent_attached` — `{name, provider, short_id?, claude_exit?, error?}`

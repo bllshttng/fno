@@ -4363,6 +4363,14 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     if entry.status == AgentStatus::Exited {
         // An exited agent needs no stop work. (Pre-G4 this also force-cleared a
         // lingering WebSocket driver; the drive surface was retired at G4.)
+        // The stop still journals: the claims release treats this response as
+        // a confirmed stop, and quiet recovery must agree, or a lead's stop
+        // of an already-terminal row leaves no evidence and the resume
+        // ladder revives the worker it stood down on every pass.
+        let _ = ctx.emitter.emit(
+            "agent_stopped",
+            &json!({"name": name, "reason": "already_exited"}),
+        );
         return Response::ok(
             req.id,
             json!({"already_exited": true, "short_id": entry.short_id}),
