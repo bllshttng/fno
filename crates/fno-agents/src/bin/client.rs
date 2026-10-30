@@ -3812,15 +3812,29 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             "--answer" => {
                 params.insert("answer".into(), str_arg(&mut it, "--answer")?);
             }
-            "--yolo" | "-Y" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--yolo"));
+            "--yolo" | "-Y" if command == "spawn" => {
+                // The never-prompt flag is the harness's own vocabulary: it
+                // rides verbatim, and a lane that cannot carry it refuses by
+                // name (the thread seat, the pane spine, the daemon-side
+                // vocabulary). Off spawn the catch-all keeps the refusal.
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String("--yolo".to_string()));
+                }
             }
-            // fno's own spelling of claude's --disallowedTools: it refuses by
-            // name, since forwarding it would hand claude a flag it lacks.
-            "--deny-tools" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
-                    "--deny-tools",
-                ));
+            "--deny-tools" if command == "spawn" => {
+                // fno's own spelling of claude's --disallowedTools forwards
+                // with its value; the lane that lacks it refuses by name.
+                let v = str_arg(&mut it, "--deny-tools")?;
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String("--deny-tools".to_string()));
+                    list.push(v);
+                }
             }
             // The front door's carrier for a fenced `--` token a thread or
             // one-shot lane maps (codex: -c/--config/--add-dir). Repeatable;
@@ -3960,6 +3974,20 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             f if command == "spawn" && fno_agents::spawn_bare::owns(f) => {
                 fno_agents::spawn_bare::take_flag(&a, &mut it, &mut params)?;
             }
+            other if other.starts_with("--") && command == "spawn" => {
+                // The passthrough law (x-bc41): a flag spawn does not own
+                // rides the harness argv verbatim, one token per token. A
+                // lane that cannot carry it refuses by name. The token is
+                // forwarded alone: an `=`-joined form carries its own value,
+                // and a loose value needs --harness-arg (no arity table at
+                // this door, so a bare next token stays the seed).
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String(other.to_string()));
+                }
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown flag: {other}"));
             }
@@ -3969,7 +3997,8 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
 
     // Off spawn the vendor axis routes nothing, so --provider/-P is a
     // tombstone: exit 2 with the axis map, never silently forwarded. On spawn
-    // the token never survives scan (the retired-axis refusal fires first).
+    // it refuses the same way: a vendor is not a harness, and the axis-rename
+    // line is the teacher scan no longer is.
     if vendor_val.is_some() {
         return Err(
             "--provider/-P was split at the axis rename: the CLI binary is \

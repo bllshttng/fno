@@ -155,38 +155,28 @@ pub struct SpawnAxes {
 }
 
 impl SpawnAxes {
-    /// The axis flag spellings this schema owns, short aliases included. The
-    /// retired spellings stay listed so `scan` sees and refuses each one
-    /// before the loop's legacy arms could accept it.
+    /// The axis flag spellings this schema owns, short aliases included.
+    /// Every other token is not an axis: the spawn grammar's own arms or the
+    /// passthrough forwarding answers it, and scan ignores it.
     pub const AXIS_FLAGS: &'static [&'static str] = &[
         "--route",
         "--account",
-        "--provider",
-        "-P",
         "--harness",
         "-H",
-        "--resume",
-        "-r",
         "--substrate",
         "--as",
     ];
 
-    /// The one refusal for a retired spawn axis at the binary door: the same
-    /// line the Python stubs print, so both doors teach one native form.
-    pub fn refused_axis(flag: &str) -> String {
-        format!(
-            "refused: {flag} is retired; the lane template owns it. \
-             Native form: docs/HARNESSES.md (launch each harness its own way)"
-        )
-    }
+    /// The live lane vocabulary both `--as` and `--substrate` select from.
+    pub const LANE_VALUES: &'static [&'static str] = &["pane", "thread", "headless", "cloud"];
 
     /// Parse the axis flags out of a spawn argv, stopping at the provider
     /// argv fence (`--argv` or bare `--`). Non-axis tokens belong to the rest
-    /// of the spawn grammar and are ignored here, but the axes themselves are
-    /// strict: a valueless live axis flag is an error in the voice the old
-    /// cursor parser used, and a repeated live axis flag is refused so the
-    /// client and the overlay can never read different values from the same
-    /// argv. A retired spelling refuses by name, never parses.
+    /// of the spawn grammar or the passthrough law and are ignored here, but
+    /// the axes themselves are strict: a valueless live axis flag is an error
+    /// in the voice the old cursor parser used, and a repeated live axis flag
+    /// is refused so the client and the overlay can never read different
+    /// values from the same argv.
     pub fn scan(toks: &[String]) -> Result<(SpawnAxes, usize), String> {
         let fence = toks.iter().position(|t| t == "--argv" || t == "--");
         let head_len = fence.unwrap_or(toks.len());
@@ -197,24 +187,6 @@ impl SpawnAxes {
         let mut i = 0;
         while i < head.len() {
             let tok = head[i].as_str();
-            // An attached retired short (`-rabc`) is one token the exact
-            // AXIS_FLAGS match never sees. The Python door refused every head
-            // token a retired short starts, so the attached form refuses by
-            // its long here instead of reaching the prompt positionals.
-            let attached = if tok.starts_with("--") {
-                None
-            } else if tok.starts_with("-P") {
-                Some("--provider")
-            } else if tok.starts_with("-r") {
-                Some("--resume")
-            } else {
-                None
-            };
-            if let Some(long) = attached {
-                if tok.len() > 2 {
-                    return Err(Self::refused_axis(long));
-                }
-            }
             // Equals-form is a live spelling of the value axes (`--account=x`);
             // split it here so the strict clap parse sees flag and value.
             let (long, inline) = match tok.split_once('=') {
@@ -240,39 +212,27 @@ impl SpawnAxes {
                             i += 2;
                         }
                     }
-                } else if long == "--as" || long == "--substrate" {
-                    // The lanes this door selects. `--as` is the public axis:
-                    // cloud has no template lane (its original selector), and
-                    // the pane arm answers an explicit `-H <pane-arm harness>
-                    // --as pane` itself. The Python seam's harness scan
-                    // (`_RUST_PANE_HARNESSES`) only execs here for the
-                    // harnesses a pane arm owns, so accepting the public
-                    // vocabulary keeps the binary door as wide as the Python
-                    // door it replaced - a narrower refusal would strand an
-                    // argv the seam already routed. `--substrate` stays the
-                    // RETIRED spelling: cloud only, everything else refuses by
-                    // name (the retirement rows in client_tests pin it).
+                } else {
+                    // The lanes both spellings select from: `--as` is the
+                    // public axis, `--substrate` its live alias, and the
+                    // vocabulary is the same four lanes for each. The Python
+                    // seam's harness scan (`_RUST_PANE_HARNESSES`) only execs
+                    // here for the harnesses a pane arm owns, so the binary
+                    // door stays as wide as the Python door it replaced.
+                    debug_assert!(long == "--as" || long == "--substrate");
                     let value = inline.or_else(|| head.get(i + 1).cloned());
-                    let accepted = match value.as_deref() {
-                        Some("cloud") => true,
-                        Some("pane") | Some("thread") | Some("headless") => long == "--as",
-                        _ => false,
-                    };
-                    if !accepted {
-                        return Err(Self::refused_axis(long));
+                    let valid =
+                        matches!(value.as_deref(), Some(v) if Self::LANE_VALUES.contains(&v));
+                    if !valid {
+                        let got = value.unwrap_or_default();
+                        return Err(format!(
+                            "{long} must be one of: pane, thread, headless, cloud (got {got})"
+                        ));
                     }
-                    let value = value.unwrap_or_default();
+                    let value = value.unwrap();
                     pairs.push("--substrate".to_string());
                     pairs.push(value);
                     i += if tok.contains('=') { 1 } else { 2 };
-                } else {
-                    // A short names its long, as the Python stubs print it.
-                    let named = match long {
-                        "-P" => "--provider",
-                        "-r" => "--resume",
-                        other => other,
-                    };
-                    return Err(Self::refused_axis(named));
                 }
             } else {
                 i += 1;
@@ -286,8 +246,9 @@ impl SpawnAxes {
             route: matches.get_one::<String>("route").cloned(),
             account: matches.get_one::<String>("account").cloned(),
             harness: matches.get_one::<String>("harness").cloned(),
-            // The retired fields never fill: scan refused the spellings above,
-            // all but `--substrate cloud`.
+            // provider/model/effort stay unfilled: their spellings are not
+            // axes here (the client's tombstone and the passthrough law own
+            // them), so every live read answers None.
             provider: None,
             model: None,
             effort: None,
@@ -522,54 +483,33 @@ mod tests {
     }
 
     #[test]
-    fn spawn_axes_retired_spellings_refuse_by_name() {
-        // Every retired spelling refuses with the same line the Python
-        // stubs print, so both doors teach one native form.
-        for flag in ["--provider", "-P", "--substrate"] {
+    fn spawn_axes_ignores_non_axis_spellings() {
+        // Not axes, so scan ignores them and the passthrough law answers
+        // each: --resume/-r ride to the harness argv, and --provider/-P reach
+        // the client's tombstone (its line, not scan's).
+        for flag in ["--provider", "-P", "--resume", "-r"] {
             let toks: Vec<String> = [flag, "x"].iter().map(|s| s.to_string()).collect();
-            let err = SpawnAxes::scan(&toks).expect_err("retired axis refuses");
-            let long = match flag {
-                "-P" => "--provider",
-                f => f,
-            };
-            assert!(
-                err.starts_with(&format!("refused: {long} is retired")),
-                "{err}"
-            );
-            assert!(err.contains("HARNESSES.md"), "{err}");
+            let (axes, _) = SpawnAxes::scan(&toks).expect("a non-axis token is ignored");
+            assert_eq!(axes.route, None);
+            assert_eq!(axes.substrate, None);
         }
     }
 
     #[test]
-    fn spawn_resume_refuses_with_the_python_golden_line() {
-        // The exact line _retired_axis("--resume") prints at the Python door;
-        // the golden pins it so both doors teach one native form.
-        const GOLDEN: &str = "refused: --resume is retired; the lane template owns it. \
-Native form: docs/HARNESSES.md (launch each harness its own way)";
-        assert_eq!(SpawnAxes::refused_axis("--resume"), GOLDEN);
+    fn spawn_resume_rides_the_passthrough_law() {
+        // --resume in every spelling survives scan, so the harness argv it
+        // joins decides whether it carries (claude --bg --resume is a real
+        // form; the codex thread lane refuses by name). The fence still
+        // keeps a post-argv -r provider payload opaque.
         for form in [
             vec!["--resume", "6501096a"],
             vec!["--resume=6501096a"],
-            vec!["-r", "6501096a"],
         ] {
             let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
-            let err = SpawnAxes::scan(&toks).expect_err("a resume-bearing spawn refuses");
-            assert_eq!(err, GOLDEN, "{err}");
-        }
-        // The attached short (`-rabc`, one token) is a spelling the exact
-        // AXIS_FLAGS match never sees; it refuses by its long. The fence
-        // still keeps a post-argv `-r` provider payload opaque.
-        for (tok, long) in [
-            ("-rabc", "--resume"),
-            ("-r=x", "--resume"),
-            ("-Pzai", "--provider"),
-        ] {
-            let toks: Vec<String> = [tok].iter().map(|s| s.to_string()).collect();
-            let err = SpawnAxes::scan(&toks).expect_err("an attached retired short refuses");
-            assert!(
-                err.starts_with(&format!("refused: {long} is retired")),
-                "{err}"
-            );
+            let (axes, fence) = SpawnAxes::scan(&toks).expect("a resume-bearing spawn rides");
+            assert_eq!(axes.route, None);
+            let kept = SpawnAxes::strip_axes(&toks, fence);
+            assert_eq!(kept, toks, "the resume tokens survive the strip");
         }
         let fenced: Vec<String> = ["--argv", "--", "claude", "-r", "x"]
             .iter()
@@ -587,31 +527,27 @@ Native form: docs/HARNESSES.md (launch each harness its own way)";
             vec!["--as", "cloud"],
             vec!["--as=cloud"],
             vec!["--substrate", "cloud"],
+            vec!["--substrate", "pane"],
+            vec!["--substrate=thread"],
         ] {
             let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
-            let (axes, _) = SpawnAxes::scan(&toks).expect("cloud is admitted");
-            assert_eq!(axes.substrate.as_deref(), Some("cloud"));
+            let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
+            let word = form.last().unwrap().as_str();
+            assert_eq!(axes.substrate.as_deref(), Some(word));
             assert!(SpawnAxes::strip_axes(&toks, toks.len()).is_empty());
         }
-        // The pane seam routes `-H <member> --as pane` argvs here, so the
-        // public substrate vocabulary rides --as beside cloud; a narrower
-        // refusal would strand an argv the seam already routed.
-        for word in ["pane", "thread", "headless"] {
+        for word in ["pane", "thread", "headless", "cloud"] {
             let toks: Vec<String> = vec!["--as".to_string(), word.to_string()];
             let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
             assert_eq!(axes.substrate.as_deref(), Some(word));
         }
-        let joined: Vec<String> = vec!["--as=pane".to_string()];
-        let (axes, _) = SpawnAxes::scan(&joined).expect("the joined spelling is admitted");
-        assert_eq!(axes.substrate.as_deref(), Some("pane"));
-        for other in ["bg"] {
-            let toks: Vec<String> = ["--substrate", other]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-            let err = SpawnAxes::scan(&toks).expect_err("bg is the retired thread spelling");
-            assert!(err.contains("is retired"), "{err}");
-        }
+        // Outside the live vocabulary names the lanes, never a retired line.
+        let toks: Vec<String> = ["--substrate", "bg"].iter().map(|s| s.to_string()).collect();
+        let err = SpawnAxes::scan(&toks).expect_err("bg is not a lane");
+        assert!(
+            err.contains("must be one of: pane, thread, headless, cloud"),
+            "{err}"
+        );
     }
 
     #[test]

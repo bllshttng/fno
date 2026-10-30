@@ -454,11 +454,12 @@ fn ask_rows() {
     assert_eq!(params["name"], "myagent");
     assert_eq!(params["from_name"], "fno");
     assert_eq!(params["timeout"], 30u64);
-    // --yolo retired with the spawn axes, on every command and in both spellings.
+    // --yolo is spawn vocabulary (the passthrough law forwards it there);
+    // off spawn the unknown-flag refusal answers both spellings.
     for flag in ["--yolo", "-Y"] {
         let err = build_request("ask", &["a".to_string(), "m".to_string(), flag.to_string()])
             .unwrap_err();
-        assert!(err.contains("--yolo is retired"), "{flag}: {err}");
+        assert!(err.contains("unknown flag"), "{flag}: {err}");
     }
 
     let args = vec![
@@ -600,17 +601,14 @@ fn ask_rows() {
 /// instead of reaching the dispatch. The harness axis is `--harness`
 /// (wire param `provider`); `--provider=...` is a tombstone (AC3).
 
-/// The retired spawn axes refuse by name in both space- and equals-form: the
-/// lane template owns the value, and no spelling may reach the request.
+/// The spawn flags parse into params; the flags spawn does not own ride the
+/// passthrough law (x-bc41) verbatim into harness_args.
 #[test]
 fn spawn_flag_rows() {
-    let refused = |args: &[&str], flag: &str| {
+    let harness_args = |args: &[&str]| {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        let err = build_request("spawn", &args).unwrap_err();
-        assert!(
-            err.contains(&format!("{flag} is retired")),
-            "{args:?}: {err}"
-        );
+        let (_m, params) = build_request("spawn", &args).expect("spawn argv parses");
+        params["harness_args"].clone()
     };
     // The harness's own flags typed before the fence are shorthand for the
     // same flag behind it: they join the fenced tail in harness_args.
@@ -689,10 +687,20 @@ fn spawn_flag_rows() {
         "portal + placement on the thread lane is the legal combination"
     );
 
-    refused(
-        &["wk", "--harness", "claude", "--substrate", "thread"],
-        "--substrate",
-    );
+    // --substrate is a live alias of --as (x-bc41): the same lane rides
+    // both spellings.
+    let (_m, sub) = build_request(
+        "spawn",
+        &[
+            "wk".to_string(),
+            "--harness".to_string(),
+            "claude".to_string(),
+            "--substrate".to_string(),
+            "thread".to_string(),
+        ],
+    )
+    .expect("--substrate thread is a live alias");
+    assert_eq!(sub["substrate"], "thread");
 
     let (_m, space) = build_request(
         "spawn",
@@ -708,9 +716,25 @@ fn spawn_flag_rows() {
         .expect("--account= must parse");
     assert_eq!(eq["account"], "makers");
 
-    // --deny-tools is fno's own spelling, not a harness flag, so it still
-    // refuses by name; the real claude flags forward.
-    refused(&["wk", "--deny-tools", "x"], "--deny-tools");
+    // The passthrough law (x-bc41): flags spawn does not own ride the
+    // harness argv verbatim, one token per token, and a lane that cannot
+    // carry one refuses by name.
+    assert_eq!(harness_args(&["wk", "--yolo"]), serde_json::json!(["--yolo"]));
+    assert_eq!(harness_args(&["wk", "-Y"]), serde_json::json!(["--yolo"]));
+    assert_eq!(
+        harness_args(&["wk", "--deny-tools", "Bash"]),
+        serde_json::json!(["--deny-tools", "Bash"])
+    );
+    // An unowned flag forwards as one token; the equals form carries its
+    // own value.
+    assert_eq!(
+        harness_args(&["wk", "--some-future-flag"]),
+        serde_json::json!(["--some-future-flag"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--some-future-flag=value"]),
+        serde_json::json!(["--some-future-flag=value"])
+    );
     assert_eq!(
         harness_args(&[
             "wk",
@@ -899,21 +923,31 @@ fn substrate_rows() {
     assert_eq!(params["substrate"], "headless");
     assert!(params.get("host_mode").is_none());
 
-    // Every --substrate spelling, the retired bg included, refuses at scan.
-    for sub in ["pane", "thread", "headless", "bg"] {
-        let err = build_request(
-            "spawn",
-            &[
+    // Every lane word parses on both spellings (x-bc41 made --substrate a
+    // live alias of --as); only a word outside the vocabulary refuses, and
+    // the line names the lanes.
+    for sub in ["pane", "thread", "headless", "cloud"] {
+        for flag in ["--as", "--substrate"] {
+            let args = vec![
                 "wk".to_string(),
                 "--harness".to_string(),
                 "claude".to_string(),
-                "--substrate".to_string(),
+                flag.to_string(),
                 sub.to_string(),
-            ],
-        )
-        .unwrap_err();
-        assert!(err.contains("--substrate is retired"), "{sub}: {err}");
+            ];
+            let (_m, params) = build_request("spawn", &args).expect("live lane parses");
+            assert_eq!(params["substrate"], sub, "{flag} {sub}");
+        }
     }
+    let err = build_request(
+        "spawn",
+        &["wk".to_string(), "--substrate".to_string(), "bg".to_string()],
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("must be one of: pane, thread, headless, cloud"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -935,13 +969,14 @@ fn harness_flag_rows() {
         );
     }
 
-    // On spawn the vendor axis retired with the rest: a harness name or a
-    // vendor typed after --provider/-P refuses by name before any routing.
+    // On spawn --provider/-P refuses too (x-bc41 lifted the scan refusal,
+    // so the axis-rename tombstone is the one teacher left): a vendor is
+    // not a harness, and it must not route.
     for v in ["claude", "codex", "zai"] {
         for flag in ["--provider", "-P"] {
             let args = vec!["wk".to_string(), flag.to_string(), v.to_string()];
             let err = build_request("spawn", &args).unwrap_err();
-            assert!(err.contains("--provider is retired"), "{flag}: {err}");
+            assert!(err.contains("split at the axis rename"), "{flag}: {err}");
         }
     }
 

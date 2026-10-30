@@ -3,7 +3,6 @@ positional substrate token). Pure argv -> argv, covered against the plan ACs."""
 from __future__ import annotations
 
 import io
-import random
 
 import pytest
 
@@ -16,7 +15,6 @@ SHORT = "6501096a"
 def _norm(args, **kw):
     kw.setdefault("existing_names", set())
     kw.setdefault("resolver", lambda s: UUID if s == SHORT else None)
-    kw.setdefault("rng", random.Random(0))
     kw.setdefault("stderr", io.StringIO())
     return normalize_spawn_args(args, **kw)
 
@@ -26,35 +24,29 @@ def _norm(args, **kw):
 
 # --- AC1-HP / AC2-EDGE: autogen name -----------------------------------------
 
-def test_ac1_hp_nameless_spawn_mints_slug():
-    out = _norm(["spawn"])
-    assert out == ["spawn", "--name", out[2]]
-    assert "-" in out[2]  # adjective-noun slug
+def test_nameless_prompt_names_the_worker_from_its_words():
+    out = _norm(["spawn", "fix the login bug today"])
+    assert out[1:3] == ["--name", "t-fix-the-login-bug"]
+
+
+def test_nameless_spawn_with_no_prompt_refuses_by_name():
+    # A worker name comes from the node slug or the prompt (law
+    # d-9e0ac19d); with neither there is nothing to mint, so refuse instead
+    # of inventing one.
+    err = io.StringIO()
+    with pytest.raises(SystemExit) as e:
+        _norm(["spawn"], stderr=err)
+    assert e.value.code == 2
+    assert "no node slug or prompt" in err.getvalue()
     # A succession hand-off names nobody: the settle draws the name, and a
     # minted slug would arrive as an explicit proposal and decline the draw.
     assert "--name" not in _norm(["spawn", "--hand-off", "--promote", "lead"])
 
 
-def test_autogen_avoids_registry_collision():
-    rng = random.Random(0)
-    first = normalize_spawn_args(["spawn"], existing_names=set(), rng=random.Random(0))[2]
-    # Seed the same rng path but mark the first pick taken -> must differ.
-    out = normalize_spawn_args(["spawn"], existing_names={first}, rng=rng)
-    assert out[2] != first
-
-
-def test_autogen_exhaustion_exits_2():
-    # Every possible slug taken -> bounded exit 2, never an infinite loop.
-    from fno.agents import spawn_defaults as sd
-
-    everything = {f"{a}-{n}" for a in sd._SLUG_ADJ for n in sd._SLUG_NOUN}
-    err = io.StringIO()
-    with pytest.raises(SystemExit) as e:
-        normalize_spawn_args(
-            ["spawn"], existing_names=everything, rng=random.Random(1), stderr=err
-        )
-    assert e.value.code == 2
-    assert "free auto-name" in err.getvalue()
+def test_prompt_name_collision_suffixes_not_refuses():
+    first = _norm(["spawn", "fix the login bug today"])[2]
+    out = _norm(["spawn", "fix the login bug today"], existing_names={first})
+    assert out[2] == "t-fix-the-login-bug-2"
 
 
 # --- --argv payload boundary (codex finding) ---------------------------------
@@ -128,14 +120,16 @@ def test_node_flag_and_slug_reach_the_mint(monkeypatch):
     assert calls == [("x919", "go", "sentinel-arms")]
 
 
-def test_mint_failure_falls_back_to_adjective_noun(monkeypatch):
-    # A spawn must never die on a naming lookup.
-    from fno.agents import spawn_defaults as sd
+def test_mint_failure_refuses_by_name(monkeypatch):
+    # A lookup failure is a named refusal, never an invented name.
     from fno.agents.naming import AgentNameError
 
     _stub_worker_name(monkeypatch, AgentNameError("no node slug"))
-    out = _norm(["spawn", "--node", "x919", "go"])
-    assert out[2] in {f"{a}-{n}" for a in sd._SLUG_ADJ for n in sd._SLUG_NOUN}
+    err = io.StringIO()
+    with pytest.raises(SystemExit) as e:
+        _norm(["spawn", "--node", "x919", "go"], stderr=err)
+    assert e.value.code == 2
+    assert "no node slug or prompt" in err.getvalue()
 
 
 def test_head_model_flag_is_shorthand_for_the_fenced_harness_flag():
