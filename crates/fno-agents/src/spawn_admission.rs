@@ -540,6 +540,23 @@ fn fence_model_shorthand(toks: &[String]) -> Result<Vec<String>, (String, i32)> 
     Ok(fence)
 }
 
+/// A sole positional that is one resolvable node id, read as the target
+/// command for that node: `(index, "/fno:target <id>")`. Codex takes `$`.
+fn bare_node_seed(head: &[String], cwd: &Path) -> Option<(usize, String)> {
+    let at = positional_indices(head);
+    let i = *at.first().filter(|_| at.len() == 1)?;
+    let id = head[i].trim().to_lowercase();
+    if !crate::law_match::matches_node_id_shape(&id) || crate::naming::node_slug(&id, cwd).is_none()
+    {
+        return None;
+    }
+    let sigil = match flag_value(head, HARNESS_FLAGS).as_deref() {
+        Some("codex") => '$',
+        _ => '/',
+    };
+    Some((i, format!("{sigil}fno:target {id}")))
+}
+
 /// Canonicalize a `spawn` argv (command at index 0); pure argv -> argv. The
 /// single positional is the MESSAGE; the name rides `--name` and is minted
 /// when omitted. A second positional refuses with exit 2. Read-only.
@@ -588,6 +605,19 @@ pub fn normalize(
         }
     } else {
         toks
+    };
+    let fence = toks.iter().position(|t| t == "--");
+    let head = match fence {
+        Some(f) => &toks[..f],
+        None => &toks[..],
+    };
+    let toks = match bare_node_seed(head, cwd) {
+        Some((i, seed)) => {
+            let mut t = toks.clone();
+            t[i] = seed;
+            t
+        }
+        None => toks,
     };
     let fence = toks.iter().position(|t| t == "--");
     let head = match fence {
@@ -1352,5 +1382,50 @@ mod tests {
         let (rewritten, profile) = outcome.unwrap();
         assert_eq!(rewritten, argv);
         assert_eq!(profile, None);
+    }
+
+    /// A prompt that is one resolvable node id reads as the target command
+    /// for it, so the worker starts and its name comes from the node.
+    #[test]
+    fn a_bare_node_id_prompt_becomes_the_target_command_and_names_the_worker() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let saved = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", tmp.path());
+        crate::graph_store::seed_rows(
+            &crate::state_layout::graph_anchor(tmp.path()),
+            &[serde_json::json!({
+                "id": "x-9fc9",
+                "slug": "spawn-bare-node-names",
+                "title": "t",
+                "status": "idea",
+                "project": "fno"
+            })],
+        )
+        .unwrap();
+        let run = |argv: &[&str]| {
+            let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+            normalize(&argv, None, tmp.path()).argv
+        };
+        let claude = run(&["spawn", "x-9fc9"]);
+        let codex = run(&["spawn", "-H", "codex", "x-9fc9"]);
+        let unknown = run(&["spawn", "x-0000"]);
+        match saved {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        assert_eq!(
+            claude,
+            [
+                "spawn",
+                "--name",
+                "t-spawn-bare-node-names",
+                "/fno:target x-9fc9"
+            ]
+        );
+        assert_eq!(codex.last().map(String::as_str), Some("$fno:target x-9fc9"));
+        assert_eq!(unknown.last().map(String::as_str), Some("x-0000"));
     }
 }
