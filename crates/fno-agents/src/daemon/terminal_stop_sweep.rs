@@ -128,34 +128,7 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
                         // finished work on a later tick. The write is
                         // offloaded like every other registry write on the
                         // async runtime.
-                        let sweep_home = home.clone();
-                        let stopped_session = marker.uuid.clone();
-                        let stopped_reason = marker.reason.clone();
-                        let _ = update_registry_offloaded(sweep_home.registry_json(), move |r| {
-                            if let Some(entry) = r.entries.iter_mut().find(|e| {
-                                e.harness_session_id.as_deref() == Some(stopped_session.as_str())
-                            }) {
-                                state::record_stop(entry, "terminal-sweep", Some(stopped_reason));
-                                // The same evidence every other registry stop
-                                // writes: quiet recovery's skip arm reads
-                                // agent_stopped, not this sweep's own kind, so
-                                // a stop that skips the journal leaves the
-                                // worker reading merely dead to the resume
-                                // ladder. The session rides the payload, so
-                                // the reader needs no registry join.
-                                let _ = EventEmitter::new(sweep_home.events_jsonl(), "daemon")
-                                    .emit(
-                                        "agent_stopped",
-                                        &json!({"name": entry.name.clone(),
-                                            "session_id": stopped_session,
-                                            "reason": "terminal-sweep"}),
-                                    );
-                                // best-effort: a failed stamp costs a later
-                                // wake its name, never the stop.
-                                crate::wake_name::stamp_from_row(&sweep_home, entry);
-                            }
-                        })
-                        .await;
+                        record_sweep_stop(home, &marker.uuid, &marker.reason).await;
                         // The row left the live set; its receipt must not sit
                         // around teaching the gate a skip that no longer
                         // applies.
@@ -177,5 +150,88 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
                 crate::terminal_stop::remove_marker(home, &marker.uuid);
             }
         }
+    }
+}
+
+/// The registry-side half of a sweep stop: stamp the row terminal under
+/// `terminal-sweep` and journal the `agent_stopped` evidence quiet recovery's
+/// skip arm reads. Every other registry stop writes that evidence; a sweep
+/// stop that skipped the journal left the worker reading merely dead to the
+/// resume ladder. The session rides the payload, so the reader needs no
+/// registry join. Best-effort end to end, like the sweep tick around it.
+async fn record_sweep_stop(home: &AgentsHome, session: &str, reason: &str) {
+    let journal_home = home.clone();
+    let _ = update_registry_offloaded(home.registry_json(), {
+        let session = session.to_string();
+        let reason = reason.to_string();
+        move |r| {
+            if let Some(entry) = r
+                .entries
+                .iter_mut()
+                .find(|e| e.harness_session_id.as_deref() == Some(session.as_str()))
+            {
+                state::record_stop(entry, "terminal-sweep", Some(reason));
+                // best-effort: a failed stamp costs a later wake its name,
+                // never the stop.
+                let _ = EventEmitter::new(journal_home.events_jsonl(), "daemon").emit(
+                    "agent_stopped",
+                    &json!({"name": entry.name.clone(), "session_id": session,
+                        "reason": "terminal-sweep"}),
+                );
+                crate::wake_name::stamp_from_row(&journal_home, entry);
+            }
+        }
+    })
+    .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[tokio::test]
+    async fn a_sweep_stop_journals_agent_stopped_with_the_session() {
+        let home = crate::daemon::tests::short_home("sweepstop");
+        let mut row = crate::state::RegistryEntry::default();
+        row.name = "t-swept".into();
+        row.harness = Some("claude".into());
+        row.harness_session_id = Some("d55e1111-1111-2222-3333-444444444444".into());
+        row.created_at = "2020-01-01T00:00:00Z".into();
+        state::update_registry(&home.registry_json(), |registry| registry.entries.push(row))
+            .unwrap();
+
+        record_sweep_stop(&home, "d55e1111-1111-2222-3333-444444444444", "pane-closed").await;
+
+        let evidence =
+            crate::watch_expiry::read_evidence(&home, chrono::Utc::now().timestamp_millis())
+                .unwrap();
+        let stopped: Vec<_> = evidence
+            .iter()
+            .filter(|e| e.kind == "agent_stopped")
+            .map(|e| {
+                (
+                    e.data.get("name").and_then(Value::as_str),
+                    e.data.get("session_id").and_then(Value::as_str),
+                    e.data.get("reason").and_then(Value::as_str),
+                )
+            })
+            .collect();
+        assert_eq!(
+            stopped,
+            vec![(
+                Some("t-swept"),
+                Some("d55e1111-1111-2222-3333-444444444444"),
+                Some("terminal-sweep")
+            )],
+            "the sweep stop is journaled where the skip arm reads"
+        );
+        let registry = state::load_registry(&home.registry_json()).unwrap();
+        assert_eq!(
+            registry.entries[0].stop.as_ref().map(|s| s.by.as_str()),
+            Some("terminal-sweep"),
+            "the row carries its stop record"
+        );
+        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
 }
