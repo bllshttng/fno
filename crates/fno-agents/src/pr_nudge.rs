@@ -1267,7 +1267,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&esc_root);
     }
 
-    /// AC (x-63c4, question leg): an open operator question naming the
+    /// AC (question leg): an open operator question naming the
     /// row's node parks the nudge, and the held row skips the PR-status
     /// read: the stop gate holds that session on the same question, so
     /// "drive it to merge" repeats a block the gate already emitted. A
@@ -1309,7 +1309,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.root().to_path_buf());
     }
 
-    /// AC (x-63c4, refusal leg): the status payload's own merge receipt
+    /// AC (refusal leg): the status payload's own merge receipt
     /// parks the nudge on the authority codes; a CI verdict word does not,
     /// so the red-head rung keeps waking the row.
     #[test]
