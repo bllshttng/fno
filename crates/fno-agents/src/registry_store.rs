@@ -26,6 +26,36 @@ pub(crate) fn database_path(path: &Path) -> Result<PathBuf, StateError> {
 
 fn open(path: &Path) -> Result<Connection, StateError> {
     let database = database_path(path)?;
+    // A migration fence dir stands only where an import put it: a completed
+    // one at `path`, a crashed one still pending. A store absent under either
+    // is a deleted graph.db, not a fresh install, so refuse BEFORE
+    // `open_write` mints a replacement - a minted 0-byte store would make the
+    // next open read the loss as a first import and answer an empty roster
+    // over it (the keeper sweep registry loss of 2026-10-30). A crash
+    // mid-first-import keeps its db file (open_write runs first), so its
+    // resume passes; a fresh install has neither fence.
+    let store_was_absent = !database.exists();
+    let pending_fence = path.parent().is_some_and(|parent| {
+        parent
+            .join(format!(
+                ".{}.table-fence",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+            ))
+            .is_dir()
+    });
+    if store_was_absent && (path.is_dir() || pending_fence) {
+        return Err(failure(
+            path,
+            format!(
+                "the store {} is gone while the migration fence still stands; \
+                 refusing to re-import an empty roster over the loss \
+                 (restore the store file, or remove the fence dir to reset)",
+                database.display(),
+            ),
+        ));
+    }
     let mut connection = crate::store_conn::open_write(&database).map_err(|e| failure(path, e))?;
     connection
         .execute_batch(DDL)
@@ -196,6 +226,36 @@ mod tests {
                     .starts_with("stray.registry.json.")
             });
         assert!(aside, "the stale file is kept, not deleted");
+    }
+
+    #[test]
+    fn a_lost_store_under_a_standing_fence_refuses_to_reimport_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let agents = temp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let path = agents.join("registry.json");
+        let legacy = json!({"schema_version": 4, "agents": []});
+        std::fs::write(&path, legacy.to_string()).unwrap();
+        super::read(&path).unwrap();
+        // The store vanishes under the standing fence (the 2026-10-30 CI
+        // loss shape): both doors must refuse, never mint a fresh empty
+        // roster over the loss.
+        let database = super::database_path(&path).unwrap();
+        std::fs::remove_file(&database).unwrap();
+        let err = super::read(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("is gone while the migration fence"),
+            "the refusal names the loss: {err}"
+        );
+        assert!(super::begin(&path).is_err(), "the write door refuses too");
+        assert!(path.is_dir(), "the fence survives the refusal");
+
+        // A fresh install next door still imports: no fence, no store.
+        let agents2 = temp.path().join("agents2");
+        std::fs::create_dir_all(&agents2).unwrap();
+        let path2 = agents2.join("registry.json");
+        super::read(&path2).unwrap();
+        assert!(path2.is_dir(), "a fresh install gets its fence");
     }
 }
 
