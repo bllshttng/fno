@@ -52,7 +52,7 @@ jobs:
             node: ''
             readme: []
           - id: claude-plugin-session-macos
-            runs-on: macos-14
+            runs-on: macos-15
             expect: pass
             node: ''
             readme: []
@@ -67,7 +67,7 @@ jobs:
             node: ''
             readme: ['curl -fsSL fno.sh | sh']
           - id: fno-sh-served-macos
-            runs-on: macos-14
+            runs-on: macos-15
             expect: pass
             node: ''
             readme: ['curl -fsSL fno.sh | sh']
@@ -77,7 +77,7 @@ jobs:
             node: ''
             readme: []
           - id: fno-sh-head-macos
-            runs-on: macos-14
+            runs-on: macos-15
             expect: pass
             node: ''
             readme: []
@@ -107,7 +107,7 @@ jobs:
             node: ''
             readme: []
           - id: brew
-            runs-on: macos-14
+            runs-on: macos-15
             expect: fail
             node: ''
             readme: ['brew install bllshttng/fno/fno']
@@ -132,7 +132,7 @@ jobs:
             node: ''
             readme: []
           - id: setup-scratch-home-macos
-            runs-on: macos-14
+            runs-on: macos-15
             expect: pass
             node: ''
             readme: []
