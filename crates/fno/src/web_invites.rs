@@ -178,7 +178,6 @@ mod web_invites_tests {
         ids.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
     fn web_invites_parse_drops_bad_rows_and_lowercases() {
         let rows = parse_invites(
             r#"[{"email":"Ann@Example.com","scope":"x-1","role":"Editor"},
@@ -195,7 +194,6 @@ mod web_invites_tests {
         );
     }
 
-    #[test]
     fn web_invites_a_scoped_editor_answers_inside_the_scope_only() {
         let list = [inv("ann@example.com", "x-1", Role::Editor)];
         let ok = decide(
@@ -214,7 +212,6 @@ mod web_invites_tests {
         assert_eq!(out.unwrap_err().code, 403);
     }
 
-    #[test]
     fn web_invites_a_low_role_an_unlisted_login_and_a_wide_bind_all_refuse() {
         let list = [
             inv("view@example.com", "*", Role::Viewer),
@@ -248,7 +245,6 @@ mod web_invites_tests {
         .is_ok());
     }
 
-    #[test]
     fn web_invites_no_list_keeps_token_reads_and_refuses_a_tailnet_answer() {
         let c = chain(&["x-1"]);
         let remote = tailnet("ann@example.com");
@@ -278,7 +274,6 @@ mod web_invites_tests {
         assert!(decide(&wide_local, None, Some(&c), Role::Editor).is_err());
     }
 
-    #[test]
     fn web_invites_configured_list_still_lets_the_local_user_in() {
         let list = [inv("ann@example.com", "x-1", Role::Editor)];
         let local = Caller {
@@ -290,5 +285,18 @@ mod web_invites_tests {
             decide(&local, Some(&list), Some(&chain(&["x-7"])), Role::Editor),
             Ok("local".into())
         );
+    }
+
+    #[test]
+    fn web_invites_decide_table() {
+        web_invites_parse_drops_bad_rows_and_lowercases();
+        web_invites_a_scoped_editor_answers_inside_the_scope_only();
+        web_invites_a_low_role_an_unlisted_login_and_a_wide_bind_all_refuse();
+    }
+
+    #[test]
+    fn web_invites_no_list_and_local_user() {
+        web_invites_no_list_keeps_token_reads_and_refuses_a_tailnet_answer();
+        web_invites_configured_list_still_lets_the_local_user_in();
     }
 }

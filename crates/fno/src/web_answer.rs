@@ -114,7 +114,6 @@ mod tests {
         serde_json::from_str(json)
     }
 
-    #[test]
     fn web_answer_pick_names_exactly_one() {
         let pick = |j: &str| pick_of(body(j).unwrap());
         assert_eq!(pick(r#"{"option":2}"#), Ok(AnswerPick::Option(2)));
@@ -138,7 +137,6 @@ mod tests {
         assert!(pick(&long).is_err());
     }
 
-    #[test]
     fn web_answer_origin_must_match_host_when_sent() {
         let with = |origin: Option<&str>| {
             let mut h = HeaderMap::new();
@@ -154,7 +152,6 @@ mod tests {
         assert!(with(Some("null")).is_err());
     }
 
-    #[test]
     fn web_answer_ids_and_scope_chain() {
         assert!(valid_id("q-door"));
         assert!(!valid_id(""));
@@ -169,5 +166,12 @@ mod tests {
         assert_eq!(chain_of(&rows, Some("x-9")), ["x-9"]);
         assert_eq!(chain_of(&rows, Some("loop-a")), ["loop-a", "loop-b"]);
         assert!(chain_of(&rows, None).is_empty());
+    }
+
+    #[test]
+    fn web_answer_pure_checks() {
+        web_answer_pick_names_exactly_one();
+        web_answer_origin_must_match_host_when_sent();
+        web_answer_ids_and_scope_chain();
     }
 }
