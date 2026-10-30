@@ -711,12 +711,12 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
 /// How many earlier commits of the PR the carry walks, newest first.
 const CARRY_WALK: usize = 30;
 
-/// The user's look carries to a head whose own paint patch is unchanged: a
-/// main merge or a test-only commit moves the head but not what the user
-/// saw. The newest earlier commit of this PR that the user approved is the
-/// reference. The PR's paint patch against its base, at that commit and at
-/// the head, must match file for file. Any paint change holds, and so does
-/// every unreadable read.
+/// The user's look sticks to the PR until merge: a later commit moves the
+/// head, and the approval holds. The newest earlier commit of this PR that
+/// the user approved is the reference, kept on the record for audit. The
+/// hold returns when the user declined a later commit, or when the head
+/// paints a file the approved patch never showed. Every unreadable read
+/// holds.
 fn approval_carries<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -769,13 +769,41 @@ fn approval_carries<P: Probes>(
     .and_then(|l| l.into_iter().next()) else {
         return false;
     };
+    let newer: Vec<&str> = commits
+        .iter()
+        .skip_while(|sha| sha.as_str() != approved.as_str())
+        .skip(1)
+        .map(String::as_str)
+        .collect();
+    if declined_after(&declining_pages(root, pr), &newer) {
+        return false;
+    }
     match (
         paint_patch(probes, cwd, &base, approved, paint_paths),
         paint_patch(probes, cwd, &base, head, paint_paths),
     ) {
-        (Some(was), Some(now)) => !now.is_empty() && was == now,
+        (Some(was), Some(now)) => adds_no_paint_surface(&was, &now),
         _ => false,
     }
+}
+
+/// An approval sticks to the PR: every paint file the head changes was
+/// already in the approved patch, so the user saw that surface. A paint file
+/// the approval never showed is a new look.
+fn adds_no_paint_surface(
+    was: &std::collections::BTreeMap<String, String>,
+    now: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    !now.is_empty() && now.keys().all(|f| was.contains_key(f))
+}
+
+/// Did the user decline the paint at a commit pushed after the approval?
+/// `newer` holds the commits after the approved one. A decline page names
+/// the head it judged.
+fn declined_after(declines: &[String], newer: &[&str]) -> bool {
+    declines
+        .iter()
+        .any(|text| newer.iter().any(|sha| text.contains(sha)))
 }
 
 /// One changed patch line with its direction marker and its string-literal
@@ -1076,6 +1104,23 @@ fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
                 && front.answer.as_deref().is_some_and(answer_approves)
                 && page_names_pr(&text, pr))
             .then_some((front.question_id, text))
+        })
+        .collect()
+}
+
+/// Every ANSWERED question page that names the PR and does not pick the
+/// approve option (hold for changes): the page text.
+fn declining_pages(root: &Path, pr: u64) -> Vec<String> {
+    let dir = crate::escalation::questions_dir(root);
+    [dir.clone(), dir.join("done")]
+        .iter()
+        .flat_map(|d| crate::lead_answers::read_question_pages(d).unwrap_or_default())
+        .filter_map(|(_stem, text)| {
+            let (front, _) = crate::attention_file::parse_page(&text)?;
+            (front.status == "answered"
+                && front.answer.as_deref().is_some_and(|a| !answer_approves(a))
+                && page_names_pr(&text, pr))
+            .then_some(text)
         })
         .collect()
 }
@@ -1395,6 +1440,29 @@ mod tests {
         // Context lines keep their bytes; only changed lines mask.
         let ctx = " footer(\"unchanged\")";
         assert_eq!(patch_body("modified", ctx), format!("modified\n{ctx}"));
+    }
+
+    #[test]
+    fn an_approval_holds_for_edits_to_files_it_showed_and_not_for_a_new_surface() {
+        let map = |names: &[&str]| {
+            names
+                .iter()
+                .map(|n| ((*n).to_string(), "body".to_string()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let was = map(&["a.rs", "b.rs"]);
+        assert!(adds_no_paint_surface(&was, &map(&["a.rs"])));
+        assert!(adds_no_paint_surface(&was, &map(&["a.rs", "b.rs"])));
+        assert!(!adds_no_paint_surface(&was, &map(&["a.rs", "c.rs"])));
+        assert!(!adds_no_paint_surface(&was, &map(&[])));
+    }
+
+    #[test]
+    fn a_decline_after_the_approved_commit_voids_the_carry() {
+        let declines = vec!["May PR 9 merge? answer 2 at c3".to_string()];
+        assert!(declined_after(&declines, &["c3", "c4"]));
+        assert!(!declined_after(&declines, &["c4"]));
+        assert!(!declined_after(&[], &["c3"]));
     }
 
     #[test]
