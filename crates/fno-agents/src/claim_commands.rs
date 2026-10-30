@@ -1974,7 +1974,7 @@ mod tests {
             by_name: Default::default(),
             by_fno_id: Default::default(),
             served: Default::default(),
-            rows: [("thr2".to_string(), RegistryEntry::default())]
+            rows: [("thr2".to_string(), crate::state::RegistryEntry::default())]
                 .into_iter()
                 .collect(),
         }));
@@ -1993,7 +1993,7 @@ mod tests {
     }
 
     fn rung_index(
-        rows: std::collections::HashMap<String, RegistryEntry>,
+        rows: std::collections::HashMap<String, crate::state::RegistryEntry>,
     ) -> std::cell::RefCell<Option<SessionRegistryIndex>> {
         std::cell::RefCell::new(Some(SessionRegistryIndex {
             known: true,
