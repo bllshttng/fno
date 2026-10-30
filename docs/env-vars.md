@@ -45,7 +45,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/daemon.rs:2093 |
 | `FNO_AGENTS_FIXTURES` | rs | Overrides the scratch sweep fixtures directory. |
 | `FNO_AGENTS_FRONT` | py+rs | unclear: cli/src/fno/graph/store.py:213 |
-| `FNO_AGENTS_HOME` | py+rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. |
+| `FNO_AGENTS_HOME` | py+rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. It does not move spaces or sessions. Set `FNO_SPACES_DIR` or `FNO_STATE_DIR` to move those. |
 | `FNO_AGENTS_IDLE_EXIT_SECS` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:67 |
 | `FNO_AGENTS_NAME_MODEL` | rs | Raw model string; the agent-name mint appends its short code to the worker name. |
 | `FNO_AGENTS_NO_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:87 |
@@ -122,7 +122,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_GH_PROXY_DEPTH` | rs | unclear: crates/fno-agents/src/pr_status/proxy.rs:146 |
 | `FNO_GH_PROXY_DIR` | rs | Names the directory holding the `gh` proxy shim. The Python front sets it for its subprocesses (prepend the shim to PATH), and the Rust transport consult reads it to stand down when a spawned `gh` resolves into it (unknown always means charge). |
 | `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:48 |
-| `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. |
+| `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. The fno-agents supervisor sets it on every footnote launch, resolved through the supervisor's own graph resolver. |
 | `FNO_GUARD_TRACE` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:25 |
 | `FNO_HARNESS` | rs | The arming session's harness, the fallback a new lead manifest names when the holder row carries none. |
 | `FNO_HARNESS_NAME` | py+rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |

@@ -120,6 +120,12 @@ fn spawn(cwd: &Path) -> Result<Child, AskOutcome> {
     for name in crate::claims::AMBIENT_IDENTITY_NAMES {
         cmd.env_remove(name);
     }
+    // fnh resolves its rules store from FNO_GRAPH_JSON; naming it here keeps
+    // the child off the $HOME/.fno fallback its own resolver would take.
+    cmd.env(
+        "FNO_GRAPH_JSON",
+        crate::feed::graph_path(&AgentsHome::from_env()),
+    );
     // SAFETY: setpgid is async-signal-safe; it runs between fork and exec.
     unsafe {
         cmd.pre_exec(|| {
@@ -182,9 +188,10 @@ fn mark_row(home: &AgentsHome, name: &str, transcript: &Path, spec: &LaunchSpec,
         .and_then(|r| r["data"]["reported_model"].as_str())
         .map(str::to_string);
     if let Some(row) = execution_row(&records, spec, reported.as_deref()) {
-        if let Err(e) = crate::ledger_axes::upsert_execution(ledger, row) {
+        if let Err(e) = crate::ledger_axes::upsert_execution(ledger, row.clone()) {
             eprintln!("fno-agents: footnote spend not recorded: {e}");
         }
+        crate::ledger_register::emit_run_recorded(&spec.cwd, "agents", &row);
     }
     let _ = update_registry(&home.registry_json(), |reg| {
         let Some(e) = reg.find_mut(name) else {

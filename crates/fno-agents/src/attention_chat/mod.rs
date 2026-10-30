@@ -490,6 +490,7 @@ fn tick_one(
         };
         let attested = format!("{}:{}:{}", sink.name, msg.sender, msg.id);
         match crate::attention_arm::append_answer_row(
+            &crate::paths::AgentsHome::from_env(),
             &item.id,
             &sink.name,
             &answer,

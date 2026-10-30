@@ -500,21 +500,6 @@ pub fn run_finalize(args: &[String]) -> i32 {
 
     let mut failed: Vec<String> = Vec::new();
 
-    // ── ALWAYS: ledger session-record (skipped only when a prior non-ship
-    //    finalize already wrote this session's row) ──────────────────────────
-    let ledger_written = if skip_ledger {
-        true // the prior non-ship finalize already wrote the row
-    } else {
-        match write_ledger_record(&cwd, &state, &transcript_uuid, &reason) {
-            Ok(()) => true,
-            Err(e) => {
-                eprintln!("finalize: ledger record failed: {e}");
-                failed.push("ledger".into());
-                false
-            }
-        }
-    };
-
     // ── ALWAYS: rescue uncommitted work at the only terminal a worker gets
     //    (HALF ONE) ──────────────────────────────────────────────────
     // A provider 429 (or any other hard stop) gives a worker no future
@@ -535,6 +520,10 @@ pub fn run_finalize(args: &[String]) -> i32 {
     let mut stamped = false;
     let mut handoff_path: Option<String> = None;
     let mut delivery_terminal_message: Option<String> = None;
+    // The advisory verdict captured from verify_advise::run's return, so the
+    // ledger row (and its run_recorded carrier) carries it at build time
+    // instead of a later stamp patching it.
+    let mut verifier_verdict: Option<String> = None;
     if legacy_ship {
         let plan = m.plan_path.clone().unwrap_or_default();
         if !plan.is_empty() {
@@ -595,6 +584,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
             &crate::verify_advise::spawn_verifier,
         );
         eprintln!("finalize: verify_advise: verdict={verdict}");
+        verifier_verdict = Some(verdict);
     }
 
     if delivery_ship {
@@ -644,6 +634,29 @@ pub fn run_finalize(args: &[String]) -> i32 {
             }
         }
     }
+
+    // ── ALWAYS: ledger session-record (skipped only when a prior non-ship
+    //    finalize already wrote this session's row) ──────────────────────────
+    // After the ship legs so the row - and its run_recorded carrier - carries
+    // the advisory verdict from verify_advise::run's return, not a later stamp.
+    let ledger_written = if skip_ledger {
+        true // the prior non-ship finalize already wrote the row
+    } else {
+        match write_ledger_record(
+            &cwd,
+            &state,
+            &transcript_uuid,
+            &reason,
+            verifier_verdict.as_deref(),
+        ) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("finalize: ledger record failed: {e}");
+                failed.push("ledger".into());
+                false
+            }
+        }
+    };
 
     // ── completion eval artifact, every terminal but NoWork ──
     // Originally re-homed the BLOCKED-postmortem generator the control-plane
@@ -1167,6 +1180,7 @@ fn write_ledger_record(
     state: &Path,
     transcript_uuid: &str,
     reason: &str,
+    verifier_verdict: Option<&str>,
 ) -> Result<(), String> {
     let cost_json = if transcript_uuid.is_empty() {
         None
@@ -1179,6 +1193,7 @@ fn write_ledger_record(
         transcript_uuid,
         reason,
         cost_json.as_ref(),
+        verifier_verdict,
     )
 }
 

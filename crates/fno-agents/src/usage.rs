@@ -13,7 +13,7 @@
 /// list against that set, so a new command cannot land without a `--help` entry
 ///.
 pub const CLIENT_COMMAND_USAGE: &[&str] = &[
-    "spawn <name> --provider <p> [--substrate pane|thread|headless] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] --argv -- <cmd...>",
+    "spawn <name> -H <harness> [--as pane|thread|headless] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",

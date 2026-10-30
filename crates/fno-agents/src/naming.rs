@@ -645,7 +645,7 @@ pub fn node_worker_name(token: &str, cwd: &std::path::Path, session: &str) -> Op
 }
 
 /// The slug of the node `token` names (id first, then slug), else None.
-fn node_slug(token: &str, cwd: &std::path::Path) -> Option<String> {
+pub(crate) fn node_slug(token: &str, cwd: &std::path::Path) -> Option<String> {
     let path = crate::graph_get::graph_path_for(cwd);
     let by_id = crate::backlog::RowQuery {
         filter: crate::backlog::api::NodeFilter {

@@ -24,7 +24,13 @@ from pathlib import Path
 sys.path.insert(0, "cli/src")
 
 from fno.agents.cli import _parse_wait_seconds  # noqa: E402
-from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable  # noqa: E402
+from fno.agents.harness_map import (  # noqa: E402
+    DispatchResolveError,
+    capabilities,
+    fence_uncarried,
+    known_harnesses,
+    thread_seatable,
+)
 from fno.agents.model_routing import load_sandbox_write_policy  # noqa: E402
 from fno.agents.spawn_gate import WAITABLE_REFUSAL_REASONS  # noqa: E402
 
@@ -33,15 +39,26 @@ GOLDEN = Path(__file__).resolve().parent / "golden" / "bare_spawn"
 
 def thread_line(harness: str, fenced: list[str]) -> str | None:
     """cmd_spawn's thread refusal (cli.py, `if substrate == "thread":`)."""
-    uncarried = fence_uncarried(harness, fenced)
     try:
-        seatable = thread_seatable(harness)
+        capabilities(harness)
     except DispatchResolveError:
-        seatable = False
+        # An unknown harness has no lane at all; the roster is the remediation.
+        roster = ", ".join(known_harnesses())
+        return (
+            f"fno agents spawn: unknown harness {harness!r}; "
+            f"the capability contract knows: {roster}"
+        )
+    uncarried = fence_uncarried(harness, fenced)
+    seatable = thread_seatable(harness)
     why = f"has no carrier for {uncarried}" if uncarried else ""
     if why or not seatable:
         why = why or "is not seatable"
-        return f"fno agents spawn: the {harness} thread lane {why}; add --as pane"
+        # A seatable harness's pane lane carries what its fence cannot; a
+        # not-seatable one (footnote, muse) seats headless, its resolver
+        # fallback. The thread_footnote/thread_muse goldens were added by
+        # hand after the capture driver lost its cmd_spawn oracle.
+        tail = "add --as pane" if seatable else "add --as headless"
+        return f"fno agents spawn: the {harness} thread lane {why}; {tail}"
     return None
 
 
