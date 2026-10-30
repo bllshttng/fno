@@ -215,8 +215,8 @@ pub fn disposition_blockers_on_chain(
                 // head pinned the gate to a stale same-head dispose forever
                 // when the real fix's round re-emitted nothing. The row stamp
                 // (`data.verify_fixes`, written by emit-attestation from the
-                // same resolved flags the attest side's x-ec79 carve-out
-                // reads) is the second witness: it survives the join being
+                // same resolved flags its empty-diff carve-out reads) is the
+                // second witness: it survives the join being
                 // lost when the review-hold claim expired before the attest
                 // read it - the attestation carries its own scoped-verify
                 // declaration, so the join is not the only path.
@@ -367,8 +367,9 @@ mod tests {
     #[test]
     fn a_stamped_same_head_row_clears_without_a_join() {
         // The attest emitter stamps data.verify_fixes on the row whose
-        // dispositions came from a scoped --verify-fixes round (x-ec79's
-        // carve-out evidence). The raise and the fix share one head and the
+        // dispositions came from a scoped --verify-fixes round - the same
+        // evidence the empty-diff carve-out accepts. The raise and the fix
+        // share one head and the
         // invocation join is lost (UNJOINED: the review-hold claim expired
         // before the attest read it), yet the scoped verification is the
         // witness - the same acceptance the attest side already gives.
