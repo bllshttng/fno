@@ -417,13 +417,15 @@ fn run_agy(
     let argv = crate::spawn_gate::qos_wrap(popen_cwd, argv.to_vec());
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
+    cmd.current_dir(popen_cwd);
+    crate::claims::stamp_command_env(&mut cmd, agent_self, "agy", None);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
+    let mut cmd = crate::sandbox_launch::boxed(cmd);
     // CRITICAL: detach stdin so agy -p never blocks on a non-TTY waiting for
     // input (the silent-stdout-drop gotcha).
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    cmd.current_dir(popen_cwd);
-    crate::claims::stamp_command_env(&mut cmd, agent_self, "agy", None);
     // Own process group so SIGTERM/SIGKILL/SIGINT reach agy's subshells.
     unsafe {
         cmd.pre_exec(|| {

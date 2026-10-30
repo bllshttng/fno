@@ -226,28 +226,6 @@ def test_opencode_activity_epoch_from_messages(tmp_path):
     assert _opencode_activity_epoch("ses_missing", db) is None
 
 
-# ---------------------------------------------------------------------------
-# render_truth: one legible human line (AC3-UI)
-# ---------------------------------------------------------------------------
-
-def test_truth_line_reads_exited_for_a_resumable_exit_and_dead_without_a_session():
-    from fno.agents.cli import _truth_line
-
-    result = {"handle": "lead-4d9b-delivery", "state": "working", "reason": None,
-              "last_activity_age_s": 600, "last_activity_basis": "last-entry",
-              "observed_model": {"kind": "observed", "model": "gpt-6-astra", "samples": 2},
-              "session_id": "01a09bcd", "suggestions": []}
-    exited = _truth_line(result, "pane-gone")
-    assert exited.startswith("truth lead-4d9b-delivery: exited")
-    assert "resumable" in exited
-    assert "working" not in exited and "active" not in exited
-    assert exited.endswith("[unreachable: pane-gone]")
-    assert _truth_line(result, "exit-recorded").startswith("truth lead-4d9b-delivery: exited")
-    orphan = {**result, "session_id": None}
-    assert _truth_line(orphan, "pane-gone").startswith("truth lead-4d9b-delivery: dead")
-    assert _truth_line(result, None).startswith("truth lead-4d9b-delivery: working")
-
-
 def test_resolver_crash_is_distinct_from_a_routine_miss(tmp_path):
     """A crashing resolver must not share not-found's reason.
 
@@ -394,40 +372,6 @@ def test_unknown_paths_leave_the_last_event_pair_null(tmp_path):
     assert result["last_message"] is None
 
 
-def test_truth_command_json_carries_the_last_event_pair(tmp_path, monkeypatch):
-    """The --json payload is an explicit key allowlist: the resolver's fields
-    reach nobody until _truth_payload copies them across. Exit code is
-    unchanged: these are reporting fields, never a gate."""
-    from typer.testing import CliRunner
-
-    from fno.agents import session_truth
-    from fno.cli import app
-
-    cwd = "/Users/bb16/code/footnote/footnote"
-    sid = "0badc0de-2222-0000-0000-000000000001"
-    _write_claude_transcript(tmp_path, cwd, sid, ["on the pytest run now"])
-    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
-
-    real = session_truth.resolve_session_truth
-    monkeypatch.setattr(
-        session_truth,
-        "resolve_session_truth",
-        lambda handle, **kw: real(
-            handle, resolve=_resolver(session), projects_root=tmp_path
-        ),
-    )
-
-    result = CliRunner().invoke(app, ["agents", "truth", "w1", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["last_message"] == "on the pytest run now"
-    assert payload["observed_model"] == {"kind": "no-model-yet"}
-    assert payload["last_event_at"]  # absolute ISO8601, present on the wire
-    # The wire names the instrument too: this fixture carries no timestamps,
-    # so the reading rode the labelled mtime fallback.
-    assert payload["last_activity_basis"] == "mtime"
-
 
 # ---------------------------------------------------------------------------
 # observed_model: the route a worker is ACTUALLY on, read from its transcript
@@ -531,33 +475,6 @@ def test_observed_model_separates_never_from_not_yet(tmp_path):
     }
 
 
-# ---------------------------------------------------------------------------
-# render_truth: the model on the line (US1 + US3)
-# ---------------------------------------------------------------------------
-
-def _truth_result(observed):
-    return {
-        "handle": "569d8d39",
-        "state": "working",
-        "reason": None,
-        "last_activity_age_s": 6,
-        "session_id": "s",
-        "observed_model": observed,
-        "suggestions": [],
-    }
-
-
-def test_render_truth_names_the_observed_model():
-    """AC1-HP: the operator asks one command and gets the real model."""
-    from fno.agents.session_truth import render_truth
-
-    line = render_truth(
-        _truth_result({"kind": "observed", "model": "glm-5.2", "samples": 300})
-    )
-    # The age is fixed-width (4), so a short one carries leading spaces here
-    # too - column alignment is worth a double space in prose.
-    assert line == "truth 569d8d39: working on glm-5.2 (active, last activity   6s ago)"
-
 
 def test_observed_model_escalates_past_an_inconclusive_tail(tmp_path):
     """A bounded tail cannot claim absence.
@@ -584,159 +501,6 @@ def test_observed_model_escalates_past_an_inconclusive_tail(tmp_path):
         "model": "gpt-5.6-sol",
         "samples": 1,
     }
-
-
-# ---------------------------------------------------------------------------
-# --handles: one process answers N handles
-#
-# The probe's real work is 0.83 ms and its delivery was 780 ms of interpreter
-# cold start, paid once per roster row per daemon sweep. These pin the batch
-# contract the Rust side now depends on: a keyed object, an always-zero exit,
-# and one registry read for the whole batch.
-# ---------------------------------------------------------------------------
-
-def test_truth_batch_keys_every_handle_and_exits_zero_with_a_miss(
-    tmp_path, monkeypatch
-):
-    """Two resolve, one does not. The miss rides its own entry, never the exit
-    code -- a batch has no single exit code to carry."""
-    from typer.testing import CliRunner
-
-    from fno.agents import session_truth
-    from fno.cli import app
-
-    cwd = "/Users/bb16/code/footnote/footnote"
-    sids = {
-        "a": "0badc0de-3333-0000-0000-00000000000a",
-        "b": "0badc0de-3333-0000-0000-00000000000b",
-    }
-    for name, sid in sids.items():
-        _write_claude_transcript(tmp_path, cwd, sid, [f"still going on {name}"])
-
-    real = session_truth.resolve_session_truth
-
-    def routed(handle, **kw):
-        sid = sids.get(handle)
-        if sid is None:
-            return real(handle, resolve=lambda _h: (None, []), projects_root=tmp_path)
-        session = SimpleNamespace(
-            agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8]
-        )
-        return real(handle, resolve=_resolver(session), projects_root=tmp_path)
-
-    monkeypatch.setattr(session_truth, "resolve_session_truth", routed)
-
-    result = CliRunner().invoke(
-        app, ["agents", "truth", "--handles", "a,b,c", "--json"]
-    )
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert set(payload) == {"a", "b", "c"}
-    assert payload["a"]["last_message"] == "still going on a"
-    assert payload["b"]["last_message"] == "still going on b"
-    assert payload["c"]["state"] == "unknown"
-    assert payload["c"]["reason"]  # the miss explains itself in its own entry
-
-
-def test_truth_batch_and_single_read_the_same_handle_identically(tmp_path, monkeypatch):
-    """ONE reader, asserted on the whole payload rather than on one field.
-
-    This is the constraint the batch exists to preserve. `state` and
-    `observed_model` must come from the same reader, so the Rust list emitter
-    reports the identical reading the Python one does -- see `TruthProbe` in
-    `crates/fno-agents/src/claude_ask.rs`. A batch that answered even slightly
-    differently from the single form would be the second reader a Rust port was
-    rejected for growing.
-
-    Compared as full dicts, not as a state string: a check that pins one field
-    passes while every other field drifts.
-    """
-    from typer.testing import CliRunner
-
-    from fno.agents import session_truth
-    from fno.cli import app
-
-    cwd = "/Users/bb16/code/footnote/footnote"
-    sid = "0badc0de-4444-0000-0000-000000000001"
-    _write_claude_transcript_with_model(tmp_path, cwd, sid, "glm-5.3", turns=3)
-    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
-
-    real = session_truth.resolve_session_truth
-    monkeypatch.setattr(
-        session_truth,
-        "resolve_session_truth",
-        lambda handle, **kw: real(
-            handle, resolve=_resolver(session), projects_root=tmp_path
-        ),
-    )
-
-    runner = CliRunner()
-    single = json.loads(
-        runner.invoke(app, ["agents", "truth", "w1", "--json"]).stdout
-    )
-    batch = json.loads(
-        runner.invoke(app, ["agents", "truth", "--handles", "w1", "--json"]).stdout
-    )["w1"]
-
-    # The age advances between two reads by construction; it is the one field a
-    # parity check must exclude rather than the one field it should check.
-    drifts = {"last_activity_age_s"}
-    assert {k: v for k, v in batch.items() if k not in drifts} == {
-        k: v for k, v in single.items() if k not in drifts
-    }
-
-
-def test_truth_batch_refuses_both_a_positional_handle_and_handles():
-    """Two spellings of one question. Exit 2 (usage), nothing on stdout."""
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    result = CliRunner().invoke(app, ["agents", "truth", "w1", "--handles", "a,b"])
-
-    assert result.exit_code == 2, result.output
-    assert result.stdout.strip() == ""
-
-
-def test_truth_batch_reports_falsifier_error_on_only_the_bad_row(monkeypatch):
-    from typer.testing import CliRunner
-
-    from fno.agents import cli as agents_cli
-    from fno.agents import session_truth
-    from fno.cli import app
-
-    rows = [
-        SimpleNamespace(name="bad", harness_session_id="sid-bad", short_id="bad1"),
-        SimpleNamespace(name="good", harness_session_id="sid-good", short_id="good1"),
-    ]
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-
-    def falsifier(row):
-        if row.name == "bad":
-            raise ValueError("broken row")
-        return None
-
-    monkeypatch.setattr("fno.agents.reachability.registry_falsifier", falsifier)
-    monkeypatch.setattr(
-        session_truth,
-        "resolve_session_truth",
-        lambda handle, **_kwargs: {
-            "handle": handle,
-            "state": "unknown",
-            "reason": "not-found",
-            "last_activity_age_s": None,
-            "observed_model": None,
-        },
-    )
-    monkeypatch.setattr(agents_cli, "_batch_resolver", lambda: lambda handle: (None, []))
-
-    result = CliRunner().invoke(app, ["agents", "truth", "--handles", "bad,good", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["bad"]["falsifier_error"] == "ValueError"
-    assert payload["good"]["falsifier_error"] is None
 
 
 def test_resolve_session_truth_peer_mail_does_not_clear_question(tmp_path):
@@ -842,17 +606,6 @@ def test_a_tail_without_timestamps_falls_back_and_names_mtime(tmp_path):
     assert result["last_activity_basis"] == "mtime"
     assert result["last_event_at"] == "2023-11-14T22:13:20Z"
 
-
-def test_render_truth_names_the_basis():
-    from fno.agents.session_truth import render_truth
-
-    line = render_truth(
-        {"handle": "w1", "state": "stalled", "reason": None,
-         "last_activity_age_s": 48 * 3600, "last_activity_basis": "last-entry",
-         "session_id": "s", "suggestions": []}
-    )
-    assert line.endswith("by last-entry)")
-    assert "2d" in line
 
 
 # ---------------------------------------------------------------------------

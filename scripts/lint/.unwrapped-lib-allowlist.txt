@@ -226,6 +226,13 @@ worktree-unpushed.sh
 # Pure sourcing library; no CLI of its own.
 worktree-removal-event.sh
 
+# Sourced by scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
+# exposes wt_cwd_cache_file/load/store. The machine-wide cwd snapshot cache
+# (raw lsof memo, 30s TTL) behind _wt_refresh_cwd_snapshot; the wrapped entry
+# points users drive are `fno workspace worktree cleanup/archive`.
+# Pure sourcing library; no CLI of its own.
+worktree-cwd-cache.sh
+
 # The shared "which of these rooted processes actually holds the tree?" answer.
 # Sourced by scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
 # exposes wt_classify_pids. The bridge is the bash ADAPTER for the classifier

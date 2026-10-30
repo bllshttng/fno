@@ -1,7 +1,6 @@
 """Slow, real-binary Codex pane journeys."""
 from __future__ import annotations
 
-import io
 import json
 import os
 import shutil
@@ -89,7 +88,7 @@ def test_late_codex_identity_composes_across_every_peer_surface(
 
     from fno.agents import dispatch, mux_spawn
     from fno.agents.discover import resolve_or_suggest
-    from fno.agents.peek import peek
+    from fno.agents.peek import recent_records
     from fno.agents.registry import load_registry, resolve_agent
     from fno.claims.core import acquire_claim
 
@@ -217,19 +216,10 @@ def test_late_codex_identity_composes_across_every_peer_surface(
         )
         assert claim.holder == identity
 
-        observed, errors = io.StringIO(), io.StringIO()
-        assert (
-            peek(
-                requested_name,
-                stdout=observed,
-                stderr=errors,
-                resolve=resolver,
-                codex_sessions_dir=rollout_root,
-            )
-            == 0
+        observed = recent_records(
+            "codex", identity, str(repo), 15, codex_sessions_dir=rollout_root
         )
-        assert errors.getvalue() == ""
-        assert "assistant: READY" in observed.getvalue()
+        assert ("assistant", "READY") in [(r.role, r.text) for r in observed]
         assert {
             row.harness_session_id,
             pane["harness_session_id"],

@@ -100,22 +100,6 @@ pub fn node_aware_root(key: &str) -> Option<PathBuf> {
     crate::claims_root::claims_root_for(key)
 }
 
-/// The registry path the Python leaf read (`paths.agents_registry_path`):
-/// a declared `FNO_AGENTS_HOME` wins, else the configured state root.
-/// `AgentsHome::shared_registry_json` pins the ambient `$HOME/.fno`, so a
-/// pinned state root would read the wrong graph store.
-fn agents_registry_path() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os(crate::paths::HOME_ENV).filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(home).join("registry.json"));
-    }
-    let cwd = std::env::current_dir().ok()?;
-    Some(
-        crate::agents_config::state_dir(&cwd)?
-            .join("agents")
-            .join("registry.json"),
-    )
-}
-
 /// The registry effort for the owned identity, read through the shared
 /// registry path (mirrors `_owned_registry_effort`: unreadable or malformed
 /// state leaves effort unknown).
@@ -123,7 +107,7 @@ fn owned_registry_effort(harness: &str, session_id: &str) -> Option<String> {
     if harness.is_empty() || session_id.is_empty() {
         return None;
     }
-    let path = agents_registry_path()?;
+    let path = crate::paths::AgentsHome::shared_registry_json();
     let raw = crate::registry_store::read(&path).ok()?;
     let rows = raw.get("agents")?.as_array()?;
     let legacy_key = match harness {
@@ -181,9 +165,7 @@ fn owned_registry_effort(harness: &str, session_id: &str) -> Option<String> {
 /// matching row answers its `harness`, empty or absent, exactly like the
 /// Python lookup it ports.
 pub(crate) fn harness_for_session(session_id: &str) -> String {
-    let Some(path) = agents_registry_path() else {
-        return "claude".to_string();
-    };
+    let path = crate::paths::AgentsHome::shared_registry_json();
     let Ok(raw) = crate::registry_store::read(&path) else {
         return "claude".to_string();
     };

@@ -285,6 +285,14 @@ Beyond an exact pin, a plan carries a **work-difficulty band** that dispatch joi
 - **`medium`** - a standard feature or fix that needs real reasoning but no load-bearing judgment.
 - **`high`** - gate semantics, security, concurrency, migrations, or an architecture decision where a weaker model's error is expensive.
 
+Before you pick the band, read where past bands in this domain ended. Take the node's `domain` and its filed band (`difficulty_history[0].value`) from `fno backlog get <node>`, then run:
+
+```bash
+fno backlog calibration -d "<domain>" -J | jq '.revisions[] | select(.filed == "<filed band>")'
+```
+
+Cite the row in the band's rationale line, for example `code/medium: <nodes> shipped, <up> up, <down> down`. When the row has 5 or more nodes and most of the revised ones moved one way, say whether this node is like them. The row informs the judgment. It never sets the band. With fewer than 5 nodes, cite the row and do not lean on it. If the command fails, write that in the rationale line and judge from the node alone.
+
 The blueprint phase is the sanctioned second write: the planner has read the code and knows more than the filer did. Record BOTH the filed estimate and the blueprint revision. The intake path appends a `source: "blueprint"` history entry rather than overwriting. The filed-versus-revised delta is the only signal that eventually says whether filers estimate well.
 
 Precedence is `model:` (exact) over the provider default. An exact pin on the same task wins. Transcribe the band from frontmatter onto the node (AFTER `$NODE_ID` is minted), idempotently:

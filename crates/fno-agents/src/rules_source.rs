@@ -7,7 +7,7 @@
 
 use crate::decision_index;
 use crate::rules::{parse_file, Rule};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -190,14 +190,299 @@ pub fn rule(cwd: &Path, ev: &crate::rules::Event) -> Ruling {
     Ruling { decision, unread }
 }
 
+/// The block verdict's refusal sentence for a door caller, or `None` when
+/// the door proceeds. A fire never fails a door on its own error: an unread
+/// source answers `None` and rides `advisory_lines`.
+pub fn block_sentence(ruling: &Ruling) -> Option<String> {
+    (ruling.decision.verdict == "block")
+        .then(|| format!("Refused by rule: {}", ruling.decision.reasons.join("; ")))
+}
+
+/// The lines a door prints so a fire is never silent: every warn and
+/// inject fire, plus the sources that could not be read. A block never
+/// reaches here; the door refused on `block_sentence` first.
+pub fn advisory_lines(ruling: &Ruling) -> Vec<String> {
+    let mut out: Vec<String> = ruling
+        .decision
+        .fires
+        .iter()
+        .map(|f| format!("rule {}: {}: {}", f.action, f.rule, f.text))
+        .collect();
+    out.extend(ruling.unread.iter().map(|r| format!("Unread: {r}")));
+    out
+}
+
+/// The first node-id-shaped token in free text (a `Fixes <node>`), the
+/// node a door event names when its caller carries one only as prose.
+pub fn node_in_text(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|t| {
+            t.trim_matches(|c: char| !c.is_ascii_alphanumeric())
+                .to_lowercase()
+        })
+        .find(|t| crate::law_match::matches_node_id_shape(t))
+}
+
+/// The event kinds with a wired decide() site: the four hook points and
+/// the four doors. A rule whose events name only anything else reports
+/// under `unwired` in the rules report.
+pub(crate) const WIRED_EVENTS: &[&str] = &[
+    "prompt",
+    "skill",
+    "pre-tool",
+    "door:merge",
+    "door:send",
+    "door:spawn",
+    "plan-start",
+];
+
+/// The `rules-import` door: validate the file through the rules-check
+/// validator, demand the operator floor through the law door's resolver,
+/// then append one `law_trigger` event per rule that carries `law`. The
+/// raw `[[rule]]` block rides verbatim as the row's `rule_toml`; the read
+/// side parses it back with the same parser. Exit 0 imported, 2 unreadable
+/// input, 3 refused, 1 store failure.
+pub fn run_rules_import(file: &str) -> i32 {
+    match rules_import_inner(file) {
+        Ok(imported) => {
+            println!("rules-import: {imported} law trigger(s) imported");
+            0
+        }
+        Err((code, message)) => {
+            eprintln!("rules-import: {message}");
+            code
+        }
+    }
+}
+
+fn rules_import_inner(file: &str) -> Result<usize, (i32, String)> {
+    let text = std::fs::read_to_string(file).map_err(|e| (2, format!("{file}: {e}")))?;
+    // The authority floor answers before any store read or validation, so
+    // an agent caller learns only the refusal, never the file's contents.
+    let caller = crate::law_match::resolve_caller().map_err(|m| (3, m))?;
+    if caller.authority != "operator" {
+        return Err((3, format!(
+            "writing law_trigger rows demands the operator floor; this caller resolves {}. Run the import from the user's terminal.",
+            caller.authority
+        )));
+    }
+    let index = match decision_index::default_store_live() {
+        Ok(rows) => decision_index::laws_of(rows),
+        Err(e) => return Err((1, format!("the decision index: {e}"))),
+    };
+    let check = crate::rules_check::check_answer(&text, &index.rows);
+    if check.get("ok") != Some(&json!(true)) {
+        let msg = check
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("the rule file does not validate");
+        return Err((3, msg.to_string()));
+    }
+    let rules = crate::rules::parse_table(&text).map_err(|e| (3, format!("{e}")))?;
+    let bodies = rule_bodies(&text);
+    let path = decision_index::default_state_path("decisions.jsonl");
+    let mut imported = 0;
+    for (rule, body) in rules.iter().zip(bodies.iter()) {
+        let Some(law_id) = rule.law.as_deref() else {
+            continue;
+        };
+        let envelope = json!({
+            "ts": chrono::Utc::now().to_rfc3339(),
+            "type": "law_trigger",
+            "source": "backlog",
+            "data": {"decision_id": law_id, "trigger_kind": "rule", "rule_toml": body},
+        });
+        crate::event_store::append_envelope(&path, &envelope.to_string(), None)
+            .map_err(|e| (1, e))?;
+        imported += 1;
+    }
+    Ok(imported)
+}
+
+/// The raw `[[rule]]` block bodies in file order: the text between one
+/// `[[rule]]` header and the next, so the import stores the caller's own
+/// TOML instead of re-serializing the parsed rule.
+fn rule_bodies(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    for line in text.lines() {
+        if line.trim() == "[[rule]]" {
+            if let Some(body) = cur.take() {
+                if !body.trim().is_empty() {
+                    out.push(body.trim_end().to_string());
+                }
+            }
+            cur = Some(String::new());
+        } else if let Some(body) = cur.as_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    if let Some(body) = cur {
+        if !body.trim().is_empty() {
+            out.push(body.trim_end().to_string());
+        }
+    }
+    out
+}
+
+/// The `rules-report` mode: per-rule counts over the `rule` decision spans
+/// the hook and door sites write, plus `never_fired`, `unwired` and
+/// `unevaluated` over the live set. A report with an unreadable journal or
+/// live set still answers, with the reason on the answer.
+pub fn rules_report(since: Option<&str>) -> Value {
+    let window = since.unwrap_or("7d");
+    let cutoff = report_cutoff(window);
+    let mut fired: BTreeMap<String, Value> = BTreeMap::new();
+    let journal = crate::law_match::project_events_journal();
+    let mut unread: Vec<String> = Vec::new();
+    match std::fs::read_to_string(&journal) {
+        Ok(text) => {
+            for line in text.lines() {
+                let Ok(row) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if row.get("type").and_then(Value::as_str) != Some("decision_span") {
+                    continue;
+                }
+                let data = row.get("data").cloned().unwrap_or(Value::Null);
+                if data.get("span_kind").and_then(Value::as_str) != Some("rule") {
+                    continue;
+                }
+                let Some(id) = data.get("rule").and_then(Value::as_str).map(str::to_owned) else {
+                    continue;
+                };
+                let ts = row.get("ts").and_then(Value::as_str).unwrap_or("");
+                let parsed = ts
+                    .parse::<chrono::DateTime<chrono::FixedOffset>>()
+                    .ok()
+                    .map(|t| t.timestamp());
+                if let Some(secs) = parsed {
+                    if secs < cutoff {
+                        continue;
+                    }
+                }
+                let entry = fired.entry(id).or_insert_with(
+                    || json!({"fires": 0, "blocks": 0, "warns": 0, "last_fired": ""}),
+                );
+                let obj = entry.as_object_mut().expect("shaped above");
+                let mut bump = |key: &str| {
+                    let n = obj.get(key).and_then(Value::as_i64).unwrap_or(0);
+                    obj.insert(key.to_string(), json!(n + 1));
+                };
+                bump("fires");
+                match data.get("verdict").and_then(Value::as_str) {
+                    Some("block") => bump("blocks"),
+                    Some("warn") => bump("warns"),
+                    _ => {}
+                }
+                let last = obj.get("last_fired").and_then(Value::as_str).unwrap_or("");
+                if ts > last {
+                    obj.insert("last_fired".to_string(), json!(ts));
+                }
+            }
+        }
+        Err(reason) => unread.push(format!("the fire journal ({reason})")),
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut answer = json!({"ok": true, "since": window, "rules": fired});
+    match rule_set(&cwd) {
+        Ok(set) => {
+            let (never, unwired, unevaluated) = classify_live(&set.rules, &fired);
+            answer["never_fired"] = json!(never);
+            answer["unwired"] = json!(unwired);
+            answer["unevaluated"] = json!(unevaluated);
+        }
+        Err(reason) => {
+            answer["never_fired"] = json!([]);
+            answer["unwired"] = json!([]);
+            answer["unevaluated"] = json!([]);
+            unread.push(format!("the rule set ({reason})"));
+        }
+    }
+    if !unread.is_empty() {
+        answer["unread"] = json!(unread);
+    }
+    answer
+}
+
+/// `never_fired`, `unwired`, `unevaluated` over the live rules against the
+/// window's fire counts. Pure, so the report's lists have a hermetic shape.
+fn classify_live(
+    rules: &[Rule],
+    fired: &BTreeMap<String, Value>,
+) -> (Vec<String>, Vec<Value>, Vec<String>) {
+    let mut never = Vec::new();
+    let mut unwired = Vec::new();
+    let mut unevaluated = Vec::new();
+    for r in rules {
+        if r.tier() == 2 {
+            unevaluated.push(r.id.clone());
+            continue;
+        }
+        let off_wire = !r.when.events.is_empty()
+            && r.when
+                .events
+                .iter()
+                .all(|e| !WIRED_EVENTS.contains(&e.as_str()));
+        if off_wire {
+            unwired.push(json!({"rule": r.id, "events": r.when.events}));
+            continue;
+        }
+        if !fired.contains_key(&r.id) {
+            never.push(r.id.clone());
+        }
+    }
+    (never, unwired, unevaluated)
+}
+
+/// The cutoff instant for a `7d`-shaped window: one integer, one unit letter
+/// (d, h or m). Anything unparseable is the 7-day default.
+fn report_cutoff(window: &str) -> i64 {
+    let now = chrono::Utc::now().timestamp();
+    let digits: String = window.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let unit = window.trim_start_matches(|c: char| c.is_ascii_digit());
+    let n: i64 = digits.parse().unwrap_or(0);
+    if n <= 0 {
+        return now - 7 * 24 * 3600;
+    }
+    match unit {
+        "h" => now - n * 3600,
+        "m" => now - n * 60,
+        _ => now - n * 24 * 3600,
+    }
+}
+
 /// One `decision_span` per fire, `span_kind = "rule"`: the rows the
 /// rules report reads. Best-effort; a lost row never changes the answer.
+/// A door event dedupes its spans per rule, event and subject set in the
+/// doors bucket of the rules-seen cursor: a polled merge preview
+/// (`fno do pr status`) re-decides the same door ask on every read, and
+/// the span belongs to the ask, not to the poll.
 fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
     if decision.fires.is_empty() {
         return;
     }
+    let is_door = ev.kind.starts_with("door:") || ev.kind == "plan-start";
+    let mut seen: Option<std::collections::HashSet<String>> = if is_door {
+        let root = crate::decision_index::default_state_path("rules-seen")
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        Some(crate::announce::load_cursor(&root, "rules-seen", "doors"))
+    } else {
+        None
+    };
+    let mut dirty = false;
     let trace_id = crate::decision_trace::new_span_id();
     for fire in &decision.fires {
+        if let Some(seen_set) = seen.as_mut() {
+            let key = format!("span:{}:{}:{}", fire.rule, ev.kind, ev.subjects.join(","));
+            if !seen_set.insert(key) {
+                continue;
+            }
+            dirty = true;
+        }
         let trace = crate::decision_trace::Trace {
             trace_id: trace_id.clone(),
             span_id: crate::decision_trace::new_span_id(),
@@ -221,6 +506,15 @@ fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
             ev.tool.clone().map(Value::from).unwrap_or(Value::Null),
         );
         let _ = crate::decision_trace::emit_span("rule", &trace, &attrs);
+    }
+    if dirty {
+        if let Some(seen_set) = seen {
+            let root = crate::decision_index::default_state_path("rules-seen")
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            crate::announce::save_cursor(&root, "rules-seen", "doors", &seen_set);
+        }
     }
 }
 
@@ -363,6 +657,138 @@ mod tests {
     fn envelope(ts: &str, data: Value) -> String {
         json!({"ts": ts, "type": "operator_decision", "source": "backlog", "data": data})
             .to_string()
+    }
+
+    #[test]
+    fn door_helpers_map_a_ruling_to_a_refusal_and_printed_lines() {
+        let fire = |action: &str| crate::rules::Fire {
+            rule: "r-hold".into(),
+            law: None,
+            action: action.into(),
+            class: String::new(),
+            deliver: "context".into(),
+            tier: 0,
+            text: "the freeze is on".into(),
+            why: String::new(),
+            instead: "lift the freeze".into(),
+        };
+        let decision =
+            |verdict: &'static str, fires: Vec<crate::rules::Fire>| crate::rules::Decision {
+                verdict,
+                fires,
+                reasons: vec!["r-hold: the freeze is on".to_string()],
+                unevaluated: Vec::new(),
+            };
+        let block = Ruling {
+            decision: decision("block", vec![fire("block")]),
+            unread: Vec::new(),
+        };
+        assert_eq!(
+            block_sentence(&block).as_deref(),
+            Some("Refused by rule: r-hold: the freeze is on")
+        );
+        let warn = Ruling {
+            decision: decision("warn", vec![fire("warn")]),
+            unread: vec!["the rule set (x)".to_string()],
+        };
+        assert_eq!(block_sentence(&warn), None);
+        let lines = advisory_lines(&warn);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "rule warn: r-hold: the freeze is on");
+        assert_eq!(lines[1], "Unread: the rule set (x)");
+        assert_eq!(
+            node_in_text("Backlog-Closure: x-aaaa ships the doors"),
+            Some("x-aaaa".to_string())
+        );
+        assert_eq!(node_in_text("no node here"), None);
+    }
+
+    #[test]
+    fn the_report_counts_window_spans_and_classifies_the_live_set() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let prev_home = std::env::var_os("FNO_HOME");
+        let prev_root = std::env::var_os("FNO_REPO_ROOT");
+        std::env::set_var("FNO_HOME", td.path().join("fno-home"));
+        std::env::set_var("FNO_REPO_ROOT", td.path());
+        let journal = td.path().join(".fno").join("events.jsonl");
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        let span = |rule: &str, verdict: &str, ts: &str| {
+            serde_json::json!({
+                "ts": ts, "type": "decision_span", "source": "target",
+                "data": {"span_kind": "rule", "rule": rule, "verdict": verdict, "event": "pre-tool"},
+            })
+            .to_string()
+        };
+        let mut text = span("r-a", "block", "2026-10-29T00:00:00Z");
+        text.push('\n');
+        text.push_str(&span("r-a", "warn", "2026-10-28T00:00:00Z"));
+        text.push('\n');
+        text.push_str(&span("r-b", "warn", "2026-10-20T00:00:00Z"));
+        text.push('\n');
+        std::fs::write(&journal, text).unwrap();
+
+        let out = rules_report(Some("7d"));
+        assert_eq!(out["ok"], serde_json::json!(true), "{out}");
+        assert_eq!(out["rules"]["r-a"]["fires"], serde_json::json!(2));
+        assert_eq!(out["rules"]["r-a"]["blocks"], serde_json::json!(1));
+        assert_eq!(out["rules"]["r-a"]["warns"], serde_json::json!(1));
+        // r-b's only span is outside the 7d window: it is not counted.
+        assert!(out["rules"].get("r-b").is_none(), "{out}");
+        // No live set is readable under the temp home: the lists say so.
+        assert_eq!(out["never_fired"], serde_json::json!([]));
+        assert!(out["unread"].as_array().is_some(), "{out}");
+        match (prev_home, prev_root) {
+            (Some(h), Some(r)) => {
+                std::env::set_var("FNO_HOME", h);
+                std::env::set_var("FNO_REPO_ROOT", r);
+            }
+            (Some(h), None) => {
+                std::env::set_var("FNO_HOME", h);
+                std::env::remove_var("FNO_REPO_ROOT");
+            }
+            (None, Some(r)) => {
+                std::env::remove_var("FNO_HOME");
+                std::env::set_var("FNO_REPO_ROOT", r);
+            }
+            (None, None) => {
+                std::env::remove_var("FNO_HOME");
+                std::env::remove_var("FNO_REPO_ROOT");
+            }
+        }
+    }
+
+    #[test]
+    fn the_live_set_classifies_into_never_unwired_and_unevaluated() {
+        let table = crate::rules::parse_table(
+            "[[rule]]\nid = \"r-wired\"\naction = \"warn\"\ntext = \"t\"\n[rule.when]\nevents = [\"pre-tool\"]\ncommands = [\"cargo*\"]\n\n[[rule]]\nid = \"r-reap\"\naction = \"inform\"\ntext = \"t\"\n[rule.when]\nevents = [\"door:reap\"]\n\n[[rule]]\nid = \"r-class\"\naction = \"inform\"\ntext = \"t\"\n[rule.when]\nevents = [\"prompt\"]\nclassifier = \"is this a release ask\"\n",
+        )
+        .expect("the fixture table parses");
+        let fired = |id: &str| {
+            let mut m = BTreeMap::new();
+            m.insert(id.to_string(), serde_json::json!({"fires": 1}));
+            m
+        };
+        // r-wired fired; r-reap is off the wire; r-class is tier 2.
+        let (never, unwired, unevaluated) = classify_live(&table, &fired("r-wired"));
+        assert_eq!(never, Vec::<String>::new());
+        assert_eq!(unwired.len(), 1);
+        assert_eq!(unwired[0]["rule"], serde_json::json!("r-reap"));
+        assert_eq!(unevaluated, vec!["r-class".to_string()]);
+        // Nothing fired: r-wired joins never_fired.
+        let (never, _, _) = classify_live(&table, &BTreeMap::new());
+        assert_eq!(never, vec!["r-wired".to_string()]);
+    }
+
+    #[test]
+    fn rule_bodies_split_blocks_in_file_order() {
+        let bodies = rule_bodies(
+            "# leading comment\n\n[[rule]]\nid = \"a\"\naction = \"warn\"\n\n[[rule]]\nid = \"b\"\naction = \"inform\"\n",
+        );
+        assert_eq!(bodies.len(), 2);
+        assert!(bodies[0].starts_with("id = \"a\""), "{}", bodies[0]);
+        assert!(bodies[1].starts_with("id = \"b\""), "{}", bodies[1]);
     }
 
     #[test]
