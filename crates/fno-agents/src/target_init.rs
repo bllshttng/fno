@@ -214,6 +214,32 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         ));
     }
 
+    // 3c. The rule door: one `plan-start` event from the input text. A
+    // block refuses init before the helper runs; inject and warn print
+    // with the orientation (AC14: an unread source never fails init).
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let ev = crate::rules::Event {
+        kind: "plan-start".to_string(),
+        node: args
+            .input
+            .as_deref()
+            .and_then(crate::rules_source::node_in_text),
+        project: crate::law_match::resolve_project(
+            Some(&cwd),
+            &crate::law_match::settings_sources(),
+        )
+        .ok(),
+        text: args.input.clone(),
+        ..crate::rules::Event::default()
+    };
+    let ruling = crate::rules_source::rule(&cwd, &ev);
+    if let Some(sentence) = crate::rules_source::block_sentence(&ruling) {
+        return Err(refuse(format!("fno do target init: {sentence}")));
+    }
+    for line in crate::rules_source::advisory_lines(&ruling) {
+        println!("{line}");
+    }
+
     // 4. The plugin helper must exist before anything runs.
     let script_path = resolve_init_script();
     if !script_path.is_file() {

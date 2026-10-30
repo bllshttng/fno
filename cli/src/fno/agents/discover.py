@@ -1374,41 +1374,30 @@ def _discover_from_projects(
 def _iter_settings_projects() -> Iterator[tuple[str, str]]:
     """Yield ``(project_name, abs_path)`` from the settings work-map.
 
-    Reuses the same candidate-file walk as
-    ``graph._intake.detect_project_from_settings`` so the two cannot point at
-    different settings files. Silent on any read/parse failure.
+    Reads the settings fact set through the binary door (one walk, the same
+    candidate order the node-id knobs use), so this reader and the graph
+    readers cannot point at different settings files. Silent on any door
+    failure.
     """
-    try:
-        import yaml  # noqa: F401  availability probe: return early if PyYAML absent
+    from fno import rust_binary
 
-        from fno.graph._intake import _settings_candidate_paths
-    except ImportError:
+    receipt = rust_binary.settings_read()
+    if receipt is None:
         return
-    from fno.config import read_config_flat
+    for pair in receipt.get("projects") or []:
+        if not isinstance(pair, list) or len(pair) != 2:
+            continue
+        name, path = pair
+        if name and path:
+            yield str(name), str(path)
 
-    for path in _settings_candidate_paths():
-        if not path.exists():
-            continue
-        # config.toml (or legacy settings.yaml) -> flat dict; work is top-level.
-        work = read_config_flat(path).get("work")
-        if not isinstance(work, dict):
-            continue
-        workspaces = work.get("workspaces")
-        if isinstance(workspaces, dict):
-            for ws in workspaces.values():
-                if not isinstance(ws, dict):
-                    continue
-                for p in ws.get("projects") or []:
-                    if not isinstance(p, dict):
-                        continue
-                    name, raw_path = p.get("name"), p.get("path")
-                    if name and raw_path:
-                        yield str(name), os.path.normpath(os.path.expanduser(str(raw_path)))
-        flat = work.get("projects")
-        if isinstance(flat, dict):
-            for name, cfg in flat.items():
-                if isinstance(cfg, dict) and cfg.get("path"):
-                    yield str(name), os.path.normpath(os.path.expanduser(str(cfg["path"])))
+
+def _detect_project(cwd: str) -> Optional[str]:
+    """The door's cwd -> project detect; None on a door failure or no match."""
+    from fno import rust_binary
+
+    project = (rust_binary.settings_read(detect=cwd) or {}).get("project")
+    return str(project) if project else None
 
 
 def _project_by_repo_basename(repo: str) -> Optional[str]:
@@ -1432,14 +1421,13 @@ def resolve_project_for_cwd(cwd: str) -> Optional[str]:
     """
     if not cwd:
         return None
-    from fno.graph._intake import detect_project_from_settings
 
     p = os.path.normpath(os.path.expanduser(cwd))
 
     marker = os.sep + ".claude" + os.sep + "worktrees" + os.sep
     if marker in p:
         root = p.split(marker)[0]
-        proj = detect_project_from_settings(root)
+        proj = _detect_project(root)
         if proj:
             return proj
 
@@ -1451,7 +1439,7 @@ def resolve_project_for_cwd(cwd: str) -> Optional[str]:
             if proj:
                 return proj
 
-    return detect_project_from_settings(p)
+    return _detect_project(p)
 
 
 # --------------------------------------------------------------------------

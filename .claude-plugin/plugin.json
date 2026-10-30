@@ -1,8 +1,8 @@
 {
   "name": "fno",
   "displayName": "Footnote",
-  "version": "0.4.3",
-  "description": "Set a target and walk away. Say f[no] to mostly done.",
+  "version": "0.4.5",
+  "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
   "author": {"name": "Jason Noah Choi"},
   "homepage": "https://github.com/bllshttng/fno#readme",
   "repository": "https://github.com/bllshttng/fno",

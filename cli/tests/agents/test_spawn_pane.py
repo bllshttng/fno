@@ -506,8 +506,7 @@ def _happy_on_path(monkeypatch, found: Optional[str]) -> None:
     """Answer `shutil.which("happy")` with `found`; every other lookup stays real.
 
     mux_spawn.shutil is the global module, so a patch that answered for every
-    binary would also answer the spawn gate's fno-agents lookup and become
-    github_cli's import-time `_WHICH` for every later test.
+    binary would also answer the spawn gate's fno-agents lookup.
     """
     import fno.agents.mux_spawn as mux_spawn
 

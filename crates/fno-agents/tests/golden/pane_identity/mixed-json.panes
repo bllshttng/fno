@@ -1,0 +1,1 @@
+[{"pane_id": 1, "fno_id": "f-1", "child_pid": null, "fno_id_state": "resolved"}, {"pane_id": 2, "fno_id": null, "child_pid": null, "fno_id_state": "unresolved:spawned-name"}, {"pane_id": 3, "fno_id": "f-3", "child_pid": null}, {"pane_id": 4, "fno_id": null, "child_pid": null}]

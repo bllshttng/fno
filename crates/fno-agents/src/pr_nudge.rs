@@ -1264,7 +1264,7 @@ mod tests {
                     String::new(),
                 )
             } else if argv.contains(&"send".to_string()) {
-                (0, "msg-1 delivered (hosted)\n".into(), String::new())
+                (0, "msg-1 accepted-new-turn\n".into(), String::new())
             } else {
                 (0, String::new(), String::new())
             }
@@ -1306,7 +1306,7 @@ mod tests {
         assert!(!saved.mail_durable);
         let ev = last_event(&home, "pr_nudge_sent");
         assert_eq!(ev["data"]["delivered"], serde_json::json!(true));
-        assert_eq!(ev["data"]["receipt"], "msg-1 delivered (hosted)");
+        assert_eq!(ev["data"]["receipt"], "msg-1 accepted-new-turn");
         assert!(ev["data"].get("fallback").is_none());
         let _ = std::fs::remove_dir_all(home.root().to_path_buf());
 
@@ -2272,7 +2272,7 @@ mod tests {
             if argv.contains(&"do".to_string()) {
                 (1, String::new(), String::new())
             } else {
-                (0, "msg-1 delivered (hosted)\n".into(), String::new())
+                (0, "msg-1 accepted-new-turn\n".into(), String::new())
             }
         };
         apply(
@@ -2303,7 +2303,7 @@ mod tests {
             if argv.contains(&"do".to_string()) {
                 (0, settled.clone(), String::new())
             } else {
-                (0, "msg-2 delivered (hosted)\n".into(), String::new())
+                (0, "msg-2 accepted-new-turn\n".into(), String::new())
             }
         };
         apply(

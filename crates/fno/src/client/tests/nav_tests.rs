@@ -322,7 +322,8 @@ fn nav_rows_fold_done_through_the_seen_bit() {
 
 #[test]
 fn nav_overlay_lines_show_query_chip_cursor_and_no_matches() {
-    // AC1-UI: query line + [all] chip + cursor `▸` on row 0. AC2-ERR: an
+    // AC1-UI: query line + [all] chip + row 0 with no cursor glyph (the fill
+    // marks it). AC2-ERR: an
     // empty filtered result renders `no matches`.
     let v = two_pane_view();
     let nav = NavView {
@@ -334,8 +335,8 @@ fn nav_overlay_lines_show_query_chip_cursor_and_no_matches() {
     let lines = nav_overlay_lines(&rows, &nav);
     assert!(lines[0].contains("find ›") && lines[0].contains("[all]"));
     assert!(
-        lines[1].trim_start().starts_with('▸'),
-        "cursor on row 0: {:?}",
+        !lines[1].contains('▸'),
+        "the fill is the cursor, not a glyph: {:?}",
         lines[1]
     );
     let empty = NavView {

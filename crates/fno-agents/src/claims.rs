@@ -507,6 +507,9 @@ pub mod basis {
     pub const REGISTRY_SESSION_LIVE: &str = "registry-session-live";
     /// The session witness answered from the transcript reachability probe.
     pub const TRANSCRIPT_LIVE: &str = "transcript-live";
+    /// The witness answered from the session's codex rollout mtime: a
+    /// rollout inside the freshness window proves the thread is advancing.
+    pub const ROLLOUT_FRESH_LIVE: &str = "rollout-fresh-live";
     /// The registry has no live row for the holder and the harness truth
     /// probe positively reports that session unreachable.
     pub const SESSION_ABSENT: &str = "session-absent";
@@ -684,6 +687,7 @@ pub fn process_create_time_ms(pid: i32) -> Option<i64> {
 #[path = "claims_classify.rs"]
 mod claims_classify;
 
+pub(crate) use claims_classify::is_node_or_task;
 pub use claims_classify::{
     classify, classify_for_sweep, classify_with_basis, classify_with_basis_and_exclusivity,
     pid_exclusivity,
@@ -1253,6 +1257,15 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("FNO_NODE_REASON", "fno"),
 ];
 
+/// Clear inherited session identity from a child's environment. A host this
+/// process boots lives past the caller (a supervisor, a serve, a daemon), so
+/// the caller's markers must not ride into it and name it as its own.
+pub(crate) fn scrub_identity_env(command: &mut std::process::Command) {
+    for name in AMBIENT_IDENTITY_NAMES {
+        command.env_remove(name);
+    }
+}
+
 /// Clear inherited session identity before stamping the values owned by this
 /// launcher. Routing and authentication variables remain untouched.
 pub(crate) fn stamp_command_env(
@@ -1261,9 +1274,7 @@ pub(crate) fn stamp_command_env(
     harness: &str,
     session_id: Option<&str>,
 ) {
-    for name in AMBIENT_IDENTITY_NAMES {
-        command.env_remove(name);
-    }
+    scrub_identity_env(command);
     // The child is a session, not a hook (crates/fno-agents/src/join_marker.rs).
     command.env_remove(crate::join_marker::HOOK_CONTEXT_ENV);
     if let Some(name) = agent_self {
@@ -2625,6 +2636,10 @@ mod tests {
         unp.pid_unavailable = true;
         unp.schema_version = 2;
         assert_eq!(basis_of(&unp, &probe_pid), basis::PID_UNAVAILABLE);
+        // The same record claimed on another machine names the machine.
+        unp.host = "another-host.example".into();
+        unp.machine_id = Some("6219ED9C-0000-0000-0000-000000000000".into());
+        assert_eq!(basis_of(&unp, &probe_pid), basis::OFFHOST);
     }
 
     #[test]
@@ -2980,6 +2995,9 @@ mod claims_gate_tests;
 #[cfg(test)]
 #[path = "claims_session_absence_tests.rs"]
 mod claims_session_absence_tests;
+#[cfg(test)]
+#[path = "claims_shared_host_tests.rs"]
+mod claims_shared_host_tests;
 
 #[cfg(test)]
 #[path = "claims_identity_tests.rs"]

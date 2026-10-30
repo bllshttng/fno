@@ -363,6 +363,11 @@ pub struct ConnectionsView {
     pub relogin: std::collections::BTreeSet<String>,
     /// When this modal last armed a read, for the [`USAGE_TICK`] refresh.
     pub last_read: std::time::Instant,
+    /// The rendered line the cursor fill covers, set while rendering. A row
+    /// carries no cursor glyph: the fill is the cursor.
+    cursor_row: std::cell::Cell<Option<usize>>,
+    /// The cursor's offset inside the accounts table rows, before they join `out`.
+    cursor_rel: std::cell::Cell<Option<usize>>,
 }
 
 /// The phase-2 identity read's lifecycle.
@@ -399,6 +404,8 @@ impl ConnectionsView {
             identity_phase: IdentityPhase::Pending,
             relogin: Default::default(),
             last_read: std::time::Instant::now(),
+            cursor_row: Default::default(),
+            cursor_rel: Default::default(),
         }
     }
 
@@ -1170,6 +1177,17 @@ impl ConnectionsView {
     /// many running workers bill it, and the overlay's text width, which the
     /// accounts table fits.
     pub fn render_with(&self, agents: &[crate::proto::AgentRow], max_cols: usize) -> Vec<String> {
+        self.render_cursor(agents, max_cols).0
+    }
+
+    /// [`Self::render_with`] and the line the cursor fill covers.
+    pub fn render_cursor(
+        &self,
+        agents: &[crate::proto::AgentRow],
+        max_cols: usize,
+    ) -> (Vec<String>, Option<usize>) {
+        self.cursor_row.set(None);
+        self.cursor_rel.set(None);
         let mut out: Vec<String> = Vec::new();
         out.push(self.tab_bar());
         out.push(String::new());
@@ -1203,7 +1221,7 @@ impl ConnectionsView {
         if let Some(notice) = &self.notice {
             out.push(format!("! {notice}"));
         }
-        pad_block(out)
+        (pad_block(out), self.cursor_row.get())
     }
 
     fn tab_bar(&self) -> String {
@@ -1286,7 +1304,11 @@ impl ConnectionsView {
         for drop in ["AUTH", "IDENTITY", "LOGIN", "AGE", ""] {
             let rows = self.account_rows(&names, w_name, &cols);
             if drop.is_empty() || rows.iter().all(|r| crate::chrome::str_cols(r) <= max_cols) {
+                let base = out.len();
                 out.extend(rows);
+                if let Some(rel) = self.cursor_rel.get() {
+                    self.cursor_row.set(Some(base + rel));
+                }
                 break;
             }
             cols.retain(|(label, _, _)| *label != drop);
@@ -1296,9 +1318,11 @@ impl ConnectionsView {
         // registers the selected one into a managed account.
         for (j, _p) in self.pending.iter().enumerate() {
             let idx = self.accounts.len() + j;
-            let cursor = if idx == self.acct_sel { ">" } else { " " };
+            if idx == self.acct_sel {
+                self.cursor_row.set(Some(out.len()));
+            }
             out.push(format!(
-                "{cursor}   {name:<wname$}  {cli:<wcli$}  …login pending  (r: register)",
+                "    {name:<wname$}  {cli:<wcli$}  …login pending  (r: register)",
                 name = crate::client::pad_to(&names[self.accounts.len() + j], w_name),
                 wname = w_name,
                 cli = clis[self.accounts.len() + j],
@@ -1339,7 +1363,9 @@ impl ConnectionsView {
         // to data rows), so nothing routes a keypress here.
         let mut rows = vec![line("    ".into(), "ACCOUNT", &|k| cols[k].0.to_string())];
         for (i, a) in self.accounts.iter().enumerate() {
-            let cursor = if i == self.acct_sel { ">" } else { " " };
+            if i == self.acct_sel {
+                self.cursor_rel.set(Some(rows.len()));
+            }
             let badge = if a.active { "●" } else { " " };
             // A distinct billing marker for the active-for-spawns
             // account, kept separate from the global-active `●` (Locked
@@ -1349,7 +1375,7 @@ impl ConnectionsView {
             } else {
                 " "
             };
-            rows.push(line(format!("{cursor}{badge}{spawn} "), &names[i], &|k| {
+            rows.push(line(format!(" {badge}{spawn} "), &names[i], &|k| {
                 cols[k].1[i].clone()
             }));
         }
@@ -1384,7 +1410,7 @@ impl ConnectionsView {
         out.push("add account".to_string());
         let field = |active: bool, label: &str, val: &str| {
             let caret = if active { "_" } else { "" };
-            format!("{} {label}: {val}{caret}", if active { ">" } else { " " })
+            format!("  {label}: {val}{caret}")
         };
         // "id" read as an opaque identifier; "name" + a format hint
         // makes the lowercase/hyphen constraint (valid_account_id) visible
@@ -1394,22 +1420,26 @@ impl ConnectionsView {
         } else {
             ""
         };
+        if w.step == WizardStep::Id {
+            self.cursor_row.set(Some(out.len()));
+        }
         out.push(format!(
             "{}{id_hint}",
             field(w.step == WizardStep::Id, "name", &w.id)
         ));
         if w.step != WizardStep::Id {
-            let kind_line = format!(
-                "{} kind: {}  (Tab/Space to change)",
-                if w.step == WizardStep::Kind { ">" } else { " " },
-                w.kind.label(),
-            );
+            if w.step == WizardStep::Kind {
+                self.cursor_row.set(Some(out.len()));
+            }
+            let kind_line = format!("  kind: {}  (Tab/Space to change)", w.kind.label(),);
             out.push(kind_line);
         }
         if w.step == WizardStep::Dir {
+            self.cursor_row.set(Some(out.len()));
             out.push(field(true, "config dir", &w.dir));
         }
         if w.step == WizardStep::ApiKey {
+            self.cursor_row.set(Some(out.len()));
             out.push(field(true, "api key", &w.api_key));
         }
         out.push(String::new());
@@ -1425,10 +1455,12 @@ impl ConnectionsView {
             self.accounts.iter().map(|a| a.id.as_str()).collect();
         for (i, c) in self.combos.iter().enumerate() {
             let selected = i == self.combo_sel;
-            let cursor = if selected { ">" } else { " " };
+            if selected {
+                self.cursor_row.set(Some(out.len()));
+            }
             let badge = if c.active { "●" } else { " " };
             out.push(format!(
-                "{cursor}{badge} {name}  [{strategy}]",
+                " {badge} {name}  [{strategy}]",
                 name = c.name,
                 strategy = c.strategy,
             ));
@@ -1437,13 +1469,15 @@ impl ConnectionsView {
                 // order, with the member cursor and dangling flags.
                 let members = self.shown_members();
                 for (m, member) in members.iter().enumerate() {
-                    let mcur = if m == self.member_sel { "»" } else { " " };
+                    if m == self.member_sel {
+                        self.cursor_row.set(Some(out.len()));
+                    }
                     let dangling = if known.contains(member.as_str()) {
                         ""
                     } else {
                         "  (dangling)"
                     };
-                    out.push(format!("    {mcur} {n}. {member}{dangling}", n = m + 1));
+                    out.push(format!("      {n}. {member}{dangling}", n = m + 1));
                 }
                 if self.dirty_order.is_some() {
                     out.push("      Enter: commit   Esc: discard".to_string());
@@ -1457,10 +1491,14 @@ impl ConnectionsView {
         out.push("new combo".to_string());
         let field = |active: bool, label: &str, val: &str| {
             let caret = if active { "_" } else { "" };
-            format!("{} {label}: {val}{caret}", if active { ">" } else { " " })
+            format!("  {label}: {val}{caret}")
         };
+        if ci.step == ComboInputStep::Name {
+            self.cursor_row.set(Some(out.len()));
+        }
         out.push(field(ci.step == ComboInputStep::Name, "name", &ci.name));
         if ci.step == ComboInputStep::Members {
+            self.cursor_row.set(Some(out.len()));
             out.push(field(true, "members (comma/space)", &ci.members));
         }
         out.push(String::new());

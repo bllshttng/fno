@@ -2223,6 +2223,100 @@ else
     fail "AC14d: post-routes-gate plan: design-only=$OUTPUT routes=$ROUTES_OUT"
 fi
 
+# --- AC15: Probe portability (backslash-b in git grep -E, grep -P, grep -c) ---
+echo ""
+echo "--- AC15: Probe Portability ---"
+
+# A pre-gate date keeps every other check at WARN, so the only possible ERROR
+# is the refusal under test.
+probe_fixture() {
+    cat > "$1" <<HEREDOC
+---
+status: ready
+created: 2020-01-01
+project: fno
+consolidation:
+  outcome: proceed_alone
+  proceed_alone_against: []
+$2
+---
+
+# Probe portability fixture
+HEREDOC
+}
+
+PLAN_PROBE_BB="$TMPDIR_BASE/probe_bb.md"
+probe_fixture "$PLAN_PROBE_BB" $'done_probes:\n  - "git grep -c -E \'\\\\bgoal\\\\b\' -- \'*.py\'"'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_BB" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "backslash-b" <<< "$OUTPUT"; then
+    pass "AC15a: git grep -E probe with a backslash-b boundary is refused"
+else
+    fail "AC15a: backslash-b probe should be refused (exit $EXIT_CODE): $OUTPUT"
+fi
+
+PLAN_PROBE_BB_PLAIN="$TMPDIR_BASE/probe_bb_plain.md"
+probe_fixture "$PLAN_PROBE_BB_PLAIN" $'done_probes:\n  - "grep -E \'\\\\bgoal\\\\b\' x.txt"'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_BB_PLAIN" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "backslash-b" <<< "$OUTPUT"; then
+    pass "AC15a2: plain grep -E probe with a backslash-b boundary is refused too"
+else
+    fail "AC15a2: plain grep -E backslash-b probe should be refused (exit $EXIT_CODE): $OUTPUT"
+fi
+
+PLAN_PROBE_P="$TMPDIR_BASE/probe_p.md"
+probe_fixture "$PLAN_PROBE_P" $'done_probes:\n  - "grep -cP goal x.txt"'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_P" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "grep -P" <<< "$OUTPUT"; then
+    pass "AC15b: grep with a -P flag cluster is refused (combined -cP included)"
+else
+    fail "AC15b: grep -P probe should be refused (exit $EXIT_CODE): $OUTPUT"
+fi
+
+PLAN_PROBE_C="$TMPDIR_BASE/probe_c.md"
+probe_fixture "$PLAN_PROBE_C" $'done_probes:\n  - "grep -c goal x.txt | grep -o ^0$"'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_C" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "grep -c" <<< "$OUTPUT"; then
+    pass "AC15c: piped grep -c probe is refused (pipefail zero-count trap)"
+else
+    fail "AC15c: piped grep -c probe should be refused (exit $EXIT_CODE): $OUTPUT"
+fi
+
+PLAN_PROBE_C_BARE="$TMPDIR_BASE/probe_c_bare.md"
+probe_fixture "$PLAN_PROBE_C_BARE" $'done_probes:\n  - "grep -c goal x.txt"'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_C_BARE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 0 ]]; then
+    pass "AC15c2: a bare grep -c presence assert stays legal"
+else
+    fail "AC15c2: bare grep -c should pass (exit $EXIT_CODE): $OUTPUT"
+fi
+
+PLAN_PROBE_CLOSE="$TMPDIR_BASE/probe_close.md"
+probe_fixture "$PLAN_PROBE_CLOSE" $'close_probes:\n  - "grep -P goal x.txt"'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_CLOSE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "grep -P" <<< "$OUTPUT"; then
+    pass "AC15d: close_probes entries are scanned with the same refusals"
+else
+    fail "AC15d: close_probes grep -P should be refused (exit $EXIT_CODE): $OUTPUT"
+fi
+
+PLAN_PROBE_CLEAN="$TMPDIR_BASE/probe_clean.md"
+probe_fixture "$PLAN_PROBE_CLEAN" $'done_probes:\n  - "git grep -q -E \'(^|[^[:alnum:]_])goal([^[:alnum:]_]|$)\' -- \'*.py\'"\n  - "awk \'/goal/{n++} END{print n+0; exit n>0}\' x.txt"\n  - "grep -c goal x.txt"\n  - "grep -o goal x.txt"\n  - "git grep -q \'\\bgoal\\b\' -- \'*.py\'"'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_CLEAN" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 0 ]]; then
+    pass "AC15e: clean probes (bracket boundary, counting awk, bare grep -c, grep -o, BRE git grep) pass untouched"
+else
+    fail "AC15e: clean probes should pass (exit $EXIT_CODE): $OUTPUT"
+fi
+
+PLAN_PROBE_INLINE="$TMPDIR_BASE/probe_inline.md"
+probe_fixture "$PLAN_PROBE_INLINE" $'done_probes: ["git grep -q -E \'\\\\bgoal\\\\b\' -- \'*.py\'"]'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_PROBE_INLINE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "backslash-b" <<< "$OUTPUT"; then
+    pass "AC15f: the inline bracket list form is scanned with the same refusals"
+else
+    fail "AC15f: inline-form backslash-b probe should be refused (exit $EXIT_CODE): $OUTPUT"
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Test Results ==="

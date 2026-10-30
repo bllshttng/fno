@@ -33,7 +33,6 @@ from pydantic import (
     model_validator,
 )
 
-from fno.user import UserBlock
 from fno.config.build_block import BuildBlock as BuildBlock
 from fno.config.split_block import SplitBlock as SplitBlock
 
@@ -81,6 +80,20 @@ _GLOB_CHARS = frozenset("*?[")
 # them. Defined here, not in fno.graph, because the validator is the only reader
 # and config must not depend upward on the graph package.
 RESERVED_PREFIXES = frozenset({"cv-", "fu-", "tgt-"})
+
+
+class UserBlock(BaseModel):
+    """How the machine addresses the human (nested under ``config.user``).
+
+    ``name`` is a form of address, never an identity and never an authority.
+    Empty is the unset state; the native birth read (backlog/birth.rs
+    ``display_name``) falls back to ``git config user.name`` so a fresh
+    install already says something better than a role noun.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = ""
 
 
 def _check_no_glob(value: str, field_name: str) -> None:
@@ -3159,8 +3172,8 @@ class ResourceMeterBlock(BaseModel):
 class CollisionThresholdsBlock(BaseModel):
     """Collision severity scoring thresholds (config.collision.severity_thresholds).
 
-    Defaults lifted verbatim from the former
-    ``collision.py:DEFAULT_THRESHOLDS`` (US2 converges that private loader here).
+    Defaults lifted verbatim from the collision module's original private
+    loader; the native thresholds reader holds the same contract.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -3175,8 +3188,9 @@ class CollisionThresholdsBlock(BaseModel):
     def _sanitize(cls, v: object) -> object:
         """Drop any non-numeric or negative value so the field default applies.
 
-        Matches the old collision._load_thresholds per-key fallback: a bad
-        threshold warns and falls back to default rather than breaking load.
+        A bad threshold warns and falls back to default rather than breaking
+        load; the native twin holds the same contract (cutover.rs
+        collision_thresholds).
         """
         if not isinstance(v, dict):
             return v

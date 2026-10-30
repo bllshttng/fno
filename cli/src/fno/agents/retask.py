@@ -1,26 +1,20 @@
-"""Read-only planning for reusing one mux worker on its existing node."""
+"""The thread viewport door shared by retask and mail --force.
+
+The retask transaction is native (`fno-agents rename retask`, ported in
+crates/fno-agents/src/retask/front.rs); this module keeps only the one
+piece two Python callers share: opening a thread's dedicated viewport.
+"""
+
 from __future__ import annotations
 
 import json
-import io
 import os
 import subprocess
 import time
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional
 
-from fno.agents.harness_map import (
-    DispatchResolveError, dispatch_command,
-    normalize_command,
-)
 from fno.agents.mux_spawn import resolve_mux_session
-from fno.agents.naming import parse_many
-from fno.agents.registry import (
-    AgentEntry,
-    resolve_agent,
-)
-from fno.agents.spawn_defaults import compose_spawn_argv
+from fno.agents.registry import AgentEntry
 
 
 class RetaskTransportError(RuntimeError):
@@ -29,50 +23,6 @@ class RetaskTransportError(RuntimeError):
     def __init__(self, reason: str, detail: Optional[str] = None):
         super().__init__(reason)
         self.detail = detail
-
-
-@dataclass(frozen=True)
-class RetaskCoordinate:
-    harness: str
-    provider: Optional[str]
-    model: Optional[str]
-    effort: Optional[str]
-    substrate: Optional[str]
-    permission_mode: Optional[str]
-    route: Optional[str]
-    account: Optional[str]
-    # The node's next lifecycle command; profiles.<command> supplies the tier.
-    command: str = "target"
-
-
-def _resolve_retask_node(node: str) -> str:
-    """Return the canonical graph id for a retask destination or refuse."""
-    from fno.graph._constants import is_wellformed_node_id
-
-    if is_wellformed_node_id(node):
-        return node
-    from fno.graph.fuzzy import resolve_node
-    from fno.graph.load import load_graph
-    from fno.graph.store import GRAPH_JSON, read_nodes_by_ids
-
-    fast = read_nodes_by_ids(GRAPH_JSON, [node])
-    match = resolve_node(node, [row for row in (fast or {}).get("entries") or [] if not row.get("archived_at")])
-    if match.kind != "exact":
-        match = resolve_node(node, load_graph())
-    if match.kind != "exact" or not match.id:
-        raise ValueError(f"retask node {node!r} does not resolve to a graph id")
-    return match.id
-
-
-def _flag_value(args: Sequence[str], *names: str) -> Optional[str]:
-    for index, token in enumerate(args):
-        for name in names:
-            if token == name and index + 1 < len(args):
-                return args[index + 1]
-            if token.startswith(f"{name}="):
-                return token.split("=", 1)[1]
-    return None
-
 
 def resolve_thread_viewport(
     entry: AgentEntry,
@@ -140,178 +90,3 @@ def resolve_thread_viewport(
             return session, matches[0]["pane_id"]
         time.sleep(0.5)
     raise RetaskTransportError("thread_view_join_missed")
-
-
-def resolve_target_coordinate(
-    node: str,
-    *,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    env: Optional[Mapping[str, str]] = None,
-) -> RetaskCoordinate:
-    # The node's next lifecycle command; an abstain (None) means ``target``.
-    # The table answers canonical "/blueprint"; probe and rename take the
-    # bare word. One lookup and one wrapper, shared with the door.
-    from fno.agents.node_dispatch import find_node_row, node_effective_command
-
-    command = (node_effective_command(find_node_row(node), node_id=node) or "target").lstrip(
-        "/"
-    ) or "target"
-    # The probe argv carries no --model/--effort: both are retired at the
-    # spawn door, so the operator's values overlay the composed answer below.
-    args = ["spawn", "--name", "retask-probe"]
-    args.append(f"/fno:{command} {node}")
-    # a probe, not a real dispatch - the builtin rung would otherwise
-    # read as an explicit override and force every retask to respawn.
-    resolved = compose_spawn_argv(
-        args,
-        env=env,
-        stderr=io.StringIO(),
-        apply_permission_builtin=False,
-    )
-    harness = _flag_value(resolved, "--harness", "-H")
-    if not harness:
-        from fno.rust_binary import CommandUnavailable, command_call
-
-        try:
-            answer = command_call(
-                "route-slot",
-                {"mode": "resolve", "explicit": None, "env": dict(env or {})},
-            )
-            harness = answer.get("harness")
-        except CommandUnavailable:
-            harness = None
-    route = _flag_value(resolved, "--route")
-    provider = _flag_value(resolved, "--provider", "-P")
-    route_model: Optional[str] = None
-    if route:
-        provider, separator, route_model = route.replace(",", "/").partition("/")
-        if not separator:
-            provider = route
-            route_model = None
-    resolved_model = model or _flag_value(resolved, "--model", "-m") or route_model
-    return RetaskCoordinate(
-        # No door and a null answer both read unset downstream.
-        harness=harness or "",
-        provider=provider,
-        model=resolved_model,
-        effort=effort or _flag_value(resolved, "--effort"),
-        substrate=_flag_value(resolved, "--substrate"),
-        permission_mode=_flag_value(resolved, "--permission-mode"),
-        route=route,
-        account=_flag_value(resolved, "--account"),
-        command=command,
-    )
-
-
-def finished_planner(
-    entries: Sequence[AgentEntry],
-    *,
-    node_id: str,
-    graph: Mapping[str, dict],
-    project_id: str,
-    project_of: Callable[[str], str],
-) -> Optional[AgentEntry]:
-    """The earliest-finished live blueprint worker on the same epic, else None."""
-    parent = (graph.get(node_id) or {}).get("parent")
-    if not parent:
-        return None
-    candidates: list[tuple[str, AgentEntry]] = []
-    for entry, parsed in zip(entries, parse_many([e.name for e in entries])):
-        if entry.status != "live" or entry.substrate not in {"pane", "thread"}:
-            continue
-        if parsed is None or parsed.command != "bp":
-            continue
-        inside = entry.inside_leg or {}
-        if inside.get("state") != "done":
-            continue
-        if project_of(entry.cwd) != project_id:
-            continue
-        row_node = entry.node or (parsed.node if parsed is not None else None)
-        if not row_node or row_node == node_id:
-            continue
-        row_rec = graph.get(row_node) or {}
-        if row_rec.get("parent") != parent:
-            continue
-        sessions = [s for s in row_rec.get("sessions") or [] if isinstance(s, dict)]
-        if not any(s.get("phase") == "blueprint" and s.get("ended_at") for s in sessions):
-            continue
-        candidates.append((inside.get("received_at") or "", entry))
-    return min(candidates, key=lambda pair: pair[0])[1] if candidates else None
-
-
-def _refused(reason: str, **overrides: object) -> dict:
-    """The shared refusal receipt; overrides restate the true partial state."""
-    return {
-        "status": "refused",
-        "cleared": False,
-        "session_restamped": False,
-        "switch": "not_started",
-        "switch_verified": False,
-        "target_submit_confirmed": False,
-        "reason": reason,
-        **overrides,
-    }
-
-
-def run_retask(
-    worker: str,
-    *,
-    node: str,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    env: Optional[Mapping[str, str]] = None,
-    registry_path: Optional[Path] = None,
-) -> dict:
-    """Resolve the retask coordinate and hand the transaction to fno-agents."""
-    node = _resolve_retask_node(node)
-    entry = resolve_agent(worker, path=registry_path).entry
-    try:
-        target = resolve_target_coordinate(
-            node,
-            model=model,
-            effort=effort,
-            env=env,
-        )
-    except DispatchResolveError as exc:
-        return _refused("dispatch_command_unresolved", detail=str(exc))
-    except RetaskTransportError as exc:
-        # The compose probe rides the same transport as the transaction; a
-        # pane that went away mid-probe is the same refused receipt.
-        detail = exc.detail if exc.detail is not None else str(exc)
-        return _refused(exc.args[0] if exc.args else "retask_transport", detail=detail)
-    try:
-        if entry.substrate == "thread":
-            resolved_session, resolved_pane_id = resolve_thread_viewport(entry)
-            mux = {"session": resolved_session, "pane_id": resolved_pane_id}
-        else:
-            mux = entry.mux or {}
-        if target.command == "target":
-            command_template = dispatch_command(target.harness)
-        else:
-            command_template = normalize_command(f"/{target.command} {{id}}", target.harness)
-        from fno import paths
-        from fno.rust_binary import command_call
-
-        return command_call(
-            "rename",
-            {
-                "op": "retask",
-                "worker": entry.name,
-                "node": node,
-                "target": {**asdict(target), "command": None, "verb": target.command},  # verb-wording: allow (older binaries read this key)
-                "target_command": command_template.format(id=node),
-                "mux": mux,
-                "graph": str(paths.graph_json()),
-                **({"registry": str(registry_path)} if registry_path else {}),
-            },
-            # Above the old poll's near-17-minute worst case, so a slow
-            # succession is never clipped into a receipt that lies.
-            RetaskTransportError,
-            timeout=1200,
-        )
-    except RetaskTransportError as exc:
-        receipt = _refused(str(exc))
-        if exc.detail:
-            receipt["detail"] = exc.detail
-        return receipt

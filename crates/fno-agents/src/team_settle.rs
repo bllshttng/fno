@@ -281,7 +281,7 @@ fn occupancy(
         }
         // An agent delegating one member of its own team does not rival
         // itself; grant_error verified strict containment before team-settle
-        // runs, and promote_existing_session skips the grantor the same way.
+        // runs, and role_grant::promote skips the grantor the same way.
         if let Caller::Agent(me) = caller {
             if name == me && !same_territory(held, scope, map) {
                 continue;

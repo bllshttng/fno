@@ -10,10 +10,14 @@
 //! makes it tier 1 (ranked text), `classifier` makes it tier 2 (a model
 //! call). Only tier 0 may block at a tool call, because only tier 0 answers
 //! inside the hook budget every time.
+//!
+//! fno-agents owns this module; build.rs copies it into the `fno` crate so
+//! the fnh harness links the same schema, match and decide in process. The
+//! store-side answers (`check_answer`, `measure_answer`) live in
+//! `rules_check`.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 const ACTIONS: &[&str] = &["inform", "warn", "require-ack", "block"];
 /// The four hook classes: `block` is sync and may deny, `wait` is sync and
@@ -35,9 +39,12 @@ const EVENTS: &[&str] = &[
     "stop",
 ];
 const LANES: &[&str] = &["law-door", "decide-door", "rule-file"];
-const DISPOSITIONS: &[&str] = &["grant", "retire", "superseded-pair"];
+/// The disposition kinds a law row can carry: `grant` (a head-pinned grant),
+/// `retire`, `superseded-pair`, and `native` (a family the door's own probes
+/// already read, so decide() never reads the same row a second time).
+pub const DISPOSITION_KINDS: &[&str] = &["grant", "retire", "superseded-pair", "native"];
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct When {
     pub events: Vec<String>,
@@ -81,7 +88,7 @@ impl When {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Authority {
     pub by: String,
@@ -93,7 +100,7 @@ fn yes() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,
@@ -311,6 +318,15 @@ pub struct Event {
     pub model: Option<String>,
     pub machine: Option<String>,
     pub subjects: Vec<String>,
+    /// The prompt or skill-args text, for a tier-1 ranked match.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Rule ids the caller already acknowledged, for a `require-ack` rule.
+    #[serde(default)]
+    pub acks: Vec<String>,
+    /// The session the event came from, for a `session:` scope.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 /// The tier-0 match: every structural field the rule sets must hold for the
@@ -322,13 +338,13 @@ pub fn matches(rule: &Rule, ev: &Event) -> bool {
         pats.is_empty()
             || val
                 .as_deref()
-                .is_some_and(|v| pats.iter().any(|p| crate::sync_canonical::fnmatch(v, p)))
+                .is_some_and(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p)))
     };
     let many = |pats: &[String], vals: &[String]| {
         pats.is_empty()
             || vals
                 .iter()
-                .any(|v| pats.iter().any(|p| crate::sync_canonical::fnmatch(v, p)))
+                .any(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p)))
     };
     (w.events.is_empty() || w.events.iter().any(|e| *e == ev.kind))
         && many(&w.paths, &ev.paths)
@@ -344,10 +360,32 @@ pub fn matches(rule: &Rule, ev: &Event) -> bool {
         && one(&w.machines, &ev.machine)
 }
 
-fn terms(text: &str) -> Vec<String> {
-    text.split_whitespace()
-        .flat_map(crate::law_match::tokens)
+/// Lowercase, split on anything outside `[a-z0-9]`, then drop digit-only
+/// tokens, 4-8 character hex tokens that contain a digit (node ids like
+/// `14c8`, `cf6a`), and the stop set. A hex word with no digit (`added`,
+/// `face`) survives.
+pub fn tokens(s: &str) -> BTreeSet<String> {
+    const STOP: [&str; 19] = [
+        "pr", "x", "ab", "q", "d", "a", "an", "the", "of", "to", "and", "or", "for", "on", "in",
+        "is", "it", "no", "not",
+    ];
+    s.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .filter(|t| !t.bytes().all(|b| b.is_ascii_digit()))
+        .filter(|t| {
+            let hex_with_digit = (4..=8).contains(&t.len())
+                && t.bytes().all(|b| b.is_ascii_hexdigit())
+                && t.bytes().any(|b| b.is_ascii_digit());
+            !hex_with_digit
+        })
+        .filter(|t| !STOP.contains(t))
+        .map(str::to_owned)
         .collect()
+}
+
+fn terms(text: &str) -> Vec<String> {
+    text.split_whitespace().flat_map(tokens).collect()
 }
 
 /// Okapi BM25 (k1 = 1.2, b = 0.75) over `(id, text)` documents. Returns the
@@ -371,7 +409,7 @@ pub fn bm25_rank(docs: &[(String, String)], query: &str, k: usize) -> Vec<(Strin
         .collect();
     let n = docs.len() as f64;
     let avg = (lens.iter().sum::<f64>() / n.max(1.0)).max(1.0);
-    let idf: Vec<(String, f64)> = crate::law_match::tokens(query)
+    let idf: Vec<(String, f64)> = tokens(query)
         .into_iter()
         .map(|q| {
             let df = bags.iter().filter(|b| b.contains_key(&q)).count() as f64;
@@ -399,189 +437,178 @@ pub fn bm25_rank(docs: &[(String, String)], query: &str, k: usize) -> Vec<(Strin
     scored
 }
 
-fn count(map: &mut BTreeMap<String, usize>, key: &str) {
-    *map.entry(key.to_owned()).or_insert(0) += 1;
+/// The lowest BM25 score a tier-1 rule needs to fire. Measured against 72
+/// labeled cases over the live corpus (36 fire, 36 unrelated prompts, the
+/// rule-engine wiring plan, 2026-10-29): 2.0 answered recall@3 0.667 with
+/// zero false fires on the unrelated prompts, where an embedding scorer
+/// answered 0.75 recall with a 0.333 false-fire rate.
+pub const TIER1_FLOOR: f64 = 2.0;
+/// A tier-1 match fires for the best three ranks at most.
+const TIER1_TOP: usize = 3;
+
+/// One rule that matched an event, with the action decide() applied.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Fire {
+    pub rule: String,
+    pub law: Option<String>,
+    pub action: String,
+    pub class: String,
+    pub deliver: String,
+    pub tier: u8,
+    pub text: String,
+    pub why: String,
+    pub instead: String,
 }
 
-fn law_id(row: &Value) -> Option<&str> {
-    row.get("decision_id").and_then(Value::as_str)
+/// What decide() answers for one event. `verdict` is the strongest fire:
+/// block over warn over inject over allow.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Decision {
+    pub verdict: &'static str,
+    /// Every fire, ordered block, warn, inform, then rule id.
+    pub fires: Vec<Fire>,
+    /// One `<rule id>: <why>` line per block or warn fire.
+    pub reasons: Vec<String>,
+    /// Tier-2 rule ids whose events matched; never decided here.
+    pub unevaluated: Vec<String>,
 }
 
-/// The `rules-check` answer: the file's rules validated and counted, and
-/// every live law either carried by a rule (`law = "<id>"`) or disposed of.
-/// `ok` holds only when nothing is invalid and no live law is missing.
-pub fn check_answer(text: &str, laws: &[Value]) -> Value {
-    let file = match parse_file(text) {
-        Ok(f) => f,
-        Err(e) => return json!({"ok": false, "error": e}),
-    };
-    let live: BTreeSet<&str> = laws.iter().filter_map(law_id).collect();
-    let mut invalid = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut covered = BTreeSet::new();
-    let (mut by_tier, mut by_action, mut by_family, mut tier0_by_family, mut by_kind) = (
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-    );
-    for rule in &file.rule {
-        for p in rule.problems() {
-            invalid.push(json!({"id": rule.id, "reason": p}));
+fn scope_fits(scope: Option<&str>, ev: &Event) -> bool {
+    let Some(scope) = scope else { return true };
+    let is = |want: &Option<String>, rest: &str| want.as_deref() == Some(rest);
+    if let Some(p) = scope.strip_prefix("project:") {
+        // An event with no resolved project fails open: a missing law is
+        // worse than one that does not apply.
+        ev.project.is_none() || is(&ev.project, p)
+    } else if let Some(n) = scope.strip_prefix("node:") {
+        is(&ev.node, n)
+    } else if let Some(s) = scope.strip_prefix("session:") {
+        is(&ev.session, s)
+    } else {
+        // fleet, and team: (no event carries a team), reach every event.
+        true
+    }
+}
+
+fn expired(expires: Option<&str>, now: chrono::NaiveDate) -> bool {
+    expires
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
+        .is_some_and(|d| d < now)
+}
+
+fn rank(action: &str) -> u8 {
+    match action {
+        "block" => 0,
+        "warn" => 1,
+        _ => 2,
+    }
+}
+
+/// Decide one event against a rule set. Pure: no I/O, so the hooks, the
+/// doors and the fnh harness all reach the same answer.
+///
+/// Tier 0 runs the structural match. Tier 1 runs only at `prompt` and
+/// `skill` events, ranked by BM25 over `ev.text`, and never blocks. Tier 2
+/// is listed in `unevaluated`. A `require-ack` rule blocks until `ev.acks`
+/// names it. A `notify` or `emit` fire never raises the verdict: its caller
+/// delivers it.
+pub fn decide(rules: &[Rule], ev: &Event, now: chrono::NaiveDate) -> Decision {
+    let live: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.when.predicates.is_empty())
+        .filter(|r| scope_fits(r.scope.as_deref(), ev) && !expired(r.expires.as_deref(), now))
+        .collect();
+    let mut hits: Vec<&Rule> = Vec::new();
+    let mut unevaluated = Vec::new();
+    for r in &live {
+        match r.tier() {
+            0 if matches(r, ev) => hits.push(*r),
+            2 if matches(r, ev) => unevaluated.push(r.id.clone()),
+            _ => {}
         }
-        if !seen.insert(rule.id.clone()) {
-            invalid.push(json!({"id": rule.id, "reason": format!("{}: duplicate id", rule.id)}));
-        }
-        if let Some(law) = &rule.law {
-            if live.contains(law.as_str()) {
-                covered.insert(law.clone());
-            } else {
-                invalid.push(
-                    json!({"id": rule.id, "reason": format!("{}: law {law} is not live", rule.id)}),
-                );
+    }
+    if matches!(ev.kind.as_str(), "prompt" | "skill") {
+        let query = ev.text.as_deref().or(ev.skill.as_deref()).unwrap_or("");
+        let tier1: Vec<&Rule> = live
+            .iter()
+            .copied()
+            .filter(|r| r.tier() == 1 && matches(r, ev))
+            .collect();
+        let docs: Vec<(String, String)> = tier1
+            .iter()
+            .map(|r| (r.id.clone(), r.when.retrieval.clone().unwrap_or_default()))
+            .collect();
+        for (id, score) in bm25_rank(&docs, query, TIER1_TOP) {
+            if score >= TIER1_FLOOR {
+                hits.extend(tier1.iter().copied().find(|r| r.id == id));
             }
         }
-        count(&mut by_tier, &format!("tier{}", rule.tier()));
-        count(&mut by_action, &rule.action);
-        let family = rule.family.as_deref().unwrap_or("other");
-        count(&mut by_family, family);
-        if rule.tier() == 0 {
-            count(&mut tier0_by_family, family);
-        }
     }
-    let ruled: BTreeSet<&str> = file.rule.iter().filter_map(|r| r.law.as_deref()).collect();
-    for d in &file.disposition {
-        if !DISPOSITIONS.contains(&d.kind.as_str()) {
-            invalid.push(json!({"id": d.law, "reason": format!("{}: unknown disposition {:?}", d.law, d.kind)}));
-        }
-        if ruled.contains(d.law.as_str()) {
-            invalid.push(json!({"id": d.law, "reason": format!("{}: a law carries a rule or a disposition, not both", d.law)}));
-        } else if live.contains(d.law.as_str()) {
-            covered.insert(d.law.clone());
-        } else {
-            invalid.push(
-                json!({"id": d.law, "reason": format!("{}: disposed law is not live", d.law)}),
-            );
-        }
-        count(&mut by_kind, &d.kind);
-    }
-    let missing: Vec<&str> = live
-        .iter()
-        .copied()
-        .filter(|id| !covered.contains(*id))
-        .collect();
-    json!({
-        "ok": invalid.is_empty() && missing.is_empty(),
-        "rules": file.rule.len(),
-        "by_tier": by_tier,
-        "by_action": by_action,
-        "by_family": by_family,
-        "tier0_by_family": tier0_by_family,
-        "dispositions": by_kind,
-        "laws_live": live.len(),
-        "laws_annotated": covered.len(),
-        "laws_missing": missing,
-        "invalid": invalid,
-    })
-}
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    stage: String,
-    query: String,
-    expected: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct Cases {
-    cases: Vec<Case>,
-}
-
-/// The `rules-measure` answer: for each labeled case, BM25 over the live
-/// laws' `{subject} {decision}` against the stage keyword match the stage
-/// read uses today. The keyword baseline skips the stage read's project and
-/// node-subject filters, so it reads the keyword table alone.
-pub fn measure_answer(
-    cases: &str,
-    laws: &[Value],
-    keywords: impl Fn(&str) -> Vec<&'static str>,
-) -> Value {
-    let cases: Cases = match serde_json::from_str(cases) {
-        Ok(c) => c,
-        Err(e) => return json!({"ok": false, "error": format!("cases: {e}")}),
-    };
-    let docs: Vec<(String, String)> = laws
-        .iter()
-        .filter_map(|row| {
-            let field = |k: &str| row.get(k).and_then(Value::as_str).unwrap_or("");
-            Some((
-                law_id(row)?.to_owned(),
-                format!("{} {}", field("subject"), field("decision")),
-            ))
+    let mut fires: Vec<Fire> = hits
+        .into_iter()
+        .map(|r| {
+            let mut action = r.action.clone();
+            if r.tier() > 0 && matches!(action.as_str(), "block" | "require-ack") {
+                action = "warn".into();
+            }
+            if action == "require-ack" {
+                action = if ev.acks.contains(&r.id) {
+                    "inform"
+                } else {
+                    "block"
+                }
+                .into();
+            }
+            let text = [&r.text, &r.what]
+                .into_iter()
+                .find(|t| !t.is_empty())
+                .cloned()
+                .or_else(|| r.when.retrieval.clone())
+                .unwrap_or_default();
+            Fire {
+                rule: r.id.clone(),
+                law: r.law.clone(),
+                class: r.class().to_string(),
+                deliver: r.deliver().to_string(),
+                tier: r.tier(),
+                why: if r.why.is_empty() {
+                    text.clone()
+                } else {
+                    r.why.clone()
+                },
+                instead: r.instead.clone(),
+                text,
+                action,
+            }
         })
         .collect();
-    let ratio = |hit: usize, of: usize| if of == 0 { 0.0 } else { hit as f64 / of as f64 };
-    let mut rows = Vec::new();
-    let mut sums = [0.0f64; 5];
-    for case in &cases.cases {
-        let expected: BTreeSet<&str> = case.expected.iter().map(String::as_str).collect();
-        let ranked = bm25_rank(&docs, &case.query, 10);
-        let hits = |n: usize| {
-            ranked
-                .iter()
-                .take(n)
-                .filter(|(id, _)| expected.contains(id.as_str()))
-                .count()
-        };
-        let words = keywords(&case.stage);
-        let picked: Vec<&str> = docs
-            .iter()
-            .filter(|(_, text)| {
-                let text = text.to_lowercase();
-                words.iter().any(|w| text.contains(w))
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-        let picked_hits = picked.iter().filter(|id| expected.contains(*id)).count();
-        let row = [
-            ratio(hits(5), expected.len()),
-            ratio(hits(10), expected.len()),
-            ratio(hits(10), 10),
-            ratio(picked_hits, expected.len()),
-            ratio(picked_hits, picked.len()),
-        ];
-        for (sum, v) in sums.iter_mut().zip(row) {
-            *sum += v;
-        }
-        rows.push(json!({
-            "name": case.name,
-            "stage": case.stage,
-            "expected": expected.len(),
-            "bm25_top10": ranked.iter().map(|(id, _)| id).collect::<Vec<_>>(),
-            "bm25_recall_at_5": row[0],
-            "bm25_recall_at_10": row[1],
-            "bm25_precision_at_10": row[2],
-            "keywords_picked": picked.len(),
-            "keywords_recall": row[3],
-            "keywords_precision": row[4],
-        }));
+    fires.sort_by(|a, b| {
+        rank(&a.action)
+            .cmp(&rank(&b.action))
+            .then_with(|| a.rule.cmp(&b.rule))
+    });
+    fires.dedup_by(|a, b| a.rule == b.rule);
+    let verdict = match fires.first() {
+        Some(f) if f.action == "block" => "block",
+        Some(f) if f.action == "warn" => "warn",
+        _ if fires.iter().any(|f| f.deliver == "context") => "inject",
+        _ => "allow",
+    };
+    // A block verdict carries only the refusals; the rest wait for a retry.
+    if verdict == "block" {
+        fires.retain(|f| f.action == "block");
     }
-    let n = cases.cases.len().max(1) as f64;
-    json!({
-        "ok": true,
-        "cases": cases.cases.len(),
-        "laws": docs.len(),
-        "mean": {
-            "bm25_recall_at_5": sums[0] / n,
-            "bm25_recall_at_10": sums[1] / n,
-            "bm25_precision_at_10": sums[2] / n,
-            "keywords_recall": sums[3] / n,
-            "keywords_precision": sums[4] / n,
-        },
-        "per_case": rows,
-    })
+    let reasons = fires
+        .iter()
+        .filter(|f| rank(&f.action) < 2)
+        .map(|f| format!("{}: {}", f.rule, f.why))
+        .collect();
+    Decision {
+        verdict,
+        fires,
+        reasons,
+        unevaluated,
+    }
 }
 
 #[cfg(test)]
@@ -644,6 +671,86 @@ mod tests {
         assert!(!matches(&r, &ev), "a set field needs a value");
     }
 
+    fn day() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap()
+    }
+
+    #[test]
+    fn decide_answers_the_strongest_fire_and_names_it() {
+        let rules = vec![
+            rule("id = \"tag-freeze\"\naction = \"block\"\nwhy = \"release is frozen\"\n[rule.when]\nevents = [\"pre-tool\"]\ncommands = [\"git tag v*\"]\n"),
+            rule("id = \"bp\"\naction = \"inform\"\n[rule.when]\nskills = [\"fno:blueprint\"]\n"),
+            rule("id = \"old\"\naction = \"block\"\nexpires = \"2026-01-01\"\n[rule.when]\ncommands = [\"git tag*\"]\n"),
+        ];
+        let mut ev = Event {
+            kind: "pre-tool".into(),
+            tool: Some("Bash".into()),
+            command: Some("git tag v0.5.0".into()),
+            ..Event::default()
+        };
+        let scoped = rule("id = \"fnh-only\"\naction = \"warn\"\nscope = \"project:fnh\"\n[rule.when]\ncommands = [\"git tag*\"]\n");
+        assert_eq!(
+            decide(std::slice::from_ref(&scoped), &ev, day()).verdict,
+            "warn",
+            "an unresolved project fails open"
+        );
+        ev.project = Some("fno".into());
+        assert_eq!(decide(&[scoped], &ev, day()).verdict, "allow");
+        let d = decide(&rules, &ev, day());
+        assert_eq!(d.verdict, "block");
+        let ids: Vec<&str> = d.fires.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(ids, ["tag-freeze"], "an expired rule never fires");
+        assert_eq!(d.reasons, ["tag-freeze: release is frozen"]);
+        let skill = Event {
+            kind: "skill".into(),
+            skill: Some("fno:blueprint".into()),
+            ..Event::default()
+        };
+        assert_eq!(decide(&rules, &skill, day()).verdict, "inject");
+        let ack = rule(
+            "id = \"ack\"\naction = \"require-ack\"\n[rule.when]\nevents = [\"plan-start\"]\n",
+        );
+        let mut ev = Event {
+            kind: "plan-start".into(),
+            ..Event::default()
+        };
+        assert_eq!(
+            decide(std::slice::from_ref(&ack), &ev, day()).verdict,
+            "block"
+        );
+        ev.acks = vec!["ack".into()];
+        assert_eq!(decide(&[ack], &ev, day()).verdict, "inject");
+    }
+
+    #[test]
+    fn a_ranked_match_never_refuses_a_tool() {
+        // problems() refuses this row; decide() must still hold if one slips by.
+        let mut r = rule("id = \"t1\"\naction = \"inform\"\n[rule.when]\nevents = [\"prompt\"]\nretrieval = \"release tag freeze version bump\"\n");
+        r.action = "block".into();
+        let ev = Event {
+            kind: "prompt".into(),
+            text: Some("cut the release tag for the version bump".into()),
+            ..Event::default()
+        };
+        let mut rules = vec![r];
+        for (i, text) in [
+            "graph store writes",
+            "mail send raw",
+            "spawn model tier",
+            "worktree prune",
+        ]
+        .iter()
+        .enumerate()
+        {
+            rules.push(rule(&format!("id = \"other{i}\"\naction = \"inform\"\n[rule.when]\nevents = [\"prompt\"]\nretrieval = \"{text}\"\n")));
+        }
+        let d = decide(&rules, &ev, day());
+        assert_eq!(d.verdict, "warn", "{d:?}");
+        assert_eq!(d.fires.len(), 1, "unrelated rules stay under the floor");
+        assert_eq!(d.fires[0].action, "warn");
+        assert_eq!(d.fires[0].tier, 1);
+    }
+
     #[test]
     fn bm25_ranks_the_rare_term_first() {
         let docs = vec![
@@ -663,61 +770,5 @@ mod tests {
         let ranked = bm25_rank(&docs, "may I merge during the freeze", 3);
         assert_eq!(ranked[0].0, "b", "{ranked:?}");
         assert!(bm25_rank(&docs, "unrelated words", 3).is_empty());
-    }
-
-    #[test]
-    fn rules_check_names_every_missing_law_and_dispositions_cover() {
-        let laws = vec![
-            json!({"decision_id": "d-11111111", "subject": "new-code-language"}),
-            json!({"decision_id": "d-22222222", "subject": "merge-grant:x"}),
-            json!({"decision_id": "d-33333333", "subject": "mail-raw"}),
-        ];
-        let text = "[[rule]]\nid = \"rust-only\"\nlaw = \"d-11111111\"\naction = \"block\"\nfamily = \"naming\"\n[rule.when]\npaths = [\"cli/src/fno/*.py\"]\n\n[[disposition]]\nlaw = \"d-22222222\"\nkind = \"grant\"\nreason = \"a head-pinned grant\"\n";
-        let answer = check_answer(text, &laws);
-        assert_eq!(answer["ok"], false);
-        assert_eq!(answer["laws_missing"], json!(["d-33333333"]));
-        assert_eq!(answer["laws_annotated"], 2);
-        assert_eq!(answer["tier0_by_family"]["naming"], 1);
-        let both = format!(
-            "{text}\n[[disposition]]\nlaw = \"d-11111111\"\nkind = \"grant\"\nreason = \"x\"\n"
-        );
-        assert!(check_answer(&both, &laws)["invalid"][0]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("not both"));
-        let with_gone = format!(
-            "{text}\n[[disposition]]\nlaw = \"d-99999999\"\nkind = \"retire\"\nreason = \"x\"\n"
-        );
-        let answer = check_answer(&with_gone, &laws);
-        assert!(answer["invalid"][0]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("not live"));
-    }
-
-    #[test]
-    fn rules_measure_scores_bm25_and_the_keyword_baseline() {
-        let laws = vec![
-            json!({"decision_id": "d-1", "subject": "merge-approval", "decision": "merge the pull request when review passes"}),
-            json!({"decision_id": "d-2", "subject": "merge-freeze", "decision": "a freeze holds every release merge"}),
-            json!({"decision_id": "d-3", "subject": "review-lane", "decision": "review inside the session"}),
-        ];
-        let cases = r#"{"cases": [{"name": "freeze", "stage": "review", "query": "may I merge during the freeze", "expected": ["d-2"]}]}"#;
-        let keywords = |stage: &str| {
-            if stage == "review" {
-                vec!["review"]
-            } else {
-                vec![]
-            }
-        };
-        let answer = measure_answer(cases, &laws, keywords);
-        assert_eq!(answer["cases"], 1);
-        assert_eq!(answer["per_case"][0]["bm25_top10"][0], "d-2");
-        assert_eq!(answer["mean"]["bm25_recall_at_5"], 1.0);
-        assert_eq!(answer["mean"]["bm25_precision_at_10"], 0.1);
-        // The keyword baseline picks the two review laws and misses the freeze.
-        assert_eq!(answer["per_case"][0]["keywords_picked"], 2);
-        assert_eq!(answer["mean"]["keywords_recall"], 0.0);
-        assert_eq!(measure_answer("not json", &laws, keywords)["ok"], false);
     }
 }

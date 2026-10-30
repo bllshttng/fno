@@ -43,11 +43,6 @@ pub(crate) fn watching_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r"<watching[>\s]").unwrap())
 }
 
-pub(crate) fn help_re() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"<help[>\s]").unwrap())
-}
-
 pub(crate) fn api_error_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"^API Error\b").unwrap())
@@ -91,10 +86,14 @@ pub(crate) enum Signal {
 
 impl Signal {
     pub(crate) fn of(text: &str) -> Self {
-        if watching_re().is_match(text) {
+        // One blank pass serves the two opener arms; the help arm blanks
+        // again inside the parser, which is idempotent on already-blanked
+        // text.
+        let blanked = crate::distress::blank_code_spans_and_fences(text);
+        if watching_re().is_match(&blanked) {
             return Signal::Watching;
         }
-        if promise_re().is_match(text) {
+        if promise_re().is_match(&blanked) {
             return Signal::Promise;
         }
         if api_error_re().is_match(text.trim_start()) {
@@ -102,7 +101,10 @@ impl Signal {
         }
         let stripped = text.trim_end();
         if stripped.ends_with('?')
-            || help_re().is_match(text)
+            // The shared distress parser, not a bare opener regex: a tag the
+            // turn merely quotes in code is prose, so truth and the loop
+            // runtime (which blanks before its own match) agree.
+            || crate::distress::extract_help_distress(text).is_some()
             || option_prompt_re().is_match(stripped)
         {
             return Signal::Question;
@@ -441,6 +443,19 @@ fn extract_text(content: Option<&Value>) -> String {
         }
         _ => String::new(),
     }
+}
+
+/// A record the harness or control plane injected, never the worker's own
+/// voice. A skill/command injection opens with the command-framing tags and
+/// carries the whole skill body, protocol tags quoted throughout; a
+/// `<local-command-stdout>` record is the harness's output, not the
+/// worker's. Tool-result blocks already drop in `extract_text`; this
+/// catches the injected record that DOES carry text.
+pub(crate) fn injected_record_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("<command-message>")
+        || t.starts_with("<command-name>")
+        || t.starts_with("<local-command-stdout>")
 }
 
 /// A claude transcript `user`/`assistant` line, else `None`.
@@ -1230,25 +1245,80 @@ pub(crate) fn tail_texts(handle: &str, n: usize) -> Result<Vec<String>, String> 
         .ok()
         .map(|r| r.entries);
     let stores = Stores::ambient();
-    let mut cursors = cursor::global();
-    let session = resolve_handle(rows.as_deref(), handle, &stores, &mut cursors)
+    let session = resolve_session(rows.as_deref(), handle, &stores)
         .ok_or_else(|| format!("{handle} resolves to no session"))?;
-    let parse: fn(&Value) -> Option<TruthRecord> = match session.agent.as_str() {
-        "claude" => parse_claude_record,
-        "codex" => parse_codex_record,
-        "opencode" => {
-            let records = opencode_records_db(&stores.opencode_db, &session.session_id, n);
-            return Ok(records.into_iter().map(|r| r.text).collect());
+    let records = session_records(&session, &stores, n).map_err(|e| match e {
+        RecordsError::Unsupported(other) => {
+            format!("{handle}: no transcript reader for harness {other}")
         }
-        other => {
-            return Err(format!(
-                "{handle}: no transcript reader for harness {other}"
-            ))
-        }
-    };
-    let path = transcript_for(&session, &stores, &mut cursors)
-        .ok_or_else(|| format!("{handle} names no readable transcript"))?;
-    tail_records(&path, n, parse)
+        RecordsError::NoTranscript => format!("{handle} names no readable transcript"),
+        RecordsError::Read(e) => e,
+    })?;
+    Ok(records.into_iter().map(|r| r.text).collect())
+}
+
+/// Resolve a handle the way a truth read does, over the process-global
+/// cursors. The peek command and the lead check-in share it.
+pub(crate) fn resolve_session(
+    rows: Option<&[RegistryEntry]>,
+    handle: &str,
+    stores: &Stores,
+) -> Option<TruthSession> {
+    let mut cursors = cursor::global();
+    resolve_handle(rows, handle, stores, &mut cursors)
+}
+
+/// The transcript file a claude or codex session reads from, if it resolves.
+pub(crate) fn session_transcript(session: &TruthSession, stores: &Stores) -> Option<PathBuf> {
+    let mut cursors = cursor::global();
+    transcript_for(session, stores, &mut cursors)
+}
+
+/// The record parser for a file-backed harness.
+pub(crate) fn record_parser(agent: &str) -> Option<fn(&Value) -> Option<TruthRecord>> {
+    match agent {
+        "claude" => Some(parse_claude_record),
+        "codex" => Some(parse_codex_record),
+        _ => None,
+    }
+}
+
+/// True when the row carries a falsifier: its process, pane or exit says
+/// the session is not running.
+pub(crate) fn row_falsified(row: &RegistryEntry) -> bool {
+    registry_falsifier(row).is_some()
+}
+
+/// The pane falsifier for a mux ref: `true` only when the mux says the pane
+/// is gone.
+pub(crate) fn pane_gone(mux: &crate::state::MuxRef) -> bool {
+    pane_falsifier(mux).is_some()
+}
+
+pub(crate) enum RecordsError {
+    Unsupported(String),
+    NoTranscript,
+    Read(String),
+}
+
+/// The last `n` renderable records of one session, oldest first: the one
+/// tail reader peek and the lead check-in share.
+pub(crate) fn session_records(
+    session: &TruthSession,
+    stores: &Stores,
+    n: usize,
+) -> Result<Vec<TruthRecord>, RecordsError> {
+    if session.agent == "opencode" {
+        return Ok(opencode_records_db(
+            &stores.opencode_db,
+            &session.session_id,
+            n,
+        ));
+    }
+    let parse = record_parser(&session.agent)
+        .ok_or_else(|| RecordsError::Unsupported(session.agent.clone()))?;
+    let path = session_transcript(session, stores).ok_or(RecordsError::NoTranscript)?;
+    tail_records(&path, n, parse).map_err(RecordsError::Read)
 }
 
 /// The newest `n` records of a JSONL transcript, read from EOF in windows
@@ -1257,9 +1327,12 @@ fn tail_records(
     path: &Path,
     n: usize,
     parse: fn(&Value) -> Option<TruthRecord>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<TruthRecord>, String> {
     use std::io::{Read, Seek, SeekFrom};
     const CAP: u64 = 8 * 1024 * 1024;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
     let read_err = |e: std::io::Error| format!("{}: {e}", path.display());
     let len = std::fs::metadata(path).map_err(read_err)?.len();
     let mut window: u64 = 256 * 1024;
@@ -1272,15 +1345,15 @@ fn tail_records(
         let text = String::from_utf8_lossy(&bytes);
         // A window that starts mid-file starts mid-line: drop that fragment.
         let skip = usize::from(from > 0);
-        let texts: Vec<String> = text
+        let mut records: Vec<TruthRecord> = text
             .lines()
             .skip(skip)
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .filter_map(|v| parse(&v))
-            .map(|r| r.text)
             .collect();
-        if texts.len() >= n || from == 0 || window >= CAP {
-            return Ok(texts[texts.len().saturating_sub(n)..].to_vec());
+        if records.len() >= n || from == 0 || window >= CAP {
+            let keep = records.len().saturating_sub(n);
+            return Ok(records.split_off(keep));
         }
         window = (window * 4).min(CAP);
     }
@@ -1484,6 +1557,48 @@ mod tests {
     }
 
     const NOW: f64 = 1_791_460_800.0; // 2026-10-08T12:00:00Z
+
+    /// A command-framed record (the skill body rides one string) and a
+    /// local-command output are injections, never the worker's own report;
+    /// the worker's text is not.
+    #[test]
+    fn an_injected_command_record_is_not_worker_text() {
+        assert!(injected_record_text(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\nbody quoting <help class=\"stuck\" reason=\"ci\">"
+        ));
+        assert!(injected_record_text(
+            "<local-command-stdout>ok</local-command-stdout>"
+        ));
+        assert!(!injected_record_text("RESULT: SUCCESS shipped the fix"));
+    }
+
+    /// The question signal reads only a REAL help block: a turn quoting the
+    /// tag in inline code stays plain, a real block asks for the lead's move.
+    #[test]
+    fn a_quoted_help_tag_is_not_a_question_but_a_real_block_is() {
+        let quoted = "Re-arming; `<help class=\"held\">` only if this wedges";
+        assert_eq!(Signal::of(quoted), Signal::Plain);
+        let real =
+            "blocked on the ruling: <help class=\"question\" reason=\"grid\">which band?</help>";
+        assert_eq!(Signal::of(real), Signal::Question);
+    }
+
+    /// The done and watching signals also blank code spans first, exactly as
+    /// the loop runtime's intent match does: a quoted promise or watching
+    /// tag is prose, a real one still signals.
+    #[test]
+    fn a_quoted_promise_or_watching_tag_does_not_signal_but_a_real_one_does() {
+        let quoted = "the gate reads `<promise>MISSION COMPLETE</promise>` from external truth";
+        assert_ne!(Signal::of(quoted), Signal::Promise);
+        assert_eq!(
+            Signal::of("<promise>MISSION COMPLETE: shipped</promise>"),
+            Signal::Promise
+        );
+        assert_eq!(
+            Signal::of("<watching reason=\"ci\" pr=\"4081\">"),
+            Signal::Watching
+        );
+    }
 
     /// Until the warm pass rebuilds a session, truth answers `warming`, and
     /// the decoded probe is neither live nor dead. After the rebuild the same

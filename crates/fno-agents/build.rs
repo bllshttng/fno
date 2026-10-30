@@ -34,6 +34,8 @@ fn main() {
     sync_module_copy("registry_read");
     sync_module_copy("effect_map");
     sync_module_copy("footnote_transcript");
+    sync_module_copy("rules");
+    sync_module_copy("glob");
     sync_merge_posture();
     sync_ambient_vocab();
     sync_page_reload();
@@ -45,7 +47,12 @@ fn main() {
     sync_provider_key();
 
     let rev = git_rev().unwrap_or_else(|| "unknown".to_string());
-    let dirty = git_dirty();
+    // A release build stamps the version into the workspace without
+    // committing (scripts/release/sync-version.sh sets FNO_RELEASE_STAMP),
+    // which dirties crates/ by construction. A stamped build reads clean:
+    // the only diff is the release identity the binary exists to report.
+    let stamped = std::env::var_os("FNO_RELEASE_STAMP").is_some_and(|v| !v.is_empty());
+    let dirty = !stamped && git_dirty();
     // The crates/ subtree rev (last commit touching crates/) is the rev `fno
     // doctor` keys its rust-staleness verdict on. It must be the
     // SAME quantity Python's update._rust_subtree_rev computes -- the last
@@ -71,6 +78,7 @@ fn main() {
     // it is correct regardless; this is dev-iteration hygiene.) Best-effort:
     // a missing ref path just makes cargo re-run this script, never an error.
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=FNO_RELEASE_STAMP");
     if let Some(gitdir) = run("git", &["rev-parse", "--absolute-git-dir"]) {
         let gitdir = gitdir.trim();
         println!("cargo:rerun-if-changed={gitdir}/HEAD");

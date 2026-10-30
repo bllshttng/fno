@@ -8,8 +8,8 @@
 //! table (`config_schema::wizard_plan`).
 //!
 //! `post-merge` asks for this repo's `post_merge.parking_lot_path` (and a
-//! `project.id` when unset). It reads readiness from `fno config doctor
-//! --post-merge --json` and writes through `fno config set --local`, so the
+//! `project.id` when unset). It reads readiness from the post-merge oracle in
+//! `config_doctor::post_merge`, in process, and writes through `fno config set --local`, so the
 //! one validator decides every value. A rejected value (exit 2) asks again; a
 //! structural refusal (exit 1) stops, because a new value cannot fix it.
 
@@ -34,8 +34,6 @@ pub enum Cmd {
     ShimCheck(Vec<OsString>),
     /// A bare `config setup`, or its `--help`.
     Help,
-    /// A root `fno setup run|auto-wire`: those live under `config setup` only.
-    Moved(String),
     Unknown(String),
 }
 
@@ -66,15 +64,14 @@ const COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Claim every `config setup` command except `run` and `auto-wire`, which
-/// their own modules claim, and every root `fno setup` spelling.
+/// their own modules claim.
 pub fn classify(args: &[OsString]) -> Option<Cmd> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
         return None;
     }
-    let (at, root) = match words.as_slice() {
-        ["config", "setup", ..] => (2, false),
-        ["setup", ..] => (1, true),
+    let at = match words.as_slice() {
+        ["config", "setup", ..] => 2,
         _ => return None,
     };
     // A bare `config setup` has no word at `at`, so slice only after a match.
@@ -86,7 +83,6 @@ pub fn classify(args: &[OsString]) -> Option<Cmd> {
         Some("cli-hooks") => Cmd::CliHooks(rest()),
         Some("cli-hooks-codex") => Cmd::CliHooksCodex(rest()),
         Some("shim-check") => Cmd::ShimCheck(rest()),
-        Some(w @ ("run" | "auto-wire")) if root => Cmd::Moved(w.to_string()),
         Some("run" | "auto-wire") => return None,
         Some(w) => Cmd::Unknown(w.to_string()),
     })
@@ -110,10 +106,6 @@ pub fn run(cmd: Cmd) -> i32 {
         Cmd::Help => {
             print!("{}", listing());
             0
-        }
-        Cmd::Moved(word) => {
-            eprintln!("`fno setup {word}` moved: run `fno config setup {word}`");
-            2
         }
         Cmd::Unknown(word) => {
             eprintln!("unknown setup command: '{word}'\n\n{}", listing());
@@ -150,8 +142,8 @@ fn run_plan(rest: &[OsString]) -> i32 {
 /// The scaffold's side effects, so a test drives the flow with no terminal
 /// and no `fno` binary.
 pub trait Io {
-    /// The readiness verdict: the `fno config doctor --post-merge --json`
-    /// object.
+    /// The readiness verdict: the object `fno config doctor --post-merge --json`
+    /// prints.
     fn readiness(&mut self) -> Result<Value, String>;
     /// Write one project-local key. `Err((exit code, message))` on refusal.
     fn set(&mut self, key: &str, value: &str) -> Result<(), (i32, String)>;
@@ -260,9 +252,8 @@ struct Terminal {
 }
 
 impl Terminal {
-    /// Every child runs in `root` with `FNO_REPO_ROOT` pinned to it. The
-    /// readiness read resolves the repo from git at its cwd, and `config set`
-    /// resolves it from the env, so both must name the same repo.
+    /// Every child runs in `root` with `FNO_REPO_ROOT` pinned to it, so
+    /// `config set` writes the same repo the in-process readiness read names.
     fn fno(&self, args: &[&str]) -> std::io::Result<std::process::Output> {
         std::process::Command::new(&self.exe)
             .args(args)
@@ -284,17 +275,7 @@ fn read_answer() -> Option<String> {
 
 impl Io for Terminal {
     fn readiness(&mut self) -> Result<Value, String> {
-        let out = self
-            .fno(&["config", "doctor", "--post-merge", "--json"])
-            .map_err(|e| format!("fno config doctor: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "fno config doctor exited {}: {}",
-                out.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-        serde_json::from_slice(&out.stdout).map_err(|e| format!("fno config doctor: {e}"))
+        Ok(crate::config_doctor::post_merge::readiness(&self.root).to_value())
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<(), (i32, String)> {
@@ -348,9 +329,10 @@ fn run_post_merge(rest: &[OsString]) -> i32 {
     match scaffold(&mut term, &name) {
         Outcome::Written(_) => {
             // The fresh verdict line, so the person sees the gate turn ready.
-            if let Ok(out) = term.fno(&["config", "doctor", "--post-merge"]) {
-                print!("{}", String::from_utf8_lossy(&out.stdout));
-            }
+            println!(
+                "{}",
+                crate::config_doctor::post_merge::readiness(&term.root).summary_line()
+            );
             0
         }
         Outcome::AlreadyReady => 0,

@@ -191,7 +191,6 @@ claim refresh	T1	claim refresh	5
 claim release	KEEP	claim release	38	deliberate readability slack for a high-traffic distinct operation
 claim session-pid	T1	claim session-pid	2
 claim status	T1	claim status	32
-codemap	KEEP	codemap	18	single-leaf group
 config accounts	KEEP	config accounts	71	deliberate readability slack for a high-traffic distinct operation
 config active-backlog	T1	config active-backlog	5
 config assert-subagent-budget	T1	config assert-subagent-budget	6
@@ -208,7 +207,6 @@ config schema	T1	config schema	10
 config set	KEEP	config set	43	deliberate readability slack for a high-traffic distinct operation
 config status-sinks	T1	config status-sinks	2
 config unset	T1	config unset	5
-context	KEEP	context	15	single-leaf group
 cost	KEEP	cost	7	single-leaf group
 delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
@@ -268,9 +266,7 @@ do review classify	T1	do review classify	8
 do review resolve-level	T1	do review resolve-level	10
 do think dispatch	T1	do think dispatch	4
 do think inspect	T1	do think inspect	7
-doctor bash-census	T1	doctor bash-census	0
 doctor bundle	T1	doctor bundle	1
-doctor codemap	T1	doctor codemap	18
 doctor evals grade	T1	doctor evals grade	11
 doctor evals export	T1	doctor evals export	0
 doctor evals macro	T1	doctor evals macro	0
@@ -286,18 +282,14 @@ event find	T1	event find	0
 doctor event gate-escape	T1	doctor event gate-escape	2
 doctor event gc	T1	doctor event gc	4
 doctor event push-parent	T1	doctor event push-parent	2
-doctor footprint	T1	doctor footprint	0
 doctor harness	T1	doctor harness	0
 doctor harness-matrix	T1	doctor harness-matrix	3
-doctor lanes	T1	doctor lanes	0
 doctor lint	T1	doctor lint	39
 doctor observer replay	T1	doctor observer replay	2
 doctor observer judge	T1	doctor observer judge	2
 doctor observer sweep	T1	doctor observer sweep	4
 doctor plugin-file	T1	doctor plugin-file	2
 doctor route	T1	doctor route	6
-doctor scratch report	T1	doctor scratch report	0
-doctor scratch sweep	T1	doctor scratch sweep	1
 doctor stalls	T1	doctor stalls	0
 doctor test	T1	doctor test	107
 doctor update	T1	doctor update	109
@@ -358,7 +350,6 @@ resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
 config plugin	T1	config plugin	0
-doctor reclaim	T1	doctor reclaim	0
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group
 agents stale-escalate	T1	agents stale-escalate	6

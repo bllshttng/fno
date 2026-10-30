@@ -247,6 +247,10 @@ The pre-tool seam translates OpenCode's `{tool, sessionID, callID}` plus `output
 
 Two loop mechanics are OpenCode-specific. The bridge resolves the target manifest through `fno-agents state path target-state` instead of assuming the legacy in-repo `.fno/target-state.md`. That command prints the space-resolved path. The bridge passes the idle event's own session id to `loop-check --harness opencode --harness-session <id>`. The gate then refuses a session its target is not bound to before any continuation. Gates are serialized per session. An idle for a running session becomes a pending recheck, never a dropped event. Different sessions never block each other.
 
+## Pack and full hook profiles
+
+A pack install ships the three hook files without their mux entries. The stage build reads `pack-profiles.json` and drops every entry in `hooks/hooks.json`, `hooks/codex-hooks.json` and `hooks/context-hooks.json` whose command runs a listed mux script. A matcher group left empty goes too. Each new hook script picks a profile. If it needs the daemon, mail or panes, list it under `mux`. Otherwise list it under `pack_hooks`. A hook that only fails open with no mux running belongs in `pack_hooks`. `scripts/ci/check-pack-profiles.sh` refuses an unlisted script. [HARNESSES.md](../HARNESSES.md#install-the-pack-without-the-mux) names the install commands.
+
 ## Hook Script Retirement (one-release tombstones)
 
 The harness reads hook config once at session start. It answers from that snapshot for the session's life. A commit that deletes a hook script while unregistering it leaves the repo self-consistent. It also bricks every session started before the merge. The cached registration points at a missing file. The dead entry sits on the Bash PreToolUse matcher, and a hook that cannot launch fails the whole tool call. On 2026-08-29 one missing file removed every shell command at once for three live sessions. It took the diagnostic commands with it.

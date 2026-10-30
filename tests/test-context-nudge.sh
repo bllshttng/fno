@@ -262,7 +262,16 @@ run_hook() {  # run_hook <payload> ; sets OUT, RC
   # stderr lands in a file, not /dev/null: a CI-only branch death (AC20 twice
   # on 2026-10-05) was undiagnosable from PASS/FAIL lines alone. The file
   # holds the LAST fire's stderr; the AC20 diagnostic dump reads it.
+  # Hermetic cwd cache: the hook's rooted-writer guard reads the machine-wide
+  # snapshot through the 30s cache, whose accepted blind window (a process
+  # leaving a tree inside the TTL reads as still present) is exactly the
+  # control arms' premise - writer gone, advice must return. Fresh dir per
+  # run keeps every read live, which is the behavior this suite pins.
+  FNO_CWD_CACHE_DIR="$(mktemp -d -t ctx-nudge-cache.XXXXXX)"
+  export FNO_CWD_CACHE_DIR
   OUT=$(printf '%s' "$1" | bash "$HOOK" 2>"$SBX/hook-stderr.log"); RC=$?
+  rm -rf "$FNO_CWD_CACHE_DIR"
+  unset FNO_CWD_CACHE_DIR
 }
 
 # Same resolution order as scripts/lib/events.sh. The store commit is the

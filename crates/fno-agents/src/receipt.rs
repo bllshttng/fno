@@ -292,6 +292,7 @@ pub fn build_reap_receipt(
     e: &state::RegistryEntry,
     ledger: Option<&Value>,
     writer: Writer,
+    store_matches: &dyn Fn(&state::RegistryEntry) -> Option<Vec<std::path::PathBuf>>,
 ) -> Result<ReapReceipt, String> {
     let harness = e.harness_name();
     if harness.is_empty() {
@@ -317,13 +318,10 @@ pub fn build_reap_receipt(
         argv
     };
     // The native locator: every transcript candidate the harness's own store
-    // holds for this session, discovered at receipt time. A store read that
+    // holds for this session, supplied by the caller's index. A store read that
     // fails leaves the locator absent-but-named rather than blocking the
     // receipt - the resume tokens above already carry the identity.
-    let transcripts = {
-        let mut index = crate::gc_inventory::HarnessStoreIndex::default();
-        index.matches(e).unwrap_or_default()
-    };
+    let transcripts = store_matches(e).unwrap_or_default();
     let identity = serde_json::json!({
         "harness": harness,
         "session_id": sid,
@@ -381,7 +379,10 @@ pub fn decide_reap_receipt(ask: &Value) -> Value {
         Some(Err(err)) => return refused(format!("row unreadable: {err}")),
         None => return refused("no row in the ask".to_string()),
     };
-    match build_reap_receipt(&row, None, Writer::RegistryWrite) {
+    let index = std::cell::RefCell::new(crate::gc_inventory::HarnessStoreIndex::default());
+    match build_reap_receipt(&row, None, Writer::RegistryWrite, &|e| {
+        index.borrow_mut().matches(e)
+    }) {
         Ok(mut receipt) => {
             if let Some(by) = ask.get("removed_by").and_then(Value::as_str) {
                 if !by.is_empty() {
@@ -460,6 +461,7 @@ pub fn stage_removal_accounting(
     entry: &state::RegistryEntry,
     remover: &str,
     emitter: &crate::events::EventEmitter,
+    store_matches: &dyn Fn(&state::RegistryEntry) -> Option<Vec<std::path::PathBuf>>,
 ) {
     // The active-surface outcome outlives the receipt write on purpose. The
     // harness-side removal happens BEFORE that write, so a write that fails
@@ -467,20 +469,16 @@ pub fn stage_removal_accounting(
     // is then the only durable record of it, and must name it. `None` means
     // no attempt was made, never "attempted, outcome unknown".
     let mut active_surface: Option<&'static str> = None;
-    let (receipt_staged, reason) = match build_reap_receipt(entry, None, Writer::RegistryWrite) {
-        Ok(mut receipt) => {
-            // A receipt already on disk for this session was staged moments
-            // ago by the reap sweep (or the watchdog) BEFORE it dropped the
-            // rows - rewriting it would stamp `removed_by` onto a pure reap
-            // receipt and change its shape. The record on disk is
-            // already the recovery path; leave it byte-identical.
-            if reap_receipt_path(home, &receipt).exists() {
-                (true, "receipt already staged for this session".to_string())
-            } else {
-                // The door that dropped the row also removes the harness
-                // side, and its receipt records the attempt. The sweep's
-                // receipt already carries its own effects (left untouched
-                // above), so the sweep path never attempts twice.
+    let already_staged = entry
+        .harness_session_id
+        .as_deref()
+        .filter(|sid| !sid.is_empty())
+        .is_some_and(|sid| reap_receipt_path_for(home, entry.harness_name(), sid).exists());
+    let (receipt_staged, reason) = if already_staged {
+        (true, "receipt already staged for this session".to_string())
+    } else {
+        match build_reap_receipt(entry, None, Writer::RegistryWrite, store_matches) {
+            Ok(mut receipt) => {
                 let outcome = crate::gc_native::apply_active_surface_removal(entry);
                 active_surface = Some(outcome.as_str());
                 receipt
@@ -494,8 +492,8 @@ pub fn stage_removal_accounting(
                     Err(err) => (false, format!("receipt did not persist: {err}")),
                 }
             }
+            Err(err) => (false, err),
         }
-        Err(err) => (false, err),
     };
     let _ = emitter.emit(
         "registry_row_removed",
@@ -530,8 +528,8 @@ mod tests {
     #[test]
     fn every_receipt_names_its_writer_and_the_key_sets_match() {
         let e = sample_row("shape");
-        let sweep = build_reap_receipt(&e, None, Writer::GcSweep).unwrap();
-        let choke = build_reap_receipt(&e, None, Writer::RegistryWrite).unwrap();
+        let sweep = build_reap_receipt(&e, None, Writer::GcSweep, &|_| None).unwrap();
+        let choke = build_reap_receipt(&e, None, Writer::RegistryWrite, &|_| None).unwrap();
         let sweep_json: serde_json::Value = serde_json::to_value(&sweep).unwrap();
         let choke_json: serde_json::Value = serde_json::to_value(&choke).unwrap();
         assert_eq!(sweep_json["removed_by"], "gc-sweep");
@@ -590,7 +588,7 @@ mod tests {
         let events = dir.path().join("events.jsonl");
         let emitter = crate::events::EventEmitter::new(&events, "daemon");
 
-        stage_removal_accounting(&home, &entry, "test-remover", &emitter);
+        stage_removal_accounting(&home, &entry, "test-remover", &emitter, &|_| None);
 
         let line = crate::events::committed_journal_text(&events);
         let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -601,6 +599,58 @@ mod tests {
             data["active_surface"], "not-applicable",
             "the removal that already happened is named even with no receipt"
         );
+    }
+
+    #[test]
+    fn receipt_locator_uses_the_callers_store_answer() {
+        let entry = sample_row("locator");
+        let receipt = build_reap_receipt(&entry, None, Writer::GcSweep, &|row| {
+            assert_eq!(row.harness_session_id, entry.harness_session_id);
+            Some(vec![std::path::PathBuf::from("/x/a.jsonl")])
+        })
+        .unwrap();
+        assert_eq!(
+            receipt.native_locator,
+            Some(json!({"transcripts": ["/x/a.jsonl"]}))
+        );
+        let unreadable = build_reap_receipt(&entry, None, Writer::GcSweep, &|_| None).unwrap();
+        assert_eq!(unreadable.native_locator, Some(json!({"transcripts": []})));
+    }
+
+    #[test]
+    fn removal_accounting_preserves_a_staged_receipt_without_a_store_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        let mut entry = sample_row("staged");
+        entry.harness = Some("opencode".to_string());
+        let events = home.events_jsonl();
+        let emitter = crate::events::EventEmitter::new(&events, "daemon");
+        let calls = std::cell::Cell::new(0);
+        stage_removal_accounting(&home, &entry, "test-remover", &emitter, &|_| {
+            calls.set(calls.get() + 1);
+            Some(vec![std::path::PathBuf::from("/x/staged.jsonl")])
+        });
+        assert_eq!(calls.get(), 1);
+        let path = reap_receipt_path_for(&home, "opencode", "staged-session");
+        let original = std::fs::read(&path).unwrap();
+        let receipt = read_reap_receipt(&path).unwrap();
+        assert!(!receipt.removed_by.is_empty());
+        assert_eq!(
+            receipt.native_locator,
+            Some(json!({"transcripts": ["/x/staged.jsonl"]}))
+        );
+        stage_removal_accounting(&home, &entry, "second-remover", &emitter, &|_| {
+            panic!("a staged receipt must not read the transcript store")
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let journal = crate::events::committed_journal_text(&events);
+        let event: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+        assert_eq!(event["data"]["receipt_staged"], true);
+        assert_eq!(
+            event["data"]["reason"],
+            "receipt already staged for this session"
+        );
+        assert!(event["data"]["active_surface"].is_null());
     }
 
     fn axes_row(name: &str, axes: &str) -> state::RegistryEntry {
@@ -624,7 +674,7 @@ mod tests {
             "zairow2",
             r#","provider":"zai","requested_model":"glm-5.3-flash[1m]""#,
         );
-        let receipt = build_reap_receipt(&e, None, Writer::GcSweep).unwrap();
+        let receipt = build_reap_receipt(&e, None, Writer::GcSweep, &|_| None).unwrap();
         // FNO_ROUTE_SETTINGS_DIR stays set (tempdir drop leaves it dangling):
         // unsetting it process-globally races every lock-free state-resolving
         // test into the paths.rs guard, and a dangling route dir is just a

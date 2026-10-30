@@ -15,14 +15,40 @@ refuses, never assumes zero.
 from __future__ import annotations
 
 import contextvars
+import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn, Optional, cast
+from typing import Any, NamedTuple, NoReturn, Optional, cast
 
-from fno.footprint import Admission
+
+class Admission(NamedTuple):
+    """The CPU axis's decision, computed once and read by both gates (LD1).
+
+    ``verdict`` is ``admit`` | ``hold`` | ``undecidable`` | ``refuse``;
+    ``axis`` names what decided: the fleet's CPU share or an unreadable
+    instrument. ``reason`` is the full sentence
+    the gates print verbatim. An attribution gap widens the share to an
+    interval: ``share_low`` is the attributed share, ``share_high`` the
+    whole machine's, and ``bound`` records that the verdict read the upper
+    bound. The native census computes it; this type carries it.
+    """
+
+    verdict: str
+    axis: str
+    reason: str
+    share_low: float
+    share_high: float
+    bound: str
+    fleet_cores: float
+    machine_cores: float
+    capacity_cores: float
+    ceiling: float
+    gap: str | None = None
+    top_holder: str | None = None
 
 # THE exit-code allocation table for the gate band across both trees (this
 # file and crates/fno-agents/src/spawn_gate.rs). A value >= 64 claims its
@@ -64,6 +90,9 @@ EXIT_GATE_UNAVAILABLE = 87
 # Rust gate only (crates/fno-agents/src/spawn_gate.rs): fleet top shows a
 # live worker on the spawn's node.
 EXIT_NODE_OCCUPIED = 92
+# Rust gate only (crates/fno-agents/src/spawn_gate.rs): the rule engine's
+# door:spawn read refused the spawn.
+EXIT_RULE_REFUSED = 93
 
 
 QUEUE_TIMEOUT_S = 600.0
@@ -395,16 +424,31 @@ def _prefetch_fleet_reading() -> tuple[Optional[Any], Optional[str]]:
     machine, so it is taken before the lock exactly as before - the band
     check that sometimes skipped it is what died.
 
-    Returns ``(reading, error)``; exactly one side is usable. A ``None``
-    reading is a REFUSAL on ``cpu_instrument``, never a skip (LD3).
+    Returns ``(payload, error)``; exactly one side is usable. A ``None``
+    payload is a REFUSAL on ``cpu_instrument``, never a skip (LD3).
     """
     try:
-        from fno.doctor_footprint import cause_reading
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is None:
+            return None, "footprint unavailable: the fno-agents binary was not found"
+        result = subprocess.run(
+            [str(binary), "census", "--cause", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
     except Exception as exc:  # noqa: BLE001 - an import fault is an unreadable instrument
         return None, f"footprint unavailable: {exc}"
+    if result.returncode != 0:
+        lines = (result.stderr or "").strip().splitlines()
+        tail = lines[-1] if lines else ""
+        return None, f"footprint unavailable: exit {result.returncode}{tail}"
     try:
-        return cause_reading()
-    except Exception as exc:  # noqa: BLE001
+        return json.loads(result.stdout or "{}"), None
+    except ValueError as exc:
         return None, f"footprint unavailable: {exc}"
 
 
@@ -413,18 +457,18 @@ def _cpu_axis(prefetched: object = _NOT_PREFETCHED) -> Admission:
 
     Maps an unreadable instrument to ``refuse`` on ``cpu_instrument`` (LD3:
     the sensor blinds under exactly the load it measures, and an unreadable
-    process table is itself a symptom) and otherwise hands the reading to
-    :func:`cpu_admission`, whose fleet CPU share decides alone.
+    process table is itself a symptom) and otherwise reads the admission
+    the native census already computed (one decider: the census op).
 
     Shared with the ``--explain`` preview, so a dry run answers the question
     the real spawn will.
     """
-    reading, error = (
+    payload, error = (
         _prefetch_fleet_reading()
         if prefetched is _NOT_PREFETCHED
         else cast("tuple[Optional[Any], Optional[str]]", prefetched)
     )
-    if reading is None:
+    if payload is None:
         why = (error or "the reading failed").strip()
         return Admission(
             verdict="refuse",
@@ -442,43 +486,28 @@ def _cpu_axis(prefetched: object = _NOT_PREFETCHED) -> Admission:
             ceiling=0.0,
             gap=None,
         )
-    from fno.doctor_footprint import _admission_config, cpu_admission
-
-    share_ceiling = _admission_config()
-    capacity = float(_load_cpus())
-    return cpu_admission(
-        reading,
-        capacity_cores=capacity,
-        share_ceiling=share_ceiling,
+    admission = payload.get("admission") or {}
+    return Admission(
+        verdict=str(admission.get("verdict") or "refuse"),
+        axis="fleet_cpu",
+        reason=str(admission.get("reason") or "the reading failed"),
+        share_low=float(admission.get("share_low") or 0.0),
+        share_high=float(admission.get("share_high") or 0.0),
+        bound=str(admission.get("bound") or "exact"),
+        fleet_cores=float(admission.get("fleet_cores") or 0.0),
+        machine_cores=float(admission.get("machine_cores") or 0.0),
+        capacity_cores=float(admission.get("capacity_cores") or 0.0),
+        ceiling=float(admission.get("ceiling") or 0.0),
+        gap=admission.get("gap"),
     )
 
 
 def _load_cpus() -> int:
-    """The CPU denominator for the CPU axis.
-
-    Footprint's capacity reading, which is the minimum of the affinity count,
-    the host count and the cgroup quota. Two reasons it is worth the import
-    over a bare `process_cpu_count`:
-
-    the Rust gate uses `available_parallelism`, which IS quota-aware, so an
-    affinity-only count here made the two runtimes compute different triggers
-    from one config on a quota-constrained container (2-of-32 cores gives 16
-    against 256);
-
-    and the share comparison already divides by this exact number, so a
-    different denominator for the trigger meant one check answering a
-    question the other was not asking.
-
-    It reads affinity and a cgroup file, never `ps`, so the cheap path stays
-    cheap. Falls back rather than raising: a guard must not brick the spawn
-    primitive because an import moved.
+    """The CPU denominator for the DISPLAY load snapshot (nothing gates on
+    it). The native census applies its quota-aware capacity itself; the
+    display denominator falls back to the interpreter's count.
     """
-    try:
-        from fno.doctor_footprint import _cpu_capacity_cores
-
-        return int(_cpu_capacity_cores()) or 1
-    except Exception:
-        return getattr(os, "process_cpu_count", os.cpu_count)() or 1
+    return getattr(os, "process_cpu_count", os.cpu_count)() or 1
 
 
 def _load_snapshot(max_load_per_cpu: float) -> LoadSnapshot:

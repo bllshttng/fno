@@ -104,7 +104,7 @@ A subagent fails the same way and gives you less to read. One finished at 23:13 
 
 Two channels, and they answer different questions.
 
-`fno agents mail send <name> "<text>"` can reach a **live** worker. Read its receipt. `delivered (hosted)` and `delivered (woken)` mean the inject was accepted. Neither proves the agent read it. A `queued` message waits until the agent looks up or a human presses ESC. Any other receipt means the worker still has its old instructions. A failed injection falls back to the durable queue, where the message can remain unread.
+`fno agents mail send <name> "<text>"` can reach a **live** worker. Read its receipt. `accepted-new-turn` and `accepted-steer` mean the worker's own turn record holds the message. `parked` and `injected` mean the bytes reached the worker but no turn took them yet. A `queued` message waits until the agent looks up or a human presses ESC. Any other receipt means the worker still has its old instructions. A failed injection falls back to the durable queue, where the message can remain unread.
 
 `fno backlog update <id> 'dispatch_brief+=...'` changes what the **next** worker reads. This is a standing order, not a note. Update it before you spawn, never after.
 

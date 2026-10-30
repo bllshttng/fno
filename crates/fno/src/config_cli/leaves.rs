@@ -68,7 +68,7 @@ const BUILDDIR_HELP: &str = concat!(
     "\n",
     "  Print the CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``.\n",
     "\n",
-    "  The shell surface over fno.paths.cargo_build_dir_value(); the target stop hook\n",
+    "  The shell surface over the build-dir resolver; the target stop hook\n",
     "  exports it for done_probes that run cargo. Hidden: consumed by the hook, not\n",
     "  by operators.\n",
     "\n",
@@ -107,7 +107,7 @@ pub fn run_build_dir(args: &[OsString]) -> i32 {
     0
 }
 
-/// `fno.paths.cargo_build_dir_value` over the native merge: the
+/// The build-dir value over the native merge: the
 /// `paths.cargo_targets_base` override, else `<state_dir>/cargo-build`.
 pub fn cargo_build_dir_value() -> String {
     let raw = super::merged_config(&repo_root());

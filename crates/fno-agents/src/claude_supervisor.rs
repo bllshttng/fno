@@ -64,6 +64,7 @@ const SUPERVISOR_WIDE_FNO_KEYS: &[&str] = &[
     "FNO_CONFIG",
     "FNO_EVENTS_PATH",
     "FNO_FOOTNOTE_BIN",
+    "FNO_FRONT_DOOR",
     "FNO_GH_BUDGET_TEST_ARMED",
     "FNO_GH_CORE_RESERVE",
     "FNO_GH_FACTS_DIR",
@@ -258,6 +259,9 @@ fn supervisor_birth_command(config_dir: Option<&Path>) -> std::process::Command 
     for key in held_poison_keys() {
         cmd.env_remove(key);
     }
+    // The supervisor outlives the session that booted it and hosts every
+    // later one, so that session's identity must not fossil into it.
+    crate::claims::scrub_identity_env(&mut cmd);
     if crate::agents_config::telemetry_claude_otel(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     ) {
@@ -609,6 +613,25 @@ mod tests {
         assert!(envs
             .iter()
             .all(|(n, v)| (n != "PATH" && n != "HOME") || v.is_some()));
+    }
+
+    #[test]
+    fn the_birth_command_holds_the_callers_identity_back() {
+        // The supervisor outlives the session that booted it and hosts every
+        // later one, so a marker it inherited would name every later session
+        // and tag the daemon's own claims with a harness it does not own.
+        let envs = env_of(&supervisor_birth_command(None));
+        for name in [
+            "CODEX_THREAD_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "FNO_HARNESS_SESSION_ID",
+        ] {
+            assert!(
+                envs.iter()
+                    .any(|(key, value)| key == name && value.is_none()),
+                "{name} rode into the supervisor birth"
+            );
+        }
     }
 
     #[test]

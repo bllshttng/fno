@@ -35,11 +35,18 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 }
 
 /// The per-user global config.toml, mirroring Python's `_global_settings_path` +
-/// `_prefer_toml`: read the config.toml SIBLING of `$FNO_GLOBAL_SETTINGS_PATH`
-/// when set, else `$HOME/.fno/config.toml`.
+/// `_prefer_toml`: the config.toml SIBLING of `$FNO_GLOBAL_SETTINGS_PATH` when
+/// set (an explicit global relocation is the more specific directive), else
+/// `$FNO_CONFIG` when it pins one (the pinned file IS the global config there,
+/// so machine-posture keys - `store.share_backlog`, the accounts records, the
+/// fleet owner - resolve from the sandbox config and stay at their stock off
+/// when it does not set them), else `$HOME/.fno/config.toml`.
 pub(crate) fn global_config_path() -> Option<PathBuf> {
     if let Some(p) = non_empty_env("FNO_GLOBAL_SETTINGS_PATH") {
         return Some(PathBuf::from(p).with_file_name("config.toml"));
+    }
+    if let Some(p) = non_empty_env("FNO_CONFIG") {
+        return Some(PathBuf::from(p));
     }
     std::env::var_os("HOME").map(|h| Path::new(&h).join(".fno/config.toml"))
 }
@@ -330,6 +337,58 @@ fn deep_merge_toml(base: toml::Value, over: toml::Value) -> toml::Value {
         }
         _ => over,
     }
+}
+
+/// One config candidate that carries the queried subtree, highest priority
+/// first. `carries_leaf` says whether THIS file declares `leaf` at the
+/// subtree root: with the merge's replace-whole rule for non-tables, the
+/// highest-priority carrier of the leaf is the file whose value won.
+pub(crate) struct ConfigSource {
+    pub path: std::path::PathBuf,
+    pub carries_leaf: bool,
+}
+
+/// The source view of [`config_value_deep`]: every candidate that carries
+/// the key path, and whether it declares `leaf` there. The walk's chain
+/// line names these so a lanes list is attributable to the file that
+/// supplied it; a candidate missing the path, unreadable, or unparseable is
+/// skipped exactly as the value read skips it.
+pub(crate) fn config_sources_deep(cwd: &Path, keys: &[&str], leaf: &str) -> Vec<ConfigSource> {
+    let mut out: Vec<ConfigSource> = Vec::new();
+    for path in config_candidates(cwd) {
+        // One candidate can enter twice (cwd under $HOME makes the project
+        // and global spellings the same file); the first sighting is the
+        // priority that matters, a repeat would read as its own override.
+        if out.iter().any(|s| s.path == path) {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(table) = parse_config(&content) else {
+            continue;
+        };
+        let root = toml::Value::Table(table);
+        let mut cur: &toml::Value = &root;
+        let mut present = true;
+        for k in keys {
+            match cur.get(*k) {
+                Some(v) => cur = v,
+                None => {
+                    present = false;
+                    break;
+                }
+            }
+        }
+        if !present {
+            continue;
+        }
+        out.push(ConfigSource {
+            path,
+            carries_leaf: cur.get(leaf).is_some(),
+        });
+    }
+    out
 }
 
 fn resolve_state_path(raw: &str, cwd: &Path) -> Option<PathBuf> {
@@ -1907,6 +1966,71 @@ mod tests {
         assert_eq!(
             config_lookup_global(&["accounts", "records"]).unwrap()[0]["id"].as_str(),
             Some("global-account")
+        );
+        std::fs::remove_dir_all(global).ok();
+        clear_config_env();
+    }
+
+    /// A sandbox pinned by `FNO_CONFIG` ALONE must not inherit the machine
+    /// global's share posture: with no explicit global relocation the pinned
+    /// file IS the global config, so `store.share_backlog` resolves from the
+    /// sandbox config and stays off when it does not set it (a docs
+    /// screenshot sandbox once synced 4,976 live rows because this lookup
+    /// skipped the pin and read `~/.fno`). An explicit
+    /// `FNO_GLOBAL_SETTINGS_PATH` still outranks the pin - it is the more
+    /// specific directive, and the route scope owns it.
+    #[test]
+    fn a_pinned_config_is_the_global_config() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let sandbox = tempfile::tempdir().unwrap();
+        let pin = sandbox.path().join("config.toml");
+        std::fs::write(&pin, "schema_version = 1\n").unwrap();
+        let global = std::env::temp_dir().join(format!("fno-pinned-global-{}", std::process::id()));
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(
+            global.join("config.toml"),
+            "[store]\nremote_url = \"http://primary.example\"\nshare_backlog = true\n",
+        )
+        .unwrap();
+
+        // Pin alone: the pin answers for the global tier. The suite's
+        // clear_config_env pins FNO_GLOBAL_SETTINGS_PATH at an isolated dir
+        // rather than unsetting it, so the true sandbox shape (the variable
+        // absent) is set explicitly here.
+        std::env::set_var("FNO_CONFIG", &pin);
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
+        assert_eq!(
+            global_config_path().as_deref(),
+            Some(pin.as_path()),
+            "with no explicit global path, the pin is the global config"
+        );
+        assert_eq!(
+            config_lookup_global(&["store", "share_backlog"]),
+            None,
+            "the machine global's share posture must not reach the sandbox"
+        );
+
+        // An explicit global relocation outranks the pin.
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.json"));
+        assert_eq!(
+            global_config_path(),
+            Some(global.join("config.toml")),
+            "an explicit global path outranks the pin for global-scope reads"
+        );
+
+        // The sandbox turning share on itself is honored. The variable stays
+        // absent here so the pin remains the global tier; the trailing
+        // clear_config_env re-establishes the suite's isolated-global shape.
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
+        std::fs::write(
+            &pin,
+            "schema_version = 1\n\n[store]\nremote_url = \"http://primary.example\"\nshare_backlog = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config_lookup_global(&["store", "share_backlog"]).and_then(|v| v.as_bool()),
+            Some(true)
         );
         std::fs::remove_dir_all(global).ok();
         clear_config_env();

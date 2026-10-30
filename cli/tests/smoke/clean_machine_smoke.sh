@@ -129,9 +129,9 @@ check_help() {  # name + argv: must exit 0
     miss "internal:$name" "rc=$RC (module missing or not in-package): $(printf '%s' "$OUT" | head -1)"
   fi
 }
-check_help plan "$FNO" plan stamp --help
-check_help phase-kill-check "$FNO" phase kill-check --help
-check_help cost "$FNO" cost --help
+check_help plan "$FNO" do plan stamp --help
+check_help phase-kill-check "$FNO" do phase kill-check --help
+check_help cost "$FNO" whoami cost --help
 
 # A real run: notify must fail (or succeed) on its own merits - on a headless
 # CI box with no notify-send it returns a clean non-zero, never a 127/traceback.

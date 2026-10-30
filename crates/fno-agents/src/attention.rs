@@ -140,7 +140,7 @@ pub struct Recommendation {
 /// One item. Field names are the OpenAPI contract (`docs/architecture/
 /// attention-items.md`); they are the wire shape the sinks and the endpoint
 /// share, so they do not follow this repo's rust naming beyond serde defaults.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct AttentionItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_batch: Option<String>,
@@ -211,6 +211,23 @@ pub struct AttentionItem {
     /// Absolute paths of the screenshots the ask copied into the vault.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub images: Vec<String>,
+    /// Who asked: handle, session id, registry name, harness and host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Value>,
+    /// The ladder rung the row sits at, and every rung it climbed from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rung: Option<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub via: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tried: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    /// The node's title and graph status, joined at read time by `needs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_stage: Option<String>,
 }
 
 /// Every defect, so the asker fixes the row instead of a sink dropping it
@@ -287,6 +304,20 @@ pub fn problems(item: &AttentionItem) -> Vec<String> {
         if item.meanwhile.as_ref().is_none_or(|m| m.trim().is_empty()) {
             out.push("missing meanwhile".to_string());
         }
+        // A ladder row on the user's board carries what every rung checked
+        // and what silence means; a row from before the ladder does not.
+        if item.rung.is_some() {
+            for (name, value) in [
+                ("class", &item.class),
+                ("tried", &item.tried),
+                ("on_silence", &item.on_silence),
+                ("deadline", &item.deadline),
+            ] {
+                if value.as_ref().is_none_or(|v| v.trim().is_empty()) {
+                    out.push(format!("missing {name}"));
+                }
+            }
+        }
     }
     out
 }
@@ -337,6 +368,57 @@ fn project_of(cwd: &str) -> String {
     basename(cwd).to_string()
 }
 
+/// The row's visible title: the question's first line with a leading
+/// machine-internal dedupe bracket dropped (`[watchdog-stale:key] prose` ->
+/// `prose`); a marker-only first line yields the next prose line. The stored
+/// body keeps the full text - the bracket is the `already_asked` dedupe key
+/// (`fno.agents.stale_escalate.already_asked` folds it), so it never leaves
+/// the body, only the title.
+pub(crate) fn display_title(question: &str) -> String {
+    let mut lines = question.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let prose = strip_marker_bracket(first);
+    if !prose.is_empty() {
+        return prose.to_string();
+    }
+    lines.next().unwrap_or("").to_string()
+}
+
+/// `[<multiword-kebab-token>:<key>]` followed by a space or end-of-line: the
+/// durable askers' dedupe bracket (`watchdog-stale`, `reap-hold`, ... - every
+/// shipped token is hyphenated). A bracket a question opens with on purpose -
+/// a single-word or uppercase token, a key with no colon inside - stays
+/// untouched.
+fn strip_marker_bracket(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix('[') else {
+        return line;
+    };
+    let Some(close) = rest.find(']') else {
+        return line;
+    };
+    let Some((token, key)) = rest[..close].split_once(':') else {
+        return line;
+    };
+    let kebab = token.contains('-')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !kebab || key.is_empty() {
+        return line;
+    }
+    let after = &rest[close + 1..];
+    match after.chars().next() {
+        // End of line: the marker-only line display_title falls through from.
+        None => after,
+        // The emitters write `] ` before the prose; a bracket followed by
+        // any other character is content the title keeps.
+        Some(ch) if ch.is_whitespace() => after.trim_start(),
+        Some(_) => line,
+    }
+}
+
 /// Build one item from an `operator_question` row (`data` fields read
 /// envelope-agnostically). `data.context`, when present, carries the
 /// structured context fields the Rust intake writes (wave 3); bare
@@ -344,7 +426,7 @@ fn project_of(cwd: &str) -> String {
 fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
     let qid = str_field(row, "question_id")?;
     let question = str_field(row, "question").unwrap_or("");
-    let title = question.lines().next().unwrap_or("").to_string();
+    let title = display_title(question);
     let ask = str_field(row, "ask").unwrap_or("");
     let options: Vec<ItemOption> = arr_field(row, "options")
         .map(|arr| {
@@ -484,7 +566,14 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         created_at: ts.to_string(),
         deadline: ctx_str("deadline"),
         on_silence: ctx_str("on_silence"),
-        class: ctx_str("class"),
+        class: ctx_str("class").or_else(|| str_field(row, "class").map(str::to_string)),
+        origin: row.get("data").and_then(|d| d.get("origin")).cloned(),
+        rung: row.get("data").and_then(|d| d.get("rung")).cloned(),
+        via: arr_field(row, "via").cloned().unwrap_or_default(),
+        tried: ctx_str("tried"),
+        evidence: ctx_str("evidence"),
+        node_title: None,
+        node_stage: None,
         blocks,
         subject: str_field(row, "subject").map(str::to_string),
         asker,
@@ -508,6 +597,16 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         "high"
     }
     .to_string();
+    // A question with no text names its asker and node instead of showing a
+    // bare id down every consumer: the row always carries who asked.
+    if item.title.is_empty() {
+        if let Some(handle) = item.asker.as_ref().map(|a| a.handle.as_str()) {
+            item.title = match item.node.as_deref() {
+                Some(node) if !node.is_empty() => format!("from {handle} on {node}"),
+                _ => format!("from {handle}"),
+            };
+        }
+    }
     item.seal_readiness();
     Some(item)
 }
@@ -580,6 +679,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
         state: "open".to_string(),
         settled: false,
         images: vec![],
+        ..Default::default()
     };
     item.seal_readiness();
     Some(item)
@@ -637,6 +737,7 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
             state: "open".to_string(),
             settled: false,
             images: vec![],
+            ..Default::default()
         });
     }
     out
@@ -672,7 +773,11 @@ pub fn project(
         match kind {
             "operator_question" => {
                 if let Some(qid) = str_field(&v, "question_id") {
-                    asked.insert(qid.to_string(), v);
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asked.insert(qid.to_string(), v);
+                    } else {
+                        asked.remove(qid);
+                    }
                 }
             }
             "operator_question_closed" => {
@@ -790,7 +895,11 @@ pub fn answered(journals_raw: &str, now: u64) -> Vec<Answered> {
         match v.get("type").and_then(Value::as_str).unwrap_or("") {
             "operator_question" => {
                 if let Some(qid) = str_field(&v, "question_id") {
-                    asks.insert(qid.to_string(), v.clone());
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asks.insert(qid.to_string(), v.clone());
+                    } else {
+                        asks.remove(qid);
+                    }
                 }
             }
             "attention_answer" => {
@@ -994,6 +1103,25 @@ mod tests {
         assert!(missing.contains("recommendation"), "missing: {missing}");
         assert!(missing.contains("reversible"), "missing: {missing}");
         assert!(missing.contains("meanwhile"), "missing: {missing}");
+        assert!(!missing.contains("tried"), "a pre-ladder row: {missing}");
+
+        // A climbed ladder row carries its provenance and needs the card
+        // fields the ladder adds.
+        let climbed = row(
+            "q-ladder",
+            "Rule on the law",
+            json!({"options": ["yes", "no"], "rung": {"level": "user"},
+                "origin": {"name": "t-worker", "harness": "claude"},
+                "via": [{"holder_name": "tomas", "evidence": "read PR 12"}]}),
+        );
+        let items = project(&format!("{climbed}\n"), &[], "", 0);
+        let item = &items[0];
+        assert_eq!(item.origin.as_ref().unwrap()["name"], json!("t-worker"));
+        assert_eq!(item.via[0]["holder_name"], json!("tomas"));
+        let missing = item.missing.join(",");
+        for field in ["tried", "on_silence", "deadline", "class"] {
+            assert!(missing.contains(field), "missing: {missing}");
+        }
     }
 
     #[test]
@@ -1068,7 +1196,7 @@ mod tests {
             "\n",
             r#"{"ts":"2026-09-26T05:01:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-a","sink":"mux","option":1,"answered_at":"2026-09-26T05:01:00Z","superseded":false}}"#,
             "\n",
-            r#"{"ts":"2026-09-26T05:02:00Z","type":"attention_delivery","source":"daemon","data":{"item_id":"q-a","rung":"mail","outcome":"landed","evidence":"outstanding: q-a answered; mail to w1: delivered (hosted)"}}"#,
+            r#"{"ts":"2026-09-26T05:02:00Z","type":"attention_delivery","source":"daemon","data":{"item_id":"q-a","rung":"mail","outcome":"landed","evidence":"outstanding: q-a answered; mail to w1: accepted-new-turn"}}"#,
             "\n",
         );
         // now = 05:10:00Z: the answer is 9 minutes old, inside the TTL.
@@ -1129,5 +1257,51 @@ mod tests {
             item.recommendation.as_ref().unwrap().downside.as_deref(),
             Some("Waiting may miss the window.")
         );
+    }
+
+    #[test]
+    fn title_strips_the_dedupe_bracket_and_falls_back_to_asker_and_node() {
+        // The bracket the emitters embed is the already_asked dedupe key: the
+        // title drops it, the body keeps it.
+        let journals = row(
+            "q-m",
+            "[session-transition-branch:t-opus:a:b] Branch f (opus) forked. Inherit or clean?",
+            json!({}),
+        );
+        let item = &project(&journals, &[], "", 0)[0];
+        assert_eq!(item.title, "Branch f (opus) forked. Inherit or clean?");
+        assert!(item
+            .body
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("[session-transition-branch:"));
+        // A marker-only first line yields the next prose line.
+        assert_eq!(
+            display_title("[watchdog-stale:k]\nThe fleet holds two rows."),
+            "The fleet holds two rows."
+        );
+        // A bracket that is not the emitters' shape stays.
+        assert_eq!(
+            display_title("[Not a marker] keep me"),
+            "[Not a marker] keep me"
+        );
+        assert_eq!(
+            display_title("[a:b] keep me"),
+            "[a:b] keep me",
+            "a single-word token is not a marker"
+        );
+        assert_eq!(
+            display_title("[client-side:render]Which implementation?"),
+            "[client-side:render]Which implementation?",
+            "no delimiter after the bracket is content"
+        );
+        // No text: the row names its asker and node instead of a bare id.
+        let silent = row("q-e", "", json!({"asker": "daemon", "node": "job-7"}));
+        let item = &project(&silent, &[], "", 0)[0];
+        assert_eq!(item.title, "from daemon on job-7");
+        // Neither asker nor node: empty stays empty, and the reader keeps
+        // its own id fallback.
+        let bare = row("q-b", "", json!({}));
+        assert_eq!(project(&bare, &[], "", 0)[0].title, "");
     }
 }

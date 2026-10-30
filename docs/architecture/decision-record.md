@@ -19,7 +19,7 @@ The old `fno decide` spelling remains as a one-release compatibility shim. It pr
 
 ## Two producers, both explicit
 
-`fno inbox decide` records a ruling that has no question on file. `fno outstanding clear --answer` records the answer to an open `operator_question`, because an answered question IS a decision.
+`fno inbox decide` records a ruling that has no question on file. `fno inbox outstanding clear --answer` records the answer to an open `operator_question`, because an answered question IS a decision.
 
 Both are explicit on purpose. Automatic classification of "was that a ruling?" is judgment on a truncated view, which `docs/architecture/memory-system.md` records as deprecated for cause.
 
@@ -92,7 +92,7 @@ There is no new recording gate, and none is needed. `crates/fno-agents/src/loopc
 | Store | What it is for | Path |
 |---|---|---|
 | Project journal | Durability and the project audit trail | `<canonical-repo>/.fno/events.jsonl` |
-| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` via `paths.decisions_jsonl()` |
+| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` |
 | Graph projection | The node view, for anyone reading the node | the subject node's `decisions` array |
 
 Rust readers do not read the JSONL alone. `decision_index::default_store_live` reads graph.db decisions plus the JSONL rows the db lacks. The merge keys match `_read_index`, so a ruling the db holds is never invisible to a Rust reader.
@@ -157,7 +157,7 @@ Every cross-rung ask is one traced decision. The ask, the lead's route (answer-s
 |---|---|---|
 | ask | `decision_span` span_kind=ask | `fno-agents mail-record` at the mail send chokepoint, when the body opens `Approval:` |
 | route | `decision_span` route=self or escalate, with the class | `mail-record --reply-to` (self), or the question intake on `answers_ask:` (escalate), or `fno inbox decide --answers-ask` (self) |
-| question | `operator_question` + trace | the question intake; span_id = question_id, parent = the route span |
+| question | `operator_question` + trace | the question intake; span_id = question_id, parent = the route span; the trace names the rung holder for a lead-rung card, else the user |
 | answer | `operator_decision` + trace | `fno inbox outstanding clear` or the decide door; span_id = decision_id, parent = the question or route span |
 | correction | `decision_span` span_kind=correction + `operator_decision.overturns` | `fno inbox decide --overturns <span-or-decision-id> --authority operator` |
 
@@ -177,7 +177,7 @@ The command is idempotent by decision id, so a second run adds nothing.
 
 ## Lifecycle and standing law
 
-The index remains append-only. A retraction is a new `decision_retracted` event, never an edit or delete: `fno backlog decide-retract d-1a2b3c4d --reason "the decision no longer applies"`. The command resolves the target first, refuses a blank reason or unknown id, and requires the operator lane to retract law. If the project journal is durable but the recall-index append fails, the command names `fno backlog decide-reindex` and never recommends retrying the retraction.
+The index remains append-only. A retraction is a new `decision_retracted` event, never an edit or delete: `fno backlog decide-retract d-1a2b3c4d --reason "the decision no longer applies"`. The command resolves the target first, refuses a blank reason or unknown id, and requires the operator lane to retract an operator law. A session retracts a `chat_attested` law with `--quote "<the user's words>"`, and the quote rides the retraction event. `fno inbox law restore <id>` undoes a law retraction. It re-records the row under a new id with `supersedes: <id>` and `restores: <retraction id>`, so every reader sees the old id superseded by a live successor. The same lane rule applies: a session restores only its own kind. If the project journal is durable but the recall-index append fails, the command names `fno backlog decide-reindex` and never recommends retrying the retraction.
 
 Every row carries a derived lifecycle: `live`, `expired`, `superseded`, `retracted`, `unknown`, or `unscoped`. Human output leads with that marker, and JSON includes `lifecycle`, reason, and any positive closure evidence. `--state live|expired|superseded|retracted|unscoped|all` filters the same projection. If a coord row is stamped to a node, it expires only after that node's graph entry has positive closure evidence. If a repository-scoped PR row exists, it expires only after its exact graph binding is marked merged. A failed graph read makes the lifecycle `unknown`; the command names the unread graph on stderr, and every state filter keeps the row. Missing or ambiguous closure evidence is `unscoped`. Neither `unknown` nor `unscoped` is live. Law does not expire because a node or PR closes.
 
@@ -205,20 +205,11 @@ The review-coverage gate is the reference consumer. Its merge predicate, its `fn
 
 The standing query reaches a reader who goes looking. The failure this hook closes is the session that never looks. Measured on the live set: 11 laws govern review under 10 subjects, and two of those subjects are bare node ids. The same three rulings were re-derived twice in one day while agents rebuilt rules a live law already carried. So the governing laws are put at the decision point, not behind a search.
 
-Two events trigger the read. Claude fires `hooks/law-stage-inject.sh` on `PostToolUse` with matcher `Skill`. Claude and Codex also fire it on `UserPromptSubmit`, which covers typed and mailed review commands. `PreToolUse` on `Edit|Write` now carries the edit read too. Both claude and codex accept `additionalContext` there, so the context lands next to the tool result. `PostToolUse` and `UserPromptSubmit` accept `hookSpecificOutput.additionalContext`. That output lands beside the review instructions the skill itself prints, and `hooks/review-hold.sh` runs on the same Skill event. The command is `fno inbox law stage`, a nested group on the `fno` front, because d-fe66560a bars new top-level commands. The front serves it by spawning the runtime worker's one-shot `--law-exec` lane, because the mux never links fno-agents (the product boundary). The laws come from `decision_index::live_laws`, a direct read of the index. Measured 2026-09-14: the Python read took 67.0s real at load 345 and hits a 10s hook bound. The direct read of the 1.2 MB index takes milliseconds. The hook's timeout wrapper passes stdin through to the matcher. The stage block lists every matched law: summarized under the 2000-byte cap, then one short id line per law the cap cut.
+Two hooks reach the reader. `hooks/rules-dispatch.sh` runs `fno-agents hook rules --event prompt` on `UserPromptSubmit` and `--event pre-tool` on `PreToolUse`. Claude matches `Edit|Write|Bash|Skill`, and codex matches `Edit|Write|Bash`. A Skill call is the skill event. Each fire asks `fno::rules::decide` (`docs/architecture/event-rules.md`) and prints a deny, the governing rules as `additionalContext`, or nothing. The stage read `fno inbox law stage` answers the same question for `scripts/validate-plan.sh`: it builds a skill event from the payload and renders the law fires under `## Law governing <stage>`. The command is a nested group on the `fno` front, because d-fe66560a bars new top-level commands. The stage block lists every fired law: summarized under the 2000-byte cap, then one short id line per law the cap cut.
 
-A law recorded with `--paths` prints once per session at the first `Edit` or `Write` of a matching file. The hook reads the target paths off the payload, and the command's edit read matches them against the row's repo-relative globs with the crate's fnmatch. The once-per-session key is the decision id alone, kept in `law-edit-seen/<session>.json`. A changed law is a new id by supersede, so no second key is needed.
+A law recorded with `--paths` becomes a pre-tool rule on `Edit` and `Write` of a matching file. An inform rule prints once per session at a pre-tool event, keyed by rule id in `rules-seen/<session>.json`. A changed law is a new id by supersede, so no second key is needed.
 
-Classification is a keyword stage table with one row today. The command names `code-review`, `review`, `review-changes` and `sigma-review` classify the pending action as the review stage. These are the same four names `hooks/review-hold.sh` carries. The hold keeps its own list on purpose: a shell hold is never ported onto a binary exec its shell tests cannot stub. The laws surface by keyword over the lowercased subject and decision text. The recall was measured against the live corpus with the 11 review laws labeled by hand:
-
-| Pattern over subject + decision text | Review laws found | False positives |
-|---|---|---|
-| `review` | 10 of 11 (misses the ruling filed under a node id) | 0 |
-| `review\|attest\|round\|finding` | 11 of 11 | 3 |
-| `review\|attest\|findings\|max_rounds` | 11 of 11 | 0 |
-| add `lane` | 11 of 11 | 16 |
-
-Semantic matching was measured and rejected. The keyword row already finds 11 of 11 with zero false positives. The repo has no local embedding index. A hook cannot wait on a model call.
+The stage classifier names the commands. `code-review`, `review`, `review-changes` and `sigma-review` classify as review. These are the same four names `hooks/review-hold.sh` carries. `blueprint` classifies as blueprint, and `target` and `execute` as target. Which laws surface is the rule engine's answer, not a keyword table. A law with an imported trigger fires on that trigger. A law with neither a trigger nor `paths` is an implicit tier-1 rule, ranked by BM25 against the skill name and its arguments. The old keyword table listed 63 laws for one blueprint. The ranked read keeps the top three over a score floor.
 
 A failed index read is a report, never silence. The block says the index `could not be read` and names `fno backlog decisions --lane law --state live` as the manual read. Damaged rows are counted. A review with a readable index and no matching law renders nothing. That silence is the correct answer for that input.
 
@@ -260,6 +251,6 @@ A decision id is a citable fact too. A worker once named a deletion-offset rulin
 
 The one-step door (`fno inbox law set`) has no staged proposal, no content hash, and no resume path (ruling d-e1eec854). The old ceremony was deleted because it refused the honest headless path at the last step. An attended chat approved the same enactment without reading the hash.
 
-The cost of that trade, measured rather than assumed: `require_marked_caller` answers `chat_attested` off `resolve_self_identity`, which walks process ancestry. The door is not "a mail-injected slash command". It is ANY process descended from a harness session. That includes an agent's own Bash call with no user-shaped text anywhere. The narrower mail shape is the one that cannot be detected. Across every transcript in this machine's claude project directory, 2173 user turns carrying an `<fno_mail>` envelope were recorded with `promptSource: "typed"` and 2439 with `origin: {"kind": "human"}`. `fno agents mail send --raw` strips the envelope that is the one remaining marker. The door is the law LANE and never the `operator` VALUE: `_resolve_decider` still refuses an `operator` claim from a resolved session. The asymmetry buys honesty. A session can mint a law row and cannot retract one, because `retract_decision` requires `operator`.
+The cost of that trade, measured rather than assumed: `require_marked_caller` answers `chat_attested` off `resolve_self_identity`, which walks process ancestry. The door is not "a mail-injected slash command". It is ANY process descended from a harness session. That includes an agent's own Bash call with no user-shaped text anywhere. The narrower mail shape is the one that cannot be detected. Across every transcript in this machine's claude project directory, 2173 user turns carrying an `<fno_mail>` envelope were recorded with `promptSource: "typed"` and 2439 with `origin: {"kind": "human"}`. `fno agents mail send --raw` strips the envelope that is the one remaining marker. The door is the law LANE and never the `operator` VALUE: `_resolve_decider` still refuses an `operator` claim from a resolved session. The asymmetry buys honesty. A session can mint and retract its own kind of law row. It can never retire an `operator` row, by retraction or by supersession.
 
 One family is closed to the chat door entirely: subjects under `review-coverage-waiver`, the merge gate's waiver evidence. These refuse every non-superuser authority at the write chokepoint. A waiver asserts a person read the diff. No chat row can carry that fact. The attended `fno do pr coverage-waive` command is the only path.

@@ -59,7 +59,10 @@ def _acquire_node(node_id: str, session_id: str, *, harness: str = "claude") -> 
 def _bus_to(recipient: str):
     from tests.fixtures.bus_rows import read_rows
 
-    return [m for m in read_rows() if m["to"] == recipient]
+    # A send also appends its delivery-state row; only messages count here.
+    return [
+        m for m in read_rows() if m["to"] == recipient and m.get("kind") != "state"
+    ]
 
 
 def _set_identity(monkeypatch, session_id: str) -> None:

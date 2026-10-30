@@ -265,18 +265,16 @@ fn live_joiners(node: &str) -> Vec<String> {
         .iter()
         .filter_map(|r| r["harness_session_id"].as_str())
         .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join(",");
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     if handles.is_empty() {
         return Vec::new();
     }
-    let argv = ["agents", "truth", "--handles", &handles, "--json"].map(str::to_string);
-    let answer =
-        super::advance::bounded_command_env(Path::new(&crate::scrape::fno_bin()), &argv, 30, &[])
-            .ok()
-            .filter(|o| o.code == 0)
-            .and_then(|o| serde_json::from_str::<Value>(&o.stdout).ok())
-            .unwrap_or(json!({}));
+    let answer = Value::Object(
+        crate::truth_cli::truth_payloads(&handles)
+            .into_iter()
+            .collect(),
+    );
     candidates
         .iter()
         .filter(|r| {

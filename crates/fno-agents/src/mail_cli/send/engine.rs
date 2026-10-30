@@ -264,37 +264,30 @@ pub(super) fn run_mail_inject_child(
     text: &str,
     timeout: f64,
     reasons: Option<&mut Vec<String>>,
-) -> bool {
+) -> DeliveryState {
     let started = std::time::Instant::now();
     let captured = run_self_captured(argv, text, timeout);
-    if captured.spawn_failed || captured.timed_out {
+    let refused = |reasons: Option<&mut Vec<String>>, why: &str| {
         if let Some(reasons) = reasons {
-            reasons.push("probe-unavailable".to_string());
+            reasons.push(why.to_string());
         }
-        return false;
-    }
-    let Ok(receipt) = serde_json::from_str::<Value>(captured.stdout.trim()) else {
-        if let Some(reasons) = reasons {
-            reasons.push("unreadable".to_string());
-        }
-        return false;
+        DeliveryState::failed(why)
     };
-    let delivered = receipt
-        .get("delivered")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    if captured.spawn_failed || captured.timed_out {
+        return refused(reasons, "probe-unavailable");
+    }
+    let Ok(outcome) = serde_json::from_str::<Value>(captured.stdout.trim()) else {
+        return refused(reasons, "unreadable");
+    };
+    // An older child prints only `delivered`/`reason`; read it like an older host.
+    let state = deliver_answer_state(&outcome);
     if let Some(reasons) = reasons {
-        let reason = receipt
-            .get("reason")
-            .and_then(Value::as_str)
-            .filter(|r| !r.is_empty())
-            .unwrap_or("unknown");
-        reasons.push(reason.to_string());
-        if !delivered {
+        reasons.push(state.reason().unwrap_or(state.word()).to_string());
+        if !state.reached() {
             reasons.push(format!("waited-{:.0}s", started.elapsed().as_secs_f64()));
         }
     }
-    delivered
+    state
 }
 
 pub(super) fn inject_argv(
@@ -332,13 +325,13 @@ pub(super) fn mail_inject_claude(
     wrapped: &str,
     reasons: Option<&mut Vec<String>>,
     harness: Option<&str>,
-) -> bool {
+) -> DeliveryState {
     if delivery_policy_refusal(Some(recipient), Some(wrapped)) == Some(BUS_ONLY_POLICY.to_string())
     {
         if let Some(reasons) = reasons {
             reasons.push(BUS_ONLY_POLICY.to_string());
         }
-        return false;
+        return DeliveryState::failed(BUS_ONLY_POLICY);
     }
     let delay = crate::mail_inject::enter_delay_for_harness(harness.unwrap_or("claude"));
     let argv = inject_argv("claude", recipient, None, None, Some(delay as u64));
@@ -351,13 +344,13 @@ pub(super) fn mail_inject_codex(
     wrapped: &str,
     reasons: Option<&mut Vec<String>>,
     origin: Option<&str>,
-) -> bool {
+) -> DeliveryState {
     if delivery_policy_refusal(Some(thread_id), Some(wrapped)) == Some(BUS_ONLY_POLICY.to_string())
     {
         if let Some(reasons) = reasons {
             reasons.push(BUS_ONLY_POLICY.to_string());
         }
-        return false;
+        return DeliveryState::failed(BUS_ONLY_POLICY);
     }
     let argv = inject_argv("codex", thread_id, origin, None, None);
     run_mail_inject_child(argv, wrapped, 60.0, reasons)
@@ -370,13 +363,13 @@ pub(super) fn mail_inject_keeper(
     wrapped: &str,
     harness: &str,
     reasons: Option<&mut Vec<String>>,
-) -> bool {
+) -> DeliveryState {
     if delivery_policy_refusal(Some(recipient), Some(wrapped)) == Some(BUS_ONLY_POLICY.to_string())
     {
         if let Some(reasons) = reasons {
             reasons.push(BUS_ONLY_POLICY.to_string());
         }
-        return false;
+        return DeliveryState::failed(BUS_ONLY_POLICY);
     }
     let argv = inject_argv(harness, recipient, None, None, None);
     run_mail_inject_child(argv, wrapped, 60.0, reasons)
@@ -490,7 +483,7 @@ pub(super) fn wake_rung(
     }
     if detail == "writer-possibly-live" || detail == "wake-already-in-flight" {
         let mut reasons = Vec::new();
-        if mail_inject_claude(&reachable.session_id, wrapped, Some(&mut reasons), None) {
+        if mail_inject_claude(&reachable.session_id, wrapped, Some(&mut reasons), None).reached() {
             return (true, None, None);
         }
     }
@@ -649,7 +642,15 @@ pub(super) fn family1_probe_reachable(handle: &str) -> bool {
 
 // The mux pane lane (dispatch.py _mux_pane_send twin, mail-callers only)
 
-pub(super) fn mux_pane_send(entry: &Value, wrapped: &str) -> bool {
+/// The pane rung: `mail-inject --harness pane`, so a pane row gets the
+/// quiet gate, the typed inject with its submit, the hosted harness's own
+/// turn record as the confirm, and the withdraw. A paste exit code is not a
+/// delivery: it never submitted and never read a record.
+pub(super) fn mail_inject_pane(
+    entry: &Value,
+    wrapped: &str,
+    reasons: Option<&mut Vec<String>>,
+) -> DeliveryState {
     let session = entry
         .pointer("/mux/session")
         .and_then(Value::as_str)
@@ -658,57 +659,48 @@ pub(super) fn mux_pane_send(entry: &Value, wrapped: &str) -> bool {
         .pointer("/mux/pane_id")
         .and_then(Value::as_i64)
         .unwrap_or(-1);
+    let refused = |reasons: Option<&mut Vec<String>>, why: &str| {
+        if let Some(reasons) = reasons {
+            reasons.push(why.to_string());
+        }
+        DeliveryState::failed(why)
+    };
     if session.is_empty() || pane < 0 {
-        eprintln!("mux pane send refused: no pane ref on the row");
-        return false;
+        return refused(reasons, "no-pane-ref");
     }
-    if crate::mail_hold::gate(session, Some(wrapped), chrono::Utc::now()).deliver {
-        // not bus-only: fall through to the send
-    } else {
-        eprintln!("mux pane send refused: recipient is bus-only by policy");
-        return false;
+    let Some(sid) =
+        opt_str_field(entry, "harness_session_id").or_else(|| opt_str_field(entry, "session_id"))
+    else {
+        return refused(reasons, "no-session-id");
+    };
+    if !crate::mail_hold::gate(session, Some(wrapped), chrono::Utc::now()).deliver {
+        return refused(reasons, BUS_ONLY_POLICY);
     }
-    // The gate Python's prepare() runs client-side: a submit into a pane
-    // showing an option prompt dismisses the payload and picks the default.
+    // A submit into a pane showing an option prompt dismisses the payload
+    // and picks the default, so that pane is refused before any byte.
     let front = crate::mail_remote::fno_binary();
-    let pane_num = pane.to_string();
     let read_argv: Vec<String> = vec![
         front.to_string_lossy().into_owned(),
         "mux".to_string(),
         "pane".to_string(),
         "read".to_string(),
-        pane_num.clone(),
+        pane.to_string(),
         "--lines".to_string(),
         "40".to_string(),
     ];
-    let mut gated = false;
     let captured = run_captured(&read_argv, "", false, 10.0);
     if captured.status == Some(0) {
         if let Ok(tail) = serde_json::from_str::<Value>(captured.stdout.trim()) {
             let text = tail.get("text").and_then(Value::as_str).unwrap_or("");
-            gated = crate::session_truth::option_prompt_re().is_match(text);
+            if crate::session_truth::option_prompt_re().is_match(text) {
+                return refused(reasons, "option-prompt");
+            }
         }
     }
-    if gated {
-        eprintln!(
-            "mux pane {pane} send refused: pane is showing an option prompt; a submit would discard the payload"
-        );
-        return false;
-    }
-    let send_argv: Vec<String> = [
-        front.to_string_lossy().into_owned(),
-        "mux".to_string(),
-        "pane".to_string(),
-        "send".to_string(),
-        pane_num,
-        "--text".to_string(),
-        wrapped.to_string(),
-        "--source".to_string(),
-        "mail".to_string(),
-    ]
-    .to_vec();
-    let sent = run_captured(&send_argv, "", true, 60.0);
-    sent.status == Some(0)
+    let mut argv = inject_argv("pane", &sid, None, None, None);
+    argv.push("--pane".to_string());
+    argv.push(format!("{session}:{pane}"));
+    run_mail_inject_child(argv, wrapped, 60.0, reasons)
 }
 
 // The a2a first-use gate (dispatch.py _a2a_first_use_gate twin)
@@ -796,7 +788,7 @@ pub(super) fn deliver_live(
     sender_entry: Option<&Value>,
     reason_out: &mut Vec<String>,
     _family1_state: &str,
-) -> bool {
+) -> DeliveryState {
     // Bus-only bounds EVERY live transport below, this fn's first gate.
     let policy = crate::mail_hold::gate(
         &opt_str_field(row, "name").unwrap_or_default(),
@@ -805,21 +797,13 @@ pub(super) fn deliver_live(
     );
     if !policy.deliver {
         reason_out.push(BUS_ONLY_POLICY.to_string());
-        return false;
+        return DeliveryState::failed(BUS_ONLY_POLICY);
     }
     let has_mux = row.get("mux").is_some_and(|m| m.is_object());
     if has_mux {
-        let mut attempt = 1;
-        while attempt <= 2 {
-            let delivered = mux_pane_send(row, wrapped);
-            if delivered {
-                return true;
-            }
-            reason_out.push(format!("mux-send-failed-attempt-{attempt}:pre-submit"));
-            if attempt == 2 || str_field(row, "status").is_empty() {
-                break;
-            }
-            attempt += 1;
+        let state = mail_inject_pane(row, wrapped, Some(reason_out));
+        if state.reached() {
+            return state;
         }
         // Heal after the pane miss: a codex row whose pane is gone but whose
         // thread is loaded in the app-server rebinds to the thread lane.
@@ -841,7 +825,7 @@ pub(super) fn deliver_live(
                 }
             }
         }
-        return false;
+        return state;
     }
     if is_codex_thread_entry(row) {
         let delivered = switchboard_exchange(
@@ -853,10 +837,16 @@ pub(super) fn deliver_live(
             sender_entry.map(switchboard_identity),
         );
         if delivered == Some(true) {
-            return true;
+            // The switchboard answers on hand-off and reads no turn record.
+            return DeliveryState::Injected;
         }
         reason_out.push("codex-thread-switchboard-miss".to_string());
-        return false;
+        // A thread row with no switchboard seat is still loaded in the
+        // app-server: turn/start reaches it, and the rollout confirms it.
+        if let Some(sid) = opt_str_field(row, "harness_session_id") {
+            return mail_inject_codex(&sid, wrapped, Some(reason_out), None);
+        }
+        return DeliveryState::failed("codex-thread-switchboard-miss");
     }
     let sock = opt_str_field(row, "messaging_socket_path").unwrap_or_default();
     let lane_harness = str_field(row, "harness");
@@ -881,22 +871,16 @@ pub(super) fn deliver_live(
                 "from_name": from_name,
             }),
         );
-        match result {
-            None => return false,
-            Some(result) => {
-                if result.get("delivered").and_then(Value::as_bool) == Some(true) {
-                    return true;
-                }
-                let reason = result
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .filter(|r| !r.is_empty())
-                    .unwrap_or("unknown");
-                eprintln!("fno-agents deliver demoted: {reason}; message queued durable");
-                reason_out.push(reason.to_string());
-                return false;
-            }
+        let Some(result) = result else {
+            return DeliveryState::failed("no-daemon");
+        };
+        let state = deliver_answer_state(&result);
+        if !state.reached() {
+            let reason = state.reason().unwrap_or("unknown");
+            eprintln!("fno-agents deliver demoted: {reason}; message queued durable");
+            reason_out.push(reason.to_string());
         }
+        return state;
     }
     // The switchboard fast lane: the daemon probes B's worker socket, so a
     // claude peer that is NOT a live stream thread answers delivered=false and
@@ -914,7 +898,7 @@ pub(super) fn deliver_live(
         from_identity,
     );
     if exchange == Some(true) {
-        return true;
+        return DeliveryState::Injected;
     }
     // Live inject over control.sock: the SOLE claude live lane.
     let recipient = opt_str_field(row, "harness_session_id")
@@ -923,12 +907,41 @@ pub(super) fn deliver_live(
     match recipient {
         None => {
             reason_out.push("no-recipient".to_string());
-            false
+            DeliveryState::failed("no-recipient")
         }
         Some(recipient) => {
             mail_inject_claude(&recipient, wrapped, Some(reason_out), Some(lane_harness))
         }
     }
+}
+
+/// An `agent.deliver` answer or a `mail-inject` outcome as a state. A host
+/// or child that predates the states answers only `delivered` (and
+/// `queued`): a queued prompt is parked, a taken one is injected, since
+/// neither read a turn record.
+fn deliver_answer_state(result: &Value) -> DeliveryState {
+    if let Some(state) = DeliveryState::from_json(result) {
+        return state;
+    }
+    if result.get("delivered").and_then(Value::as_bool) == Some(true) {
+        let queued = result
+            .get("queued")
+            .is_some_and(|q| q == true || q.as_u64().unwrap_or(0) > 1);
+        return if queued {
+            DeliveryState::Parked {
+                where_: crate::mail_delivery_state::Parked::HarnessQueue,
+            }
+        } else {
+            DeliveryState::Injected
+        };
+    }
+    DeliveryState::failed(
+        result
+            .get("reason")
+            .and_then(Value::as_str)
+            .filter(|r| !r.is_empty())
+            .unwrap_or("unknown"),
+    )
 }
 
 /// The durable FALLBACK envelope, the same
@@ -1068,6 +1081,8 @@ pub(super) struct DispatchSendResult {
     pub(super) to: Option<String>,
     pub(super) to_harness: Option<String>,
     pub(super) to_session: Option<String>,
+    /// What the live lane reached; `queued` when no live lane ran.
+    pub(super) state: DeliveryState,
 }
 
 /// Python `_recipient_identity_key`: every field that can select or replace a
@@ -1388,6 +1403,8 @@ pub(super) fn dispatch_send_locked(
         || (str_field(&existing, "harness") == "claude" && existing.get("mux").is_none());
 
     let mut live_attempted = false;
+
+    let mut live_state = DeliveryState::Queued;
     let mut delivery = "durable".to_string();
     let mut demotion_notice: Option<String> = None;
     // A vetoed live lane names the reading; bus-only outranks it below.
@@ -1469,7 +1486,7 @@ pub(super) fn dispatch_send_locked(
         };
         if stage_ok {
             live_attempted = true;
-            let delivered = deliver_live(
+            let state = deliver_live(
                 &existing,
                 &wrapped,
                 from_name,
@@ -1477,6 +1494,14 @@ pub(super) fn dispatch_send_locked(
                 &mut live_reasons,
                 &family1_state,
             );
+            crate::mail_delivery_state::record(
+                &msg_id,
+                &state,
+                &mail_ctx.from_,
+                &recipient_for_row,
+            );
+            let delivered = state.reached();
+            live_state = state;
             if delivered {
                 delivery = "hosted".to_string();
                 let record = bus_envelope_row(
@@ -1560,6 +1585,7 @@ pub(super) fn dispatch_send_locked(
         to: durable_recipient.or_else(|| opt_str_field(&existing, "short_id")),
         to_harness: opt_str_field(&existing, "harness"),
         to_session: opt_str_field(&existing, "harness_session_id"),
+        state: live_state,
     })
 }
 
@@ -1737,6 +1763,7 @@ pub(super) fn dispatch_send_lock_timeout_locked(
         },
         to_harness: opt_str_field(&timeout_entry, "harness"),
         to_session: opt_str_field(&timeout_entry, "harness_session_id"),
+        state: DeliveryState::Queued,
     })
 }
 

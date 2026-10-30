@@ -41,10 +41,12 @@ pub fn unescape_text(text: &str) -> String {
     text.replace("&lt;", "<").replace("&gt;", ">")
 }
 
-/// The page's title: the question's first line, cut to 120 characters, with
-/// the characters that break wikilinks or headings removed.
+/// The page's title: the question's first prose line (a leading internal
+/// dedupe bracket dropped, [`crate::attention::display_title`]), cut to 120
+/// characters, with the characters that break wikilinks or headings removed.
 pub fn page_title(question: &str) -> String {
-    let first_line = question.lines().next().unwrap_or("").trim();
+    let first_line = crate::attention::display_title(question).trim().to_owned();
+    let first_line = first_line.as_str();
     let cleaned: String = first_line
         .chars()
         .filter(|c| !matches!(c, '|' | '[' | ']' | '\n' | '\r'))
@@ -811,6 +813,7 @@ mod tests {
             state: "open".into(),
             settled: false,
             images: vec![],
+            ..Default::default()
         }
     }
 
@@ -1097,5 +1100,21 @@ mod tests {
             1,
         );
         assert_eq!(key0, settle_key(&stamped));
+    }
+
+    #[test]
+    fn page_title_drops_the_dedupe_bracket_and_keeps_a_deliberate_bracket() {
+        let marker =
+            "[session-transition-branch:t-opus:a:b] Branch f (opus) forked. Inherit or clean?";
+        assert_eq!(
+            page_title(marker),
+            "Branch f (opus) forked. Inherit or clean?"
+        );
+        // A bracket a question opens with on purpose survives the cleanup.
+        assert_eq!(
+            page_title("[Not a marker] keep me"),
+            "Not a marker keep me",
+            "the wikilink char cleanup still applies"
+        );
     }
 }

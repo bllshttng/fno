@@ -152,7 +152,13 @@ pub(crate) fn rerun_recovery<P: GhProbe>(
 /// during a critical Actions incident the surface could not name). Read-only
 /// and fail-open: an unreachable page reads null, never a second red.
 pub(crate) fn platform_incident() -> Value {
-    let out = std::process::Command::new("curl")
+    platform_incident_via("curl")
+}
+
+/// The same status-page read with the curl program named, so a caller with a
+/// bin-dir seam (heal) resolves a stub in tests.
+pub(crate) fn platform_incident_via(curl: &str) -> Value {
+    let out = std::process::Command::new(curl)
         .args([
             "-sf",
             "--max-time",

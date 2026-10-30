@@ -164,13 +164,13 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 15 | paths_testing (leaf) | 75 | 0 | 6/- | 0 | 2 |
 | 16 | __init__ (leaf) | 279 | 0 | 7/- | 0 | 0 |
 | 17 | paths_cli (leaf) | 187 | 0 | 7/- | 0 | 5 |
-| 18 | plugin_install_cli (leaf) | 79 | 0 | 7/- | 0 | 2 |
+| 18 | plugin_install_cli (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 79 | 0 | 7/- | 0 | 2 |
 | 19 | worker (leaf) | 795 | 0 | 8/1 | 439 | 6 |
 | 20 | autonomy_cli (leaf) | 362 | 0 | 12/- | 0 | 5 |
 | 21 | doctor_cli (leaf) | 136 | 0 | 22/1 | 0 | 22 |
 | 22 | restart (leaf) | 49 | 0 | 24/- | 3688 | 1 |
 | 23 | paths_verify | 38 | 1 | 0/- | 0 | 2 |
-| 24 | context_audit | 952 | 1 | 1/- | 0 | 2 |
+| 24 | context_audit (ported to Rust and deleted 2026-10, gone on next regen) | 952 | 1 | 1/- | 0 | 2 |
 | 25 | hook_config | 104 | 1 | 1/- | 0 | 1 |
 | 26 | lint_shellout_drift | 499 | 1 | 1/- | 0 | 1 |
 | 27 | worktree_gate (ported to Rust and deleted 2026-10, gone on next regen) | 62 | 1 | 1/- | 0 | 2 |
@@ -180,17 +180,16 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 31 | state_fence | 138 | 1 | 2/- | 0 | 1 |
 | 32 | delivery | 1788 | 1 | 2/- | 30 | 5 |
 | 33 | yard | 125 | 1 | 2/- | 379 | 1 |
-| 34 | doctor_reclaim | 29 | 1 | 3/- | 0 | 3 |
+| 34 | doctor_reclaim (pure transport; ported to Rust and deleted 2026-10, gone on next regen) | 29 | 1 | 3/- | 0 | 3 |
 | 35 | lint_command_ratchet | 739 | 1 | 3/- | 0 | 4 |
-| 36 | scratch_cli | 71 | 1 | 3/- | 0 | 3 |
+| 36 | scratch_cli (pure transport; ported to Rust and deleted 2026-10, gone on next regen) | 71 | 1 | 3/- | 0 | 3 |
 | 37 | test_runner | 110 | 1 | 3/- | 0 | 2 |
 | 38 | lint_seam_crossings | 419 | 1 | 4/- | 0 | 1 |
 | 39 | review_level (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 209 | 1 | 4/- | 0 | 4 |
-| 40 | codemap_cli | 1545 | 1 | 5/- | 0 | 3 |
 | 41 | post_merge_route | 740 | 1 | 5/- | 0 | 10 |
-| 42 | doctor_bash_census | 33 | 1 | 6/- | 0 | 3 |
+| 42 | doctor_bash_census (pure transport; ported to Rust and deleted 2026-10, gone on next regen) | 33 | 1 | 6/- | 0 | 3 |
 | 43 | skill_diff | 1360 | 1 | 5/1 | 0 | 6 |
-| 44 | context_probe | 85 | 1 | 7/- | 0 | 3 |
+| 44 | context_probe (ported to Rust and deleted 2026-10, gone on next regen) | 85 | 1 | 7/- | 0 | 3 |
 | 45 | annotate | 56 | 1 | 10/- | 28 | 2 |
 | 46 | status_fanout | 900 | 1 | 11/- | 0 | 9 |
 | 47 | done | 967 | 1 | 11/- | 2607 | 4 |
@@ -219,7 +218,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 70 | doctor_graph | 86 | 2 | 14/1 | 0 | 4 |
 | 71 | resume | 1075 | 2 | 15/- | 228 | 8 |
 | 72 | law | 189 | 2 | 22/- | 2654 | 5 |
-| 73 | doctor_lanes | 542 | 2 | 28/- | 0 | 5 |
+| 73 | doctor_lanes (ported to Rust and deleted 2026-10, gone on next regen) | 542 | 2 | 28/- | 0 | 5 |
 | 74 | observer | 2574 | 2 | 34/1 | 72 | 12 |
 | 75 | lint_cli | 2165 | 2 | 42/- | 0 | 13 |
 | 76 | update | 1662 | 2 | 62/- | 7478 | 8 |
@@ -234,8 +233,8 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 85 | active_backlog | 108 | 3 | 11/- | 0 | 5 |
 | 86 | target | 2216 | 3 | 15/- | 9616 | 11 |
 | 87 | route_slot_client | 30 | 3 | 17/- | 0 | 4 |
-| 88 | footprint | 480 | 3 | 23/- | 8 | 3 |
-| 89 | doctor_footprint | 1194 | 3 | 68/- | 0 | 8 |
+| 88 | footprint (ported to Rust and deleted 2026-10, gone on next regen) | 480 | 3 | 23/- | 8 | 3 |
+| 89 | doctor_footprint (ported to Rust and deleted 2026-10, gone on next regen) | 1194 | 3 | 68/- | 0 | 8 |
 | 90 | _lazy_group | 502 | 4 | 2/- | 0 | 7 |
 | 91 | user | 62 | 4 | 3/- | 588 | 5 |
 | 92 | loops | 202 | 4 | 4/- | 42 | 8 |

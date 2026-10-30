@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 
+use crate::pack_profile::{MuxPaths, Profile, HOOK_FILES};
 use crate::paths::{dirs_home, AgentsHome};
 
 const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
@@ -111,7 +112,7 @@ fn repo_root(dir: &Path) -> Result<PathBuf, String> {
 /// Sessions started before the restage hold the old hook config for their
 /// whole life; the hook-tombstones lint protects one merge range, but a stage
 /// stale across many merges can still reference a script the new tree deleted.
-fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
+fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path, mux: Option<&MuxPaths>) -> usize {
     let re = match Regex::new(HOOK_REF_PATTERN) {
         Ok(r) => r,
         Err(_) => return 0,
@@ -128,7 +129,8 @@ fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
         };
         for rel in re.captures_iter(&text).map(|c| c[1].to_string()) {
             let target = new_stage.join(&rel);
-            if target.exists() {
+            // A script reclassified as mux stays out of a pack, old stage or not.
+            if target.exists() || mux.is_some_and(|m| m.covers(&rel)) {
                 continue;
             }
             let src = old_stage.join(&rel);
@@ -278,7 +280,21 @@ fn require_fno_source(source_root: &Path) -> Result<(), String> {
 /// half-built tree; running bash hooks keep their open inode and finish on
 /// old bytes. Returns the stage path and the file count copied.
 fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usize), String> {
+    build_stage_as(source_root, stage_parent, Profile::Full)
+}
+
+/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// and holds no mux path and no hook entry that runs one.
+fn build_stage_as(
+    source_root: &Path,
+    stage_parent: &Path,
+    profile: Profile,
+) -> Result<(PathBuf, usize), String> {
     require_fno_source(source_root)?;
+    let mux = match profile {
+        Profile::Full => None,
+        Profile::Pack => Some(MuxPaths::load(source_root)?),
+    };
     let listed = run_checked(
         &[
             "git".to_string(),
@@ -289,10 +305,11 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
         ],
         Some(source_root),
     )?;
-    let dest = stage_parent.join(STAGE_DIR);
+    let dir = profile.stage_dir();
+    let dest = stage_parent.join(dir);
     let pid = std::process::id();
-    let new_dir = stage_parent.join(format!(".fno.new-{pid}"));
-    let old_dir = stage_parent.join(format!(".fno.old-{pid}"));
+    let new_dir = stage_parent.join(format!(".{dir}.new-{pid}"));
+    let old_dir = stage_parent.join(format!(".{dir}.old-{pid}"));
     let _ = std::fs::remove_dir_all(&new_dir);
     let _ = std::fs::remove_dir_all(&old_dir);
     std::fs::create_dir_all(&new_dir).map_err(|e| format!("stage: {e}"))?;
@@ -300,6 +317,9 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     let copy_all = || -> Result<usize, String> {
         let mut copied = 0usize;
         for rel in listed.split('\0').filter(|s| !s.is_empty()) {
+            if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+                continue;
+            }
             let src = source_root.join(rel);
             let meta = match std::fs::symlink_metadata(&src) {
                 Ok(m) => m,
@@ -315,6 +335,18 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
             std::fs::copy(&src, &target).map_err(|e| format!("stage: {rel}: {e}"))?;
             copied += 1;
         }
+        if let Some(m) = &mux {
+            for rel in HOOK_FILES {
+                let path = new_dir.join(rel);
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let filtered = m
+                    .filter_hooks(&text)
+                    .map_err(|e| format!("stage: {rel}: {e}"))?;
+                std::fs::write(&path, filtered).map_err(|e| format!("stage: {rel}: {e}"))?;
+            }
+        }
         Ok(copied)
     };
     let copied = match copy_all() {
@@ -328,7 +360,11 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
         &["git".to_string(), "rev-parse".into(), "HEAD".into()],
         Some(source_root),
     ) {
-        let stamp = json!({"source_head": head, "built_at": chrono::Utc::now().to_rfc3339()});
+        let stamp = json!({
+            "source_head": head,
+            "built_at": chrono::Utc::now().to_rfc3339(),
+            "profile": if profile == Profile::Pack { "pack" } else { "full" },
+        });
         let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
     }
 
@@ -344,7 +380,7 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     }
 
     if dest.exists() {
-        carry_referenced_scripts(&dest, &new_dir);
+        carry_referenced_scripts(&dest, &new_dir, mux.as_ref());
         // ponytail: two concurrent manual installs can race these renames;
         // the update:fno claim serializes the automated path.
         std::fs::rename(&dest, &old_dir)
@@ -473,6 +509,16 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         Ok(l) => l,
         Err(e) => return unknown_check(stage, source_dir, e),
     };
+    // A pack stage leaves the mux paths out and rewrites the hook files on
+    // purpose, so neither is drift.
+    let pack = std::fs::read_to_string(stage.join(STAGE_STAMP))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|v| v.get("profile").and_then(Value::as_str) == Some("pack"));
+    let mux = match pack.then(|| MuxPaths::load(&root)).transpose() {
+        Ok(m) => m,
+        Err(e) => return unknown_check(stage, source_dir, e),
+    };
 
     let mut tracked: Vec<(String, String)> = Vec::new(); // (path, blob sha)
     for entry in listing.split('\0').filter(|s| !s.is_empty()) {
@@ -496,9 +542,14 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
     let mut to_hash: Vec<(&str, &str)> = Vec::new(); // (stage path, HEAD sha)
     let mut manifests = Vec::new();
     for (path, sha) in &tracked {
-        if [MARKETPLACE_REL, CODEX_MARKETPLACE_REL].contains(&path.as_str()) {
+        if mux.as_ref().is_some_and(|m| m.covers(path)) {
+            continue;
+        }
+        if [MARKETPLACE_REL, CODEX_MARKETPLACE_REL].contains(&path.as_str())
+            || (mux.is_some() && HOOK_FILES.contains(&path.as_str()))
+        {
             // The stage serves a rewritten copy of this file
-            // (staged_marketplace_bytes), so no HEAD sha can match it.
+            // (staged_marketplace_bytes, filter_hooks), so no HEAD sha can match it.
             manifests.push(path.as_str());
             continue;
         }
@@ -545,14 +596,23 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         if !stage_manifest.is_file() {
             missing.push(marketplace.to_string());
         } else {
-            let verdict = std::fs::read_to_string(root.join(marketplace))
-                .map_err(|e| format!("{marketplace}: {e}"))
-                .and_then(|t| staged_marketplace_bytes(&t, marketplace))
-                .and_then(|expected| {
-                    std::fs::read_to_string(&stage_manifest)
-                        .map(|actual| actual == expected)
-                        .map_err(|e| format!("{marketplace}: {e}"))
-                });
+            // A pack hook file is filtered from its HEAD blob, so a dirty
+            // working-tree hook file reads stale here as it does on a full stage.
+            let verdict = match &mux {
+                Some(m) if HOOK_FILES.contains(&marketplace) => run_checked(
+                    &["git".into(), "show".into(), format!("HEAD:{marketplace}")],
+                    Some(&root),
+                )
+                .and_then(|t| m.filter_hooks(&t)),
+                _ => std::fs::read_to_string(root.join(marketplace))
+                    .map_err(|e| format!("{marketplace}: {e}"))
+                    .and_then(|t| staged_marketplace_bytes(&t, marketplace)),
+            }
+            .and_then(|expected| {
+                std::fs::read_to_string(&stage_manifest)
+                    .map(|actual| actual == expected)
+                    .map_err(|e| format!("{marketplace}: {e}"))
+            });
             match verdict {
                 Err(e) => return unknown_check(stage, source_dir, e),
                 Ok(false) => differing.push(marketplace.to_string()),
@@ -607,7 +667,11 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         differing_count: differing.len(),
         missing_count: missing.len(),
         sample: combined.into_iter().take(10).collect(),
-        remedy: format!("fno config plugin install claude --source {source_root}"),
+        remedy: if pack {
+            format!("fno-agents plugin-install --restage --source {source_root}")
+        } else {
+            format!("fno config plugin install claude --source {source_root}")
+        },
         detail: None,
         stage_head,
         built_at: stamp_field("built_at"),
@@ -770,6 +834,9 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
     ] {
         push_root(&mut roots, &mut seen, path, "orphan", false);
     }
+    // footnote loads its plugin folder in place, so the link is a live root.
+    let footnote = home.join(".footnote/plugins").join(PLUGIN_LINK_NAME);
+    push_root(&mut roots, &mut seen, footnote, "footnote", true);
 
     (roots, detail)
 }
@@ -952,10 +1019,14 @@ enum RestageOutcome {
 
 /// Rebuild an EXISTING stage from `source_dir`. Never installs, exports env,
 /// or reclaims: those belong to install, not deploy. A machine that never set
-/// up the directory marketplace has no stage and gets a no-op.
+/// up the directory marketplace has no stage and gets a no-op. Each profile
+/// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let stage = stage_parent.join("fno");
-    if !stage.exists() {
+    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
+        .into_iter()
+        .filter(|p| stage_parent.join(p.stage_dir()).exists())
+        .collect();
+    if present.is_empty() {
         return Ok(RestageOutcome::Absent);
     }
     let root = repo_root(source_dir)?;
@@ -967,7 +1038,10 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         ],
         Some(&root),
     )?;
-    let (_, files) = build_stage(&root, &stage_parent)?;
+    let mut files = 0;
+    for profile in present {
+        files += build_stage_as(&root, stage_parent, profile)?.1;
+    }
     Ok(RestageOutcome::Restaged {
         files,
         root,
@@ -1418,6 +1492,8 @@ struct PluginInstallArgs {
     dev: bool,
     /// Converge codex onto the release channel (setup's wiring).
     release: bool,
+    /// Install the pack profile: no mux skills, no mux hooks.
+    pack: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1446,6 +1522,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         dry_run: false,
         dev: false,
         release: false,
+        pack: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1494,6 +1571,10 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
             }
             "--release" => {
                 parsed.release = true;
+                i += 1;
+            }
+            "--pack" => {
+                parsed.pack = true;
                 i += 1;
             }
             "--json" | "-J" => {
@@ -1564,6 +1645,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         dry_run,
         dev,
         release,
+        pack,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1644,6 +1726,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             }
         }
         Some(harness) => {
+            if pack && (matches!(harness, "opencode" | "pi") || release || status) {
+                eprintln!(
+                    "plugin install: --pack filters the staged tree; the opencode and pi \
+                     adapters and the codex --release/--status forms have no pack profile"
+                );
+                return 2;
+            }
             if harness == "codex" && status {
                 return crate::codex_converge::run_status();
             }
@@ -1676,7 +1765,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 return 3;
             }
             let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
-            let outcome = install_harness(harness, force, &source_dir);
+            let profile = if pack { Profile::Pack } else { Profile::Full };
+            let outcome = install_harness(harness, force, &source_dir, profile);
             match outcome {
                 Ok(detail) => {
                     println!("plugin install {harness}: {detail}");
@@ -1704,7 +1794,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         }
         None => {
             eprintln!(
-                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok> [--force] [--dev] [--source <dir>]"
+                "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote> [--force] [--dev] [--pack] [--source <dir>]"
             );
             eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
@@ -1897,7 +1987,8 @@ fn run_opencode_arm(
             }
             let home = AgentsHome::from_env();
             let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
-            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(STAGE_DIR));
+            let full = Profile::Full.stage_dir();
+            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(full));
             if receipt.status == "partial" {
                 3
             } else {
@@ -2012,18 +2103,26 @@ fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
     if status {
         let mut installed = dest.is_file();
         if installed {
-            if let Some(src) = extension_src {
-                installed = files_byte_equal(Path::new(src), &dest).unwrap_or(false);
+            if let Some(src) = extension_src
+                .map(PathBuf::from)
+                .or_else(default_pi_extension_src)
+            {
+                installed = files_byte_equal(&src, &dest).unwrap_or(false);
             }
         }
         print_pi_receipt(installed, &dest, agent_dir_source, &skills, json);
         return 0;
     }
-    let Some(src) = extension_src else {
-        eprintln!("plugin install pi: --extension-src <path> is required (or pass --status)");
+    let Some(src) = extension_src
+        .map(PathBuf::from)
+        .or_else(default_pi_extension_src)
+    else {
+        eprintln!(
+            "plugin install pi: no plugin tree carries the pi extension; pass --extension-src <path> (or --status)"
+        );
         return 2;
     };
-    let src_path = Path::new(src);
+    let src_path = src.as_path();
     if !src_path.is_file() {
         eprintln!(
             "plugin install pi: extension source {} is not a file",
@@ -2214,32 +2313,38 @@ fn zcode_install_config(config_path: &Path, stage: &Path) -> Result<String, Stri
     ))
 }
 
-/// The stage dir name under plugin-stage; build_stage and the pointer prime
-/// must agree on it.
-const STAGE_DIR: &str = "fno";
-
 /// Written into the stage at build: the source HEAD it was built from and
 /// when, so the check can say how far behind a stale stage is. HEAD never
 /// tracks it, and the check ignores files HEAD lacks.
 const STAGE_STAMP: &str = ".fno-stage.json";
 
-fn install_harness(harness: &str, force: bool, source_dir: &Path) -> Result<String, String> {
+fn install_harness(
+    harness: &str,
+    force: bool,
+    source_dir: &Path,
+    profile: Profile,
+) -> Result<String, String> {
     let root = repo_root(source_dir)?;
     let parent = state_root().join("plugin-stage");
-    let (stage, _) = build_stage(&root, &parent)?;
+    let (stage, _) = build_stage_as(&root, &parent, profile)?;
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
         "agy" => install_agy(&stage, force)?,
         "codex" => crate::codex_converge::run_dev(&stage, force)?,
         "grok" => install_grok(&stage, force)?,
         "zcode" => install_zcode(&stage, force)?,
+        "footnote" => install_footnote(&stage)?,
         other => {
             return Err(format!(
-                "unknown harness '{other}'; want claude, codex, opencode, agy, grok or zcode"
+                "unknown harness '{other}'; want claude, codex, opencode, pi, agy, grok, zcode or footnote"
             ))
         }
     };
-    prime_plugin_root_pointer(&stage);
+    // A pack install never moves the machine pointer off a full stage: the
+    // env-less mux readers (the lead skill's fallback) resolve through it.
+    if profile == Profile::Full || !parent.join(Profile::Full.stage_dir()).exists() {
+        prime_plugin_root_pointer(&stage);
+    }
     Ok(format!("{detail}; local checkout {}", root.display()))
 }
 
@@ -2441,6 +2546,20 @@ fn grok_receipt_for(reachability: GrokReachability) -> String {
     }
 }
 
+/// The pi extension shipped in the plugin tree: the session's plugin root,
+/// then the filtered stage. `None` when neither carries it.
+pub(crate) fn default_pi_extension_src() -> Option<PathBuf> {
+    const REL: &str = "cli/src/fno/setup/assets/pi/footnote.ts";
+    let stage = state_root()
+        .join("plugin-stage")
+        .join(Profile::Full.stage_dir());
+    crate::provider::plugin_root()
+        .into_iter()
+        .chain(std::iter::once(stage))
+        .map(|root| root.join(REL))
+        .find(|path| path.is_file())
+}
+
 /// Whether footnote's loop artifacts reach `harness` on THIS machine: the
 /// machine fact behind the capability row. `None` names a harness with no
 /// fno-installed loop gate (a native row whose loop closes through the
@@ -2480,10 +2599,13 @@ pub(crate) fn loop_install_probe(
             let dest = crate::pi::pi_agent_dir()
                 .join("extensions")
                 .join("footnote.ts");
+            let src = extension_src
+                .map(Path::to_path_buf)
+                .or_else(default_pi_extension_src);
             let mut installed = dest.is_file();
             if installed {
-                if let Some(src) = extension_src {
-                    installed = files_byte_equal(Path::new(src), &dest).unwrap_or(false);
+                if let Some(src) = src {
+                    installed = files_byte_equal(&src, &dest).unwrap_or(false);
                 }
             }
             Some(if installed {
@@ -2660,7 +2782,7 @@ fn parse_grok_inspect(text: &str, grok_home: &Path) -> GrokReachability {
 /// The plugin entry name the install links under `<grok_home>/plugins`; the
 /// name constant also keeps the link-name join out of the seam linter's
 /// porcelain-path scan, which ratchets on the literal `join("fno")`.
-const GROK_PLUGIN_LINK_NAME: &str = "fno";
+const PLUGIN_LINK_NAME: &str = "fno";
 
 /// Link the stage into `<grok_home>/plugins/fno`, then a second status
 /// read: the `linked` receipt prints only when that read is reachable. Why
@@ -2697,7 +2819,7 @@ fn trusted_path_is_copy(read: &GrokReachability, home: &Path) -> bool {
 }
 
 fn migrate_grok_to_link(home: &Path, stage: &Path) -> Result<String, String> {
-    let receipt = link_grok_plugin(home, stage)?;
+    let receipt = link_plugin(home, stage, "grok")?;
     match grok_reachability() {
         GrokReachability::Reachable { path } => Ok(format!("{receipt}, reachable: {path}")),
         GrokReachability::Absent => {
@@ -2712,15 +2834,16 @@ fn migrate_grok_to_link(home: &Path, stage: &Path) -> Result<String, String> {
     }
 }
 
-/// Link `<grok_home>/plugins/fno` to the stage. A real file or directory at
-/// the link path is refused, never deleted. The swap builds the new link as
+/// Link `<home>/plugins/fno` to the stage, for a harness that loads a plugin
+/// folder in place (grok, footnote). A real file or directory at the link
+/// path is refused, never deleted. The swap builds the new link as
 /// `plugins/.fno.new-<pid>` and renames it over the link path, so a reader
 /// never sees a half-made link.
-fn link_grok_plugin(grok_home: &Path, stage: &Path) -> Result<String, String> {
-    let plugins = grok_home.join("plugins");
+fn link_plugin(home: &Path, stage: &Path, harness: &str) -> Result<String, String> {
+    let plugins = home.join("plugins");
     std::fs::create_dir_all(&plugins)
         .map_err(|e| format!("cannot create {}: {e}", plugins.display()))?;
-    let link = plugins.join(GROK_PLUGIN_LINK_NAME);
+    let link = plugins.join(PLUGIN_LINK_NAME);
     let link_str = link.display().to_string();
     let stage_str = stage.display().to_string();
     match std::fs::read_link(&link) {
@@ -2733,7 +2856,7 @@ fn link_grok_plugin(grok_home: &Path, stage: &Path) -> Result<String, String> {
             ))
         }
         Err(_) if link.symlink_metadata().is_ok() => Err(format!(
-            "refused: {link_str} is not a symlink; move it aside, then rerun fno config plugin install grok"
+            "refused: {link_str} is not a symlink; move it aside, then rerun fno config plugin install {harness}"
         )),
         Err(_) => {
             swap_grok_symlink(&plugins, &link, stage)?;
@@ -2756,6 +2879,21 @@ fn lexically_normalized(path: &str) -> PathBuf {
         }
     }
     out
+}
+
+/// footnote loads every folder under `~/.footnote/plugins` with its hooks,
+/// so the install is the grok link with a readback in place of a status read.
+fn install_footnote(stage: &Path) -> Result<String, String> {
+    let home = dirs_home().join(".footnote");
+    let receipt = link_plugin(&home, stage, "footnote")?;
+    let link = home.join("plugins").join(PLUGIN_LINK_NAME);
+    match std::fs::read_link(&link) {
+        Ok(target) if target == stage => Ok(receipt),
+        read => Err(format!(
+            "{receipt}, but {} reads back {read:?}",
+            link.display()
+        )),
+    }
 }
 
 fn swap_grok_symlink(plugins: &Path, link: &Path, stage: &Path) -> Result<(), String> {
@@ -2891,6 +3029,56 @@ mod tests {
         fs::create_dir_all(&stage_parent).unwrap();
         let (stage, _) = build_stage(&source, &stage_parent).unwrap();
         (source, stage)
+    }
+
+    /// AC3/AC4: a pack stage drops mux paths and mux hook entries, checks
+    /// fresh against its own source, and a manifest naming a missing path
+    /// refuses before any temp dir exists.
+    #[test]
+    fn pack_stage_drops_mux_paths_and_checks_fresh() {
+        let base = std::env::temp_dir().join(format!("pi-pack-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        new_repo(&source);
+        fs::create_dir_all(source.join("skills/mail")).unwrap();
+        fs::write(source.join("skills/mail/SKILL.md"), "mail\n").unwrap();
+        fs::write(source.join("hooks/mail.sh"), "mail\n").unwrap();
+        fs::write(
+            source.join("hooks/hooks.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"command":"${R}/hooks/mail.sh"},{"command":"${R}/hooks/live.sh"}]}]}}"#,
+        )
+        .unwrap();
+        let manifest = r#"{"mux":["hooks/mail.sh","skills/mail"]}"#;
+        fs::write(source.join(crate::pack_profile::MANIFEST), manifest).unwrap();
+        git_in(&source, &["add", "-A"]);
+        git_in(&source, &["commit", "-q", "-m", "c2"]);
+        let parent = base.join("stage-parent");
+        fs::create_dir_all(&parent).unwrap();
+
+        let (stage, _) = build_stage_as(&source, &parent, Profile::Pack).unwrap();
+        assert!(stage.ends_with("fno-pack"));
+        assert!(!stage.join("skills/mail").exists());
+        assert!(!stage.join("hooks/mail.sh").exists());
+        let hooks = fs::read_to_string(stage.join("hooks/hooks.json")).unwrap();
+        assert!(
+            !hooks.contains("mail.sh") && hooks.contains("live.sh"),
+            "{hooks}"
+        );
+        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
+
+        fs::write(
+            source.join(crate::pack_profile::MANIFEST),
+            r#"{"mux":["skills/gone"]}"#,
+        )
+        .unwrap();
+        let err = build_stage_as(&source, &parent, Profile::Pack).unwrap_err();
+        assert!(err.contains("skills/gone"), "{err}");
+        let temp = fs::read_dir(&parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().starts_with(".fno-pack."));
+        assert!(!temp, "a refused pack build left a temp dir");
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// AC1-HP: the swap is atomic (no temp dirs left), new bytes land, and a
@@ -3320,7 +3508,7 @@ mod tests {
     /// AC4-HP/AC5-EDGE/AC6-ERR: the link installs, relinks, and refuses a
     /// real directory without deleting it.
     #[test]
-    fn grok_link_installs_relinks_and_refuses_a_real_dir() {
+    fn plugin_link_installs_relinks_and_refuses_a_real_dir() {
         let base = std::env::temp_dir().join(format!("grok-link-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let gh = base.join("grok-home");
@@ -3329,14 +3517,14 @@ mod tests {
         fs::create_dir_all(&stage).unwrap();
         fs::create_dir_all(&other).unwrap();
 
-        let receipt = link_grok_plugin(&gh, &stage).unwrap();
+        let receipt = link_plugin(&gh, &stage, "footnote").unwrap();
         assert!(receipt.starts_with("linked "), "{receipt}");
         assert_eq!(fs::read_link(gh.join("plugins/fno")).unwrap(), stage);
 
-        let receipt = link_grok_plugin(&gh, &stage).unwrap();
+        let receipt = link_plugin(&gh, &stage, "footnote").unwrap();
         assert!(receipt.starts_with("already linked "), "{receipt}");
 
-        let receipt = link_grok_plugin(&gh, &other).unwrap();
+        let receipt = link_plugin(&gh, &other, "footnote").unwrap();
         assert!(receipt.starts_with("relinked "), "{receipt}");
         assert!(receipt.contains(" from "), "{receipt}");
         assert!(receipt.contains(&stage.display().to_string()), "{receipt}");
@@ -3347,8 +3535,9 @@ mod tests {
         fs::remove_file(&real).unwrap();
         fs::create_dir(&real).unwrap();
         fs::write(real.join("keep.txt"), "keep").unwrap();
-        let err = link_grok_plugin(&gh, &stage).unwrap_err();
+        let err = link_plugin(&gh, &stage, "footnote").unwrap_err();
         assert!(err.starts_with("refused: "), "{err}");
+        assert!(err.ends_with("plugin install footnote"), "{err}");
         assert!(
             real.join("keep.txt").exists(),
             "refused dir must be untouched"

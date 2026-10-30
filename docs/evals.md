@@ -31,6 +31,8 @@ grade:                      # >=1 mechanical check; a gradeless task is rejected
     pattern: "hello"
   - kind: file-exists       # a workdir-relative path must exist
     path: "out/report.md"
+  - kind: tool-budget       # the worker's claude transcript must hold at most N tool calls
+    max_tool_calls: 120     # a missing transcript (codex, opencode, or a lane account with its own CLAUDE_CONFIG_DIR) fails as unmeasured
 timeout_minutes: 20
 tags: [cli, greenfield]
 ```
@@ -150,7 +152,7 @@ Agents author throwaway scripts under `~/.claude/jobs/<job>/tmp/`. The scratch-s
 - **Only a missing remedy files.** A shape at three jobs does not always have an fno remedy. The census measured `file_patch` at 26 jobs and `git_wrap` at 17 with none. Each shape's remedy row says whether it can file. A report-only shape still emits observed rows and shows in the report. Before filing, the sweep runs the row's help probe. A match means the remedy shipped, so it prints `served:<shape>` and files nothing. A probe call that fails files with the table hint, so a broken probe never hides a missing remedy.
 - **One node per run.** `MAX_FILES_PER_SWEEP` is 1. A long list of new nodes is the failure the operator named. Five shapes crossing in one day file one node today. The next files tomorrow. The filing index is the graph. Every sweep node carries `origin_evidence` `scratch-shape:<shape>` and is minted with `--separate`, so text similarity never picks the node. When a scratch file is newer than its last write, a live keyed node folds (`--wave-of`, no new id). A same-day re-run adds nothing. A keyed node done inside the window suppresses. A keyed node done before the window refiles with `--caused-by`.
 - **State words on stdout.** One per line, never silent: `ok`, `insufficient: <reason>`, `filed:<id>`, `folded:<id>`, `suppressed:<id>`, `served:<shape>`, and `would-file:<shape>` under `--dry-run`. The sweep classifies shipped fixture specimens before touching the real jobs dir. A classifier that finds nothing there prints `insufficient: control failed` and emits nothing. A broken classifier can never read as a quiet machine.
-- **Command hint.** Details name the census rule, the file and job counts, and the three newest specimens. The hint names the missing command or flag. A probe on a hidden leaf reads `fno help <group> --all`, because that surface lists hidden leaves and `fno <group> --help` does not.
+- **Command hint.** Details name the census rule, the file and job counts, and the three newest specimens. The hint names the missing command or flag. A probe reads the `--help` of the group the missing leaf joins, because a retired root no longer answers.
 - **Reading it.** `fno doctor scratch report` renders the ranked table from the journal: shape, files, jobs, monitors, first and last seen, filed node. `--json` serves machines. The sweep runs as stage five of the daily eval-sweep ignition. It is bounded and logged to `.fno/logs/eval-sweep.log` like every other stage.
 
 ## Context-to-outcome trace

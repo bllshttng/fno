@@ -1,0 +1,78 @@
+# The names the fno front door answers: path, live|retired, replacement (- for
+# none), note. The front door refuses a root word no live row lists, and
+# fno doctor lint menu-caps counts the live rows. Rows below the root name what
+# a Rust classifier claims; the group's own dispatcher refuses the rest.
+agents	live	-	sessions, mail, roles and the loop that drives them
+backlog	live	-	the backlog graph
+config	live	-	configuration
+do	live	-	the delivery pipeline
+doctor	live	-	health checks, tests, lint, update
+inbox	live	-	what waits on a human
+mux	live	-	the terminal multiplexer
+restart	live	-	restart the fleet daemon (d-da008537)
+uninstall	live	-	remove fno
+update	live	-	update fno (a sync_command leg)
+version	live	-	the installed versions
+whoami	live	-	this session's operating stack
+annotate	retired	backlog note	-
+approvals	retired	inbox approvals	-
+autonomy	retired	agents admit autonomy	-
+board-render	retired	backlog publish --local-snapshot	-
+bundle	retired	doctor bundle	-
+carveout	retired	backlog carveout	-
+claim	retired	agents claim	-
+codemap	retired	-	codegraph answers code-map questions now
+context	retired	whoami context	-
+cost	retired	whoami cost	-
+decide	retired	inbox decide	-
+decide list	retired	backlog decisions	-
+decide reindex	retired	backlog decide-reindex	-
+decide retract	retired	backlog decide-retract	-
+delivery	retired	do delivery	-
+done	retired	backlog done	-
+evals	retired	doctor evals	-
+event	retired	doctor event	-
+help	retired	--help	-
+law	retired	inbox law	-
+lead	retired	agents org	-
+lead board	retired	inbox board	-
+lint	retired	doctor lint	-
+loops	retired	agents loop control	-
+mail	retired	agents mail	-
+mcp	retired	agents mail admin mcp	-
+notify	retired	inbox notify	-
+observer	retired	doctor observer	-
+outstanding	retired	inbox outstanding	-
+paths	retired	config paths	-
+phase	retired	do phase	-
+plan	retired	do plan	-
+plugins	retired	config plugins	-
+pr	retired	do pr	-
+pr-watch	retired	do pr watch	-
+project	retired	config project	-
+research	retired	do research	-
+resume	retired	do resume	-
+retro	retired	backlog retro	-
+review	retired	do review	-
+roles	retired	agents org roles	-
+route	retired	config route	-
+scoreboard	retired	whoami scoreboard	-
+setup	retired	config setup	-
+skill-diff	retired	doctor skill-diff	-
+state	retired	do state	-
+status	retired	whoami status	-
+status-fanout	retired	doctor event fanout	-
+stub-manifest	retired	do pr stub-manifest	-
+target	retired	do target	-
+test	retired	doctor test	-
+think	retired	do think	-
+workspace	retired	agents workspace	-
+worktree	retired	agents workspace worktree	-
+yard	retired	agents audit yard	-
+inbox day	live	-	claimed by inbox_user::classify_inbox_day
+inbox decide	live	-	claimed by law_cli::classify_inbox_decide
+inbox decisions	live	-	claimed by law_cli::classify_inbox_decisions
+inbox law	live	-	claimed by law_cli::classify_inbox_law
+inbox notify	live	-	claimed by notify_dispatch::classify_inbox_notify
+inbox outstanding	live	-	claimed by inbox_user::classify_inbox_outstanding
+inbox peers	live	-	claimed by inbox_user::classify_inbox_peers

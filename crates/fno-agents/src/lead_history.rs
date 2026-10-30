@@ -1687,11 +1687,11 @@ mod verdict_tests {
 
     #[test]
     fn an_other_session_filed_close_reads_converging() {
-        // The delivery side (lead ruling, 2026-10-26): one in-window close on
-        // a row another session filed is progress, so the quiet-board stalled
-        // test cannot fire. The guard side - the lead's own filings never
-        // reaching a counter - lives in scope_split's tests; at this layer it
-        // is ac3's both-counters-zero reading.
+        // The delivery side: one in-window close on a row another session
+        // filed is progress, so the quiet-board stalled test cannot fire.
+        // scope_split counts every in-window close, whoever filed it, so at
+        // this layer this is ac3's both-counters-zero reading with one
+        // counter lifted.
         let mut r = readings();
         r.last_actionable = Some(0);
         r.inherited_undelivered = 5;

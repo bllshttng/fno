@@ -404,6 +404,16 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     // The node is a tap target where it is painted.
     let mut agents = lead_and_worker();
     agents[1].node = Some("x-4310".into());
+    // The node lives in another repo: the tap opens its stored URL.
+    agents[1].bindings = vec![crate::proto::SessionBinding {
+        node: "x-4310".into(),
+        pr: agents[1].pr,
+        pr_url: Some("https://github.com/acme/web/pull/42".into()),
+        pr_count: 1,
+        source: "spawn".into(),
+        state: "open".into(),
+        inferred: true,
+    }];
     let mut v = card_view(agents);
     v.term = (30, 140);
     v.sideline_width = 80;
@@ -428,9 +438,16 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
         .expect("PR painted") as u16
         + 1;
     assert!(
-        matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(url)) if url.ends_with("/pull/42")),
+        matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(url)) if url == "https://github.com/acme/web/pull/42"),
         "PR tap opens its own link: {line:?}"
     );
+    // No stored URL: the tap opens no PR, never a guessed home repo.
+    v.layout.agents[1].bindings[0].pr_url = None;
+    assert!(
+        !matches!(v.chrome_hit(row as u16, pr_col), Some(ChromeHit::OpenPr(_))),
+        "{line:?}"
+    );
+    v.layout.agents[1].bindings[0].pr_url = Some("https://github.com/acme/web/pull/42".into());
     let node_span =
         card_line::node_span(&v.layout.agents[1], v.sideline_paint_w() - 1).expect("node range");
     let pr_span =
@@ -616,7 +633,7 @@ fn hovered_card_paints_one_background_across_both_lines_including_gaps() {
     let cols = frame.cols as usize;
     let text_w = v.sideline_paint_w().saturating_sub(1);
     let offset = v.sideline_offset();
-    let (band_fg, band_bg, _) = crate::theme::band_style(&v.theme);
+    let (band_fg, band_bg, _) = crate::cursor::resting_band_style(&v.theme);
     let rects = v.worker_column_rects(text_w as u16);
     let in_col =
         |j: usize, c: usize| j >= rects[c].x as usize && j < (rects[c].x + rects[c].width) as usize;
@@ -822,7 +839,7 @@ fn a_named_theme_bands_on_its_surface_and_never_paints_a_signal_across_a_row() {
     let (agent_i, detail_i) = card_rows_for(&v, "w1");
     v.hover_row = Some(agent_i);
     let frame = v.compose();
-    let (band_fg, _, _) = crate::theme::band_style(&v.theme);
+    let (band_fg, _, _) = crate::cursor::resting_band_style(&v.theme);
     assert_eq!(band_fg, v.theme.stamp, "the band text is the neutral stamp");
     let cols = frame.cols as usize;
     let text_w = v.sideline_paint_w().saturating_sub(1);
@@ -1026,7 +1043,7 @@ fn band_pairs_hold_luminance_contrast_on_dark_and_light() {
     // against each lens theme's real palette; named themes paint fixed RGB
     // pairs, which the named-theme lens themes judge directly.
     for t in shipped_mux_themes() {
-        let (fg, bg, flags) = crate::theme::band_style(&t);
+        let (fg, bg, flags) = crate::cursor::resting_band_style(&t);
         assert_eq!(flags, 0, "no INVERSE and no DIM inside the band");
         assert!(fg != Color::Default, "band fg must be explicit");
         assert!(bg != Color::Default, "band bg must be explicit");
@@ -1214,6 +1231,27 @@ async fn a_long_press_on_each_card_line_opens_the_agents_menu() {
             "line {display_i}: no click action rode the long press"
         );
     }
+}
+
+#[tokio::test]
+async fn a_click_on_a_cards_star_toggles_its_pin() {
+    // The star sits on line 2, which arms the press hold, not a row drag:
+    // a short release there must still reach the pin.
+    let mut v = card_view(lead_and_worker());
+    let (_, detail_i) = card_rows_for(&v, "lead-a");
+    let row = (detail_i - v.sideline_offset() + 1) as u16;
+    let col = (0..v.panel_w()).find(|c| v.pin_star_at(row, *c).is_some());
+    let col = col.expect("line 2 carries a star cell");
+    let (mut buf, mut carry) = (Vec::<u8>::new(), Vec::<u8>::new());
+    let click = format!("\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m", c = col + 1, r = row + 1);
+    let mut scanner = Scanner::default();
+    crate::client::handle_stdin(&mut v, &mut scanner, &mut carry, click.as_bytes(), &mut buf)
+        .await
+        .unwrap();
+    assert!(v
+        .notice
+        .as_ref()
+        .is_some_and(|(n, _)| n == "pinning lead-a"));
 }
 
 #[tokio::test]

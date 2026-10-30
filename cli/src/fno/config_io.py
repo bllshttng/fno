@@ -1,12 +1,12 @@
-"""Pure config file-reader leaf, shared by ``fno.config`` and ``fno.graph``.
+"""Pure config file-reader leaf for the ``fno.config`` package's internals.
 
 This module exists to break the ``fno.config`` <-> ``fno.graph`` import cycle.
-``graph/_intake.py`` (and its siblings) needs the low-level config *readers* but
-not the ``fno.config`` god module; importing ``fno.config`` at top level closed a
+The config package needs the low-level config *readers* one hop away from its
+own god module; importing ``fno.config`` from a graph module at top level closed a
 load-time loop (config's ``id_prefix`` validator imports ``graph._constants``),
-so graph pushed the import into function bodies. Giving graph a dependency-free
-*leaf* to import instead removes the back-edge and lets both sides import at top
-level.
+so graph pushed the import into function bodies. The graph leftovers retired
+their config reads onto the binary door (2026-10), and the leaf now serves the
+config package and a few CLI readers (agents, setup).
 
 It MUST live outside the ``config/`` package: a module at ``config/_io.py`` would
 re-run ``config/__init__.py`` on import and reintroduce the half-init cycle. This
@@ -143,10 +143,16 @@ def _unwrap_config_dict(raw: dict[str, object]) -> dict[str, object]:
 def _global_settings_path() -> Path:
     """Resolve the per-user global settings.yaml path.
 
-    Returns ``Path(FNO_GLOBAL_SETTINGS_PATH)`` when that environment variable
-    is set to a non-empty value (use ``/dev/null`` to disable the global
-    candidate in test isolation), otherwise the default
-    ``~/.fno/settings.yaml``.
+    Returns ``Path($FNO_CONFIG)`` when that pin is set AND no explicit global
+    path is set: the pinned file IS the global config in a sandbox, so
+    global-scope reads (the work map, lane overrides, provider accounts)
+    resolve from the sandbox config and never from the machine's real global
+    (a sandbox with only ``FNO_CONFIG`` set must not inherit the machine's
+    ``store.share_backlog`` posture or its accounts). Otherwise returns
+    ``Path(FNO_GLOBAL_SETTINGS_PATH)`` when that environment variable is set
+    to a non-empty value (use ``/dev/null`` to disable the global candidate
+    in test isolation) - an explicit global relocation outranks the pin -
+    otherwise the default ``~/.fno/settings.yaml``.
 
     This hook exists so unit tests pinning ``repo_root=tmp_path`` cannot leak
     the developer's real ``~/.fno/settings.yaml`` into assertions that
@@ -158,6 +164,9 @@ def _global_settings_path() -> Path:
     point at the CWD must say so explicitly: ``FNO_GLOBAL_SETTINGS_PATH=.``.
     """
     env = os.environ.get("FNO_GLOBAL_SETTINGS_PATH")
+    if env:
+        return Path(env)
+    env = os.environ.get("FNO_CONFIG")
     if env:
         return Path(env)
     return Path.home() / ".fno" / "settings.yaml"

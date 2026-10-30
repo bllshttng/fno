@@ -544,15 +544,16 @@ fn run_codex(
     for (key, value) in route_env {
         cmd.env(key, value);
     }
-    cmd.stdin(Stdio::null()); // LD11
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped()); // merged below via thread
-
     if let Some(cwd) = popen_cwd {
         cmd.current_dir(cwd);
     }
 
     crate::claims::stamp_command_env(&mut cmd, agent_self, "codex", bound_session_id);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
+    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    cmd.stdin(Stdio::null()); // LD11
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped()); // merged below via thread
 
     // Put the child in its own process group so SIGTERM/SIGKILL propagate
     // to codex's subshells (sandbox tooling). Python uses start_new_session=True.
