@@ -415,6 +415,9 @@ event_types:
         review_round:
           type: integer
           description: "The declared round this verdict is, as a running max across the PR's life. A round is one reviewed HEAD, so two verdicts at one unchanged head are one round; CI failures, lint failures and rebases are not rounds. A row carrying this field bypasses the head collapse, because the declared number is already the round's identity. The round budget (config.review.max_rounds) counts these. OPTIONAL."
+        verify_fixes:
+          type: boolean
+          description: "The dispositions on THIS row came from a scoped --verify-fixes round: the attest emitter (skills/review/scripts/emit-attestation.sh) writes it from the same resolved invocation flags its empty-diff carve-out reads, so a fixed disposition rides the stamp terminal at the disposing row's own head (disposition_gate) even when the invocation join was lost - the review-hold claim is a 15-minute TTL lock and a review that outlives it attests UNJOINED. OPTIONAL: absent on every plain round and every pre-landed row; a reader treats absent as false. True only ever beside dispositions; a stamped row with none clears nothing."
         level:
           type: string
           description: "The invocation's review level (low | medium | high | xhigh | max | unset), mirrored from the sibling review_invocation started row's own `level` field at emit time. Read by publish_round (crates/fno-agents/src/publish_review.rs) to name the level in the GitHub review summary it posts. OPTIONAL: an attestation emitted before this field, or one whose started row resolved no level, carries neither key nor the literal 'unset' - a reader treats both the same way."
@@ -975,6 +978,21 @@ event_types:
         nonce:
           type: string
     consumers: [postmortem]
+
+  - name: transcript_record
+    retention: ephemeral
+    description: "One raw transcript line pushed over the daemon socket by a session's turn hook, for a session whose transcript file the host-side readers cannot read (a sandboxed worker). Stored through the judged event store; readers read stored records first and fall back to the file."
+    sources: [hook]
+    data:
+      required: [session_id, line]
+      properties:
+        session_id:
+          type: string
+          description: "The harness session id the record belongs to; projected to the store's session_id column, so readers query by session."
+        line:
+          type: string
+          description: "The raw transcript JSON line, byte-for-byte, exactly as the harness wrote it."
+    consumers: [operator]
 
   - name: polling_external_review
     description: "Emitted by /fno:ship pr check at every external-review check tick. Counted as the fifth thrash-fingerprint signal so polling iterations register as progress and the thrash detector does not force-cancel the loop while waiting for a slow external reviewer."
@@ -2786,6 +2804,28 @@ event_types:
 
   - name: quiet_worker_error
     description: "The daemon could not inspect or escalate one quiet unfinished worker."
+    sources: [daemon]
+    data:
+      required: [name, reason]
+      properties:
+        name: { type: string }
+        reason: { type: string }
+
+  - name: blueprint_stall
+    description: "The blueprint-stall lane observed codex stall evidence, nudged the worker once, or mailed the lead the reseat-on-claude remedy."
+    sources: [daemon]
+    data:
+      required: [session_id, node, kind, stage]
+      properties:
+        session_id: { type: string }
+        node: { type: string }
+        kind: { type: string, enum: [verify-loop, goal-paused] }
+        basis: { type: string }
+        stage: { type: string, enum: [observed, nudged, lead-notified] }
+        lead: { type: string }
+
+  - name: blueprint_stall_error
+    description: "The blueprint-stall lane could not inspect one registry row."
     sources: [daemon]
     data:
       required: [name, reason]

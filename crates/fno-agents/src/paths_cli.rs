@@ -563,6 +563,50 @@ fn state_dir_resolved(cwd: &Path) -> Result<PathBuf, String> {
     resolve_template(raw.trim_end_matches('/'), None)
 }
 
+/// Python `Path.resolve()`'s tail for a resolution that may stay relative:
+/// `resolve_loose` answers relative when nothing along the path exists, so
+/// anchor the remainder at `base` and collapse `.`/`..` lexically. An
+/// already-absolute answer passes through.
+pub(crate) fn anchor_at(base: &Path, p: PathBuf) -> PathBuf {
+    if p.is_absolute() {
+        return p;
+    }
+    let mut out = PathBuf::new();
+    for comp in base.join(&p).components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The declared half of Python `paths.state_dir()`: the `FNO_STATE_DIR`
+/// carrier, else the configured root through the template resolver. Always
+/// absolute -- a relative value anchors at `cwd`. `None` when neither
+/// declares a root, so the caller owns its default (and its guards).
+pub(crate) fn declared_state_dir(cwd: &Path) -> Option<PathBuf> {
+    if let Some(carrier) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
+        let p = crate::paths::resolve_loose(&expanduser(&carrier.to_string_lossy()));
+        return Some(anchor_at(cwd, p));
+    }
+    let raw = cfg_str(cwd, &["state_dir"])?;
+    let resolved = resolve_template(raw.trim_end_matches('/'), None).ok()?;
+    Some(anchor_at(cwd, resolved))
+}
+
+/// Python `paths.state_dir()`'s full answer: declared, else `~/.fno`;
+/// always absolute.
+pub(crate) fn state_dir_absolute(cwd: &Path) -> Result<PathBuf, String> {
+    match declared_state_dir(cwd) {
+        Some(p) => Ok(p),
+        None => Ok(anchor_at(cwd, resolve_template("~/.fno", None)?)),
+    }
+}
+
 /// Python `paths.global_events_json()`: the machine journal at the pinned
 /// state root. An absolute `state_dir` anchors it; a relative one falls back
 /// to the default state root. No `paths.ledger_json` override is consulted:
@@ -732,7 +776,7 @@ fn resolve_override(raw: &str) -> Result<String, String> {
 /// emits the shell-oriented forms (`$HOME/...`, template results), so expand
 /// env vars and a leading `~` before the absolute/relative decision, in
 /// Python's expandvars-then-expanduser order.
-fn resolve_override_path(raw: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_override_path(raw: &str) -> Result<PathBuf, String> {
     let resolved = resolve_override(raw)?;
     Ok(expanduser(&expandvars(&resolved)))
 }
@@ -752,13 +796,26 @@ fn state_subpath(override_: Option<String>, subdir: &str) -> Result<String, Stri
 /// resolved at codegen time so shell consumers never see raw template
 /// tokens. Byte-shape port of the live branch of Python `emit_paths_sh`.
 pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
-    // STATE_DIR: home-relative or absolute; a template value resolves
-    // through the full state-dir chain.
+    // STATE_DIR: the FNO_STATE_DIR carrier wins before config, as Python
+    // state_dir() reads it; a template value resolves through the same
+    // chain; a relative configured root anchors at the caller's cwd (never
+    // a bare relative STATE_DIR); the default stays $HOME-relative.
     let state_raw = cfg_str(cwd, &["state_dir"]).unwrap_or_else(|| "~/.fno/".to_string());
     glob_check("path field", &state_raw)?;
     let state_stripped = state_raw.trim_end_matches('/');
-    let state_tmpl = if has_template(state_stripped) {
-        state_dir_resolved(cwd)?.to_string_lossy().into_owned()
+    let sealed = std::env::var_os("FNO_STATE_DIR").is_some_and(|v| !v.is_empty());
+    let state_tmpl = if sealed {
+        state_dir_absolute(cwd)?.to_string_lossy().into_owned()
+    } else if has_template(state_stripped) {
+        // The template resolver's error propagates, as it did before the
+        // env carrier existed here.
+        anchor_at(cwd, state_dir_resolved(cwd)?)
+            .to_string_lossy()
+            .into_owned()
+    } else if is_project_relative(state_stripped) {
+        anchor_at(cwd, PathBuf::from(state_stripped))
+            .to_string_lossy()
+            .into_owned()
     } else {
         home_relative(state_stripped)
     };
@@ -780,7 +837,28 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
         if let Some(raw) = &override_ {
             glob_check("paths override", raw)?;
         }
-        let v = state_subpath(override_, sub)?;
+        let v = if name == "LEDGER_JSON_PATH" {
+            // Python paths.ledger_json: the seal wins before any override,
+            // a relative override anchors under ~/.fno, and with no
+            // override a RELATIVE state root pins there too -- the ledger
+            // is cross-project and never lands inside a checkout.
+            match override_.as_deref().filter(|_| !sealed) {
+                Some(raw) => {
+                    let v = resolve_override(raw)?;
+                    if v.starts_with('$') || v.starts_with('/') {
+                        v
+                    } else {
+                        format!("$HOME/.fno/{}", v)
+                    }
+                }
+                None if !sealed && is_project_relative(state_stripped) => {
+                    "$HOME/.fno/ledger.json".to_string()
+                }
+                None => "$STATE_DIR/ledger.json".to_string(),
+            }
+        } else {
+            state_subpath(override_, sub)?
+        };
         lines.push(format!("export {name}={}", bash_quote(&v)));
     }
     // No config override: latches_dir() tracks state_dir by design.

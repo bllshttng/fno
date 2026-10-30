@@ -11,7 +11,7 @@ const NAV_OVERLAY_W: usize = 54;
 
 /// Build the navigator overlay lines: a top `find › <query>  [chip]`
 /// line, then one line per FILTERED row with a leading state glyph and the
-/// cursor row marked `▸`. A row that matched an identity token invisible in
+/// cursor row left to the caller's fill. A row that matched an identity token invisible in
 /// its label appends that token as a `·<token>` suffix, so a hit
 /// always shows WHY it hit - a row that appears arbitrary reads as a bug. An
 /// empty result renders a single `no matches` line (the key handler BELs).
@@ -35,8 +35,7 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
         return lines;
     }
     let q = nav.query.to_lowercase();
-    for (i, r) in rows.iter().enumerate() {
-        let marker = if i == nav.cursor { '▸' } else { ' ' };
+    for r in rows.iter() {
         // The reason token: a match-key token that contains the query while
         // the label does not. A query that hits the visible label appends
         // nothing (AC4-UI: the row renders exactly as before).
@@ -54,7 +53,7 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
             }
         };
         lines.push(pad_to(
-            &format!(" {marker} {} {}", nav_glyph(r.state), label),
+            &format!("   {} {}", nav_glyph(r.state), label),
             NAV_OVERLAY_W,
         ));
     }
@@ -237,6 +236,62 @@ pub(crate) fn peek_overlay_lines(
 }
 
 impl View {
+    /// Paint the yard: the crowd, and the picked citizen's spotlight. The
+    /// caption names that citizen, so it is the yard's cursor row.
+    pub(super) fn draw_yard(&self, yv: &YardSel, cells: &mut [Cell], rows: usize, cols: usize) {
+        let (origin, dims) = self.overlay_viewport();
+        let crowd = self.yard_crowd();
+        let sel = yv.sel.min(crowd.len().saturating_sub(1));
+        let identity = crowd
+            .get(sel)
+            .and_then(|(name, _, _)| self.yard_identity(name));
+        let frame = (yv.opened_at.elapsed().as_millis() / YARD_FRAME_MS)
+            % crate::sprites::FRAME_COUNT as u128;
+        let (lines, cursor) = crate::yard_overlay::overlay_lines_cursor(
+            &crowd,
+            sel,
+            identity,
+            frame as usize,
+            self.yard_footer(),
+        );
+        let chrome = chrome::Chrome::new("the yard", Anchor::Center).footer("n/N pick · q close");
+        draw_lines_overlay(
+            cells,
+            rows,
+            cols,
+            origin,
+            dims,
+            &chrome,
+            &lines,
+            &self.theme,
+            cursor,
+        );
+    }
+
+    /// Paint the connections modal. The modal reports the line its fill covers.
+    pub(super) fn draw_connections(
+        &self,
+        conn: &crate::connections_view::ConnectionsView,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+    ) {
+        let (origin, dims) = self.overlay_viewport();
+        let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
+        let (lines, cursor) = conn.render_cursor(&self.layout.agents, overlay_text_cols(dims.1));
+        draw_lines_overlay(
+            cells,
+            rows,
+            cols,
+            origin,
+            dims,
+            &chrome,
+            &lines,
+            &self.theme,
+            cursor,
+        );
+    }
+
     /// The navigator's framed block, from the live layout. One layout feeds
     /// the painter and the row menu's anchor, so the two cannot disagree.
     pub(super) fn nav_layout(

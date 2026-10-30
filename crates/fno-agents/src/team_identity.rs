@@ -4,7 +4,7 @@
 //!
 //! Three team commands resolve a target row before the registry lock and used
 //! to find that row again by NAME alone under the lock:
-//! `promote_existing_session` stamps its target, `reclaim_team` finds its
+//! `role_grant::promote` stamps its target, `reclaim_team` finds its
 //! holder, and `lead done` vacates the caller's own row. Registry names are
 //! reclaimable (an exited row is dropped and a new one appended under the
 //! old name), so a name rebound inside that window was teamed, reclaimed

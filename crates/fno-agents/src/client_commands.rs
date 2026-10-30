@@ -2237,6 +2237,7 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
     let mut name: Option<String> = None;
     let mut select_session: Option<String> = None;
     let mut print_command = false;
+    let mut boot_failed = false;
     // Same expansion discipline as every sibling parser here: `--session=<id>`
     // splits before the match so no flag arm sees a fused value.
     let rest = expand_eq(rest);
@@ -2244,6 +2245,7 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--print-command" => print_command = true,
+            "--boot-failed" => boot_failed = true,
             "--session" => {
                 select_session = Some(match iter.next() {
                     Some(v) if !v.starts_with("--") => v.clone(),
@@ -2260,9 +2262,20 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
             }
         }
     }
+    if boot_failed {
+        if name.is_some() || select_session.is_some() || print_command {
+            eprintln!(
+                "fno agents session recover: --boot-failed reruns every failed and skipped \
+                 row of this boot's receipt and takes no other argument"
+            );
+            return 2;
+        }
+        return crate::boot_revival::rerun_failed(home);
+    }
     let Some(name) = name else {
         eprintln!(
-            "fno agents recover: an agent name is required. With two recorded ids, \
+            "fno agents recover: an agent name is required, or pass --boot-failed to rerun \
+             this boot's failed and skipped rows. With two recorded ids, \
              pass --session <id> to choose."
         );
         return 2;

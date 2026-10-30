@@ -306,13 +306,15 @@ pub(crate) fn run_one_shot(
     let argv = crate::spawn_gate::qos_wrap(cwd, argv.to_vec());
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
     cmd.current_dir(cwd);
     // The harness resolves its project from $PWD, not the process cwd.
     cmd.env("PWD", cwd);
     crate::claims::stamp_command_env(&mut cmd, Some(agent_self), harness, None);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
+    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
     // Own process group so SIGTERM/SIGKILL/SIGINT reach the child's subshells.
     unsafe {
         cmd.pre_exec(|| {

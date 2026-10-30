@@ -179,7 +179,7 @@ fn footer_segs(version: &str, dim: CtColor) -> Vec<Seg> {
     // stays near the art width. The longer tagline leaves less room, so the
     // floor keeps a full semver core ("0.10.0") on the tightest fit and only
     // the widest footers may wrap on a minimum terminal.
-    const FIXED: usize = "footnote".len() + 3 + "fno ".len() + 3 + "say f[no] to mostly done".len();
+    const FIXED: usize = "footnote".len() + 3 + "fno ".len() + 3 + "say F[no] to mostly done".len();
     let budget = (ART_CELLS as usize).saturating_sub(FIXED).max(6);
     let version: String = version.chars().take(budget).collect();
     // Words in the text color, connectors and version in overlay1.
@@ -189,7 +189,7 @@ fn footer_segs(version: &str, dim: CtColor) -> Vec<Seg> {
         ("fno ", Some(dim)),
         (&version, Some(dim)),
         (" · ", Some(dim)),
-        ("say f[no] to mostly done", None),
+        ("say F[no] to mostly done", None),
     ];
     let total: usize = parts.iter().map(|(s, _)| s.chars().count()).sum();
     let lead = (ART_CELLS as usize).saturating_sub(total) / 2;
@@ -518,7 +518,7 @@ mod tests {
         let footer: String = fin[8].iter().map(|s| s.text.as_str()).collect();
         assert!(footer.contains("footnote"));
         assert!(footer.contains("fno 9.9.9"));
-        assert!(footer.contains("say f[no] to mostly done"));
+        assert!(footer.contains("say F[no] to mostly done"));
         assert!(footer.trim_start().starts_with("footnote"));
     }
 

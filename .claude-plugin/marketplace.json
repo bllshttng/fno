@@ -5,7 +5,7 @@
     "url": "https://github.com/bllshttng/fno"
   },
   "metadata": {
-    "description": "Set a target and walk away. Say f[no] to mostly done.",
+    "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
     "version": "0.4.5"
   },
   "plugins": [
@@ -16,7 +16,7 @@
         "repo": "bllshttng/fno",
         "ref": "stable"
       },
-      "description": "Set a target and walk away. Say f[no] to mostly done.",
+      "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
       "category": "workflow",
       "tags": ["workflow", "tdd", "planning", "code-review", "autonomous", "target"]
     },

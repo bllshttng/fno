@@ -47,6 +47,17 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// `name` resolved to its canonical project name, or `None` when it is no
+/// configured project or the registry cannot be read.
+pub(crate) fn canonical(name: &str) -> Option<String> {
+    load_registry().and_then(|map| resolve_in(&map, name)).ok()
+}
+
+/// The whole `{alias: canonical}` table, or `None` when it cannot be read.
+pub(crate) fn alias_map() -> Option<Vec<(String, String)>> {
+    load_registry().ok()
+}
+
 /// `project map`: the whole alias registry as one JSON object, the machine
 /// answer the rivals scanner consumes (the deleted Python module's cache
 /// dump, carried by the binary that owns the registry now).

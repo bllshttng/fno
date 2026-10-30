@@ -37,20 +37,22 @@ fn ts_key(raw: &str) -> String {
 
 /// The delivery trend split so filing cannot inflate it (Python `scope_split`,
 /// lead/scope.py). A lead filing real nodes raises undelivered by working
-/// well, so the undelivered sides stay split inherited vs filed. Closes read
-/// the other way: a close by ANYONE is delivery evidence, except a node the
-/// lead's own session filed (`lead_session`, the manifest's teamed session) -
-/// the lead closing its own filings must not read as convergence, so that
-/// close stays invisible to both close counts (lead ruling, 2026-10-26). A row
-/// with no birth date reads as inherited: an old undated backlog is work the
-/// lead can be stalled on, never fresh filing that excuses it. A row with no
-/// filer reads as not-own-filed, so its close counts.
+/// well, so the undelivered sides stay split inherited vs filed. Every
+/// in-window close counts, whoever filed or closed the row. The close side
+/// once carried a guard that dropped a row the lead's own session filed, but
+/// the projected row never carried a filer field, so the guard never fired
+/// while its tests passed on hand-built rows - and a filer-based exclusion
+/// would read a delivering team as stalled anyway, which is what the guard
+/// was written to prevent. The graph records no closer (a reconcile is
+/// detached on purpose), so there is no closer key to honor and counting
+/// every close is the only honest read. A row with no birth date reads as
+/// inherited: an old undated backlog is work the lead can be stalled on,
+/// never fresh filing that excuses it.
 pub(crate) fn scope_split(
     ids: &std::collections::HashSet<String>,
     entries: &[Value],
     generation_start: &str,
     window_start: &str,
-    lead_session: Option<&str>,
 ) -> (u64, u64, u64, u64) {
     let generation_start = ts_key(generation_start);
     let window = ts_key(window_start);
@@ -74,12 +76,6 @@ pub(crate) fn scope_split(
                 filed_undelivered += 1;
             }
         } else {
-            let own_filed = lead_session.is_some_and(|session| {
-                row.get("source_session_id").and_then(Value::as_str) == Some(session)
-            });
-            if own_filed {
-                continue;
-            }
             let completed = ts_key(
                 row.get("completed_at")
                     .and_then(Value::as_str)
@@ -139,8 +135,8 @@ pub(crate) struct VerdictInputs {
     pub inherited_undelivered: u64,
     pub filed_undelivered: u64,
     pub inherited_closed_in_window: u64,
-    /// In-window closes on rows another session filed. The lead's own
-    /// filings' closes count in neither field (the guard in `scope_split`).
+    /// In-window closes on rows filed after the team's generation start,
+    /// whoever filed or closed them.
     pub filed_closed_in_window: u64,
 }
 
@@ -687,13 +683,7 @@ pub(crate) fn resolve_verdict_inputs(
         filed_undelivered,
         inherited_closed_in_window,
         filed_closed_in_window,
-    ) = scope_split(
-        &ids,
-        &entries,
-        &generation_start,
-        &window_start,
-        manifest.harness_session_id.as_deref(),
-    );
+    ) = scope_split(&ids, &entries, &generation_start, &window_start);
 
     Ok(VerdictInputs {
         scope,
@@ -1318,7 +1308,6 @@ mod tests {
             &rows,
             "2026-10-25T20:13:46+00:00",
             "2026-10-26T01:51:00+00:00",
-            Some("lead-session"),
         );
         assert_eq!(inherited_open, 0);
         assert_eq!(filed_open, 0);
@@ -1327,10 +1316,15 @@ mod tests {
     }
 
     #[test]
-    fn the_lead_s_own_filed_close_counts_in_neither_close_counter() {
+    fn a_close_counts_even_when_the_row_names_the_lead_as_its_filer() {
+        // The close side carries no filer exclusion: the projected row never
+        // carried the filer field, so the old guard never fired in production,
+        // and a filer-based drop would read a delivering team as stalled. The
+        // row here names the lead as filer the way a future projection would;
+        // the close still counts.
         let rows = [close_row(
             "x-kid",
-            "2026-10-25T20:13:03+00:00",
+            "2026-10-25T20:14:03+00:00",
             serde_json::json!({"source_session_id": "lead-session"}),
         )];
         let (_, _, inherited_closed, filed_closed) = scope_split(
@@ -1338,14 +1332,13 @@ mod tests {
             &rows,
             "2026-10-25T20:13:46+00:00",
             "2026-10-26T01:51:00+00:00",
-            Some("lead-session"),
         );
         assert_eq!(inherited_closed, 0);
-        assert_eq!(filed_closed, 0);
+        assert_eq!(filed_closed, 1);
     }
 
     #[test]
-    fn an_inherited_close_still_counts_and_a_filerless_row_is_not_own_filed() {
+    fn an_inherited_close_still_counts_and_a_filerless_row_counts_as_filed() {
         let rows = [
             // created before generation_start, no filer recorded: inherited
             // close that still counts (old undated backlog behavior kept).
@@ -1359,7 +1352,6 @@ mod tests {
             &rows,
             "2026-10-25T20:13:46+00:00",
             "2026-10-26T01:51:00+00:00",
-            Some("lead-session"),
         );
         assert_eq!(inherited_open, 0);
         assert_eq!(filed_open, 0);
@@ -1380,7 +1372,6 @@ mod tests {
             &rows,
             "2026-10-25T20:13:46+00:00",
             "2026-10-26T01:51:00+00:00",
-            Some("lead-session"),
         );
         assert_eq!(inherited_open, 0);
         assert_eq!(filed_open, 1);

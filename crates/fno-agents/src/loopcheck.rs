@@ -1173,9 +1173,12 @@ pub(crate) fn decide_with_payload(
             Some((key, holder)) if matches!(&renewed_lease, Some((k, h)) if k == key && h == holder) => {
                 true
             }
-            Some((key, holder)) => {
-                matches!(crate::claims::renew(key, holder, window_ms, None), Ok(true))
-            }
+            Some((key, holder)) => watch_lease::renewal_holds(
+                key,
+                holder,
+                &crate::claims::renew(key, holder, window_ms, None),
+                None,
+            ),
             None => false,
         };
         // An unclaimed session may still idle on a LOCAL watch: its wake is

@@ -3,6 +3,7 @@
 //! `subprocess.run`; the registry and graph are real files in a temp dir.
 
 use super::*;
+use crate::retask::{execute_retask, RetaskTarget};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::VecDeque;

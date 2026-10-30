@@ -1,6 +1,7 @@
 //! The reply dock: space on an agent row docks the peek under the list,
 //! reply focused. It is the peek in another place: one implementation.
 
+use super::overlay_paint::layout_lines_overlay_at;
 use super::*;
 
 /// The narrowest sideline the dock fits in; below it the peek centers.
@@ -43,8 +44,15 @@ impl View {
         let dims = ((rows / 2).max(1), self.panel_w() as usize - 1);
         // Follow the tail: the newest message and the reply stay in view.
         let follow = lines.len().checked_sub(1);
-        let mut layout =
-            layout_lines_overlay(origin, dims, chrome, lines, follow, OverlayAnchor::Center);
+        let mut layout = layout_lines_overlay_at(
+            origin,
+            dims,
+            chrome,
+            lines,
+            follow,
+            false,
+            OverlayAnchor::Center,
+        );
         // Sit on the column's floor; over the answered row, take the top.
         let floor = (origin.0 + rows).saturating_sub(layout.framed.lines.len());
         let cursor_row = self.peek.as_ref().map_or(0, |p| {

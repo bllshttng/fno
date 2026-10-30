@@ -227,6 +227,85 @@ fn resolve_dq_escapes(s: &str) -> String {
     out
 }
 
+/// Strict scalar read for top-level frontmatter keys: a double-quoted value
+/// must close its quote with no unescaped interior quote, single likewise.
+/// Returns the parsed scalar or a line-naming error. A bare value is read
+/// leniently (an interior quote in a bare string is legal prose).
+fn parse_scalar_strict(key: &str, lineno: usize, raw_val: &str) -> Result<String, String> {
+    let trimmed = raw_val.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2 && bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"' {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        let mut chars = inner.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                chars.next();
+                continue;
+            }
+            if c == '"' {
+                return Err(format!(
+                    "Malformed frontmatter at line {lineno}: '{key}' opens a quoted \
+                     value with an unescaped quote inside it. Offending value: \
+                     '{trimmed}'"
+                ));
+            }
+        }
+        return Ok(resolve_dq_escapes(inner));
+    }
+    if bytes.len() >= 2 && bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'' {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        // YAML escapes a single quote by doubling it: 'it''s' is legal and
+        // must keep parsing. A stray quote outside a '' pair is the defect.
+        if inner.replace("''", "").contains('\'') {
+            return Err(format!(
+                "Malformed frontmatter at line {lineno}: '{key}' opens a quoted \
+                 value with an unescaped quote inside it. Offending value: \
+                 '{trimmed}'"
+            ));
+        }
+        return Ok(inner.replace("''", "'"));
+    }
+    // One-sided quote: unterminated.
+    if bytes.first() == Some(&b'"') || bytes.first() == Some(&b'\'') {
+        return Err(format!(
+            "Malformed frontmatter at line {lineno}: '{key}' opens a quoted \
+             value that never closes. Offending value: '{trimmed}'"
+        ));
+    }
+    Ok(parse_scalar(raw_val))
+}
+
+/// Parse-back check every plan-doc write runs before touching disk: the
+/// serialized content must re-parse. Structural only: a writer that leaves a
+/// pre-existing drift-word status (`draft`, `pending`) untouched must still
+/// be able to write its own field, so the vocabulary belongs to
+/// [`ensure_canonical`], used by the doors that SET the status.
+pub fn ensure_parsable(content: &str) -> Result<(), String> {
+    parse_frontmatter(content)?;
+    Ok(())
+}
+
+/// [`ensure_parsable`] plus the status-vocabulary check, for the doors whose
+/// own output sets the `status` scalar: a writer that produces an unknown
+/// token is refused with the file byte-identical.
+pub fn ensure_canonical(content: &str) -> Result<(), String> {
+    let parsed = parse_frontmatter(content)?;
+    if let Some(Value::Scalar(s)) = parsed.fields.get("status") {
+        let canonical = crate::plan_doc::status::canonical_status(Some(s));
+        if !s.trim().is_empty()
+            && !super::status::known_statuses()
+                .iter()
+                .any(|k| *k == canonical)
+        {
+            return Err(format!(
+                "frontmatter status '{}' is not in the plan vocabulary; refusing to save",
+                s.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Split an inline-list body on commas that sit outside a double-quoted item.
 /// Double quotes only; an unterminated quote yields one long item rather than
 /// raising (a malformed doc must degrade).
@@ -429,7 +508,13 @@ pub fn parse_frontmatter(content: &str) -> Result<Parsed, String> {
                 fields.insert(key, Value::Scalar(String::new()));
             }
         } else {
-            fields.insert(key, Value::Scalar(parse_scalar(raw_val)));
+            // A quoted scalar must be well-formed: a value that opens with a
+            // quote must close it with no unescaped interior quote. The
+            // corrupt specimens this refuses (`"in_"in_review"`,
+            // `"in_in_review`) previously read as garbage tokens and only
+            // surfaced downstream as unreadable-plan refusals.
+            let value = parse_scalar_strict(&key, lineno, raw_val)?;
+            fields.insert(key, Value::Scalar(value));
         }
     }
 
@@ -554,10 +639,14 @@ pub fn atomic_write(target: &Path, content: &str) -> std::io::Result<()> {
     }
 }
 
-/// Serialize + write the updated frontmatter back to the plan file.
+/// Serialize + write the updated frontmatter back to the plan file. The
+/// parse-back check (`ensure_parsable`) runs before the bytes move: a write
+/// that would save frontmatter this module cannot re-parse, or a `status`
+/// outside the known vocabulary, is refused with the file byte-identical.
 pub fn write_plan_file(target: &Path, fields: &Fields, rest: &str) -> std::io::Result<()> {
     let fm_block = serialize_frontmatter(fields);
     let new_content = format!("---\n{fm_block}\n---\n{rest}");
+    ensure_parsable(&new_content).map_err(std::io::Error::other)?;
     atomic_write(target, &new_content)
 }
 
@@ -722,6 +811,54 @@ mod tests {
         let parsed = parse_frontmatter("---\nsources: [\"a, b]\n---\nbody\n").unwrap();
         assert!(matches!(parsed.fields.get("sources"), Some(Value::List(_))));
         let _ = serialize_frontmatter(&parsed.fields);
+    }
+
+    #[test]
+    fn corrupt_quoted_scalar_is_a_named_parse_error() {
+        // Regression: an interior quote inside a quoted scalar (the corrupt-specimen shape).
+        let err = parse_frontmatter("---\nstatus: \"in_\"in_review\"\n---\nbody\n").unwrap_err();
+        assert!(err.contains("status"), "names the key: {err}");
+        assert!(err.contains("unescaped quote"), "names the defect: {err}");
+        // Unterminated: opens a quote it never closes.
+        let err = parse_frontmatter("---\nstatus: \"in_in_review\n---\nbody\n").unwrap_err();
+        assert!(err.contains("never closes"), "names the defect: {err}");
+        // Valid quoted and lenient bare scalars still parse.
+        let parsed =
+            parse_frontmatter("---\nstatus: \"in_review\"\ntitle: he said \"hi\"\n---\nbody\n")
+                .unwrap();
+        assert_eq!(get_str(&parsed.fields, "status"), "in_review");
+        assert_eq!(get_str(&parsed.fields, "title"), "he said \"hi\"");
+    }
+
+    #[test]
+    fn quoted_status_parse_back_gate() {
+        // Corrupt line: the parse-back check refuses before any bytes move.
+        let err = ensure_parsable("---\nstatus: \"in_\"in_review\"\n---\nbody\n").unwrap_err();
+        assert!(err.contains("Malformed frontmatter"), "{err}");
+        // A pre-existing drift-word status parses back: a writer that leaves
+        // it untouched must be able to write its own field.
+        assert!(ensure_parsable("---\nstatus: draft\n---\nbody\n").is_ok());
+        // The status-setting doors refuse an unknown token.
+        let err = ensure_canonical("---\nstatus: in_garbage\n---\nbody\n").unwrap_err();
+        assert!(err.contains("not in the plan vocabulary"), "{err}");
+        assert!(ensure_canonical("---\nstatus: in_review\n---\nbody\n").is_ok());
+        assert!(ensure_canonical("---\nstatus: \"superseded\"\n---\nbody\n").is_ok());
+        assert!(ensure_canonical("---\nkind: quick-plan\n---\nbody\n").is_ok());
+    }
+
+    #[test]
+    fn write_plan_file_saves_an_untouched_drift_word_status() {
+        // The regression the vocabulary-at-the-chokepoint shape caused: the
+        // read-mutate-write flow (set-expected) writes back the full field
+        // map including a drift-word status the writer did not touch.
+        let doc = write_tmp("writegate", "plan.md", "---\nstatus: draft\n---\n# body\n");
+        let mut fields = Fields::new();
+        fields.insert("status", Value::Scalar("draft".into()));
+        fields.insert("expected_url_count", Value::Scalar("3".into()));
+        write_plan_file(&doc, &fields, &"# body\n").unwrap();
+        let after = std::fs::read_to_string(&doc).unwrap();
+        assert!(after.contains("status: draft"), "{after}");
+        assert!(after.contains("expected_url_count: 3"), "{after}");
     }
 
     #[test]

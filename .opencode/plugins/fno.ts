@@ -433,7 +433,7 @@ function loadOrchestratorPrompt(projectDir: string): string {
   try {
     return readFileSync(join(projectDir, ".opencode", "fno-orchestrator.md"), "utf8")
   } catch {
-    return "You are footnote's delivery orchestrator. Set a target, walk away, say f[no] to mostly done."
+    return "You are footnote's delivery orchestrator. Set the targets. Your agents do the rest. Say F[no] to mostly done."
   }
 }
 
