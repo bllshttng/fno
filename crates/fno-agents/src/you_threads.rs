@@ -59,12 +59,17 @@ pub(crate) struct WalkTail {
 
 /// The person's own words in a turn. Mail delivered into the pane lands as
 /// a user row, alone or glued after a typed line when the harness merges
-/// queued input, and its header marks where another agent's words begin.
+/// queued input, and its header (or a held-mail release line) marks where
+/// another agent's words begin.
 /// `None` when nothing typed comes before the first header.
 fn typed_part(text: &str) -> Option<String> {
     let mut cut = text.len();
     let mut at = 0;
     for line in text.split_inclusive('\n') {
+        if crate::mail_header::is_held_release_line(line.trim()) {
+            cut = at;
+            break;
+        }
         if let Some(i) = line.find("`@") {
             if crate::mail_header::is_header_line(&line[i..]) {
                 cut = at + i;
@@ -181,9 +186,9 @@ pub(crate) fn walk(
                     == Some("queued_command")
                     && att.pointer("/origin/kind").and_then(Value::as_str) == Some("human");
                 if !is_human_queued {
-                    // Hook context and every other attachment is machine
-                    // shape: it closes the span like any injected row.
-                    close(&mut open, &mut reply, &mut item_start, &mut items);
+                    // Hook context and the tool listings ride every typed
+                    // turn before its reply: context, never a turn, so the
+                    // span stays open.
                     continue;
                 }
                 let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or("");
@@ -334,7 +339,7 @@ struct YouEntry {
     open: Option<WalkTail>,
 }
 
-const YOU_CACHE_VERSION: u32 = 2;
+const YOU_CACHE_VERSION: u32 = 3;
 
 /// The loaded cache plus its lock discipline. `save` is best effort: an
 /// unwritable cache degrades the next projection to a full re-walk.
@@ -645,6 +650,11 @@ mod tests {
                 "2026-10-27T00:00:06Z",
             ),
             assistant_row("Checked in.", "2026-10-27T00:00:07Z"),
+            row(
+                "user",
+                "2 held messages · sent 17:32 to 17:41 · held 32m",
+                "2026-10-27T00:00:08Z",
+            ),
             // A typed line with queued mail merged after it keeps only the
             // typed words.
             row(
@@ -667,7 +677,8 @@ mod tests {
     }
 
     /// A human queued command opens its own item; a pasted bus row closes
-    /// instead of opening; a hook attachment closes but never opens.
+    /// instead of opening; a hook attachment neither opens nor closes, so
+    /// the reply after it stays with its turn.
     #[test]
     fn queued_opens_relay_closes_attachment_never_opens() {
         let bus_text = "`@worker · fmail-abc` status please";
@@ -690,6 +701,7 @@ mod tests {
             row("user", "before the digest", "2026-10-27T00:00:00Z"),
             hook_attachment_row(),
             queued_row("and the second thing", "2026-10-27T00:00:03Z"),
+            hook_attachment_row(),
             assistant_row("Answering both.", "2026-10-27T00:00:06Z"),
             queued_row(bus_text, "2026-10-27T00:00:07Z"),
             assistant_row("Relay ack text.", "2026-10-27T00:00:08Z"),
