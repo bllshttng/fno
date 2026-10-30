@@ -117,24 +117,6 @@ def _boom_transport(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_bus_only_send_never_pastes_and_queues_durable(runner, mailbox, monkeypatch):
-    _seed_registry({"name": "leader", "sid": BUS_SID,
-                    "delivery_policy": "bus-only"})
-    _boom_transport(monkeypatch)
-
-    res = runner.invoke(
-        app, ["mail", "send", BUS_SID, "probe", "--from-name", "peer"]
-    )
-
-    assert res.exit_code == 0, res.output
-    assert "queued (durable)" in res.output
-    assert "bus-only" in res.output
-    assert "DND" in res.output
-    # Not a miss, not stranded: the receipt names the polling contract.
-    assert "live-miss" not in res.output
-    assert "not live" not in res.output
-
-
 # ---------------------------------------------------------------------------
 # The register seam: stamp, preserve-when-silent, clear.
 # ---------------------------------------------------------------------------
@@ -183,25 +165,3 @@ def test_register_stamps_bus_only_and_flagless_reregister_preserves(monkeypatch)
     assert rows and rows[0].delivery_policy == "bus-only"
 
 
-def test_the_gate_resolves_every_address_tier(monkeypatch):
-    """The gate must recognize a bus-only row by session id, short id, AND name:
-    a guard keyed on one tier is a guard on one of N paths (pitfall 1)."""
-    from fno.agents.dispatch import BUS_ONLY_POLICY, _delivery_policy_refusal
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="leader",
-            cwd="/tmp/x",
-            log_path="/tmp/x.log",
-            harness="claude",
-            harness_session_id=BUS_SID,
-            short_id=BUS_SID[:8],
-            delivery_policy="bus-only",
-        )
-    ])
-    for token in (BUS_SID, BUS_SID[:8], "leader"):
-        assert _delivery_policy_refusal(token) == BUS_ONLY_POLICY, (
-            f"the gate missed the {token!r} address tier"
-        )
-    assert _delivery_policy_refusal(WORKER_SID) is None

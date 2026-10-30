@@ -1385,31 +1385,42 @@ jobs:
           # cap) leaves every output empty: the shards skip on `== 'true'`,
           # and this aggregator used to read that as red with zero real
           # failures. An empty output alongside a cancelled pr-affected now
-          # reads as lane-off. A FAILED selector stays red on purpose: it
-          # broke, so nobody measured anything.
+          # reads as lane-off. The tier keeper cancels out-of-tier runs on
+          # purpose, so a CANCELLED selector is the same no-verdict shape:
+          # it measures nothing, and a rerun lands the measurement. A FAILED
+          # selector stays red on purpose: it broke, so nobody measured
+          # anything.
           [ "${{ needs.test-agents.result }}" = "success" ] || {
-            [ "${{ needs.test-agents.result }}" = "skipped" ] \
+            { [ "${{ needs.test-agents.result }}" = "skipped" ] \
+                || [ "${{ needs.test-agents.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-agents.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-agents-integration.result }}" = "success" ] || {
-            [ "${{ needs.test-agents-integration.result }}" = "skipped" ] \
+            { [ "${{ needs.test-agents-integration.result }}" = "skipped" ] \
+                || [ "${{ needs.test-agents-integration.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-agents-integration.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux.result }}" = "success" ] || {
-            [ "${{ needs.test-mux.result }}" = "skipped" ] \
+            { [ "${{ needs.test-mux.result }}" = "skipped" ] \
+                || [ "${{ needs.test-mux.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-mux.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux-integration.result }}" = "success" ] || {
-            [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
+            { [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
+                || [ "${{ needs.test-mux-integration.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-mux-integration.result }}" = "cancelled" ]; }
           } || exit 1
 
   # Selection half of the paint-artifact pair. Runs the same read the merge

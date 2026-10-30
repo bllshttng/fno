@@ -83,11 +83,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
-    "mail": (
-        "fno.mail.cli:mail_app",
-        "Durable polled mailbox: send/unread/ack/reply/drain/status.",
-        {"hidden": True},
-    ),
     # the entries between this comment and `agents` below whose names
     # are retired at the front door (crates/fno/command-names.tsv) and answer
     # only through fno-py.
@@ -185,7 +180,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "doctor": set(),
     "evals": set(),
     "event": {"emit"},
-    "mail": {"send"},
     "paths": set(),
     "plan": set(),
     "pr-watch": set(),

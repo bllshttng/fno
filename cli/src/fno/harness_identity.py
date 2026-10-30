@@ -293,6 +293,26 @@ def scrub_ambient_identity(environ: Optional[dict] = None) -> tuple[str, ...]:
     return tuple(name for name in AMBIENT_IDENTITY_ENV if target.pop(name, None) is not None)
 
 
+#: The child-environment contract of a spawn seed's attribution sidecar, read
+#: back by the native ``fno agents mail seed-provenance`` command. Callers SET
+#: OR CLEAR the whole group: a child inheriting half of it attributes its own
+#: seed to whoever seeded its parent.
+ENV_SEED_B64 = "FNO_SEED_PROV_SEED_B64"
+ENV_FROM = "FNO_SEED_PROV_FROM"
+ENV_FROM_SESSION = "FNO_SEED_PROV_FROM_SESSION"
+ENV_HARNESS = "FNO_SEED_PROV_HARNESS"
+ENV_NODE = "FNO_SEED_PROV_NODE"
+ENV_MSG_ID = "FNO_SEED_PROV_MSG_ID"
+SEED_PROVENANCE_KEYS: tuple[str, ...] = (
+    ENV_SEED_B64,
+    ENV_FROM,
+    ENV_FROM_SESSION,
+    ENV_HARNESS,
+    ENV_NODE,
+    ENV_MSG_ID,
+)
+
+
 def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
     """The env floor every adapter's child env crosses: ``base`` minus the
     parent's identity, spawn cause, seed provenance and proxy hop marker.
@@ -303,8 +323,6 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
     marker is good for one exec only, or the child's first gh is refused.
     The gh shim itself rides PATH from the front door.
     """
-    from fno.mail.seed_provenance import SEED_PROVENANCE_KEYS
-
     env = dict(base)
     scrub_ambient_identity(env)
     for key in ("FNO_SPAWN_TRIGGER", "FNO_GH_PROXY_DEPTH", *SEED_PROVENANCE_KEYS):

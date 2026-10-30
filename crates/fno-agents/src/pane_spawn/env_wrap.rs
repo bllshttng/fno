@@ -180,7 +180,7 @@ pub fn mesh_env_wrapper(
     out
 }
 
-/// `MAX_SEED_BYTES` (`mail/seed_provenance.py:63`).
+/// `MAX_SEED_BYTES` (`agents/mux_spawn.py`).
 const MAX_SEED_BYTES: usize = 16 * 1024;
 
 /// `mail.seed_provenance.build_env` (seed_provenance.py:74): the child-env

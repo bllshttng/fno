@@ -33,7 +33,6 @@ def test_agents_registers_the_folded_roots() -> None:
 
     assert {
         "claim",
-        "mail",
     } <= _commands(agents_app)
 
 
@@ -41,7 +40,6 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
     modules = {
         "fno.claims.cli",
         "fno.dispatch",
-        "fno.mail.cli",
     }
     script = (
         "import json, sys; import fno.agents.cli; "

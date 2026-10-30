@@ -5,7 +5,3 @@ claim:
   - fno.claims.cli:cli
   - Work-claim coordination primitive
   - hidden: true
-mail:
-  - fno.mail.cli:mail_app
-  - "Durable polled mailbox: send/unread/ack/reply/drain/status (canonical spelling; root `fno mail` is the shim)."
-  - hidden: true

@@ -185,19 +185,14 @@ def _fake_machine_mail(monkeypatch, receipt: str) -> list[list[str]]:
     import subprocess
     from pathlib import Path
 
-    import fno.agents.dispatch as dispatch_mod
     import fno.rust_binary as rust_binary
 
     calls: list[list[str]] = []
-
-    def fake_dispatch_send(address, body, provider, **kwargs):
-        return SimpleNamespace(delivery="hosted", msg_id="legacy-msg")
 
     def fake_run(argv, **kwargs):
         calls.append(list(argv))
         return SimpleNamespace(returncode=0, stdout=receipt, stderr="")
 
-    monkeypatch.setattr(dispatch_mod, "dispatch_send", fake_dispatch_send)
     monkeypatch.setattr(rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
     monkeypatch.setattr(subprocess, "run", fake_run)
     return calls

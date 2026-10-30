@@ -294,25 +294,6 @@ class TestEveryLockWriterHarvestsTheReset:
         assert reset_epoch_from(None) is None
         assert reset_epoch_from("") is None
 
-    def test_note_quota_death_writes_the_harvested_reset(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import fno.adapters.providers.runtime_state as rs
-        from fno.agents import dispatch
-
-        seen: dict[str, object] = {}
-        monkeypatch.setattr(
-            rs, "update_provider_health",
-            lambda provider_id, rule, model=None, now=None, resets_at=None:
-                seen.setdefault("resets_at", resets_at),
-            raising=True,
-        )
-        monkeypatch.setattr(
-            dispatch, "_account_id_for_env", lambda env: "zai", raising=True,
-        )
-
-        dispatch.note_quota_death(None, f"Claude usage limit reached. {self._BODY}")
-        assert seen["resets_at"] == pytest.approx(self._expected())
 
     def test_a_naive_stamp_needs_the_records_timezone_at_the_writer(
         self, monkeypatch: pytest.MonkeyPatch

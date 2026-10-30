@@ -20,10 +20,6 @@ _TAIL_BYTES = 256 * 1024
 _EXPANDED_TAIL_BYTES = 2 * 1024 * 1024
 
 
-class IdentityAmbiguousError(RuntimeError):
-    """The ambient markers disagree and no process-tree proof is available."""
-
-
 def runtime_identity_witness(harness: str) -> frozenset:
     """codex rollout fd ids plus the caller's own spawn row; the row is the claude family's only id witness (name_only stamp, no ancestor carries the id)."""
     from fno.agents.codex_rollout import codex_rollout_witness
@@ -49,72 +45,6 @@ def resolve_self_identity(env: Optional[Mapping[str, str]] = None):
     return _resolve_self_identity(
         env, collide=collide, witness=runtime_identity_witness
     )
-
-
-def identity_ambiguity_message(identity) -> str:
-    """Render the single refusal sentence for an unproven mixed environment.
-
-    The strip lines are the self-rescue: stripping the foreign family's
-    markers restores self-resolution. Built from
-    :func:`fno.harness_identity.ambient_identity_strip_flags`, which reads the
-    same list the scrub reads, so the text cannot drift from behavior.
-    """
-    from fno.harness_identity import ambient_identity_strip_flags
-
-    markers = ", ".join(marker for marker, _harness, _value in identity.markers_present)
-    lookup_id = next(
-        (value for _marker, _harness, value in identity.markers_present), "<session-id>"
-    )
-    families = []
-    for _marker, harness, _value in identity.markers_present:
-        if harness not in families:
-            families.append(harness)
-    strip_lines = ""
-    for family in families:
-        flags = ambient_identity_strip_flags(family)
-        if flags:
-            strip_lines += (
-                f"  if this is a {family} session: env {' '.join(flags)}"
-                " <command>\n"
-            )
-    strip_section = (
-        # A single-family ambiguous disposition (a proven harness with two
-        # distinct ids, or a contradicted only marker) has no foreign family
-        # to strip, so the section is omitted entirely rather than printing
-        # the header with no command under it.
-        f"or strip the foreign family's markers and retry:\n{strip_lines}"
-        "keeping your own harness's markers; each harness re-mints "
-        "its own for a child\n"
-        if strip_lines
-        else ""
-    )
-    rejection = identity.rejected[0] if identity.rejected else None
-    # owned_by_live_row is a different ambiguity than mixed families.
-    if rejection:
-        opening = (
-            "cannot decide which session is 'self': id "
-            f"{rejection.get('session_id', '')} is owned by live row "
-            f"{rejection.get('owner', '')}"
-        )
-    else:
-        opening = (
-            "cannot decide which session is 'self': multiple harness markers "
-            "present (inherited env?)"
-        )
-    return (
-        f"{opening}\n"
-        f"markers: {markers}\n"
-        "resolve with: find ~/.codex/sessions ~/.claude/projects -name "
-        f"'*{lookup_id}*'\n" + strip_section
-    ).rstrip("\n")
-
-
-def require_self_identity(env: Optional[Mapping[str, str]] = None):
-    """Return owned identity or refuse to let a mixed environment guess."""
-    identity = resolve_self_identity() if env is None else resolve_self_identity(env)
-    if identity.disposition == "ambiguous":
-        raise IdentityAmbiguousError(identity_ambiguity_message(identity))
-    return identity
 
 
 def stamp_from(from_name: Optional[str]) -> str:

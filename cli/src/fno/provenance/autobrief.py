@@ -286,7 +286,7 @@ def _extract_pairs(
     except Exception:
         return []
     # One batched classify per read: delivered mail never counts as a pair.
-    from fno.mail.envelope import mail_shape
+    from fno.rust_binary import mail_shape
 
     shapes = mail_shape([text for _, text, _ in pairs])
     return [p for p, s in zip(pairs, shapes) if s["framing"] == "bare"]

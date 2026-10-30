@@ -303,20 +303,6 @@ def _refusal_text(rung):
     )
 
 
-def test_unanswerable_plan_rung_refuses(monkeypatch):
-    from fno.agents.node_dispatch import node_effective_command
-
-    rung = "done"
-
-    def door(method, params):
-        raise RuntimeError(_refusal_text(rung))
-
-    _stub_door(monkeypatch, door)
-    with pytest.raises(DispatchResolveError, match=rung) as exc_info:
-        node_effective_command({"id": "x-abcd"})
-    assert_refusal_names_subject_and_cites_no_node(exc_info.value)
-
-
 def assert_refusal_names_subject_and_cites_no_node(exc: DispatchResolveError) -> None:
     # A lead reads the refusal cold: the failing node must be the first
     # identifier in the sentence, and a trailing citation invites a misread

@@ -93,6 +93,8 @@ enum Role {
     /// leg. Claimed for flag-led sends and session-shaped
     /// targets; @host and plain-name targets stay the relay's, and --help
     /// stays Python's.
+    MailRetiredReader(&'static str, &'static str),
+    MailUnknown(String),
     MailSend(Vec<OsString>),
     /// `mux kill-server [<name>] [--json]`: shut a session down (no TTY needed).
     MuxKill(crate::cli_args::KillRequest),
@@ -1179,40 +1181,32 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     match command {
         "show" => Some(Role::MailShow(tail.to_vec())),
         "send" => {
-            // Help stays Python's (the reply precedent), so `send --help`
-            // still prints the full local command's docs; only the routed tail
-            // is claimed.
-            if tail
-                .iter()
-                .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
-            {
-                return None;
-            }
             // The cross-host relay claims @host and plain-name targets (a
             // leading flag in the target slot means a flag-led send, which
             // is the local command's); every other send is the local command's.
-            // The target is the tail's first word, which reads the same in
-            // the `mail send` and `agents mail send` spellings.
-            let target = tail.first().and_then(|s| s.to_str());
-            match target {
-                Some(target) if !target.starts_with('-') => {
-                    if target.contains('@') || fno::remote_target::is_plain_name_target(target) {
-                        return None;
-                    }
-                    Some(Role::MailSend(tail.to_vec()))
-                }
-                _ => Some(Role::MailSend(tail.to_vec())),
-            }
-        }
-        "reply" => {
-            // Help stays the forward leaf's, so `reply --help` still prints
-            // the command's docs; only the routed tail is claimed.
-            if tail
+            // The relay's same-host forward carries the marker, so it lands on
+            // the local command here instead of re-entering the relay. The
+            // target is the tail's first word, which reads the same in the
+            // `mail send` and `agents mail send` spellings.
+            let relay_target = tail
+                .first()
+                .and_then(|s| s.to_str())
+                .filter(|t| !t.starts_with('-'))
+                .is_some_and(|t| t.contains('@') || fno::remote_target::is_plain_name_target(t));
+            let wants_help = tail
                 .iter()
-                .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+                .take_while(|a| a.to_str() != Some("--"))
+                .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")));
+            if relay_target
+                && !wants_help
+                && std::env::var_os(fno::remote_target::LOCAL_FORWARD_ENV).is_none()
             {
                 return None;
             }
+            std::env::remove_var(fno::remote_target::LOCAL_FORWARD_ENV);
+            Some(Role::MailSend(tail.to_vec()))
+        }
+        "reply" => {
             // The native reply leaf claims the command now; the cross-host lane
             // runs inside it (reply_cross_host before local routing), so the
             // RemoteMail claim this arm replaces never fires for reply.
@@ -1248,7 +1242,29 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
         "view" => Some(Role::MailViewRenamed),
         "lint" | "migrate-bus" | "rebuild-render" => Some(Role::MailRetired(command.to_string())),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongCommand(command.to_string())),
-        _ => None,
+        "list" => Some(Role::MailRetiredReader(
+            "list",
+            "fno agents mail unread [-n NAME] [--json]",
+        )),
+        "drain" => Some(Role::MailRetiredReader(
+            "drain",
+            "fno agents mail drain-self",
+        )),
+        "status" => Some(Role::MailRetiredReader("status", "fno agents mail unread")),
+        "triage" => Some(Role::MailRetiredReader(
+            "triage",
+            "fno agents mail show <id>",
+        )),
+        // `peek <name>@<host>` is the relay's; the rest is no command at all.
+        "peek"
+            if tail
+                .first()
+                .and_then(|t| t.to_str())
+                .is_some_and(|t| t.contains('@')) =>
+        {
+            None
+        }
+        other => Some(Role::MailUnknown(other.to_string())),
     }
 }
 
@@ -2126,6 +2142,16 @@ fn main() {
             );
             std::process::exit(2);
         }
+        Role::MailRetiredReader(name, replacement) => {
+            eprintln!(
+                "fno agents mail {name} is retired: the markdown inbox is gone. Use {replacement}."
+            );
+            std::process::exit(1);
+        }
+        Role::MailUnknown(name) => {
+            eprintln!("fno agents mail: no command {name:?}. Run fno agents mail --help.");
+            std::process::exit(2);
+        }
         Role::MailWrongCommand(command_name) => {
             eprintln!(
                 "no mail command {command_name:?}. An `fmail-<id>` header in a delivered turn is read \
@@ -2553,8 +2579,7 @@ mod tests {
             ),
             Role::MailSeedProvenance(os(&["seed-provenance", "--registry", "r.json"]))
         );
-        // The native reply claims its command on both mounts, tail included;
-        // help stays with the Python forward leaf.
+        // The native reply claims its command on both mounts, tail included.
         assert_eq!(
             decide_role(
                 &os(&["agents", "mail", "reply", "--to", "fmail-x", "hi"]),
@@ -2568,8 +2593,32 @@ mod tests {
         );
         assert_eq!(
             decide_role(&os(&["agents", "mail", "reply", "--help"]), false),
-            Role::Forward,
-            "help stays Python's"
+            Role::MailReply(os(&["--help"]))
+        );
+        // Help is native, even over a relay-shaped target.
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "send", "--help"]), false),
+            Role::MailSend(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "send", "w@remote", "--help"]),
+                false
+            ),
+            Role::MailSend(os(&["w@remote", "--help"]))
+        );
+        // The Python mount is gone: nothing under `agents mail` falls through.
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "list"]), false),
+            Role::MailRetiredReader("list", "fno agents mail unread [-n NAME] [--json]")
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "nope"]), false),
+            Role::MailUnknown("nope".to_string())
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "peek", "plain"]), false),
+            Role::MailUnknown("peek".to_string())
         );
     }
 

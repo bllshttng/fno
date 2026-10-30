@@ -58,6 +58,14 @@ pub(super) fn compute_ci_conclusion(checks: &Value) -> Result<CiConclusion, Stri
     // errored the read on every fire - follow-on, previously masked by the budget bug terminating
     // sessions before this read ran.) Unknown or missing buckets fail closed as Pending - never
     // green.
+    //
+    // Only `fail` is a verdict, so only `fail` reads Failure. A `cancel` produced NO result: the
+    // tier keeper cancels out-of-tier runs, a newer push cancels older ones, and neither is ever
+    // answered by a rerun this session can start. Folding cancel into Failure read a held PR as a
+    // live red, refused every idle ending, and re-invoked a worker with nothing to do until it
+    // took the cancel exit. The wait-side twin (`pr_status::wait::red_is_stale`) already
+    // reads a red made only of cancelled checks as pending; this is the same rule. A timed-out
+    // cancel still buckets `fail`, so timeouts keep their verdict.
     let bucket_of = |check: &Value| -> String {
         check
             .get("bucket")
@@ -66,10 +74,7 @@ pub(super) fn compute_ci_conclusion(checks: &Value) -> Result<CiConclusion, Stri
             .to_lowercase()
     };
 
-    if let Some(failing) = arr
-        .iter()
-        .find(|c| matches!(bucket_of(c).as_str(), "fail" | "cancel"))
-    {
+    if let Some(failing) = arr.iter().find(|c| bucket_of(c) == "fail") {
         let name = failing
             .get("name")
             .and_then(|v| v.as_str())
@@ -149,11 +154,11 @@ pub(super) fn failing_check_names(checks: &Value) -> Vec<String> {
 /// DoneAwaitingMerge terminal must not fire while any check is unresolved: a
 /// still-running check (e.g. the session's own new job) could turn red, so a
 /// partial `Failure` is not yet proof that the ONLY problem is pre-existing
-/// main-red. `cancel` is deliberately non-terminal here even though it stays
-/// red in `failing_check_names` and `compute_ci_conclusion`: a cancelled run
-/// produced NO result, so declaring the session done off it would assert a
-/// verdict that never ran. The held terminal waits for a newer run (or the
-/// iteration/budget kill criteria), which is the correct trade.
+/// main-red. `cancel` is non-terminal here and in `compute_ci_conclusion`
+/// (it reads Pending there): a cancelled run produced NO result, so
+/// declaring the session done off it would assert a verdict that never ran.
+/// The held terminal waits for a newer run (or the iteration/budget kill
+/// criteria), which is the correct trade.
 pub(super) fn ci_has_pending_checks(checks: &Value) -> bool {
     let Some(arr) = checks.as_array() else {
         return false;

@@ -386,7 +386,7 @@ def _opencode_records(
 
 def _resolve_peer_roles(records: list[Record]) -> list[Record]:
     """Flip ``user`` roles whose text IS a delivered mail turn to ``peer``."""
-    from fno.mail.envelope import mail_shape
+    from fno.rust_binary import mail_shape
 
     user_records = [r for r in records if r.role == "user"]
     if not user_records:

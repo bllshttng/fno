@@ -148,7 +148,7 @@ pub fn changed_snapshot(root: &Path, base: &str, head: &str) -> (Vec<String>, St
     )
 }
 
-/// cli/src/fno/mail/envelope.py -> fno.mail.envelope; "" for anything else.
+/// cli/src/fno/inbox/store.py -> fno.inbox.store; "" for anything else.
 /// A co-located `__init__.py` maps to its package, not `pkg.__init__`.
 pub fn module_name(rel: &str) -> String {
     let prefix = "cli/src/";

@@ -494,7 +494,7 @@ pub(crate) fn append_line_open(live: &Path, obj: &Value, chats_dir: &Path) -> Re
 }
 
 // ---------------------------------------------------------------------------
-// Scope matching: the exact port of mail/cli.py::_team_recipients
+// Scope matching: the fleet recipient rule
 // ---------------------------------------------------------------------------
 
 /// Which team answers to `scope`: one rule shared with the walk, blank

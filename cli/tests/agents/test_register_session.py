@@ -26,36 +26,6 @@ def _events(tmp_path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_ac7_hp_registers_addressable_entry(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry, register_existing_session
-
-    entry = register_existing_session(
-        provider="claude",
-        session_id="ef9982cc-2543-4cea-9a20-081cca7119f6",
-        cwd="/home/user/project",
-    )
-
-    assert entry.harness == "claude"
-    # The transport short id is claude's own 8-hex attach/job key (the uuid's
-    # leading segment), NOT the full uuid: `claude attach <short_id>` refuses a
-    # full uuid, so a row carrying one was unattachable from the mux tap.
-    assert entry.short_id == "ef9982cc"
-    # Registered NON-live: a hand-started session has no live transport, so it
-    # must not be a resolve_to_project anycast target (else default sends
-    # dead-letter to inbox/<agent-name>/, which its wake hook never reads).
-    assert entry.status == "idle"
-    # Derived name is the canonical first-eight, the mailbox id a peer addresses.
-    assert entry.name == "ef9982cc"
-
-    # AC7-UI: a fresh load shows the row with provider/cwd/status intact.
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].name == entry.name
-    assert rows[0].cwd == "/home/user/project"
-    assert rows[0].status == "idle"
-
-
 def test_ac7_hp_idempotent_on_resame_session(tmp_path: Path, monkeypatch) -> None:
     """The hook re-firing for the same session refreshes, never duplicates."""
     use_tmpdir(monkeypatch, tmp_path)
@@ -631,7 +601,6 @@ DEFER_NODE = "x-defer1"
 
 def _seed_deferred_node() -> None:
     """One node in the tmp graph the parked row opens at SessionStart."""
-    import json
 
     from fno import paths
 

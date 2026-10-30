@@ -103,27 +103,3 @@ class TestPickAtLaunch:
         assert dispatch_mod._pick_account_overlay() is None
 
 
-class TestQuotaDeath:
-    @pytest.mark.dev_build  # the verdict reads through the native list command
-    def test_a_quota_death_cools_the_account_down(
-        self, armed: Path
-    ) -> None:
-        # The snapshot can be probe_ttl_seconds stale, so without this the next
-        # pick would hand the successor the account that just died. The verdict
-        # reads through the native list command, whose `headroom` column the
-        # account rows carry.
-        def _makers_headroom() -> str:
-            from fno.rust_binary import call_binary_json
-
-            err, rows = call_binary_json(
-                "spawn-overlay", ("accounts", "list", "--json")
-            )
-            assert err is None, err
-            return next(r["headroom"] for r in rows if r["id"] == "makers")
-
-        env = {"CLAUDE_CONFIG_DIR": str(armed / "claude-main")}
-        assert not _makers_headroom().startswith("exhausted")
-        dispatch_mod.note_quota_death(env, "Error: usage limit reached for this account")
-        assert _makers_headroom().startswith("exhausted")
-
-
