@@ -57,8 +57,9 @@ pub fn surface_files(files: &[String], cwd: &Path) -> Vec<String> {
 fn docs_value(body: &str) -> Option<String> {
     body.lines()
         .find_map(|line| {
-            line.trim()
-                .strip_prefix("Docs:")
+            let t = line.trim();
+            t.strip_prefix("Docs:")
+                .or_else(|| t.strip_prefix("docs:"))
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
         })
@@ -163,6 +164,8 @@ mod tests {
         assert!(body_names_doc("## Summary\n\nfixes x\nDocs: fno-web#45\n"));
         assert!(body_names_doc("Docs: docs/reference/pr.mdx\n"));
         assert!(!body_names_doc("Docs: none\n"));
+        // The lowercase spelling carries the same meaning.
+        assert!(body_names_doc("docs: docs/reference/pr.mdx\n"));
         assert!(body_names_doc(
             "Docs: none, internal gate, no user surface copy\n"
         ));
