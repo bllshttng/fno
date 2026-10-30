@@ -70,7 +70,7 @@ def _field_models(annotation: object) -> tuple[_Model, _Model, _Model]:
 def warn_unknown_keys(
     data: dict[str, object], model: type[BaseModel], prefix: str = ""
 ) -> list[str]:
-    """Dotted keys the model's field set does not carry. Logs under FNO_DEBUG."""
+    """Dotted keys the model's field set does not carry."""
     _flatten_leaf_paths = _cfg()._flatten_leaf_paths
 
     unknown: list[str] = []
