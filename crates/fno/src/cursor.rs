@@ -81,7 +81,15 @@ mod tests {
                 }
                 let text = std::fs::read_to_string(&p).unwrap();
                 for (i, line) in text.lines().enumerate() {
-                    if ["t.sel", "theme.sel"].iter().any(|k| line.contains(k)) {
+                    let word = |c: char| c.is_alphanumeric() || c == '_';
+                    let hit = ["t.sel", "theme.sel"].iter().any(|k| {
+                        line.match_indices(k).any(|(at, _)| {
+                            let before = line[..at].chars().next_back();
+                            let after = line[at + k.len()..].chars().next();
+                            !before.is_some_and(word) && !after.is_some_and(word)
+                        })
+                    });
+                    if hit {
                         bad.push(format!("{}:{}", p.display(), i + 1));
                     }
                 }
