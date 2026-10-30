@@ -1424,12 +1424,7 @@ mod tests {
         }
         assert_eq!(
             claude,
-            [
-                "spawn",
-                "--name",
-                "t-spawn-bare-node",
-                "/fno:target x-aaaa"
-            ]
+            ["spawn", "--name", "t-spawn-bare-node", "/fno:target x-aaaa"]
         );
         assert_eq!(codex.last().map(String::as_str), Some("$fno:target x-aaaa"));
         assert_eq!(unknown.last().map(String::as_str), Some("x-0000"));
