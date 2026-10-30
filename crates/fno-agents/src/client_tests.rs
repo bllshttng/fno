@@ -719,7 +719,10 @@ fn spawn_flag_rows() {
     // The passthrough law: flags spawn does not own ride the
     // harness argv verbatim, one token per token, and a lane that cannot
     // carry one refuses by name.
-    assert_eq!(harness_args(&["wk", "--yolo"]), serde_json::json!(["--yolo"]));
+    assert_eq!(
+        harness_args(&["wk", "--yolo"]),
+        serde_json::json!(["--yolo"])
+    );
     assert_eq!(harness_args(&["wk", "-Y"]), serde_json::json!(["--yolo"]));
     assert_eq!(
         harness_args(&["wk", "--deny-tools", "Bash"]),
@@ -941,7 +944,11 @@ fn substrate_rows() {
     }
     let err = build_request(
         "spawn",
-        &["wk".to_string(), "--substrate".to_string(), "bg".to_string()],
+        &[
+            "wk".to_string(),
+            "--substrate".to_string(),
+            "bg".to_string(),
+        ],
     )
     .unwrap_err();
     assert!(

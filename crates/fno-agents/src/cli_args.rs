@@ -501,10 +501,7 @@ mod tests {
         // joins decides whether it carries (claude --bg --resume is a real
         // form; the codex thread lane refuses by name). The fence still
         // keeps a post-argv -r provider payload opaque.
-        for form in [
-            vec!["--resume", "6501096a"],
-            vec!["--resume=6501096a"],
-        ] {
+        for form in [vec!["--resume", "6501096a"], vec!["--resume=6501096a"]] {
             let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
             let (axes, fence) = SpawnAxes::scan(&toks).expect("a resume-bearing spawn rides");
             assert_eq!(axes.route, None);
@@ -542,7 +539,10 @@ mod tests {
             assert_eq!(axes.substrate.as_deref(), Some(word));
         }
         // Outside the live vocabulary names the lanes, never a retired line.
-        let toks: Vec<String> = ["--substrate", "bg"].iter().map(|s| s.to_string()).collect();
+        let toks: Vec<String> = ["--substrate", "bg"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let err = SpawnAxes::scan(&toks).expect_err("bg is not a lane");
         assert!(
             err.contains("must be one of: pane, thread, headless, cloud"),
