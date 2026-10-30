@@ -3188,12 +3188,12 @@ console.log("recent searches: 12 cases ok");
             stream.read_to_string(&mut reply).await.unwrap();
             reply
         };
-        let reply = ask("/trace/model.json?node=x-a141&t=wrong").await;
+        let reply = ask("/trace/model.json?node=n-1&t=wrong").await;
         assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
         let reply = ask("/trace/model.json?node=--help&t=right").await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
-        assert!(ask("/trace?node=x-a141").await.starts_with("HTTP/1.1 401"));
-        let reply = ask("/trace?node=x-a141&t=right").await;
+        assert!(ask("/trace?node=n-1").await.starts_with("HTTP/1.1 401"));
+        let reply = ask("/trace?node=n-1&t=right").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         assert!(reply.contains("data-current=\"command\""), "{reply}");
         server.abort();

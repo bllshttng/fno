@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn node_ids_never_reach_argv_as_flags() {
-        assert!(valid_node("x-a141"));
+        assert!(valid_node("n-1"));
         assert!(valid_node("fno-a3f9"));
         assert!(!valid_node("--help"));
         assert!(!valid_node("-x"));
