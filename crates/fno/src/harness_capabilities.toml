@@ -1827,6 +1827,11 @@ pane = "unmeasured"
 thread = "unmeasured"
 headless = "unsandboxed"
 
+# Deliberately capable, never native: the standalone footnote harness left
+# the release tarball, and a release install resolves only the updater-compat
+# stub at that name, so the thread lane has no binary to seat. A flip would
+# turn the honest seat refusal into a launch failure. Revisit if fnh ships
+# again.
 [harness.footnote.features.spawn]
 state = "capable"
 
