@@ -1291,9 +1291,7 @@ fn session_liveness_answer_uncached(
 /// The per-thread instrument for a shared-host witness read that ended
 /// Unresolved: the session's own rollout mtime. Fresh proves the thread is
 /// advancing (Live); quiet beside a removed worker row proves gone (Absent).
-/// A missing rollout, an unreadable store or registry, or a row still
-/// present keep Unresolved: fail closed, never free a claim on evidence
-/// nobody read.
+/// Fails closed to Unresolved on any unreadable input.
 fn codex_rollout_rung(
     session: &str,
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
