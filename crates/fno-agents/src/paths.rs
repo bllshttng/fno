@@ -975,18 +975,13 @@ fn durable_spaces_root() -> PathBuf {
             return root;
         }
     }
-    let state_root = if let Some(v) = std::env::var_os(HOME_ENV).filter(|v| !v.is_empty()) {
-        let home = PathBuf::from(&v);
-        home.parent().map(|p| p.to_path_buf()).unwrap_or(home)
-    } else {
-        crate::paths_cli::declared_state_dir(&cwd).unwrap_or_else(|| {
-            refuse_undeclared_home_fallback(test_root_declared(), "FNO_SPACES_DIR");
-            std::env::var_os("HOME")
-                .filter(|h| !h.is_empty())
-                .map(|h| PathBuf::from(h).join(".fno"))
-                .unwrap_or_else(|| PathBuf::from(".fno"))
-        })
-    };
+    let state_root = crate::paths_cli::declared_state_dir(&cwd).unwrap_or_else(|| {
+        refuse_undeclared_home_fallback(test_root_declared(), "FNO_SPACES_DIR");
+        std::env::var_os("HOME")
+            .filter(|h| !h.is_empty())
+            .map(|h| PathBuf::from(h).join(".fno"))
+            .unwrap_or_else(|| PathBuf::from(".fno"))
+    });
     let root = state_root.join("spaces");
     fence_declared_root(test_sandbox_claimed(), &root);
     root
