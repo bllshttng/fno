@@ -217,8 +217,8 @@ pub(crate) fn walk(
                     // build: open_new is the walk's own closure, no launcher
                     // parser touches this path. The .to_string() on the
                     // String is the element shape the fence-gate scanner
-                    // reads; dropping it hides this site from the census
-                    // and re-breaks the pinned exemption count.
+                    // reads; the marker keeps the site visible in its
+                    // census, and the exempt count floats.
                     typed_prompt.to_string(),
                     line_start,
                 );
