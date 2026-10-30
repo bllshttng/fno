@@ -5028,6 +5028,8 @@ impl View {
             // modal's own render (pure). This and the settings modal are the
             // pair from the operator's screenshot - they now share one chrome.
             let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
+            let conn_lines =
+                conn.render_with(&self.layout.agents, overlay_text_cols(overlay_dims.1));
             draw_lines_overlay(
                 &mut cells,
                 rows,
@@ -5035,9 +5037,9 @@ impl View {
                 overlay_origin,
                 overlay_dims,
                 &chrome,
-                &conn.render_with(&self.layout.agents, overlay_text_cols(overlay_dims.1)),
+                &conn_lines,
                 &self.theme,
-                None,
+                crate::connections_view::cursor_line(&conn_lines),
             );
         } else if let Some(peek) = &self.peek {
             // peek overlay: the peeked agent row (re-read LIVE from the

@@ -668,7 +668,7 @@ async fn header_rows() {
     let band_cell = frame.cells[(2 + sel) * cols + x0 + 2];
     assert_eq!(
         band_cell.bg,
-        crate::theme::band_style(&v.theme).1,
+        crate::cursor::cursor_style(&v.theme).1,
         "the selected row wears the band while the feed owns the keyboard"
     );
     // The keyboard returns to the pane when the panel CLOSES, not through a

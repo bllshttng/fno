@@ -958,7 +958,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 bold,
             );
             if start + r - 1 == panel.selected {
-                let (fg, bg, flags) = crate::theme::band_style(&view.theme);
+                let (fg, bg, flags) = crate::cursor::cursor_style(&view.theme);
                 for c in (x0 + 1)..cols {
                     let cell = &mut cells[y + c];
                     cell.fg = fg;

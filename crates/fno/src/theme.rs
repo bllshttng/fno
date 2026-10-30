@@ -9,6 +9,7 @@
 //! job, not a multiplexer's, and keeping it inverse is what makes `terminal` a
 //! true no-op and keeps modal content readable against every palette.
 
+use crate::cursor;
 use crate::keys::KeymapWarning;
 use crate::proto::{cell_flags, Color};
 
@@ -86,12 +87,11 @@ pub enum Role {
     /// `(is_active,)` - a section tab; the active one carries the accent.
     Tab(bool),
     Footer,
-    /// The selected row's cell - a cut-out under `terminal`, a `sel` highlight
-    /// under a named theme.
+    /// The selected row's cell: the one cursor ([`cursor::cursor_style`]).
     BodySel,
     /// The focused row of the sideline selector and the settings modal: the
     /// theme's text color becomes the ground and its base color the text,
-    /// checkbox included ([`focus_style`]).
+    /// checkbox included ([`cursor::cursor_style`]).
     BodyFocus,
     /// A plain-body popup's emphasis text (the key column, a section
     /// heading): the theme's brand accent, bold, on the plain ground - never
@@ -99,8 +99,7 @@ pub enum Role {
     /// doc), so the emphasis reads under every theme.
     BodyAccent,
     /// The cursor row of a plain-body popup: a filled band on the plain
-    /// ground. Under `terminal` INVERSE is the band; under a named theme
-    /// the `sel` surface, as [`Role::BodySel`].
+    /// ground: the one cursor ([`cursor::cursor_style`]).
     BodyCursor,
     /// A disabled (greyed) body entry: present but inert to arrow, Enter, and
     /// click. DIM under `terminal`, the theme's `dim` color under a named theme.
@@ -239,7 +238,7 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // The focused composer chip resolves above the theme split too: the
         // terminal's own pair, swapped, is the fill - visible under every
         // theme and every emulator ground.
-        Role::BodyFocus => return focus_style(t),
+        Role::BodySel | Role::BodyCursor | Role::BodyFocus => return cursor::cursor_style(t),
         Role::ChipFocus => {
             return (
                 Color::Default,
@@ -327,46 +326,12 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
     }
 }
 
-/// `(fg, bg, flags)` for the row the user drives, inverted from the theme's
-/// pair: text color as ground, base as text. With no base, the emulator's own.
-pub fn focus_style(t: &Theme) -> (Color, Color, u8) {
-    if t.inherit || t.base == Color::Default {
-        // No BOLD: a terminal brightens bold text, so dark letters go gray.
-        (Color::Default, Color::Default, cell_flags::INVERSE)
-    } else {
-        (t.base, t.title, 0)
-    }
-}
-
-/// `(fg, bg, flags)` for a sideline highlight band: accent text on the
-/// surface band. Selection, hover, and the focused row share one pair - the
-/// focused row's distinction rides its glyph marks, never a louder fill
-/// (the operator's color ruling: selection is the surface0 band, never a
-/// full brand fill). Both legs are explicit colors that answer each other's
-/// contrast, so the band reads identically on a dark and a light terminal:
-/// INVERSE would make the terminal's own background the text color and DIM
-/// washes the text toward the band. Neither belongs in a band.
-pub fn band_style(t: &Theme) -> (Color, Color, u8) {
-    if t.inherit {
-        // The palette's own surface pair: accent text on the deep index, so
-        // both legs follow the emulator's scheme instead of painting a pale
-        // gray bar over it.
-        (Color::Indexed(3), Color::Indexed(0), 0)
-    } else {
-        // A named theme bands on its `sel` surface with `stamp` text: the
-        // neutral text-on-surface pair. The brand belongs to the glyph and
-        // state word (the highlight pass restores the lane accent there),
-        // never to the whole band.
-        (t.stamp, t.sel, 0)
-    }
-}
-
 /// The chosen sideline card's fill: the theme accent across all 3 lines with
 /// the base tone as text - the same leg-swap the `[no]` stamp uses - so the
 /// selection reads as one unmistakable accent block on a dark and a light
 /// terminal. The operator's 2026-10-04 sideline ruling supersedes the
 /// surface-band selection for the card layout; the list layout keeps
-/// [`band_style`].
+/// [`cursor::cursor_style`].
 pub fn chosen_card_style(t: &Theme) -> (Color, Color, u8) {
     if t.inherit {
         (Color::Indexed(0), Color::Indexed(3), 0)
@@ -904,16 +869,13 @@ mod tests {
     }
 
     #[test]
-    fn selected_row_is_a_cut_out_under_terminal_and_a_highlight_under_named() {
-        // terminal: normal video (flags 0) = the existing cut-out.
+    fn selected_row_is_reverse_video_under_terminal_and_title_on_base_under_named() {
         let (_, _, flags) = cell_style(Role::BodySel, &theme_terminal());
-        assert_eq!(flags, 0);
-        // named: a sel-colored background and an explicit (non-Default) fg, so a
-        // dark sel bg stays readable on a light terminal as well as a dark one.
+        assert_eq!(flags, cell_flags::INVERSE);
+        // named: the theme's text color as ground, base as text, both explicit.
         let (fg, bg, _) = cell_style(Role::BodySel, &theme_catppuccin());
-        assert_eq!(bg, theme_catppuccin().sel);
-        assert_ne!(fg, Color::Default, "named-theme sel fg must be explicit");
-        assert_eq!(fg, theme_catppuccin().title);
+        assert_eq!(bg, theme_catppuccin().title);
+        assert_eq!(fg, theme_catppuccin().base);
     }
 
     #[test]

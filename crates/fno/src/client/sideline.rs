@@ -816,11 +816,7 @@ impl View {
                 // to contrast with it, never per-span inversion, so a span's
                 // own color cannot patch the highlight and the band reads the
                 // same on a dark and a light terminal.
-                let (fg, bg, flags) = if driven {
-                    crate::theme::focus_style(&self.theme)
-                } else {
-                    crate::theme::band_style(&self.theme)
-                };
+                let (fg, bg, flags) = crate::cursor::cursor_style(&self.theme);
                 for cell in &mut cells[r * cols..r * cols + text_w] {
                     cell.bg = bg;
                     cell.fg = fg;
@@ -865,7 +861,7 @@ impl View {
                     self.paint_card_activity(cells, r, cols, text_w, a, card_indent + depth * 2);
                 }
                 if driven {
-                    let (fg, bg, flags) = crate::theme::focus_style(&self.theme);
+                    let (fg, bg, flags) = crate::cursor::cursor_style(&self.theme);
                     for cell in &mut cells[r * cols..r * cols + text_w] {
                         (cell.fg, cell.bg, cell.flags) = (fg, bg, flags);
                     }
@@ -1479,7 +1475,7 @@ impl View {
                 let rollup_fg = if on_chosen_fill {
                     fill_fg
                 } else if highlit {
-                    crate::theme::band_style(&self.theme).0
+                    crate::cursor::cursor_style(&self.theme).0
                 } else {
                     crate::theme::dim_fg(&self.theme)
                 };

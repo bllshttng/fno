@@ -1817,6 +1817,15 @@ fn stderr_tail(stderr: &[u8]) -> String {
         .to_string()
 }
 
+/// The rendered line the cursor sits on: the order tab's member cursor (`»`)
+/// when it shows, else the first line led by the `>` marker.
+pub fn cursor_line(lines: &[String]) -> Option<usize> {
+    lines
+        .iter()
+        .position(|l| l.trim_start().starts_with('»'))
+        .or_else(|| lines.iter().position(|l| l.starts_with('>')))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

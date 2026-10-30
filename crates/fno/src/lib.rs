@@ -38,6 +38,7 @@ pub mod config_doctor;
 pub mod config_schema;
 pub mod connections_view;
 pub mod context_used;
+pub mod cursor;
 pub mod digest_overlay;
 pub mod dispatch_launch;
 pub mod doctor_update;

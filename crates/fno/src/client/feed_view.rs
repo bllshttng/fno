@@ -982,7 +982,7 @@ impl View {
                 }
             }
             if band_row == Some(r) {
-                let (bfg, bbg, bflags) = crate::theme::band_style(&self.theme);
+                let (bfg, bbg, bflags) = crate::cursor::cursor_style(&self.theme);
                 for c in (x0 + 1)..(x0 + w) {
                     let cell = &mut cells[r * cols + c];
                     cell.fg = bfg;
