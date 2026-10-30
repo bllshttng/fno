@@ -512,6 +512,87 @@ fn chat_holds_message(chat_dir: &Path, id: &str) -> bool {
         })
 }
 
+/// Fold chat dirs that landed beside the bus log back into the store. The
+/// send lanes once recorded into the bus dir itself, so every mail they
+/// carried sat where no reader looks. Each stray chat's lines the store
+/// lacks append under the chat lock; the stray dir then moves under
+/// `.folded-chats/`, kept, never deleted. Warn-only: a fold error never
+/// fails the record that triggered it.
+pub(crate) fn fold_stray_chats(chats_dir: &Path, stray_root: &Path) {
+    if stray_root == chats_dir {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(stray_root) else {
+        return;
+    };
+    let strays: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(CHAT_PREFIX))
+        .map(|e| e.path())
+        .filter(|p| p.join("messages.jsonl").is_file())
+        .collect();
+    if strays.is_empty() {
+        return;
+    }
+    let parked = stray_root.join(".folded-chats");
+    for stray in strays {
+        let Some(name) = stray.file_name().map(|n| n.to_os_string()) else {
+            continue;
+        };
+        // A concurrent record may fold and park this dir first; a vanished
+        // stray is that fold's success, not an error.
+        if let Err(e) = fold_one_stray(&stray.join("messages.jsonl"), &chats_dir.join(&name)) {
+            if stray.exists() {
+                eprintln!("chats fold {}: {e}", stray.display());
+            }
+            continue;
+        }
+        let _ = std::fs::create_dir_all(&parked);
+        // An older send may have parked the same chat already: keep both.
+        let mut target = parked.join(&name);
+        let mut n = 1;
+        while target.exists() {
+            let mut next = name.clone();
+            next.push(format!(".{n}"));
+            target = parked.join(next);
+            n += 1;
+        }
+        if let Err(e) = std::fs::rename(&stray, &target) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("chats fold park {}: {e}", stray.display());
+            }
+        }
+    }
+}
+
+fn fold_one_stray(stray_file: &Path, chat_dir: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(stray_file).map_err(|e| format!("read: {e}"))?;
+    std::fs::create_dir_all(chat_dir).map_err(|e| format!("chat dir: {e}"))?;
+    let chat_file = chat_dir.join("messages.jsonl");
+    let _lock = ChatLock::acquire(&chat_file)?;
+    let held = std::fs::read_to_string(&chat_file).unwrap_or_default();
+    let held: std::collections::HashSet<&str> = held.lines().collect();
+    let missing: String = text
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !held.contains(l))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(&chat_file)
+        .and_then(|mut f| f.write_all(missing.as_bytes()))
+        .map_err(|e| format!("chat append {}: {e}", chat_file.display()))
+}
+
 /// The sender name the store row for `id` carries: the bus envelope's
 /// `from_name` (the fleet name a delivered header shows) else its `from`
 /// address. `None` when no row holds the id or the row names no sender.
@@ -2421,6 +2502,39 @@ mod tests {
             "v": 1, "id": id, "ts": "2026-10-01T19:00:00Z", "thread": id,
             "from": from, "from_session": from, "to": to, "kind": kind, "body": "hello",
         })
+    }
+
+    #[test]
+    fn a_chat_recorded_beside_the_bus_folds_into_the_store_once() {
+        let root = temp_root("fold");
+        let (chats, bus_dir) = (root.join("chats"), root.join("bus"));
+        let stray = bus_dir.join("chat-00000000000000aa");
+        std::fs::create_dir_all(&stray).unwrap();
+        let held = r#"{"type":"message","id":"m1","ts":"2026-10-29T01:00:00Z"}"#;
+        let lost = r#"{"type":"message","id":"m2","ts":"2026-10-29T02:00:00Z"}"#;
+        std::fs::write(stray.join("messages.jsonl"), format!("{held}\n{lost}\n")).unwrap();
+        let target = chats.join("chat-00000000000000aa");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("messages.jsonl"), format!("{held}\n")).unwrap();
+        fold_stray_chats(&chats, &bus_dir);
+        fold_stray_chats(&chats, &bus_dir);
+        let text = std::fs::read_to_string(target.join("messages.jsonl")).unwrap();
+        assert_eq!(text, format!("{held}\n{lost}\n"), "one copy of each line");
+        assert!(!stray.exists(), "the stray dir leaves the bus dir");
+        assert!(bus_dir.join(".folded-chats/chat-00000000000000aa").exists());
+        // An old sender records the same chat beside the bus again: it
+        // folds and parks beside the first copy.
+        let late = r#"{"type":"message","id":"m3","ts":"2026-10-29T03:00:00Z"}"#;
+        std::fs::create_dir_all(&stray).unwrap();
+        std::fs::write(stray.join("messages.jsonl"), format!("{late}\n")).unwrap();
+        fold_stray_chats(&chats, &bus_dir);
+        let text = std::fs::read_to_string(target.join("messages.jsonl")).unwrap();
+        assert!(text.ends_with(&format!("{late}\n")), "{text}");
+        assert!(!stray.exists(), "the second stray parks too");
+        assert!(bus_dir
+            .join(".folded-chats/chat-00000000000000aa.1")
+            .exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -55,8 +55,11 @@ const ROUTES: &[Route] = &[
         name: "init",
         native: &["lead-state", "--init"],
         help: "Usage: fno agents org init --scope SCOPE [--scope SCOPE...] \
-               --harness-session-id ID [--max-iterations N] [--respawn-ceiling N] [--force]\n\n\
-               Write this role scope's manifest, which the lead loop arms read.\n",
+               --harness-session-id ID [--max-iterations N] [--respawn-ceiling N] [--force] \
+               [--rebind-from OLD-ID]\n\n\
+               Write this role scope's manifest, which the lead loop arms read.\n\
+               --rebind-from OLD-ID moves the existing role (row and manifest) to ID, \
+               keeping every other field; it refuses with --force.\n",
     },
     Route {
         name: "checkin",
