@@ -557,6 +557,24 @@ fn bare_node_seed(head: &[String], cwd: &Path) -> Option<(usize, String)> {
     Some((i, format!("{sigil}fno:target {id}")))
 }
 
+/// `args` with a bare node id prompt rewritten by [`bare_node_seed`]. Runs
+/// before the node seed rewrite, so the rewritten seed meets the same
+/// command and node checks as a typed one.
+fn with_bare_node_seed(args: &[String], cwd: &Path) -> Vec<String> {
+    let mut out = args.to_vec();
+    if out.first().map(String::as_str) != Some("spawn") {
+        return out;
+    }
+    let end = out
+        .iter()
+        .position(|t| t == "--argv" || t == "--")
+        .unwrap_or(out.len());
+    if let Some((i, seed)) = bare_node_seed(&out[1..end], cwd) {
+        out[i + 1] = seed;
+    }
+    out
+}
+
 /// Canonicalize a `spawn` argv (command at index 0); pure argv -> argv. The
 /// single positional is the MESSAGE; the name rides `--name` and is minted
 /// when omitted. A second positional refuses with exit 2. Read-only.
@@ -605,19 +623,6 @@ pub fn normalize(
         }
     } else {
         toks
-    };
-    let fence = toks.iter().position(|t| t == "--");
-    let head = match fence {
-        Some(f) => &toks[..f],
-        None => &toks[..],
-    };
-    let toks = match bare_node_seed(head, cwd) {
-        Some((i, seed)) => {
-            let mut t = toks.clone();
-            t[i] = seed;
-            t
-        }
-        None => toks,
     };
     let fence = toks.iter().position(|t| t == "--");
     let head = match fence {
@@ -1100,7 +1105,8 @@ pub fn admit(args: &[String], cwd: &Path, existing_names: &HashSet<String>) -> A
 
     // 2. The node seed rewrite. A `profile` answer names the command the compose
     //    reads as the node's command.
-    let (args, node_command) = match node_seed_rewrite(args) {
+    let args = with_bare_node_seed(args, cwd);
+    let (args, node_command) = match node_seed_rewrite(&args) {
         Ok(rewritten) => rewritten,
         Err(text) => return Admission::refused(stderr, text),
     };
@@ -1407,7 +1413,7 @@ mod tests {
         .unwrap();
         let run = |argv: &[&str]| {
             let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-            normalize(&argv, None, tmp.path()).argv
+            normalize(&with_bare_node_seed(&argv, tmp.path()), None, tmp.path()).argv
         };
         let claude = run(&["spawn", "x-9fc9"]);
         let codex = run(&["spawn", "-H", "codex", "x-9fc9"]);
