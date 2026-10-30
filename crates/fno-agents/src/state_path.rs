@@ -258,23 +258,16 @@ mod tests {
     struct EnvGuard {
         home: PathBuf,
         spaces: Option<std::ffi::OsString>,
-        state: Option<std::ffi::OsString>,
     }
 
     impl EnvGuard {
         fn new(home: &Path) -> Self {
             let spaces = std::env::var_os("FNO_SPACES_DIR");
-            let state = std::env::var_os("FNO_STATE_DIR");
             std::env::set_var("FNO_AGENTS_HOME", home.join("agents-home"));
             std::env::set_var("FNO_SPACES_DIR", home.join("spaces"));
-            // The durable spaces root ignores the per-process FNO_SPACES_DIR
-            // pin, so the declared state root must name the same tree or the
-            // journal mover refuses the destination.
-            std::env::set_var("FNO_STATE_DIR", home);
             Self {
                 home: home.to_path_buf(),
                 spaces,
-                state,
             }
         }
     }
@@ -284,10 +277,6 @@ mod tests {
             match &self.spaces {
                 Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
                 None => std::env::remove_var("FNO_SPACES_DIR"),
-            }
-            match &self.state {
-                Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-                None => std::env::remove_var("FNO_STATE_DIR"),
             }
             std::env::remove_var("FNO_AGENTS_HOME");
             let _ = &self.home;

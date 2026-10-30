@@ -1724,7 +1724,6 @@ mod tests {
     struct EnvGuard {
         spaces: Option<std::ffi::OsString>,
         home: Option<std::ffi::OsString>,
-        state: Option<std::ffi::OsString>,
         hermetic: Option<std::ffi::OsString>,
     }
 
@@ -1733,7 +1732,6 @@ mod tests {
             Self {
                 spaces: std::env::var_os("FNO_SPACES_DIR"),
                 home: std::env::var_os(HOME_ENV),
-                state: std::env::var_os("FNO_STATE_DIR"),
                 hermetic: std::env::var_os("FNO_TEST_HERMETIC"),
             }
         }
@@ -1748,10 +1746,6 @@ mod tests {
             match &self.home {
                 Some(v) => std::env::set_var(HOME_ENV, v),
                 None => std::env::remove_var(HOME_ENV),
-            }
-            match &self.state {
-                Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-                None => std::env::remove_var("FNO_STATE_DIR"),
             }
             match &self.hermetic {
                 Some(v) => std::env::set_var("FNO_TEST_HERMETIC", v),
@@ -1788,10 +1782,9 @@ mod tests {
         );
     }
 
-    /// Mirror of the Python row "durable-config-root-migrates": the durable
-    /// root follows the declared state root and never the agents home, and a
-    /// genuine legacy checkout journal still moves once, behind a MOVED-TO
-    /// marker.
+    /// Mirror of the Python row "durable-config-root-migrates": with no env
+    /// pin, the default state root IS the durable home and a genuine legacy
+    /// checkout journal still moves once, behind a MOVED-TO marker.
     #[test]
     fn migrate_durable_root_still_moves_checkout_journal() {
         if !git_available() {
@@ -1801,8 +1794,6 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let _env = EnvGuard::capture();
-        let state_root = tmp("durable-state");
-        std::env::set_var("FNO_STATE_DIR", &state_root);
         let agents_home = tmp("durable-home");
         std::env::set_var(HOME_ENV, &agents_home);
         std::env::remove_var("FNO_SPACES_DIR");
@@ -1813,7 +1804,12 @@ mod tests {
         std::fs::write(&old, "rows").unwrap();
         git(&repo, &["init", "-q"]);
         let slug = space_slug(&std::fs::canonicalize(&repo).unwrap());
-        let expected = state_root.join("spaces").join(slug).join("events.jsonl");
+        let expected = agents_home
+            .parent()
+            .unwrap()
+            .join("spaces")
+            .join(slug)
+            .join("events.jsonl");
 
         let resolved = events_path(&repo);
 
@@ -1823,6 +1819,5 @@ mod tests {
         assert!(repo.join(".fno").join("MOVED-TO").exists());
         std::fs::remove_dir_all(&base).ok();
         std::fs::remove_dir_all(&agents_home).ok();
-        std::fs::remove_dir_all(&state_root).ok();
     }
 }
