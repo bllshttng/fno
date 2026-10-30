@@ -299,6 +299,18 @@ fn publish_answers(remote: &Remote, me: &Host) -> Result<usize, String> {
         if on_primary.contains(id.as_str()) {
             continue;
         }
+        // The apply half reads these two from the record: the copy's origin
+        // id (stamped on the question beside origin_machine at pull time),
+        // and this machine as the answering host.
+        let Some(origin_id) = asked["data"]["origin_question_id"].as_str() else {
+            continue;
+        };
+        if !event.get("data").map(|d| d.is_object()).unwrap_or(false) {
+            continue;
+        }
+        let mut record = event.clone();
+        record["data"]["origin_question_id"] = json!(origin_id);
+        record["data"]["host"] = json!(me.host.clone());
         steps.push((
             format!(
                 "INSERT OR IGNORE INTO fleet_question_answer \
@@ -310,7 +322,7 @@ VALUES (?, ?, ?, ?, ?, {NOW})"
                 SqlValue::Text(id.clone()),
                 SqlValue::Text(origin_machine.to_string()),
                 SqlValue::Text(me.host.clone()),
-                SqlValue::Text(event.to_string()),
+                SqlValue::Text(record.to_string()),
             ],
         ));
     }
