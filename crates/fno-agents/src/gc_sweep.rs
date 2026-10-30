@@ -2824,6 +2824,7 @@ pub(crate) fn run_with_release(
             surface_removal,
             mux_member,
             &mut receipts,
+            store_matches,
         ) {
             Ok(staged) => staged,
             Err(refusal) => {
@@ -3141,6 +3142,7 @@ pub(crate) fn stage_session_retirement(
     surface_removal: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
     mux_member: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
     receipts: &mut std::collections::BTreeMap<String, ReapReceipt>,
+    store_matches: &dyn Fn(&state::RegistryEntry) -> Option<Vec<std::path::PathBuf>>,
 ) -> Result<StagedRetirement, RetireRefusal> {
     let ledger = ledger_rows
         .and_then(|rows| ledger_entry_in(rows, e.harness_session_id.as_deref().unwrap_or("")));
@@ -3181,10 +3183,11 @@ pub(crate) fn stage_session_retirement(
     // The record precedes the effects: a receipt that cannot be built or
     // persisted refuses BEFORE the harness is touched, so no effect ever
     // fires without its recovery record already on disk (AC3-EDGE).
-    let mut receipt = match build_reap_receipt(e, ledger, crate::receipt::Writer::GcSweep) {
-        Ok(receipt) => receipt,
-        Err(reason) => return Err(RetireRefusal::NoReceipt(reason)),
-    };
+    let mut receipt =
+        match build_reap_receipt(e, ledger, crate::receipt::Writer::GcSweep, store_matches) {
+            Ok(receipt) => receipt,
+            Err(reason) => return Err(RetireRefusal::NoReceipt(reason)),
+        };
     if mode == RetireMode::DryRun {
         // the rehearsal never fires an effect, and it does not
         // report a row as retiring while a mutation-only gate stands

@@ -532,6 +532,7 @@ struct RequestSeams<'a> {
     /// gone, roster terminal). `false` keeps the row: a live and working
     /// worker stays even when its node is done.
     finished: &'a dyn Fn(&state::RegistryEntry) -> bool,
+    transcripts: &'a dyn Fn(&state::RegistryEntry) -> Option<Vec<std::path::PathBuf>>,
     /// Stop the row's harness. `Ok(short)` names the stopped session (empty
     /// for a pane row); `Err` holds the row for this pass.
     stop: &'a dyn Fn(&state::RegistryEntry) -> Result<String, &'static str>,
@@ -677,6 +678,7 @@ fn run_request(
             seams.surface_removal,
             seams.mux_member,
             &mut receipts,
+            seams.transcripts,
         ) {
             Ok(crate::gc_sweep::StagedRetirement::Retired) => {
                 to_retire.insert(
@@ -984,6 +986,7 @@ pub(crate) fn consume_merge_cleanup_requests(
     }
     let batch_refs: Vec<&state::RegistryEntry> = batch_entries.iter().collect();
     let ages = crate::gc::probe_entry_ages(&batch_refs);
+    let index = std::cell::RefCell::new(crate::gc_inventory::HarnessStoreIndex::default());
     for root in roots {
         for request in pending.iter().filter(|r| r.repo == *root) {
             total_requests += 1;
@@ -1025,6 +1028,7 @@ pub(crate) fn consume_merge_cleanup_requests(
                 continue;
             }
             let seams = RequestSeams {
+                transcripts: &|e| index.borrow_mut().matches(e),
                 finished: &|entry| {
                     let age = ages.get(&crate::gc::row_handle(entry)).copied().flatten();
                     let terminal = if entry.harness_name() == "claude" {
@@ -1389,6 +1393,7 @@ mod tests {
         request.worktree = None;
         request.node_ids = vec!["x-1".to_string(), "x-2".to_string()];
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -1432,6 +1437,7 @@ mod tests {
         let mut request = settled_request("/repo/wt");
         request.worktree = None;
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -1473,6 +1479,7 @@ mod tests {
         let mut request = settled_request("/repo/wt");
         request.worktree = None;
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -1723,6 +1730,7 @@ mod tests {
         let surface_calls = std::rc::Rc::clone(&calls);
         let tree_calls = std::rc::Rc::clone(&calls);
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| {
                 stop_calls.borrow_mut().push("stop".to_string());
@@ -1802,6 +1810,7 @@ mod tests {
         );
         let request = settled_request("/repo/wt");
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -1863,6 +1872,7 @@ mod tests {
         );
         let tree_calls = std::cell::RefCell::new(Vec::new());
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -1910,6 +1920,7 @@ mod tests {
         states.insert("x-1".to_string(), ("in_progress".to_string(), None, 0));
         let request = settled_request("/repo/wt");
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -1950,6 +1961,7 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         let request = settled_request(wt.to_str().unwrap());
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -1988,6 +2000,7 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         let request = settled_request(wt.to_str().unwrap());
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -2022,6 +2035,7 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         let request = settled_request(wt.to_str().unwrap());
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -2106,6 +2120,7 @@ mod tests {
         let mut request = settled_request("/no-such-worktree");
         request.node_ids = vec!["x-aaaa".to_string()];
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -2164,6 +2179,7 @@ mod tests {
         let mut clean = settled_request("/no-such-worktree");
         clean.node_ids = vec!["x-aaaa".to_string()];
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
@@ -2222,6 +2238,7 @@ mod tests {
         let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
         let stop_calls = std::rc::Rc::clone(&calls);
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| false,
             stop: &|_entry| {
                 stop_calls.borrow_mut().push("stop".to_string());
@@ -2272,6 +2289,7 @@ mod tests {
         write_registry(&home, &[]);
         let request = settled_request("/no-such-worktree");
         let seams = RequestSeams {
+            transcripts: &|_| None,
             finished: &|_entry| true,
             stop: &|_entry| Ok("abc123".to_string()),
             surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,

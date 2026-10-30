@@ -227,14 +227,13 @@ pub enum Liveness {
 }
 
 /// The harnesses whose transcripts `fno agents session peek` can tail: the
-/// reader arms registered in `recent_records` (cli/src/fno/agents/peek.py).
-/// A static mirror of a Python seam; `thread_reach_mirrors_the_peek_reader_seam`
-/// pins it against that file so the two cannot drift (Rust checked against
-/// Rust proves nothing). Mirrors `_follow_target`, which owns `--follow`'s
-/// tailable-file question, not `recent_records` (opencode answers there -
-/// it has readable history - but writes a directory tree with no tailable
-/// file, so `_follow_target` returns `None` for it and `--follow` would
-/// exit immediately; that gap is why this list omits opencode).
+/// file-backed reader arms in `record_parser`
+/// (crates/fno-agents/src/session_truth.rs), which owns `--follow`'s
+/// tailable-file question. A static mirror of that seam, because this crate
+/// does not link fno-agents; `thread_reach_mirrors_the_peek_reader_seam`
+/// pins it against the source so the two cannot drift. opencode has readable
+/// history but writes a directory tree with no tailable file, so it has no
+/// arm there and this list omits it.
 const PEEK_READER_HARNESSES: [&str; 2] = ["claude", "codex"];
 
 /// The argv that opens pi's OWN interface on `session_id`.
@@ -4695,48 +4694,35 @@ config_dir = "~/.claude-alt"
         assert_eq!(thread_reach(None, None), Reach::Locate);
     }
 
-    /// The Follow set mirrors the reader arms in peek.py's `recent_records`.
-    /// Rust checked against Rust proves nothing: parse the Python seam the
-    /// command actually dispatches on, so adding a reader arm there without
-    /// moving the tier here fails this test.
+    /// The Follow set mirrors the file-backed reader arms `fno agents peek
+    /// --follow` dispatches on: `record_parser` in fno-agents'
+    /// session_truth.rs. This crate does not link fno-agents, so the test
+    /// parses that seam's source; adding a reader arm there without moving
+    /// the tier here fails this test.
     #[test]
     fn thread_reach_mirrors_the_peek_reader_seam() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/src/fno/agents/peek.py");
+            .join("../fno-agents/src/session_truth.rs");
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        // Isolate _follow_target's body, not recent_records': recent_records
-        // answers "can this harness's history be read at all" (opencode
-        // yes), while _follow_target answers "does --follow have a tailable
-        // file" (opencode no - it writes a directory tree). Follow tier
-        // rides the second question, so that is the arm set to mirror.
+        // Isolate record_parser's body: it answers "does --follow have a
+        // tailable file" (opencode no - it writes a directory tree), the
+        // question the Follow tier rides.
         let body = raw
-            .split("def _follow_target(")
+            .split("fn record_parser(")
             .nth(1)
-            .and_then(|s| s.split("\ndef ").next())
-            .expect("_follow_target body");
+            .and_then(|s| s.split("\n}").next())
+            .expect("record_parser body");
         let arms: std::collections::BTreeSet<&str> = body
             .lines()
-            .filter_map(|l| {
-                let l = l.trim();
-                // `if` or `elif`: a future arm written as `elif` must be
-                // collected too, or the mirror would stay green while the
-                // Follow set silently drifted - the exact drift this guards.
-                l.strip_prefix("if agent == ")
-                    .or_else(|| l.strip_prefix("elif agent == "))
-            })
-            .map(|rest| rest.trim_end_matches(':'))
-            .map(|rest| {
-                let r = rest.trim();
-                let un = r.trim_start_matches('"').trim_end_matches('"');
-                un.trim_start_matches('\'').trim_end_matches('\'')
-            })
+            .filter_map(|l| l.trim().split_once("\" =>"))
+            .map(|(arm, _)| arm.trim_start_matches('"'))
             .collect();
         let mirror: std::collections::BTreeSet<&str> =
             super::PEEK_READER_HARNESSES.into_iter().collect();
         assert_eq!(
             arms, mirror,
-            "peek.py reader arms and PEEK_READER_HARNESSES drifted apart"
+            "record_parser arms and PEEK_READER_HARNESSES drifted apart"
         );
     }
 

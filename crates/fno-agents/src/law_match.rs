@@ -74,6 +74,17 @@ enum MatchRequest {
     /// BM25 against the stage keywords over labeled cases.
     #[serde(rename = "rules-measure")]
     RulesMeasure(RulesRequest),
+    /// The law-trigger import door: one `law_trigger` event per rule that
+    /// carries `law`, appended to the decision index. Demands the operator
+    /// floor. The door owns stdout and the exit code (0 imported, 2
+    /// unreadable input, 3 refused, 1 store failure).
+    #[serde(rename = "rules-import")]
+    RulesImport(RulesRequest),
+    /// The fire report: per-rule counts over the `rule` decision spans,
+    /// with `never_fired`, `unwired` and `unevaluated` over the live set.
+    /// Prints one JSON answer and exits 0, like the other read modes.
+    #[serde(rename = "rules-report")]
+    RulesReport(RulesRequest),
 }
 
 /// The rules modes read one file: `file` for rules-check, `cases` for
@@ -84,6 +95,9 @@ struct RulesRequest {
     file: String,
     #[serde(default)]
     cases: String,
+    /// The report window, `7d`-shaped; rules-report only.
+    #[serde(default)]
+    since: Option<String>,
 }
 
 /// The resolver request: the caller's authority claim and its carried
@@ -2675,7 +2689,7 @@ fn node_is_closed(node_id: &str) -> bool {
 pub fn run_law_match(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
+            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
         );
         return 0;
     }
@@ -2796,6 +2810,13 @@ pub fn run_law_match_str(input: &str) -> i32 {
                 crate::rules_check::measure_answer(text, laws)
             }))
             .expect("serializes")
+        }
+        MatchRequest::RulesImport(r) => {
+            return crate::rules_source::run_rules_import(&r.file);
+        }
+        MatchRequest::RulesReport(r) => {
+            serde_json::to_string(&crate::rules_source::rules_report(r.since.as_deref()))
+                .expect("serializes")
         }
     };
     println!("{answer}");

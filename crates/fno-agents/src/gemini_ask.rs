@@ -439,14 +439,16 @@ fn run_gemini(
         crate::spawn_gate::qos_wrap(popen_cwd.unwrap_or_else(|| Path::new(".")), argv.to_vec());
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped()); // SEPARATE pipe (divergence from codex LD12)
     if let Some(cwd) = popen_cwd {
         cmd.current_dir(cwd);
     }
     crate::claims::stamp_command_env(&mut cmd, agent_self, "gemini", bound_session_id);
-    // Own process group so SIGTERM/SIGKILL/SIGINT reach gemini's subshells.
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
+    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped()); // SEPARATE pipe (divergence from codex LD12)
+                                // Own process group so SIGTERM/SIGKILL/SIGINT reach gemini's subshells.
     unsafe {
         cmd.pre_exec(|| {
             libc::setpgid(0, 0);

@@ -134,6 +134,16 @@ fn proven_session_pid(rec: &ClaimRecord) -> bool {
         && pid_dies_with_session(rec.harness.as_deref())
 }
 
+/// The record's key is a node or task lock, the keys target runs hold.
+pub(crate) fn is_node_or_task(rec: &ClaimRecord) -> bool {
+    rec.key.starts_with("node:") || rec.key.starts_with("task:")
+}
+
+/// A shared-host harness (measured codex): its pid outlives every session.
+fn shared_host(rec: &ClaimRecord) -> bool {
+    !pid_dies_with_session(rec.harness.as_deref())
+}
+
 /// Classify with optional sweep-time sibling evidence. `None` is the honest
 /// value for single-key reads; a full scan passes the PID exclusivity map's
 /// result for the record being classified. `session_witness` is the
@@ -168,7 +178,7 @@ pub fn classify_with_basis_and_exclusivity(
     if !is_expired(rec, now)
         && !pid_dies_with_session(rec.harness.as_deref())
         && rec.session_id.as_deref().is_some_and(|s| !s.is_empty())
-        && (rec.key.starts_with("node:") || rec.key.starts_with("task:"))
+        && is_node_or_task(rec)
         && is_same_machine(&rec.host, rec.machine_id.as_deref())
     {
         return match session_witness.map(|witness| witness(rec)) {
@@ -239,7 +249,7 @@ pub fn classify_with_basis_and_exclusivity(
             // the reaper counts the 1511 revert restored depend on.
             if rec.session_id.as_deref().is_some_and(|s| !s.is_empty()) {
                 let session_state = witness(rec);
-                if (rec.key.starts_with("node:") || rec.key.starts_with("task:"))
+                if is_node_or_task(rec)
                     && is_same_machine(&rec.host, rec.machine_id.as_deref())
                     && matches!(&session_state, SessionLiveness::Absent)
                 {
@@ -269,6 +279,13 @@ pub fn classify_with_basis_and_exclusivity(
     }
     let (live, cause) = liveness_reading(rec, probe);
     if rec.expires_at.is_none() {
+        if live && shared_host(rec) && is_node_or_task(rec) {
+            // The answering pid is the shared host: it cannot tell a live
+            // thread from a live multiplexer. A claim with a session id
+            // returned above (the witness arm); one without has no witness,
+            // so Suspect is the honest verdict.
+            return (ClaimState::Suspect, basis::PID_SHARED);
+        }
         if live {
             return (ClaimState::Live, cause);
         }
@@ -299,11 +316,17 @@ pub fn classify_with_basis_and_exclusivity(
         }
         return (ClaimState::Live, cause);
     }
-    if (rec.key.starts_with("node:") || rec.key.starts_with("task:"))
+    if is_node_or_task(rec)
         && is_same_machine(&rec.host, rec.machine_id.as_deref())
         && matches!(witnessed, Some(SessionLiveness::Absent))
     {
         return (ClaimState::Stale, basis::SESSION_ABSENT);
+    }
+    if live && shared_host(rec) && is_node_or_task(rec) {
+        // The same shared-host rule inside the TTL window: the host pid alone
+        // proves nothing. A record with a session id returned earlier (the
+        // witness arm), so `witnessed` is None here and Suspect is honest.
+        return (ClaimState::Suspect, basis::PID_SHARED);
     }
     if live {
         (ClaimState::Live, cause)

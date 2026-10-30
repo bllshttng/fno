@@ -3197,11 +3197,14 @@ pub(crate) fn account_for_removed_rows(
         .ok()
         .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "unknown".to_string());
+    let index = std::cell::RefCell::new(crate::gc_inventory::HarnessStoreIndex::default());
     for entry in &removed {
         // The drop stamp a later wake reads: the identity leaves the
         // registry beside the receipt, before the row is announced gone.
         crate::wake_name::stamp_from_row(&home, entry);
-        crate::receipt::stage_removal_accounting(&home, entry, &remover, &emitter);
+        crate::receipt::stage_removal_accounting(&home, entry, &remover, &emitter, &|e| {
+            index.borrow_mut().matches(e)
+        });
     }
     // One grouped `registry_rows_lost` beside the per-row events: the
     // per-row events carry receipts, this one names the writer, pid and command,

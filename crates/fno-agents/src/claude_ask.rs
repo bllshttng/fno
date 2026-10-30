@@ -2797,6 +2797,8 @@ pub fn dispatch_claude_headless(
         cmd.env(crate::session_report::NO_ROW_ENV, name);
     }
     cmd.env_remove(SHOW_ROW_ENV);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
+    let mut cmd = crate::sandbox_launch::boxed(cmd);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(if use_stdin {

@@ -118,6 +118,20 @@ _fm_has() {
         | grep -E "$1" >/dev/null
 }
 
+# Probe list entries, raw: one line per done_probes/close_probes item (block
+# list) or the whole inline bracket line. Read by the portability gate.
+_probe_scan() {
+    awk '
+        /^---/{c++; if(c==2) exit; next}
+        c==1 {
+            if ($0 ~ /^(done_probes|close_probes):[[:space:]]*\[/) { print; next }
+            if ($0 ~ /^(done_probes|close_probes):[[:space:]]*$/) { inlist=1; next }
+            if (inlist && $0 ~ /^[[:space:]]*-[[:space:]]/) { sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next }
+            if (inlist && $0 ~ /^[[:space:]]*[^[:space:]#-]/) { inlist=0 }
+        }
+    ' "$1" 2>/dev/null
+}
+
 _is_quick_plan() {
     _fm_has "^[[:space:]]*kind:[[:space:]]*['\"]?quick-plan['\"]?([[:space:]]*(#.*)?)?$"
 }
@@ -571,6 +585,33 @@ except yaml.YAMLError as exc:
         elif _fm_has '^[[:space:]]*domain:[[:space:]]*code'; then
             error "code plan declares no done_probes; add a probe that proves the goal, not the activity (a docs or research plan sets domain: docs|research instead)"
         fi
+        # Probe portability: the probe lists are shell commands that must run
+        # on BSD hosts where the daemon sweep runs. Three measured traps:
+        # \b in a grep -E pattern matches nothing on macOS BSD regex (git
+        # grep or plain); /usr/bin/grep rejects -P with exit 2 while an
+        # interactive shell resolves ugrep; grep -c exits 1 on a zero count,
+        # which the pipefail probe wrapper reads as failure, so only its
+        # piped (absence-asserting) shape is refused - a bare grep -c stays
+        # a legal presence assert per the done_probes gate.
+        _probe_re_flag_e="(^|[[:space:]])-[[:alnum:]]*E([[:space:]]|[\"']|$)"
+        _probe_re_grep='(^|[^[:alnum:]_-])grep[[:space:]]+-'
+        while IFS= read -r _entry; do
+            [[ -z "$_entry" ]] && continue
+            # Plain-grep rules run on the entry with git grep stripped, so a
+            # pipe like "git grep ... | grep -c" trips them without
+            # mis-attributing the engine.
+            _plain="${_entry//git grep/}"
+            if [[ "$_entry" == *'\b'* && "$_entry" =~ $_probe_re_flag_e ]] \
+                && { [[ "$_entry" == *'git grep'* ]] || [[ "$_plain" =~ $_probe_re_grep ]]; }; then
+                error "probe uses \\b (backslash-b) in a grep -E pattern; BSD regex has no \\b in ERE so the probe matches nothing on macOS; use a bracket boundary like (^|[^[:alnum:]_])word([^[:alnum:]_]|$)"
+            fi
+            if [[ "$_plain" =~ $_probe_re_grep[[:alnum:]]*P([^[:alnum:]]|$) ]]; then
+                error "probe runs grep -P; /usr/bin/grep (BSD) rejects -P with exit 2 while an interactive shell resolves ugrep; rewrite with grep -E or awk"
+            fi
+            if [[ "$_plain" =~ $_probe_re_grep[[:alnum:]]*c([^[:alnum:]]|$) && "$_entry" == *'|'* ]]; then
+                error "probe pipes grep -c; grep -c exits 1 on a zero count and the runner wraps probes in set -o pipefail, so an absence-asserting pipe like grep -c x | grep -o ^0$ never passes; assert absence with awk '/pat/{n++} END{print n+0; exit n>0}' which prints the count, or assert presence with a bare grep -c"
+            fi
+        done < <(_probe_scan "$PLAN_DIR")
         if _fm_has '^dispatch_hold:'; then
             _hold_out=""
             if _hold_out=$(_dispatch_hold_validate 2>&1); then

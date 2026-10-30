@@ -285,6 +285,14 @@ Beyond an exact pin, a plan carries a **work-difficulty band** that dispatch joi
 - **`medium`** - a standard feature or fix that needs real reasoning but no load-bearing judgment.
 - **`high`** - gate semantics, security, concurrency, migrations, or an architecture decision where a weaker model's error is expensive.
 
+Before you pick the band, read where past bands in this domain ended. Take the node's `domain` and its filed band (`difficulty_history[0].value`) from `fno backlog get <node>`, then run:
+
+```bash
+fno backlog calibration -d "<domain>" -J | jq '.revisions[] | select(.filed == "<filed band>")'
+```
+
+Cite the row in the band's rationale line, for example `code/medium: <nodes> shipped, <up> up, <down> down`. When the row has 5 or more nodes and most of the revised ones moved one way, say whether this node is like them. The row informs the judgment. It never sets the band. With fewer than 5 nodes, cite the row and do not lean on it. If the command fails, write that in the rationale line and judge from the node alone.
+
 The blueprint phase is the sanctioned second write: the planner has read the code and knows more than the filer did. Record BOTH the filed estimate and the blueprint revision. The intake path appends a `source: "blueprint"` history entry rather than overwriting. The filed-versus-revised delta is the only signal that eventually says whether filers estimate well.
 
 Precedence is `model:` (exact) over the provider default. An exact pin on the same task wins. Transcribe the band from frontmatter onto the node (AFTER `$NODE_ID` is minted), idempotently:
@@ -448,16 +456,28 @@ lookup) so it can only pass if the thing ran recently.
 `... | grep -q x` exits on the grep; `... | tail -5` exits on the tail and
 masks the real status, so a broken command reads as a pass.
 
-**Emit stdout on success, never a silent flag.** A PASS with empty stdout
-reads as vacuous and is held to `SKIP`, which never satisfies this gate - so
-`grep -q`/`-s` and any other output-suppressing predicate silently blocks a
-probe that would otherwise pass forever. Use `grep -o` (or `grep -c`, or any
-predicate that prints the thing it matched) so a real pass carries evidence.
+**Emit stdout on success, never a silent flag.** A PASS with empty stdout reads as vacuous and is held to `SKIP`.
+
+`grep -q`/`-s` and any other output-suppressing predicate silently blocks a probe that can otherwise pass forever.
+
+Use `grep -o` (or a bare `grep -c` presence assert, or any predicate that prints the thing it matched) so a real pass carries evidence.
+
+Never pipe `grep -c` into a zero-count check: it exits 1 on zero and reads as failure under the pipefail wrapper.
 
 **Use the block form above, or a single-line inline list** (`done_probes: ["cmd"]`).
 A declaration in any other shape (a multi-line inline list, say) refuses done as
 "probes undeterminable" rather than passing as if you had declared nothing -
 declaring a gate the loop cannot read must never read as no gate.
+
+**Portability refusals at plan validation.** The validator refuses three measured probe shapes outright.
+
+A `\b` boundary in a `grep -E` pattern matches nothing on macOS because BSD regex has none in ERE. Use a bracket boundary.
+
+A plain `grep -P` flag fails under `/usr/bin/grep` with exit 2 while interactive shells resolve ugrep.
+
+`grep -c` piped into a zero-count check reads as failure under the pipefail wrapper.
+
+Each refusal message names the portable rewrite.
 
 **Constraints.** At most 3 probes (a gate, not a test suite); each gets a 60s
 native timeout and its whole process group is killed past it; a missing binary

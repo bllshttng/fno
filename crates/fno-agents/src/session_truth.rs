@@ -1245,25 +1245,80 @@ pub(crate) fn tail_texts(handle: &str, n: usize) -> Result<Vec<String>, String> 
         .ok()
         .map(|r| r.entries);
     let stores = Stores::ambient();
-    let mut cursors = cursor::global();
-    let session = resolve_handle(rows.as_deref(), handle, &stores, &mut cursors)
+    let session = resolve_session(rows.as_deref(), handle, &stores)
         .ok_or_else(|| format!("{handle} resolves to no session"))?;
-    let parse: fn(&Value) -> Option<TruthRecord> = match session.agent.as_str() {
-        "claude" => parse_claude_record,
-        "codex" => parse_codex_record,
-        "opencode" => {
-            let records = opencode_records_db(&stores.opencode_db, &session.session_id, n);
-            return Ok(records.into_iter().map(|r| r.text).collect());
+    let records = session_records(&session, &stores, n).map_err(|e| match e {
+        RecordsError::Unsupported(other) => {
+            format!("{handle}: no transcript reader for harness {other}")
         }
-        other => {
-            return Err(format!(
-                "{handle}: no transcript reader for harness {other}"
-            ))
-        }
-    };
-    let path = transcript_for(&session, &stores, &mut cursors)
-        .ok_or_else(|| format!("{handle} names no readable transcript"))?;
-    tail_records(&path, n, parse)
+        RecordsError::NoTranscript => format!("{handle} names no readable transcript"),
+        RecordsError::Read(e) => e,
+    })?;
+    Ok(records.into_iter().map(|r| r.text).collect())
+}
+
+/// Resolve a handle the way a truth read does, over the process-global
+/// cursors. The peek command and the lead check-in share it.
+pub(crate) fn resolve_session(
+    rows: Option<&[RegistryEntry]>,
+    handle: &str,
+    stores: &Stores,
+) -> Option<TruthSession> {
+    let mut cursors = cursor::global();
+    resolve_handle(rows, handle, stores, &mut cursors)
+}
+
+/// The transcript file a claude or codex session reads from, if it resolves.
+pub(crate) fn session_transcript(session: &TruthSession, stores: &Stores) -> Option<PathBuf> {
+    let mut cursors = cursor::global();
+    transcript_for(session, stores, &mut cursors)
+}
+
+/// The record parser for a file-backed harness.
+pub(crate) fn record_parser(agent: &str) -> Option<fn(&Value) -> Option<TruthRecord>> {
+    match agent {
+        "claude" => Some(parse_claude_record),
+        "codex" => Some(parse_codex_record),
+        _ => None,
+    }
+}
+
+/// True when the row carries a falsifier: its process, pane or exit says
+/// the session is not running.
+pub(crate) fn row_falsified(row: &RegistryEntry) -> bool {
+    registry_falsifier(row).is_some()
+}
+
+/// The pane falsifier for a mux ref: `true` only when the mux says the pane
+/// is gone.
+pub(crate) fn pane_gone(mux: &crate::state::MuxRef) -> bool {
+    pane_falsifier(mux).is_some()
+}
+
+pub(crate) enum RecordsError {
+    Unsupported(String),
+    NoTranscript,
+    Read(String),
+}
+
+/// The last `n` renderable records of one session, oldest first: the one
+/// tail reader peek and the lead check-in share.
+pub(crate) fn session_records(
+    session: &TruthSession,
+    stores: &Stores,
+    n: usize,
+) -> Result<Vec<TruthRecord>, RecordsError> {
+    if session.agent == "opencode" {
+        return Ok(opencode_records_db(
+            &stores.opencode_db,
+            &session.session_id,
+            n,
+        ));
+    }
+    let parse = record_parser(&session.agent)
+        .ok_or_else(|| RecordsError::Unsupported(session.agent.clone()))?;
+    let path = session_transcript(session, stores).ok_or(RecordsError::NoTranscript)?;
+    tail_records(&path, n, parse).map_err(RecordsError::Read)
 }
 
 /// The newest `n` records of a JSONL transcript, read from EOF in windows
@@ -1272,9 +1327,12 @@ fn tail_records(
     path: &Path,
     n: usize,
     parse: fn(&Value) -> Option<TruthRecord>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<TruthRecord>, String> {
     use std::io::{Read, Seek, SeekFrom};
     const CAP: u64 = 8 * 1024 * 1024;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
     let read_err = |e: std::io::Error| format!("{}: {e}", path.display());
     let len = std::fs::metadata(path).map_err(read_err)?.len();
     let mut window: u64 = 256 * 1024;
@@ -1287,15 +1345,15 @@ fn tail_records(
         let text = String::from_utf8_lossy(&bytes);
         // A window that starts mid-file starts mid-line: drop that fragment.
         let skip = usize::from(from > 0);
-        let texts: Vec<String> = text
+        let mut records: Vec<TruthRecord> = text
             .lines()
             .skip(skip)
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .filter_map(|v| parse(&v))
-            .map(|r| r.text)
             .collect();
-        if texts.len() >= n || from == 0 || window >= CAP {
-            return Ok(texts[texts.len().saturating_sub(n)..].to_vec());
+        if records.len() >= n || from == 0 || window >= CAP {
+            let keep = records.len().saturating_sub(n);
+            return Ok(records.split_off(keep));
         }
         window = (window * 4).min(CAP);
     }

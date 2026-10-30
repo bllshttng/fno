@@ -303,7 +303,7 @@ pub(crate) fn pane_lines(
             let marker = if k == sel {
                 follow = Some(lines.len());
                 k += 1;
-                ">"
+                " "
             } else {
                 k += 1;
                 " "
@@ -364,7 +364,7 @@ pub(crate) fn pane_lines(
         let marker = if k == sel {
             follow = Some(lines.len());
             k += 1;
-            ">"
+            " "
         } else {
             k += 1;
             " "

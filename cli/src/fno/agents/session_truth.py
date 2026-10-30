@@ -556,18 +556,6 @@ def _default_resolve(handle: str):
     return session, suggestions
 
 
-_EVIDENCE = {
-    "done": "promise emitted",
-    "watching": "watching external",
-    "your-move": "awaiting your reply",
-    "working": "active",
-    "stalled": "silent",
-    "dead": "falsified",
-    "exited": "resumable",
-}
-RESUMABLE_BASES = frozenset({"exit-recorded", "process-gone", "pane-gone"})  # resume relaunches
-
-
 def _humanize_age(seconds: Optional[int]) -> str:
     """Fixed-width (4) so a column of these never reflows when a value rolls
     from ``59m`` to ``1h`` or past a day. ``None`` renders ``?`` padded to the
@@ -589,46 +577,4 @@ def _humanize_age(seconds: Optional[int]) -> str:
     return f"{n}{unit}".rjust(4)
 
 
-def _model_clause(observed: Any) -> str:
-    """The model half of the truth line, or '' when there is nothing to say.
 
-    ``no-transcript`` renders NOTHING rather than "unknown": a worker spawned
-    two seconds ago has no transcript yet and must not look broken.
-    ``not-file-backed`` renders nothing for the same reason one level over --
-    an opencode worker will never have one, and saying so on every line would be
-    noise, not news. The remaining two each get their own words, because a
-    session that came up and never answered is the state this reading exists to
-    make visible and must not read as healthy.
-    """
-    if not isinstance(observed, dict):
-        return ""
-    kind = observed.get("kind")
-    if kind == "observed":
-        return f" on {observed.get('model')}"
-    if kind == "no-model-yet":
-        return ", no model yet"
-    if kind == "unreadable":
-        return ", model unreadable"
-    return ""
-
-
-def render_truth(result: dict[str, Any]) -> str:
-    """One legible human line with the state, the model, and the evidence."""
-    handle = result.get("handle", "?")
-    state = str(result.get("state") or "")
-    if state == "unknown":
-        line = f"truth {handle}: unknown ({result.get('reason') or 'unresolved'})"
-        suggestions = result.get("suggestions") or []
-        if suggestions:
-            line += f" -- did you mean: {', '.join(suggestions)}"
-        return line
-    age = _humanize_age(result.get("last_activity_age_s"))
-    model = _model_clause(result.get("observed_model"))
-    basis = result.get("last_activity_basis")
-    suffix = f" by {basis}" if basis else ""
-    reason = result.get("reason")
-    tag = f" [{reason}]" if reason else ""
-    return (
-        f"truth {handle}: {state}{model}{tag} "
-        f"({_EVIDENCE.get(state, '')}, last activity {age} ago{suffix})"
-    )

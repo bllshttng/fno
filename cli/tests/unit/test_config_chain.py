@@ -64,3 +64,49 @@ def test_merge_read_climbs_to_the_canonical_project_from_a_worktree(
     settings = config.load_settings_for_repo(worktree)
 
     assert settings.auto_merge.enabled is True
+
+
+def test_a_pinned_config_is_the_global_settings_path(monkeypatch, tmp_path: Path):
+    from fno.config_io import _global_settings_path
+
+    pin = tmp_path / "sandbox" / "config.toml"
+    pin.parent.mkdir()
+    pin.write_text("schema_version = 1\n", encoding="utf-8")
+
+    # Pin alone: the pin is the global config.
+    monkeypatch.setenv("FNO_CONFIG", str(pin))
+    monkeypatch.delenv("FNO_GLOBAL_SETTINGS_PATH", raising=False)
+    assert _global_settings_path() == pin
+
+    # An explicit global relocation outranks the pin.
+    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "global.toml"))
+    assert _global_settings_path() == Path(tmp_path / "global.toml")
+
+
+def test_a_seeded_root_load_under_a_pin_never_reads_the_machine_global(
+    monkeypatch, tmp_path: Path
+):
+    # A sandbox that pins FNO_CONFIG alone must not inherit the machine
+    # global's share posture: with no explicit global path the pin is the
+    # chain's global candidate, so a machine global with share_backlog on
+    # stays invisible to the sandbox.
+    worktree = tmp_path / "sandbox-repo"
+    (worktree / ".fno").mkdir(parents=True)
+    pin = tmp_path / "sandbox" / "config.toml"
+    pin.parent.mkdir()
+    pin.write_text("schema_version = 1\n", encoding="utf-8")
+    (tmp_path / "global.toml").write_text(
+        "[store]\nremote_url = \"http://primary.example\"\nshare_backlog = true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FNO_CONFIG", str(pin))
+    monkeypatch.delenv("FNO_GLOBAL_SETTINGS_PATH", raising=False)
+    monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
+    monkeypatch.setattr(
+        "fno.paths.resolve_canonical_worktree",
+        lambda root=None, timeout=None: tmp_path / "canonical",
+    )
+
+    settings = config.load_settings_for_repo(worktree)
+
+    assert settings.store.share_backlog is False

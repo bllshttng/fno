@@ -45,6 +45,7 @@ fn stage(
         &|_| CascadeOutcome::Removed,
         mux_member,
         &mut receipts,
+        &|_| None,
     )
 }
 

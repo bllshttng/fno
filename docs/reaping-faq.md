@@ -10,7 +10,7 @@ Measured on this machine on 2026-09-10 with the dry run: 1 `would retire` line, 
 
 A reaping sweep kept a session row and you want to know why. You want a row gone and reap refuses. You asked which condition acts first and got told no doc answers. This page owns the keep reasons and every program that stops or removes a session or one of its parts. It owns the order they run in. It owns every key of the reap JSON report. Misreading it makes you force a delete the machine will re-judge on the next sweep, or kill a worker whose row was telling the truth.
 
-Not for: the worktree removal contract (which trees prune on merge and which never do). That is answered at [The row retired and its tree stayed](#the-row-retired-and-its-tree-stayed) and owned by [../.claude/rules/worktrees.md](../.claude/rules/worktrees.md).
+Not for: the worktree removal contract (which trees prune on merge and which never do). That is answered at [The row retired and its tree stayed](#the-row-retired-and-its-tree-stayed) and owned by [worktree-mechanics.md](architecture/worktree-mechanics.md) (Placement).
 
 ## Read the answer
 
@@ -321,7 +321,7 @@ Tree lines start with `kept tree`. They are decided only after the row verdict i
 - `kept tree {id} (the cleanliness probe could not answer: {path})`: unknown never removes (`gc.rs` `tree_action`).
 - `kept tree {id} (shared with {holder}, still live)`: another live row occupies the path (`gc_sweep.rs` `run_with_release`).
 
-A clean and merged tree prunes, and the branch stays (`gc.rs` `tree_action`). The removal contract for worktrees lives in [../.claude/rules/worktrees.md](../.claude/rules/worktrees.md).
+A clean and merged tree prunes, and the branch stays (`gc.rs` `tree_action`). The removal contract for worktrees lives in [worktree-mechanics.md](architecture/worktree-mechanics.md).
 
 A `kept tree` keeps its source. When no session holds it, its build output is reclaimed after 6h of quiet (`cargo_build_dirs.rs` `reclaim_idle_trees`).
 

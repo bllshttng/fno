@@ -218,6 +218,10 @@
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\"",
             "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/transcript-push.sh\""
           }
         ]
       }
@@ -426,6 +430,10 @@
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-run.sh\" claude-session-start",
             "timeout": 50
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/daemon-liveness-session-start.sh\""
           }
         ]
       }

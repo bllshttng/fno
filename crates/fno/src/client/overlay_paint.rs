@@ -79,7 +79,30 @@ pub(crate) fn layout_lines_overlay<S: AsRef<str>>(
     content_dims: (usize, usize),
     chrome: &chrome::Chrome,
     lines: &[S],
+    cursor: Option<usize>,
+    anchor: OverlayAnchor,
+) -> OverlayLayout {
+    layout_lines_overlay_at(
+        content_origin,
+        content_dims,
+        chrome,
+        lines,
+        cursor,
+        true,
+        anchor,
+    )
+}
+
+/// [`layout_lines_overlay`] with `follow` kept in view; `paint_cursor` also
+/// fills that line with the one cursor ([`crate::cursor`]). A tail-follow
+/// (the reply dock) keeps the newest line in view without it.
+pub(crate) fn layout_lines_overlay_at<S: AsRef<str>>(
+    content_origin: (usize, usize),
+    content_dims: (usize, usize),
+    chrome: &chrome::Chrome,
+    lines: &[S],
     follow: Option<usize>,
+    paint_cursor: bool,
     anchor: OverlayAnchor,
 ) -> OverlayLayout {
     let (content_rows, content_cols) = content_dims;
@@ -137,7 +160,14 @@ pub(crate) fn layout_lines_overlay<S: AsRef<str>>(
     };
     let body: Vec<chrome::BodyLine> = lines[start..start + take]
         .iter()
-        .map(|l| chrome::BodyLine::plain(l))
+        .enumerate()
+        .map(|(i, l)| {
+            let mut line = chrome::BodyLine::plain(l);
+            if paint_cursor && follow == Some(start + i) {
+                line.sel_span = Some((0, l.chars().count()));
+            }
+            line
+        })
         .collect();
     let framed = chrome::frame(&body, chrome, body_w, scroll);
     let box_h = framed.lines.len().min(content_rows);
