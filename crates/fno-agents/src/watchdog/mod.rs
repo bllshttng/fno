@@ -2,4 +2,5 @@
 
 pub mod keeper;
 pub mod outage;
+pub mod recoverable;
 pub mod unfinished;

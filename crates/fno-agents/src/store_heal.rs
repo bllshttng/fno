@@ -82,7 +82,7 @@ fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
 }
 
-fn codex_sessions_dir() -> PathBuf {
+pub(crate) fn codex_sessions_dir() -> PathBuf {
     if let Some(dir) = env_dir("FNO_CODEX_SESSIONS_DIR") {
         return dir;
     }
@@ -107,7 +107,7 @@ fn opencode_storage_dir() -> PathBuf {
 /// Every file under `root` the filter accepts. An absent root is empty; any
 /// directory that cannot be listed is an error, never an empty answer, so a
 /// uniqueness check never reads a partial corpus as a complete one.
-fn scan_files(
+pub(crate) fn scan_files(
     root: &Path,
     max_depth: Option<usize>,
     include: &dyn Fn(&str) -> bool,
@@ -203,7 +203,7 @@ fn probe_claude(token: &str) -> std::io::Result<Vec<StoreHit>> {
 
 /// A rollout's `session_meta` line 1: `(id, cwd)`, or `None` when the file
 /// carries no readable meta.
-fn codex_meta(path: &Path) -> Option<(String, String)> {
+pub(crate) fn codex_meta(path: &Path) -> Option<(String, String)> {
     let file = std::fs::File::open(path).ok()?;
     let mut first = String::new();
     std::io::BufReader::new(file).read_line(&mut first).ok()?;
@@ -476,7 +476,15 @@ fn collision(kind: &str, token: &str, action: &str, session_id: &str, tail: &str
 ///
 /// No `FNO_AGENT_SELF` refusal here: that guard stops a worker minting a
 /// second row for itself, and an adopted session is never the caller.
-fn adopt(hit: &StoreHit, registry_path: &Path, token: &str) -> Result<Value, HealError> {
+///
+/// A caller that will resume the thread by full session id passes `log_path`
+/// here so the row is complete the moment it lands; empty leaves the field.
+fn adopt(
+    hit: &StoreHit,
+    registry_path: &Path,
+    token: &str,
+    log_path: &str,
+) -> Result<Value, HealError> {
     use crate::state::RegistryEntry;
     if recent_rm_tombstone(hit.harness, &hit.session_id, registry_path) {
         return Err(HealError::Ambiguous(format!(
@@ -498,6 +506,7 @@ deliberately.",
     let adopted_by = adopting_session(&hit.session_id);
     let harness = hit.harness.to_string();
     let sid = hit.session_id.clone();
+    let log_path: Option<String> = Some(log_path.to_string()).filter(|p| !p.is_empty());
     let written = crate::state::update_registry(registry_path, |registry| {
         let entries = &mut registry.entries;
         if let Some(index) = entries.iter().position(|e| {
@@ -524,6 +533,9 @@ deliberately.",
                 row.status = crate::AgentStatus::Orphaned;
             }
             row.cwd = hit.cwd.clone();
+            if log_path.is_some() {
+                row.log_path = log_path.clone();
+            }
             if !short_id.is_empty() {
                 row.short_id = short_id.clone();
             }
@@ -573,6 +585,7 @@ deliberately.",
         fresh.status = crate::AgentStatus::Orphaned;
         fresh.origin = Some("adopted".to_string());
         fresh.short_id = short_id.clone();
+        fresh.log_path = log_path.clone();
         fresh.last_message_at = last_message_at.clone();
         fresh.adopted_by_session = adopted_by.clone();
         fresh.created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -617,11 +630,31 @@ will appear on a later resolution.",
             synthetic.status = crate::AgentStatus::Orphaned;
             synthetic.origin = Some("adopted".to_string());
             synthetic.short_id = short_id;
+            synthetic.log_path = log_path;
             synthetic.adopted_by_session = adopted_by;
             serde_json::to_value(synthetic)
                 .map_err(|e| HealError::Unavailable(format!("adopted row did not serialize: {e}")))
         }
     }
+}
+
+/// Register one Codex rollout the caller already identified as an adopted
+/// orphan, with its follow-up path on the same write.
+pub(crate) fn adopt_codex_rollout(
+    session_id: &str,
+    cwd: &str,
+    rollout_path: &Path,
+    registry_path: &Path,
+    token: &str,
+    log_path: &str,
+) -> Result<Value, HealError> {
+    let hit = StoreHit {
+        harness: "codex",
+        session_id: session_id.to_string(),
+        cwd: cwd.to_string(),
+        transcript: Some(rollout_path.to_path_buf()),
+    };
+    adopt(&hit, registry_path, token, log_path)
 }
 
 /// Adopt the one session `token` names from the harness stores. `Ok(None)`
@@ -633,7 +666,7 @@ pub(crate) fn heal_from_store(
     let hits = complete_store_hits(token)?;
     match hits.len() {
         0 => Ok(None),
-        1 => adopt(&hits[0], registry_path, token).map(Some),
+        1 => adopt(&hits[0], registry_path, token, "").map(Some),
         n => Err(HealError::Ambiguous(format!(
             "token {} matches {n} sessions across harness stores: {}. Disambiguate with the full \
 session id.",
