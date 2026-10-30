@@ -723,6 +723,18 @@ fn spawn_flag_rows() {
         harness_args(&["wk", "--yolo"]),
         serde_json::json!(["--yolo"])
     );
+    // The one dangling retired short refuses by name instead of falling to
+    // the positionals; the long form forwards above.
+    let err = build_request(
+        "spawn",
+        &["wk".to_string(), "-r".to_string(), "6501096a".to_string()],
+    )
+    .unwrap_err();
+    assert!(err.contains("-r is not a spawn flag here"), "{err}");
+    assert_eq!(
+        harness_args(&["wk", "--resume", "6501096a"]),
+        serde_json::json!(["--resume", "6501096a"])
+    );
     assert_eq!(harness_args(&["wk", "-Y"]), serde_json::json!(["--yolo"]));
     assert_eq!(
         harness_args(&["wk", "--deny-tools", "Bash"]),
