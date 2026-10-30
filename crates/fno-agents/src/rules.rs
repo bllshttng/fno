@@ -346,7 +346,7 @@ pub fn matches(rule: &Rule, ev: &Event) -> bool {
                 .iter()
                 .any(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p)))
     };
-    (w.events.is_empty() || w.events.iter().any(|e| *e == ev.kind))
+    (w.events.is_empty() || w.events.contains(&ev.kind))
         && many(&w.paths, &ev.paths)
         && many(&w.subjects, &ev.subjects)
         && one(&w.tools, &ev.tool)
