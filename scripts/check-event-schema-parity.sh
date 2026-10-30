@@ -383,6 +383,11 @@ dual_owner_kinds = {
     # that field also feeds the tracked events_schema.json projection,
     # which only a cargo build can regenerate.
     "session_pane_rebound",
+    # session_id_restamped: the Python SessionStart restamp
+    # (register_session.py) and the org init --rebind-from repair
+    # (lead_rebind.rs) write the same row shape: one row's harness session
+    # id moved onto a new id.
+    "session_id_restamped",
     # triage_applied: one row per committed triage apply, emitted by the
     # native triage engine (Rust) and the Python twin it ports, both with
     # the backlog source, until the Python leg deletes with the closing
