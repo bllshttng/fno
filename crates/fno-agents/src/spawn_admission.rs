@@ -1427,7 +1427,7 @@ mod tests {
             [
                 "spawn",
                 "--name",
-                "t-spawn-bare-node-names",
+                "t-spawn-bare-node",
                 "/fno:target x-aaaa"
             ]
         );
