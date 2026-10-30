@@ -281,11 +281,9 @@ pub fn classify_with_basis_and_exclusivity(
     if rec.expires_at.is_none() {
         if live && shared_host(rec) && is_node_or_task(rec) {
             // The answering pid is the shared host: it cannot tell a live
-            // thread from a live multiplexer, so it never decides a node
-            // claim. A claim with a session id returned above (the witness
-            // arm); a claim without one has no witness to speak, so Suspect
-            // is the honest verdict - held, never trusted, never freed on
-            // host evidence.
+            // thread from a live multiplexer. A claim with a session id
+            // returned above (the witness arm); one without has no witness,
+            // so Suspect is the honest verdict.
             return (ClaimState::Suspect, basis::PID_SHARED);
         }
         if live {
@@ -327,8 +325,7 @@ pub fn classify_with_basis_and_exclusivity(
     if live && shared_host(rec) && is_node_or_task(rec) {
         // The same shared-host rule inside the TTL window: the host pid alone
         // proves nothing. A record with a session id returned earlier (the
-        // witness arm), so `witnessed` is None here and Suspect is the honest
-        // verdict - held, never trusted, never freed on host evidence.
+        // witness arm), so `witnessed` is None here and Suspect is honest.
         return (ClaimState::Suspect, basis::PID_SHARED);
     }
     if live {
