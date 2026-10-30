@@ -217,8 +217,8 @@ fn manifest_path_matches_the_python_goldens() {
         "---\nscope: epic-orphan\nharness_session_id: sess-predecessor\n---\n",
     )
     .unwrap();
-    // The Orphaned rows read their crown through the row_verdict door, and
-    // the door rests on a pid probe: no fixture pid is live or dead on every
+    // The Orphaned rows answer the manifest read through the row_verdict
+    // door, and the door rests on a pid probe: no fixture pid is live or dead on every
     // host, so the test injects its own - this process's pid, which is alive
     // for the duration of each child run, and a reaped child's, which is
     // dead on every host.
