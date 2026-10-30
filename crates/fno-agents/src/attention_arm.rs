@@ -2305,7 +2305,7 @@ mod tests {
         let rendered = render_page(&item, &Routing::default());
         let stale = rendered.replace(
             "title: Branch f (opus) forked. Inherit or clean?",
-            "title: session-transition-branch:t-opus:a:b Branch f (opus) forked. Inherit or clean?",
+            "title: pending-probe:t-opus:a:b Branch f (opus) forked. Inherit or clean?",
         );
         assert_ne!(stale, rendered, "fixture: the title line must exist");
         io.files.insert(dir.path().join("q-old.md"), stale);
@@ -2325,7 +2325,7 @@ mod tests {
             .get(&dir.path().join("questions.md"))
             .expect("the tick rewrites the index");
         assert!(index.contains("Branch f (opus) forked"), "{index}");
-        assert!(!index.contains("session-transition-branch"), "{index}");
+        assert!(!index.contains("pending-probe"), "{index}");
     }
 
     #[test]
