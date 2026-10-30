@@ -30,8 +30,10 @@ pub(crate) async fn read_trace(node: &str) -> Result<Vec<u8>, String> {
         Err(_) => return Err(format!("timed out after {}ms", TRACE_TIMEOUT.as_millis())),
     };
     if !output.status.success() {
-        let said = String::from_utf8_lossy(&output.stdout);
-        let said = said.lines().next().unwrap_or("").trim();
+        let said = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_string))
+            .unwrap_or_default();
         return Err(if said.is_empty() {
             match output.status.code() {
                 Some(code) => format!("backlog get --trace exited {code}"),
