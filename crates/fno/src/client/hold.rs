@@ -98,7 +98,7 @@ pub(crate) fn current() -> Option<Hold> {
             return hold.clone();
         }
     }
-    let path = crate::agents_view::registry_path().with_file_name("fleet-stop.json");
+    let path = crate::agents_view::runtime_home().join("fleet-stop.json");
     let hold = std::fs::read_to_string(path)
         .ok()
         .and_then(|raw| parse(&raw, chrono::Utc::now()));

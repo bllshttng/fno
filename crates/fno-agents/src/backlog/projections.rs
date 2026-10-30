@@ -626,12 +626,37 @@ fn parse_target(row: &Value) -> Result<RenderTarget, String> {
     })
 }
 
+/// Whether the canonical board page is already among the targets.
+fn names_canonical_page(targets: &[RenderTarget]) -> bool {
+    let canonical = resolve(&graph_html_path());
+    targets
+        .iter()
+        .any(|t| resolve(&expand(&t.path)) == canonical)
+}
+
+/// The target list `fno backlog view` renders: the configured targets, plus
+/// the canonical page when no target names it. With `render_default` off the
+/// keeper never writes the page, so the view renders it here on demand.
+fn view_targets(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarget> {
+    let mut targets = targets_from_global(global, unreadable);
+    if !names_canonical_page(&targets) {
+        targets.push(default_target());
+    }
+    targets
+}
+
+/// `backlog.render_default` (default true): whether the canonical board page
+/// stays an implicit render target. Off, only explicit `render_targets` rows
+/// render, and `fno backlog view` renders the page on demand.
+fn render_default_on(block: Option<&Value>) -> bool {
+    super::advance_settings::coerce_bool(block.and_then(|b| b.get("render_default")), true)
+}
+
 /// `config.backlog.render_targets` from the GLOBAL config only: a render
 /// fired from any cwd must not depend on a project-local list. Every bad
-/// row warns and costs that one board; the canonical board row is always
-/// present.
-fn configured_targets() -> Vec<RenderTarget> {
-    let (global, unreadable) = super::advance_settings::load_global_merged();
+/// row warns and costs that one board; the canonical board row is implicit
+/// unless `backlog.render_default: false` turns it off.
+fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarget> {
     let block = global.get("backlog");
     let rows = match block.and_then(|b| b.get("render_targets")) {
         None | Some(Value::Null) => Vec::new(),
@@ -692,8 +717,7 @@ fn configured_targets() -> Vec<RenderTarget> {
         out.push(target);
     }
     warn_shadowed_local_rows(&out);
-    let canonical = resolve(&graph_html_path());
-    if !out.iter().any(|t| resolve(&expand(&t.path)) == canonical) {
+    if render_default_on(block) && !names_canonical_page(&out) {
         out.insert(0, default_target());
     }
     out
@@ -742,9 +766,18 @@ fn board_render(request: &Value) -> Result<std::process::Output, String> {
 /// Write every configured `local` board target through `fno board-render`
 /// and return the count of failures. Retired projections warn and skip.
 pub(crate) fn render_local_targets() -> usize {
-    let (global, _) = super::advance_settings::load_global_merged();
+    let (global, unreadable) = super::advance_settings::load_global_merged();
+    render_board_targets(
+        &targets_from_global(&global, &unreadable),
+        global_obsidian_vault(&global),
+    )
+}
+
+/// Write each `local` projection target through `fno board-render` and
+/// return the count of failures. Retired projections warn and skip.
+fn render_board_targets(targets: &[RenderTarget], vault: Option<String>) -> usize {
     let mut local = Vec::new();
-    for target in configured_targets() {
+    for target in targets {
         if target.projection == "local" {
             local.push(json!({
                 "path": expand(&target.path).to_string_lossy(),
@@ -762,7 +795,7 @@ pub(crate) fn render_local_targets() -> usize {
         return 0;
     }
     let count = local.len();
-    let request = json!({"targets": local, "vault": global_obsidian_vault(&global)});
+    let request = json!({"targets": local, "vault": vault});
     let done = match board_render(&request) {
         Ok(done) => done,
         Err(e) => {
@@ -951,7 +984,9 @@ pub fn run_view(tail: &[String]) -> i32 {
     if let Some(arg) = tail.first() {
         return usage_error("view", arg);
     }
-    let failures = render_local_targets();
+    let (global, unreadable) = super::advance_settings::load_global_merged();
+    let targets = view_targets(&global, &unreadable);
+    let failures = render_board_targets(&targets, global_obsidian_vault(&global));
     if failures > 0 {
         eprintln!(
             "Error: local board render failed ({failures} target(s)); see the warnings above"
@@ -2034,5 +2069,41 @@ mod tests {
             .contains("scope must not be empty"));
         let star = parse_target(&json!({"path": "/tmp/b.html", "scope": "*"})).unwrap();
         assert_eq!(star.scope, "all");
+    }
+
+    #[test]
+    fn render_default_off_drops_the_implicit_page_and_view_restores_it() {
+        let off = json!({"backlog": {"render_default": false}});
+        let targets = targets_from_global(&off, &[]);
+        assert!(!names_canonical_page(&targets));
+        // `fno backlog view` renders the page on demand when the keeper skips it.
+        assert!(names_canonical_page(&view_targets(&off, &[])));
+        // Unset reads as on: exactly one target, the canonical page.
+        let on = targets_from_global(&json!({}), &[]);
+        assert_eq!(on.len(), 1);
+        assert!(names_canonical_page(&on));
+        // The lax bool reader takes the string spelling too.
+        let str_off = json!({"backlog": {"render_default": "false"}});
+        assert!(!names_canonical_page(&targets_from_global(&str_off, &[])));
+    }
+
+    #[test]
+    fn render_default_off_keeps_explicit_rows_and_view_adds_the_page_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("board.html");
+        let global = json!({
+            "backlog": {
+                "render_default": false,
+                "render_targets": [{"path": page.to_string_lossy(), "scope": "all"}],
+            }
+        });
+        let targets = targets_from_global(&global, &[]);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path, page.to_string_lossy());
+        // The view list carries the explicit row plus the on-demand page.
+        let view = view_targets(&global, &[]);
+        assert_eq!(view.len(), 2);
+        assert_eq!(view[0].path, page.to_string_lossy());
+        assert!(names_canonical_page(&view));
     }
 }

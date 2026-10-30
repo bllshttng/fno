@@ -21,9 +21,14 @@ pub fn version_json() -> serde_json::Value {
     // The front door's own Python resolution (the executed-path receipt): the
     // script this door would exec, so a receipt can name the deployment the
     // user actually runs instead of the venv a caller guessed at. None (null)
-    // when the resolver could not answer.
+    // when the resolver could not answer. The resolver lives in `bootstrap`,
+    // a `full` module: the contract build (an external harness linking this
+    // crate) reports null, since it is not a front door.
+    #[cfg(feature = "full")]
     let python_script =
         crate::bootstrap::resolved_python_script().map(|p| p.to_string_lossy().into_owned());
+    #[cfg(not(feature = "full"))]
+    let python_script: Option<String> = None;
     json!({
         "package": env!("CARGO_PKG_VERSION"),
         "git_rev": env!("FNO_MUX_GIT_REV"),       // full sha, or the literal "unknown"
@@ -36,6 +41,9 @@ pub fn version_json() -> serde_json::Value {
 
 /// Print the mux's embedded version. `--json` emits [`version_json`]; the human
 /// form is a one-liner. Side-effect-free: never spawns a server or attaches.
+/// Binary surface: the `fno` bin requires the `full` feature, and the human
+/// form reads the `full`-only bootstrap resolver.
+#[cfg(feature = "full")]
 pub fn print_version(json_out: bool) {
     let pkg = env!("CARGO_PKG_VERSION");
     let rev = env!("FNO_MUX_GIT_REV"); // full sha, or the literal "unknown"

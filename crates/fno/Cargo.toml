@@ -24,60 +24,103 @@ publish = true
 [[bin]]
 name = "fno"
 path = "src/main.rs"
+required-features = ["full"]
+
+[features]
+# The contract build is `--no-default-features`: only the four modules an
+# external harness links (footnote_transcript, effect_map, version,
+# provider_key) plus their three light dependencies (serde,
+# serde_json, sha2). `full` is everything the `fno` binary
+# needs: the mux, the TUI, the server, the web bridge, and the bootstrap
+# python resolver behind version_json's receipt. fnh pins this crate
+# with default-features = false, so a new dependency must either join the
+# light set or stay behind `full`; an unconditional heavy dep silently
+# re-inflates every fnh build.
+default = ["full"]
+full = [
+    "dep:axum",
+    "dep:alacritty_terminal",
+    "dep:crossterm",
+    "dep:ratatui-core",
+    "dep:ratatui-widgets",
+    "dep:throbber-widgets-tui",
+    "dep:ratatui-image",
+    "dep:image",
+    "dep:hayro",
+    "dep:libc",
+    "dep:portable-pty",
+    "dep:regex",
+    "dep:shlex",
+    "dep:magic-wormhole",
+    "dep:futures-util",
+    "dep:serde_yaml_ng",
+    "dep:toml_edit",
+    "dep:clap",
+    "dep:clap_complete",
+    "dep:unicode-width",
+    "dep:toml",
+    "dep:blake3",
+    "dep:rusqlite",
+    "dep:chrono",
+    "dep:strsim",
+    "dep:thiserror",
+    "dep:tempfile",
+    "dep:tokio",
+]
 
 [dependencies]
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"], optional = true }
 # Same major versions as crates/fno-agents, which already builds this stack.
-alacritty_terminal = "0.26"
-crossterm = { version = "0.29", features = ["event-stream"] }
+alacritty_terminal = { version = "0.26", optional = true }
+crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 # The sideline's widget layer: `draw_sideline` renders a `Table` into a
 # standalone `Buffer` and `ratatui_blit` copies it into the compositor's
 # cells. No backend, no terminal: default features stay off so neither
 # crate pulls a second crossterm beside the one pinned above. The plan
 # wrote "0.30"; the split crates version independently (the 0.30 umbrella
 # builds on exactly these), so the real lines are 0.1.x / 0.3.x.
-ratatui-core = { version = "0.1", default-features = false, features = ["std"] }
-ratatui-widgets = { version = "0.3", default-features = false, features = ["std"] }
+ratatui-core = { version = "0.1", default-features = false, features = ["std"], optional = true }
+ratatui-widgets = { version = "0.3", default-features = false, features = ["std"], optional = true }
 # The Working row's spin frames come from this crate's symbol sets, so the
 # glyph animation is a maintained widget crate's vocabulary, not a local
 # table. Symbols only: default features off so no second ratatui backend
 # rides in.
-throbber-widgets-tui = { version = "0.11", default-features = false }
+throbber-widgets-tui = { version = "0.11", default-features = false, optional = true }
 # The file viewer's images. ratatui-image encodes kitty, iTerm2, sixel or
 # half-blocks into a ratatui Buffer; default features off keeps out its
 # crossterm backend and the chafa dylib (the terminal query rides rustix,
 # which it always builds). `image` decodes the four formats a screenshot
 # arrives in and nothing else.
-ratatui-image = { version = "11.1", default-features = false }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+ratatui-image = { version = "11.1", default-features = false, optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
 # The file viewer's PDF pages. Pure Rust (no pdfium dylib shipped beside the
 # binary); renders one page to an RGBA pixmap that rides the image layer.
-hayro = "0.8"
-libc = "0.2"
-portable-pty = "0.9"
+hayro = { version = "0.8", optional = true }
+libc = { version = "0.2", optional = true }
+portable-pty = { version = "0.9", optional = true }
 # `pane wait --pattern RE`: regex over a pane's visible grid (script API).
-regex = "1"
+regex = { version = "1", optional = true }
 # The review invocation parser's shlex.split port (one owner in
 # review_invocation.rs). Already resolved through the lockfile.
-shlex = "2.0.1"
+shlex = { version = "2.0.1", optional = true }
 # store_client.rs hashes long graph paths for the fallback keeper-socket
 # name; the same crate version fno-agents pins, so one build stack.
 sha2 = "0.10"
 # The session-bundle transfer wire (send/receive over a pairing code).
-magic-wormhole = "0.7.7"
+magic-wormhole = { version = "0.7.7", optional = true }
 # magic-wormhole's transfer reader is a futures AsyncRead, so the cursor
 # and the rest of its io types come from here.
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
 # The shared event store: the native front door routes `fno doctor event`
 # onto this library; the runtime binary links the same types.
 # Re-verify a picked answer's region fingerprint against the live grid before
 # injecting. Must match the daemon's hash byte-for-byte across
 # processes, so the same content hash both sides use - not a per-process
 # DefaultHasher.
-blake3 = "1"
+blake3 = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: the `mux thread reseat` command round-trips registry.json as
 # raw JSON to clear one row's mux ref; without it serde_json would reorder
@@ -88,29 +131,29 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # (the worktree hooks, wt_config) serves yaml through `fno config get` cold,
 # before any loader run could migrate it to flat config.toml. Same pin and
 # same backend (pure-Rust unsafe-libyaml) the fno-agents crate resolves.
-serde_yaml_ng = "0.10"
+serde_yaml_ng = { version = "0.10", optional = true }
 # Read the flat `config.toml` (stage 3): the interactive server reads
 # `config.mux.*` directly (digest_overlay Pattern B) instead of shelling `fno`.
-toml = "0.8"
+toml = { version = "0.8", optional = true }
 # The spawn floor setter parses and rewrites config.toml keeping comments
 # (spawn_floor.rs); `toml` only reads. Already resolved through `toml`.
-toml_edit = "0.22"
+toml_edit = { version = "0.22", optional = true }
 # Native mux argv parsing: one typed declaration per flag, so the
 # flag registry is structural rather than a hand-copied convention.
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
+clap = { version = "4", features = ["derive"], optional = true }
+clap_complete = { version = "4", optional = true }
 # Popup chrome measures and paints in terminal columns: a fullwidth
 # glyph is one char and two cells. Already resolved transitively via
 # alacritty_terminal, so this adds no new build artifact.
-unicode-width = "0.2"
-rusqlite = { version = "0.40.2", features = ["bundled", "backup", "fallible_uint", "functions"] }
-chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }
+unicode-width = { version = "0.2", optional = true }
+rusqlite = { version = "0.40.2", features = ["bundled", "backup", "fallible_uint", "functions"], optional = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"], optional = true }
 # `search_query.rs` names the nearest key on an unknown-key error (already
 # locked at 0.11.1 as a transitive dep, so no new download).
-strsim = "0.11"
-thiserror = "2"
-tempfile = "3"
-tokio = { version = "1", features = [
+strsim = { version = "0.11", optional = true }
+thiserror = { version = "2", optional = true }
+tempfile = { version = "3", optional = true }
+tokio = { optional = true, version = "1", features = [
     "rt-multi-thread",
     "net",
     "io-util",

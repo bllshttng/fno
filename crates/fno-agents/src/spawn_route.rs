@@ -117,6 +117,33 @@ pub struct Target {
     pub env: BTreeMap<String, String>,
 }
 
+/// One declared lane row matched by name, the lookup [`resolve_target`] and
+/// [`route_vendor`] share; `None` when no row carries the name.
+fn lane_row(route: &str, cwd: &Path) -> Option<Value> {
+    let row = crate::route_gather::run_mode(
+        &json!({"mode": "lane", "match": "name", "name": route}),
+        cwd,
+    );
+    (row.get("found").and_then(Value::as_bool) == Some(true)).then_some(row)
+}
+
+/// The vendor a `--route` names, without resolving its env: the pair form's
+/// provider, else a declared lane's vendor half. The gate's cheap half of
+/// [`resolve_target`] - no credential reads, no refusal lines.
+pub fn route_vendor(route: &str, cwd: &Path) -> Option<String> {
+    if let Some((provider, _model)) = parse_target(route) {
+        return Some(provider);
+    }
+    let row = lane_row(route, cwd)?;
+    let vendor = row
+        .get("vendor")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    (!vendor.is_empty()).then_some(vendor)
+}
+
 /// Resolve a `--route` value (`provider,model` or a declared lane name) to
 /// its env. `Err` is the refusal line, `cmd_spawn`'s words.
 pub fn resolve_target(
@@ -127,16 +154,12 @@ pub fn resolve_target(
     let (provider, model, effort) = match parse_target(route) {
         Some((p, m)) => (p, m, None),
         None => {
-            let row = crate::route_gather::run_mode(
-                &json!({"mode": "lane", "match": "name", "name": route}),
-                cwd,
-            );
-            if row.get("found").and_then(Value::as_bool) != Some(true) {
+            let Some(row) = lane_row(route, cwd) else {
                 return Err(format!(
                     "--route takes 'provider,model' or a declared lane name; got {}",
                     py_repr(route)
                 ));
-            }
+            };
             let field = |k: &str| row.get(k).and_then(Value::as_str).unwrap_or("").to_string();
             if field("vendor").is_empty() {
                 return Err(format!(

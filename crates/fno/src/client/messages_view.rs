@@ -1247,13 +1247,6 @@ pub(crate) fn open_handle(view: &mut View, name: String) {
     }
 }
 
-/// Restore after launch: a persisted Messages sideline reopens it.
-pub(crate) fn restore(view: &mut View) {
-    if view.sideline_view == SidelineView::Messages {
-        open(view);
-    }
-}
-
 /// A landed gather: apply under the gen guard. The org tree result rides
 /// the same channel and is not used by the flat chat list.
 pub(crate) fn apply_gather(

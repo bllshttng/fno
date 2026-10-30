@@ -7050,8 +7050,8 @@ async fn attach_and_run(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut view = View::new((rows, cols), session, LayoutView::default());
-    org_board::restore(&mut view);
-    messages_view::restore(&mut view);
+    // A fresh launch opens on Agents whatever sideline view was last persisted.
+    backlog_board::set_sideline_view(&mut view, crate::view_store::SidelineView::Agents);
     // Latch the focus-follows-mouse off-switch once; a direct
     // config.toml read (fail-open to on), the digest_overlay idiom.
     view.hover_focus = crate::digest_overlay::hover_focus_enabled(Path::new(&cwd));

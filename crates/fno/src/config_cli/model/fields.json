@@ -113,6 +113,7 @@
       "epic_max_open_children": null,
       "max_open_ideas": 25,
       "render_targets": [],
+      "render_default": true,
       "page_reload_s": 60
      }
     },
@@ -911,6 +912,10 @@
     {
      "name": "render_targets",
      "default": []
+    },
+    {
+     "name": "render_default",
+     "default": true
     },
     {
      "name": "page_reload_s",
@@ -2967,6 +2972,7 @@
   "backlog.id_prefix",
   "backlog.id_hex_width",
   "backlog.render_targets",
+  "backlog.render_default",
   "batch.enabled",
   "batch.max_nodes",
   "batch.max_loc",

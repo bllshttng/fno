@@ -419,6 +419,12 @@ class BacklogBlock(BaseModel):
     # Enforced by the Rust idea cap (idea_cap.rs); 0 turns the cap off.
     max_open_ideas: int = Field(default=25, ge=0)
     render_targets: list[RenderTargetConfig] = Field(default_factory=list)
+    # The implicit canonical board page (~/.fno/cache/pages/graph.html).
+    # False turns the automatic page render off: the store keeper stops
+    # rewriting it after every graph burst, and `fno backlog view` renders
+    # it on demand instead. Like render_targets, honored from the GLOBAL
+    # config only.
+    render_default: bool = True
     # Seconds an open local board or lead.html tab waits, visible and
     # untouched, before it reloads itself (0 is off).
     page_reload_s: int = 60
