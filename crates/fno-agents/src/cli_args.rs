@@ -532,7 +532,7 @@ mod tests {
         ] {
             let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
             let (axes, _) = SpawnAxes::scan(&toks).expect("the vocabulary is admitted");
-            let word = form.last().unwrap().as_str();
+            let word: &str = form.last().map(String::as_str).unwrap();
             assert_eq!(axes.substrate.as_deref(), Some(word));
             assert!(SpawnAxes::strip_axes(&toks, toks.len()).is_empty());
         }
