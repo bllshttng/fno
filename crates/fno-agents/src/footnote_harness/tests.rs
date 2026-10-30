@@ -331,10 +331,7 @@ fn the_launch_serves_a_configured_state_dir() {
     );
     let saved = set_env(&[
         ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
-        (
-            "FNO_GLOBAL_SETTINGS_PATH",
-            settings.to_str().unwrap().to_string(),
-        ),
+        ("FNO_GLOBAL_SETTINGS_PATH", settings.to_str().unwrap()),
     ]);
     let saved_state_dir = std::env::var_os("FNO_STATE_DIR");
     let saved_config = std::env::var_os("FNO_CONFIG");
@@ -383,7 +380,7 @@ fn a_declared_sandbox_beats_an_inherited_graph_env() {
     let saved = set_env(&[
         ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
         ("FNO_STATE_DIR", tmp.path().join("state").to_str().unwrap()),
-        ("FNO_GRAPH_JSON", inherited.to_str().unwrap().to_string()),
+        ("FNO_GRAPH_JSON", inherited.to_str().unwrap()),
     ]);
     let status = spawn(tmp.path()).unwrap().wait().unwrap();
     let want = crate::backlog::settings::graph_path_at(Some(tmp.path()));
