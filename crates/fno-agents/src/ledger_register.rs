@@ -1020,6 +1020,35 @@ fn emit_ledger_transition(entry: &Value) {
     let _ = crate::event_store::append_envelope(&events, &event.to_string(), None);
 }
 
+/// Emit the run row as a durable `run_recorded` carrier event: the row's
+/// ride out of the ledger file, so the event store is the record once every
+/// reader folds this kind. Best-effort, like the file append's own
+/// transition event; a missed emit is re-carried by the writer's next fire.
+pub(crate) fn emit_run_recorded(cwd: &Path, source: &str, run: &Value) {
+    let project_events = crate::paths::space_dir(cwd).join("events.jsonl");
+    let global_events = crate::paths_cli::global_events_json(cwd);
+    let event = json!({
+        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        "type": "run_recorded",
+        "source": source,
+        "data": { "run": run },
+    });
+    let line = serde_json::to_string(&event).unwrap_or_default();
+    if line.is_empty() {
+        eprintln!("run_recorded: serialize failed; row stays file-only");
+        return;
+    }
+    let mut paths: Vec<&Path> = vec![project_events.as_path()];
+    if global_events != project_events {
+        paths.push(global_events.as_path());
+    }
+    for path in paths {
+        if let Err(e) = crate::event_store::append_envelope(path, &line, None) {
+            eprintln!("run_recorded: emit to {} failed: {e}", path.display());
+        }
+    }
+}
+
 /// Write the entry to the global ledger.json and emit the gate transition
 /// (the ported `register_entry`). The ledger is cross-project by definition
 /// (one row per terminal session across every repo), so the single writer
@@ -1052,35 +1081,6 @@ pub(crate) fn register_target_entry(
         serde_json::to_string_pretty(&entry).unwrap_or_default()
     );
     Ok(())
-}
-
-/// Emit the run row as a durable `run_recorded` carrier event: the row's
-/// ride out of the ledger file, so the event store is the record once every
-/// reader folds this kind. Best-effort, like the file append's own
-/// transition event; a missed emit is re-carried by the writer's next fire.
-pub(crate) fn emit_run_recorded(cwd: &Path, source: &str, run: &Value) {
-    let project_events = crate::paths::space_dir(cwd).join("events.jsonl");
-    let global_events = crate::paths_cli::global_events_json(cwd);
-    let event = json!({
-        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
-        "type": "run_recorded",
-        "source": source,
-        "data": { "run": run },
-    });
-    let line = serde_json::to_string(&event).unwrap_or_default();
-    if line.is_empty() {
-        eprintln!("run_recorded: serialize failed; row stays file-only");
-        return;
-    }
-    let mut paths: Vec<&Path> = vec![project_events.as_path()];
-    if global_events != project_events {
-        paths.push(global_events.as_path());
-    }
-    for path in paths {
-        if let Err(e) = crate::event_store::append_envelope(path, &line, None) {
-            eprintln!("run_recorded: emit to {} failed: {e}", path.display());
-        }
-    }
 }
 
 #[cfg(test)]
