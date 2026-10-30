@@ -35,6 +35,7 @@ use super::{execute_retask, refused_receipt, RetaskRow, RetaskTarget};
 pub type RunSeam = Box<dyn FnMut(&[String], u64) -> Result<std::process::Output, String>>;
 
 /// A viewport refusal or transport death. `word` is the receipt reason.
+#[derive(Debug)]
 pub struct TransportError {
     pub word: String,
     pub detail: Option<String>,
@@ -411,6 +412,7 @@ fn target_command(target: &RetaskTarget, node: &str) -> Result<String, String> {
 }
 
 /// The parsed CLI form.
+#[derive(Debug)]
 struct CliArgs {
     worker: String,
     node: String,

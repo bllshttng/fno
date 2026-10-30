@@ -115,9 +115,7 @@ fn viewport_join_misses_after_three_tries() {
 
 #[test]
 fn viewport_door_failure_carries_the_last_error_line() {
-    let mut called = 0;
     let run: RunSeam = Box::new(move |_argv: &[String], _secs: u64| {
-        called += 1;
         let mut out = output(1, "");
         out.stderr = b"no such pane".to_vec();
         Ok(out)
