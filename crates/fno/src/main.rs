@@ -2014,9 +2014,11 @@ fn main() {
             &["test-run", "builds"],
             &rest,
         )),
-        Role::DoctorTest(rest) => {
-            std::process::exit(fno_agents_exec("fno doctor test", &["test"], &rest))
-        }
+        Role::DoctorTest(rest) => std::process::exit(fno_agents_exec(
+            "fno doctor test",
+            &["test-run", "doctor"],
+            &rest,
+        )),
         Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
         Role::DoctorAgentsExec(label, argv) => {
             let action: Vec<String> = argv
