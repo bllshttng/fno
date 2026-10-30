@@ -404,8 +404,9 @@ pub trait Probes {
     fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead;
     /// The journal match reads the head being merged from facts, never cwd
     /// HEAD: a lead merging from the canonical checkout is not checked out
-    /// at the PR head, so a cwd match there can never clear.
-    fn covered_head(&self, cwd: &Path, pr_head: &str) -> Option<String>;
+    /// at the PR head, so a cwd match there can never clear. The match also
+    /// scopes to this PR: the space journal aggregates every PR's rows.
+    fn covered_head(&self, cwd: &Path, pr: u64, pr_head: &str) -> Option<String>;
     fn auto_merge_enabled(&self, cwd: &Path) -> bool;
     fn posture_floor_block(&self, cwd: &Path) -> Option<String>;
     fn strategy(&self, cwd: &Path) -> String;
@@ -519,7 +520,7 @@ fn resolved_covered_head<P: Probes>(
     request
         .covered_head
         .clone()
-        .or_else(|| probes.covered_head(cwd, &facts.head_sha))
+        .or_else(|| probes.covered_head(cwd, facts.number, &facts.head_sha))
         .filter(|sha| !sha.is_empty())
 }
 
@@ -2149,9 +2150,9 @@ refusing to assume no review is running"
             .unwrap_or(0)
     }
 
-    fn covered_head(&self, cwd: &Path, pr_head: &str) -> Option<String> {
+    fn covered_head(&self, cwd: &Path, pr: u64, pr_head: &str) -> Option<String> {
         let _step = step_timer::step("covered_head");
-        covered_head_from_event(cwd, pr_head)
+        covered_head_from_event(cwd, pr, pr_head)
     }
 
     fn auto_merge_enabled(&self, cwd: &Path) -> bool {
@@ -2762,25 +2763,33 @@ pub fn ci_base_verdict(
 /// the PR's head, or None. The match reads the head being merged from facts,
 /// never cwd HEAD: a lead merging from the canonical checkout is not checked
 /// out at the PR head, so a cwd match there can never clear.
-pub fn covered_head_from_event(cwd: &Path, pr_head: &str) -> Option<String> {
+pub fn covered_head_from_event(cwd: &Path, pr: u64, pr_head: &str) -> Option<String> {
     if pr_head.is_empty() {
         return None;
     }
     let path = crate::paths::events_path(cwd);
     let content = crate::event_store::journal_text(&path, &["review_coverage"]);
-    covered_head_from_text(&content, pr_head)
+    covered_head_from_text(&content, pr, pr_head)
 }
 
 /// The journal-text half of [`covered_head_from_event`], split so the match
-/// is testable without a pinned space root. An empty `pr_head` never reaches
-/// here: an unreadable head holds instead of pinning an arbitrary event.
-fn covered_head_from_text(content: &str, pr_head: &str) -> Option<String> {
+/// is testable without a pinned space root. The match scopes to one PR: the
+/// space journal aggregates every PR's rows, so an unscoped head match could
+/// pin one PR's merge on another PR's coverage. An empty `pr_head` never
+/// reaches here: the effect chain refuses an unpinned merge.
+fn covered_head_from_text(content: &str, pr: u64, pr_head: &str) -> Option<String> {
     let mut latest: Option<String> = None;
     for line in content.lines() {
         let Ok(val) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        // The query filter above already restricts the text to this event
+        // type, but the family-fallback degrade can surface foreign lines,
+        // so the type guard rides the loop.
         if val.get("type").and_then(Value::as_str) != Some("review_coverage") {
+            continue;
+        }
+        if val.pointer("/data/pr").and_then(Value::as_i64) != Some(pr as i64) {
             continue;
         }
         if val.pointer("/data/coverage").and_then(Value::as_str) != Some("covered") {
@@ -2798,7 +2807,7 @@ fn covered_head_from_text(content: &str, pr_head: &str) -> Option<String> {
             .pointer("/data/head_sha")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if pr_head.is_empty() || ev_head != pr_head {
+        if ev_head != pr_head {
             continue;
         }
         latest = Some(ev_head.to_string());

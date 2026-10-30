@@ -376,7 +376,7 @@ impl Probes for Fake {
             rerun_failures: None,
         }
     }
-    fn covered_head(&self, _cwd: &Path, _pr_head: &str) -> Option<String> {
+    fn covered_head(&self, _cwd: &Path, _pr: u64, _pr_head: &str) -> Option<String> {
         self.covered_head.clone()
     }
     fn auto_merge_enabled(&self, _cwd: &Path) -> bool {
@@ -1164,25 +1164,32 @@ fn the_journal_match_reads_the_pr_head_not_the_checkout() {
     // A lead merges from the canonical checkout, whose HEAD is main's tip,
     // never the PR head. The covered event sits at the PR head, so a
     // cwd-anchored match can never clear. The newest covered event at
-    // another head must not shadow the matching one.
+    // another head must not shadow the matching one, and another PR's
+    // covered event at the same head must not pin this PR's merge.
+    const MINE: &str = "0b7fd460ce82dd3888de71a651dc36dfb1f488f8";
+    const OTHER_HEAD: &str = "aa11bb22aa11bb22aa11bb22aa11bb22aa11bb22";
     let journal = concat!(
-        r#"{"type":"review_coverage","data":{"coverage":"covered","reviewed_count":2,"head_sha":"0b7fd46"}}"#,
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"covered","reviewed_count":2,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
         "\n",
-        r#"{"type":"review_coverage","data":{"coverage":"uncovered","reviewed_count":2,"head_sha":"0b7fd46"}}"#,
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"uncovered","reviewed_count":2,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
         "\n",
-        r#"{"type":"review_coverage","data":{"coverage":"covered","reviewed_count":0,"head_sha":"0b7fd46"}}"#,
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"covered","reviewed_count":0,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
         "\n",
-        r#"{"type":"review_coverage","data":{"coverage":"covered","reviewed_count":3,"head_sha":"aa11bb22"}}"#,
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"covered","reviewed_count":3,"head_sha":"aa11bb22aa11bb22aa11bb22aa11bb22aa11bb22"}}"#,
+        "\n",
+        r#"{"type":"review_coverage","data":{"pr":4166,"coverage":"covered","reviewed_count":4,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
         "\n",
     );
     assert_eq!(
-        covered_head_from_text(journal, "0b7fd46").as_deref(),
-        Some("0b7fd46")
+        covered_head_from_text(journal, 4165, MINE).as_deref(),
+        Some(MINE)
     );
     // No covered event at this head: uncovered, and an unreadable head
-    // holds instead of pinning an arbitrary event.
-    assert_eq!(covered_head_from_text(journal, "deadbeef"), None);
-    assert_eq!(covered_head_from_text(journal, ""), None);
+    // holds instead of pinning an arbitrary event. Another PR's covered
+    // row at the same head never pins this PR.
+    assert_eq!(covered_head_from_text(journal, 4165, OTHER_HEAD), None);
+    assert_eq!(covered_head_from_text(journal, 4166, MINE), None);
+    assert_eq!(covered_head_from_text(journal, 4165, ""), None);
 }
 
 #[test]
