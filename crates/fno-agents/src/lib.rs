@@ -2065,6 +2065,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A foreground SessionStart report bound its row to a proven pane claim
     // (pane_claim.rs), moving it off a stale or absent mux ref.
     "session_pane_rebound",
+    // The org init --rebind-from repair (lead_rebind.rs): a role row and its
+    // scope manifest moved onto a new harness session id, old id recorded as
+    // the row's predecessor.
+    "session_id_restamped",
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",
