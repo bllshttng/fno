@@ -1928,7 +1928,6 @@ mod tests {
     #[test]
     fn the_rollout_rung_answers_from_the_thread_rollout() {
         let root = std::env::temp_dir().join(format!("fno-rung-{}", std::process::id()));
-        let root = std::env::temp_dir().join(format!("fno-rung-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("rollout-2026-10-30-thr1.jsonl");
