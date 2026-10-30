@@ -297,8 +297,8 @@ mod tests {
         assert_eq!(out, vec![("run-history".to_string(), Status::Merged)]);
         let imported = stored(&journal, "run_imported");
         assert_eq!(imported.len(), 2);
-        assert_eq!(imported[0]["run"]["session_id"], json!("sess-b"));
-        assert_eq!(imported[1]["run"]["pr_number"], json!(7));
+        assert_eq!(imported[0]["data"]["run"]["session_id"], json!("sess-b"));
+        assert_eq!(imported[1]["data"]["run"]["pr_number"], json!(7));
         let markers = stored(&journal, "run_history_imported");
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0]["data"]["count"], json!(2));
@@ -349,7 +349,7 @@ mod tests {
         assert!(out.iter().any(|(name, _)| name == "run-history"));
         assert_eq!(stored(&journal, "run_imported").len(), 1);
         assert_eq!(
-            stored(&journal, "run_imported")[0]["run"]["session_id"],
+            stored(&journal, "run_imported")[0]["data"]["run"]["session_id"],
             json!("sess-b")
         );
     }
