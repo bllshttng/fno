@@ -12,7 +12,6 @@ and the delivery-time recipient stamp that AC3 asks for.
 from __future__ import annotations
 
 import pytest
-from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
 
@@ -105,53 +104,3 @@ def test_a_portfolio_role_does_not_answer_for_one_of_its_projects(env, monkeypat
 # ---------------------------------------------------------------------------
 
 
-def test_cli_to_lead_refuses_when_the_role_is_vacant(env):
-    from fno.mail.cli import mail_app
-
-    _register("former-lead")
-    res = CliRunner().invoke(mail_app, ["send", "--to-lead", "fno", "ping"])
-
-    assert res.exit_code == 16
-    assert "no live row holds this role" in res.output
-
-
-def test_cli_to_lead_refuses_a_split_role_naming_both(env):
-    from fno.mail.cli import mail_app
-
-    _register("lead-a", scope="fno", level=1)
-    _register("lead-b", scope="fno", level=1)
-    res = CliRunner().invoke(mail_app, ["send", "--to-lead", "fno", "ping"])
-
-    assert res.exit_code == 17
-    assert "lead-a" in res.output and "lead-b" in res.output
-
-
-def test_cli_to_lead_refuses_a_second_addressing_mode(env):
-    from fno.mail.cli import mail_app
-
-    res = CliRunner().invoke(
-        mail_app, ["send", "--to-lead", "fno", "--to-project", "p", "ping"]
-    )
-    assert res.exit_code == 2
-    assert "mutually exclusive" in res.output
-
-
-def test_cli_to_lead_hands_the_holder_to_the_name_lane(env):
-    """AC1: the resolved holder, not a handle a peer remembered, is what the
-    ordinary name lane is asked to deliver to.
-
-    The send body lives in the rust leaf, so the handoff is pinned through its
-    stdout receipt: the `to` field names the resolved holder, and the test
-    host's only deliverable outcome is the durable demotion.
-    """
-    import json as _json
-
-    from fno.mail.cli import mail_app
-
-    _register("lead-fno-g5", scope="fno", level=1)
-    res = CliRunner().invoke(mail_app, ["send", "--to-lead", "fno", "ping"])
-
-    assert res.exit_code == 14, res.output
-    receipt = _json.loads(res.stdout.strip().splitlines()[0])
-    assert receipt["to"] == "lead-fno-g5"
-    assert "queued (durable)" in receipt["status"]

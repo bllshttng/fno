@@ -6,6 +6,8 @@ Rust client; there is no Python list renderer.
 """
 from __future__ import annotations
 
+import json
+import subprocess
 from typing import Optional
 
 from fno.agents.registry import AgentEntry
@@ -77,6 +79,57 @@ def row_address(
     return None
 
 
+def _hold_addresses(entry: AgentEntry) -> tuple:
+    """Every token a hold clock for ``entry`` could sit under. The identity key
+    leads, so a live clock outranks a legacy first-eight alias."""
+    from fno.harness_identity import canonical_handle, session_identity_key
+
+    session_id = getattr(entry, "harness_session_id", None)
+    tokens: list = []
+    if session_id:
+        try:
+            tokens.append(session_identity_key(session_id))
+        except Exception:  # noqa: BLE001 - a malformed id contributes no address
+            pass
+    tokens += [getattr(entry, "name", None), getattr(entry, "short_id", None), session_id]
+    if session_id:
+        try:
+            tokens.append(canonical_handle(session_id))
+        except Exception:  # noqa: BLE001 - a malformed id contributes no address
+            pass
+    return tuple(dict.fromkeys(t for t in tokens if t))
+
+
+def _describe_hold(keys: tuple) -> Optional[dict]:
+    """The native clock read for ``keys``, or None when it has nothing to say."""
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        raise RuntimeError("no fno-agents binary to read the hold clock")
+    proc = subprocess.run(
+        [str(binary), "mail-hold", "--describe", *keys],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or "fno-agents mail-hold failed").strip()[:200])
+    out = proc.stdout.rstrip("\n")
+    return json.loads(out) if out else None
+
+
+def _dnd_cell(state: Optional[dict]) -> Optional[str]:
+    """The DND cell for a row whose flag IS ``bus-only``: None when a timed hold
+    lapsed, a duration when one is known, else "held"."""
+    if state is None:
+        return "held"
+    if state.get("lapsed"):
+        return None
+    auto = state.get("source") == "conversation"
+    return (state.get("remaining") or "held") + (" (auto)" if auto else "")
+
+
 def _dnd_label(entry: AgentEntry) -> Optional[str]:
     """This row's do-not-disturb state for the DND column, or None.
 
@@ -94,12 +147,10 @@ def _dnd_label(entry: AgentEntry) -> Optional[str]:
     if getattr(entry, "delivery_policy", None) != "bus-only":
         return None
     try:
-        from fno.mail import hold as _hold
-
-        # The ENTRY, not `entry.name`. A codex row's name is a spawn label and
-        # its clock sits under the canonical handle, so keying by the name read
-        # a blank cell for a held codex session.
-        return _hold.dnd_label(entry)
+        # The ENTRY's addresses, not `entry.name`. A codex row's name is a spawn
+        # label and its clock sits under the canonical handle, so keying by the
+        # name read a blank cell for a held codex session.
+        return _dnd_cell(_describe_hold(_hold_addresses(entry)))
     except Exception:  # noqa: BLE001 - a render helper never breaks the listing
         # "?" and not None. None renders as "-", which is the cell a row with
         # no hold gets, so a failed read would tell the operator mail is

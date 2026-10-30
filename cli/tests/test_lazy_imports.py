@@ -40,7 +40,6 @@ _FORBIDDEN_AFTER_HELP = [
     "fno.adapters.providers.cli",
     "fno.graph.cli",
     "fno.events.cli",
-    "fno.mail.cli",
     "fno.agent",
 ]
 

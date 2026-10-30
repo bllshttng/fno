@@ -14,18 +14,12 @@ Public API:
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 import secrets
-import time
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-
-
-from fno.mail.kinds import AUTHORED_MAIL_KINDS
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +34,7 @@ class Kind(str, Enum):
     SEND = "send"
 
 
-VALID_KINDS = AUTHORED_MAIL_KINDS
+VALID_KINDS = frozenset({"send", "heads-up", "question", "fyi"})
 
 
 class BusLockTimeout(TimeoutError):
@@ -79,42 +73,6 @@ _OWNER_TTL_HOURS: dict[str, float] = {
 }
 
 
-def classify_durable_owner(
-    *,
-    param_forced: bool,
-    recipient_live: bool,
-    recipient_resumable: bool,
-) -> DurableOwner:
-    """Classify a durable write's owner from the signals a send choke point has.
-
-    Precedence is deliberate: a ``--kind``/``--to-project`` send chose the durable
-    inbox lane on purpose (``param_forced``), so it owns as ``inbox-drain`` even
-    when a live peer exists. Otherwise a live recipient drains on its next turn,
-    an asleep-but-resumable one is woken by the daemon, and anything else is a
-    dead-letter at birth.
-    """
-    if param_forced:
-        return DurableOwner.INBOX_DRAIN
-    if recipient_live:
-        return DurableOwner.LIVE_DRAIN
-    if recipient_resumable:
-        return DurableOwner.WAKE_DAEMON
-    return DurableOwner.DEAD_LETTER
-
-
-def owner_ttl_hours(owner: DurableOwner | str) -> float:
-    """The unread horizon (hours) the sweep enforces; the receipt's drain
-    window quotes this same table. Unknown classes return 0."""
-    key = owner.value if isinstance(owner, DurableOwner) else owner
-    return _OWNER_TTL_HOURS.get(key, 0.0)
-
-
-def ttl_at_for(owner: DurableOwner | str, created: datetime) -> datetime:
-    """The ``ttl_at`` horizon for an owner class, measured from ``created``."""
-    from datetime import timedelta
-
-    return created + timedelta(hours=owner_ttl_hours(owner))
-
 # Map deprecated kinds -> what to use instead. Reading these tokens from
 # the CLI exits non-zero with a hint pointing at the replacement.
 DEPRECATED_KINDS: dict[str, str] = {
@@ -140,51 +98,9 @@ class ProjectIdentificationError(Exception):
 _PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
 
-def _validate_recipient(project: str) -> None:
-    """Refuse a recipient that is not one safe address segment.
-
-    It must match ``^[A-Za-z0-9][A-Za-z0-9._:-]*$`` (``:`` admitted so a job
-    address like ``node:<id>`` is a first-class recipient) and contain no
-    ``..``.
-    """
-    if "/" in project or "\\" in project:
-        raise ValueError(f"project name must not contain path separators: {project!r}")
-    if ".." in project:
-        raise ValueError(f"project name must not contain '..': {project!r}")
-    if not _PROJECT_NAME_RE.match(project):
-        raise ValueError(
-            f"project name must match {_PROJECT_NAME_RE.pattern}: {project!r}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Lock helper - mkdir mutex pattern, POSIX-atomic on macOS
 # ---------------------------------------------------------------------------
-
-def _acquire_lock(path: Path, timeout: float = 30.0, poll: float = 0.05) -> Path:
-    """Acquire a per-path mkdir lock. Returns the lock-dir path; caller releases."""
-    lock_dir = path.with_suffix(path.suffix + ".lock.d")
-    deadline = time.time() + timeout
-    while True:
-        try:
-            lock_dir.parent.mkdir(parents=True, exist_ok=True)
-            os.mkdir(str(lock_dir))
-            return lock_dir
-        except FileExistsError:
-            if time.time() >= deadline:
-                raise TimeoutError(f"could not acquire lock at {lock_dir} within {timeout}s")
-            time.sleep(poll)
-
-
-def _release_lock(lock_dir: Path) -> None:
-    try:
-        os.rmdir(str(lock_dir))
-    except OSError as exc:
-        log_inbox_error(
-            "lock_release_failed",
-            path=str(lock_dir),
-            error=f"{type(exc).__name__}: {exc}",
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -301,89 +217,6 @@ def _append_to_bus(
         raise
 
 
-def _mark_control_pending(recipient: str) -> None:
-    """Stamp the tool-boundary pending flag (best-effort)."""
-    try:
-        from fno import paths
-
-        flag = paths.bus_dir() / "control-pending" / f"{recipient}.flag"
-        flag.parent.mkdir(parents=True, exist_ok=True)
-        flag.touch()
-    except OSError:
-        pass
-
-
-def write_new_thread(
-    recipient: str,
-    sender: str,
-    kind: str,
-    body: str,
-    *,
-    msg_id: Optional[str] = None,
-    timestamp: Optional[datetime] = None,
-    replies_to: Optional[str] = None,
-    persist_to_memory: bool = False,
-    refs: Optional[dict[str, str]] = None,
-    from_harness: Optional[str] = None,
-    to_harness: Optional[str] = None,
-    from_session: Optional[str] = None,
-    from_model: Optional[str] = None,
-    to_kind: Optional[str] = None,
-    owner: Optional[str] = None,
-    ttl_at: Optional[datetime] = None,
-    word_count: Optional[int] = None,
-    origin: Optional[str] = None,
-    subject: Optional[str] = None,
-) -> str:
-    """Append one durable envelope to the bus log. Returns its msg-id.
-
-    ``owner``/``ttl_at`` stamp the terminal classification (US6): who will
-    drain the message and when the dead-letter sweep should reclassify it if
-    they have not. They ride the envelope ``meta``, the record the sweep reads.
-    A bus failure raises: the message is not durably stored.
-    """
-    if kind not in VALID_KINDS:
-        raise ValueError(f"invalid kind: {kind!r}; expected one of {sorted(VALID_KINDS)}")
-    _validate_recipient(recipient)
-    if msg_id is None:
-        msg_id = generate_msg_id()
-    if timestamp is None:
-        timestamp = datetime.now(tz=timezone.utc)
-    # An explicit ttl_at (a caller reclassifying) wins over the owner's horizon.
-    if owner is not None and ttl_at is None:
-        ttl_at = ttl_at_for(owner, timestamp)
-
-    _append_to_bus(
-        msg_id=msg_id,
-        thread_id=msg_id,
-        sender=sender,
-        recipient=recipient,
-        kind=kind,
-        body=body,
-        timestamp=timestamp,
-        in_reply_to=replies_to,
-        persist_to_memory=persist_to_memory,
-        refs=refs,
-        from_harness=from_harness,
-        to_harness=to_harness,
-        from_session=from_session,
-        from_model=from_model,
-        to_kind=to_kind,
-        owner=owner,
-        ttl_at=ttl_at,
-        word_count=word_count,
-        origin=origin,
-        subject=subject,
-    )
-
-    from fno.mail.budget import is_control
-
-    if is_control(body):
-        _mark_control_pending(recipient)
-
-    return msg_id
-
-
 # ---------------------------------------------------------------------------
 # Project resolution
 # ---------------------------------------------------------------------------
@@ -456,16 +289,3 @@ def resolve_project(
 # Error log helper (for callers that need to record parse / dispatch errors)
 # ---------------------------------------------------------------------------
 
-def log_inbox_error(reason: str, **extra) -> None:
-    """Append a JSON line to ``.fno/inbox-errors.jsonl``."""
-    from fno.paths import project_log
-
-    errors_path = project_log("inbox-errors.jsonl")
-    errors_path.parent.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "reason": reason,
-        **extra,
-    }
-    with errors_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")

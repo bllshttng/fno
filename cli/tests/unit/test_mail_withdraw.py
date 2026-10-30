@@ -97,23 +97,6 @@ def test_reader_1_scan_unread_omits_a_withdrawn_message(env):
     assert [m["id"] for m in scan_unread(PEER)] == [kept]
 
 
-def test_reader_2_sent_unclaimed_stops_counting_it(env):
-    """The nag reads the bus rows directly and bypasses scan_unread. A
-    withdrawal that did not reach here would leave the every-prompt line firing
-    forever on a message the sender already retracted -- the exact symptom this
-    command exists to end."""
-    from fno.config import load_settings
-    from fno.mail.landed import _sent_unclaimed
-
-    mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
-    ttl = load_settings().inbox.unclaimed_ttl
-    assert len(_sent_unclaimed(MY_HANDLE, ttl)) == 1
-
-    _tombstone(mid)
-
-    assert _sent_unclaimed(MY_HANDLE, ttl) == []
-
-
 # ---------------------------------------------------------------------------
 # What a withdrawal must NOT do
 # ---------------------------------------------------------------------------
@@ -154,16 +137,3 @@ def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
     assert [m["id"] for m in scan_unread("cccc1111")] == [mid]
 
 
-def test_withdrawing_a_typed_message_refuses_instead_of_pretending(env):
-    """There is nothing to retract once the bytes are at a prompt.
-
-    Withdraw guarded on `hosted` alone, so a forced pane message wrote its
-    tombstone and printed success while retracting nothing. That is worse than
-    refusing: the sender walks away believing the message is gone.
-    """
-    msg_id = _send(MY_HANDLE, PEER, "wrong ruling", ts=_ts_ago(60), delivery="typed")
-
-    result = _run("agents", "mail", "withdraw", msg_id)
-
-    assert result.exit_code == 1
-    assert "cannot be recalled" in (result.stderr or result.output)
