@@ -522,6 +522,11 @@
       "title": "Render Targets",
       "type": "array"
      },
+     "render_default": {
+      "default": true,
+      "title": "Render Default",
+      "type": "boolean"
+     },
      "page_reload_s": {
       "default": 60,
       "title": "Page Reload S",
@@ -4103,6 +4108,15 @@
    "question": "",
    "default_source": "",
    "doc": "Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file)."
+  },
+  {
+   "path": "backlog.render_default",
+   "type": "bool",
+   "default": true,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). Set false to stop the store keeper rewriting the page after every burst: only explicit [[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand before opening. GLOBAL config file only, like render_targets."
   },
   {
    "path": "backlog.page_reload_s",

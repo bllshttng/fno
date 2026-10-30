@@ -72,7 +72,8 @@ pub enum NudgeAction {
     /// Nothing is due: the transcript is fresh, the last nudge is young, or
     /// the ladder already escalated and is waiting for activity.
     Wait,
-    /// A merge order, the owner's pr-hold, or a fleet loop halt holds the
+    /// A merge order, the owner's pr-hold, a fleet loop halt, an open
+    /// operator question, or the merge authority's own refusal holds the
     /// session: no nudge, and the pause names itself in the event log at
     /// most once per hour.
     Pause,
@@ -148,9 +149,10 @@ pub fn decide(input: &NudgeInput) -> (NudgeAction, LadderState) {
     if !due(&input) {
         return (NudgeAction::Wait, state);
     }
-    // 3. Pause: a merge order, the owner's pr-hold, or a fleet loop halt
-    // holds the row. The pause names itself at most once per hour.
-    if input.merge_order_hold {
+    // 3. Pause: a merge order, the owner's pr-hold, a fleet loop halt, an
+    // open operator question, or the merge authority's own refusal holds
+    // the row. The pause names itself at most once per hour.
+    if input.merge_order_hold || input.merge_refused {
         return (NudgeAction::Pause, state);
     }
     // 4. Escalate: the budget is spent and the operator has not heard yet.
@@ -196,6 +198,11 @@ pub struct NudgeInput {
     /// The head of a settled red on an OPEN PR, when this pass read one.
     /// `None` for every other payload, and for a pass that took no read.
     pub red_head: Option<String>,
+    /// The status payload's merge receipt refused the merge on the merge
+    /// authority's own word (per-run no-merge, config off, posture floor).
+    /// A CI verdict word is also a refused blocker but the worker owns the
+    /// next push, so only the authority codes hold.
+    pub merge_refused: bool,
 }
 
 /// The production effect: one bounded subprocess, returning the exit code,
@@ -280,6 +287,7 @@ fn merge_hold_in(home: &AgentsHome, row: &OpenPrRow, graph: Option<&[Value]>) ->
         || authorized_merge_hold(home, row)
         || merge_freeze_hold(home, row)
         || node_dispatch_hold_rows(&row.node, graph)
+        || question_hold(row)
 }
 
 fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
@@ -690,6 +698,30 @@ fn actionable_nudge_status(status: &Result<Value, i32>) -> bool {
     settled && actionable_verdict && open
 }
 
+/// The merge-authority hold, read from the receipt the status read already
+/// carried: the authority fold's own codes name a run or posture that
+/// forbids the merge, so driving it repeats a refusal. A CI verdict word is
+/// also a refused blocker but the worker owns the next push, so only the
+/// authority codes hold. An unread status or a stripped follower row (no
+/// merge_decision key) reads false: fail toward today's behavior.
+fn authority_refusal_hold(status: &Result<Value, i32>) -> bool {
+    const AUTHORITY_CODES: [&str; 3] = ["per_run_no_merge", "auto_merge_disabled", "posture_floor"];
+    let Ok(payload) = status else {
+        return false;
+    };
+    payload
+        .get("merge_decision")
+        .and_then(|m| m.get("blockers"))
+        .and_then(Value::as_array)
+        .is_some_and(|blockers| {
+            blockers.iter().any(|b| {
+                b.get("code")
+                    .and_then(Value::as_str)
+                    .is_some_and(|code| AUTHORITY_CODES.contains(&code))
+            })
+        })
+}
+
 /// The nudge body: the order to drive, plus the PR's own verdict, head and
 /// failing checks so the session starts the fix round without a round
 /// trip.
@@ -907,6 +939,34 @@ fn merge_freeze_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
     crate::merge_freeze::holds_pr(home, pr, slug.as_deref())
 }
 
+/// The question-board hold: the stop gate's own open-question predicate
+/// (`scan_open_holds`) over the journal union the gate reads. A session
+/// parked on an open operator question cannot finish its loop; waking it to
+/// drive a merge repeats the block the gate already emitted.
+fn question_hold(row: &OpenPrRow) -> bool {
+    let mut journals = vec![
+        crate::paths::events_path(std::path::Path::new(&row.cwd)),
+        crate::loopcheck::global_events_path(),
+    ];
+    if let Some(canon) = crate::paths::canonical_repo_root(std::path::Path::new(&row.cwd)) {
+        let canonical_journal = crate::paths::events_path(&canon);
+        if !journals.contains(&canonical_journal) {
+            journals.push(canonical_journal);
+        }
+    }
+    question_hold_in(row, &journals)
+}
+
+/// The same predicate over caller-staged journals, so tests can stage the
+/// world the way `plan_with` stages the runner.
+fn question_hold_in(row: &OpenPrRow, journals: &[std::path::PathBuf]) -> bool {
+    let cwd = std::path::Path::new(&row.cwd);
+    !crate::loopcheck::scan_open_holds(journals, &row.session_id, &row.node, &|id| {
+        crate::loopcheck::node_is_done(cwd, id)
+    })
+    .is_empty()
+}
+
 fn authorized_merge_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
     let Some(pr) = row.pr else {
         return false;
@@ -1004,18 +1064,22 @@ fn decide_with_read(
         live: row.live,
         busy: row.busy,
         red_head: None,
+        merge_refused: false,
     };
     let mut status = None;
     // ponytail: one status read per due row per retire pass (300 s), and an
     // escalated row is due every pass. Read escalated rows once per grace if the
     // gh budget runs hot. A dead-worker row carries no PR: no read, no red
     // head - the node's open work is the whole reason for the nudge. A held
-    // row (merge order, authorized-merge pr-hold, or loop pause) also skips
-    // the read: the decision is Pause either way, and the read is a wasted
-    // `gh`-touching call for a row the ladder already knows not to nudge.
+    // row (merge order, authorized-merge pr-hold, loop pause, or question
+    // hold) also skips the read: the decision is Pause either way, and the
+    // read is a wasted `gh`-touching call for a row the ladder already knows
+    // not to nudge. A refusal leg from the receipt needs the read, so it
+    // lands only on a due row the earlier holds did not catch.
     if !input.merge_order_hold && due(&input) && row.pr.is_some() {
         let s = read_status(row, runner);
         input.red_head = s.as_ref().ok().and_then(settled_red_head);
+        input.merge_refused = authority_refusal_hold(&s);
         status = Some(s);
     }
     let (action, state) = decide(&input);
@@ -1096,6 +1160,7 @@ mod tests {
             live,
             busy: false,
             red_head: None,
+            merge_refused: false,
         }
     }
 
@@ -1198,6 +1263,102 @@ mod tests {
         assert_eq!(planned[0].1, "paused");
         assert!(!status_read, "a held nudge skips the PR-status read");
         let _ = std::fs::remove_dir_all(&esc_root);
+    }
+
+    /// AC (question leg): an open operator question naming the
+    /// row's node parks the nudge, and the held row skips the PR-status
+    /// read: the stop gate holds that session on the same question, so
+    /// "drive it to merge" repeats a block the gate already emitted. A
+    /// closed question lifts the pause.
+    #[test]
+    fn question_hold_parks_a_due_nudge() {
+        let row_cwd = tempfile::tempdir().unwrap();
+        let journal = crate::paths::events_path(row_cwd.path());
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        let open_row = r#"{"ts":"2026-10-30T00:00:00Z","type":"operator_question","source":"test","data":{"question_id":"q-1","blocks":["x-node"],"session_id":"99999999-8888-7777-6666-555555555555","question":"may PR 1943 merge?"}}"#;
+        std::fs::write(&journal, format!("{open_row}\n")).unwrap();
+        let r = OpenPrRow {
+            cwd: row_cwd.path().to_string_lossy().into_owned(),
+            ..row(false)
+        };
+        let home = AgentsHome::at(std::env::temp_dir().join("fno-pn-question"));
+        let _ = std::fs::remove_dir_all(home.root().to_path_buf());
+
+        assert!(question_hold(&r), "the open question must hold the nudge");
+        let mut status_read = false;
+        let planned = plan_with(&home, &[r.clone()], 900, &mut |_, _| {
+            status_read = true;
+            (0, "{}".into(), String::new())
+        });
+        assert_eq!(planned[0].1, "paused");
+        assert!(
+            !status_read,
+            "a question-held nudge skips the PR-status read"
+        );
+
+        // The same journal with the question closed: the pause lifts.
+        let closed_row = r#"{"ts":"2026-10-30T01:00:00Z","type":"operator_question_closed","source":"test","data":{"question_id":"q-1"}}"#;
+        std::fs::write(&journal, format!("{open_row}\n{closed_row}\n")).unwrap();
+        assert!(!question_hold(&r), "a closed question must lift the hold");
+        let planned = plan_with(&home, &[r], 900, &mut |_, _| {
+            (0, "{}".into(), String::new())
+        });
+        assert_ne!(planned[0].1, "paused");
+        let _ = std::fs::remove_dir_all(home.root().to_path_buf());
+    }
+
+    /// AC (refusal leg): the status payload's own merge receipt
+    /// parks the nudge on the authority codes; a CI verdict word does not,
+    /// so the red-head rung keeps waking the row.
+    #[test]
+    fn authority_refusal_parks_a_due_nudge() {
+        // The pure parser: an authority code holds; an Err status and a CI
+        // verdict word read false.
+        let refused = serde_json::json!({
+            "pr": "1943", "pr_state": "OPEN", "verdict": "green", "settled": true,
+            "head": "0123 codes",
+            "merge_decision": {"outcome": "blocked", "blockers": [
+                {"code": "per_run_no_merge", "class": "refused", "detail": "manifest false"}
+            ]}
+        });
+        assert!(authority_refusal_hold(&Ok(refused)));
+        let ci_red = serde_json::json!({
+            "pr": "19 Junk",
+            "merge_decision": {"blockers": [{"code": "red", "class": "refused"}]}
+        });
+        assert!(!authority_refusal_hold(&Ok(ci_red)));
+        assert!(!authority_refusal_hold(&Err(1)));
+
+        // End to end: a due row whose receipt refuses on authority parks,
+        // while the same shape refusing only on a CI word still mails.
+        let home = AgentsHome::at(std::env::temp_dir().join("fno-pn-authority"));
+        let _ = std::fs::remove_dir_all(home.root().to_path_buf());
+        let receipt = r#"{"pr":"1943","pr_state":"OPEN","verdict":"green","settled":true,"head":"0123456789abcdef","merge_decision":{"outcome":"blocked","blockers":[{"code":"per_run_no_merge","class":"refused","detail":"manifest false"}]}}"#;
+        let planned = plan_with(&home, &[row(true)], 900, &mut |argv: &[String], _: &str| {
+            if argv.contains(&"do".to_string()) {
+                (0, receipt.to_string(), String::new())
+            } else {
+                (0, String::new(), String::new())
+            }
+        });
+        assert_eq!(
+            planned[0].1, "paused",
+            "the authority refusal must park the row"
+        );
+
+        let ci_receipt = r#"{"pr":"1943","pr_state":"OPEN","verdict":"green","settled":true,"head":"0123456789abcdef","merge_decision":{"outcome":"blocked","blockers":[{"code":"red","class":"refused"}]}}"#;
+        let planned = plan_with(&home, &[row(true)], 900, &mut |argv: &[String], _: &str| {
+            if argv.contains(&"do".to_string()) {
+                (0, ci_receipt.to_string(), String::new())
+            } else {
+                (0, String::new(), String::new())
+            }
+        });
+        assert_eq!(
+            planned[0].1, "mail",
+            "a CI-word refusal must not park the row"
+        );
+        let _ = std::fs::remove_dir_all(home.root().to_path_buf());
     }
 
     /// A lead's `hold-set` writes `dispatch_hold`, on the node row when the
@@ -1520,6 +1681,7 @@ mod tests {
                 live: false,
                 busy: false,
                 red_head: None,
+                merge_refused: false,
             })
             .0,
             NudgeAction::Wait
@@ -1809,6 +1971,7 @@ mod tests {
             live: true,
             busy: true,
             red_head: None,
+            merge_refused: false,
         });
         assert_eq!(action, NudgeAction::Mail);
 

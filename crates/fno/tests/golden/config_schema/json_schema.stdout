@@ -514,6 +514,11 @@
           "title": "Page Reload S",
           "type": "integer"
         },
+        "render_default": {
+          "default": true,
+          "title": "Render Default",
+          "type": "boolean"
+        },
         "render_targets": {
           "items": {
             "$ref": "#/$defs/RenderTargetConfig"

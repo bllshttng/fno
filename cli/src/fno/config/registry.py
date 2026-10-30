@@ -141,6 +141,13 @@ FIELD_META: dict[str, Meta] = {
         "projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board "
         "page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file).",
     ),
+    "backlog.render_default": Meta(
+        "advanced",
+        "Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). "
+        "Set false to stop the store keeper rewriting the page after every burst: only explicit "
+        "[[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand "
+        "before opening. GLOBAL config file only, like render_targets.",
+    ),
     # --- config.batch.* ---
     "batch.enabled": Meta("advanced", "Coalesce same-domain nodes into one batch PR (opt-in)."),
     "batch.max_nodes": Meta("advanced", "Nodes per batch before it closes (default 3)."),
