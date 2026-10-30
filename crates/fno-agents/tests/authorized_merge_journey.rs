@@ -127,7 +127,7 @@ impl Probes for FakeGitHub {
             note: String::new(),
         }
     }
-    fn covered_head(&self, _cwd: &Path) -> Option<String> {
+    fn covered_head(&self, _cwd: &Path, _pr: u64, _pr_head: &str) -> Option<String> {
         Some(self.head.borrow().clone())
     }
     fn auto_merge_enabled(&self, _cwd: &Path) -> bool {
