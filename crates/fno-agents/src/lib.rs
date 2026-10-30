@@ -1739,6 +1739,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Who stamped a row bus-only (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",
+    // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,
+    // the one nudge delivered, or the lead's reseat-on-claude mail landed;
+    // plus the per-row error row the run loop emits on a failed entry.
+    "blueprint_stall",
+    "blueprint_stall_error",
     "agent_create_no_session",
     "agent_orphan_reaped",
     "agent_orphan_state_archived",

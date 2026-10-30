@@ -24,7 +24,7 @@ const TAIL_BYTES: u64 = 256 * 1024;
 /// resume salvaged a recovery branch.
 const WATCH_LINGER_MS: i64 = 900 * 1000;
 
-fn watch_shielded(
+pub(super) fn watch_shielded(
     watch: &crate::watch_expiry::Watch,
     evidence: &[crate::watch_expiry::Evidence],
     now_ms: i64,
@@ -66,15 +66,15 @@ struct Episode {
 }
 
 #[derive(Default)]
-struct Tail {
-    activity: i64,
+pub(super) struct Tail {
+    pub(super) activity: i64,
     started_at: Option<i64>,
     failed: bool,
     read: bool,
-    touched: i64,
+    pub(super) touched: i64,
 }
 
-fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
+pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
     let mut file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok()?;
     let size = meta.len();
@@ -142,7 +142,7 @@ enum Action {
 
 /// The reason a node is closed to its worker, or `None` while work remains.
 /// Deferred stays a silent skip: a parked node may come back to the same seat.
-fn closed(row: &Value) -> Option<&'static str> {
+pub(super) fn closed(row: &Value) -> Option<&'static str> {
     let field = |k: &str| row.get(k).and_then(Value::as_str);
     match field("status") {
         Some("done") => Some("done"),
