@@ -945,13 +945,13 @@ fn merge_freeze_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
 /// drive a merge repeats the block the gate already emitted.
 fn question_hold(row: &OpenPrRow) -> bool {
     let mut journals = vec![
-        crate::paths::events_path(&row.cwd),
+        crate::paths::events_path(std::path::Path::new(&row.cwd)),
         std::env::var("HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
             .join(".fno/events.jsonl"),
     ];
-    if let Some(canon) = crate::paths::canonical_repo_root(&row.cwd) {
+    if let Some(canon) = crate::paths::canonical_repo_root(std::path::Path::new(&row.cwd)) {
         let canonical_journal = crate::paths::events_path(&canon);
         if !journals.contains(&canonical_journal) {
             journals.push(canonical_journal);
@@ -963,8 +963,9 @@ fn question_hold(row: &OpenPrRow) -> bool {
 /// The same predicate over caller-staged journals, so tests can stage the
 /// world the way `plan_with` stages the runner.
 fn question_hold_in(row: &OpenPrRow, journals: &[std::path::PathBuf]) -> bool {
-    !crate::loopcheck::holds::scan_open_holds(journals, &row.session_id, &row.node, &|id| {
-        crate::loopcheck::holds::node_is_done(&row.cwd, id)
+    let cwd = std::path::Path::new(&row.cwd);
+    !crate::loopcheck::scan_open_holds(journals, &row.session_id, &row.node, &|id| {
+        crate::loopcheck::node_is_done(cwd, id)
     })
     .is_empty()
 }

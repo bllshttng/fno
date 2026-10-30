@@ -242,6 +242,7 @@ use gh_read::{
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use gh_read::{read_pr_view_fields, PR_INFO_FALLBACK_FIELDS};
+pub(crate) use holds::{node_is_done, scan_open_holds};
 pub(crate) use intent::read_tail_lines;
 #[cfg(test)]
 use intent::INTENT_LOOKBACK_ENTRIES;
