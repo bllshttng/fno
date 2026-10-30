@@ -1288,15 +1288,12 @@ fn session_liveness_answer_uncached(
     codex_rollout_rung(session, index, codex_root, harness_shared_host)
 }
 
-/// The per-thread instrument for a shared-host claim whose witness read ended
-/// Unresolved: the session's own rollout mtime, the same store the row
-/// ladder's freshness rung reads. A rollout written within the freshness
-/// window proves the thread is advancing (Live). A rollout that exists but is
-/// quiet answers Absent only when the worker row is GONE: the row's removal
-/// was deliberate, the thread stopped writing, and the only remaining "alive"
-/// evidence is the shared host pid, which proves nothing. A missing rollout,
-/// an unreadable store or registry, or a row still present keep Unresolved:
-/// fail closed, never free a claim on evidence nobody read.
+/// The per-thread instrument for a shared-host witness read that ended
+/// Unresolved: the session's own rollout mtime. Fresh proves the thread is
+/// advancing (Live); quiet beside a removed worker row proves gone (Absent).
+/// A missing rollout, an unreadable store or registry, or a row still
+/// present keep Unresolved: fail closed, never free a claim on evidence
+/// nobody read.
 fn codex_rollout_rung(
     session: &str,
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,

@@ -139,9 +139,7 @@ fn is_node_or_task(rec: &ClaimRecord) -> bool {
     rec.key.starts_with("node:") || rec.key.starts_with("task:")
 }
 
-/// A shared-host harness (measured codex): the recorded pid is the
-/// multiplexer that hosts every session on the machine, so its liveness says
-/// nothing about the holder's.
+/// A shared-host harness (measured codex): its pid outlives every session.
 fn shared_host(rec: &ClaimRecord) -> bool {
     !pid_dies_with_session(rec.harness.as_deref())
 }
