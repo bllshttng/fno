@@ -507,6 +507,22 @@ pub struct Authorized {
     pub merge_grant: Option<String>,
 }
 
+/// The covered-head pin, resolved once for the effect chain and the preview
+/// walk: the caller's own coverage answer wins, else the journal read matches
+/// the PR head from facts, and an empty answer is no pin at all.
+fn resolved_covered_head<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    request: &Request,
+    facts: &PrFacts,
+) -> Option<String> {
+    request
+        .covered_head
+        .clone()
+        .or_else(|| probes.covered_head(cwd, &facts.head_sha))
+        .filter(|sha| !sha.is_empty())
+}
+
 /// The whole authorization. Order matters: the refusals that need an operator
 /// come first, then the holds, then the head pin, then the effect's own
 /// preconditions.
@@ -644,12 +660,7 @@ fn decide_observed<P: Probes>(
     // The pin. An unreadable covered head refuses instead of falling back to an
     // unpinned effect: an unpinned arm lets a racing push land an unreviewed
     // head through GitHub's queue, which is the failure this owner exists for.
-    let Some(head) = request
-        .covered_head
-        .clone()
-        .or_else(|| probes.covered_head(cwd, &facts.head_sha))
-        .filter(|sha| !sha.is_empty())
-    else {
+    let Some(head) = resolved_covered_head(probes, cwd, request, facts) else {
         return Err(Outcome::Unknown {
             reason: format!(
                 "no covered head is readable for PR {}; refusing an unpinned {}",
@@ -1059,12 +1070,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
 
     // (5) the pin.
-    if let Some(head) = request
-        .covered_head
-        .clone()
-        .or_else(|| probes.covered_head(cwd, &facts.head_sha))
-        .filter(|sha| !sha.is_empty())
-    {
+    if let Some(head) = resolved_covered_head(probes, cwd, request, facts) {
         if head != facts.head_sha {
             blockers.push(Blocker::unknown(
                 "head_moved",
@@ -2757,14 +2763,17 @@ pub fn ci_base_verdict(
 /// never cwd HEAD: a lead merging from the canonical checkout is not checked
 /// out at the PR head, so a cwd match there can never clear.
 pub fn covered_head_from_event(cwd: &Path, pr_head: &str) -> Option<String> {
+    if pr_head.is_empty() {
+        return None;
+    }
     let path = crate::paths::events_path(cwd);
     let content = crate::event_store::journal_text(&path, &["review_coverage"]);
     covered_head_from_text(&content, pr_head)
 }
 
 /// The journal-text half of [`covered_head_from_event`], split so the match
-/// is testable without a pinned space root. An empty `pr_head` matches
-/// nothing: an unreadable head holds instead of pinning an arbitrary event.
+/// is testable without a pinned space root. An empty `pr_head` never reaches
+/// here: an unreadable head holds instead of pinning an arbitrary event.
 fn covered_head_from_text(content: &str, pr_head: &str) -> Option<String> {
     let mut latest: Option<String> = None;
     for line in content.lines() {
@@ -2794,7 +2803,7 @@ fn covered_head_from_text(content: &str, pr_head: &str) -> Option<String> {
         }
         latest = Some(ev_head.to_string());
     }
-    latest.filter(|s| !s.is_empty())
+    latest
 }
 
 // ---------------------------------------------------------------------------
