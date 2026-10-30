@@ -310,16 +310,14 @@ pub(crate) fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 /// Read JSONL records, returning `(raw_line, parsed)` pairs and a malformed
-/// count. Mirrors Python `_read_jsonl`: UTF-8 with replacement, skip blank
-/// lines, count lines that fail to parse or are non-objects.
+/// count: skip blank lines, count lines that fail to parse or are
+/// non-objects. The trace journal is a state-root journal, so the rows come
+/// from the event store's committed rows and a retired raw file never serves
+/// a read; an absent journal reads as no records.
 fn read_jsonl(path: &Path) -> (Vec<(String, Value)>, usize) {
     let mut records = Vec::new();
     let mut malformed = 0usize;
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return (records, 0), // absent file -> no records (Python: path.exists() guard)
-    };
-    let text = String::from_utf8_lossy(&bytes);
+    let text = crate::event_store::journal_text(path, &[]);
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {

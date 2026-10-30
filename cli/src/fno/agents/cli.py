@@ -1625,18 +1625,17 @@ def cmd_attach(
     refuse_without_binary("attach")
 
 
-# Observability commands: trace + resume (Tasks 3.3 / 3.4 / 3.5)
-# Both commands live in their own modules so this CLI file stays focused
+# Observability commands: resume (Tasks 3.4 / 3.5). `trace` is Rust-only:
+# its Python twin left with the events.jsonl read it was ported from.
+# Commands live in their own modules so this CLI file stays focused
 # on shape + wiring. The cmd_<command> functions are re-bound here as
 # Typer subcommands; tests can still monkeypatch cli.cmd_<command> for
 # spy injection.
 
-from fno.agents.trace_cli import cmd_trace as _cmd_trace  # noqa: E402
 from fno.agents.resume_cli import cmd_resume as _cmd_resume  # noqa: E402
 from fno.agents.history import history_command  # noqa: E402
 from fno.agents.transcript import transcript_command  # noqa: E402
 
-agents_app.command("trace", hidden=True)(_cmd_trace)
 agents_app.command("resume")(_cmd_resume)
 # Advertised: the one command over live rows, reap receipts and the
 # ledger. `fno whoami ledger` stays as its hidden alias.
