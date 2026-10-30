@@ -18,6 +18,67 @@ fn read_events(home: &AgentsHome) -> Vec<Value> {
         .collect()
 }
 
+/// Teardown that runs even when an assert above it fails. A panicked body
+/// used to skip the worker SIGKILL and the keeper stop: the SIG_IGN child
+/// then lived out its 30s sleep and the keeper thread parked forever, and
+/// nextest reported the process FAIL + LEAK.
+struct StopFixture {
+    worker_pid: u32,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    keeper: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for StopFixture {
+    fn drop(&mut self) {
+        // SAFETY: teardown of a test-spawned child; already-reaped pids
+        // answer ESRCH and the error is ignored.
+        unsafe { libc::kill(self.worker_pid as libc::pid_t, libc::SIGKILL) };
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(keeper) = self.keeper.take() {
+            let _ = keeper.join();
+        }
+    }
+}
+
+/// The store state a failed registry read needs in the panic text. The CI
+/// loss on 2026-10-30 unwrapped a None whose cause (absent row vs ambiguous
+/// label vs a writer's drop) the message did not name; a dropped row carries
+/// a `registry_row_removed` event naming the remover, so this dump makes a
+/// recurrence diagnose itself instead of re-filing a blind flake.
+fn dump_store_state(home: &AgentsHome) -> String {
+    let path = home.registry_json();
+    let document =
+        crate::registry_read::registry_text(&path).unwrap_or_else(|e| format!("unreadable: {e}"));
+    let journal = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+    format!(
+        "registry path: dir={} file={}\ndocument: {document}\nevents: {journal}",
+        path.is_dir(),
+        path.is_file()
+    )
+}
+
+/// The assert `registry.find(name).unwrap()` wants, with the None cause
+/// named: `find` resolves to None both when the row is absent and when two
+/// rows answer the label, and the store dump rides the panic either way.
+fn expect_row<'a>(
+    registry: &'a crate::state::Registry,
+    name: &str,
+    home: &AgentsHome,
+) -> &'a RegistryEntry {
+    match registry.find(name) {
+        Some(entry) => entry,
+        None => panic!(
+            "the {name} row answered nothing after stop ({}): {}",
+            if registry.label_matches_count(name) > 1 {
+                "ambiguous: more than one row answers the label"
+            } else {
+                "absent from the registry"
+            },
+            dump_store_state(home)
+        ),
+    }
+}
+
 /// A cursor-agent lane-B row whose ownership anchor is THIS test process:
 /// the census proves worker-server ownership through `pid` +
 /// `pid_start_time`, so both must read back a live, real process.
@@ -112,6 +173,11 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
     let worker_pid = spawn_worker_server(":");
+    let _fixture = StopFixture {
+        worker_pid,
+        stop: Arc::clone(&stop),
+        keeper: Some(keeper),
+    };
     state::update_registry(&home.registry_json(), |r| {
         r.entries.push(cursor_thread_row(
             "cur-stop",
@@ -136,7 +202,6 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
     assert_eq!(result["backend"], "keeper-thread", "{result:?}");
     assert_eq!(result["worker_servers_reaped"], 1, "{result:?}");
 
-    keeper.join().unwrap();
     // The reaped pid is really gone, not just reported gone.
     assert_ne!(
         unsafe { libc::kill(worker_pid as libc::pid_t, 0) },
@@ -144,7 +209,7 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
         "the worker-server must be reaped, not reported"
     );
     let registry = load_registry_offloaded(home.registry_json()).await.unwrap();
-    let entry = registry.find("cur-stop").unwrap();
+    let entry = expect_row(&registry, "cur-stop", &home);
     assert_eq!(entry.status, AgentStatus::Exited);
     assert!(entry.exited_at.is_some());
     assert!(read_events(&home).iter().any(|event| {
@@ -176,6 +241,11 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
     let worker_pid = spawn_worker_server("trap \"\" TERM");
+    let _fixture = StopFixture {
+        worker_pid,
+        stop: Arc::clone(&stop),
+        keeper: Some(keeper),
+    };
     state::update_registry(&home.registry_json(), |r| {
         r.entries.push(cursor_thread_row(
             "cur-hard",
@@ -207,16 +277,16 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
     // The keeper DID confirm; only the reap failed, so the row must stay
     // live (a terminal stamp here would bury the surviving server).
     let registry = load_registry_offloaded(home.registry_json()).await.unwrap();
-    assert_eq!(registry.find("cur-hard").unwrap().status, AgentStatus::Live);
+    assert_eq!(
+        expect_row(&registry, "cur-hard", &home).status,
+        AgentStatus::Live
+    );
     assert!(
         unsafe { libc::kill(worker_pid as libc::pid_t, 0) } == 0,
         "the stubborn server is the reason the reap failed"
     );
 
-    // SAFETY: teardown of a test-spawned child that ignores SIGTERM. The
-    // spawn-time reaper thread collects it.
-    unsafe { libc::kill(worker_pid as libc::pid_t, libc::SIGKILL) };
-    stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    keeper.join().unwrap();
+    // The kill, the keeper stop and the join ride StopFixture's Drop, so
+    // they also ran when an assert above this line failed.
     std::fs::remove_dir_all(home.root()).ok();
 }
