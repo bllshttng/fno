@@ -46,7 +46,7 @@ def test_nameless_spawn_with_no_prompt_refuses_by_name():
 def test_prompt_name_collision_suffixes_not_refuses():
     first = _norm(["spawn", "fix the login bug today"])[2]
     out = _norm(["spawn", "fix the login bug today"], existing_names={first})
-    assert out[2] == "t-fix-the-login-bug-2"
+    assert out[2] == "t-fix-the-login-2"
 
 
 # --- --argv payload boundary (codex finding) ---------------------------------
