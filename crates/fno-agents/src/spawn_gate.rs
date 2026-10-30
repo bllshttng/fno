@@ -1762,7 +1762,7 @@ fn decide_gate(
                                     "parked": parked_names,
                                     "reserved": reserved_receipt(&reading.reserved),
                                     "launches": reading.launches,
-                                    "remedy": "read fno agents gate-status",
+                                    "remedy": "read fno agents admit status",
                                 }),
                             ));
                         }

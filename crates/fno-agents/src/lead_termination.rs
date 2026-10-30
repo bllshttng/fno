@@ -410,7 +410,7 @@ pub(crate) fn read_org_board(
     })
 }
 
-/// The spawn gate's read-only verdict (`fno agents gate-status --json`):
+/// The spawn gate's read-only verdict (`fno agents admit status --json`):
 /// whether a dispatch would be admitted right now, and which constraint binds.
 pub(crate) struct GateProbe {
     pub(crate) verdict: String,
@@ -450,15 +450,15 @@ impl GateProbe {
                 "fno agents incident status; fno agents incident clear --reason <text>".into()
             }
             Some("max_live" | "lead_share") => {
-                "live workers exiting (`fno agents gate-status` slot_rows)".into()
+                "live workers exiting (`fno agents admit status` slot_rows)".into()
             }
             Some("machine-runaway") => {
-                "machine runaway brake (`fno agents gate-status`); it expires on its own".into()
+                "machine runaway brake (`fno agents admit status`); it expires on its own".into()
             }
             Some("provider_cap" | "provider_quota_lock") => {
                 "provider lanes (`fno-agents provider-cap status`)".into()
             }
-            _ => "fno agents gate-status".into(),
+            _ => "fno agents admit status".into(),
         }
     }
 }
@@ -468,7 +468,7 @@ impl GateProbe {
 pub(crate) fn probe_dispatch_capacity(fno_bin: &str, cwd: &Path) -> Result<GateProbe, String> {
     let out = crate::loopcheck::bounded_read(
         std::ffi::OsStr::new(fno_bin),
-        &["agents", "census", "gate-status"],
+        &["agents", "admit", "status"],
         cwd,
         "spawn gate status",
         crate::loopcheck::stopgate_read_timeout(),

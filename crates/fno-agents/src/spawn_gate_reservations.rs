@@ -22,7 +22,7 @@ use crate::spawn_gate::NOTE;
 pub(crate) const RESERVATION_RULE: &str = "A reservation is held for a NAME: spawn with \
      --name <that name> to redeem it. A reservation expires within 15 minutes, whatever \
      happened to the session that made it. Slot order is otherwise first-come; read \
-     `fno agents gate-status` for the lane.";
+     `fno agents admit status` for the lane.";
 
 /// The refusal receipt's `reserved` field: one object per held reservation.
 pub(crate) fn reserved_receipt(reserved: &[(String, i64)]) -> Value {
@@ -189,7 +189,7 @@ mod tests {
         assert!(verdict.contains("cap=2"), "{verdict}");
         assert!(verdict.contains("count=2"), "{verdict}");
         assert!(
-            verdict.contains("remedy: read fno agents gate-status"),
+            verdict.contains("remedy: read fno agents admit status"),
             "{verdict}"
         );
         let receipt = refusal
