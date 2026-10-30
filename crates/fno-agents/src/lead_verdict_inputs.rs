@@ -1324,7 +1324,7 @@ mod tests {
         // the close still counts.
         let rows = [close_row(
             "x-kid",
-            "2026-10-25T20:13:03+00:00",
+            "2026-10-25T20:14:03+00:00",
             serde_json::json!({"source_session_id": "lead-session"}),
         )];
         let (_, _, inherited_closed, filed_closed) = scope_split(
