@@ -891,24 +891,13 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         pending_route = Some((trace, attrs));
     }
     // The correction span: parented at the overturned span; the row's trace
-    // names the same parent. The attrs carry the same id as the `overturns`
-    // join key the pushback fold matches against route spans. Captured here,
-    // emitted after the row lands.
-    let pending_correction = overturns.as_ref().map(|t| {
-        let mut attrs = Map::new();
-        attrs.insert("overturns".to_string(), json!(t.to_string()));
-        (
-            Trace {
-                trace_id: subject.clone(),
-                span_id: new_span_id(),
-                parent_span_id: Some(t.to_string()),
-                actor_session: caller_session.clone(),
-                actor_kind: actor_kind_from_authority(provenance.authority_source.as_deref()),
-                comms: "mail",
-                recipient_session: None,
-                recipient_kind: None,
-            },
-            attrs,
+    // names the same parent. Captured here, emitted after the row lands.
+    let pending_correction = overturns.as_deref().map(|t| {
+        pending_correction_span(
+            &subject,
+            t,
+            caller_session.clone(),
+            provenance.authority_source.as_deref(),
         )
     });
     // The route rides ahead of the row: the trace query reads in ts order and
@@ -1178,6 +1167,35 @@ fn attended_provenance(
     }
 }
 
+/// The correction span and its attrs: parented at the overturned span, with
+/// the attrs carrying the same id as the `overturns` join key the pushback
+/// fold matches against route spans. The operator lane owns corrections and
+/// is unreachable under the door's test identities (an agent claiming
+/// operator refuses; an unattributed caller refuses), so the unit test
+/// drives this constructor directly.
+fn pending_correction_span(
+    subject: &str,
+    target: &str,
+    caller_session: Option<String>,
+    authority_source: Option<&str>,
+) -> (Trace, Map<String, Value>) {
+    let mut attrs = Map::new();
+    attrs.insert("overturns".to_string(), json!(target));
+    (
+        Trace {
+            trace_id: subject.to_string(),
+            span_id: new_span_id(),
+            parent_span_id: Some(target.to_string()),
+            actor_session: caller_session,
+            actor_kind: actor_kind_from_authority(authority_source),
+            comms: "mail",
+            recipient_session: None,
+            recipient_kind: None,
+        },
+        attrs,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1356,41 +1374,21 @@ mod tests {
     }
 
     #[test]
-    fn decide_correction_span_carries_the_overturns_join_key() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        save_node(
-            &crate::graph_get::default_graph_path(),
+    fn decide_correction_span_attrs_carry_the_overturns_join_key() {
+        // The operator lane owns corrections and is unreachable under the
+        // door's test identities (an agent claiming operator refuses, an
+        // unattributed caller refuses), so the test drives the constructor
+        // the write path calls.
+        let (trace, attrs) = pending_correction_span(
             "x-node5",
-            "node-five",
+            "s-r1",
+            Some("cl-test5".to_string()),
+            Some("operator"),
         );
-        let code = decide_door_write(
-            decide_argv(&[
-                "x-node5",
-                "Overruled",
-                "--overturns",
-                "s-r1",
-                "--authority",
-                "operator",
-            ]),
-            DecideIdentity::Forced(Some("cl-test5")),
-        );
-        assert_eq!(code, 0);
-        let journal = project_events_journal();
-        let spans = crate::event_store::query_events(
-            &journal,
-            &crate::event_store::EventQuery::of_types(&["decision_span"]),
-        )
-        .unwrap_or_default();
-        let correction = spans
-            .iter()
-            .find(|r| r.line.contains("span_kind\":\"correction\""))
-            .expect("a correction span landed");
-        let row = serde_json::from_str::<serde_json::Value>(&correction.line).unwrap();
-        // The fold reads this attr as the join key against route spans; the
-        // trace parent names the same hop.
-        assert_eq!(row["data"]["overturns"], json!("s-r1"));
-        assert_eq!(row["data"]["trace"]["parent_span_id"], json!("s-r1"));
+        assert_eq!(attrs["overturns"], json!("s-r1"));
+        assert_eq!(trace.parent_span_id.as_deref(), Some("s-r1"));
+        assert_eq!(trace.actor_kind, "user");
+        assert!(trace.span_id.starts_with("s-"));
     }
 
     #[test]
