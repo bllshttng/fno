@@ -82,7 +82,6 @@ inbox user ack
 inbox user list
 inbox user status
 lint
-mail
 mux
 paths
 plan
