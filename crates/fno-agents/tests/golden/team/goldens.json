@@ -1,0 +1,636 @@
+{
+ "fold-did-not-run|inputs": {
+  "fold": {},
+  "gate": {
+   "live_workers": 2,
+   "max_live": 8,
+   "verdict": "admit"
+  },
+  "team": {
+   "conflicts": [],
+   "graph_readable": true,
+   "registry_readable": true,
+   "roles": [
+    {
+     "agree": true,
+     "grantor": "human",
+     "holder": "lead-fno",
+     "level": 1,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": null,
+     "role_source": "row",
+     "scope": "fno",
+     "status": "idle"
+    }
+   ],
+   "summary": {
+    "disagreements": 0,
+    "manifest_only": 0,
+    "splits": 0,
+    "sweep_ran": true,
+    "total": 1,
+    "unknowns": 0
+   }
+  }
+ },
+ "fold-did-not-run|json": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [\n        \"the scope fold did not run\"\n      ],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": null,\n      \"unclaimed\": [],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "fold-did-not-run|nodes": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"scope_nodes\": {\n        \"reason\": \"the fold could not run: frozen\",\n        \"status\": \"unresolved\"\n      },\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [\n        \"the scope fold did not run\"\n      ],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": null,\n      \"unclaimed\": [],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "fold-did-not-run|table": "SCOPE            LEVEL HOLDER               GRANTOR          STATUS         AGREE SOURCE\nfno              1     lead-fno             human            idle           yes  row     \n\nteam: 1 role, 0 disagreements, 0 unknowns, 0 splits\nstuck: could not answer: the scope fold did not run",
+ "fold-predates|inputs": {
+  "fold": {
+   "scope_nodes": {
+    "fno": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    }
+   }
+  },
+  "gate": {
+   "live_workers": 2,
+   "max_live": 8,
+   "verdict": "admit"
+  },
+  "team": {
+   "conflicts": [],
+   "graph_readable": true,
+   "registry_readable": true,
+   "roles": [
+    {
+     "agree": true,
+     "grantor": "human",
+     "holder": "lead-fno",
+     "level": 1,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": null,
+     "role_source": "row",
+     "scope": "fno",
+     "status": "idle"
+    }
+   ],
+   "summary": {
+    "disagreements": 0,
+    "manifest_only": 0,
+    "splits": 0,
+    "sweep_ran": true,
+    "total": 1,
+    "unknowns": 0
+   }
+  }
+ },
+ "fold-predates|json": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [\n        \"the fno-agents binary predates this team and returned no stuck verdict; run fno doctor --fix\"\n      ],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": null,\n      \"unclaimed\": [],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "fold-predates|nodes": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"scope_nodes\": {\n        \"counts\": {\n          \"ready\": 1\n        },\n        \"nodes\": [\n          {\n            \"id\": \"x-aaaa\",\n            \"sessions\": [\n              {\n                \"id\": \"sid-live\",\n                \"live\": true,\n                \"status\": \"idle\"\n              },\n              {\n                \"id\": \"sid-gone\",\n                \"live\": false,\n                \"status\": \"exited\"\n              },\n              {\n                \"id\": \"sid-unknown\",\n                \"live\": null,\n                \"status\": null\n              }\n            ],\n            \"status\": \"ready\"\n          }\n        ],\n        \"status\": \"resolved\"\n      },\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [\n        \"the fno-agents binary predates this team and returned no stuck verdict; run fno doctor --fix\"\n      ],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": null,\n      \"unclaimed\": [],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "fold-predates|table": "SCOPE            LEVEL HOLDER               GRANTOR          STATUS         AGREE SOURCE\nfno              1     lead-fno             human            idle           yes  row     \n\nteam: 1 role, 0 disagreements, 0 unknowns, 0 splits\nstuck: could not answer: the fno-agents binary predates this team and returned no stuck verdict; run fno doctor --fix",
+ "full|inputs": {
+  "fold": {
+   "scope_nodes": {
+    "fno": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    },
+    "x-epic1": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    }
+   },
+   "stuck": {
+    "blind": [],
+    "blocked": [],
+    "in_review": [],
+    "threshold_minutes": 30,
+    "unclaimed": [
+     "x-aaaa"
+    ],
+    "unproven_claim": []
+   },
+   "stuck_line": "1 unclaimed (x-aaaa)"
+  },
+  "gate": {
+   "live_workers": 2,
+   "max_live": 8,
+   "verdict": "admit"
+  },
+  "team": {
+   "conflicts": [
+    {
+     "holders": [
+      "lead-epic",
+      "half"
+     ],
+     "members": [
+      "x-epic1"
+     ],
+     "scope": "x-epic1"
+    }
+   ],
+   "graph_readable": true,
+   "registry_readable": true,
+   "roles": [
+    {
+     "agree": true,
+     "grantor": "human",
+     "holder": "lead-fno",
+     "level": 1,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": null,
+     "role_source": "row",
+     "scope": "fno",
+     "status": "idle"
+    },
+    {
+     "agree": false,
+     "grantor": "human",
+     "holder": "lead-epic",
+     "level": 2,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": "'x-epic1' is a feature, not an epic",
+     "role_source": "split",
+     "scope": "x-epic1",
+     "status": "idle"
+    },
+    {
+     "agree": false,
+     "grantor": "human",
+     "holder": "half",
+     "level": null,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": "half a role: scope is set but level is missing",
+     "role_source": "row",
+     "scope": "x-epic2",
+     "status": "idle"
+    },
+    {
+     "agree": null,
+     "grantor": "human",
+     "holder": "x-gone",
+     "level": 2,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": "role lives on the manifest; no live registry row holds it",
+     "role_source": "manifest",
+     "scope": "x-gone",
+     "status": "manifest-only"
+    }
+   ],
+   "summary": {
+    "disagreements": 2,
+    "manifest_only": 1,
+    "splits": 1,
+    "sweep_ran": true,
+    "total": 3,
+    "unknowns": 1
+   }
+  }
+ },
+ "full|json": "{\n  \"conflicts\": [\n    {\n      \"holders\": [\n        \"lead-epic\",\n        \"half\"\n      ],\n      \"members\": [\n        \"x-epic1\"\n      ],\n      \"scope\": \"x-epic1\"\n    }\n  ],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"status\": \"idle\"\n    },\n    {\n      \"agree\": false,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-epic\",\n      \"level\": 2,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": \"'x-epic1' is a feature, not an epic\",\n      \"role_source\": \"split\",\n      \"scope\": \"x-epic1\",\n      \"status\": \"idle\"\n    },\n    {\n      \"agree\": false,\n      \"grantor\": \"human\",\n      \"holder\": \"half\",\n      \"level\": null,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": \"half a role: scope is set but level is missing\",\n      \"role_source\": \"row\",\n      \"scope\": \"x-epic2\",\n      \"status\": \"idle\"\n    },\n    {\n      \"agree\": null,\n      \"grantor\": \"human\",\n      \"holder\": \"x-gone\",\n      \"level\": 2,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": \"role lives on the manifest; no live registry row holds it\",\n      \"role_source\": \"manifest\",\n      \"scope\": \"x-gone\",\n      \"status\": \"manifest-only\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 2,\n    \"manifest_only\": 1,\n    \"splits\": 1,\n    \"stuck\": {\n      \"blind\": [],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": true,\n    \"total\": 3,\n    \"unknowns\": 1\n  }\n}",
+ "full|nodes": "{\n  \"conflicts\": [\n    {\n      \"holders\": [\n        \"lead-epic\",\n        \"half\"\n      ],\n      \"members\": [\n        \"x-epic1\"\n      ],\n      \"scope\": \"x-epic1\"\n    }\n  ],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"scope_nodes\": {\n        \"counts\": {\n          \"ready\": 1\n        },\n        \"nodes\": [\n          {\n            \"id\": \"x-aaaa\",\n            \"sessions\": [\n              {\n                \"id\": \"sid-live\",\n                \"live\": true,\n                \"status\": \"idle\"\n              },\n              {\n                \"id\": \"sid-gone\",\n                \"live\": false,\n                \"status\": \"exited\"\n              },\n              {\n                \"id\": \"sid-unknown\",\n                \"live\": null,\n                \"status\": null\n              }\n            ],\n            \"status\": \"ready\"\n          }\n        ],\n        \"status\": \"resolved\"\n      },\n      \"status\": \"idle\"\n    },\n    {\n      \"agree\": false,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-epic\",\n      \"level\": 2,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": \"'x-epic1' is a feature, not an epic\",\n      \"role_source\": \"split\",\n      \"scope\": \"x-epic1\",\n      \"scope_nodes\": {\n        \"counts\": {\n          \"ready\": 1\n        },\n        \"nodes\": [\n          {\n            \"id\": \"x-aaaa\",\n            \"sessions\": [\n              {\n                \"id\": \"sid-live\",\n                \"live\": true,\n                \"status\": \"idle\"\n              },\n              {\n                \"id\": \"sid-gone\",\n                \"live\": false,\n                \"status\": \"exited\"\n              },\n              {\n                \"id\": \"sid-unknown\",\n                \"live\": null,\n                \"status\": null\n              }\n            ],\n            \"status\": \"ready\"\n          }\n        ],\n        \"status\": \"resolved\"\n      },\n      \"status\": \"idle\"\n    },\n    {\n      \"agree\": false,\n      \"grantor\": \"human\",\n      \"holder\": \"half\",\n      \"level\": null,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": \"half a role: scope is set but level is missing\",\n      \"role_source\": \"row\",\n      \"scope\": \"x-epic2\",\n      \"scope_nodes\": {\n        \"reason\": \"the fold answered no row for this scope\",\n        \"status\": \"unresolved\"\n      },\n      \"status\": \"idle\"\n    },\n    {\n      \"agree\": null,\n      \"grantor\": \"human\",\n      \"holder\": \"x-gone\",\n      \"level\": 2,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": \"role lives on the manifest; no live registry row holds it\",\n      \"role_source\": \"manifest\",\n      \"scope\": \"x-gone\",\n      \"scope_nodes\": {\n        \"reason\": \"the fold answered no row for this scope\",\n        \"status\": \"unresolved\"\n      },\n      \"status\": \"manifest-only\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 2,\n    \"manifest_only\": 1,\n    \"splits\": 1,\n    \"stuck\": {\n      \"blind\": [],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": true,\n    \"total\": 3,\n    \"unknowns\": 1\n  }\n}",
+ "full|table": "SCOPE            LEVEL HOLDER               GRANTOR          STATUS         AGREE SOURCE\nfno              1     lead-fno             human            idle           yes  row     \nx-epic1          2     lead-epic            human            idle           no   split      'x-epic1' is a feature, not an epic\nx-epic2          None  half                 human            idle           no   row        half a role: scope is set but level is missing\nx-gone           2     x-gone               human            manifest-only  ?    manifest   role lives on the manifest; no live registry row holds it\n\nconflicts: scope 'x-epic1' held by 2 live rows (lead-epic, half)\n\nteam: 3 roles, 2 disagreements, 1 unknown, 1 split, 1 manifest-only\nstuck: 1 unclaimed (x-aaaa)",
+ "gate-refused|inputs": {
+  "fold": {
+   "scope_nodes": {
+    "fno": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    },
+    "x-epic1": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    }
+   },
+   "stuck": {
+    "blind": [],
+    "blocked": [],
+    "in_review": [],
+    "threshold_minutes": 30,
+    "unclaimed": [
+     "x-aaaa"
+    ],
+    "unproven_claim": []
+   },
+   "stuck_line": "1 unclaimed (x-aaaa)"
+  },
+  "gate": {
+   "reason": "max_live",
+   "verdict": "refused"
+  },
+  "team": {
+   "conflicts": [],
+   "graph_readable": true,
+   "registry_readable": true,
+   "roles": [
+    {
+     "agree": true,
+     "grantor": "human",
+     "holder": "lead-fno",
+     "level": 1,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": null,
+     "role_source": "row",
+     "scope": "fno",
+     "status": "idle"
+    }
+   ],
+   "summary": {
+    "disagreements": 0,
+    "manifest_only": 0,
+    "splits": 0,
+    "sweep_ran": true,
+    "total": 1,
+    "unknowns": 0
+   }
+  }
+ },
+ "gate-refused|json": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"reason\": \"max_live\",\n    \"verdict\": \"refused\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "gate-refused|nodes": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"reason\": \"max_live\",\n    \"verdict\": \"refused\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"scope_nodes\": {\n        \"counts\": {\n          \"ready\": 1\n        },\n        \"nodes\": [\n          {\n            \"id\": \"x-aaaa\",\n            \"sessions\": [\n              {\n                \"id\": \"sid-live\",\n                \"live\": true,\n                \"status\": \"idle\"\n              },\n              {\n                \"id\": \"sid-gone\",\n                \"live\": false,\n                \"status\": \"exited\"\n              },\n              {\n                \"id\": \"sid-unknown\",\n                \"live\": null,\n                \"status\": null\n              }\n            ],\n            \"status\": \"ready\"\n          }\n        ],\n        \"status\": \"resolved\"\n      },\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "gate-refused|table": "SCOPE            LEVEL HOLDER               GRANTOR          STATUS         AGREE SOURCE\nfno              1     lead-fno             human            idle           yes  row     \n\nteam: 1 role, 0 disagreements, 0 unknowns, 0 splits\nstuck: 1 unclaimed (x-aaaa), gate refused max_live",
+ "gate-unknown|inputs": {
+  "fold": {
+   "scope_nodes": {
+    "fno": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    },
+    "x-epic1": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    }
+   },
+   "stuck": {
+    "blind": [],
+    "blocked": [],
+    "in_review": [],
+    "threshold_minutes": 30,
+    "unclaimed": [
+     "x-aaaa"
+    ],
+    "unproven_claim": []
+   },
+   "stuck_line": "1 unclaimed (x-aaaa)"
+  },
+  "gate": {
+   "reason": "gate_unavailable",
+   "verdict": "unknown"
+  },
+  "team": {
+   "conflicts": [],
+   "graph_readable": true,
+   "registry_readable": true,
+   "roles": [
+    {
+     "agree": true,
+     "grantor": "human",
+     "holder": "lead-fno",
+     "level": 1,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": null,
+     "role_source": "row",
+     "scope": "fno",
+     "status": "idle"
+    }
+   ],
+   "summary": {
+    "disagreements": 0,
+    "manifest_only": 0,
+    "splits": 0,
+    "sweep_ran": true,
+    "total": 1,
+    "unknowns": 0
+   }
+  }
+ },
+ "gate-unknown|json": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"reason\": \"gate_unavailable\",\n    \"verdict\": \"unknown\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [\n        \"the spawn gate answered unknown: gate_unavailable\"\n      ],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "gate-unknown|nodes": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"reason\": \"gate_unavailable\",\n    \"verdict\": \"unknown\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"scope_nodes\": {\n        \"counts\": {\n          \"ready\": 1\n        },\n        \"nodes\": [\n          {\n            \"id\": \"x-aaaa\",\n            \"sessions\": [\n              {\n                \"id\": \"sid-live\",\n                \"live\": true,\n                \"status\": \"idle\"\n              },\n              {\n                \"id\": \"sid-gone\",\n                \"live\": false,\n                \"status\": \"exited\"\n              },\n              {\n                \"id\": \"sid-unknown\",\n                \"live\": null,\n                \"status\": null\n              }\n            ],\n            \"status\": \"ready\"\n          }\n        ],\n        \"status\": \"resolved\"\n      },\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [\n        \"the spawn gate answered unknown: gate_unavailable\"\n      ],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": true,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "gate-unknown|table": "SCOPE            LEVEL HOLDER               GRANTOR          STATUS         AGREE SOURCE\nfno              1     lead-fno             human            idle           yes  row     \n\nteam: 1 role, 0 disagreements, 0 unknowns, 0 splits\nstuck: 1 unclaimed (x-aaaa), could not answer: the spawn gate answered unknown: gate_unavailable",
+ "no-roles|inputs": {
+  "fold": {
+   "scope_nodes": {
+    "fno": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    },
+    "x-epic1": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    }
+   },
+   "stuck": {
+    "blind": [],
+    "blocked": [],
+    "in_review": [],
+    "threshold_minutes": 30,
+    "unclaimed": [
+     "x-aaaa"
+    ],
+    "unproven_claim": []
+   },
+   "stuck_line": "1 unclaimed (x-aaaa)"
+  },
+  "gate": {
+   "live_workers": 2,
+   "max_live": 8,
+   "verdict": "admit"
+  },
+  "team": {
+   "conflicts": [],
+   "graph_readable": true,
+   "registry_readable": true,
+   "roles": [],
+   "summary": {
+    "disagreements": 0,
+    "manifest_only": 0,
+    "splits": 0,
+    "sweep_ran": true,
+    "total": 0,
+    "unknowns": 0
+   }
+  }
+ },
+ "no-roles|json": "{\n  \"conflicts\": [],\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [],\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"sweep_ran\": true,\n    \"total\": 0,\n    \"unknowns\": 0\n  }\n}",
+ "no-roles|nodes": "{\n  \"conflicts\": [],\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [],\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"sweep_ran\": true,\n    \"total\": 0,\n    \"unknowns\": 0\n  }\n}",
+ "no-roles|table": "team: no live roles",
+ "sessions": {
+  "sid-gone": "exited",
+  "sid-live": "idle"
+ },
+ "sweep-did-not-run|inputs": {
+  "fold": {
+   "scope_nodes": {
+    "fno": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    },
+    "x-epic1": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    }
+   },
+   "stuck": {
+    "blind": [],
+    "blocked": [],
+    "in_review": [],
+    "threshold_minutes": 30,
+    "unclaimed": [
+     "x-aaaa"
+    ],
+    "unproven_claim": []
+   },
+   "stuck_line": "1 unclaimed (x-aaaa)"
+  },
+  "gate": {
+   "live_workers": 2,
+   "max_live": 8,
+   "verdict": "admit"
+  },
+  "team": {
+   "conflicts": [],
+   "graph_readable": true,
+   "registry_readable": true,
+   "roles": [
+    {
+     "agree": true,
+     "grantor": "human",
+     "holder": "lead-fno",
+     "level": 1,
+     "manifest_path": null,
+     "manifest_session": null,
+     "reason": null,
+     "role_source": "row",
+     "scope": "fno",
+     "status": "idle"
+    }
+   ],
+   "summary": {
+    "disagreements": 0,
+    "manifest_only": 0,
+    "splits": 0,
+    "sweep_ran": false,
+    "total": 1,
+    "unknowns": 0
+   }
+  }
+ },
+ "sweep-did-not-run|json": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": false,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "sweep-did-not-run|nodes": "{\n  \"conflicts\": [],\n  \"gate\": {\n    \"live_workers\": 2,\n    \"max_live\": 8,\n    \"verdict\": \"admit\"\n  },\n  \"graph_readable\": true,\n  \"registry_readable\": true,\n  \"roles\": [\n    {\n      \"agree\": true,\n      \"grantor\": \"human\",\n      \"holder\": \"lead-fno\",\n      \"level\": 1,\n      \"manifest_path\": null,\n      \"manifest_session\": null,\n      \"reason\": null,\n      \"role_source\": \"row\",\n      \"scope\": \"fno\",\n      \"scope_nodes\": {\n        \"counts\": {\n          \"ready\": 1\n        },\n        \"nodes\": [\n          {\n            \"id\": \"x-aaaa\",\n            \"sessions\": [\n              {\n                \"id\": \"sid-live\",\n                \"live\": true,\n                \"status\": \"idle\"\n              },\n              {\n                \"id\": \"sid-gone\",\n                \"live\": false,\n                \"status\": \"exited\"\n              },\n              {\n                \"id\": \"sid-unknown\",\n                \"live\": null,\n                \"status\": null\n              }\n            ],\n            \"status\": \"ready\"\n          }\n        ],\n        \"status\": \"resolved\"\n      },\n      \"status\": \"idle\"\n    }\n  ],\n  \"sessions_readable\": true,\n  \"summary\": {\n    \"disagreements\": 0,\n    \"manifest_only\": 0,\n    \"splits\": 0,\n    \"stuck\": {\n      \"blind\": [],\n      \"blocked\": [],\n      \"in_review\": [],\n      \"threshold_minutes\": 30,\n      \"unclaimed\": [\n        \"x-aaaa\"\n      ],\n      \"unproven_claim\": []\n    },\n    \"stuck_line\": \"1 unclaimed (x-aaaa)\",\n    \"sweep_ran\": false,\n    \"total\": 1,\n    \"unknowns\": 0\n  }\n}",
+ "sweep-did-not-run|table": "SCOPE            LEVEL HOLDER               GRANTOR          STATUS         AGREE SOURCE\nfno              1     lead-fno             human            idle           yes  row     \n\nteam: 1 role, 0 disagreements, 0 unknowns, 0 splits\norphan sweep did not run (stale or missing binary): zero manifest-only entries is an absence, not a finding\nstuck: 1 unclaimed (x-aaaa)",
+ "unreadable|inputs": {
+  "fold": {
+   "scope_nodes": {
+    "fno": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    },
+    "x-epic1": {
+     "counts": {
+      "ready": 1
+     },
+     "nodes": [
+      {
+       "id": "x-aaaa",
+       "sessions": [
+        "sid-live",
+        "sid-gone",
+        "sid-unknown"
+       ],
+       "status": "ready"
+      }
+     ],
+     "status": "resolved"
+    }
+   },
+   "stuck": {
+    "blind": [],
+    "blocked": [],
+    "in_review": [],
+    "threshold_minutes": 30,
+    "unclaimed": [
+     "x-aaaa"
+    ],
+    "unproven_claim": []
+   },
+   "stuck_line": "1 unclaimed (x-aaaa)"
+  },
+  "gate": {
+   "live_workers": 2,
+   "max_live": 8,
+   "verdict": "admit"
+  },
+  "team": {
+   "conflicts": null,
+   "graph_readable": null,
+   "registry_readable": false,
+   "roles": null,
+   "summary": {
+    "disagreements": null,
+    "reason": "registry unreadable: boom",
+    "splits": null,
+    "total": null,
+    "unknowns": null
+   }
+  }
+ },
+ "unreadable|json": "{\n  \"conflicts\": null,\n  \"graph_readable\": null,\n  \"registry_readable\": false,\n  \"roles\": null,\n  \"summary\": {\n    \"disagreements\": null,\n    \"reason\": \"registry unreadable: boom\",\n    \"splits\": null,\n    \"total\": null,\n    \"unknowns\": null\n  }\n}",
+ "unreadable|nodes": "{\n  \"conflicts\": null,\n  \"graph_readable\": null,\n  \"registry_readable\": false,\n  \"roles\": null,\n  \"summary\": {\n    \"disagreements\": null,\n    \"reason\": \"registry unreadable: boom\",\n    \"splits\": null,\n    \"total\": null,\n    \"unknowns\": null\n  }\n}",
+ "unreadable|table": "team: CANNOT READ - registry unreadable: boom. This is not an empty team; nothing was checked."
+}

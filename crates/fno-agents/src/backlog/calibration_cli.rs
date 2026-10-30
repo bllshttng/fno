@@ -3,9 +3,7 @@
 //! node-tagged `friction` event stream (crate::backlog::calibration owns the
 //! computation; this module owns argv, I/O and render).
 
-use super::calibration::{
-    aggregate, compute, friction_counts_by_node, friction_counts_by_node_checked,
-};
+use super::calibration::{aggregate, compute, read_friction, revisions};
 use super::scorecard;
 use serde_json::{json, Value};
 
@@ -79,7 +77,7 @@ impl CalibrationArgs {
     }
 }
 
-const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  --kind-depth <1|2|3>   Split the kind by the merge commit: 1 stage/difficulty, 2 +type, 3 +type-surface, default 1 (requires --by-lane)\n  --propose --stage <stage>  One verdict per candidate lane per kind under the stage: target or blueprint (requires --by-lane, with --stage)\n  -h, --help             Print help";
+const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...], \"revisions\": [...], \"friction_since\": <ts|null>}\n  --by-lane              Fold work into (kind, harness, provider, model) lane cells over the window\n  --since <DAYS>         Scorecard window in days, default 28 (requires --by-lane)\n  --kind-depth <1|2|3>   Split the kind by the merge commit: 1 stage/difficulty, 2 +type, 3 +type-surface, default 1 (requires --by-lane)\n  --propose --stage <stage>  One verdict per candidate lane per kind under the stage: target or blueprint (requires --by-lane, with --stage)\n  -h, --help             Print help";
 
 pub fn run(tail: &[String]) -> i32 {
     if tail.iter().any(|t| t == "--help" || t == "-h") {
@@ -159,19 +157,28 @@ the seat laws name no other stage"
     };
     let cwd = std::env::current_dir().unwrap_or_default();
     let journal = crate::paths::events_path(&cwd);
-    let friction_by_node = friction_counts_by_node(&journal);
-    let rows = compute(&nodes, &friction_by_node);
+    let friction = read_friction(&journal);
+    let rows = compute(&nodes, &friction.by_node, friction.first_ms);
     let agg = aggregate(&rows);
+    let revs = revisions(&nodes);
     if args.json_out {
+        let friction_since = friction
+            .first_ms
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         println!(
             "{}",
-            super::render::py_json_pretty(&json!({"nodes": rows, "aggregate": agg}))
+            super::render::py_json_pretty(&json!({
+                "nodes": rows,
+                "aggregate": agg,
+                "revisions": revs,
+                "friction_since": friction_since,
+            }))
         );
         return 0;
     }
     if rows.is_empty() {
         eprintln!("fno backlog calibration: no done node carries a cost_sessions row yet");
-        return 0;
     }
     for r in &rows {
         println!(
@@ -182,18 +189,37 @@ the seat laws name no other stage"
             r.actual_cost_usd,
             r.session_count,
             r.friction.values().sum::<u32>(),
-            if r.smooth { "smooth" } else { "rough" },
+            match r.smooth {
+                Some(true) => "smooth",
+                Some(false) => "rough",
+                None => "unmeasured",
+            },
         );
     }
-    println!("\n-- by domain/difficulty --");
+    if !agg.is_empty() {
+        println!("\n-- by domain/difficulty/size --");
+    }
     for a in &agg {
         println!(
-            "{}/{}\t{} node(s)\t{} smooth\tavg ${:.2}",
+            "{}/{}/{}\t{} node(s)\t{} measured\t{} smooth\tavg ${:.2}",
             a.domain.as_deref().unwrap_or("-"),
             a.planned_difficulty.as_deref().unwrap_or("?"),
+            a.planned_size.as_deref().unwrap_or("-"),
             a.node_count,
+            a.measured_count,
             a.smooth_count,
             a.avg_cost_usd,
+        );
+    }
+    println!("\n-- revisions by domain/filed band --");
+    for r in &revs {
+        println!(
+            "{}/{}\t{} node(s)\t{} up\t{} down",
+            r.domain.as_deref().unwrap_or("-"),
+            r.filed.as_deref().unwrap_or("?"),
+            r.nodes,
+            r.revised_up,
+            r.revised_down,
         );
     }
     0
@@ -227,7 +253,7 @@ fn run_by_lane(
     let journal = crate::paths::events_path(&cwd);
     // An unreadable friction store stays None down the fold, so the
     // friction columns read null instead of a measured zero.
-    let (friction_by_node, friction_readable) = friction_counts_by_node_checked(&journal);
+    let friction = read_friction(&journal);
     // The review feed: one batched read over the same journal, keyed by PR.
     let (review_fails_by_pr, review_readable) = scorecard::review_fails_by_pr(&journal);
     let feeds = scorecard::OutcomeFeeds {
@@ -240,7 +266,7 @@ fn run_by_lane(
     let mut built = scorecard::build_records(
         &nodes,
         &ledger,
-        friction_readable.then_some(&friction_by_node),
+        friction.readable.then_some(&friction.by_node),
         &feeds,
         repo_scope.as_deref(),
         since_days,

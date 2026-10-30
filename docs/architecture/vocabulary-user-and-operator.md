@@ -58,7 +58,7 @@ The user said it on 2026-09-27: "i think of workspaces as an object that houses 
 | Membership | the one resolver in `crates/fno/src/server/thread_workspace.rs`: the recorded member answers first, then the spawner's workspace (the `spawned_by_session` edge), then the project default. A thread's cwd is its own property and decides membership only on the last rung. | New rule, no rename. |
 | Project | one repo, named by `project.id` through git. It is the default workspace for a thread nobody placed. | No. |
 | Project group | the config key `work.workspaces.<name>.projects[]` and the `mux.board_scope = workspace:<name>` value. Called a project group in prose. | No. The key keeps its spelling and its data: it is already in users' config.toml, the same call this page makes for `routing.operator_*`. Migration: none. |
-| `fno agents workspace` | the worktree-lifecycle command group, unrelated to the mux object. `.claude/rules/worktrees.md` names it. | No. |
+| `fno agents workspace` | the worktree-lifecycle command group, unrelated to the mux object. `docs/architecture/worktree-mechanics.md` (Placement) names it. | No. |
 | Squad (company topology) | `direct, loop, squad, pipeline` in `crates/fno-agents/src/plugins/verify.rs` `TOPOLOGIES`: a group of workers as an org shape. | Homonym, like the shell `operator`. Out of scope. |
 
 ## Before you run sed

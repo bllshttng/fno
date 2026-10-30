@@ -16,20 +16,15 @@ pub fn registry_join() -> (JoinMap, bool) {
     registry_join_at(&registry_path())
 }
 
-/// The registry file: the `WORKTREE_STATUS_REGISTRY` pin, else
-/// `$FNO_AGENTS_HOME/registry.json`, else the state root's agents registry.
+/// The registry file: the `WORKTREE_STATUS_REGISTRY` pin, else the one
+/// resolver every surface reads ([`AgentsHome::shared_registry_json`]).
 fn registry_path() -> PathBuf {
     if let Some(over) = std::env::var_os("WORKTREE_STATUS_REGISTRY") {
         if !over.is_empty() {
             return PathBuf::from(over);
         }
     }
-    if let Some(home) = std::env::var_os("FNO_AGENTS_HOME") {
-        if !home.is_empty() {
-            return resolve_lenient(Path::new(&home)).join("registry.json");
-        }
-    }
-    super::state_root().join("agents").join("registry.json")
+    crate::paths::AgentsHome::shared_registry_json()
 }
 
 /// The porcelain listing via the shared parser.

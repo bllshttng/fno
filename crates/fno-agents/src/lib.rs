@@ -242,6 +242,7 @@ pub mod glob;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
+pub mod green_carry;
 pub mod grok_ask;
 pub mod grok_store;
 pub mod harness_beat;
@@ -426,6 +427,7 @@ pub mod pane_spawn;
 pub mod pane_stop;
 pub mod paths;
 pub mod paths_cli;
+pub mod peek;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
@@ -534,6 +536,7 @@ pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
 pub mod role_cwd;
+pub mod role_grant;
 pub mod role_migration;
 pub mod roles;
 pub mod roster_progress;
@@ -553,6 +556,7 @@ pub mod rules_source;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
+pub mod sandbox_launch;
 pub mod sandbox_probe;
 pub mod scoreboard;
 pub mod scoreboard_escalation;
@@ -646,6 +650,7 @@ pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;
 pub mod team_names;
+pub mod team_read;
 pub mod team_reap;
 pub mod team_rescope;
 pub mod team_settle;
@@ -685,6 +690,7 @@ pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
 pub mod transcript_turns;
+pub mod truth_cli;
 pub mod truth_probe;
 pub mod update_journal;
 pub mod usage;
@@ -1467,9 +1473,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), five
+        // The allowed files: production binary repair (install_verify), six
         // production dir modes (paths, fleet_incident, chats, the
-        // session-state pin dir, the mcp sidecar's socket-parent tightening),
+        // session-state pin dir, the mcp sidecar's socket-parent tightening,
+        // the daemon's sandbox socket dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -1486,6 +1493,7 @@ mod tests {
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
             ("mcp/sidecar.rs", 1),
+            ("daemon/sandbox_host.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();

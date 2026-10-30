@@ -70,6 +70,20 @@ Two modes on `fno inbox law match` read a rule file. `{"mode":"rules-check","fil
 
 The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt` at `UserPromptSubmit` and `--event pre-tool` at `PreToolUse`, where a Skill call is the skill event. A block prints the PreToolUse deny with the rule ids. A warn or an inform prints `## Rules governing this <event>` as `additionalContext`. An inform at a pre-tool event prints once per session.
 
+The four doors ask the same way through `rules_source::rule`. The merge door reads one `door:merge` event per PR. The subject is `<owner/repo>#<n>`. The node comes from the body. A block holds the merge with blocker `rule`. The preview carries the same answer, so `fno do pr status` never says ready where merge refuses.
+
+The send door reads `door:send` with the recipient as subject. A block exits 3.
+
+The spawn gate reads `door:spawn` (harness, model, node, phase). A block refuses with exit 93 before any capacity math runs. `--force` does not clear a rule.
+
+Plan start reads `plan-start` from the init input. A block refuses before the helper runs.
+
+At every door a warn or an unread source prints and the door proceeds. Rules never fail a door closed.
+
+Two modes on the same door write and report. `{"mode":"rules-import","file":"<path>"}` validates the file through the rules-check validator. It demands the operator floor through the law door's resolver, so an agent caller is refused with exit 3. Then it appends one `law_trigger` event per rule that carries `law`, storing the raw TOML block verbatim. The write is append-only, and the newest import wins.
+
+`{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
+
 ## Events
 
 `stop` is the Stop payload: session id, last assistant text, transcript path. Journal events are `journal:<type>` (`journal:operator_question`) or `decision_span:<kind>` (`decision_span:route`), read from the project events journal for rows written since this session's previous engine fire. The engine keeps a per-session cursor (seq + ts) under the journal's `event-rules/` folder. The spans a fire writes are the dedupe ledger. A lost cursor costs a re-read, never a re-fire.
@@ -110,6 +124,17 @@ Each row is a guess about a failure, so check it against its fires. `fno-agents 
 A block on a row that names `last_message_decision_ask` also asks fnod, the local decision model, the `is_ask` question about the same message. The span then carries `keyword_ask: true` and either `fnod_is_ask` (the probability) with `fnod_ms`, or `fnod_error` with the reason the score is missing. The score is advice only. The keyword verdict has already fired the block, and fnod's answer changes nothing.
 
 fnod is the `kev.serve` server on loopback. Start it with `python -m kev.serve --run <student run dir> --port 8008` from the kev checkout. `fnod.url` in fno config moves it (default `http://127.0.0.1:8008`). It must resolve to a loopback address, or the call is refused and the message never leaves the machine. An empty value turns the score off. `fnod.timeout_ms` bounds the connect and the reply wait (default 500). No server, a timeout or a malformed reply writes `fnod_error` and the Stop goes on.
+
+## The tier-1 scorer: BM25 stays
+
+The tier-1 ranked match was measured against an embedding scorer before either got more code (the rule-engine wiring plan, 2026-10-29). The case set: 72 cases over the 12 measured tier-1 laws. 36 prompts name a law that must rank. 36 are real node titles from unrelated work, where none must rank. Pool: the 170 live laws. Both scorers answer top-3.
+
+| Scorer | recall@3 | precision@3 | false-fire on unrelated prompts |
+|---|---|---|---|
+| BM25 with `TIER1_FLOOR = 2.0` | 0.667 | 0.222 | 0.000 |
+| nomic-embed-text cosine | 0.750 | 0.250 | 0.333 |
+
+Embeddings beat BM25 by 0.083 recall@3, under the 0.15 bar the plan set for shipping them. They also fire on a third of the unrelated prompts the floored BM25 answer leaves silent. Tier 1 stays BM25. The floor is a cheap in-process score gate, and the false-fire record keeps an inform from becoming noise. The case set and the numbers live beside the plan (`bm25-tier1-cases.json`, `bm25-tier1-result.json`).
 
 ## Overrides
 
