@@ -379,7 +379,13 @@ fn worker_rows(
                 )
                 .0
             });
-            let handle = entry.map(|e| e.name.as_str()).filter(|n| *n != w.name);
+            // The registry name the row joins wins over the roster short id,
+            // so a claude bg worker reads as its name, not its handle.
+            let display = entry
+                .map(|e| e.name.as_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or(&w.name);
+            let handle = entry.map(|e| e.name.as_str()).filter(|n| *n != display);
             let joined = w
                 .session_id
                 .as_deref()
@@ -388,7 +394,7 @@ fn worker_rows(
             let seat = seat_facts(w, entry, probe);
             let mut row = json!({
                 "source": w.source,
-                "name": w.name,
+                "name": display,
                 "handle": handle,
                 "harness": w.harness,
                 "substrate": w.substrate,

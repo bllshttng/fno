@@ -1,4 +1,4 @@
-//! Mechanical grading: the three check kinds against a graded worktree
+//! Mechanical grading: the four check kinds against a graded worktree
 //! (the deleted Python leg's grading.py, ported). Deterministic by
 //! construction: no model in the pass/fail path. The same worktree
 //! end-state always grades the same.
@@ -39,6 +39,11 @@ pub fn grade(
         match check.kind.as_str() {
             "exit" => results.push(grade_exit(check, workdir, timeout_s, base_ref)),
             "file-exists" => results.push(grade_file_exists(check, workdir)),
+            "tool-budget" => results.push(grade_tool_budget(
+                check,
+                &crate::claude_drive::claude_projects_dir()
+                    .join(crate::claude_ask::claude_cwd_slug(workdir)),
+            )),
             _ => results.push(grade_grep(check, workdir)),
         }
     }
@@ -130,6 +135,72 @@ fn grade_grep(check: &super::bank::GradeCheck, workdir: &std::path::Path) -> Che
     }
 }
 
+/// `tool-budget`: the worker's recorded tool calls must not exceed
+/// `max_tool_calls`. The evidence is the claude transcript the trial left in
+/// its own projects dir (every trial is a fresh cwd, so the dir holds this
+/// attempt alone). A missing or unreadable transcript FAILS the check: an
+/// unmeasured route is never a pass. Codex and opencode workers write no
+/// claude transcript, so they fail here as unmeasured.
+fn grade_tool_budget(
+    check: &super::bank::GradeCheck,
+    transcript_dir: &std::path::Path,
+) -> CheckResult {
+    let max = check.max_tool_calls.unwrap_or(0);
+    let fail = |why: String| CheckResult {
+        kind: "tool-budget".into(),
+        passed: false,
+        detail: format!("tool-budget: unmeasured, {why}"),
+    };
+    if let Err(e) = std::fs::read_dir(transcript_dir) {
+        return fail(format!(
+            "no transcript dir {}: {e}",
+            transcript_dir.display()
+        ));
+    }
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    collect_jsonl(transcript_dir, &mut files);
+    if files.is_empty() {
+        return fail(format!("no transcript in {}", transcript_dir.display()));
+    }
+    let mut calls: i64 = 0;
+    for f in &files {
+        match crate::interrupt_classify::read_transcript(f) {
+            Ok(entries) => {
+                calls += entries
+                    .iter()
+                    .filter(|e| {
+                        matches!(
+                            e,
+                            crate::interrupt_classify::TranscriptEntry::AssistantToolUse { .. }
+                        )
+                    })
+                    .count() as i64;
+            }
+            Err(e) => return fail(format!("cannot read {}: {e}", f.display())),
+        }
+    }
+    CheckResult {
+        kind: "tool-budget".into(),
+        passed: calls <= max,
+        detail: format!("tool-budget: {calls} tool calls (max {max})"),
+    }
+}
+
+/// Every `.jsonl` under the dir, subagent transcripts
+/// (`<session>/subagents/agent-*.jsonl`) included.
+fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for p in rd.flatten().map(|e| e.path()) {
+        if p.is_dir() {
+            collect_jsonl(&p, out);
+        } else if p.extension().is_some_and(|e| e == "jsonl") {
+            out.push(p);
+        }
+    }
+}
+
 enum WaitOutcome {
     Done(i32),
     TimedOut,
@@ -159,5 +230,82 @@ fn spawn_wait_timeout(cmd: &mut std::process::Command, timeout_s: i64) -> WaitOu
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn budget(max: i64) -> super::super::bank::GradeCheck {
+        super::super::bank::GradeCheck {
+            kind: "tool-budget".into(),
+            command: None,
+            expect: 0,
+            path: None,
+            pattern: None,
+            max_tool_calls: Some(max),
+        }
+    }
+
+    fn tool_line(ids: &[&str]) -> String {
+        let blocks: Vec<String> = ids
+            .iter()
+            .map(|i| format!(r#"{{"type":"tool_use","id":"{i}","name":"Bash","input":{{}}}}"#))
+            .collect();
+        format!(r#"{{"message":{{"content":[{}]}}}}"#, blocks.join(","))
+    }
+
+    fn dir_with(lines: &[String]) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("s.jsonl"), lines.join("\n") + "\n").unwrap();
+        d
+    }
+
+    #[test]
+    fn under_budget_passes_and_names_both_numbers() {
+        let lines: Vec<String> = (0..12).map(|i| tool_line(&[&format!("t{i}")])).collect();
+        let r = grade_tool_budget(&budget(40), dir_with(&lines).path());
+        assert!(r.passed, "{}", r.detail);
+        assert_eq!(r.detail, "tool-budget: 12 tool calls (max 40)");
+    }
+
+    #[test]
+    fn over_budget_fails_naming_count_and_budget() {
+        let lines: Vec<String> = (0..91).map(|i| tool_line(&[&format!("t{i}")])).collect();
+        let r = grade_tool_budget(&budget(40), dir_with(&lines).path());
+        assert!(!r.passed);
+        assert_eq!(r.detail, "tool-budget: 91 tool calls (max 40)");
+    }
+
+    #[test]
+    fn three_blocks_in_one_message_count_three() {
+        let r = grade_tool_budget(&budget(2), dir_with(&[tool_line(&["a", "b", "c"])]).path());
+        assert!(!r.passed);
+        assert!(r.detail.contains("3 tool calls"), "{}", r.detail);
+    }
+
+    #[test]
+    fn subagent_transcripts_count_toward_the_budget() {
+        let d = dir_with(&[tool_line(&["a"])]);
+        let sub = d.path().join("sess").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("agent-1.jsonl"), tool_line(&["b", "c"]) + "\n").unwrap();
+        let r = grade_tool_budget(&budget(40), d.path());
+        assert_eq!(r.detail, "tool-budget: 3 tool calls (max 40)");
+    }
+
+    #[test]
+    fn a_missing_or_empty_transcript_fails_never_passes() {
+        let gone = tempfile::tempdir().unwrap().path().join("nope");
+        let r = grade_tool_budget(&budget(40), &gone);
+        assert!(!r.passed && r.detail.contains("unmeasured"), "{}", r.detail);
+        let empty = tempfile::tempdir().unwrap();
+        let r = grade_tool_budget(&budget(40), empty.path());
+        assert!(
+            !r.passed && r.detail.contains("no transcript"),
+            "{}",
+            r.detail
+        );
     }
 }

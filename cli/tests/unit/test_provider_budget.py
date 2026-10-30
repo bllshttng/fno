@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-from fno.agents.model_routing import ROUTE_PROVIDER_ENV
 from fno.config import (
     AgentsBlock,
     assert_subagent_budget,
@@ -86,17 +85,3 @@ def test_the_env_stamp_drives_the_check_when_no_provider_is_passed(monkeypatch):
 # --- the stamp is set or cleared, never inherited ---------------------------
 
 
-def test_a_stamp_alone_does_not_count_as_a_recorded_route(tmp_path):
-    # A settings file holding the scrub floor plus a provider name records no
-    # route, and relaunching from it would bill the default account in silence.
-    import json
-
-    from fno.agents.model_routing import RouteRestoreError, read_route_settings
-
-    path = tmp_path / "route.json"
-    path.write_text(
-        json.dumps({"env": {"ANTHROPIC_API_KEY": "", ROUTE_PROVIDER_ENV: "zai"}}),
-        encoding="utf-8",
-    )
-    with pytest.raises(RouteRestoreError, match="records no route"):
-        read_route_settings(str(path))

@@ -119,16 +119,33 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
     }
     out.push(blank());
     out.push(rule("Last message", width));
-    let stamp = match (ago(s.last_message_at.as_deref(), now), &s.last_message_at) {
-        (Some(a), Some(at)) => format!("{NOT_PUBLISHED} \u{b7} last turn {a} ({at})"),
-        _ => NOT_PUBLISHED.into(),
-    };
-    out.push(
-        Lb::default()
-            .s("   \u{2502} ", BRole::Meta)
-            .s(stamp, BRole::Body)
-            .done(),
-    );
+    match s.last_message.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(text) => {
+            for line in text.lines().take(6) {
+                out.push(
+                    Lb::default()
+                        .s("   \u{2502} ", BRole::Meta)
+                        .s(fit(line, inner).trim_end().to_string(), BRole::Body)
+                        .done(),
+                );
+            }
+            if let Some(a) = ago(s.last_message_at.as_deref(), now) {
+                out.push(meta(format!("   \u{b7} last turn {a}")));
+            }
+        }
+        None => {
+            let stamp = match ago(s.last_message_at.as_deref(), now) {
+                Some(a) => format!("last turn {a}"),
+                None => NOT_PUBLISHED.into(),
+            };
+            out.push(
+                Lb::default()
+                    .s("   \u{2502} ", BRole::Meta)
+                    .s(stamp, BRole::Body)
+                    .done(),
+            );
+        }
+    }
     out.push(blank());
     out.push(rule("Seat", width));
     out.push(kv("machine", format!("{} ({})", m.host, m.id), BRole::Body));

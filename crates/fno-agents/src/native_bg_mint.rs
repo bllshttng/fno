@@ -126,13 +126,16 @@ pub(crate) fn mint_missing_native_bg(
     // the birth race and write the child's row first with no origin and no
     // substrate; both minters then skip the held session, so the record is
     // the only witness left. Without it the reaper keeps the row as not-spawn
-    // for the process's whole life.
+    // for the process's whole life. A spawn-door mint whose ambient capture
+    // found nothing (a claude shell carries no identity markers) is in the
+    // same boat: origin=spawn with an empty edge and the record is the
+    // witness, so it is revisited here too.
     let mut parented: Vec<(String, crate::launch_record::Record)> = Vec::new();
     for e in entries.iter().filter(|e| {
         e.harness_name() == "claude"
             && match e.origin.as_deref() {
                 Some("adopted") => e.substrate.as_deref() == Some(SUBSTRATE),
-                None => true,
+                None | Some("spawn") => true,
                 Some(_) => false,
             }
             && e.spawned_by_session
@@ -881,6 +884,46 @@ mod tests {
                 Some(v) => std::env::set_var("FNO_CLAUDE_PROJECTS_DIR", v),
                 None => {}
             }
+        });
+    }
+
+    /// A spawn-door mint whose ambient capture found nothing (origin=spawn,
+    /// empty edge, a lineage reason) is revisited by the beat once its child
+    /// claims a launch record; the record's launcher parents the row.
+    #[test]
+    fn a_spawn_row_gains_its_parent_from_the_record_on_a_later_beat() {
+        sandbox(|home| {
+            let em = emitter(home);
+            let sid = "f005cafe-0000-0000-0000-000000000042";
+            claim_record(home, sid);
+            crate::state::update_registry(&home.registry_json(), |reg| {
+                reg.entries.push(RegistryEntry {
+                    name: "t-fleet-names".into(),
+                    origin: Some("spawn".into()),
+                    substrate: Some("thread".into()),
+                    harness: Some("claude".into()),
+                    harness_session_id: Some(sid.into()),
+                    short_id: "f005cafe".into(),
+                    created_at: "2026-10-30T08:12:52Z".into(),
+                    ..RegistryEntry::new(
+                        Some(sid.into()),
+                        Lineage::unproven("identity disposition=absent, markers=no markers"),
+                    )
+                });
+            })
+            .unwrap();
+            // A listing row that mints nothing new keeps the beat alive past
+            // its empty-listing short circuit.
+            let snapshot = ClaudeAgentsSnapshot::known(vec![listing_row("tui-build", "working")]);
+            assert_eq!(mint_missing_native_bg(home, &snapshot, &em), 1);
+            let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
+            let e = registry
+                .entries
+                .iter()
+                .find(|e| e.harness_session_id.as_deref() == Some(sid))
+                .unwrap();
+            assert_eq!(e.spawned_by_session.as_deref(), Some("d7031e2c"));
+            assert_eq!(e.lineage_reason, None, "the record replaced the reason");
         });
     }
 }

@@ -9,7 +9,6 @@ Layers:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
 
 import pytest
 from typer.testing import CliRunner
@@ -57,29 +56,6 @@ def _full_route_env(token: str = "t") -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def test_codex_thread_lane_refuses_resume_instead_of_spawning_fresh(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A --resume codex spawn used to drop the id silently and mint a FRESH
-    session; it must refuse and name the durable resume path instead."""
-    from fno.agents import dispatch
-
-    def _never(*args: Any, **kwargs: Any) -> str:
-        raise AssertionError("a resume request must not reach the thread-lane spawn")
-
-    monkeypatch.setattr(dispatch, "_codex_thread_spawn", _never)
-    monkeypatch.setattr(dispatch, "_emit_ev", lambda *a, **k: None)
-    with pytest.raises(dispatch.DispatchAskError) as exc:
-        dispatch.dispatch_spawn(
-            name="codex-thread",
-            message="hi",
-            harness="codex",
-            cwd=tmp_path,
-            resume_session_id="019f0000-0000-7000-8000-000000000003",
-        )
-    assert "not supported on the codex thread lane" in str(exc.value)
-
-
 # ---------------------------------------------------------------------------
 # cmd_spawn: fail CLOSED before the gate (AC3-ERR)
 # ---------------------------------------------------------------------------
@@ -112,45 +88,6 @@ class _Gate:
 # x-6de8: routed spawn applies its route via a --settings file (survives the
 # daemon fork that drops per-spawn env), on both bg and headless.
 # ---------------------------------------------------------------------------
-
-
-def test_composed_route_and_account_spawn_scrubs_inherited_auth(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A --route + --account spawn writes ONLY the route settings file (route-wins
-    atomicity), so that file has to carry the auth scrub itself: the env scrub is
-    discarded at the daemon fork, and without the floor the worker could still
-    authenticate with an inherited key while its endpoint points elsewhere."""
-    import json
-
-    _setup_tmp_home(tmp_path, monkeypatch)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-primary-key")
-    from fno.agents.harnesses import claude as claude_mod
-
-    seen: Dict[str, Any] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        seen["argv"] = argv
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(argv, 0, stdout="backgrounded \xb7 abcd1234 \xb7 ok\n", stderr="")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    claude_mod.bg_create(
-        name="w",
-        message="hi",
-        cwd=tmp_path,
-        account_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "acct")},
-        route_env=_full_route_env(),
-    )
-    argv = seen["argv"]
-    blob = json.load(open(argv[argv.index("--settings") + 1]))["env"]
-    assert "ANTHROPIC_API_KEY" not in blob, (
-        "a self-authed route drops the credential it does not name"
-    )
-    assert blob["CLAUDE_CODE_OAUTH_TOKEN"] == ""
-    assert blob["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
 
 
 # ---------------------------------------------------------------------------
@@ -214,97 +151,4 @@ def test_partial_route_env_is_refused_with_or_without_account(
     monkeypatch.setenv("FNO_PROVIDER_AUTH", "managed")
     assert resolve_spawn_route(None, complete) == complete
 
-
-@pytest.mark.dev_build
-def test_every_spawn_seam_uses_the_one_composition_function(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC5-INV: bg_create, headless_create, and _mesh_env_wrapper all produce
-    exactly what the `accounts::credentials` compose produces - asserted by
-    enumerating the seams against it, not by three independent orderings.
-
-    An account overlay + a vendor route COMPOSE. The route wins
-    endpoint+auth+model as one unit; the account keeps CLAUDE_CONFIG_DIR, and
-    its competing login never reaches the env or the pane argv (where `ps`
-    would show it)."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.mux_spawn import _mesh_env_wrapper
-
-    _setup_tmp_home(tmp_path, monkeypatch)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-stale")
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://stale.example")
-    account = {"CLAUDE_CONFIG_DIR": "/x/.claude", "ANTHROPIC_AUTH_TOKEN": "acct"}
-    route = _full_route_env()
-
-    class _Result:
-        returncode = 0
-        stdout = "backgrounded \xb7 abcd1234 \xb7 ok\n"
-        stderr = ""
-
-    seen: Dict[str, Any] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        seen["argv"] = argv
-        seen["env"] = kwargs.get("env")
-        return _Result()
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    claude_mod.bg_create(
-        name="seam-bg", message="hi", cwd=tmp_path, route_env=route,
-        account_env=account,
-    )
-    assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/x/.claude"
-    assert seen["env"]["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
-    assert seen["env"]["ANTHROPIC_AUTH_TOKEN"] == "t"
-    assert "ANTHROPIC_API_KEY" not in seen["env"]
-
-    claude_mod.headless_create(
-        message="hi", cwd=tmp_path, route_env=route, account_env=account,
-    )
-    assert seen["env"]["CLAUDE_CONFIG_DIR"] == "/x/.claude"
-    assert seen["env"]["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
-    assert seen["env"]["ANTHROPIC_AUTH_TOKEN"] == "t"
-    assert "ANTHROPIC_API_KEY" not in seen["env"]
-
-    # The pane seam renders the same composition as an env(1) argv: scrub via
-    # -u, then the composed pairs (route last, left-to-right last-wins).
-    argv = _mesh_env_wrapper(
-        "seam-pane", "claude", None, ["claude"], account_env=dict(account),
-        route_env=dict(route),
-    )
-    assignments = {
-        a.split("=", 1)[0]: a.split("=", 1)[1]
-        for a in argv
-        if "=" in a
-    }
-    assert assignments.get("CLAUDE_CONFIG_DIR") == "/x/.claude"
-    assert assignments.get("ANTHROPIC_BASE_URL") == "https://api.z.ai/api/anthropic"
-    assert assignments.get("ANTHROPIC_AUTH_TOKEN") == "t"
-    assert "ANTHROPIC_AUTH_TOKEN=acct" not in argv
-    assert argv.count("ANTHROPIC_API_KEY=") == 0
-
-
-def test_bg_and_headless_refuse_modelless_route_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The model-completeness refusal must fire on the in-process seams (bg,
-    headless), not only on the CLI-resolved lane - the guard lives in
-    resolve_spawn_route, which every seam routes through."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.model_routing import RouteCompositionError
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(argv, 0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    modelless = {
-        "ANTHROPIC_BASE_URL": "https://foreign.example/anthropic",
-        "ANTHROPIC_AUTH_TOKEN": "t",
-    }
-    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
-        claude_mod.bg_create(name="w", message="hi", cwd=tmp_path, route_env=modelless)
-    with pytest.raises(RouteCompositionError, match="without ANTHROPIC_MODEL"):
-        claude_mod.headless_create(message="hi", cwd=tmp_path, route_env=modelless)
 

@@ -90,6 +90,7 @@ pub(super) fn watch_target(reason: &str, pr: Option<&str>) -> (&'static str, Opt
         "ci" => "ci",
         "review" => "review",
         "merge_slot" => "merge_slot",
+        "merge_hold" => "merge_hold",
         "local" => "local",
         _ => "unknown",
     };
@@ -735,6 +736,10 @@ mod tests {
         assert_eq!(
             watch_target("merge_slot", Some("1")),
             ("merge_slot", Some(1))
+        );
+        assert_eq!(
+            watch_target("merge_hold", Some("1")),
+            ("merge_hold", Some(1))
         );
         assert_eq!(watch_target("local", None), ("local", None));
         assert_eq!(watch_target("cargo-test", None), ("unknown", None));

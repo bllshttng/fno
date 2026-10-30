@@ -380,9 +380,7 @@ RUST_CLIENT_COMMANDS = frozenset(
 #: ``_resolve_ask_provider``) is gone; the ``AUTO_ROUTE_COMMANDS`` identity below is
 #: now the whole routing contract except for ``send``.
 PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
-    # Messaging commands are not direct agents actions. They live below the
-    # Python-owned `fno agents mail` subgroup and therefore never auto-route as
-    # direct send, inbox, or ack Rust commands. `incident` relays argv.
+    # `incident` relays argv.
     "incident",
     "distress-verdicts", #: blocked_child's verdict lookup; no Rust port.
     # The stop hook's read-only spawn-gate capacity probe. Pure Python (the
@@ -492,6 +490,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "wait": "Block until an agent's registry row reaches idle|blocked|done: --agent <name> --state <s> [--timeout-ms N] [--json].",
     "subscribe": "Stream registry state transitions + pane exits as NDJSON (follows events.jsonl): [--agent <name>] [--kinds state,exit] [--json].",
     "digest": "Catch-up 'while you were gone' fold over events + ledger for a session: --session <s> --since <ts> [--json].",
+    "trace": "An agent's dispatch lifecycle from the event store: [name] [--all] [--request-id X] [--since S] [--limit N] [--json].",
     "needs": "Needs-me queue fold over events + ledger across all sessions (review_wedged/budget_stop): [--since-epoch <secs>] [--fires-floor <n>] [--json].",
     "liveness": "One 'is this worker alive' answer per handle: <handle...> [-J|--json] reads the registry row, the transcript age (the one reader), and the pid through the one verdict door; the caller's own row (FNO_AGENT_SELF or a harness session env) rides along as the positive control. Exit 0 all live, 1 any finished, 2 any unknown, 3 no handle resolved. Daemon-free; starts nothing.",
     "select-read": "One bounded backlog read (next|undispatched) under [auto_continue] select_timeout_s; prints an ok/unmeasured/error receipt JSON.",
@@ -799,10 +798,7 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
         # A revive continues an EXISTING transcript, and that transcript lives
         # under the config dir it was created in - so an injected --account
         # points CLAUDE_CONFIG_DIR at a directory where the uuid does not exist.
-        # It also collides with the recorded-route restore in `dispatch_spawn`,
-        # which reads any --account as operator intent and refuses the pair:
-        # the operator would be told to drop a flag they never typed. Nothing to
-        # pick - the transcript already decided where it lives.
+        # Nothing to pick - the transcript already decided where it lives.
         return out
     if _has_flag(out, longs=("--dispatch-account",)):
         # A cutover already SELECTED its account, and picking a second one here
@@ -833,32 +829,6 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
     # stamps a config pick as "caller" - the misread this column ends.
     os.environ[LAUNCH_ACCOUNT_SOURCE_ENV] = "config"
     return [*out[:boundary], "--account", picked, *out[boundary:]]
-
-
-#: Commands whose Rust-client handling launches a harness child that would inherit
-#: the exec'd client's env verbatim. ``worker_environment`` scrubs identity for
-#: every Python adapter seam, but a spawn/ask that execs the binary crosses no
-#: Python seam, and the Rust spawn arms only scrub model vars
-#: (model_env_scrub), so without this the identity floor is one of two
-#: reachable implementations - decorative for the default installed-binary
-#: route. Direct ``fno-agents`` invocations still need the Rust-side twin.
-_WORKER_LAUNCHING_COMMANDS = frozenset({"spawn", "ask"})
-
-
-def _scrub_ambient_identity_at_exec(command: str) -> None:
-    """Drop ambient identity markers from ``os.environ`` right before the exec,
-    so the Rust client (and the worker it launches) cannot inherit them.
-
-    Only the exec branches call this: the process is replaced immediately, so
-    the mutation never reaches a Python code path (parent-edge capture in
-    ``cmd_spawn`` still sees the markers on the fall-through route). Scoped to
-    worker-launching commands because the client itself resolves identity for
-    other commands and must keep seeing the ambient markers."""
-    if command not in _WORKER_LAUNCHING_COMMANDS:
-        return
-    from fno.harness_identity import scrub_ambient_identity
-
-    scrub_ambient_identity()
 
 
 #: d-fe66560a keeps the binary's action list shrink-only, so these read
@@ -1108,13 +1078,11 @@ def make_agents_group_cls() -> type:
                 mode = runtime_mode()
                 if mode == "rust":
                     _pin = _worktree_policy_pin_at_seam(args)
-                    _scrub_ambient_identity_at_exec(command)
                     route_to_rust(list(args), env_pin=_pin or None)  # execs; does not return
                 elif mode == "auto" and command in AUTO_ROUTE_COMMANDS:
                     binary = rust_binary.resolve_installed_binary()
                     if binary is not None:
                         _pin = _worktree_policy_pin_at_seam(args)
-                        _scrub_ambient_identity_at_exec(command)
                         route_to_rust(list(args), binary=binary, env_pin=_pin or None)  # execs
                     # else: no installed binary -> Python dispatch below.
                 # mode == "python", or no installed binary -> Python dispatch below.

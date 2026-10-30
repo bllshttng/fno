@@ -454,6 +454,11 @@ pub(crate) fn append_line_open(live: &Path, obj: &Value, chats_dir: &Path) -> Re
     // and fail closed (what was never recorded is never sent); receipts
     // (`landed`, or an envelope carrying a delivery mark) record AFTER the
     // bus write and warn only - a receipt must never break an ack flow.
+    // The fold reads the live bus's own dir, so an overridden bus dir
+    // (FNO_BUS_DIR, paths.bus_dir) gives up its stray chats too.
+    if let Some(stray_root) = live.parent() {
+        crate::chats::fold_stray_chats(chats_dir, stray_root);
+    }
     if crate::chats::is_message_kind(kind) && !has_delivery {
         crate::chats::record(chats_dir, obj)?;
     }
@@ -489,7 +494,7 @@ pub(crate) fn append_line_open(live: &Path, obj: &Value, chats_dir: &Path) -> Re
 }
 
 // ---------------------------------------------------------------------------
-// Scope matching: the exact port of mail/cli.py::_team_recipients
+// Scope matching: the fleet recipient rule
 // ---------------------------------------------------------------------------
 
 /// Which team answers to `scope`: one rule shared with the walk, blank

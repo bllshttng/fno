@@ -2304,81 +2304,38 @@ def digest_text(payload: dict, limit: int = 8) -> str:
 def _send_machine_report(
     to: str, body: str, *, runner: Callable | None = None
 ) -> tuple[bool, str]:
-    """Send a generated watchdog report through the transport layer.
+    """Send a generated watchdog report through the native mail send.
 
-    The authored-prose gate belongs to operator-written relay mail. Watchdog
-    reports use the existing dispatch transport directly, so their measured
-    rows can exceed that prose budget without adding a caller-facing bypass.
-    ``runner`` remains an injectable subprocess seam for the legacy unit tests.
+    The authored-prose gate belongs to operator-written relay mail. A report's
+    measured rows can exceed that prose budget, so it declares the reasoned
+    exception the send command takes. ``runner`` is an injectable subprocess
+    seam for unit tests.
     """
-    if runner is not None:
-        argv = [*_fno(), "agents", "mail", "send", "--origin", "recovery"]
-        if to.startswith("project:"):
-            argv += ["--to-project", to[len("project:"):]]
-        else:
-            argv.append(to)
-        argv.append(body)
-        try:
-            proc = runner(argv, capture_output=True, text=True, timeout=60, check=False)
-        except (OSError, subprocess.SubprocessError) as exc:
-            return False, f"mail send failed: {exc}"
-        return proc.returncode == 0, (proc.stdout or proc.stderr or "").strip()
-
-    from fno.agents.dispatch import (
-        DispatchAskError,
-        dispatch_send,
-        dispatch_send_to_project,
-    )
     from fno.inbox.store import ProjectIdentificationError, resolve_project
 
+    argv = [
+        *_fno(), "agents", "mail", "send",
+        "--origin", "recovery",
+        "--style-exception", "generated watchdog report",
+    ]
     try:
-        sender = resolve_project(cwd=Path.cwd(), flag_hint="--from-name")
+        argv += ["--from-name", resolve_project(cwd=Path.cwd(), flag_hint="--from-name")]
     except ProjectIdentificationError:
-        # A watchdog daemon can run outside any checkout. Let dispatch use its
-        # existing neutral sender instead of dropping the alert at resolution.
-        sender = None
-
+        # A watchdog daemon can run outside any checkout. The send picks its
+        # neutral sender rather than dropping the alert at resolution.
+        pass
+    if to.startswith("project:"):
+        argv += ["--to-project", to[len("project:"):]]
+    else:
+        argv.append(to)
+    argv += ["--body", body]
     try:
-        if to.startswith("project:"):
-            if sender is None:
-                result = dispatch_send_to_project(
-                    to[len("project:"):],
-                    body,
-                    cwd=Path.cwd(),
-                    origin="recovery",
-                )
-            else:
-                result = dispatch_send_to_project(
-                    to[len("project:"):],
-                    body,
-                    cwd=Path.cwd(),
-                    from_name=sender,
-                    origin="recovery",
-                )
-        else:
-            if sender is None:
-                result = dispatch_send(
-                    name=to,
-                    message=body,
-                    provider=None,
-                    cwd=Path.cwd(),
-                    origin="recovery",
-                )
-            else:
-                result = dispatch_send(
-                    name=to,
-                    message=body,
-                    provider=None,
-                    cwd=Path.cwd(),
-                    from_name=sender,
-                    origin="recovery",
-                )
-    except DispatchAskError as exc:
-        return False, str(exc)
-
-    if result.delivery == "hosted":
-        return True, f"{result.msg_id} delivered (hosted)"
-    return True, f"{result.msg_id} queued (durable) [{result.reason or 'live-miss'}]"
+        proc = (runner or subprocess.run)(
+            argv, capture_output=True, text=True, timeout=180, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"mail send failed: {exc}"
+    return proc.returncode == 0, (proc.stdout or proc.stderr or "").strip()
 
 
 def mail_digest(
@@ -2464,7 +2421,7 @@ def _fno() -> list[str]:
     return [*_subprocess_util.fno_py_cmd()]
 
 
-#: The shipped content-confirm cadence (dispatch._mux_content_confirm): resume
+#: The shipped content-confirm cadence: resume
 #: returns when the live STATE reads working, which is before the injected turn
 #: is flushed to the transcript, so a one-shot read reports a landed wake as
 #: refused.

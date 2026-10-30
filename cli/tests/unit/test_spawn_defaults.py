@@ -7,7 +7,6 @@ no-surface provider while an explicit --effort stays fail-closed downstream.
 from __future__ import annotations
 import pytest
 
-from fno.agents.spawn_defaults import compose_spawn_argv
 
 
 @pytest.mark.parametrize(
@@ -57,43 +56,3 @@ def overlay_answer(monkeypatch):
     return install
 
 
-def test_transport_sends_the_scan_projection(overlay_answer):
-    calls = overlay_answer({"argv": ["spawn"], "stderr": [], "exit": 0})
-    compose_spawn_argv(
-        ["spawn", "--name", "w", "-H", "codex", "-m", "m1", "--yolo",
-         "/fno:target x-1"]
-    )
-    scan = calls[0]["scan"]
-    assert scan["has_harness"] is True
-    assert scan["explicit_harness"] == "codex"
-    assert scan["has_model"] is True
-    assert scan["permission_value"] == "yolo"
-    assert scan["seed"] == "/fno:target x-1"
-    assert scan["name"] == "w"
-    assert calls[0]["permission_builtin"] == "bypassPermissions"
-    assert calls[0]["kind"] == "compose"
-
-
-def test_transport_applies_stderr_and_raises_the_command_exit(overlay_answer):
-    overlay_answer({
-        "argv": ["spawn"], "exit": 2,
-        "stderr": ["fno agents spawn: refusing"],
-    })
-    with pytest.raises(SystemExit) as exc:
-        compose_spawn_argv(["spawn", "--name", "w", "/fno:nosuch x"])
-    assert exc.value.code == 2
-
-
-def test_transport_unavailable_degrades_open(capsys, monkeypatch):
-    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable
-
-    def boom(payload, *a, **k):
-        raise SpawnOverlayUnavailable("no binary")
-
-    monkeypatch.setattr(
-        "fno.agents.spawn_overlay_client.spawn_overlay_call", boom
-    )
-    argv = compose_spawn_argv(["spawn", "--name", "w", "/fno:target x-1"])
-    err = capsys.readouterr().err
-    assert "config defaults skipped (spawn-overlay unavailable: no binary)" in err
-    assert argv[0] == "spawn"

@@ -144,9 +144,9 @@ pub(crate) fn millis_now() -> i64 {
 
 /// The wait blockers whose watch parks a provider seat: the session has
 /// pushed and the remaining blocker is external (CI pending, an outstanding
-/// review, the merge slot), so the seat sits idle until the settle arm's or
-/// expiry arm's wake resumes the session.
-const SEAT_WAIT_BLOCKERS: &[&str] = &["ci", "review", "merge_slot"];
+/// review, the merge slot, a recorded merge freeze), so the seat sits idle
+/// until the settle arm's or expiry arm's wake resumes the session.
+const SEAT_WAIT_BLOCKERS: &[&str] = &["ci", "review", "merge_slot", "merge_hold"];
 
 /// Registry-row identity -> the blocker of the session's CURRENT watch, for
 /// the seat-wait blockers. Two identities per watch: the manifest session id
@@ -551,7 +551,7 @@ pub(crate) fn message(watch: &Watch) -> String {
     }
     let task = watch.task_id.as_deref().unwrap_or("missing; do not guess");
     let blocker = match watch.reason.as_deref() {
-        Some(blocker @ ("ci" | "review" | "merge_slot" | "local")) => blocker,
+        Some(blocker @ ("ci" | "review" | "merge_slot" | "merge_hold" | "local")) => blocker,
         _ => watch.blocker.as_str(),
     };
     format!(

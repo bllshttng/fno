@@ -233,13 +233,6 @@ pub(crate) fn layout_body_overlay(
     anchor: OverlayAnchor,
 ) -> OverlayLayout {
     let (content_rows, content_cols) = content_dims;
-    // Body width: the widest line, capped to the viewport minus the frame.
-    let body_w = body
-        .iter()
-        .map(|l| chrome::str_cols(&l.text))
-        .max()
-        .unwrap_or(0)
-        .min(content_cols.saturating_sub(chrome::Chrome::FRAME_COLS));
     let overhead = chrome.rows_overhead();
     let body_budget = content_rows.saturating_sub(overhead);
     let total = body.len();
@@ -260,6 +253,17 @@ pub(crate) fn layout_body_overlay(
     } else {
         (0, total, None)
     };
+    // Body width: the widest line, capped to the viewport minus the frame.
+    // A visible scrollbar rides inside the frame, so it reserves its own
+    // column: without it the frame grows one past the viewport and the right
+    // border - the esc chip's corner included - clips off screen.
+    let scroll_col = usize::from(scroll.is_some());
+    let body_w = body
+        .iter()
+        .map(|l| chrome::str_cols(&l.text))
+        .max()
+        .unwrap_or(0)
+        .min(content_cols.saturating_sub(chrome::Chrome::FRAME_COLS + scroll_col));
     let framed = chrome::frame(&body[start..start + take], chrome, body_w, scroll);
     let box_h = framed.lines.len().min(content_rows);
     let box_w = framed.width.min(content_cols);

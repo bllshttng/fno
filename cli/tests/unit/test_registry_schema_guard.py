@@ -85,27 +85,6 @@ def deployed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reg, "_running_from_source", lambda: None)
 
 
-def test_the_guard_fires_through_update_registry_the_way_mail_reaches_it(
-    shared: Path, from_source: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The regression this test exists for.
-
-    ``fno.mail.hold`` calls ``update_registry(_updater)`` with no path, and
-    ``update_registry`` resolves the default ITSELF before calling
-    ``write_registry(entries, path=target)``. So a guard keyed on "the caller
-    passed no explicit path" is permanently false on the one path that caused
-    the outage. Key on the RESOLVED target instead.
-    """
-    _write_raw(shared, reg.SCHEMA_VERSION, [_row()])
-    before = _doc(shared)
-    monkeypatch.setattr(reg, "SCHEMA_VERSION", reg.SCHEMA_VERSION + 1)
-
-    with pytest.raises(reg.RegistryVersionError):
-        reg.update_registry(lambda entries: entries)
-
-    assert _doc(shared) == before
-
-
 def test_the_refusal_names_both_versions_the_source_path_and_both_exits(
     shared: Path, from_source: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

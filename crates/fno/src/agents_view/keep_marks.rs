@@ -2,14 +2,14 @@
 //! the files `fno agents reap --keep` writes, so the sideline and every
 //! reaper read one fact.
 
-use super::{registry_path, RegistryAgent};
+use super::{runtime_home, RegistryAgent};
 use std::path::Path;
 
-/// Stamp `pinned` from `keep/` beside the registry. An unreadable store reads
-/// as unpinned here: the reapers fail closed on their own read.
+/// Stamp `pinned` from the runtime home's `keep/`, where `fno agents reap
+/// --keep` writes. An unreadable store reads as unpinned here: the reapers
+/// fail closed on their own read.
 pub(crate) fn overlay_keep_marks(rows: &mut [RegistryAgent]) {
-    let reg = registry_path();
-    overlay_keep_marks_at(rows, &reg.parent().unwrap_or(Path::new(".")).join("keep"));
+    overlay_keep_marks_at(rows, &runtime_home().join("keep"));
 }
 
 /// The same lineage the reapers read (`keep_mark::for_row`), so a row never

@@ -39,6 +39,7 @@ pub fn run_init(args: &[String]) -> i32 {
     let mut max_iterations: u64 = 40;
     let mut respawn_ceiling: u64 = 4;
     let mut force = false;
+    let mut rebind_from: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         let value = args.get(i + 1);
@@ -61,6 +62,7 @@ pub fn run_init(args: &[String]) -> i32 {
                 i += 1;
                 continue;
             }
+            ("--rebind-from", Some(v)) => rebind_from = Some(v.clone()),
             (other, _) => {
                 eprintln!("fno-agents lead-state --init: unknown argument {other}");
                 return 2;
@@ -91,6 +93,16 @@ pub fn run_init(args: &[String]) -> i32 {
     if scope.is_empty() {
         eprintln!("lead: --scope needs a role scope: name an epic or a project.");
         return 2;
+    }
+    if let Some(old) = rebind_from.as_deref() {
+        if force {
+            eprintln!(
+                "lead: --rebind-from and --force refuse each other: one moves the role, \
+                 the other re-arms fresh."
+            );
+            return 2;
+        }
+        return crate::lead_rebind::run(&scope, &session, Some(old));
     }
     let admit = [
         "loop",

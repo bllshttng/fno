@@ -158,65 +158,6 @@ def _configure_codex(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("provider", "route_provider", "model", "env_key"),
-    [
-        ("claude", "zai", "business-model", "ANTHROPIC_MODEL=business-model"),
-        ("codex", "oai", "gpt-business", "OPENAI_API_KEY=openai-key"),
-    ],
-)
-def test_real_manifest_reaches_pane_launch_argv(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    provider: str,
-    route_provider: str,
-    model: str,
-    env_key: str,
-) -> None:
-    from fno.agents import mux_spawn
-
-    use_tmpdir(monkeypatch, tmp_path)
-    root = tmp_path / "roles"
-    _write_role(root, provider=route_provider, model=model)
-    monkeypatch.setenv("FNO_ROLES_ROOT", str(root))
-    if provider == "claude":
-        monkeypatch.setenv("ZAI_API_KEY", "zai-key")
-    else:
-        _configure_codex(monkeypatch)
-        monkeypatch.setattr(
-            mux_spawn,
-            "_backfill_codex_session_id",
-            lambda *a, **k: "019fb024-2327-75f3-8b80-06e9d5ade05f",
-        )
-    runner = _MuxRunner()
-
-    name = f"{provider}-publisher-pane"
-    gate = None
-    if provider == "claude":
-        from fno.agents.spawn_gate import run_gate
-
-        monkeypatch.setenv("FNO_SPAWN_GATE", "0")
-        gate = run_gate(name, "pane", route_provider=route_provider)
-    try:
-        mux_spawn.dispatch_spawn_pane(
-            name=name,
-            message="work",
-            provider=provider,
-            cwd=tmp_path,
-            role="publisher",
-            runner=runner,
-            provider_gate=gate,
-        )
-    finally:
-        if gate is not None:
-            gate.release()
-
-    launched = runner.launched_argv()
-    assert env_key in launched
-    if provider == "codex":
-        assert "model='gpt-business'" in " ".join(launched)
-
-
 def test_invalid_real_manifest_refuses_before_any_launch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

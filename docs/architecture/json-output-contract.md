@@ -14,7 +14,7 @@ Python is out of scope by the standing no-new-Python ruling, and `scripts/ci/che
 
 1. Opt-in. Text by default, `--json`/`-J` switches to JSON: `crates/fno-agents/src/needs.rs:551`, and most Python commands.
 2. Always JSON. The flag is a no-op parity flag (`cli/src/fno/graph/cli.py:4493`). Or there is no flag at all, and `-J` is refused (`fno backlog next`, `fno backlog get`).
-3. TTY-auto. When stdout is not a terminal, JSON prints. When it is a terminal, text prints (`cli/src/fno/agents/cli.py`, `cli/src/fno/mail/cli.py`). The same command prints different bytes in a pane and in a pipe. The bytes must not depend on the terminal. With `-J` they never do.
+3. TTY-auto. When stdout is not a terminal, JSON prints. When it is a terminal, text prints (`cli/src/fno/agents/cli.py`). The same command prints different bytes in a pane and in a pipe. The bytes must not depend on the terminal. With `-J` they never do.
 4. Format selector. `--format markdown|json` (`cli/src/fno/decide/cli.py:550`, `cli/src/fno/plan/cli.py`, `crates/fno-agents/src/team_fold.rs`). On commands that print JSON, `-J` selects the JSON format the same way.
 
 ## Where it lives
@@ -60,7 +60,6 @@ no-flag: cli/src/fno/graph/triage.py cmd_validate
 no-flag: cli/src/fno/graph/triage.py cmd_apply
 no-flag: cli/src/fno/graph/triage.py cmd_projects
 no-flag: cli/src/fno/inbox/operator_turns.py cmd_ack
-no-flag: cli/src/fno/mail/cli.py cmd_hold_release
 no-flag: cli/src/fno/pr/cli.py coverage_publish
 no-flag: cli/src/fno/pr/cli.py info
 no-flag: cli/src/fno/pr/cli.py list_cmd

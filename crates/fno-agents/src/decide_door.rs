@@ -892,15 +892,13 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     }
     // The correction span: parented at the overturned span; the row's trace
     // names the same parent. Captured here, emitted after the row lands.
-    let pending_correction = overturns.as_ref().map(|t| Trace {
-        trace_id: subject.clone(),
-        span_id: new_span_id(),
-        parent_span_id: Some(t.to_string()),
-        actor_session: caller_session.clone(),
-        actor_kind: actor_kind_from_authority(provenance.authority_source.as_deref()),
-        comms: "mail",
-        recipient_session: None,
-        recipient_kind: None,
+    let pending_correction = overturns.as_deref().map(|t| {
+        pending_correction_span(
+            &subject,
+            t,
+            caller_session.clone(),
+            provenance.authority_source.as_deref(),
+        )
     });
     // The route rides ahead of the row: the trace query reads in ts order and
     // a parent must not postdate its child. A failed route emit leaves the
@@ -946,8 +944,8 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     }
     // The row is durable: now the correction hop it parents (the route rode
     // ahead of the row above).
-    if let Some(trace) = pending_correction {
-        if let Err(e) = emit_span_to(&journal, "correction", &trace, &Map::new()) {
+    if let Some((trace, attrs)) = pending_correction {
+        if let Err(e) = emit_span_to(&journal, "correction", &trace, &attrs) {
             eprintln!("decide: correction span skipped: {e}");
         }
     }
@@ -1007,6 +1005,40 @@ Do NOT re-run decide; that records it twice."
                 "decide: recorded {decision_id}; no projection was written because {why} \
 (the event and the index are the record). Recover with: fno backlog decisions {subject}"
             );
+        }
+    }
+    // The ruling closes the question it names, in the same write: the
+    // check-in that prints the answer command reads the close, not the
+    // decision. The close is bookkeeping on a durable ruling, so a
+    // failed write reports and never fails the record.
+    if let Some(qid) = door
+        .question_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+    {
+        let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        match crate::question_clear::close_with_recorded_answer(
+            &journal,
+            &index,
+            qid,
+            &decision,
+            Some(&provenance.decided_by),
+            crate::question_intake::QUESTION_CAP,
+        ) {
+            Ok(crate::question_clear::AnsweredClose::Closed) => {
+                eprintln!("decide: closed question {qid} (decision {decision_id})")
+            }
+            Ok(crate::question_clear::AnsweredClose::AlreadyClosed) => {}
+            Ok(crate::question_clear::AnsweredClose::Unknown) => eprintln!(
+                "decide: question {qid} is not a question id this machine knows; nothing to close"
+            ),
+            Ok(crate::question_clear::AnsweredClose::Peer(host)) => {
+                eprintln!("decide: question {qid} was asked on {host}; close it there")
+            }
+            Err(e) => eprintln!(
+                "decide: recorded {decision_id}, but the question close for {qid} did not land ({e}); finish it with: fno inbox outstanding clear {qid}"
+            ),
         }
     }
     println!("{decision_id}");
@@ -1167,6 +1199,35 @@ fn attended_provenance(
         attested_by: Some(origin.unwrap_or(decider).to_string()),
         relayed_by: None,
     }
+}
+
+/// The correction span and its attrs: parented at the overturned span, with
+/// the attrs carrying the same id as the `overturns` join key the pushback
+/// fold matches against route spans. The operator lane owns corrections and
+/// is unreachable under the door's test identities (an agent claiming
+/// operator refuses; an unattributed caller refuses), so the unit test
+/// drives this constructor directly.
+fn pending_correction_span(
+    subject: &str,
+    target: &str,
+    caller_session: Option<String>,
+    authority_source: Option<&str>,
+) -> (Trace, Map<String, Value>) {
+    let mut attrs = Map::new();
+    attrs.insert("overturns".to_string(), json!(target));
+    (
+        Trace {
+            trace_id: subject.to_string(),
+            span_id: new_span_id(),
+            parent_span_id: Some(target.to_string()),
+            actor_session: caller_session,
+            actor_kind: actor_kind_from_authority(authority_source),
+            comms: "mail",
+            recipient_session: None,
+            recipient_kind: None,
+        },
+        attrs,
+    )
 }
 
 #[cfg(test)]
@@ -1347,6 +1408,24 @@ mod tests {
     }
 
     #[test]
+    fn decide_correction_span_attrs_carry_the_overturns_join_key() {
+        // The operator lane owns corrections and is unreachable under the
+        // door's test identities (an agent claiming operator refuses, an
+        // unattributed caller refuses), so the test drives the constructor
+        // the write path calls.
+        let (trace, attrs) = pending_correction_span(
+            "x-node5",
+            "s-r1",
+            Some("cl-test5".to_string()),
+            Some("operator"),
+        );
+        assert_eq!(attrs["overturns"], json!("s-r1"));
+        assert_eq!(trace.parent_span_id.as_deref(), Some("s-r1"));
+        assert_eq!(trace.actor_kind, "user");
+        assert!(trace.span_id.starts_with("s-"));
+    }
+
+    #[test]
     fn decide_records_person_beside_the_session() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -1369,6 +1448,44 @@ mod tests {
         if !machine_id.is_empty() {
             assert_eq!(row["machine_id"], json!(machine_id));
         }
+    }
+
+    #[test]
+    fn decide_with_question_id_closes_the_question_it_names() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        save_node(&crate::graph_get::default_graph_path(), "x-nodeq", "node-q");
+        let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        let ask = json!({
+            "ts": now_iso(),
+            "type": "operator_question",
+            "source": "target",
+            "data": {
+                "question_id": "q-closeaa1",
+                "question": "which lane?",
+                "asker": "robin",
+                "node": "x-nodeq",
+            },
+        });
+        crate::event_store::append_envelope(&index, &ask.to_string(), None).expect("ask");
+
+        let argv = [
+            "x-nodeq",
+            "Ship it",
+            "--authority",
+            "agent",
+            "--question-id",
+            "q-closeaa1",
+        ];
+        let code = decide_door_write(decide_argv(&argv), DecideIdentity::Forced(Some("cl-testq")));
+        assert_eq!(code, 0);
+        let closes = crate::event_store::journal_text(&index, &["operator_question_closed"]);
+        assert!(closes.contains("q-closeaa1"), "{closes}");
+        // A rerun writes no second close: the first close is the close.
+        let code = decide_door_write(decide_argv(&argv), DecideIdentity::Forced(Some("cl-testq")));
+        assert_eq!(code, 0);
+        let closes = crate::event_store::journal_text(&index, &["operator_question_closed"]);
+        assert_eq!(closes.lines().count(), 1, "{closes}");
     }
 
     #[test]

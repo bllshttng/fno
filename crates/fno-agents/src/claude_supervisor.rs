@@ -45,6 +45,7 @@ const SUPERVISOR_WIDE_FNO_KEYS: &[&str] = &[
     "FNO_AGENTS_DAEMON_BIN",
     "FNO_AGENTS_FRONT",
     "FNO_AGENTS_HOME",
+    "FNO_ACTOR_KIND",
     "FNO_ATTEST_DEBUG",
     "FNO_AUTO_CONTINUE",
     "FNO_BIN",
@@ -259,6 +260,9 @@ fn supervisor_birth_command(config_dir: Option<&Path>) -> std::process::Command 
     for key in held_poison_keys() {
         cmd.env_remove(key);
     }
+    // The supervisor outlives the session that booted it and hosts every
+    // later one, so that session's identity must not fossil into it.
+    crate::claims::scrub_identity_env(&mut cmd);
     if crate::agents_config::telemetry_claude_otel(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     ) {
@@ -460,7 +464,7 @@ pub fn guard_birth_for_plan(env: &std::collections::BTreeMap<String, String>) {
 }
 
 /// The seed provenance group, by name. The Rust side never imports the Python
-/// tuple; the names are the wire contract (cli/src/fno/mail/seed_provenance.py).
+/// tuple; the names are the wire contract (`SEED_PROVENANCE_KEYS` in cli/src/fno/harness_identity.py).
 pub(crate) const SEED_PROVENANCE_KEYS: [&str; 6] = [
     "FNO_SEED_PROV_SEED_B64",
     "FNO_SEED_PROV_FROM",
@@ -610,6 +614,25 @@ mod tests {
         assert!(envs
             .iter()
             .all(|(n, v)| (n != "PATH" && n != "HOME") || v.is_some()));
+    }
+
+    #[test]
+    fn the_birth_command_holds_the_callers_identity_back() {
+        // The supervisor outlives the session that booted it and hosts every
+        // later one, so a marker it inherited would name every later session
+        // and tag the daemon's own claims with a harness it does not own.
+        let envs = env_of(&supervisor_birth_command(None));
+        for name in [
+            "CODEX_THREAD_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "FNO_HARNESS_SESSION_ID",
+        ] {
+            assert!(
+                envs.iter()
+                    .any(|(key, value)| key == name && value.is_none()),
+                "{name} rode into the supervisor birth"
+            );
+        }
     }
 
     #[test]

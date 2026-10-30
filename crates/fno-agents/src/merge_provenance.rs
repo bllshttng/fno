@@ -52,10 +52,13 @@ impl TestJournal {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let root = tempfile::tempdir().expect("temp journal root");
-        let mut prev = ["FNO_AGENTS_HOME"]
-            .iter()
-            .map(|k| (*k, std::env::var_os(k)))
-            .collect::<Vec<_>>();
+        let mut prev = [
+            "FNO_AGENTS_HOME",
+            crate::decision_trace::ACTOR_KIND_STAMP_ENV,
+        ]
+        .iter()
+        .map(|k| (*k, std::env::var_os(k)))
+        .collect::<Vec<_>>();
         let agents_home = root.path().join("agents-home");
         std::fs::create_dir_all(&agents_home).expect("temp agents home");
         std::env::set_var("FNO_AGENTS_HOME", &agents_home);

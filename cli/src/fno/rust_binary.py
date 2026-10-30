@@ -18,8 +18,10 @@ Resolution order, widest first:
 
 from __future__ import annotations
 
+import json as _json
 import os
 import shutil
+import subprocess
 import sys
 
 from functools import lru_cache
@@ -286,19 +288,33 @@ def plan_schema(payload: dict) -> Optional[dict]:
     return receipt
 
 
-def style_word_count_checked(text: str) -> int:
-    """Masked word count for an ENFORCING site: raises
-    ``budget.BudgetCountUnavailable`` on a door failure instead of answering a
-    silent zero (a zero would read as unlimited traffic under the control
-    lane's rolling cap). Imported lazily: budget.py never imports this module,
-    so there is no cycle.
-    """
-    from fno.mail.budget import BudgetCountUnavailable
+class MailShapeError(RuntimeError):
+    """The Rust mail-shape classifier failed or returned malformed output."""
 
-    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
-    if err or not isinstance(receipt, dict):
-        raise BudgetCountUnavailable(f"style count unavailable: {err or 'no receipt'}")
-    return int(receipt.get("word_count") or 0)
+
+def mail_shape(texts: list) -> list[dict]:
+    """Per text: framing, msg_id, ids, holds_tag, envelope_block,
+    legacy_tags, header_turns, relay_parse."""
+    binary = find_dev_binary() or resolve_binary() or "fno-agents"
+    try:
+        result = subprocess.run(
+            [str(binary), "mail-envelope", "--classify"],
+            input=_json.dumps(texts),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MailShapeError("mail-envelope --classify timed out after 5s") from exc
+    if result.returncode:
+        raise MailShapeError(result.stderr.strip() or "mail-envelope --classify failed")
+    try:
+        parsed = _json.loads(result.stdout)
+    except _json.JSONDecodeError as exc:
+        raise MailShapeError(f"malformed classifier output: {exc}") from None
+    if not isinstance(parsed, list) or len(parsed) != len(texts):
+        raise MailShapeError(f"classifier returned {len(parsed)} items for {len(texts)} texts")
+    return parsed
 
 
 def mint_fno_id() -> str:

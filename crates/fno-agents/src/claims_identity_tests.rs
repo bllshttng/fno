@@ -146,6 +146,39 @@ fn command_stamp_scrubs_all_identity_and_sets_only_bound_session() {
 }
 
 #[test]
+fn scrub_identity_env_removes_every_identity_name_and_keeps_routing() {
+    // A host booted for the caller (supervisor, serve, daemon) outlives it:
+    // it may keep PATH and the auth/router vars, never the caller's identity.
+    let mut command = std::process::Command::new("sh");
+    command.env("CODEX_THREAD_ID", "parent");
+    command.env("PATH", "/usr/bin:/bin");
+    scrub_identity_env(&mut command);
+    let envs: Vec<(String, Option<String>)> = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+
+    for name in AMBIENT_IDENTITY_NAMES {
+        assert!(
+            envs.iter()
+                .any(|(key, value)| key.as_str() == *name && value.is_none()),
+            "{name} was not scrubbed"
+        );
+    }
+    assert_eq!(
+        envs.iter()
+            .find(|(key, _)| key.as_str() == "PATH")
+            .and_then(|(_, value)| value.as_deref()),
+        Some("/usr/bin:/bin")
+    );
+}
+
+#[test]
 fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
     // Single claude marker: the VALUE is the parent session id.
     let claude = |k: &str| match k {

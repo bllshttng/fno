@@ -1820,3 +1820,75 @@ fn resume_by_predecessor_full_id_refuses_13() {
 // -----------------------------------------------------------------------
 // the client-side gate receives the route provider
 // -----------------------------------------------------------------------
+
+// -----------------------------------------------------------------------
+// spawn request lineage: the client stamps the caller's ambient parent edge
+// -----------------------------------------------------------------------
+
+/// Every name `claims::ambient_parent_edge` reads. Clearing them all is what
+/// "the caller carries no marker" means; `AMBIENT_IDENTITY_NAMES` is
+/// crate-private to the lib, so the bin's tests name the set here.
+const IDENTITY_ENV_NAMES: &[&str] = &[
+    "FNO_HARNESS_NAME",
+    "FNO_HARNESS_SESSION_ID",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "GEMINI_SESSION_ID",
+    "OPENCODE_SESSION_ID",
+];
+
+/// Clears every identity marker for the test, restoring the caller's own on
+/// Drop so a panic cannot leak the mutation into the rest of this binary.
+struct IdentityEnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl IdentityEnvGuard {
+    fn take(set: &[(&'static str, &str)]) -> Self {
+        let saved = IDENTITY_ENV_NAMES
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for name in IDENTITY_ENV_NAMES {
+            std::env::remove_var(name);
+        }
+        for (name, value) in set {
+            std::env::set_var(name, value);
+        }
+        Self(saved)
+    }
+}
+
+impl Drop for IdentityEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.0 {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+#[test]
+fn spawn_request_carries_the_callers_codex_edge() {
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    // One codex id under both names is the measured thread shape.
+    let _guard = IdentityEnvGuard::take(&[("CODEX_THREAD_ID", "T"), ("CODEX_SESSION_ID", "T")]);
+    let (_method, params) = build_request("spawn", &["wk".to_string(), "hi".to_string()])
+        .expect("a plain spawn request parses");
+    assert_eq!(params["spawned_by_session"], serde_json::json!("T"));
+    assert_eq!(params["spawned_by_harness"], serde_json::json!("codex"));
+}
+
+#[test]
+fn spawn_request_without_markers_carries_no_edge() {
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    // A daemon arm or a bare shell carries nothing: the request says so, and
+    // the mint stamps its honest null rather than a guessed parent.
+    let _guard = IdentityEnvGuard::take(&[]);
+    let (_method, params) = build_request("spawn", &["wk".to_string(), "hi".to_string()])
+        .expect("a plain spawn request parses");
+    assert!(params.get("spawned_by_session").is_none(), "{params:?}");
+    assert!(params.get("spawned_by_harness").is_none(), "{params:?}");
+}

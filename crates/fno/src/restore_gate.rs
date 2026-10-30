@@ -88,10 +88,7 @@ impl Drop for RestoreStaleIdsGuard {
 /// convention) rather than bricking restore on a broken store. A missing
 /// directory is the complete-empty case: no receipt was ever written.
 pub(crate) fn retired_receipt_session_ids() -> Option<std::collections::HashSet<String>> {
-    let root = agents_view::registry_path()
-        .parent()?
-        .to_path_buf()
-        .join("reap-receipts");
+    let root = agents_view::runtime_home().join("reap-receipts");
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

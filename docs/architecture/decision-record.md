@@ -151,13 +151,13 @@ The graph projection stamps that mark at write time under the lock. The index is
 
 ## Traced decisions
 
-Every cross-rung ask is one traced decision. The ask, the lead's route (answer-self versus escalate, with the class), the question, the answer, and the correction all link by id. One hop is one `decision_span` row in the project journal. Hops that already have a natural id (the question row, the decision row) carry the same `trace` envelope instead of a second row. The envelope is `{trace_id, span_id, parent_span_id?, actor_session?, actor_kind, comms, recipient_session?, recipient_kind?}`. When the session holds a live role, `actor_kind` is `lead`, and any other resolved session is `worker`. An attended terminal with no session identity is `user`, and daemon or scheduler work is `sweep`. The class enum is `public-surface`, `irreversible`, `money-security`, `law-change`, `gate-override`, `none`. The spans:
+Every cross-rung ask is one traced decision. The ask, the lead's route (answer-self versus escalate, with the class), the question, the answer, and the correction all link by id. One hop is one `decision_span` row in the project journal. Hops that already have a natural id (the question row, the decision row) carry the same `trace` envelope instead of a second row. The envelope is `{trace_id, span_id, parent_span_id?, actor_session?, actor_kind, comms, recipient_session?, recipient_kind?}`. When the session holds a live role, `actor_kind` is `lead`, and any other resolved session is `worker`. An attended terminal with no session identity is `user`, and daemon or scheduler work is `sweep`. A machine arm with no session of its own reads `sweep` through a launcher stamp. The daemon close sweep and the detached finalize queue stamp `FNO_ACTOR_KIND=sweep` on the child. Any other stamp value is ignored: the stamp names a sweep and never forges a session actor. The class enum is `public-surface`, `irreversible`, `money-security`, `law-change`, `gate-override`, `none`. The spans:
 
 | Span | Row | Emitted by |
 |---|---|---|
 | ask | `decision_span` span_kind=ask | `fno-agents mail-record` at the mail send chokepoint, when the body opens `Approval:` |
 | route | `decision_span` route=self or escalate, with the class | `mail-record --reply-to` (self), or the question intake on `answers_ask:` (escalate), or `fno inbox decide --answers-ask` (self) |
-| question | `operator_question` + trace | the question intake; span_id = question_id, parent = the route span |
+| question | `operator_question` + trace | the question intake; span_id = question_id, parent = the route span; the trace names the rung holder for a lead-rung card, else the user |
 | answer | `operator_decision` + trace | `fno inbox outstanding clear` or the decide door; span_id = decision_id, parent = the question or route span |
 | correction | `decision_span` span_kind=correction + `operator_decision.overturns` | `fno inbox decide --overturns <span-or-decision-id> --authority operator` |
 

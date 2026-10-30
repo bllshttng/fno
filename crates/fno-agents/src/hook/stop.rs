@@ -617,6 +617,9 @@ fn spawn_finalize_detached(fargs: &[String]) -> bool {
     };
     let mut cmd = Command::new(exe);
     cmd.arg("finalize").args(fargs);
+    // The detached finalize is machine work outside any interactive actor:
+    // the launcher stamp keeps its merge-arm records out of the user column.
+    cmd.env(crate::decision_trace::ACTOR_KIND_STAMP_ENV, "sweep");
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

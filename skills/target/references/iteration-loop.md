@@ -136,7 +136,7 @@ When your only outstanding work is a wait, do NOT keep waking every stop tick to
    <watching reason="local" task_id="<task-id>" timeout="15m">
    ```
 
-   `reason` is `ci`, `review`, `merge_slot`, or `local` (a run on this machine: a test suite, a build, a review fork). `pr` is a real PR number. Leave it out for a local run, never `pr="0"`. For local runs include the harness `task_id` so expiry mail identifies the task to inspect. The attributes feed the idle event and the claim-lease math. If the daemon wake route is unavailable or the claim lease cannot renew, loop-check ignores the tag and reports the blocker.
+   `reason` is `ci`, `review`, `merge_slot`, `merge_hold`, or `local` (a run on this machine: a test suite, a build, a review fork). `pr` is a real PR number. Leave it out for a local run, never `pr="0"`. For local runs include the harness `task_id` so expiry mail identifies the task to inspect. The attributes feed the idle event and the claim-lease math. If the daemon wake route is unavailable or the claim lease cannot renew, loop-check ignores the tag and reports the blocker.
 
 3. **On wake, re-check and either proceed or re-arm.** The harness re-invokes you when the watcher exits (settle, timeout, or kill). If the state settled, proceed. If the timeout fired and it is still pending, re-arm the watcher and re-emit `<watching>` - one cheap turn per ~30 min instead of one per ~90 s.
 

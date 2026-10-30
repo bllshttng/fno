@@ -413,7 +413,7 @@ def adopt_store_hit(
         )
         # The adopting session VOUCHED for this row (LD3); this
         # fallback copy skips register_session, stating the same split itself.
-        from fno.agents.dispatch import _capture_parent_edge
+        from fno.agents.spawn_lineage import _capture_parent_edge
 
         _sb_session = _capture_parent_edge()[0]
         return mint_agent_entry(

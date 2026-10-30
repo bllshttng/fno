@@ -862,8 +862,6 @@ def _hermetic_worker_add_dirs(monkeypatch):
 # on the test-file side; keep the two lists in step.
 _PLAN_JOURNAL_PINNED_MODULES = frozenset(
     {
-        "test_spawn_gate_refusal_events",
-        "test_spawn_defaults",
         "test_rust_runtime",
         "test_epic_status",
     }
@@ -1119,59 +1117,6 @@ def _no_live_evidence_gate(monkeypatch):
         return real_command_call(command, payload, **kwargs)
 
     monkeypatch.setattr(rust_binary, "command_call", _passthrough)
-
-
-@pytest.fixture(autouse=True)
-def _hermetic_resume_pin(monkeypatch):
-    """Hermetic default for the resume-pin transport.
-
-    dispatch_spawn's unpinned-claude-resume seam asks the Rust resume-pin
-    owner through `fork_lineage.spawn_axes_call`, and in a dev environment
-    that resolver can find a real installed binary whose answer depends on
-    the machine's registry and transcripts. The default answers from the
-    payload's own row (requested_model, else model; routed answers ride
-    route_model) and refuses a rowless unpinned resume; tests that need a
-    different answer re-stub `fork_lineage.spawn_axes_call` and win.
-    """
-    import fno.agents.fork_lineage as fork_lineage
-
-    real = fork_lineage.spawn_axes_call
-
-    def _answer(payload):
-        if payload.get("reentry_mechanism") is not None:
-            # The rung-2 respawn gate asks the Rust reentry resolver; the
-            # hermetic default keeps today's respawn-in-place behavior.
-            return {"mechanism": "respawn"}
-        pin = payload.get("resume_pin")
-        if pin is None:
-            return real(payload)
-        row = pin.get("row") or {}
-        model = row.get("requested_model") or row.get("model")
-        if model is None:
-            # A routed resume never refuses; the route owns the argv model.
-            if pin.get("routed"):
-                return {
-                    "model": None,
-                    "effort": row.get("effort"),
-                    "route_model": None,
-                    "source": "registry",
-                }
-            return {"refusal": "stubbed: no model on the row"}
-        if pin.get("routed"):
-            return {
-                "model": None,
-                "effort": row.get("effort"),
-                "route_model": model,
-                "source": "registry",
-            }
-        return {
-            "model": model,
-            "effort": row.get("effort"),
-            "route_model": None,
-            "source": "registry",
-        }
-
-    monkeypatch.setattr(fork_lineage, "spawn_axes_call", _answer)
 
 
 @pytest.fixture(autouse=True)

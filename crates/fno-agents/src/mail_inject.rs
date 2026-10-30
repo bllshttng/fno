@@ -1,6 +1,6 @@
 //! `mail-inject`: the one-shot LIVE-DELIVERY command `fno agents mail send` calls to inject
 //! an a2a turn into a LIVE adopted `claude --bg` session over the daemon
-//! `control.sock`. Python's `_deliver_live` runs it as a binary subprocess and
+//! `control.sock`. A caller runs it as a binary subprocess and
 //! falls back to the durable bus queue ONLY when this reports not-delivered
 //! (live-inject-first, durable fallback -- node, epic).
 //!
@@ -1594,7 +1594,7 @@ pub fn deliver_via_keeper_socket_in(
 /// codex awaits [`crate::codex_inject::deliver_via_codex_daemon`] on the caller's
 /// runtime (no nested runtime).
 /// Read a brevity-cap env knob as an int, falling back to `default` when unset or
-/// non-numeric. Mirrors Python `_cap_env_int` (cli/src/fno/mail/cli.py): the SAME
+/// non-numeric. The SAME
 /// knob name governs BOTH front doors onto this transport, so the thresholds
 /// cannot drift between the Python `fno agents mail send --raw` entry and this binary.
 /// Trims surrounding whitespace because Python `int()` does (`int(" 4000 ")` ==
@@ -1608,7 +1608,7 @@ pub(crate) fn cap_env_int(name: &str, default: i64) -> i64 {
 }
 
 /// Two-tier brevity cap on an UNWRAPPED body's byte length, mirroring Python
-/// `_enforce_body_cap` (cli/src/fno/mail/cli.py). `n` is UTF-8 byte length (Rust
+/// the body cap. `n` is UTF-8 byte length (Rust
 /// `String::len`), matching Python's `len(body.encode("utf-8"))`. Returns
 /// `Some(exit_code)` to refuse (caller returns it without injecting); `None` to
 /// proceed. The warn tier is a stderr note only and does not block, matching
@@ -1738,7 +1738,7 @@ fn body_cap_decision(text: &str, warn: i64, refuse: i64) -> Option<i32> {
 /// refusal reason was that a second line "rides in as a second submitted
 /// turn" -- and C17 deleted that harm, because the typing layer
 /// ([`inject_with_submit`]) flattens every newline run into one submitted
-/// line. The held-mail drain (hold.py `release` -> `_deliver_live` with no
+/// line. The held-mail drain (the hold release with no
 /// mail context) is the caller this door was stranding: its multi-line
 /// digest was refused with "an unframed payload must be a single line" and
 /// the held messages never reached the session. The digest types now, still

@@ -2078,33 +2078,26 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     // A push after the user looked holds again.
     let pushed: String = "b".repeat(40);
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
-    // A main merge or a test-only commit leaves the PR's paint patch alone:
-    // the look carries. Only a hunk header moved, and a test file changed.
-    let paint = |hunk: &str, line: &str| {
-        format!(r#"["crates/fno/src/client/theme.rs","modified","{hunk}\n-old\n+{line}","s1"]"#)
-    };
-    let test_file = r#"["cli/tests/test_x.py","modified","@@ -1 +1 @@\n+t","s2"]"#;
-    let routes = |now: String| {
+    // The approval sticks to the PR: a later head that edits only files the
+    // approved head painted keeps the look, whatever the edit.
+    let routes = |now: &str| {
         vec![
             ("/commits".to_string(), format!("{head}\n{pushed}\n")),
             (".base.ref".to_string(), "main\n".to_string()),
             (
                 format!("compare/main...{head}"),
-                paint("@@ -1,2 +1,2 @@", "new"),
+                "crates/fno/src/client/theme.rs\n".to_string(),
             ),
-            (
-                format!("compare/main...{pushed}"),
-                format!("{now}\n{test_file}"),
-            ),
+            (format!("compare/main...{pushed}"), now.to_string()),
         ]
     };
-    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "new"));
+    fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncli/tests/test_x.py\n");
     assert!(
         crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none(),
-        "an unchanged paint patch carries the look to the new head"
+        "the look carries to the new head"
     );
-    // A real paint change at the new head holds.
-    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "newer"));
+    // A paint file the approval never showed is a new look and holds.
+    fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncrates/fno/src/client/splash.rs\n");
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
     fake.gh_routes.clear();
     // The page archives into done/; the approval must not lapse.

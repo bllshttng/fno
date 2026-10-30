@@ -1,6 +1,6 @@
 //! One owner for healing a registry row whose mux pane ref is dead.
 //!
-//! Eight readers key on the stored `mux` ref (`keystroke_lane`, `_deliver_live`,
+//! Eight readers key on the stored `mux` ref (`keystroke_lane`, the mail send,
 //! the codex thread predicates, resume). When the pane the ref names is gone
 //! and the row's codex thread is still loaded in the app-server, the FACT is
 //! stale, so the fix heals the fact once here and every reader stays as it is.

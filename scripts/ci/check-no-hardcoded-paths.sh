@@ -82,7 +82,6 @@ add_violation() {
 #   update.py (try/except),
 #   adapters/providers/dispatch.py (try/except), adapters/providers/staging.py (try/except),
 #   adapters/providers/loader.py (bootstrap: settings loader self-reference)
-#   agents/dispatch_target.py (bootstrap: settings loader self-reference)
 #   agents/registry.py (guard identifies the shared HOME registry despite config overrides)
 #   graph/_constants.py (uses _state_dir() helper), test_*.py
 # ---------------------------------------------------------------------------
