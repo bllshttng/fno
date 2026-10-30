@@ -187,12 +187,21 @@ pub(super) fn claim_pair(manifest: &str) -> Option<(String, String)> {
 
 /// Said instead of the generic renewal refusal when there is no claim at all.
 /// The generic one reads as transient, so a reader believes another watcher
-/// will help, arms one on every stop, and never idles once.
+/// will help, arms one on every stop, and never idles once. The heal line
+/// names the exact working shape because a worker burned three refused
+/// acquires on it (measured 2026-10-30): an unprefixed holder lands the claim
+/// but the manifest refresh refuses it, so the blocked line survives and the
+/// gate keeps reading no claim.
 pub(super) const NO_CLAIM_REFUSAL: &str =
     "watching ignored: this session recorded no node claim at init, so no watch lease can \
-ever renew, and arming another watcher will not change that. The manifest is write-once, \
-so rerunning `fno do target start` cannot restore the claim. Hand the PR to a session \
-that holds the claim.";
+ever renew, and arming another watcher will not change that. If `fno agents claim status \
+node:<id>` shows the node held by `spawn-handover:<this worker>` (live or suspect), the \
+heal is `fno agents claim acquire node:<id> --holder target-session:<session id> \
+--handover-from spawn-handover:<worker> --pid-unavailable --ttl <lease>`: the \
+`target-session:` prefix is required, because the manifest refresh refuses an unprefixed \
+holder, and the handover lands the claim lines and drops the blocked line. Once the \
+window is gone no command heals the manifest; hand the PR to a session that holds the \
+claim.";
 
 /// The lead of the arm-and-tag hint. One literal, shared by the writer (the
 /// Step-5 continue message) and the idle-refusal tests, so the cut can never
