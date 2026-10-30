@@ -86,9 +86,8 @@ pub(crate) fn pane_row_refusal(
             );
         }
     }
-    // Present, Unknown, or no precheck answer: today's text byte for byte
-    // (cli/tests/test_recovery.py pins the prefix), so the operator hears the
-    // familiar advice whenever absence is not proven.
+    // Present, Unknown, or no precheck answer: today's text byte for byte, so
+    // the operator hears the familiar advice whenever absence is not proven.
     format!(
         "agent {name} is a pane worker; `stop` reaches no pane and would report a \
          stop it did not perform. Kill the pane: \
@@ -131,8 +130,8 @@ mod tests {
         assert!(!text.contains("--force"), "{text}");
     }
 
-    /// Present, Unknown, or no precheck: byte-for-byte today's refusal, the
-    /// prefix cli/tests/test_recovery.py pins (AC3-HP). The pane-kill advice
+    /// Present, Unknown, or no precheck: byte-for-byte today's refusal
+    /// (AC3-HP). The pane-kill advice
     /// lives on this branch only.
     #[test]
     fn present_unknown_or_unread_matches_todays_refusal_byte_for_byte() {

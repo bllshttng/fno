@@ -50,7 +50,6 @@ The one case that previously stayed on Python — an `ask` with no resolvable pr
 | `crates/fno-agents/tests/gemini_ask_unit.rs` | argv builders, `inject_from_name`, `sandbox_flag`, single-blob `parse_response` + every schema-drift guard, exit-code map |
 | `crates/fno-agents/tests/gemini_ask_parity.rs` | cross-language byte parity: Python `harnesses/gemini.py` vs Rust `gemini_ask` against one shared fake gemini (create/resume/null-response/drift/non-zero/stderr-noise/inject) + the cross-language registry round-trip |
 | `crates/fno-agents/tests/gemini_ask_sigint.rs` | Ctrl-C forwards to the gemini pgroup → exit 130; SIG_IGN parent disposition preserved (shared `subprocess_ask` driver) |
-| `cli/tests/agents/test_rust_runtime.py` | empty `PYTHON_AGENT_COMMANDS`, `AUTO_ROUTE_COMMANDS == RUST_CLIENT_COMMANDS` identity, ask auto-routes for every provider / no-flag / no-binary fallback / `=python` force |
 | `cli/tests/agents/test_ask_e2e_dispatch.py` | CLI-level create + followup dispatch differential parametrized across codex AND gemini |
 
 The fake gemini fixture (single JSON blob + stderr noise) is shape-identical across the Rust parity test and the Python e2e test, so one fake serves both differential paths.

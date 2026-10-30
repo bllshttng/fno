@@ -2049,7 +2049,7 @@ mod style_gate_tests {
     }
 }
 
-// Ported from cli/tests/agents/test_rust_runtime.py when the anycast ask
+// Ported from the Python tests when the anycast ask
 // moved off the Python seam: the no-live-peer refusal is ask's contract, not
 // the durable queue mail send falls back to.
 #[cfg(test)]
