@@ -661,7 +661,7 @@ fn decide_observed<P: Probes>(
     // The docs gate, beside the look: a user-surface PR names its doc at
     // merge time too. Held, not rejected: pushing a `Docs:` line into the
     // body clears it on the next read, no new commit needed.
-    if let Some(blocker) = crate::docs_gate::docs_gate_blocker(probes, cwd, facts) {
+    if let Some(blocker) = crate::docs_gate::docs_gate_blocker(probes, cwd, &facts) {
         return Err(Outcome::Held {
             reason: blocker.detail,
         });
