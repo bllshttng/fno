@@ -4298,7 +4298,7 @@ where
 }
 
 mod stop;
-use stop::{attach_stopped_claims_release, handle_stop, release_stopped_claims_into};
+use stop::{handle_stop, release_stopped_claims_into};
 
 /// Bound on a worker's shutdown ACK (review): a wedged worker must not
 /// hang the daemon's stop handler - the client above it would then report the

@@ -1,4 +1,4 @@
-//! The agent.stop verb: the response the switchboard answers with, the
+//! The agent.stop command: the response the switchboard answers with, the
 //! already-terminal no-op branch, and the stop claims release. Moved out
 //! of daemon.rs under its file budget: the module owns one question -
 //! what a stop writes and releases.

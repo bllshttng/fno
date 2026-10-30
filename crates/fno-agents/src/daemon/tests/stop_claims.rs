@@ -1,6 +1,7 @@
 //! Stop/rm claim release (x-9c91 change 5): the response-keyed release gate.
 
 use super::*;
+use crate::daemon::stop::attach_stopped_claims_release;
 
 /// The pid no OS reports as alive (rm_refusal.rs uses the same token).
 const GONE_PID: i64 = i32::MAX as i64;
