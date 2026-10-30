@@ -293,6 +293,9 @@ enum Role {
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
+    /// `fno agents audit claude-fallback ...` (flat `agents claude-fallback`):
+    /// the projects-store count the daily gate's no-fallback part reads.
+    AgentsClaudeFallback(Vec<OsString>),
     /// `fno agents restart ...` and root `fno restart ...`: exec'd as
     /// `fno-agents restart`, the one implementation.
     AgentsRestart(Vec<OsString>),
@@ -1406,6 +1409,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_command(args, "top") {
         return Role::AgentsTop(rest);
     }
+    if let Some(rest) = classify_agents_command(args, "claude-fallback") {
+        return Role::AgentsClaudeFallback(rest);
+    }
     if let Some(rest) = classify_agents_restart(args) {
         return Role::AgentsRestart(rest);
     }
@@ -1970,6 +1976,7 @@ fn main() {
             fno::agents_menu::native_leaf("top"),
             &rest,
         )),
+        Role::AgentsClaudeFallback(rest) => std::process::exit(fno::claude_fallback::run(&rest)),
         Role::AgentsRestart(rest) => {
             std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
         }

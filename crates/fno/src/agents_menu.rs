@@ -213,6 +213,11 @@ const AUDIT: &[Node] = &[
     moved("incident", &["incident"], &[&["fleet-incident"]], "The durable fleet incident breaker."),
     command("test-run", &["test-run"], "The native test-suite process-group owner."),
     command("harness", &["harness"], "Instruments over the harness capability table."),
+    command(
+        "claude-fallback",
+        &["claude-fallback"],
+        "Count claude sessions on node worktrees in a window, for the daily gate's no-fallback part.",
+    ),
 ];
 
 #[rustfmt::skip]
