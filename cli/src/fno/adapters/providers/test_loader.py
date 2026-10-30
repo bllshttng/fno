@@ -184,6 +184,31 @@ class TestLoadProvidersEmpty:
         assert result.active is None
 
 
+class TestGlobalScopeUnderPin:
+
+    def test_scope_global_pair_targets_the_pin(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """FNO_CONFIG alone is a sandbox: the accounts scope-own read/write
+        pair mutates the pinned file, never the machine's real global (a
+        sandbox account write used to land in ~/.fno)."""
+        from fno.adapters.providers.loader import (
+            _global_settings_path,
+            load_scope_config,
+        )
+
+        pin = tmp_path / "sandbox" / "config.toml"
+        pin.parent.mkdir()
+        pin.write_text("schema_version = 1\n", encoding="utf-8")
+        machine_global = tmp_path / "machine" / ".fno" / "config.toml"
+        _write_settings(machine_global, _valid_providers_block(active="claude-primary"))
+        monkeypatch.setenv("FNO_CONFIG", str(pin))
+        monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(machine_global))
+
+        assert _global_settings_path() == pin
+        assert load_scope_config("global").records == []
+
+
 # ---------------------------------------------------------------------------
 # AC01.2-ERR: Invalid record raises ProviderConfigError naming the id
 # ---------------------------------------------------------------------------

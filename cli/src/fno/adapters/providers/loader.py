@@ -63,7 +63,10 @@ def _atomic_write(path: Path, content: str) -> None:
 def _global_settings_path() -> Path:
     """Resolve the per-user global config.toml path.
 
-    Returns the config.toml sibling of ``$FNO_GLOBAL_SETTINGS_PATH`` when that
+    Returns ``Path($FNO_CONFIG)`` when that pin is set: the pinned file IS the
+    global config in a sandbox, so the accounts scope-own read/write pair
+    mutates the sandbox config and never the machine's real global. Otherwise
+    returns the config.toml sibling of ``$FNO_GLOBAL_SETTINGS_PATH`` when that
     env var is set to a non-empty value (mirrors ``fno.config._prefer_toml``),
     otherwise the default ``~/.fno/config.toml``. We cannot import from
     ``fno.config`` here because the provider loader runs during the config
@@ -71,6 +74,9 @@ def _global_settings_path() -> Path:
 
     Empty-string env var is treated as "unset" rather than ``Path("")``.
     """
+    env = os.environ.get("FNO_CONFIG")
+    if env:
+        return Path(env)
     env = os.environ.get("FNO_GLOBAL_SETTINGS_PATH")
     if env:
         return Path(env).with_name("config.toml")
