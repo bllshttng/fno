@@ -946,9 +946,8 @@ pub(crate) fn dirs_home() -> PathBuf {
 
 /// The spaces ROOT (the directory holding `<slug>` space dirs): `FNO_SPACES_DIR`
 /// verbatim -- it names the root itself, like Python `spaces_root` -- else the
-/// durable root's `spaces` dir: the `FNO_AGENTS_HOME` parent when set, else
-/// the declared state root, else `$HOME/.fno`. The agents-home leg is
-/// Rust-only; the Python hub's chain never had it.
+/// durable root's `spaces` dir: the declared state root, else `$HOME/.fno`.
+/// `FNO_AGENTS_HOME` plays no part, as in the Python hub's chain.
 fn spaces_root_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_SPACES_DIR").filter(|v| !v.is_empty()) {
         let root = PathBuf::from(v);
