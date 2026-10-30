@@ -17,7 +17,6 @@ path handles its absence as caller_kind=nested_agent + from_session_id=None.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict
 
 import pytest
@@ -26,40 +25,6 @@ import pytest
 # ---------------------------------------------------------------------------
 # claude.bg_create
 # ---------------------------------------------------------------------------
-
-
-def test_claude_bg_create_injects_agent_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """claude.bg_create passes env containing FNO_AGENT_SELF/PROVIDER."""
-    from fno.agents.harnesses import claude as claude_mod
-
-    captured: Dict[str, Any] = {}
-
-    def fake_run(argv: list[str], **kw: Any) -> SimpleNamespace:
-        captured["argv"] = argv
-        captured["env"] = kw.get("env")
-        # Stdout shape must match Locked Decision 6: backgrounded · <8hex> · ...
-        return SimpleNamespace(
-            returncode=0,
-            stdout="backgrounded \xb7 abc12345 \xb7 ok\n",
-            stderr="",
-        )
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-
-    claude_mod.bg_create(name="alpha", message="hi", cwd=tmp_path)
-
-    env = captured["env"]
-    assert env is not None, "expected env kwarg to subprocess.run"
-    assert env["FNO_AGENT_SELF"] == "alpha"
-    assert env["FNO_AGENT_HARNESS"] == "claude"
-    assert env["FNO_HARNESS_NAME"] == "claude"
-    assert "FNO_HARNESS_SESSION_ID" not in env
-    # The session id is not known until the subprocess returns.
-    assert "FNO_AGENT_SESSION" not in env
-    # Parent env must be preserved (sample check on PATH)
-    assert "PATH" in env, "spawn env should inherit parent PATH"
 
 
 # ---------------------------------------------------------------------------

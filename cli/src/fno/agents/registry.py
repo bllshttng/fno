@@ -2039,7 +2039,7 @@ def register_existing_session(
         _sb_reason = None
         _adopted_by = None
         if origin != "operator":
-            from fno.agents.dispatch import _capture_parent_edge
+            from fno.agents.spawn_lineage import _capture_parent_edge
             from fno.agents.spawn_lineage import _lineage_reason
 
             _sb_session, _sb_harness, _sb_cwd = _capture_parent_edge()

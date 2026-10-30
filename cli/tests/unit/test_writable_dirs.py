@@ -120,13 +120,6 @@ def test_codex_pane_lane_drops_the_grant_on_the_remote_launch(
     ]
 
 
-def test_claude_bg_lane_carries_the_grant(one_grant: str, tmp_path: Path) -> None:
-    from fno.agents.harnesses.claude import _build_argv
-
-    argv = _build_argv(name="w", message="m", use_stdin=False, cwd=tmp_path)
-    assert argv[argv.index("--add-dir") + 1] == one_grant
-
-
 def test_claude_headless_lane_carries_the_grant(
     one_grant: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

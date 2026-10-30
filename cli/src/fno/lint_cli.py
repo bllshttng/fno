@@ -48,7 +48,7 @@ CHECKS: dict[str, str] = {
 
 
 # Single-line argv shapes that are intentionally still owned by a provider or
-# a legacy one-shot seam. New session spawns belong behind dispatch_spawn; a
+# a legacy one-shot seam. New session spawns belong behind fno agents spawn; a
 # contributor adding a new shape must either migrate it or add the exact file
 # here in the same change. This is deliberately a narrow grep-style guard, not
 # an AST claim: multi-line assembly is documented coverage debt.
@@ -112,7 +112,7 @@ def spawn_paths() -> None:
 
     The allowlist is intentionally explicit and lives next to this lint. The
     scan does not claim to catch multi-line argv assembly; those sites remain
-    census-backed migration work until they move behind ``dispatch_spawn``.
+    census-backed migration work until they move behind ``fno agents spawn``.
     """
     violations = _spawn_shape_violations(_repo_root())
     if violations:
@@ -120,8 +120,8 @@ def spawn_paths() -> None:
         for violation in violations:
             typer.echo(f"  {violation}", err=True)
         typer.echo(
-            "\nFix: route session launches through fno agents spawn / "
-            "dispatch_spawn, or add the exact source file to "
+            "\nFix: route session launches through fno agents spawn, "
+            "or add the exact source file to "
             "SPAWN_SHAPE_ALLOWLIST in cli/src/fno/lint_cli.py with a census-backed reason.",
             err=True,
         )

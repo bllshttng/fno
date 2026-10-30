@@ -83,7 +83,7 @@ def test_grantor_is_the_claude_session_never_the_inherited_codex_thread(
     (``spawned_by_session or "human"``), so the session id it returns IS the
     recorded grantor.
     """
-    from fno.agents.dispatch import _capture_parent_edge
+    from fno.agents.spawn_lineage import _capture_parent_edge
 
     _walk(monkeypatch, "claude")
     session_id, harness, _cwd = _capture_parent_edge()
@@ -105,7 +105,7 @@ def test_no_walk_refuses_to_guess_rather_than_stamping_a_stranger(
     "human" and `fno whoami` names the family to clear; that is the honest
     answer, because the environment alone cannot say which session this is.
     """
-    from fno.agents.dispatch import _capture_parent_edge
+    from fno.agents.spawn_lineage import _capture_parent_edge
 
     _walk(monkeypatch, None)
     session_id, harness, _cwd = _capture_parent_edge()

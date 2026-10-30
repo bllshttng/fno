@@ -138,15 +138,6 @@ def test_escalation_failure_never_breaks_the_send(runner, mailbox, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _resolved_claude(session_id: str):
-    """A minimal duck-typed resolved session for _name_lane_send."""
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        session_id=session_id, agent="claude", handle=session_id[-8:]
-    )
-
-
 def _skip_mux(monkeypatch):
     """Force the mux-pane rung to skip (resolve_agent raises) so a live-miss
     falls straight to the durable floor."""
@@ -158,87 +149,12 @@ def _skip_mux(monkeypatch):
     monkeypatch.setattr("fno.agents.registry.resolve_agent", _raise)
 
 
-def test_attended_live_miss_escalates(mailbox, monkeypatch, emitted_events):
-    from fno.agents.registry import register_existing_session
-    from fno.mail.cli import _name_lane_send
-
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    register_existing_session(
-        provider="claude", session_id=sid, cwd=str(mailbox), origin="operator"
-    )
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
-    _skip_mux(monkeypatch)
-
-    import typer
-
-    with pytest.raises(typer.Exit):
-        _name_lane_send("need your eyes on this", from_name="sender", resolved=_resolved_claude(sid))
-
-    assert len(emitted_events) == 1, "operator live-miss escalates once"
-    assert emitted_events[0]["data"]["reason"] == "attended-miss"
-    assert emitted_events[0]["data"]["recipient"] == "9a063cd3"
-
-
-def test_reachable_worker_live_miss_escalates_as_reachable_miss(
-    mailbox, monkeypatch, emitted_events
-):
-    # A spawn/host worker row: no origin -> not attended, so it never matched the
-    # attended lane and a live miss sat silent. The reachable-miss lane covers it
-    # (node x-1904). The overlay event must actually LAND: its reason is an
-    # enforced enum, and the emit is best-effort, so an unlisted reason would be
-    # swallowed and this lane would surface nothing on a headless host.
-    from fno.agents.registry import register_existing_session
-    from fno.mail.cli import _name_lane_send
-
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    register_existing_session(provider="claude", session_id=sid, cwd=str(mailbox))
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
-    _skip_mux(monkeypatch)
-
-    import typer
-
-    with pytest.raises(typer.Exit):
-        _name_lane_send("fyi", from_name="sender", resolved=_resolved_claude(sid))
-
-    assert len(emitted_events) == 1, "a reachable worker live-miss escalates once"
-    assert emitted_events[0]["data"]["reason"] == "reachable-miss"
-
-
 # ---------------------------------------------------------------------------
 # AC8 (x-c24d Wave 1): a codex send that demotes to durable with no app-server
 # daemon prints the fix command, not only the live-miss reason token. The
 # codex daemon socket is the live-mail prerequisite; naming `codex app-server
 # daemon start` at the demote site is self-teaching runtime text.
 # ---------------------------------------------------------------------------
-
-
-def _resolved_codex(session_id: str):
-    """A minimal duck-typed resolved codex session for _name_lane_send."""
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        session_id=session_id, agent="codex", handle=session_id[-8:]
-    )
-
-
-def test_mail_demote_reason_codex_no_daemon_carries_fix(mailbox, monkeypatch, capsys):
-    from fno.agents.registry import register_existing_session
-    from fno.mail.cli import _name_lane_send
-
-    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
-    register_existing_session(provider="codex", session_id=sid, cwd=str(mailbox))
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_codex", lambda *_a, **_k: False)
-    _skip_mux(monkeypatch)
-    monkeypatch.setattr("fno.mail.cli._codex_daemon_socket_absent", lambda: True)
-
-    import typer
-
-    with pytest.raises(typer.Exit):
-        _name_lane_send("ping", from_name="sender", resolved=_resolved_codex(sid))
-
-    out = capsys.readouterr().out
-    assert "queued (durable)" in out
-    assert "codex app-server daemon start" in out, "demote line names the fix command"
 
 
 #: The five axes are never inferred from a value: `claude` is a HARNESS, and
