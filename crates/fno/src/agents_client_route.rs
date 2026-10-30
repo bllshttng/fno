@@ -36,6 +36,7 @@ const MAPPED: &[(&str, &[&str])] = &[
         &["census", "codex-session-for-pid"],
     ),
     ("spawn-guard", &["census", "spawn-guard"]),
+    ("discovered-json", &["census", "discovered-json"]),
 ];
 
 #[derive(Debug, PartialEq)]
