@@ -1161,9 +1161,9 @@ fn a_push_between_validation_and_effect_reads_as_head_changed() {
 
 #[test]
 fn the_journal_match_reads_the_pr_head_not_the_checkout() {
-    // PR 4165: a lead merges from the canonical checkout, whose HEAD is
-    // main's tip, never the PR head. The covered event sits at the PR head,
-    // so a cwd-anchored match can never clear. The newest covered event at
+    // A lead merges from the canonical checkout, whose HEAD is main's tip,
+    // never the PR head. The covered event sits at the PR head, so a
+    // cwd-anchored match can never clear. The newest covered event at
     // another head must not shadow the matching one.
     let journal = concat!(
         r#"{"type":"review_coverage","data":{"coverage":"covered","reviewed_count":2,"head_sha":"0b7fd46"}}"#,
