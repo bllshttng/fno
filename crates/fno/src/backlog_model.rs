@@ -929,7 +929,7 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
         }
     }
     hidden.total = hidden.deferred + hidden.superseded + hidden.roadmap;
-    let offboard: Vec<Card> = off_board_cards
+    let mut offboard: Vec<Card> = off_board_cards
         .into_iter()
         .filter(|c| {
             keeps_query(
@@ -942,6 +942,7 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
             )
         })
         .collect();
+    offboard.truncate(OFFBOARD_CAP);
     // Per-column totals over the filtered set; `open` excludes Done, the
     // header counts keep it.
     let mut open_totals: HashMap<&'static str, usize> = HashMap::new();
@@ -1071,6 +1072,10 @@ fn facets_of(cards: &[Card], inp: &Inputs) -> Facets {
 const CELL_CAP: usize = 50;
 /// The Done cap per cell.
 const DONE_CAP: usize = 20;
+/// The off-board payload cap: the counts stay complete, the page names the
+/// first slice and a narrower query reaches the rest, so a 10 s poll never
+/// carries two thousand cards for wire size.
+const OFFBOARD_CAP: usize = 200;
 
 /// Group the filtered cards into lanes and six-column cells, with caps.
 fn build_lanes(

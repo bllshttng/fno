@@ -1180,7 +1180,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     const cards = (board && board.offboard) || [];
     const head = document.createElement("div");
     head.className = "dim obhead";
-    head.textContent = line + " - showing the " + cards.length + " matching the current filters";
+    head.textContent = line + " - showing the first " + cards.length + " matching the current filters; narrow the search for the rest";
     el.appendChild(head);
     const wrap = document.createElement("div");
     wrap.className = "obcards";
