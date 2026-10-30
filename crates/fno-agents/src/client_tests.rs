@@ -687,7 +687,7 @@ fn spawn_flag_rows() {
         "portal + placement on the thread lane is the legal combination"
     );
 
-    // --substrate is a live alias of --as (x-bc41): the same lane rides
+    // --substrate is a live alias of --as: the same lane rides
     // both spellings.
     let (_m, sub) = build_request(
         "spawn",
