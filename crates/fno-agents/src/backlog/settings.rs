@@ -250,30 +250,54 @@ pub(crate) fn detect_project(cwd: Option<&str>) -> Option<String> {
         .map(|(name, _)| name)
 }
 
+/// The `state_dir` value of one parsed candidate: the bare key first, then
+/// the legacy settings.yaml envelope (`schema_version:` + `config:`), the
+/// same bare-then-envelope walk live_lookup applies.
+fn state_dir_value(doc: &Value) -> Option<&str> {
+    doc.get("state_dir")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            doc.get("config")
+                .and_then(|c| c.get("state_dir"))
+                .and_then(Value::as_str)
+        })
+        .filter(|s| !s.is_empty())
+}
+
 /// The state directory the porcelain reads serve from: `FNO_STATE_DIR` when
 /// the env names a root (the carrier `fno.paths.state_dir` resolves and
 /// `accounts::credentials::seal` pins, so a sealed read serves the store its parent
 /// wrote), else `FNO_CONFIG`'s `state_dir` when the env names a file, else
 /// the first candidate carrying a `state_dir`, else `~/.fno`. `FNO_HOME`
-/// does not move the backlog.
+/// does not move the backlog. Python's `state_dir()` always answers
+/// absolute: a relative value anchors at the cwd and collapses `.`/`..`.
 pub fn state_dir() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok();
     if let Some(v) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
-        return Some(expand_home(&v.to_string_lossy()));
+        return Some(anchored(expand_home(&v.to_string_lossy()), cwd.as_deref()));
     }
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
-        let cfg = PathBuf::from(cfg);
-        if let Some(sd) = read_flat(&cfg).get("state_dir").and_then(Value::as_str) {
-            return Some(expand_home(sd));
+        if let Some(sd) = state_dir_value(&read_flat(&PathBuf::from(cfg))) {
+            return Some(anchored(expand_home(sd), cwd.as_deref()));
         }
     }
     for path in candidates() {
-        if let Some(sd) = read_flat(&path).get("state_dir").and_then(Value::as_str) {
-            return Some(expand_home(sd));
+        if let Some(sd) = state_dir_value(&read_flat(&path)) {
+            return Some(anchored(expand_home(sd), cwd.as_deref()));
         }
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|h| h.join(".fno"))
+}
+
+/// Anchor at `cwd` through the shared lexical walk; with no cwd (it cannot
+/// be read), the value passes through.
+fn anchored(p: PathBuf, cwd: Option<&std::path::Path>) -> PathBuf {
+    match cwd {
+        Some(base) => crate::paths_cli::anchor_at(base, p),
+        None => p,
+    }
 }
 
 /// The graph file the porcelain reads serve: `<state_dir>/graph.json`,
