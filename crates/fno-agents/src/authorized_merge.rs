@@ -402,7 +402,10 @@ pub trait Probes {
     /// The four verdict words `green` | `red` | `pending` | `unknown`, plus
     /// GitHub's own ruleset hold when the same payload names one.
     fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead;
-    fn covered_head(&self, cwd: &Path) -> Option<String>;
+    /// The journal match reads the head being merged from facts, never cwd
+    /// HEAD: a lead merging from the canonical checkout is not checked out
+    /// at the PR head, so a cwd match there can never clear.
+    fn covered_head(&self, cwd: &Path, pr_head: &str) -> Option<String>;
     fn auto_merge_enabled(&self, cwd: &Path) -> bool;
     fn posture_floor_block(&self, cwd: &Path) -> Option<String>;
     fn strategy(&self, cwd: &Path) -> String;
@@ -644,7 +647,7 @@ fn decide_observed<P: Probes>(
     let Some(head) = request
         .covered_head
         .clone()
-        .or_else(|| probes.covered_head(cwd))
+        .or_else(|| probes.covered_head(cwd, &facts.head_sha))
         .filter(|sha| !sha.is_empty())
     else {
         return Err(Outcome::Unknown {
@@ -1059,7 +1062,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     if let Some(head) = request
         .covered_head
         .clone()
-        .or_else(|| probes.covered_head(cwd))
+        .or_else(|| probes.covered_head(cwd, &facts.head_sha))
         .filter(|sha| !sha.is_empty())
     {
         if head != facts.head_sha {
@@ -2140,9 +2143,9 @@ refusing to assume no review is running"
             .unwrap_or(0)
     }
 
-    fn covered_head(&self, cwd: &Path) -> Option<String> {
+    fn covered_head(&self, cwd: &Path, pr_head: &str) -> Option<String> {
         let _step = step_timer::step("covered_head");
-        covered_head_from_event(cwd)
+        covered_head_from_event(cwd, pr_head)
     }
 
     fn auto_merge_enabled(&self, cwd: &Path) -> bool {
@@ -2749,19 +2752,20 @@ pub fn ci_base_verdict(
     }
 }
 
-/// The head sha from the latest covered `review_coverage` event that matches the
-/// current HEAD, or None.
-pub fn covered_head_from_event(cwd: &Path) -> Option<String> {
+/// The head sha from the latest covered `review_coverage` event that matches
+/// the PR's head, or None. The match reads the head being merged from facts,
+/// never cwd HEAD: a lead merging from the canonical checkout is not checked
+/// out at the PR head, so a cwd match there can never clear.
+pub fn covered_head_from_event(cwd: &Path, pr_head: &str) -> Option<String> {
     let path = crate::paths::events_path(cwd);
     let content = crate::event_store::journal_text(&path, &["review_coverage"]);
-    let head = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(cwd)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+    covered_head_from_text(&content, pr_head)
+}
+
+/// The journal-text half of [`covered_head_from_event`], split so the match
+/// is testable without a pinned space root. An empty `pr_head` matches
+/// nothing: an unreadable head holds instead of pinning an arbitrary event.
+fn covered_head_from_text(content: &str, pr_head: &str) -> Option<String> {
     let mut latest: Option<String> = None;
     for line in content.lines() {
         let Ok(val) = serde_json::from_str::<Value>(line) else {
@@ -2785,7 +2789,7 @@ pub fn covered_head_from_event(cwd: &Path) -> Option<String> {
             .pointer("/data/head_sha")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if !head.is_empty() && ev_head != head {
+        if pr_head.is_empty() || ev_head != pr_head {
             continue;
         }
         latest = Some(ev_head.to_string());
