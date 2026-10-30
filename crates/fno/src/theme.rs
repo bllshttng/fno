@@ -339,13 +339,10 @@ pub fn focus_style(t: &Theme) -> (Color, Color, u8) {
 }
 
 /// `(fg, bg, flags)` for a sideline highlight band: accent text on the
-/// surface band. Selection, hover, and the focused row share one pair - the
-/// focused row's distinction rides its glyph marks, never a louder fill
-/// (the operator's color ruling: selection is the surface0 band, never a
-/// full brand fill). Both legs are explicit colors that answer each other's
-/// contrast, so the band reads identically on a dark and a light terminal:
-/// INVERSE would make the terminal's own background the text color and DIM
-/// washes the text toward the band. Neither belongs in a band.
+/// surface band. Selection and hover share one pair; the keyboard-driven
+/// row does not - it inverts through [`focus_style`] (the bell and feed
+/// panels since the 2026-10-29 ruling, the sideline driven row before it),
+/// so the row about to take Enter reads on both theme families.
 pub fn band_style(t: &Theme) -> (Color, Color, u8) {
     if t.inherit {
         // The palette's own surface pair: accent text on the deep index, so
