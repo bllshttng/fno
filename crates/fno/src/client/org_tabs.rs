@@ -385,9 +385,12 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bo
             let age = epoch(r.s.started_at.as_deref())
                 .map(|t| dur(now as i64 - t))
                 .unwrap_or_else(|| "not published".into());
-            let last = match ago(r.s.last_message_at.as_deref(), now) {
-                Some(a) => format!("not published \u{b7} last turn {a}"),
-                None => "not published".into(),
+            let last = match r.s.last_message.as_deref().filter(|t| !t.trim().is_empty()) {
+                Some(text) => text.to_string(),
+                None => match ago(r.s.last_message_at.as_deref(), now) {
+                    Some(a) => format!("last turn {a}"),
+                    None => "not published".into(),
+                },
             };
             let runtime = r.s.harness.as_deref().unwrap_or("not published");
             out.push(

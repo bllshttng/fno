@@ -250,3 +250,42 @@ fn receipt_columns_render_and_unmeasured_reads_dash() {
     assert!(stray_line.contains("     - -"), "{stray_line}");
     assert_eq!(read_line.find("busy"), stray_line.find("busy"));
 }
+
+/// A roster short-id row that joins a registry row displays the registry
+/// name, so the fleet panel reads names, not handles. An unjoined row keeps
+/// the short id.
+#[test]
+fn the_row_takes_the_registry_name_it_joins() {
+    let sid = "aaaa1111-2222-3333-4444-555566667777";
+    let mut entry = row("lenore", AgentStatus::Live);
+    entry.harness_session_id = Some(sid.into());
+    let worker = |name: &str, entry: Option<usize>| Worker {
+        source: "claude",
+        name: name.into(),
+        harness: "claude".into(),
+        substrate: "bg".into(),
+        pid: None,
+        session_pid: None,
+        stored_status: "live".into(),
+        status_basis: None,
+        session_id: Some(sid.into()),
+        spawned_by: None,
+        entry,
+    };
+    let c = Census {
+        workers: vec![worker("aaaa1111", Some(0)), worker("zzzz9999", None)],
+        ..Default::default()
+    };
+    let out = worker_rows(
+        &c,
+        &[entry],
+        &HashMap::new(),
+        crate::truth_probe::BatchOutcome::Measured,
+        &Map::new(),
+        &BTreeMap::new(),
+    );
+    let joined = &out[0];
+    assert_eq!(joined["name"], "lenore");
+    assert_eq!(joined["handle"], "lenore");
+    assert_eq!(out[1]["name"], "zzzz9999", "unjoined keeps the short id");
+}
