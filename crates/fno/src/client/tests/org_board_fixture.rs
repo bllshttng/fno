@@ -129,6 +129,26 @@ fn a_remote_seat_names_its_attach_command_and_no_action_key() {
     );
 }
 
+/// The Now cell reads the published message text; a stamp without text
+/// reads its age, never a false "not published".
+#[test]
+fn the_now_cell_reads_the_published_text() {
+    let mut map = fleet_json();
+    map["machines"][1]["sessions"][0]["last_message"] =
+        json!("Bug 1 found: the census keeps the roster short id.");
+    let view = opened(map, Vec::new());
+    let b = view.org_board.as_ref().unwrap();
+    let body = text(&b.frame(None, 200, 80, now()).right);
+    assert!(
+        body.contains("Bug 1 found: the census keeps the roster short id."),
+        "{body}"
+    );
+    assert!(
+        !body.contains("not published \u{b7}"),
+        "a stamp without text reads its age: {body}"
+    );
+}
+
 #[test]
 fn graph_boxes_every_seat_under_its_lead_and_health_reads_not_sampled() {
     let mut view = opened(fleet_json(), Vec::new());

@@ -492,6 +492,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "wait": "Block until an agent's registry row reaches idle|blocked|done: --agent <name> --state <s> [--timeout-ms N] [--json].",
     "subscribe": "Stream registry state transitions + pane exits as NDJSON (follows events.jsonl): [--agent <name>] [--kinds state,exit] [--json].",
     "digest": "Catch-up 'while you were gone' fold over events + ledger for a session: --session <s> --since <ts> [--json].",
+    "trace": "An agent's dispatch lifecycle from the event store: [name] [--all] [--request-id X] [--since S] [--limit N] [--json].",
     "needs": "Needs-me queue fold over events + ledger across all sessions (review_wedged/budget_stop): [--since-epoch <secs>] [--fires-floor <n>] [--json].",
     "liveness": "One 'is this worker alive' answer per handle: <handle...> [-J|--json] reads the registry row, the transcript age (the one reader), and the pid through the one verdict door; the caller's own row (FNO_AGENT_SELF or a harness session env) rides along as the positive control. Exit 0 all live, 1 any finished, 2 any unknown, 3 no handle resolved. Daemon-free; starts nothing.",
     "select-read": "One bounded backlog read (next|undispatched) under [auto_continue] select_timeout_s; prints an ok/unmeasured/error receipt JSON.",
