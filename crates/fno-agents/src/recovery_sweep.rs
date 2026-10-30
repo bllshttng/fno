@@ -251,7 +251,7 @@ pub fn node_id_from_worktree(cwd: &str) -> Option<String> {
 /// reads as node-bound.
 fn worktree_is_node_less(cwd: &str) -> bool {
     let fno_dir = Path::new(cwd).join(".fno");
-    fno_dir.is_dir() && !fno_dir.join("target-state.md").exists()
+    fno_dir.is_dir() && crate::target_orient::manifest_path(Path::new(cwd)).is_none()
 }
 
 /// Keep a counts entry only while its session is still a candidate. A sentinel

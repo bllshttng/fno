@@ -21,7 +21,6 @@ pub const RM_DECLINED_EXIT: i32 = 3;
 const WORKER_DIR_COMMANDS: &[&str] = &["resume", "ask", "revive", "wake"];
 
 /// Stamped once the notice is written, for a later writer below the seam.
-const NOTICE_SHOWN_ENV: &str = "FNO_RM_NOTICE_SHOWN";
 
 /// Stops the prompt WITHOUT opting into `--force`, which also drops a live
 /// row and leaves a named orphan when teardown fails.
@@ -280,7 +279,6 @@ fn warn_and_confirm(name: &str, force: bool) -> bool {
     let mut err = std::io::stderr();
     let _ = err.write_all(notice.as_bytes());
     let _ = err.flush();
-    std::env::set_var(NOTICE_SHOWN_ENV, "1");
 
     let interactive = std::io::stdin().is_terminal() && err.is_terminal();
     let assume_yes = std::env::var_os(ASSUME_YES_ENV).is_some_and(|v| !v.is_empty());
