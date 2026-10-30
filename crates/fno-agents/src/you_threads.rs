@@ -57,6 +57,26 @@ pub(crate) struct WalkTail {
     pub typed_text: String,
 }
 
+/// The person's own words in a turn. Mail delivered into the pane lands as
+/// a user row, alone or glued after a typed line when the harness merges
+/// queued input, and its header marks where another agent's words begin.
+/// `None` when nothing typed comes before the first header.
+fn typed_part(text: &str) -> Option<String> {
+    let mut cut = text.len();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        if let Some(i) = line.find("`@") {
+            if crate::mail_header::is_header_line(&line[i..]) {
+                cut = at + i;
+                break;
+            }
+        }
+        at += line.len();
+    }
+    let typed = text[..cut].trim();
+    (!typed.is_empty()).then(|| typed.to_string())
+}
+
 /// One walk's output: complete items plus the trailing item's resume state.
 pub(crate) struct WalkOut {
     pub items: Vec<YouItem>,
@@ -167,6 +187,10 @@ pub(crate) fn walk(
                     continue;
                 }
                 let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or("");
+                let Some(typed) = typed_part(prompt) else {
+                    close(&mut open, &mut reply, &mut item_start, &mut items);
+                    continue;
+                };
                 match classify_text(prompt, Some((bus, session))) {
                     // The typed shape intel's corpus trusts. A bus-joined
                     // prompt is relay the person pasted into the pane; it
@@ -187,7 +211,7 @@ pub(crate) fn walk(
                     // argv-fence: exempt. A plain Rust call, not an argv
                     // build: open_new is the walk's own closure, no launcher
                     // parser touches this path.
-                    prompt.to_string(),
+                    typed,
                     line_start,
                 );
             }
@@ -217,6 +241,10 @@ pub(crate) fn walk(
                 if text.trim().is_empty() {
                     continue;
                 }
+                let Some(text) = typed_part(&text) else {
+                    close(&mut open, &mut reply, &mut item_start, &mut items);
+                    continue;
+                };
                 open_new(
                     &mut open,
                     &mut reply,
@@ -306,7 +334,7 @@ struct YouEntry {
     open: Option<WalkTail>,
 }
 
-const YOU_CACHE_VERSION: u32 = 1;
+const YOU_CACHE_VERSION: u32 = 2;
 
 /// The loaded cache plus its lock discipline. `save` is best effort: an
 /// unwritable cache degrades the next projection to a full re-walk.
@@ -598,8 +626,8 @@ mod tests {
     }
 
     /// The walk scenario the node asks about: a typed question with its
-    /// reply (tool results keep the span open), a machine row that closes
-    /// the span, and a second typed turn after it.
+    /// reply (tool results keep the span open), a machine row and a
+    /// delivered mail that close the span, and a second typed turn after it.
     #[test]
     fn typed_reply_machine_close_and_a_second_item() {
         let raw = [
@@ -609,7 +637,21 @@ mod tests {
             assistant_row("I merged main into the branch.", "2026-10-27T00:00:02.5Z"),
             meta_row(),
             assistant_row("Acked the hook.", "2026-10-27T00:00:05Z"),
-            row("user", "ship it then", "2026-10-27T00:00:09Z"),
+            // Mail delivered into the pane, no bus row to join: its header
+            // marks it as another agent's, so it opens no item.
+            row(
+                "user",
+                "`@tomas · fmail-0123456789ab`\nRun your check-in now.",
+                "2026-10-27T00:00:06Z",
+            ),
+            assistant_row("Checked in.", "2026-10-27T00:00:07Z"),
+            // A typed line with queued mail merged after it keeps only the
+            // typed words.
+            row(
+                "user",
+                "ship it then `@ines · fmail-0123456789ac`\nFrom ines.",
+                "2026-10-27T00:00:09Z",
+            ),
             assistant_row("Opening the PR.", "2026-10-27T00:00:10Z"),
         ]
         .join("\n");
