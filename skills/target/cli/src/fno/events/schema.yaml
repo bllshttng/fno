@@ -8849,6 +8849,24 @@ event_types:
           type: object
           description: "The row as written, keyed by fno_id or session_id."
     consumers: [operator]
+  - name: run_imported
+    retention: durable
+    description: "One ledger history row imported once: a ledger.json row no run_recorded carrier covers, moved into the store at this machine's import day. The row rides as written, so reconcile-backstop rows keep their node and PR join with cost_usd null."
+    sources: [migration]
+    data:
+      required: [run]
+      properties:
+        run:
+          type: object
+          description: "The imported row as written, keyed by fno_id, session_id, or the backstop's node and PR."
+    consumers: [operator]
+  - name: run_history_imported
+    retention: durable
+    description: "The ledger history import ran once for this machine: the imported row count, the earliest run start the import covers, and the import time. Readers that show history name the earliest start as the day history begins; a second import run refuses on this row."
+    sources: [migration]
+    data:
+      required: [count, earliest_started, imported_at]
+    consumers: [operator]
   - name: session_finalized
     description: "Every finalize sub-step succeeded: the terminal event naming the termination reason, the ship receipt, and the auto-merge posture."
     sources: [hook]
