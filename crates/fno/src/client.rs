@@ -4956,8 +4956,8 @@ impl View {
                 .and_then(|(name, _, _)| self.yard_identity(name));
             let frame = (yv.opened_at.elapsed().as_millis() / YARD_FRAME_MS)
                 % crate::sprites::FRAME_COUNT as u128;
-            let lines =
-                yard_overlay_lines(&crowd, sel, identity, frame as usize, self.yard_footer());
+            let (lines, yard_cursor) =
+                yard_overlay_cursor(&crowd, sel, identity, frame as usize, self.yard_footer());
             let chrome =
                 chrome::Chrome::new("the yard", Anchor::Center).footer("n/N pick · q close");
             draw_lines_overlay(
@@ -4971,7 +4971,7 @@ impl View {
                 &self.theme,
                 // The spotlight caption names the picked citizen: it is the
                 // yard's cursor row.
-                lines.iter().position(|l| l.trim_start().starts_with('▸')),
+                yard_cursor,
             );
         } else if let Some(picker) = &self.move_pick {
             // move picker: `move tab to:` / `move pane to:` + one
@@ -5030,8 +5030,8 @@ impl View {
             // modal's own render (pure). This and the settings modal are the
             // pair from the operator's screenshot - they now share one chrome.
             let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
-            let conn_lines =
-                conn.render_with(&self.layout.agents, overlay_text_cols(overlay_dims.1));
+            let (conn_lines, conn_cursor) =
+                conn.render_cursor(&self.layout.agents, overlay_text_cols(overlay_dims.1));
             draw_lines_overlay(
                 &mut cells,
                 rows,
@@ -5041,7 +5041,7 @@ impl View {
                 &chrome,
                 &conn_lines,
                 &self.theme,
-                crate::connections_view::cursor_line(&conn_lines),
+                conn_cursor,
             );
         } else if let Some(peek) = &self.peek {
             // peek overlay: the peeked agent row (re-read LIVE from the
@@ -5311,7 +5311,6 @@ impl View {
                     .map(|s| s.name.as_str())
                     .unwrap_or("(gone)")
             });
-            let marker = if i == picker.cursor { '›' } else { ' ' };
             // Only the first nine are digit-addressable; the rest get a blank
             // gutter, so the drawn numbering never promises a key that does
             // not exist.
@@ -5320,7 +5319,7 @@ impl View {
             } else {
                 " ".into()
             };
-            lines.push(pad_to(&format!(" {marker} {ord} {name}"), W));
+            lines.push(pad_to(&format!("   {ord} {name}"), W));
         }
         lines.push(pad_to(" hjkl/arrows move · enter move here", W));
         lines.push(pad_to(" 1-9 move to first nine · esc/q cancel", W));
@@ -6956,7 +6955,9 @@ struct YardSel {
 
 /// The yard's line builder moved into the module named for it; the alias
 /// keeps the one call site and its tests reading the same as before.
+#[cfg(test)]
 use crate::yard_overlay::overlay_lines as yard_overlay_lines;
+use crate::yard_overlay::overlay_lines_cursor as yard_overlay_cursor;
 
 /// The yard overlay body width: the 12-column sprite plus a label margin,
 /// padded to a block rectangle like the needs overlay.

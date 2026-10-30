@@ -35,8 +35,7 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
         return lines;
     }
     let q = nav.query.to_lowercase();
-    for (i, r) in rows.iter().enumerate() {
-        let marker = if i == nav.cursor { '▸' } else { ' ' };
+    for r in rows.iter() {
         // The reason token: a match-key token that contains the query while
         // the label does not. A query that hits the visible label appends
         // nothing (AC4-UI: the row renders exactly as before).
@@ -54,7 +53,7 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
             }
         };
         lines.push(pad_to(
-            &format!(" {marker} {} {}", nav_glyph(r.state), label),
+            &format!("   {} {}", nav_glyph(r.state), label),
             NAV_OVERLAY_W,
         ));
     }

@@ -142,13 +142,12 @@ fn draw_list(
     }
     let _ = queue!(out, Print(format!("{prompt}\r\n")));
     for (cursor, tick, text) in rows {
-        let marker = if *cursor { "> " } else { "  " };
         let ticked = if *tick { "[x] " } else { "[ ] " };
         // The cursor row is reverse video: the `terminal` cursor of the mux.
         if *cursor {
             let _ = queue!(out, SetAttribute(Attribute::Reverse));
         }
-        let _ = queue!(out, Print(format!("{marker}{ticked}{text}")));
+        let _ = queue!(out, Print(format!("  {ticked}{text}")));
         if *cursor {
             let _ = queue!(out, SetAttribute(Attribute::Reset));
         }

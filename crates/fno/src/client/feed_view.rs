@@ -431,10 +431,9 @@ pub(crate) fn feed_panel_rows(
             Some(Slot::Item(i)) => {
                 let item = &o.win.items[*i];
                 let selected = focused && d == o.sel;
-                let marker = if d == o.sel { '▸' } else { ' ' };
                 let mut row = Vec::new();
                 row.push(Span {
-                    text: format!(" {marker} "),
+                    text: "   ".to_string(),
                     bold: selected,
                     brand: selected,
                 });

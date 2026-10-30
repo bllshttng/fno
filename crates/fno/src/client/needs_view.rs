@@ -117,14 +117,13 @@ pub(crate) fn needs_overlay_lines(
     )];
 
     lines.push(pad_to(" MINE", ANSWER_OVERLAY_W));
-    for (i, row) in mine_rows.iter().enumerate() {
+    for row in mine_rows {
         let NeedsOverlayRow::Mine(item) = row else {
             continue;
         };
-        let marker = if i == sel { '▸' } else { ' ' };
         let check = if item.done { '✓' } else { ' ' };
         lines.push(pad_to(
-            &format!(" {marker} [{check}] {}", item.text),
+            &format!("   [{check}] {}", item.text),
             ANSWER_OVERLAY_W,
         ));
     }
@@ -143,9 +142,7 @@ pub(crate) fn needs_overlay_lines(
     if need_rows.is_empty() {
         lines.push(pad_to("   nothing needs you", ANSWER_OVERLAY_W));
     } else {
-        for (i, row) in need_rows.iter().enumerate() {
-            let idx = projection.mine_shown + i;
-            let marker = if idx == sel { '▸' } else { ' ' };
+        for row in need_rows.iter() {
             match row {
                 NeedsOverlayRow::Question(q) => {
                     // Render `title` as the headline (the projection's one-line
@@ -157,11 +154,7 @@ pub(crate) fn needs_overlay_lines(
                         ""
                     };
                     lines.push(pad_to(
-                        &format!(
-                            " {marker} {} {}{stale}",
-                            need_glyph(NeedKind::Question),
-                            q.title
-                        ),
+                        &format!("   {} {}{stale}", need_glyph(NeedKind::Question), q.title),
                         ANSWER_OVERLAY_W,
                     ));
                 }
@@ -171,12 +164,7 @@ pub(crate) fn needs_overlay_lines(
                         _ => "",
                     };
                     lines.push(pad_to(
-                        &format!(
-                            " {marker} {} {}  {}{tag}",
-                            need_glyph(r.kind),
-                            r.name,
-                            r.reason
-                        ),
+                        &format!("   {} {}  {}{tag}", need_glyph(r.kind), r.name, r.reason),
                         ANSWER_OVERLAY_W,
                     ));
                 }
