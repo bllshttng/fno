@@ -774,18 +774,19 @@ fn approval_carries<P: Probes>(
     }
 }
 
-/// One patch line with string-literal contents dropped, so changed lines
-/// that differ only inside literals compare equal: copy is not a look, and
-/// a copy edit must not void an approved carry (user ruling 2026-10-30).
-/// Masking never erases code outside quotes, so a scanner miss fails
-/// toward holding.
+/// One changed patch line with its direction marker and its string-literal
+/// contents dropped, so the `-` and `+` sides of a pair that differs only
+/// inside literals compare equal: copy is not a look, and a copy edit must
+/// not void an approved carry (user ruling 2026-10-30). Masking never
+/// erases code outside quotes, so a scanner miss fails toward holding.
 fn mask_copy(line: &str) -> String {
     if !line.starts_with('+') && !line.starts_with('-') {
         return line.to_string();
     }
     let mut out = String::with_capacity(line.len());
+    out.push(' ');
     let mut in_string = false;
-    for c in line.chars() {
+    for c in line.chars().skip(1) {
         match (in_string, c) {
             (true, '\\') => {}
             (true, '"') => {
@@ -1365,7 +1366,7 @@ mod tests {
         let code = "\n+    footer(footer_text())";
         assert_ne!(patch_body("modified", was), patch_body("modified", code));
         // Context lines keep their bytes; only changed lines mask.
-        let ctx = "modified\n footer(\"unchanged\")";
-        assert_eq!(patch_body("", " footer(\"unchanged\")"), ctx);
+        let ctx = " footer(\"unchanged\")";
+        assert_eq!(patch_body("modified", ctx), format!("modified\n{ctx}"));
     }
 }
