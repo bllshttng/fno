@@ -52,14 +52,11 @@ pub(in crate::daemon) fn dump_store_state(home: &AgentsHome) -> String {
 fn store_tree(home: &AgentsHome) -> String {
     let root = home.root().parent().unwrap_or(home.root());
     let database = crate::registry_read::database_path(&home.registry_json());
-    let mut out = format!(
-        "store db: {} exists={}\nbase tree:",
-        database
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "unresolvable".into()),
-        database.as_ref().is_some_and(|p| p.exists()),
-    );
+    let (db_path, db_exists) = match database.as_ref() {
+        Some(p) => (p.display().to_string(), p.exists().to_string()),
+        None => ("unresolvable".into(), "unknown".into()),
+    };
+    let mut out = format!("store db: {db_path} exists={db_exists}\nbase tree:");
     let Ok(entries) = std::fs::read_dir(root) else {
         out.push_str(" (base unreadable)");
         return out;
