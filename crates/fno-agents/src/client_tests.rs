@@ -602,7 +602,7 @@ fn ask_rows() {
 /// (wire param `provider`); `--provider=...` is a tombstone (AC3).
 
 /// The spawn flags parse into params; the flags spawn does not own ride the
-/// passthrough law (x-bc41) verbatim into harness_args.
+/// passthrough law verbatim into harness_args.
 #[test]
 fn spawn_flag_rows() {
     let harness_args = |args: &[&str]| {
@@ -716,7 +716,7 @@ fn spawn_flag_rows() {
         .expect("--account= must parse");
     assert_eq!(eq["account"], "makers");
 
-    // The passthrough law (x-bc41): flags spawn does not own ride the
+    // The passthrough law: flags spawn does not own ride the
     // harness argv verbatim, one token per token, and a lane that cannot
     // carry one refuses by name.
     assert_eq!(harness_args(&["wk", "--yolo"]), serde_json::json!(["--yolo"]));
@@ -923,8 +923,8 @@ fn substrate_rows() {
     assert_eq!(params["substrate"], "headless");
     assert!(params.get("host_mode").is_none());
 
-    // Every lane word parses on both spellings (x-bc41 made --substrate a
-    // live alias of --as); only a word outside the vocabulary refuses, and
+    // Every lane word parses on both spellings (--substrate is a live
+    // alias of --as); only a word outside the vocabulary refuses, and
     // the line names the lanes.
     for sub in ["pane", "thread", "headless", "cloud"] {
         for flag in ["--as", "--substrate"] {
@@ -969,8 +969,8 @@ fn harness_flag_rows() {
         );
     }
 
-    // On spawn --provider/-P refuses too (x-bc41 lifted the scan refusal,
-    // so the axis-rename tombstone is the one teacher left): a vendor is
+    // On spawn --provider/-P refuses too (the scan refusal is lifted, so
+    // the axis-rename tombstone is the one teacher left): a vendor is
     // not a harness, and it must not route.
     for v in ["claude", "codex", "zai"] {
         for flag in ["--provider", "-P"] {

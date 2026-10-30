@@ -3975,7 +3975,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
                 fno_agents::spawn_bare::take_flag(&a, &mut it, &mut params)?;
             }
             other if other.starts_with("--") && command == "spawn" => {
-                // The passthrough law (x-bc41): a flag spawn does not own
+                // The passthrough law: a flag spawn does not own
                 // rides the harness argv verbatim, one token per token. A
                 // lane that cannot carry it refuses by name. The token is
                 // forwarded alone: an `=`-joined form carries its own value,
