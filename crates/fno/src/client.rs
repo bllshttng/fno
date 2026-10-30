@@ -4969,7 +4969,9 @@ impl View {
                 &chrome,
                 &lines,
                 &self.theme,
-                None,
+                // The spotlight caption names the picked citizen: it is the
+                // yard's cursor row.
+                lines.iter().position(|l| l.trim_start().starts_with('▸')),
             );
         } else if let Some(picker) = &self.move_pick {
             // move picker: `move tab to:` / `move pane to:` + one
