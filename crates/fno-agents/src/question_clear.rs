@@ -1384,7 +1384,10 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 if matches!(
                     row.get("authority_source").and_then(Value::as_str),
                     Some("operator") | Some("chat_attested")
-                ) =>
+                ) && row
+                    .get("decision")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty()) =>
             {
                 Some(row)
             }
