@@ -481,9 +481,8 @@ mod tests {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
         }
-        match prev_stamp {
-            Some(v) => std::env::set_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV, v),
-            None => {}
+        if let Some(v) = prev_stamp {
+            std::env::set_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV, v);
         }
         run.expect("the fake fno exits 0");
         let stamp = std::fs::read_to_string(&seen).unwrap();
