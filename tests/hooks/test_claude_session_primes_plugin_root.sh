@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/hooks/test_claude_session_primes_plugin_root.sh
 #
-# x-8e27. The machine plugin-root pointer (~/.fno/install/plugin-root) is the
+# The machine plugin-root pointer (~/.fno/install/plugin-root) is the
 # only env-less source for `fno do target init`'s helper resolution, and only
 # the codex/gemini wrapper (session-start.sh) primed it. A claude worker's
 # init then resolved whatever copy codex last installed - measured live

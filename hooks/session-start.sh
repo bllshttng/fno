@@ -35,7 +35,7 @@ STATE_FILE=".fno/target-state.md"
 # at its own copy, so a claude worker's env-less init never resolves whatever
 # copy the last codex session installed.
 # shellcheck source=helpers/prime-plugin-root.sh
-source "$SCRIPT_DIR/helpers/prime-plugin-root.sh"
+source "$SCRIPT_DIR/helpers/prime-plugin-root.sh" 2>/dev/null || true
 prime_plugin_root_pointer || true
 
 # ── heal a wired Claude WorktreeRemove hook after a plugin move ──────

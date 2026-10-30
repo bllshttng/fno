@@ -194,13 +194,14 @@ pub(super) fn claim_pair(manifest: &str) -> Option<(String, String)> {
 /// gate keeps reading no claim.
 pub(super) const NO_CLAIM_REFUSAL: &str =
     "watching ignored: this session recorded no node claim at init, so no watch lease can \
-ever renew, and arming another watcher will not change that. If `fno agents claim status \
+ever renew, and arming another watcher will not change that. The manifest is write-once, \
+so rerunning `fno do target start` cannot restore the claim. If `fno agents claim status \
 node:<id>` shows the node held by `spawn-handover:<this worker>` (live or suspect), the \
 heal is `fno agents claim acquire node:<id> --holder target-session:<session id> \
---handover-from spawn-handover:<worker> --pid-unavailable --ttl <lease>`: the \
+--handover-from spawn-handover:<worker> --pid-unavailable --ttl <lease>`; the \
 `target-session:` prefix is required, because the manifest refresh refuses an unprefixed \
 holder, and the handover lands the claim lines and drops the blocked line. Once the \
-window is gone no command heals the manifest; hand the PR to a session that holds the \
+window is gone no command heals the manifest. Hand the PR to a session that holds the \
 claim.";
 
 /// The lead of the arm-and-tag hint. One literal, shared by the writer (the
