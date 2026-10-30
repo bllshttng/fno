@@ -11,7 +11,7 @@ const NAV_OVERLAY_W: usize = 54;
 
 /// Build the navigator overlay lines: a top `find › <query>  [chip]`
 /// line, then one line per FILTERED row with a leading state glyph and the
-/// cursor row marked `▸`. A row that matched an identity token invisible in
+/// cursor row left to the caller's fill. A row that matched an identity token invisible in
 /// its label appends that token as a `·<token>` suffix, so a hit
 /// always shows WHY it hit - a row that appears arbitrary reads as a bug. An
 /// empty result renders a single `no matches` line (the key handler BELs).

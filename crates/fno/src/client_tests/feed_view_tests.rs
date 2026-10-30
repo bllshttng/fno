@@ -171,7 +171,7 @@ fn render_rows() {
         "top row shows the newest: {}",
         lines[3]
     );
-    assert!(lines[3].starts_with(" ▸"));
+    assert!(!lines[3].contains('▸'), "the fill is the cursor");
     assert!(lines[4].contains("x-b"));
     assert!(lines[5].contains("x-a"));
     assert!(lines[6].trim().is_empty(), "below the last item: blank");

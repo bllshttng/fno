@@ -40,7 +40,7 @@ pub(crate) mod search;
 /// arrows while it is focused - the panel consumes keys only then.
 pub(crate) struct FeedOverlay {
     pub(crate) win: page::FeedWindow,
-    /// Hovered row in display order; the `▸` marker paints here.
+    /// Hovered row in display order; the cursor fill paints here.
     pub(crate) sel: usize,
     /// The typed fold failure, if the last fold failed. `Some` renders its
     /// reason verbatim; a success fold clears it.

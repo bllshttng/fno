@@ -94,7 +94,7 @@ impl NeedsProjection {
 /// operator's own priorities) above THEY NEED YOU (the severity-ranked union
 /// + the selected row's answer options), each with its own state footer, on
 /// the shared inverse-video chrome. `sel` is pre-clamped by the caller and
-/// indexes `projection.rows` (MINE rows first, then need rows) - a `▸` marks
+/// indexes `projection.rows` (MINE rows first, then need rows) - the cursor fill marks
 /// the selected row wherever it falls. An answerable row lists its numbered
 /// options only when it is the selected NEED row; a focus-only row is tagged.
 /// Always renders both headings - an empty NEED lane shows "nothing needs
