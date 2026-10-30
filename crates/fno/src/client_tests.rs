@@ -11107,10 +11107,7 @@ fn yard_overlay_renders_one_spotlight_sprite() {
         .iter()
         .any(|l| { l.trim_start() == "\u{b7}@" || l.trim_start().starts_with("\u{b7}@") }));
     // Caption carries identity outcome fields, never a rank or boundary.
-    let caption = lines
-        .iter()
-        .find(|l| l.contains("b · cat"))
-        .expect("caption");
+    let caption = lines.iter().find(|l| l.contains("b · cat")).unwrap();
     assert!(caption.contains("b") && caption.contains("cat") && caption.contains("common"));
     assert!(!caption.contains("60") && !caption.contains("boundary"));
     // The sprite: each of the cat's rendered rows WITH CONTENT appears
