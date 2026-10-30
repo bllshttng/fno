@@ -103,7 +103,7 @@ Each row names the contracts its file keeps, each with the failure that turns th
 | cli/tests/agents/test_spawn_pane_codex_hook_modal.py | 2 | 1 | bind probe answers the hooks modal once with option 3, never a second keystroke -> stray "3" typed as a turn |
 | cli/tests/agents/test_pane_journeys.py | 2 | 1 | late codex identity composes across registry, resolver, mux ls/where, claim and peek (real binaries) -> identity split across surfaces |
 | cli/tests/agents/test_dispatch_attribution.py | 2 | 2 | env-corrupting agent name refused with exit 2 (one row; one tuple scan) -> name crashes subprocess env; spawn create events share request_id and carry from_name -> trace correlation lost |
-| cli/tests/agents/test_argv_fence_gate.py | 2 | 1 | every argv seed push fenced/value-form/exempt plus scanner floor and exact exempt count (merged) -> unfenced seam ships or scanner rots to an empty sweep |
+| cli/tests/agents/test_argv_fence_gate.py | 2 | 1 | every argv seed push fenced/value-form/exempt plus scanner floors, exempt count floats (merged) -> unfenced seam ships or scanner rots to an empty sweep |
 | cli/tests/agents/test_spawn_pane_node_provenance.py | 1 | 1 | --node spawn passes FNO_NODE/SLUG/PLAN/claim-holder provenance -> worker lacks its node claim |
 | cli/tests/agents/test_spawn_pane_codex_route.py | 1 | 1 | codex successor routes provider/account/model into bounded pane dispatch -> successor lands on the wrong account or model |
 | cli/tests/agents/test_spawn_pane_codex_receipt.py | 1 | 1 | CLI refuses an unbound codex pane receipt (exit 1, reap, uncaptured event) -> public CLI exits zero with an unaddressable pane |
