@@ -891,16 +891,25 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         pending_route = Some((trace, attrs));
     }
     // The correction span: parented at the overturned span; the row's trace
-    // names the same parent. Captured here, emitted after the row lands.
-    let pending_correction = overturns.as_ref().map(|t| Trace {
-        trace_id: subject.clone(),
-        span_id: new_span_id(),
-        parent_span_id: Some(t.to_string()),
-        actor_session: caller_session.clone(),
-        actor_kind: actor_kind_from_authority(provenance.authority_source.as_deref()),
-        comms: "mail",
-        recipient_session: None,
-        recipient_kind: None,
+    // names the same parent. The attrs carry the same id as the `overturns`
+    // join key the pushback fold matches against route spans. Captured here,
+    // emitted after the row lands.
+    let pending_correction = overturns.as_ref().map(|t| {
+        let mut attrs = Map::new();
+        attrs.insert("overturns".to_string(), json!(t.to_string()));
+        (
+            Trace {
+                trace_id: subject.clone(),
+                span_id: new_span_id(),
+                parent_span_id: Some(t.to_string()),
+                actor_session: caller_session.clone(),
+                actor_kind: actor_kind_from_authority(provenance.authority_source.as_deref()),
+                comms: "mail",
+                recipient_session: None,
+                recipient_kind: None,
+            },
+            attrs,
+        )
     });
     // The route rides ahead of the row: the trace query reads in ts order and
     // a parent must not postdate its child. A failed route emit leaves the
@@ -946,8 +955,8 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     }
     // The row is durable: now the correction hop it parents (the route rode
     // ahead of the row above).
-    if let Some(trace) = pending_correction {
-        if let Err(e) = emit_span_to(&journal, "correction", &trace, &Map::new()) {
+    if let Some((trace, attrs)) = pending_correction {
+        if let Err(e) = emit_span_to(&journal, "correction", &trace, &attrs) {
             eprintln!("decide: correction span skipped: {e}");
         }
     }
@@ -1344,6 +1353,44 @@ mod tests {
             route["ts"].as_str().unwrap() <= row["ts"].as_str().unwrap(),
             "route precedes the row in ts order"
         );
+    }
+
+    #[test]
+    fn decide_correction_span_carries_the_overturns_join_key() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        save_node(
+            &crate::graph_get::default_graph_path(),
+            "x-node5",
+            "node-five",
+        );
+        let code = decide_door_write(
+            decide_argv(&[
+                "x-node5",
+                "Overruled",
+                "--overturns",
+                "s-r1",
+                "--authority",
+                "operator",
+            ]),
+            DecideIdentity::Forced(Some("cl-test5")),
+        );
+        assert_eq!(code, 0);
+        let journal = project_events_journal();
+        let spans = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["decision_span"]),
+        )
+        .unwrap_or_default();
+        let correction = spans
+            .iter()
+            .find(|r| r.line.contains("span_kind\":\"correction\""))
+            .expect("a correction span landed");
+        let row = serde_json::from_str::<serde_json::Value>(&correction.line).unwrap();
+        // The fold reads this attr as the join key against route spans; the
+        // trace parent names the same hop.
+        assert_eq!(row["data"]["overturns"], json!("s-r1"));
+        assert_eq!(row["data"]["trace"]["parent_span_id"], json!("s-r1"));
     }
 
     #[test]

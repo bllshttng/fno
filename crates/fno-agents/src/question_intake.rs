@@ -1112,7 +1112,19 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     // the request (the Python sandbox stays the single path authority, as
     // with index_path); the legacy .fno path is the fallback.
     // The question span: the question row IS the span (span_id = question_id),
-    // parented at the route span an answers_ask pointer produced.
+    // parented at the route span an answers_ask pointer produced. The
+    // recipient follows the row's destination: a lead-rung card asks its rung
+    // holder, a board card asks the user.
+    let holder = data
+        .get("rung")
+        .and_then(|r| r.get("holder_session"))
+        .and_then(Value::as_str)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    let (recipient_session, recipient_kind) = match &holder {
+        Some(h) => (Some(h.clone()), Some("lead")),
+        None => (None, Some("user")),
+    };
     data.insert(
         "trace".into(),
         serde_json::to_value(&Trace {
@@ -1122,8 +1134,8 @@ already waits ({}). Answer it or clear it; do not ask twice.",
             actor_session: req.session_id.clone(),
             actor_kind: actor_kind_in(home, req.session_id.as_deref(), "question"),
             comms: "question",
-            recipient_session: None,
-            recipient_kind: Some("user"),
+            recipient_session,
+            recipient_kind,
         })
         .unwrap_or(Value::Null),
     );
@@ -1623,6 +1635,13 @@ stops
             journal.contains("\"holder_session\":\"s-lead\""),
             "{journal}"
         );
+        // The question span names the rung holder as the recipient: the card
+        // asks its lead, and the pushback fold reads that as an ask for her.
+        assert!(
+            journal.contains("\"recipient_session\":\"s-lead\""),
+            "{journal}"
+        );
+        assert!(journal.contains("\"recipient_kind\":\"lead\""), "{journal}");
         // Fresh, the row sits with the lead: the board fold does not list it.
         assert!(crate::outstanding::fold_questions(&journal).is_empty());
     }
