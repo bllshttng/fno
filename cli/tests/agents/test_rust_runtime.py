@@ -618,40 +618,6 @@ class _BridgeProc:
     stderr = ""
 
 
-def _capture_bridge_run(captured: dict, monkeypatch) -> None:
-    import fno.agents.rust_spawn as rust_spawn
-
-    def _run(argv, **kw):
-        captured["argv"] = [str(a) for a in argv]
-        captured["env"] = kw.get("env")
-        return _BridgeProc()
-
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: Path("/bin/true"))
-    monkeypatch.setattr(rust_spawn.subprocess, "run", _run)
-
-
-def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) -> None:
-    import fno.agents.rust_spawn as rust_spawn
-
-    captured: dict = {}
-    _capture_bridge_run(captured, monkeypatch)
-    rust_spawn._opencode_serve_spawn(
-        name="w",
-        message="/target x-90a9",
-        cwd=Path("/tmp"),
-        from_name="k",
-        node="x-90a9",
-    )
-    argv = captured["argv"]
-    assert argv[1] == "spawn"
-    assert argv[2].startswith("--defaults-applied=")
-    # No substrate flag: the binary refuses the retired axis and defaults
-    # opencode to the thread lane.
-    assert "--substrate" not in argv
-    tail = argv[argv.index("--") + 1 :]
-    assert tail == ["/target x-90a9"]
-
-
 def test_python_forced_list_is_refused_with_no_table(monkeypatch) -> None:
     """There is no Python list lane: forcing it names the binary and exits 127."""
     from fno.cli import app

@@ -11,7 +11,6 @@ import json
 import time
 
 import pytest
-import typer
 
 from fno import rust_binary
 from fno.mail import budget
@@ -43,74 +42,6 @@ def control_send(sender: str, recipient: str, n: int, msg_id: str, **keys):
 
 # --- AC1-HP: an ordinary pair window does not exist -------------------------
 
-def test_three_79_word_sends_deliver_without_a_ledger(
-    monkeypatch,
-    tmp_path,
-    capsys,
-):
-    """The flipped burst acceptance, all three lanes: three 79-word ordinary
-    sends from one sender to one recipient inside one window all deliver, and
-    no ``<bus_dir>/word-budget/`` file is ever written."""
-    from fno import paths
-    from fno.agents.discover import DiscoveredSession
-    from fno.agents.registry import AgentEntry, write_registry
-    from fno.mail import cli
-
-    recipient = DiscoveredSession(
-        session_id="11111111-2222-3333-4444-555566667777",
-        short_id="11111111",
-        handle="11111111",
-        pid=0,
-        cwd="/tmp",
-        project=None,
-        status=None,
-        agent="codex",
-        truth_state="working",
-    )
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_codex",
-        lambda _sid, body, **_kwargs: (body, False)[1],
-    )
-    body = words(79)
-    for _ in range(3):
-        # a durable demotion that cannot prove landing ends NOT LANDED, exit 14
-        with pytest.raises(typer.Exit):
-            cli._name_lane_send(body, from_name="sender", resolved=recipient)
-        assert "queued (durable)" in capsys.readouterr().out
-
-    registry = tmp_path / "agents.json"
-    monkeypatch.setattr(paths, "agents_registry_path", lambda: registry)
-    write_registry(
-        [
-            AgentEntry(
-                name="worker",
-                harness="claude",
-                harness_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                short_id="aaaaaaaa",
-                cwd=str(tmp_path),
-                log_path="",
-                status="idle",
-            )
-        ],
-        registry,
-    )
-    monkeypatch.setattr(
-        "fno.agents.dispatch._registered_family1_state",
-        lambda _entry: "sleeping",
-    )
-    from fno.agents.dispatch import dispatch_send
-
-    for _ in range(3):
-        result = dispatch_send(
-            "worker", body, provider=None, cwd=tmp_path, from_name="sender"
-        )
-        assert result.delivery == "durable"
-
-    assert not (paths.bus_dir() / "word-budget").exists(), (
-        "an ordinary send charges no rolling ledger"
-    )
-
-
 # --- control lane: operational control rides its own window ----------------
 
 def test_is_control_reads_the_first_non_blank_line_only():
@@ -120,44 +51,6 @@ def test_is_control_reads_the_first_non_blank_line_only():
     assert not budget.is_control("we need a control: review of this")
     assert not budget.is_control("status report\ncontrol: mentioned below")
     assert not budget.is_control("")
-
-
-def test_control_body_over_the_cap_refuses_with_the_lane_marker(monkeypatch, capsys):
-    """AC1-ERR: one 61-word control body refuses naming the lane; two 40-word
-    control bodies refuse on the second."""
-    from fno.agents.discover import DiscoveredSession
-    from fno.mail import cli
-
-    recipient = DiscoveredSession(
-        session_id="11111111-2222-3333-4444-555566667777",
-        short_id="11111111",
-        handle="11111111",
-        pid=0,
-        cwd="/tmp",
-        project=None,
-        status=None,
-        agent="codex",
-        truth_state="working",
-    )
-    monkeypatch.setattr(
-        "fno.agents.dispatch._mail_inject_codex",
-        lambda _sid, _body, **_kwargs: False,
-    )
-    with pytest.raises(typer.Exit) as raised:
-        cli._name_lane_send("control: " + words(60), from_name="sender", resolved=recipient)
-    assert raised.value.exit_code == 1
-    assert "refused: control word budget" in capsys.readouterr().err
-
-    with pytest.raises(typer.Exit) as raised_mid:
-        cli._name_lane_send("control: " + words(39), from_name="sender", resolved=recipient)
-    assert raised_mid.value.exit_code == 14
-    capsys.readouterr()
-    with pytest.raises(typer.Exit) as raised2:
-        cli._name_lane_send("control: " + words(39), from_name="sender", resolved=recipient)
-    assert raised2.value.exit_code == 1
-    refusal = capsys.readouterr().err
-    assert "refused: control word budget" in refusal
-    assert "running=40 current=40 projected=80 cap=60 window=10m" in refusal
 
 
 def test_control_window_resets_on_an_inbound_reply():

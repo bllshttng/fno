@@ -799,10 +799,7 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
         # A revive continues an EXISTING transcript, and that transcript lives
         # under the config dir it was created in - so an injected --account
         # points CLAUDE_CONFIG_DIR at a directory where the uuid does not exist.
-        # It also collides with the recorded-route restore in `dispatch_spawn`,
-        # which reads any --account as operator intent and refuses the pair:
-        # the operator would be told to drop a flag they never typed. Nothing to
-        # pick - the transcript already decided where it lives.
+        # Nothing to pick - the transcript already decided where it lives.
         return out
     if _has_flag(out, longs=("--dispatch-account",)):
         # A cutover already SELECTED its account, and picking a second one here

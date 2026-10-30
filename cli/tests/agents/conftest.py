@@ -85,32 +85,16 @@ def _force_python_runtime(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_spawn_uuid_capture(monkeypatch):
-    """Keep spawn-time full-UUID resolution instant + host-independent.
+    """Keep full-UUID resolution host-independent.
 
-    ``_claude_create_path`` best-effort resolves the full session UUID at spawn
-    (ab-f1b0ccd1). By default the suite zeroes the retry backoff (no real sleep
-    on the bounded window) and stubs the underlying registry reader to ``None``
-    (no read of the developer's real ``~/.claude/sessions``), so a claude spawn
-    leaves ``claude_session_uuid`` unresolved without slowing or host-coupling
-    the suite. The spawn seed check reads claude's real job state the same
-    way, so it is stubbed to verified. Tests that exercise resolution override
-    these per-test (monkeypatch order: the test-local setattr wins).
+    The suite stubs the registry reader to ``None`` (no read of the
+    developer's real ``~/.claude/sessions``), so a claude row leaves
+    ``claude_session_uuid`` unresolved. Tests that exercise resolution
+    override it per-test (monkeypatch order: the test-local setattr wins).
     """
-    from fno.agents.harnesses import _claude_session_registry, claude
+    from fno.agents.harnesses import claude
 
-    monkeypatch.setattr(claude, "_SPAWN_UUID_RETRY_BACKOFF_SEC", 0.0)
     monkeypatch.setattr(claude, "resolve_session_uuid", lambda short_id: None)
-    monkeypatch.setattr(_claude_session_registry, "seed_unverified_reason", lambda *a, **k: None)
-    # The revival liveness gate (the fno-agents binary's revive-proof op)
-    # polls real claude roots for a transcript; the fake-claude journeys
-    # write none, so the suite auto-passes it. The patch must land on the
-    # CALL SITE's binding: harnesses/claude.py imports the name directly, so
-    # patching the registry module's own attribute would never be seen.
-    # Tests that exercise the gate (test_revival_liveness.py) re-arm it by
-    # restoring the real function on THIS binding and faking
-    # `_revive_proof_verdict` on the registry module; faking the verdict
-    # alone cannot reach the neutered call site.
-    monkeypatch.setattr(claude, "revive_proof_or_refuse", lambda *a, **k: None)
 
 
 FAKE_CHILD_PID = 4242

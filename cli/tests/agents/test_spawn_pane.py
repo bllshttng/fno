@@ -27,7 +27,6 @@ import pytest
 from fno.paths_testing import use_tmpdir
 
 
-from tests.agents._route_overlay_stub import claude_route_overlay_stub
 
 
 @pytest.fixture(autouse=True)
@@ -198,18 +197,12 @@ def _spawn(monkeypatch, tmp_path, **kwargs):
     if provider == "claude" and kwargs.get("route_env") is not None:
         kwargs.setdefault("route_provider", "zai")
     if kwargs.get("route_provider") is not None:
-        from fno.agents.model_routing import bind_route_provider
-        from fno.agents.spawn_gate import run_gate
+        from fno.agents.model_routing import BoundRouteEnv
 
-        monkeypatch.setenv("FNO_SPAWN_GATE", "0")
         if kwargs.get("route_env") is not None:
-            kwargs["route_env"] = bind_route_provider(
+            kwargs["route_env"] = BoundRouteEnv(
                 kwargs["route_env"], kwargs["route_provider"]
             )
-        kwargs.setdefault(
-            "provider_gate",
-            run_gate(name, "pane", route_provider=kwargs["route_provider"]),
-        )
     result = dispatch_spawn_pane(
         name=name,
         message=kwargs.pop("message", "hello"),
@@ -1284,32 +1277,6 @@ def test_inject_route_model_argv_pins_the_route_before_the_seed_fence() -> None:
     assert mux_spawn.inject_route_model_argv(["codex", "go"], route) == ["codex", "go"]
 
 
-def test_explicit_happy_monitor_refuses_when_happy_is_absent_before_runner(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.model_routing import resolve_explicit_route
-
-    monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    _happy_on_path(monkeypatch, None)
-    route = resolve_explicit_route("zai", "glm-5.2")
-    assert route is not None
-    runner = FakeRunner()
-
-    with pytest.raises(DispatchAskError, match="--monitor happy") as exc:
-        _spawn(
-            monkeypatch,
-            tmp_path,
-            monitor="happy",
-            route_provider="zai",
-            route_env=route,
-            runner=runner,
-        )
-
-    assert exc.value.exit_code == 127
-    assert runner.calls == []
-
-
 @pytest.mark.parametrize(
     ("provider", "route_provider", "message"),
     [("codex", "zai", "claude")],
@@ -1381,56 +1348,6 @@ def test_explicit_happy_monitor_refuses_conflicting_account_credential(
     assert runner.calls == []
 
 
-def _zai_route(monkeypatch):
-    from fno.agents.model_routing import resolve_explicit_route
-
-    monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    route = resolve_explicit_route("zai", "glm-5.2[1m]")
-    assert route is not None
-    return route
-
-
-def _happy_spawn(monkeypatch, tmp_path, **kwargs):
-    """A happy-monitored claude pane spawn.
-
-    No real SessionStart hook fires under the fake runner, so the bounded
-    registration wait is scripted: by default the worker "restamps" a known id
-    (the success path); pass ``registration=(None, reason)`` to drive the
-    failure path (reap + raise). The argv is built before that wait, so argv
-    assertions are unaffected.
-    """
-    import fno.agents.mux_spawn as mux_spawn
-
-    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
-    registration = kwargs.pop("registration", ("happy-proven-sid", ""))
-    monkeypatch.setattr(
-        mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: registration
-    )
-    return _spawn(
-        monkeypatch,
-        tmp_path,
-        monitor="happy",
-        route_provider="zai",
-        route_env=_zai_route(monkeypatch),
-        **kwargs,
-    )
-
-
-def test_happy_spawn_never_pins_a_session_id(tmp_path: Path, monkeypatch) -> None:
-    """happy discards --session-id, so fno must not mint one and report it."""
-    result, runner = _happy_spawn(monkeypatch, tmp_path)
-
-    run_call = next(c for c in runner.calls if c[1:4] == ["mux", "pane", "run"])
-    provider_argv = run_call[run_call.index("--") + 1 :]
-    assert "--session-id" not in provider_argv
-    assert "happy" in provider_argv
-    # fno did not mint an id; the one on the receipt came from the restamp,
-    # and that proven session earns a `live` receipt with a real short_id.
-    assert result.session_uuid == "happy-proven-sid"
-    assert result.status == "live"
-    assert result.short_id, "a live receipt must carry a non-empty short_id"
-
-
 def test_happy_routed_panes_malformed_config_file_refuses(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1491,38 +1408,6 @@ def test_codex_pane_applies_business_role_route_before_launch(tmp_path: Path, mo
     ]
 
 
-def test_routed_claude_pane_launches_through_happy_when_enabled(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import fno.agents.mux_spawn as mux_spawn
-
-    monkeypatch.setattr(mux_spawn, "happy_routed_panes_enabled", lambda: True)
-    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
-    monkeypatch.setattr(
-        mux_spawn, "_await_pane_registration", lambda name, mux, r, *a, **k: ("happy-sid", "")
-    )
-    # The route env the Rust owner would answer for -P zai --model glm-5.2
-    # with ZAI_API_KEY: the canned stub's answer.
-    route_env = claude_route_overlay_stub(
-        {"kind": "claude-route", "env": {"ZAI_API_KEY": "zai-secret"}, "model": "glm-5.2"}
-    )["route"]
-    _, runner = _spawn(monkeypatch, tmp_path, route_env=route_env)
-
-    argv = _pane_run_argv(runner)
-    assert argv[0] == "env", "the mesh env wrapper must stay outermost"
-    happy_argv = argv[argv.index("happy") :]
-    pairs = [
-        happy_argv[i + 1]
-        for i, token in enumerate(happy_argv)
-        if token == "--claude-env"
-    ]
-    assert "ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic" in pairs
-    # Credential on the env(1) run only -- see the union invariant test.
-    assert not any(p.startswith("ANTHROPIC_AUTH_TOKEN=") for p in pairs)
-    assert "ANTHROPIC_AUTH_TOKEN=zai-secret" in argv[: argv.index("happy")]
-    assert "--settings" not in argv
-
-
 # A happy-hosted claude pane is created id-less (`spawning`) because
 # happy owns the session id and restamps the row later via the worker's
 # SessionStart hook. If that restamp never lands, the row strands `spawning`
@@ -1557,31 +1442,6 @@ def test_await_pane_registration_times_out_when_alive_but_unregistered(monkeypat
     )
     assert sid is None
     assert "no session id" in reason
-
-
-def test_happy_pane_failure_reaps_and_raises_not_silent(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The headline: a stranded happy pane must fail loud, not return `spawning`."""
-    import fno.agents.mux_spawn as mux_spawn
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.registry import load_registry
-
-    monkeypatch.setattr(mux_spawn, "happy_routed_panes_enabled", lambda: True)
-    _happy_on_path(monkeypatch, "/usr/local/bin/happy")
-    monkeypatch.setattr(
-        mux_spawn,
-        "_await_pane_registration",
-        lambda name, mux, r, *a, **k: (None, "pane process exited before registering"),
-    )
-    runner = FakeRunner()
-    with pytest.raises(DispatchAskError) as ei:
-        _spawn(monkeypatch, tmp_path, route_env=dict(_ROUTE), runner=runner)
-
-    assert ei.value.exit_code == 1
-    assert "did not register" in str(ei.value)
-    assert runner.kill_calls, "the stranded pane must be reaped"
-    assert load_registry() == [], "the stranded spawning row must be removed"
 
 
 def test_a_terminal_row_does_not_own_its_name(tmp_path: Path, monkeypatch) -> None:
@@ -1638,38 +1498,6 @@ def test_ac1_passthrough_splices_into_every_pane_arm(tmp_path: Path) -> None:
     # opencode: the tail, after the model pair (the positional is a project path).
     argv = build_pane_argv("opencode", "task", tmp_path, None, passthrough=tok)
     assert argv[-3:] == tok
-
-
-def test_ac3_passthrough_hits_the_happy_refusals(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC3-ERR: the happy-lane refusals get their first real callers - a
-    passthrough is the only way those tokens can enter the composed argv.
-    happy discards a pinned --session-id, so the receipt would name a session
-    that never exists; the --settings refusal is pinned on happy_pane_argv."""
-    tok = ["--session-id", "u"]
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.model_routing import resolve_explicit_route
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("ZAI_API_KEY", "zai-secret")
-    _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
-    route = resolve_explicit_route("zai", "glm-5.2")
-    assert route is not None
-    runner = FakeRunner()
-    with pytest.raises(DispatchAskError, match=tok[0]) as exc:
-        _spawn(
-            monkeypatch,
-            tmp_path,
-            monitor="happy",
-            route_provider="zai",
-            route_env=route,
-            passthrough=tok,
-            runner=runner,
-        )
-    assert exc.value.exit_code == 2
-    assert runner.calls == []
-
 
 
 @pytest.mark.parametrize(

@@ -19,15 +19,11 @@ Acceptance criteria (operator-locked):
 """
 from __future__ import annotations
 
-import os
 
 import pytest
 
 from fno.paths_testing import use_tmpdir
 from fno.agents import events as events_mod
-from fno.agents.registry import (
-    load_registry,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -113,21 +109,6 @@ def captured_emits(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_spawn_trigger_does_not_leak_into_this_process_environment(monkeypatch):
-    """Code-review finding (x-42c5): _capture_spawn_trigger POPS the var, not just
-    reads it. Left in place, it would ride into a spawned worker's own persistent
-    environment via a later dict(os.environ) snapshot (bg_create builds the new
-    worker's env that way, and scrub_ambient_identity does not know this marker),
-    mislabeling that worker's OWN later spawns with this spawn's cause."""
-    from fno.agents.dispatch import _capture_spawn_trigger
-
-    monkeypatch.setenv("FNO_SPAWN_TRIGGER", "think_spawn:work-start")
-    assert _capture_spawn_trigger() == "think_spawn:work-start"
-    assert "FNO_SPAWN_TRIGGER" not in os.environ
-    # A second read in the same process (e.g. a nested spawn) sees nothing left.
-    assert _capture_spawn_trigger() is None
-
-
 # --- x-132c: the gaps the fleet measurement found (0 of 30 rows stamped) ------
 
 _PARENT_MARKERS = (
@@ -145,51 +126,6 @@ def _only_marker(monkeypatch, var: str, value: str):
     for m in _PARENT_MARKERS:
         monkeypatch.delenv(m, raising=False)
     monkeypatch.setenv(var, value)
-
-
-def test_codex_create_path_stamps_the_row_not_just_the_event(
-    workdir_claude, captured_emits, monkeypatch
-):
-    """The codex create path used to stamp the parent edge on the lifecycle
-    EVENT only; the durable registry row - the surface every consumer reads -
-    carried nothing. The row must name the same parent as the event, and a
-    machine dispatch's cause, the same stamps the claude bg mint writes."""
-    from unittest.mock import MagicMock
-
-    from fno.agents.dispatch import DispatchAskResult, _codex_create_path
-    from fno.agents.harnesses import codex as codex_mod
-    from fno.agents.harnesses.codex import CodexResult
-
-    class _Handle:
-        def detach(self):
-            pass
-
-    monkeypatch.setattr(
-        codex_mod,
-        "create",
-        MagicMock(return_value=CodexResult(
-            exit_code=0, session_id="codex-sid-abc", last_msg="hello", duration_ms=42,
-        )),
-    )
-    _only_marker(monkeypatch, "CODEX_SESSION_ID", "parent-cx-1")
-    monkeypatch.setenv("FNO_SPAWN_TRIGGER", "dispatch:rd")
-    result = _codex_create_path(
-        name="codex-child",
-        message="echo hello",
-        cwd=os.getcwd(),
-        from_name="fno",
-        yolo=False,
-        timeout_sec=10.0,
-        lock_handle=_Handle(),
-    )
-    assert isinstance(result, DispatchAskResult)
-
-    entries = load_registry()
-    row = next(e for e in entries if e.name == "codex-child")
-    assert row.spawned_by_session == "parent-cx-1"
-    assert row.spawned_by_harness == "codex"
-    assert row.spawned_by_cwd
-    assert row.spawn_trigger == "dispatch:rd"
 
 
 def test_register_adopted_row_stamps_the_adopting_session(tmp_path, monkeypatch):
@@ -252,7 +188,7 @@ def test_ac5_hp_marker_less_spawn_still_names_the_harness(monkeypatch):
     """
     import fno.claims.self_identity as self_identity
     import fno.claims.session_pid as session_pid
-    from fno.agents.dispatch import _capture_parent_edge
+    from fno.agents.spawn_lineage import _capture_parent_edge
 
     class _Empty:
         harness = None
@@ -274,7 +210,7 @@ def test_a_present_marker_that_resolves_to_nothing_stays_nothing(monkeypatch):
     overturn it."""
     import fno.claims.self_identity as self_identity
     import fno.claims.session_pid as session_pid
-    from fno.agents.dispatch import _capture_parent_edge
+    from fno.agents.spawn_lineage import _capture_parent_edge
 
     class _Contradicted:
         harness = None

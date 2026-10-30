@@ -63,14 +63,6 @@ SEED_PROVENANCE_KEYS: tuple[str, ...] = (
 MAX_SEED_BYTES = 16 * 1024
 
 
-def scrub_seed_provenance(environ: dict) -> None:
-    """Pop the whole seed group from a child-env dict. The floor every
-    adapter's child env crosses already runs this; these callers build a
-    child env without crossing it (a child that inherits it misattributes)."""
-    for key in SEED_PROVENANCE_KEYS:
-        environ.pop(key, None)
-
-
 def build_env(seed: str, *, node: Optional[str] = None) -> dict[str, str]:
     """The child-environment fields carrying this seed's provenance.
 
@@ -87,7 +79,7 @@ def build_env(seed: str, *, node: Optional[str] = None) -> dict[str, str]:
     Never raises. Three cases return empty and launch unattributed: an
     unprovable identity (the operator case), a seed too long to quote in full,
     and a seed that already carries an ``<fno_mail>`` envelope. That last one is
-    load-bearing: ``wake_and_deliver``'s fork rung seeds a worker with the
+    load-bearing: a mail wake seeds a worker with the
     wrapped message itself, so refusing it killed every mail send to an
     asleep-but-resumable peer that reached that rung.
 
@@ -104,7 +96,7 @@ def build_env(seed: str, *, node: Optional[str] = None) -> dict[str, str]:
     # A seed carrying an envelope gets NO sidecar, and still launches.
     #
     # This refused the spawn until it turned out that a legitimate seed carries
-    # an envelope by construction: `wake_and_deliver`'s fork rung spawns with a
+    # an envelope by construction: a mail wake spawns with a
     # lineage prefix followed by the wrapped message itself, so every mail send
     # to an asleep-but-resumable peer that reached that rung died here and
     # demoted to durable, blaming a spawn failure that never happened.

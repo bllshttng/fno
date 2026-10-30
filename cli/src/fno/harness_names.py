@@ -79,15 +79,3 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def unknown_thread_harness_message(name: str) -> str:
-    """The one refusal every thread-substrate seam raises: both halves derive
-    from this module, and the pane lane execs whatever is on PATH."""
-    accepted = ", ".join(_roster("spawn"))
-    lines = [
-        f"unknown harness {name!r} on the thread substrate (--harness names "
-        f"the CLI BINARY); accepted here: {accepted}.",
-    ]
-    if name in known_harnesses():
-        lines.append(f"{name} has no measured thread lane yet; use --as pane.")
-    lines.append("If you meant a model VENDOR, that is -P/--provider.")
-    return "\n".join(lines)

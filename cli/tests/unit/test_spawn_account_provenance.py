@@ -19,8 +19,6 @@ from pathlib import Path
 import pytest
 import tomli_w
 
-from fno.agents import dispatch as dispatch_mod
-from fno.agents import spawn_flag_owners
 
 
 @pytest.fixture(autouse=True)
@@ -81,117 +79,6 @@ def armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         json.dumps({"usage": {"readyrule": snap(100.0), "makers": snap(32.0)}})
     )
     return tmp_path
-
-
-def _stub_created(monkeypatch: pytest.MonkeyPatch, seen: dict) -> None:
-    class _Created:
-        short_id = "abc123"
-
-    monkeypatch.setattr(
-        dispatch_mod, "_claude_create_path",
-        lambda **kw: (seen.update(kw), _Created())[1],
-    )
-    monkeypatch.setattr(dispatch_mod, "_emit_ev", lambda *a, **k: None)
-
-
-def _run_bg_spawn(name: str, tmp_path: Path, **kw):
-    monkeypatch_kw = kw.pop("monkeypatch")
-    monkeypatch_kw.setenv("FNO_SPAWN_GATE", "0")
-    from fno.agents.spawn_gate import run_gate
-
-    gate = run_gate(name, "bg")
-    try:
-        return dispatch_mod.dispatch_spawn(
-            name=name, message="hi", harness="claude", cwd=tmp_path, **kw
-        )
-    finally:
-        gate.release()
-
-
-class TestBgSeam:
-    def test_bg_pick_names_config_as_the_source(
-        self, armed: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        seen: dict = {}
-        _stub_created(monkeypatch, seen)
-        result = _run_bg_spawn("w-prov", armed, monkeypatch=monkeypatch)
-        assert result.launch_account == "makers"
-        assert result.launch_account_source == spawn_flag_owners.CONFIG
-        assert seen["launch_account"] == "makers"
-
-    def test_bg_explicit_account_names_caller(
-        self, armed: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        seen: dict = {}
-        _stub_created(monkeypatch, seen)
-        # A caller's explicit account always arrives WITH its env overlay
-        # (resolved at the CLI layer); the overlay is what suppresses the pick.
-        result = _run_bg_spawn(
-            "w-prov2", armed, monkeypatch=monkeypatch,
-            launch_account="readyrule", account_env={"CLAUDE_CONFIG_DIR": "x"},
-        )
-        assert result.launch_account == "readyrule"
-        assert result.launch_account_source == spawn_flag_owners.CALLER
-
-
-class TestReceipts:
-    """The receipt branch in cmd_spawn, exercised with stubbed back halves."""
-
-    @staticmethod
-    def _receipt_of(output: str) -> dict:
-        """The JSON receipt line; the canonical-cwd note may follow it."""
-        for line in output.strip().splitlines():
-            if line[:1] == "{":
-                return json.loads(line)
-        raise AssertionError(f"no JSON receipt in output: {output!r}")
-
-    @staticmethod
-    def _stub_pane_back(monkeypatch: pytest.MonkeyPatch, result) -> None:
-        from fno.agents import mux_spawn, spawn_gate
-
-        class Gate:
-            def release(self):
-                pass
-
-        monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: Gate())
-        monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *a, **k: None)
-        monkeypatch.setattr(
-            mux_spawn, "dispatch_spawn_bounded_pane", lambda **kw: result
-        )
-
-class TestPaneRowDecider:
-    """The real `dispatch_spawn_pane` decides the row pair; a stubbed back
-    half at `dispatch_spawn_bounded_pane` never enters it (that gap is why a
-    pre-pick snapshot shipped green). Here only the LAUNCH below the picker is
-    stubbed, so the pair the row and the result carry is the pair the picker
-    produced."""
-
-    @staticmethod
-    def _stub_pane_launch(monkeypatch: pytest.MonkeyPatch) -> None:
-        import subprocess
-
-        from fno.agents import mux_spawn
-
-        monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *a, **k: None)
-        monkeypatch.setattr(mux_spawn, "resolve_mux_session", lambda session: "sess")
-        monkeypatch.setattr(
-            mux_spawn,
-            "_run_mux",
-            lambda *a, **k: subprocess.CompletedProcess([], 0, stdout="1", stderr=""),
-        )
-        monkeypatch.setattr(mux_spawn, "_lookup_child_pid", lambda *a, **k: None)
-
-    def test_a_picked_pane_row_carries_the_picked_account(
-        self, armed: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from fno.agents import mux_spawn
-
-        self._stub_pane_launch(monkeypatch)
-        result = mux_spawn.dispatch_spawn_pane(
-            name="p-row", message="hi", provider="claude", cwd=armed
-        )
-        assert result.launch_account == "makers"
-        assert result.launch_account_source == spawn_flag_owners.CONFIG
 
 
 class TestVocabulary:

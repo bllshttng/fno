@@ -1,8 +1,8 @@
-"""Spawn gate : global concurrency cap + free-RAM floor + queue loop.
+"""Spawn gate readers shared with the pane lane, watchdog and reachability.
 
-Called by ``dispatch_spawn`` (mail wake) before it launches. Mirrors
-``crates/fno-agents/src/spawn_gate.rs``, which gates every ``fno agents spawn``;
-the two sit on separate paths, so every spawn passes exactly one.
+``crates/fno-agents/src/spawn_gate.rs`` gates every ``fno agents spawn``;
+this module keeps the Python readers and the provider admission the pane
+lane still consumes.
 
 The gate is READ-ONLY: the ``max_live`` slot cap counts fno registry rows
 (worker provenance) and the RAM floor reads real system RAM. The claude daemon
@@ -15,40 +15,11 @@ refuses, never assumes zero.
 from __future__ import annotations
 
 import contextvars
-import json
 import os
-import subprocess
 import sys
-import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple, NoReturn, Optional, cast
+from typing import Any, NoReturn, Optional
 
-
-class Admission(NamedTuple):
-    """The CPU axis's decision, computed once and read by both gates (LD1).
-
-    ``verdict`` is ``admit`` | ``hold`` | ``undecidable`` | ``refuse``;
-    ``axis`` names what decided: the fleet's CPU share or an unreadable
-    instrument. ``reason`` is the full sentence
-    the gates print verbatim. An attribution gap widens the share to an
-    interval: ``share_low`` is the attributed share, ``share_high`` the
-    whole machine's, and ``bound`` records that the verdict read the upper
-    bound. The native census computes it; this type carries it.
-    """
-
-    verdict: str
-    axis: str
-    reason: str
-    share_low: float
-    share_high: float
-    bound: str
-    fleet_cores: float
-    machine_cores: float
-    capacity_cores: float
-    ceiling: float
-    gap: str | None = None
-    top_holder: str | None = None
 
 # THE exit-code allocation table for the gate band across both trees (this
 # file and crates/fno-agents/src/spawn_gate.rs). A value >= 64 claims its
@@ -95,25 +66,12 @@ EXIT_NODE_OCCUPIED = 92
 EXIT_RULE_REFUSED = 93
 
 
-QUEUE_TIMEOUT_S = 600.0
-#: The mutex claim key. Prefixed so the native leg routes it to the global
-#: root the gate writes; the old colon-less `spawn-gate` key unrouted, so
-#: `claim status`/`release --force` read `<space>/claims/spawn-gate.lock`
-#: while the gate held `~/.fno/claims/spawn-gate.lock` and both lied.
-GATE_CLAIM_KEY = "gate:spawn"
-WORKER_CLAIM_TTL_MS = 4 * 60 * 60 * 1000
-CLAIM_RELEASE_ATTEMPTS = 3
-
 #: Registry statuses that can hold a live process. `idle` counts when the pid
 #: is alive (an unreaped idle process still holds RAM); a reaped pid drops out
 #: via the liveness check — the reaper is our slot-release mechanism.
 LIVE_STATUSES = frozenset(
     {"spawning", "ready", "idle", "busy", "live", "restarting"}
 )
-
-
-def _warn(msg: str) -> None:
-    print(msg, file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -193,136 +151,10 @@ def _roster_path() -> Path:
     return base / "roster.json"
 
 
-@dataclass(frozen=True)
-class LoadSnapshot:
-    # display/trend only; nothing gates on these.
-    load_1m: float | None
-    load_cpu_count: int
-    load_5m: float | None = None
-    load_15m: float | None = None
-
-
-class ProviderCountUnavailable(RuntimeError):
-    """A provider count cannot be proved from registry/liveness evidence."""
-
-
 _KNOWN_UNROUTED_PROVIDER = "__uncapped__"
-_PROVIDER_ADMISSION_TOKEN = object()
-
-
-def _gate_claims_root() -> Path:
-    from fno.claims.io import global_claims_root
-
-    return global_claims_root()
-
-
 # ---------------------------------------------------------------------------
 # The gate
 # ---------------------------------------------------------------------------
-
-@dataclass
-class GateGuard:
-    """Held gate state. The caller keeps this across dispatch and calls
-    ``release()`` when the dispatch result (registry row / roster receipt)
-    exists — for headless, the worker slot claim outlives the mutex."""
-
-    _gate_holder: Optional[str] = None
-    _worker_key: Optional[str] = None
-    _worker_holder: Optional[str] = None
-    _route_provider: Optional[str] = None
-    _spawn_name: Optional[str] = None
-    _substrate: Optional[str] = None
-    _admission_token: object | None = None
-    _consumed: bool = False
-    _released: bool = False
-
-    def _consume_provider(self, provider: str, name: str, substrate: str) -> bool:
-        authorized = (
-            self._admission_token is _PROVIDER_ADMISSION_TOKEN
-            and self._route_provider == provider
-            and self._spawn_name == name
-            and self._substrate == substrate
-            and not self._consumed
-            and not self._released
-        )
-        if authorized:
-            self._consumed = True
-        return authorized
-
-    def retain_revived_worker(
-        self,
-        short_id: str,
-        *,
-        worker_name: Optional[str] = None,
-        worker_pid: Optional[int] = None,
-        positive_marker: str = "claude-respawn-ok",
-    ) -> None:
-        """Convert a BG admission into durable fail-closed worker evidence."""
-        if self._route_provider is None or self._spawn_name is None:
-            raise ProviderCountUnavailable("provider admission identity unavailable")
-        holder = self._gate_holder or f"spawn-gate:{os.getpid()}:{self._spawn_name}"
-        _acquire_worker_slot(
-            self,
-            worker_name or self._spawn_name,
-            holder,
-            self._route_provider,
-            fail_closed=True,
-            worker_pid=worker_pid,
-            metadata={
-                "session_short_id": short_id,
-                "positive_marker": positive_marker,
-            },
-        )
-
-    def release_worker_reservation(self) -> None:
-        if self._worker_key is None:
-            return
-        key = self._worker_key
-        if not _release_claim_bounded(key, self._worker_holder or ""):
-            return
-        self._worker_key = None
-        self._worker_holder = None
-
-    def release_gate_mutex(self) -> None:
-        if self._gate_holder is None:
-            return
-        holder = self._gate_holder
-        if not _release_claim_bounded(GATE_CLAIM_KEY, holder):
-            return
-        self._gate_holder = None
-
-    def release(self) -> None:
-        self._released = True
-        self.release_gate_mutex()
-        self.release_worker_reservation()
-
-
-def consume_provider_admission(
-    guard: object, provider: str, name: str, substrate: str
-) -> bool:
-    """Consume one genuine opaque admission; duck-typed substitutes never pass."""
-    return isinstance(guard, GateGuard) and guard._consume_provider(
-        provider, name, substrate
-    )
-
-
-def _release_claim_bounded(key: str, holder: str) -> bool:
-    """Release a gate claim with a short retry budget for transient store faults."""
-    from fno.claims.core import release_claim
-
-    last_error: Exception | None = None
-    for attempt in range(CLAIM_RELEASE_ATTEMPTS):
-        try:
-            release_claim(key, holder, root=_gate_claims_root())
-            return True
-        except Exception as exc:
-            last_error = exc
-            if attempt + 1 < CLAIM_RELEASE_ATTEMPTS:
-                time.sleep(0.01)
-    label = "gate mutex" if key == GATE_CLAIM_KEY else f"worker reservation {key}"
-    _warn(f"spawn-gate note: could not release {label}: {last_error}")
-    return False
-
 
 class GateRefused(SystemExit):
     """Raised (as SystemExit subclass) when the gate refuses the spawn."""
@@ -407,262 +239,6 @@ def _emit_gate_event(kind: str, **data: Any) -> None:
         events.emit(kind, **data)
     except Exception:  # noqa: BLE001 - telemetry never changes a gate outcome
         pass
-
-
-#: `(None, "error")` is a real reading ("unreadable"), so the "not supplied"
-#: case needs a value that cannot be confused with it.
-_NOT_PREFETCHED: object = object()
-
-
-def _prefetch_fleet_reading() -> tuple[Optional[Any], Optional[str]]:
-    """Take the footprint reading OUTSIDE the gate mutex, ALWAYS.
-
- LD2: every spawn takes the reading. A trigger that fires on a
-    number the node proved does not track the work is not a cost
-    optimisation, it is a second decider. The read is one `ps` snapshot
-    behind a deadline, and the gate mutex serializes every spawner on the
-    machine, so it is taken before the lock exactly as before - the band
-    check that sometimes skipped it is what died.
-
-    Returns ``(payload, error)``; exactly one side is usable. A ``None``
-    payload is a REFUSAL on ``cpu_instrument``, never a skip (LD3).
-    """
-    try:
-        from fno.rust_binary import resolve_binary
-
-        binary = resolve_binary()
-        if binary is None:
-            return None, "footprint unavailable: the fno-agents binary was not found"
-        result = subprocess.run(
-            [str(binary), "census", "--cause", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except Exception as exc:  # noqa: BLE001 - an import fault is an unreadable instrument
-        return None, f"footprint unavailable: {exc}"
-    if result.returncode != 0:
-        lines = (result.stderr or "").strip().splitlines()
-        tail = lines[-1] if lines else ""
-        return None, f"footprint unavailable: exit {result.returncode}{tail}"
-    try:
-        return json.loads(result.stdout or "{}"), None
-    except ValueError as exc:
-        return None, f"footprint unavailable: {exc}"
-
-
-def _cpu_axis(prefetched: object = _NOT_PREFETCHED) -> Admission:
-    """The CPU axis's verdict for THIS spawn: one decider, no second opinion.
-
-    Maps an unreadable instrument to ``refuse`` on ``cpu_instrument`` (LD3:
-    the sensor blinds under exactly the load it measures, and an unreadable
-    process table is itself a symptom) and otherwise reads the admission
-    the native census already computed (one decider: the census op).
-
-    Shared with the ``--explain`` preview, so a dry run answers the question
-    the real spawn will.
-    """
-    payload, error = (
-        _prefetch_fleet_reading()
-        if prefetched is _NOT_PREFETCHED
-        else cast("tuple[Optional[Any], Optional[str]]", prefetched)
-    )
-    if payload is None:
-        why = (error or "the reading failed").strip()
-        return Admission(
-            verdict="refuse",
-            axis="cpu_instrument",
-            reason=(
-                f"spawn-gate: the CPU instrument is unreadable ({why}); "
-                "refusing to spawn (--force to bypass)"
-            ),
-            share_low=0.0,
-            share_high=0.0,
-            bound="exact",
-            fleet_cores=0.0,
-            machine_cores=0.0,
-            capacity_cores=0.0,
-            ceiling=0.0,
-            gap=None,
-        )
-    admission = payload.get("admission") or {}
-    return Admission(
-        verdict=str(admission.get("verdict") or "refuse"),
-        axis="fleet_cpu",
-        reason=str(admission.get("reason") or "the reading failed"),
-        share_low=float(admission.get("share_low") or 0.0),
-        share_high=float(admission.get("share_high") or 0.0),
-        bound=str(admission.get("bound") or "exact"),
-        fleet_cores=float(admission.get("fleet_cores") or 0.0),
-        machine_cores=float(admission.get("machine_cores") or 0.0),
-        capacity_cores=float(admission.get("capacity_cores") or 0.0),
-        ceiling=float(admission.get("ceiling") or 0.0),
-        gap=admission.get("gap"),
-    )
-
-
-def _load_cpus() -> int:
-    """The CPU denominator for the DISPLAY load snapshot (nothing gates on
-    it). The native census applies its quota-aware capacity itself; the
-    display denominator falls back to the interpreter's count.
-    """
-    return getattr(os, "process_cpu_count", os.cpu_count)() or 1
-
-
-def _load_snapshot(max_load_per_cpu: float) -> LoadSnapshot:
-    """The display/trend load reading. The retired per-cpu argument stays so
-    footprint's degraded-snapshot path keeps its shape; nothing gates here."""
-    del max_load_per_cpu
-    cpus = _load_cpus()
-    try:
-        load1, load5, load15 = os.getloadavg()
-    except (OSError, AttributeError):
-        return LoadSnapshot(load_1m=None, load_cpu_count=cpus)
-    return LoadSnapshot(
-        load_1m=load1,
-        load_cpu_count=cpus,
-        load_5m=load5,
-        load_15m=load15,
-    )
-
-
-def _acquire_worker_slot(
-    guard: GateGuard,
-    name: str,
-    holder: str,
-    route_provider: Optional[str] = None,
-    *,
-    fail_closed: bool = False,
-    worker_pid: Optional[int] = None,
-    metadata: Optional[dict[str, object]] = None,
-) -> None:
-    key = f"worker:{name}"
-    try:
-        from fno.claims.core import acquire_claim
-
-        claim_metadata: dict[str, object] = {
-            "model_provider": route_provider or _KNOWN_UNROUTED_PROVIDER
-        }
-        if metadata:
-            claim_metadata.update(metadata)
-        acquire_claim(
-            key,
-            holder,
-            ttl_ms=WORKER_CLAIM_TTL_MS,
-            metadata=claim_metadata,
-            pid=worker_pid,
-            root=_gate_claims_root(),
-        )
-        guard._worker_key = key
-        guard._worker_holder = holder
-    except Exception as exc:
-        if fail_closed:
-            raise ProviderCountUnavailable(
-                f"worker reservation {key} unavailable: {exc}"
-            ) from exc
-        # Fail open: a slot claim is count VISIBILITY, not a correctness gate.
-        _warn(f"spawn-gate note: worker slot claim {key} unavailable; proceeding uncounted")
-
-
-def _call_gate_command(payload: dict) -> dict:
-    """One round trip to the Rust gate (``fno-agents spawn-gate``, mode
-    ``gate``). The child's stderr stays attached to this process, so a gate
-    that queues streams its ``spawn queued: ...`` prose live. The timeout
-    bounds the command's own 600s queue plus prose and startup.
-    """
-    from fno.rust_binary import command_call
-
-    return command_call(
-        "spawn-gate",
-        payload,
-        timeout=QUEUE_TIMEOUT_S + 100.0,
-        passthrough_stderr=True,
-    )
-
-
-def run_gate(
-    name: str,
-    substrate: str,
-    *,
-    force: bool = False,
-    no_wait: bool = False,
-    route_provider: Optional[str] = None,
-    account: Optional[str] = None,
-    caller: object = ...,
-    seed: Optional[str] = None,
-    session_phase: Optional[str] = None,
-    succession_scope: Optional[str] = None,
-) -> GateGuard:
-    """Run the full gate - by asking the ONE gate in the binary. Returns a
-    :class:`GateGuard` to hold across dispatch on pass; raises
-    :class:`GateRefused` (a SystemExit) on refusal/timeout.
-
-    This is a TRANSPORT, not a second gate: the axes (fleet incident, schema,
-    quota lock, provider cap, CPU, slots, RAM, lead share) are decided inside
-    ``crates/fno-agents/src/spawn_gate.rs``. This side carries the caller's
-    identity and raw seed/phase inputs in, then carries refusal data out. The
-    refusal event still emits from here (locked decision 5), so journal
-    population is unchanged for
-    spawns that enter Python.
-    """
-    # Set before the first branch that can refuse, so every refusal event in
-    # this run names the spawn it refused (see _CURRENT_SPAWN).
-    _CURRENT_SPAWN.set((name, substrate))
-    # The calling lead's session id (W4), resolved through the same
-    # self-identity source that stamps `spawned_by_session` onto the spawned
-    # row, so the gate attributes a spawn exactly the way the row will.
-    try:
-        from fno.claims.self_identity import resolve_self_identity
-
-        caller_session = resolve_self_identity().session_id
-    except Exception:  # noqa: BLE001 - no identity, no share check (an
-        # operator-run spawn is not competing for the commons)
-        caller_session = None
-    caller_session = caller_session if caller is ... else caller  # revival names its row's parent
-    payload = {
-        "mode": "gate",
-        "name": name,
-        "substrate": substrate,
-        "force": force,
-        "no_wait": no_wait,
-        "route_provider": route_provider,
-        "account": account,
-        "seed": seed,
-        "session_phase": session_phase,
-        "succession_scope": succession_scope,
-        "caller_session": caller_session,
-        "holder_pid": os.getpid(),
-    }
-    try:
-        answer = _call_gate_command(payload)
-    except Exception as exc:  # noqa: BLE001 - an unanswered gate never admits
-        _warn(f"spawn-gate: refused on gate (gate_unavailable, exit {EXIT_GATE_UNAVAILABLE}): {exc}")
-        _refuse(
-            EXIT_GATE_UNAVAILABLE,
-            {
-                "status": "refused",
-                "reason": "gate_unavailable",
-                "error": str(exc),
-            },
-        )
-    if answer.get("status") == "admitted":
-        return GateGuard(
-            _gate_holder=answer.get("gate_holder"),
-            _worker_key=answer.get("worker_key"),
-            _worker_holder=answer.get("worker_holder"),
-            _route_provider=route_provider,
-            _spawn_name=name,
-            _substrate=substrate,
-            _admission_token=_PROVIDER_ADMISSION_TOKEN,
-        )
-    # The command produced an answer, and the answer is a refusal: the exit code
-    # and the receipt travelled inside the answer (a refusal is data).
-    _refuse(
-        int(answer.get("exit_code", EXIT_GATE_UNAVAILABLE)),
-        answer.get("receipt"),
-        **(answer.get("event") or {}),
-    )
 
 
 def probe_capacity(only: Optional[list[str]] = None) -> dict:

@@ -8,18 +8,9 @@ vocabulary, and the transcript-age suffix a bare live-miss carries.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import subprocess
 import sys
 from typing import Optional
-
-# The exit a NOT LANDED receipt leaves `mail send` with : a last-line
-# reader must never record an unconfirmed send as delivered. Distinct from the
-# usage (2), lock (11), durable-address (12) and unknown-agent (16) refusals:
-# the send itself succeeded and is recoverable, the LANDING is what is missing.
-NOT_LANDED_EXIT = 14
-
 
 def _render(argv: list[str]) -> str:
     """One mail-receipt read through the native door (the style-check
@@ -108,26 +99,6 @@ def durable_window_clause(owner: Optional[str]) -> str:
     return _render(["window", "--ttl-hours", repr(hours)])
 
 
-def durable_leg_story(
-    reason: Optional[str], recipient: Optional[str] = None
-) -> Optional[str]:
-    """Positive stdout wording for a live-lane failure demotion : a
-    live-inject miss plus a durable success is a normal outcome, and the raw
-    token (``io-error``, ``attach-failed``, ...) rendered an error string
-    inside a success receipt. None when the reason is not a live-lane
-    failure; the token stays diagnostic (stderr advisory, bus record).
-
-    ``recipient``, when passed, appends how long the live leg waited
-    (a ``waited-<n>s`` token in the reason) and the transcript-age suffix, so
-    the sender can tell a busy peer from a silent one. Words only: no raw
-    token reaches this line."""
-    suffix = _live_miss_age_suffix(recipient) if recipient is not None else None
-    story = _render(
-        ["story", *(_flag("reason", reason)), *(_flag("suffix", suffix)), *(_flag("age-of", recipient))]
-    )
-    return story or None
-
-
 def json_receipt(
     msg_id: str,
     *,
@@ -180,107 +151,6 @@ def demotion_receipt(
             *(_flag("subject", subject)),
         ]
     )
-
-
-def not_landed_receipt(
-    msg_id: str,
-    pane: Optional[int],
-    *,
-    target: str,
-    harness: Optional[str] = None,
-    session_id: Optional[str] = None,
-) -> str:
-    """The NOT LANDED verdict block for a durable-floor send the post-send
-    verify could not confirm .
-
-    ``pane`` comes from the LIVE pane list via :func:`_live_pane_for`, never
-    the registry row: a row can carry no mux ref while the pane list still
-    shows the recipient's pane (measured: mux=None, pane alive). A codex
-    thread with no pane cannot be injected by fno at all - the session's own
-    surface has to receive it - and the verify names that.
-    """
-    return _render(
-        [
-            "not-landed",
-            "--msg-id", msg_id,
-            *(_flag("pane", str(pane) if pane is not None else None)),
-            "--target", target,
-            *(_flag("harness", harness)),
-            *(_flag("session-id", session_id)),
-        ]
-    )
-
-
-def report_landing(
-    msg_id: str,
-    *,
-    target: str,
-    to: Optional[str],
-    to_harness: Optional[str],
-    to_session: Optional[str],
-) -> bool:
-    """The post-send verify both durable floors share: after the settle
-    window, re-read the recipient - bus claim and cursor, then transcript -
-    and print `landed (<how>)` or the NOT LANDED block with the
-    substrate-correct recovery. True when landed; the caller owns the
-    non-zero exit."""
-    import time as _time
-
-    from fno.mail.landed import post_send_landed, post_send_settle_seconds
-
-    settle_s = post_send_settle_seconds()
-    if settle_s > 0:
-        _time.sleep(settle_s)
-    landed, how = post_send_landed(
-        msg_id, to=to, to_harness=to_harness, to_session=to_session
-    )
-    if landed:
-        print(f"{msg_id} landed ({how})")
-        return True
-    print(not_landed_receipt(
-        msg_id,
-        _live_pane_for(target, to_session),
-        target=target,
-        harness=to_harness,
-        session_id=to_session,
-    ))
-    return False
-
-
-def _live_pane_for(target: str, session_id: Optional[str]) -> Optional[int]:
-    """The recipient's pane id from the LIVE pane list, or None.
-
-    Matches on harness session id (the stable join) or the pane's label,
-    in one ``pane ls --json`` read. Any failure - mux down, unreadable
-    JSON - answers None: a recovery hint that guesses a pane number is
-    worse than a generic verify line.
-    """
-    from fno.agents.mux_spawn import DispatchAskError, _run_mux
-
-    try:
-        proc = _run_mux(["mux", "pane", "ls", "--json"], subprocess.run)
-        if proc.returncode != 0:
-            return None
-        rows = json.loads(proc.stdout or "[]")
-    except (DispatchAskError, OSError, TypeError, ValueError):
-        return None
-    if not isinstance(rows, list):
-        return None
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        # The session id is the stable join; the label matches only when no
-        # session id exists, so a shell pane that happens to share the
-        # recipient's name can never produce a wrong pane number.
-        if session_id:
-            hit = row.get("fno_id") == session_id or row.get("harness_session_id") == session_id
-        else:
-            hit = bool(target) and row.get("name") == target
-        if hit:
-            pane = row.get("pane_id")
-            if isinstance(pane, int):
-                return pane
-    return None
 
 
 def print_project_demotion(result, to_project: str, subject: Optional[str] = None) -> None:
@@ -388,111 +258,3 @@ def _warn_deferred(target: str, *, project: bool = False, reason: Optional[str] 
     )
 
 
-# Send-time human escalation for a question, per (sender, recipient). A burst
-# re-nudges every window rather than once forever (marker refreshed only on an
-# actual escalation, so the window runs from the last nudge, not the first send).
-_ESCALATION_DEBOUNCE_S = 300
-
-
-def _recipient_is_attended(recipient: str) -> bool:
-    """True iff ``recipient``'s registry row was stamped ``origin=operator`` at
-    a hand-start (SessionStart register hook / ``fno agents register``).
-
-    Attendance is declared at registration, never inferred at send time, so a
-    row missing the field (a spawn/host worker, or a pre-change row) reads as
-    not-attended -- fail toward silence. Never raises: an unreadable registry or
-    an unresolved recipient escalates nothing, so the send still succeeds.
-    """
-    try:
-        return _render(["attended", "--recipient", recipient]) == "true"
-    except Exception:  # noqa: BLE001 - a door failure escalates nothing
-        return False
-
-
-def _escalate_to_human(
-    sender: str,
-    recipient: str,
-    summary: str,
-    reason: str,
-    msg_id: str | None = None,
-) -> str:
-    """Notify the human at send time that mail needs them, and surface it in the
-    needs-me mux overlay.
-
-    ``reason`` is ``"question"`` (a --kind question send; Locked Decision 7: a
-    question NEVER autonomous-responds - only the human answers it) or
-    ``"attended-miss"`` (a send to an operator-attended session that fell to the
-    durable floor) or ``"reachable-miss"`` (the same miss to a worker the
-    resolver reports reachable). Every reason flows through this ONE helper so
-    the overlay event is emitted from a single place; a second emit site would
-    leave one reason un-surfaced (the silent-eat this exists to close). A reason
-    added here must also be added to :data:`fno.events.MAIL_ESCALATION_REASONS`
-    and the schema enum, or the overlay emit raises and is swallowed by the
-    best-effort guard below - the nudge then reaches the notifier only.
-
-    Debounced per (sender, recipient) so a chatty peer cannot spam the queue, and
-    the debounce gates BOTH the notifier and the event (one event per
-    non-debounced escalation, zero on debounced). The caller writes the durable
-    thread regardless, so the ambient unread count stays truthful even when this
-    nudge is debounced. Best-effort throughout: a notifier, events-write, or
-    filesystem failure never breaks the send. Returns ``"escalated"`` (the human
-    was notified), ``"debounced"`` (a recent nudge for this pair suppressed it),
-    or ``"notifier-unavailable"`` (no OS notifier on this host, so nothing
-    displayed - the caller must not claim escalation; the overlay event still
-    fired).
-    """
-
-    from fno.paths import state_dir
-
-    pair = hashlib.sha256(f"{sender}\x00{recipient}".encode()).hexdigest()[:16]
-    # The debounce marker state machine lives behind the mail-receipt command
-    # (file budget): O_CREAT|O_EXCL claims the window atomically - exactly
-    # one concurrent sender wins a fresh escalation, the rest see the marker
-    # and debounce; a stale marker refreshes so the next window runs from now.
-    try:
-        verdict = _render(
-            [
-                "debounce",
-                "--marker-dir", str(state_dir() / "mail-escalations"),
-                "--pair", pair,
-                "--window-secs", str(_ESCALATION_DEBOUNCE_S),
-            ]
-        )
-    except Exception:  # noqa: BLE001 - a marker failure just re-notifies
-        verdict = "claim"
-    if verdict == "debounced":
-        return "debounced"
-    # Debounce gate passed: this is a real escalation. Emit the overlay event
-    # BEFORE the notifier verdict - the overlay is an independent surface that
-    # must render even on a headless host where the notifier is unavailable (the
-    # whole point of surfacing in the mux). Best-effort: an events-write failure
-    # never breaks the notifier or the send.
-    try:
-        from fno.events import append_event, mail_escalation
-
-        append_event(
-            mail_escalation(
-                reason=reason,
-                sender=sender,
-                recipient=recipient,
-                summary=summary.split("\n", 1)[0][:120],
-                msg_id=msg_id,
-            )
-        )
-    except Exception:  # noqa: BLE001 - an overlay miss never breaks the send
-        pass
-    # Only report escalation when the notification actually displayed:
-    # send_notification returns (code, err) and a nonzero code means no OS
-    # notifier (a headless host), so the human was NOT notified.
-    try:
-        from fno.rust_binary import notify_operator
-
-        one_line = summary.split("\n", 1)[0][:120]
-        label = "missed you" if reason in ("attended-miss", "reachable-miss") else "question"
-        code, _err = notify_operator(
-            f"fno agents mail: {label} from {sender}",
-            f"{one_line} - run `fno agents mail drain-self`",
-        )
-    except Exception:  # noqa: BLE001 - a notifier failure never breaks the send
-        code = 1
-    return "escalated" if code == 0 else "notifier-unavailable"

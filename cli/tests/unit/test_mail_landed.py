@@ -95,31 +95,6 @@ def _send_hosted(
     return msg_id
 
 
-def test_ac1_landed_true_when_id_is_in_recipient_transcript(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    mid = _send_hosted()
-    _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, _envelope_line(mid))
-
-    all_msgs = read_rows()
-    states = landed_states(withdrawn_and_landed()[1], all_msgs)
-
-    assert states[mid] is True
-
-    # the post-send verify reads the same transcript RAW, so the id
-    # inside a rendered tool output (an `unread` poll result) counts as the
-    # pickup the record parsers drop. No <fno_mail> tag anywhere.
-    from fno.mail.landed import post_send_landed
-
-    send_id = append_row({"from": "alice", "to": "bob", "kind": "send", "body": "raw pickup"})
-    tool_output = json.dumps(
-        {"type": "tool_result", "content": f"{send_id} queued (durable) for bob"}
-    ) + "\n"
-    _write_transcript(tmp_path, monkeypatch, RECIPIENT_SESSION, tool_output)
-    assert post_send_landed(
-        send_id, to="bob", to_harness="claude", to_session=RECIPIENT_SESSION
-    ) == (True, "recipient transcript")
-
-
 def test_ac3_unresolvable_transcript_reads_null_never_false(tmp_path, monkeypatch):
     """A read failure is not evidence of absence: no transcript file at all
     (a session with no store record) must never masquerade as a proven miss."""
@@ -170,37 +145,6 @@ def test_ac2_err_readable_transcript_without_the_id_nags(tmp_path, monkeypatch):
 
     assert [m["id"] for m in outstanding] == [mid]
     assert "bob" in (nag_line(outstanding) or "")
-
-
-def test_ac3_edge_durable_row_with_unread_cursor_still_nags(tmp_path, monkeypatch):
-    """The durable rule does not move: a past-TTL row whose recipient cursor
-    is still behind it is outstanding even with no landed verdict."""
-    use_tmpdir(monkeypatch, tmp_path)
-
-    send_id = append_row(
-        {"from": "alice", "to": "lead", "kind": "send", "body": "status report", "ts": _ts_ago(3600)}
-    )
-
-    outstanding = _sent_unclaimed("alice", ttl_seconds=0)
-
-    assert [m["id"] for m in outstanding] == [send_id]
-
-    # the sender-side verify reads the same cursor, and an advanced
-    # cursor IS the pickup proof - the bus claim the transcript grep is blind
-    # to. Before the claim the verdict is a proven False; the nag above still
-    # applies its own TTL rule, which this arm does not touch.
-    from tests.fixtures.bus_rows import write_cursor
-    from fno.mail.landed import post_send_landed
-
-    assert post_send_landed(send_id, to="lead") == (False, "")
-    write_cursor("lead", send_id)
-    assert post_send_landed(send_id, to="lead") == (
-        True,
-        "bus claim (recipient read past it)",
-    )
-    # A same-pair landed control row is the stronger proof and answers first.
-    append_row({"from": "alice", "to": "lead", "kind": "landed", "body": "", "meta": {"landed": send_id}})
-    assert post_send_landed(send_id, to="lead") == (True, "bus landed record")
 
 
 def test_ac9_self_send_refuses_the_resolution(tmp_path, monkeypatch):

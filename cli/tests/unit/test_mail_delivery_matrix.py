@@ -271,48 +271,6 @@ def test_cell6a_caller_typed_retired_handle_is_refused(runner, mailbox, monkeypa
     assert "queued (durable)" not in res.output
 
 
-def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
-    runner, mailbox, monkeypatch, tmp_path
-):
-    """A retired address READ off a stored record is a data artifact, not a
-    caller error: migrate to the bare id and deliver through the normal ladder.
-
-    The reply path first shipped this as a refusal -- the same wall class as this
-    node's root cause -- and was reversed on PR #491.
-    """
-    from tests.fixtures.bus_rows import read_rows
-    from fno.inbox.store import write_new_thread
-
-    _seed_asleep_transcript(monkeypatch, tmp_path, session_id=LIVE_SID)
-    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
-    monkeypatch.setattr(
-        "fno.agents.dispatch.wake_and_deliver",
-        lambda *_a, **_k: (False, "wake-refused"),
-    )
-    inbound = write_new_thread(
-        recipient="meeeeeee",
-        sender=LIVE_LEGACY_PREFIX,
-        kind="send",
-        body="ping",
-        to_kind="name",
-    )
-
-    result = runner.invoke(
-        app,
-        ["mail", "reply", "--to", inbound, "--body", "ack", "--from", "lead"],
-    )
-
-    assert result.exit_code == 14, result.output
-    replies = [m for m in read_rows() if m.get("in_reply_to") == inbound]
-    # The write-ahead stage row and the durable recovery row share one id.
-    assert len(replies) == 2
-    assert replies[0]["id"] == replies[-1]["id"]
-    assert replies[0].get("delivery") is None
-    assert replies[-1]["to"] == LIVE_HANDLE
-    drained = _drain_as(runner, monkeypatch, LIVE_SID)
-    assert any(message["id"] == replies[-1]["id"] for message in drained)
-
-
 # ---------------------------------------------------------------------------
 # Cell 7 (AC7-EDGE): self-send and ambiguity. Two ways to wake the wrong thing.
 # ---------------------------------------------------------------------------

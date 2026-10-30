@@ -45,12 +45,14 @@ from fno.agents import launch_provenance
 from fno.agents.team_thread import lead_typed_message
 from fno.agents.dispatch import (
     DispatchAskError,
-    _capture_parent_edge,
-    _report_unlinked_parent,
-    build_spawn_provenance,
     _capture_spawn_trigger,
     _touch_log_path,
     validate_spawn_name,
+)
+from fno.agents.spawn_lineage import (
+    _capture_parent_edge,
+    _report_unlinked_parent,
+    build_spawn_provenance,
 )
 from fno.agents.codex_rollout import (  # noqa: F401 - re-export: dispatch and tests bind it here
     _codex_session_id_for_pid,
@@ -1362,66 +1364,6 @@ def _seed_provenance_env(
     from fno.mail.seed_provenance import build_env
 
     return build_env(message, node=(provenance or {}).get("FNO_NODE"))
-
-
-def resolve_provenance(
-    node: Optional[str],
-    slug: Optional[str] = None,
-    plan: Optional[str] = None,
-) -> dict[str, str]:
-    """Build the ``FNO_NODE``/``FNO_SLUG``/``FNO_PLAN`` provenance map for a
-    node-driven pane spawn.
-
-    ``node`` is the only required input (a node id or slug). ``slug``/``plan``
-    fill from the graph node record when absent - a single graph read that a
-    caller can skip by passing both. An unresolvable node keeps just
-    ``FNO_NODE``; no node at all yields ``{}`` so an ad-hoc pane exports nothing
-    (edge AC: no empty-string exports). ``FNO_PLAN`` is omitted when the node has
-    no linked plan; ``FNO_PR`` is intentionally absent (unknown at spawn)."""
-    if not node:
-        return {}
-    # The graph read also NORMALIZES a slug input to an id. Skipping it when the
-    # caller supplied slug+plan would export FNO_NODE=<slug>, and the ambient
-    # origin-capture consumer matches ids exactly - so a slug-driven spawn would
-    # silently file its nodes with no origin at all.
-    from fno.graph._constants import has_node_id_prefix, is_wellformed_node_id
-
-    if slug is None or plan is None or not has_node_id_prefix(node):
-        try:
-            from fno.graph.load import load_graph
-            from fno.graph.store import GRAPH_JSON, read_nodes_by_ids
-
-            fast = read_nodes_by_ids(GRAPH_JSON, [node])
-            for rec in fast["entries"] if fast is not None else load_graph():
-                if not rec.get("archived_at") and (rec.get("id") == node or rec.get("slug") == node):
-                    node = rec.get("id") or node  # normalize a slug input to id
-                    if slug is None:
-                        slug = rec.get("slug") or ""
-                    if plan is None:
-                        plan = rec.get("plan_path") or ""
-                    break
-        except Exception as e:
-            # A graph read failure must not block the spawn -- but it must not
-            # degrade a SLUG into FNO_NODE=<slug> either. The origin-capture
-            # consumer matches ids exactly and would drop a slug as an unknown
-            # node, blaming a bad id for what was a read failure. Keep `node`
-            # only when it is a STRICTLY well-formed id (hex suffix); the liberal
-            # has_node_id_prefix admits a title-derived slug like `x-marks-the-
-            # spot`, which would leak right back into FNO_NODE. An absent-but-
-            # well-formed id is still dropped downstream by the capture side's
-            # known-ids check, so strict-here is safe. Never re-raise: the pane
-            # path degrades. Log under FNO_DEBUG so a missing-origin node is
-            # traceable to the read failure rather than being silently invisible.
-            if not is_wellformed_node_id(node):
-                if os.environ.get("FNO_DEBUG"):
-                    print(
-                        f"resolve_provenance: graph read failed ({type(e).__name__}); "
-                        f"dropping unresolved node '{node}' from provenance",
-                        file=sys.stderr,
-                    )
-                node = None
-    prov = {"FNO_NODE": node, "FNO_SLUG": slug or "", "FNO_PLAN": plan or ""}
-    return {k: v for k, v in prov.items() if v}
 
 
 def _run_mux(
@@ -3203,7 +3145,6 @@ def dispatch_spawn_pane(
     route_env: Optional[dict[str, str]] = None,
     monitor: Optional[str] = None,
     route_provider: Optional[str] = None,
-    provider_gate: object | None = None,
     route_provider_id: Optional[str] = None,
     model_name: Optional[str] = None,
     account_record_id: Optional[str] = None,
@@ -3340,15 +3281,12 @@ def dispatch_spawn_pane(
             "its provider cap cannot be evaluated; no worker launched",
             exit_code=2,
         )
-    from fno.agents.spawn_gate import consume_provider_admission
-
-    if route_provider is not None and not (
-        provider_gate is not None
-        and consume_provider_admission(provider_gate, route_provider, name, "pane")
-    ):
+    if route_provider is not None:
+        # Only the Rust spawn gate admits a routed launch, so this lane has
+        # no provider cap to charge. Fail closed rather than launch uncapped.
         raise DispatchAskError(
-            f"provider {route_provider!r} has no matching admission token; "
-            "refusing before dispatch; no worker launched",
+            f"provider {route_provider!r} routes through the native spawn gate; "
+            "run `fno agents spawn` for a routed pane; no worker launched",
             exit_code=2,
         )
 

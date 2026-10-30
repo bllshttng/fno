@@ -164,13 +164,6 @@ class BoundRouteEnv(dict[str, str]):
             self[ROUTE_PROVIDER_ENV] = provider
 
 
-def bind_route_provider(
-    route: Mapping[str, str], provider: str
-) -> BoundRouteEnv:
-    """Bind a trusted provider resolution to the environment it produced."""
-    return BoundRouteEnv(route, provider)
-
-
 def resolve_spawn_route(
     role: Optional[str],
     route_env: Optional[Mapping[str, str]] = None,
@@ -931,44 +924,6 @@ def resolve_explicit_route(
     )
 
 
-def materialize_model_scrub_settings(dropped: Sequence[str]) -> str:
-    """Write a ``--settings`` JSON flooring only ``dropped`` to "" and return
-    its path.
-
-    ``bg_create``'s incoherent-model-env scrub mutates the spawn env, but a
-    ``claude --bg`` session is forked by the claude daemon with the DAEMON's
-    own env, so the plain poisoned-inherited-env case (the shape this module
-    exists to fix) reached only the short-lived front-end process, never the
-    actual serving session. This is the whole auth floor's mechanism scoped to
-    just the offending model vars: a coherent ``ANTHROPIC_API_KEY``/
-    ``ANTHROPIC_AUTH_TOKEN`` must not be wiped by a spawn that only had a
-    poisoned model tier.
-    """
-    return _write_settings_env_file({name: "" for name in dropped})
-
-
-def read_recorded_sandbox_block(path: Optional[str]) -> Optional[dict[str, object]]:
-    """Read the ``sandbox`` block a recorded settings file carried, or None.
-
-    The revive-side twin of :func:`load_sandbox_write_policy`: a relaunched
-    worker must come back under the SAME OS jail it ran under, or the revive
-    is partial enforcement that reads as enforcement. Unreadable or missing
-    means None - the caller revives unrouted-side-safe and says so, never
-    silently.
-    """
-    import json
-    from pathlib import Path
-
-    if not path:
-        return None
-    try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        block = payload.get("sandbox") if isinstance(payload, dict) else None
-    except (OSError, ValueError):
-        return None
-    return block if isinstance(block, dict) else None
-
-
 def load_sandbox_write_policy(path: str) -> dict[str, object]:
     """Read a ``--sandbox-write-policy`` file and return its ``sandbox`` block.
 
@@ -1016,22 +971,6 @@ def _door_write(payload_obj: dict) -> str:
     return str(receipt["path"])
 
 
-def _write_settings_env_file(
-    env: Mapping[str, str],
-    sandbox: "Optional[Mapping[str, object]]" = None,
-    alias: Optional[str] = None,
-) -> str:
-    """The pre-composed ``{"env"}`` door shape (byte parity with the revive
-    readers)."""
-    return _door_write(
-        {"env": dict(env), "sandbox": dict(sandbox) if sandbox else None, "alias": alias}
-    )
-
-
-class RouteRestoreError(RuntimeError):
-    """A recorded route could not be read back, so a relaunch must refuse."""
-
-
 def route_settings_path_for(
     route_env: Optional[Mapping[str, str]],
     account_env: Optional[Mapping[str, str]] = None,
@@ -1060,132 +999,6 @@ def route_settings_path_for(
             "sandbox": dict(sandbox) if sandbox else None,
             "alias": alias,
         }
-    )
-
-
-def read_route_settings(path: str) -> dict[str, str]:
-    """Read a recorded route-settings file back into the route it expressed.
-
-    Returns the route's OWN keys only. The stored file is the auth-scrub floor
-    (every ``SCRUB_AUTH_VARS`` entry as an empty string) with the route written
-    on top, and an empty value means "unset" only to claude reading a settings
-    FILE. Handing the floor back to a spawn would put it in the child's process
-    environment instead, where the original launch had those vars simply absent
-    - a revived worker carrying ``ANTHROPIC_API_KEY=""`` and every unset tier
-    var is not running the env it ran under. The floor is re-applied by
-    :func:`route_settings_path_for` when the relaunch writes its own settings
-    file, so dropping it here loses nothing and keeps the replay faithful.
-
-    Raises :class:`RouteRestoreError` when the file is gone, unreadable, or
-    malformed. Every caller is a relaunch, and a relaunch that cannot restore
-    its route must refuse rather than fall back: an unrouted worker WORKS, so
-    it bills the default Anthropic account and reports nothing - the one
-    failure shape an operator discovers from an invoice.
-    """
-    import json
-    from pathlib import Path
-
-    try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        env = payload["env"]
-    except OSError as exc:
-        raise RouteRestoreError(f"route settings file {path} is unreadable: {exc}") from exc
-    except (ValueError, KeyError, TypeError) as exc:
-        raise RouteRestoreError(f"route settings file {path} is malformed: {exc}") from exc
-    if not isinstance(env, dict):
-        raise RouteRestoreError(f"route settings file {path} has no env mapping")
-    route = {str(k): str(v) for k, v in env.items() if str(v) != ""}
-    # The stamp NAMES a route; it never IS one. Counting it toward "this file
-    # records a route" would let a file holding the scrub floor plus a provider
-    # name pass this refusal and relaunch a worker with no endpoint, no auth
-    # and no model, on the default Anthropic account - the silent wrong-bill
-    # outcome this refusal exists to prevent.
-    if not {k: v for k, v in route.items() if k != ROUTE_PROVIDER_ENV}:
-        # The row claims this worker was routed, and the file is readable but
-        # carries only the scrub floor. Returning {} would read as "never routed"
-        # to the caller and relaunch on the default account without a word - the
-        # same silent fallback as a missing file, so it takes the same refusal.
-        raise RouteRestoreError(f"route settings file {path} records no route")
-    return route
-
-
-def _match_provider(
-    route: Mapping[str, str], providers: dict[str, dict[str, object]]
-) -> Optional[str]:
-    """The provider name for a route within an ALREADY-BUILT providers map.
-
-    The match itself (stamp first, else base_url) lives here once so the
-    restore re-resolution and the ``config route settings ls`` rendering can
-    never disagree; callers that own a map call this and never rebuild it.
-    """
-    base = (route.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
-    named = (route.get(ROUTE_PROVIDER_ENV) or "").strip()
-    if named and named in providers:
-        return named
-    for name, record in providers.items():
-        if base and str(record.get("base_url") or "").rstrip("/") == base:
-            return name
-    return None
-
-
-def refresh_provider_default_tiers(
-    route: Mapping[str, str],
-    *,
-    settings: "Optional[SettingsModel]" = None,
-) -> tuple[dict[str, str], Optional[str]]:
-    """Re-resolve a recorded route's provider-DEFAULT tier keys, or say why not.
-
-    A recorded route-settings file pins two kinds of value with the same
-    authority: what the operator CHOSE (endpoint, token, model) and what the
-    provider registry defaulted to at launch (the haiku tier, a background
-    model the operator never named, plus every ``tier_models`` entry declared
-    in config). Replayed verbatim on resume, a moved default keeps serving the
-    old tier forever - glm-4.5-air left the z.ai coding-plan supported set, and
-    every resume off a file recorded before the change failed background calls
-    with model-not-found while the main model stayed healthy.
-
-    The operator's 2026-08-17 rule decides the split: the recorded file pins
-    what the operator chose, not what the provider happened to default to
-    that week. So every tier in the provider's effective tier map re-resolves
-    against TODAY'S registry (built-in defaults overlaid by config, the same
-    map :func:`effective_providers` renders), and every other key replays
-    verbatim. An extra_env tier pin does not survive a resume - pin the
-    provider's ``tier_models`` (or ``haiku_model``) in config to make a tier
-    durable.
-
-    Returns ``(route, note)``: a copy of the route (the caller's mapping is
-    never mutated) plus a disclosure note naming the provider, the old value
-    and the new one whenever a tier moved. A route whose provider cannot be
-    identified replays verbatim with a note naming what failed to match. No
-    default moved, or nothing recorded to refresh, returns ``(route, None)``.
-    """
-    refreshed = dict(route)
-    providers = effective_providers(_routing_block(settings))
-    pname = _match_provider(route, providers)
-    if pname is None:
-        base = (route.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
-        named = (route.get(ROUTE_PROVIDER_ENV) or "").strip()
-        missing = f"provider {named!r}" if named else f"base_url {base!r}"
-        return refreshed, (
-            f"recorded {missing} is not in today's provider registry; "
-            "replaying recorded tiers verbatim"
-        )
-    record = providers[pname]
-    tiers = record.get("tier_models")
-    tiers = tiers if isinstance(tiers, dict) else {}
-    moved: list[str] = []
-    for alias, todays in tiers.items():
-        key = f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"
-        recorded = refreshed.get(key)
-        if not todays or not recorded or str(todays) == recorded:
-            continue
-        refreshed[key] = str(todays)
-        moved.append(f"{alias} {recorded} -> {todays}")
-    if not moved:
-        return refreshed, None
-    return refreshed, (
-        f"provider {pname} tier default moved {', '.join(moved)}; "
-        "tiers re-resolved, operator-chosen keys replay verbatim"
     )
 
 
@@ -1368,32 +1181,4 @@ def _business_role_target(
     assert provider is not None and model is not None
     return provider, model
 
-
-def effective_providers(
-    block: "ModelRoutingBlock | None" = None,
-    env: Optional[Mapping[str, str]] = None,
-) -> dict[str, dict[str, object]]:
-    """The merged built-in + config providers map, answered by the one Rust
-    owner through the spawn-overlay ``providers`` kind (the ``block``
-    argument is retained for call compatibility; the binary reads the same
-    config files). Records carry ``tier_models`` and a ``key`` source pair
-    instead of the raw scalar fields. A non-``os.environ`` ``env`` rides the
-    payload so the key column answers from it. Returns {} when the binary is
-    unavailable, so a dev checkout renders no providers rather than
-    refusing."""
-    import os
-
-    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
-
-    payload: dict = {"kind": "providers", "cwd": os.getcwd()}
-    if env is not None and env is not os.environ:
-        payload["env"] = dict(env)
-    try:
-        answer = spawn_overlay_call(payload)
-    except SpawnOverlayUnavailable:
-        return {}
-    out: dict[str, dict[str, object]] = {}
-    for name, record in (answer.get("providers") or {}).items():
-        out[str(name)] = record
-    return out
 
