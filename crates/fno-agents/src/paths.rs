@@ -1056,45 +1056,39 @@ pub fn space_dir(cwd: &Path) -> PathBuf {
 /// the resolution mid-read. The stop/rm claims release skips on `None`
 /// instead of failing the stop.
 pub fn space_dir_opt(cwd: &Path) -> Option<PathBuf> {
+    space_dir_from_root(spaces_root_opt()?, cwd)
+}
+
+/// [`spaces_root`] from the same one-read snapshot, for readers that walk
+/// every space and must skip, not refuse, when no state root is declared.
+pub(crate) fn spaces_root_opt() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("FNO_SPACES_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
     {
-        return space_dir_from_root(dir, cwd);
+        return Some(dir);
     }
     let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     // The configured spaces override answers before the state chain, so the
     // best-effort callers read the same space the strict resolver answers.
     if let Some(raw) = crate::paths_cli::cfg_str(&base, &["paths", "spaces_dir"]) {
         if let Ok(p) = crate::paths_cli::resolve_override_path(&raw) {
-            return space_dir_from_root(crate::paths_cli::anchor_at(&base, p), cwd);
+            return Some(crate::paths_cli::anchor_at(&base, p));
         }
-    }
-    let agents_home = std::env::var_os(HOME_ENV)
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from);
-    if let Some(home) = agents_home {
-        let root = home
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| home.clone())
-            .join("spaces");
-        return space_dir_from_root(root, cwd);
     }
     // The configured state chain (carrier, then config state_dir), then the
     // guarded default: the strict resolver's answer, one-read.
     if let Some(root) = crate::paths_cli::declared_state_dir(&base) {
-        return space_dir_from_root(root.join("spaces"), cwd);
+        return Some(root.join("spaces"));
     }
     // No pin at all: under test that is an undeclared process (skip);
     // in production the durable default is the real answer.
     if cfg!(test) && !test_root_declared() {
         return None;
     }
-    let home = std::env::var_os("HOME")
+    std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
-        .map(|h| PathBuf::from(h).join(".fno").join("spaces"))?;
-    space_dir_from_root(home, cwd)
+        .map(|h| PathBuf::from(h).join(".fno").join("spaces"))
 }
 
 /// The slug join every [`space_dir_opt`] arm shares: the space for `cwd`'s
@@ -1791,6 +1785,23 @@ mod tests {
     /// root follows the declared state root and never the agents home, and a
     /// genuine legacy checkout journal still moves once, behind a MOVED-TO
     /// marker.
+    /// The strict and best-effort resolvers answer one root: a split here
+    /// writes a space through one and releases its claims through the other.
+    #[test]
+    fn best_effort_spaces_root_ignores_the_agents_home() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _env = EnvGuard::capture();
+        let state_root = tmp("opt-state");
+        std::env::set_var("FNO_STATE_DIR", &state_root);
+        std::env::set_var(HOME_ENV, tmp("opt-home"));
+        std::env::remove_var("FNO_SPACES_DIR");
+
+        assert_eq!(spaces_root_opt(), Some(state_root.join("spaces")));
+        assert_eq!(spaces_root_opt(), Some(spaces_root()));
+    }
+
     #[test]
     fn migrate_durable_root_still_moves_checkout_journal() {
         if !git_available() {

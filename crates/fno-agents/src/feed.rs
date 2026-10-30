@@ -1688,7 +1688,8 @@ fn main_store_journal(
     let Some(parent) = home.root().parent() else {
         return (String::new(), None);
     };
-    let mail = mail_escalation_text(&parent.join("spaces"), since_epoch, until_epoch);
+    let spaces = crate::paths::spaces_root_opt().unwrap_or_else(|| parent.join("spaces"));
+    let mail = mail_escalation_text(&spaces, since_epoch, until_epoch);
     let path = parent.join("events.jsonl");
     if !path.is_file() && !crate::event_store::store_path(&path).is_file() {
         return (

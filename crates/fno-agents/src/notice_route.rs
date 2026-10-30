@@ -30,9 +30,9 @@ pub(crate) fn notice_route_dir() -> Result<PathBuf, String> {
     state_root().map(|p| crate::state_layout::place(&p, "notice-route"))
 }
 
-/// The agents home's parent, `~/.fno` in the default layout. `spaces_dir`
-/// and the plugin-root stamp anchor here, never on the moved notice-route
-/// dir: after the fold its parent is `~/.fno/state`.
+/// The agents home's parent, `~/.fno` in the default layout. The plugin-root
+/// stamp anchors here, never on the moved notice-route dir: after the fold
+/// its parent is `~/.fno/state`.
 fn state_root() -> Result<PathBuf, String> {
     crate::paths::AgentsHome::from_env()
         .root()
@@ -1129,7 +1129,7 @@ pub(crate) fn fold_pass(rows: &[FoldRow], state: &mut FoldState, now: i64) -> Ve
 
 /// `~/.fno/spaces/` - every space journal the fold reads.
 fn spaces_dir() -> Option<std::path::PathBuf> {
-    state_root().ok().map(|p| p.join("spaces"))
+    crate::paths::spaces_root_opt()
 }
 
 /// The trailing 7 days of foldable rows from every space journal
