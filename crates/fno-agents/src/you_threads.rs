@@ -192,7 +192,7 @@ pub(crate) fn walk(
                     continue;
                 }
                 let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or("");
-                let Some(typed) = typed_part(prompt) else {
+                let Some(typed_prompt) = typed_part(prompt) else {
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 };
@@ -216,7 +216,7 @@ pub(crate) fn walk(
                     // argv-fence: exempt. A plain Rust call, not an argv
                     // build: open_new is the walk's own closure, no launcher
                     // parser touches this path.
-                    typed,
+                    typed_prompt.to_string(),
                     line_start,
                 );
             }
