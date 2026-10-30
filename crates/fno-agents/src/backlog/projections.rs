@@ -626,15 +626,6 @@ fn parse_target(row: &Value) -> Result<RenderTarget, String> {
     })
 }
 
-/// `config.backlog.render_targets` from the GLOBAL config only: a render
-/// fired from any cwd must not depend on a project-local list. Every bad
-/// row warns and costs that one board; the canonical board row is implicit
-/// unless `backlog.render_default: false` turns it off.
-fn configured_targets() -> Vec<RenderTarget> {
-    let (global, unreadable) = super::advance_settings::load_global_merged();
-    targets_from_global(&global, &unreadable)
-}
-
 /// Whether the canonical board page is already among the targets.
 fn names_canonical_page(targets: &[RenderTarget]) -> bool {
     let canonical = resolve(&graph_html_path());
@@ -661,6 +652,10 @@ fn render_default_on(block: Option<&Value>) -> bool {
     super::advance_settings::coerce_bool(block.and_then(|b| b.get("render_default")), true)
 }
 
+/// `config.backlog.render_targets` from the GLOBAL config only: a render
+/// fired from any cwd must not depend on a project-local list. Every bad
+/// row warns and costs that one board; the canonical board row is implicit
+/// unless `backlog.render_default: false` turns it off.
 fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarget> {
     let block = global.get("backlog");
     let rows = match block.and_then(|b| b.get("render_targets")) {
