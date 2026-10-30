@@ -883,10 +883,37 @@ fn classify_reachability(
     last_activity_basis: Option<&str>,
     observed: &Value,
 ) -> (&'static str, &'static str) {
+    classify_reachability_at(
+        truth_state,
+        age_s,
+        falsifier,
+        TRANSCRIPT_EVIDENCE_S as f64,
+        None,
+        last_activity_basis,
+        observed,
+    )
+}
+
+/// The verdict with its two caller-set inputs: the freshness window and the
+/// positive process evidence (`pid_alive == Some(true)`, basis `process`: a
+/// parked worker between turns holds its tree while its transcript is quiet).
+/// A dead pid never rides `pid_alive`; it arrives as a falsifier.
+pub(crate) fn classify_reachability_at(
+    truth_state: Option<&str>,
+    age_s: Option<i64>,
+    falsifier: Option<&'static str>,
+    fresh_s: f64,
+    pid_alive: Option<bool>,
+    last_activity_basis: Option<&str>,
+    observed: &Value,
+) -> (&'static str, &'static str) {
     if let Some(word) = falsifier {
         // The falsifier word IS the basis: process-gone / pane-gone /
         // exit-recorded, the evidence the verdict was reached from.
         return ("unreachable", word);
+    }
+    if pid_alive == Some(true) {
+        return ("reachable", "process");
     }
     if truth_state == Some("working")
         || truth_state == Some("watching")
@@ -898,7 +925,7 @@ fn classify_reachability(
         if inference_samples(observed) == Some(0) {
             return ("unknown", "no-inference");
         }
-        if age_s.is_some_and(|a| a > TRANSCRIPT_EVIDENCE_S) {
+        if age_s.is_some_and(|a| a as f64 > fresh_s) {
             return ("unknown", "stale-transcript");
         }
         return ("reachable", "transcript");
@@ -1323,7 +1350,7 @@ pub(crate) fn session_records(
 
 /// The newest `n` records of a JSONL transcript, read from EOF in windows
 /// that grow until they hold `n` records, reach the file start, or hit 8 MB.
-fn tail_records(
+pub(crate) fn tail_records(
     path: &Path,
     n: usize,
     parse: fn(&Value) -> Option<TruthRecord>,

@@ -18,7 +18,7 @@ pub fn registry_join() -> (JoinMap, bool) {
 
 /// The registry file: the `WORKTREE_STATUS_REGISTRY` pin, else the one
 /// resolver every surface reads ([`AgentsHome::shared_registry_json`]).
-fn registry_path() -> PathBuf {
+pub(crate) fn registry_path() -> PathBuf {
     if let Some(over) = std::env::var_os("WORKTREE_STATUS_REGISTRY") {
         if !over.is_empty() {
             return PathBuf::from(over);
@@ -28,7 +28,7 @@ fn registry_path() -> PathBuf {
 }
 
 /// The porcelain listing via the shared parser.
-fn porcelain(repo: &Path) -> Option<Vec<(Option<String>, String)>> {
+pub(crate) fn porcelain(repo: &Path) -> Option<Vec<(Option<String>, String)>> {
     let out = git_out(repo, &["worktree", "list", "--porcelain"])?;
     if !out.status.success() {
         return None;
