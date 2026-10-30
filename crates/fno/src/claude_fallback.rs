@@ -76,6 +76,9 @@ fn parse_args(args: &[OsString]) -> Result<Option<Args>, String> {
                 days = s
                     .parse()
                     .map_err(|_| format!("--days {s:?} is not a count"))?;
+                if days > 9_999 {
+                    return Err(format!("--days {days} is over the 9999 cap"));
+                }
             }
             Some(other) => return Err(format!("unknown argument {other:?}")),
             None => return Err("arguments must be utf-8".to_string()),
@@ -103,7 +106,7 @@ fn parse_since(s: &str) -> Result<SystemTime, String> {
 
 fn count_in(projects: &Path, args: &Args) -> usize {
     let end = args.since + Duration::from_secs(args.days * 86_400);
-    let base_slugs = candidate_slugs(&args.worktrees_base);
+    let base_slugs = base_slugs(&args.worktrees_base);
     let Ok(dirs) = std::fs::read_dir(projects) else {
         return 0;
     };
@@ -121,6 +124,29 @@ fn count_in(projects: &Path, args: &Args) -> usize {
         }
     }
     sessions.len()
+}
+
+/// The slugs the base answers under: the path as given, trailing
+/// separators trimmed, plus the resolved path when it differs, so a
+/// relative or symlinked spelling still carries the leading `-` the
+/// encoded absolute cwds start with.
+fn base_slugs(base: &Path) -> Vec<String> {
+    let given = base.to_string_lossy();
+    let trimmed = given.trim_end_matches('/');
+    let spelled = if trimmed.is_empty() {
+        given.as_ref()
+    } else {
+        trimmed
+    };
+    let mut slugs = candidate_slugs(Path::new(spelled));
+    if let Ok(resolved) = base.canonicalize() {
+        for slug in candidate_slugs(&resolved) {
+            if !slugs.contains(&slug) {
+                slugs.push(slug);
+            }
+        }
+    }
+    slugs
 }
 
 /// True when the encoded dir name is strictly deeper than the encoded base
@@ -315,6 +341,8 @@ mod tests {
         // And so does a session whose cwd was deeper inside that worktree.
         mk(&format!("{}-x-cccc-sub", slug("/wt/fleet")), in_window);
         assert_eq!(count_in(projects, &args_for(base, 7)), 2);
+        // A trailing separator on the base still counts the same sessions.
+        assert_eq!(count_in(projects, &args_for(Path::new("/wt/fleet/"), 7)), 2);
     }
 
     #[test]
@@ -370,6 +398,18 @@ mod tests {
             .iter()
             .map(OsString::from)
             .collect();
+        assert!(parse_args(&a).is_err());
+        let a: Vec<OsString> = [
+            "--worktrees-base",
+            "/wt",
+            "--since",
+            SINCE,
+            "--days",
+            "10000",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
         assert!(parse_args(&a).is_err());
         let a: Vec<OsString> = ["--worktrees-base", "/wt", "--since", SINCE]
             .iter()
