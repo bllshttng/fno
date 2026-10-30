@@ -203,6 +203,19 @@ pub fn tick_answers(
         if state.terminal() {
             continue;
         }
+        // A copy's answer was recorded on this machine, but the asking
+        // machine delivers it: the ladder never runs, and the `carried`
+        // delivery row keeps the walk bounded so the copy never burns its
+        // clear retries against the origin-only refusal.
+        if items.iter().any(|i| i.id == *item_id && i.host.is_some()) {
+            state.cleared = true;
+            state.rung = "carried".into();
+            state.outcome = "carried".into();
+            state.evidence = "answer on a copy; the asking machine delivers it".into();
+            acted += 1;
+            emit_delivery(state);
+            continue;
+        }
         // The clear phase: while the door can still close, the arm owns the
         // clear (same retry cap as the file lane). `answered` still needs it:
         // the answer row recorded, and the clear is what closes the question.
@@ -871,6 +884,39 @@ mod tests {
             journal()
         );
         assert_eq!(io.clears, 1, "no second clear");
+    }
+
+    // The ladder never runs for a copy's answer: the asking machine delivers
+    // it, so no local clear or mail burns against the origin-only refusal.
+    #[test]
+    fn a_copy_answer_row_never_enters_the_local_ladder() {
+        let _root = crate::paths::DeclaredRoot::declare("reply_copy_carried_");
+        let mut item = ready_item("q-copy@hosta", None, Some("s1"));
+        item.host = Some("hosta".into());
+        let items = vec![item];
+        record_answer("q-copy@hosta");
+        let mut io = FakeIo {
+            posture: String::new(),
+            clears: 0,
+        };
+        let state_dir = tempfile::tempdir().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let runner = &|_argv: &[String]| (0, String::new(), String::new());
+        let (acted, detail) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            runner,
+        );
+        assert_eq!(io.clears, 0, "no local clear for a copy: {detail:?}");
+        assert_eq!(acted, 1, "one carried delivery row: {detail:?}");
+        let raw = journal();
+        assert!(
+            raw.contains("\"outcome\":\"carried\"") && raw.contains("\"item_id\":\"q-copy@hosta\""),
+            "the carried row landed: {raw}"
+        );
     }
 
     #[test]
