@@ -1403,7 +1403,7 @@ mod tests {
         crate::graph_store::seed_rows(
             &crate::state_layout::graph_anchor(tmp.path()),
             &[serde_json::json!({
-                "id": "x-9fc9",
+                "id": "x-aaaa",
                 "slug": "spawn-bare-node-names",
                 "title": "t",
                 "status": "idea",
@@ -1415,8 +1415,8 @@ mod tests {
             let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
             normalize(&with_bare_node_seed(&argv, tmp.path()), None, tmp.path()).argv
         };
-        let claude = run(&["spawn", "x-9fc9"]);
-        let codex = run(&["spawn", "-H", "codex", "x-9fc9"]);
+        let claude = run(&["spawn", "x-aaaa"]);
+        let codex = run(&["spawn", "-H", "codex", "x-aaaa"]);
         let unknown = run(&["spawn", "x-0000"]);
         match saved {
             Some(v) => std::env::set_var("FNO_STATE_DIR", v),
@@ -1428,10 +1428,10 @@ mod tests {
                 "spawn",
                 "--name",
                 "t-spawn-bare-node-names",
-                "/fno:target x-9fc9"
+                "/fno:target x-aaaa"
             ]
         );
-        assert_eq!(codex.last().map(String::as_str), Some("$fno:target x-9fc9"));
+        assert_eq!(codex.last().map(String::as_str), Some("$fno:target x-aaaa"));
         assert_eq!(unknown.last().map(String::as_str), Some("x-0000"));
     }
 }
