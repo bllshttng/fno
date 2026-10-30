@@ -205,7 +205,7 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
         // honest heartbeat: each wake re-evaluates the hold and re-arms
         // while it lasts.
         format!(
-            "background Bash `fno do pr wait {pr_number} --until review --timeout=15m` (wakes when a new review posts, or after ~15m; the slot frees outside this PR, so the bound is the heartbeat)"
+            "background Bash `fno do pr wait {pr_number} --until review --timeout=15m` (wakes when a new review posts, or after ~15m; the hold frees outside this PR, so the bound is the heartbeat)"
         )
     } else {
         format!(
