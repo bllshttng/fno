@@ -527,6 +527,13 @@ mod tests {
                 "lead_verdict_inputs.rs",
                 include_str!("../lead_verdict_inputs.rs"),
             ),
+            // The lead skill ships its grant teaching in prose; the same
+            // ruling covers it, so a regression lands in CI, not in a
+            // worker's chat with the user.
+            (
+                "skills/lead/SKILL.md",
+                include_str!("../../../../skills/lead/SKILL.md"),
+            ),
         ];
         for needle in &needles {
             let hits: Vec<&str> = sources

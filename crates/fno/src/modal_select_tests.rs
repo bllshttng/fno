@@ -112,7 +112,7 @@ fn a_press_is_a_click_until_it_moves_and_a_double_click_takes_the_word() {
 }
 
 #[test]
-fn a_selection_paints_with_the_theme_sel_surface_and_drops_with_its_text() {
+fn a_selection_paints_with_the_cursor_style_and_drops_with_its_text() {
     let popup = info_popup(URL);
     paint(&popup);
     drag_everything();
