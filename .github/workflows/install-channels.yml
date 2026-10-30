@@ -108,7 +108,7 @@ jobs:
             readme: []
           - id: brew
             runs-on: macos-15
-            expect: fail
+            expect: pass
             node: ''
             readme: ['brew install bllshttng/fno/fno']
           - id: cargo
