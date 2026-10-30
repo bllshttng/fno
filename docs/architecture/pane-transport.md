@@ -20,15 +20,13 @@ An earlier ruling said "an envelope typed as keystrokes is still keystrokes" and
 
 | Caller | Wants | Why |
 |--------|-------|-----|
-| `_forced_pane_send` (`mail/cli.py`) | passthrough | the body is already enveloped by `_name_lane_send` |
-| name-lane pane rung (`mail/cli.py`) | passthrough | same, already enveloped |
-| `_raw_send` (`mail/cli.py`) | `raw=True` | the REPL slash parser must fire, and an envelope defeats it |
-| peer follow-up (`dispatch.py`) | passthrough | carries a `<cross-session-message>` container of its own |
-| `_deliver_live` (`dispatch.py`) | `raw` when `mail is None` | that argument is what says whether this is mail at all |
+| forced pane send (`mail_cli/send/lanes.rs`) | passthrough | the body is already enveloped by the name lane |
+| name-lane pane rung (`mail_cli/send/lanes.rs`) | passthrough | same, already enveloped |
+| raw send (`mail_cli/send_raw.rs`) | `raw=True` | the REPL slash parser must fire, and an envelope defeats it |
 
-The three passthroughs rely on `_already_wrapped`, which tests the FIRST tag of the body. A digest that merely CONTAINS an envelope fails that test. `wrap_fno_mail` then refuses it, because a body must not hold an envelope. So a caller whose payload EMBEDS mail says `raw` rather than trusting the passthrough.
+The passthroughs test the FIRST tag of the body. A digest that merely CONTAINS an envelope fails that test. The renderer then refuses it, because a body must not hold an envelope. So a caller whose payload EMBEDS mail says `raw` rather than trusting the passthrough.
 
-**One renderer.** `cli/src/fno/mail/envelope.py` is the sole `<fno_mail>` renderer. A prior node deleted the Rust mirror as dead code. If the Rust command cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
+**One renderer.** `crates/fno-agents/src/mail_envelope.rs` is the sole `<fno_mail>` renderer. If the Rust command cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
 
 ## The read-back gate
 
@@ -124,7 +122,7 @@ The seed is the one message that defines a worker's entire task. It was also the
 
 The envelope cannot ride the payload. `skills/agent/scripts/normalize.sh:710` classifies a payload by a LEADING slash (`case "$msg" in /*) payload_mode="passthrough"`), so anything in front of `/fno:target x-aaaa` destroys routing. Behind the command line is no safer. The harness REPL is a second reader nobody controls. Probe 1 measured what it does with a trailing block. The command still routes, and the whole trailer lands inside `<command-args>`. For `/fno:target <node>` those arguments are load-bearing, so an envelope swallowed into them is a real failure rather than a cosmetic one.
 
-So the prompt stays byte-identical and the attribution arrives beside it. Every launcher exports bounded `FNO_SEED_PROV_*` fields on the child's environment (`cli/src/fno/mail/seed_provenance.py` owns the contract), and `hooks/spawn-seed-provenance-session-start.sh` renders them through the one renderer into startup context. The worker learns who supplied its seed before it acts. The transcript carries a greppable `</fno_mail>` for that seed, with no envelope at byte zero.
+So the prompt stays byte-identical and the attribution arrives beside it. Every launcher exports bounded `FNO_SEED_PROV_*` fields on the child's environment (`SEED_PROVENANCE_KEYS` in `cli/src/fno/harness_identity.py` and its Rust reader in `crates/fno-agents/src/claude_supervisor.rs` hold the contract), and `hooks/spawn-seed-provenance-session-start.sh` renders them through the one renderer into startup context. The worker learns who supplied its seed before it acts. The transcript carries a greppable `</fno_mail>` for that seed, with no envelope at byte zero.
 
 The gate is not-a-restart, and it is not the same test on every harness. Claude reports a `source` field, so the hook refuses an explicit `compact` or `resume`. Codex reports no such field. It routes compaction to `PostCompact`, a separate event this hook is not registered for. So a codex payload that parses and carries no `source` is a real start, and it emits. Requiring the literal `startup` silenced the sidecar on the one harness whose head-8 is a clock bucket. A payload that does not parse at all still emits nothing, because that hook cannot tell a start from a compaction.
 
@@ -138,7 +136,7 @@ An operator spawn emits nothing. A person typing `fno agents spawn` in a shell a
 
 Three seeds get no sidecar, and none of them loses its spawn. A seed over the 16 KiB cap: a sidecar must quote the seed in full, and a pasted plan is long rather than dishonest. A seed from an unprovable identity: that is the operator case. And a seed already carrying an `<fno_mail>` envelope.
 
-That last one refused the spawn for a while, and it was wrong twice over. `wake_and_deliver`'s fork rung seeds a worker with the wrapped message itself. So a legitimate seed carries an envelope BY CONSTRUCTION. Refusing killed every mail send to an asleep-but-resumable peer that reached that rung. It demoted to durable blaming a spawn failure that never happened. Refusing was also the wrong instrument. The tag reaches the worker prompt whether or not a sidecar renders. It only ever helped by killing the launch.
+That last one refused the spawn for a while, and it was wrong twice over. The mail wake's fork rung seeded a worker with the wrapped message itself. So a legitimate seed carries an envelope BY CONSTRUCTION. Refusing killed every mail send to an asleep-but-resumable peer that reached that rung. It demoted to durable blaming a spawn failure that never happened. Refusing was also the wrong instrument. The tag reaches the worker prompt whether or not a sidecar renders. It only ever helped by killing the launch.
 
 So this helper never refuses a spawn. It owes the caller an honest sidecar or none, and it has no stake in the work being launched.
 
