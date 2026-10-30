@@ -18,7 +18,30 @@ use std::path::PathBuf;
 /// entries are DISCOVERED, so they honor `FNO_CONFIG_SEARCH_ROOT`
 /// ([`crate::agents_config::within_search_ceiling`]); the FNO_CONFIG and
 /// FNO_GLOBAL_SETTINGS_PATH entries are explicit and read as-is.
+///
+/// A pin is the whole config world, exactly as Python's loader reads it: the
+/// pinned file and its directory siblings, never the cwd tier and never the
+/// machine global. The fall-through to `~/.fno` for keys the pin lacks is
+/// the leak that once synced a pinned sandbox against the shared primary.
 pub(crate) fn candidates() -> Vec<PathBuf> {
+    // The explicit file is usually its parent's settings.yaml sibling, so the
+    // sibling push already covers it: skip the repeat so one file is read
+    // once (a doubled work map was the symptom; Python's FNO_CONFIG branch
+    // reads the file exactly once).
+    if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
+        let cfg = PathBuf::from(cfg);
+        let mut out = Vec::new();
+        if let Some(parent) = cfg.parent() {
+            out.push(parent.join("config.toml"));
+            out.push(parent.join("settings.yaml"));
+        }
+        if !out.contains(&cfg) {
+            out.push(cfg);
+        }
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|p| seen.insert(p.clone()));
+        return out;
+    }
     let mut out = Vec::new();
     let mut push_dir = |dir: PathBuf| {
         out.push(dir.join("config.toml"));
@@ -28,21 +51,6 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
         let dir = cwd.join(".fno");
         if crate::agents_config::within_search_ceiling(&dir.join("config.toml")) {
             push_dir(dir);
-        }
-    }
-    // The project config the FNO_CONFIG redirect names (python's
-    // `config_file()` candidate), then the global file. The explicit file is
-    // usually its parent's settings.yaml sibling, so the sibling push already
-    // covered it: skip the repeat so one file is read once (a doubled work
-    // map was the symptom; Python's FNO_CONFIG branch reads the file exactly
-    // once).
-    if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
-        let cfg = PathBuf::from(cfg);
-        if let Some(parent) = cfg.parent() {
-            push_dir(parent.to_path_buf());
-        }
-        if !out.contains(&cfg) {
-            out.push(cfg);
         }
     }
     match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
