@@ -661,7 +661,7 @@ fn decide_observed<P: Probes>(
     // The pin. An unreadable covered head refuses instead of falling back to an
     // unpinned effect: an unpinned arm lets a racing push land an unreviewed
     // head through GitHub's queue, which is the failure this owner exists for.
-    let Some(head) = resolved_covered_head(probes, cwd, request, facts) else {
+    let Some(head) = resolved_covered_head(probes, cwd, request, &facts) else {
         return Err(Outcome::Unknown {
             reason: format!(
                 "no covered head is readable for PR {}; refusing an unpinned {}",
