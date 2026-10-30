@@ -5,7 +5,7 @@
 //! refuse-on-silence) stay owned by keeper_sweep.rs.
 
 use super::*;
-use crate::daemon::tests::keeper_sweep::{keeper_sweep_home, spawn_killable_keeper};
+use crate::daemon::tests::keeper_sweep::{expect_row, keeper_sweep_home, spawn_killable_keeper};
 use crate::daemon::tests::test_ctx;
 
 fn read_events(home: &AgentsHome) -> Vec<Value> {
@@ -37,45 +37,6 @@ impl Drop for StopFixture {
         if let Some(keeper) = self.keeper.take() {
             let _ = keeper.join();
         }
-    }
-}
-
-/// The store state a failed registry read needs in the panic text. The CI
-/// loss on 2026-10-30 unwrapped a None whose cause (absent row vs ambiguous
-/// label vs a writer's drop) the message did not name; a dropped row carries
-/// a `registry_row_removed` event naming the remover, so this dump makes a
-/// recurrence diagnose itself instead of re-filing a blind flake.
-fn dump_store_state(home: &AgentsHome) -> String {
-    let path = home.registry_json();
-    let document =
-        crate::registry_read::registry_text(&path).unwrap_or_else(|e| format!("unreadable: {e}"));
-    let journal = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
-    format!(
-        "registry path: dir={} file={}\ndocument: {document}\nevents: {journal}",
-        path.is_dir(),
-        path.is_file()
-    )
-}
-
-/// The assert `registry.find(name).unwrap()` wants, with the None cause
-/// named: `find` resolves to None both when the row is absent and when two
-/// rows answer the label, and the store dump rides the panic either way.
-fn expect_row<'a>(
-    registry: &'a crate::state::Registry,
-    name: &str,
-    home: &AgentsHome,
-) -> &'a RegistryEntry {
-    match registry.find(name) {
-        Some(entry) => entry,
-        None => panic!(
-            "the {name} row answered nothing after stop ({}): {}",
-            if registry.label_matches_count(name) > 1 {
-                "ambiguous: more than one row answers the label"
-            } else {
-                "absent from the registry"
-            },
-            dump_store_state(home)
-        ),
     }
 }
 
