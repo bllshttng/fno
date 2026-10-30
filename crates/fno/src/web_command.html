@@ -129,7 +129,7 @@ function waiting(model) {
     for (const q of qs.filter((x) => x.host === host)) {
       const r = el("div", "lk"), t = el("span", "lt");
       t.append(el("b", null, q.title || q.id));
-      t.append(el("code", null, [q.node || "no node", ago(since(q.created_at)) + " old", "fno inbox outstanding clear " + q.id + " --answer \"…\"" + (host == null ? "" : " (on " + host + ")")].join(" · ")));
+      t.append(el("code", null, [q.node || "no node", ago(since(q.created_at)) + " old"].join(" · ")));
       r.append(t);
       box.append(r);
     }
