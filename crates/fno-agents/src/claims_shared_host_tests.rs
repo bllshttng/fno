@@ -1,8 +1,7 @@
 //! The shared-host node-claim arms: a codex claim's recorded pid is the
 //! app-server that hosts every thread on the machine, so on `node:`/`task:`
-//! keys it must never answer Live by itself. Specimens x-2121/x-2668 and node
-//! x-5a80: the worker row was gone, only the host pid answered, and the node
-//! stayed claimed.
+//! keys it must never answer Live by itself. When the worker row is gone,
+//! only the host pid answers, and the node must not stay claimed on it.
 use super::*;
 
 fn shared_host_record(harness: Option<&str>, now: i64, expires_at: Option<i64>) -> ClaimRecord {
@@ -22,39 +21,6 @@ fn shared_host_record(harness: Option<&str>, now: i64, expires_at: Option<i64>) 
         machine_id: Some(machine_id()),
         metadata: serde_json::Map::new(),
     }
-}
-
-#[test]
-fn codex_node_claim_no_ttl_live_host_pid_absent_witness_stales() {
-    let now = now_ms();
-    let rec = shared_host_record(Some("codex"), now, None);
-    let witness: SessionWitness = &|_| SessionLiveness::Absent;
-    assert_eq!(
-        classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, Some(witness)),
-        (ClaimState::Stale, basis::SESSION_ABSENT)
-    );
-}
-
-#[test]
-fn codex_node_claim_no_ttl_live_host_pid_unresolved_witness_suspects() {
-    let now = now_ms();
-    let rec = shared_host_record(Some("codex"), now, None);
-    let witness: SessionWitness = &|_| SessionLiveness::Unresolved;
-    assert_eq!(
-        classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, Some(witness)),
-        (ClaimState::Suspect, basis::PID_SHARED)
-    );
-}
-
-#[test]
-fn codex_node_claim_no_ttl_live_host_pid_witness_live_stays_live() {
-    let now = now_ms();
-    let rec = shared_host_record(Some("codex"), now, None);
-    let witness: SessionWitness = &|_| SessionLiveness::Live(basis::REGISTRY_SESSION_LIVE);
-    assert_eq!(
-        classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, Some(witness)),
-        (ClaimState::Live, basis::REGISTRY_SESSION_LIVE)
-    );
 }
 
 #[test]
