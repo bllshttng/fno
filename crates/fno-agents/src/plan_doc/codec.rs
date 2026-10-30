@@ -276,10 +276,19 @@ fn parse_scalar_strict(key: &str, lineno: usize, raw_val: &str) -> Result<String
 }
 
 /// Parse-back check every plan-doc write runs before touching disk: the
-/// serialized content must re-parse, and a `status` scalar must be in the
-/// known vocabulary. A writer that would save what it cannot read back is
-/// refused with the file byte-identical.
+/// serialized content must re-parse. Structural only: a writer that leaves a
+/// pre-existing drift-word status (`draft`, `pending`) untouched must still
+/// be able to write its own field, so the vocabulary belongs to
+/// [`ensure_canonical`], used by the doors that SET the status.
 pub fn ensure_parsable(content: &str) -> Result<(), String> {
+    parse_frontmatter(content)?;
+    Ok(())
+}
+
+/// [`ensure_parsable`] plus the status-vocabulary check, for the doors whose
+/// own output sets the `status` scalar: a writer that produces an unknown
+/// token is refused with the file byte-identical.
+pub fn ensure_canonical(content: &str) -> Result<(), String> {
     let parsed = parse_frontmatter(content)?;
     if let Some(Value::Scalar(s)) = parsed.fields.get("status") {
         let canonical = crate::plan_doc::status::canonical_status(Some(s));
@@ -826,35 +835,29 @@ mod tests {
         // Corrupt line: the parse-back check refuses before any bytes move.
         let err = ensure_parsable("---\nstatus: \"in_\"in_review\"\n---\nbody\n").unwrap_err();
         assert!(err.contains("Malformed frontmatter"), "{err}");
-        // Unknown token: refused at the write door.
-        let err = ensure_parsable("---\nstatus: in_garbage\n---\nbody\n").unwrap_err();
+        // A pre-existing drift-word status parses back: a writer that leaves
+        // it untouched must be able to write its own field.
+        assert!(ensure_parsable("---\nstatus: draft\n---\nbody\n").is_ok());
+        // The status-setting doors refuse an unknown token.
+        let err = ensure_canonical("---\nstatus: in_garbage\n---\nbody\n").unwrap_err();
         assert!(err.contains("not in the plan vocabulary"), "{err}");
-        // Known statuses (quoted or bare) and an absent status parse.
-        assert!(ensure_parsable("---\nstatus: in_review\n---\nbody\n").is_ok());
-        assert!(ensure_parsable("---\nstatus: \"superseded\"\n---\nbody\n").is_ok());
-        assert!(ensure_parsable("---\nkind: quick-plan\n---\nbody\n").is_ok());
+        assert!(ensure_canonical("---\nstatus: in_review\n---\nbody\n").is_ok());
+        assert!(ensure_canonical("---\nstatus: \"superseded\"\n---\nbody\n").is_ok());
+        assert!(ensure_canonical("---\nkind: quick-plan\n---\nbody\n").is_ok());
     }
 
     #[test]
-    fn write_plan_file_runs_the_parse_back_gate() {
-        let doc = write_tmp("writegate", "plan.md", "---\nstatus: ready\n---\n# body\n");
-        let before = std::fs::read_to_string(&doc).unwrap();
-        // A status outside the vocabulary is refused through the public write
-        // door; the file stays byte-identical.
+    fn write_plan_file_saves_an_untouched_drift_word_status() {
+        // The regression the vocabulary-at-the-chokepoint shape caused: a
+        // writer that does not set status (set-expected) must write a plan
+        // whose current status is a drift word.
+        let doc = write_tmp("writegate", "plan.md", "---\nstatus: draft\n---\n# body\n");
         let mut fields = Fields::new();
-        fields.insert("status", Value::Scalar("in_garbage".into()));
-        let err = write_plan_file(&doc, &fields, &"# body\n").unwrap_err();
-        assert!(
-            err.to_string().contains("not in the plan vocabulary"),
-            "{err}"
-        );
-        assert_eq!(std::fs::read_to_string(&doc).unwrap(), before);
-        // A known status writes through.
-        let mut ok = Fields::new();
-        ok.insert("status", Value::Scalar("in_review".into()));
-        write_plan_file(&doc, &ok, &"# body\n").unwrap();
+        fields.insert("expected_url_count", Value::Scalar("3".into()));
+        write_plan_file(&doc, &fields, &"# body\n").unwrap();
         let after = std::fs::read_to_string(&doc).unwrap();
-        assert!(after.contains("status: in_review"), "{after}");
+        assert!(after.contains("status: draft"), "{after}");
+        assert!(after.contains("expected_url_count: 3"), "{after}");
     }
 
     #[test]

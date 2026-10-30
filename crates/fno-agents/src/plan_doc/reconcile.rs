@@ -335,7 +335,7 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
                             rewritten
                         };
                         if apply {
-                            if let Err(e) = codec::ensure_parsable(&rewritten)
+                            if let Err(e) = codec::ensure_canonical(&rewritten)
                                 .map_err(std::io::Error::other)
                                 .and_then(|()| codec::atomic_write(&path, &rewritten))
                             {
@@ -417,7 +417,7 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
         };
 
         if apply {
-            if let Err(e) = codec::ensure_parsable(&rewritten)
+            if let Err(e) = codec::ensure_canonical(&rewritten)
                 .map_err(std::io::Error::other)
                 .and_then(|()| codec::atomic_write(&path, &rewritten))
             {
