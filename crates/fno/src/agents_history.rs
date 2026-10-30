@@ -3,7 +3,7 @@
 use serde_json::Value;
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod render;
 mod resolve;
@@ -49,6 +49,12 @@ fn run_to(args: &[OsString], stdout: &mut impl Write, stderr: &mut impl Write) -
     let resolved = resolve(&paths.arg, &sources);
     let transcripts = find_many(&resolved.sessions);
     let mut output = Vec::new();
+    // The import day names where history begins: rows before it were never
+    // recorded, so a listing states the boundary instead of implying
+    // completeness.
+    if let Some(day) = history_start(&paths.events) {
+        let _ = writeln!(output, "history starts {day}");
+    }
 
     if resolved.repo_slug_unresolved {
         let _ = writeln!(
@@ -161,6 +167,20 @@ fn next_path<'a>(
 }
 pub(super) fn short_id(value: &str) -> String {
     value.chars().take(8).collect()
+}
+
+/// The day history begins: the newest `run_history_imported` marker's
+/// `earliest_started`, as a date. None while the import has not run.
+fn history_start(events: &Path) -> Option<String> {
+    let q = crate::event_store::EventQuery::of_types(&["run_history_imported"]);
+    let rows = crate::event_store::query_events(events, &q).ok()?;
+    let row = rows.last()?;
+    let line: Value = serde_json::from_str(&row.line).ok()?;
+    let ts = line
+        .pointer("/data/earliest_started")?
+        .as_str()?
+        .to_string();
+    Some(ts.chars().take(10).collect())
 }
 
 pub(super) fn str_at<'a>(value: &'a Value, key: &str) -> Option<&'a str> {

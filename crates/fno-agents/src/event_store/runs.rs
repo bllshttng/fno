@@ -23,7 +23,7 @@ pub struct RunFilter {
 /// The run key both writers and the import share: `fno_id`, else
 /// `session_id`, else the backstop's node and PR for rows that predate
 /// scalar ids.
-fn run_key(run: &Value) -> Option<String> {
+pub(crate) fn run_key(run: &Value) -> Option<String> {
     for field in ["fno_id", "session_id"] {
         if let Some(id) = run.get(field).and_then(Value::as_str) {
             if !id.is_empty() {
