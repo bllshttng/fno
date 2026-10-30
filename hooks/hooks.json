@@ -430,6 +430,10 @@
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-run.sh\" claude-session-start",
             "timeout": 50
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/daemon-liveness-session-start.sh\""
           }
         ]
       }

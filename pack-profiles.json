@@ -29,6 +29,7 @@
     "hooks/codex-review-findings.sh",
     "hooks/context-nudge.sh",
     "hooks/context-run.sh",
+    "hooks/daemon-liveness-session-start.sh",
     "hooks/diff-budget-commit.sh",
     "hooks/edit-integrity.sh",
     "hooks/effect-guard-dispatch.sh",
