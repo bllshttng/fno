@@ -1253,13 +1253,13 @@ mod tests {
                         handle: "daemon".into(),
                         ..Default::default()
                     }),
-                    node: Some("x-9f8e".into()),
+                    node: Some("job-7".into()),
                     state: "open".into(),
                     ..Default::default()
                 },
                 crate::needs_overlay::QuestionItem {
                     id: "q-node-only".into(),
-                    node: Some("x-9f8e".into()),
+                    node: Some("job-7".into()),
                     state: "open".into(),
                     ..Default::default()
                 },
@@ -1271,8 +1271,8 @@ mod tests {
         assert_eq!(question_title(&v, "q-shared"), "from the projection");
         assert_eq!(question_title(&v, "q-index-only"), "index only");
         // A question with no text names its asker and node, never a bare id.
-        assert_eq!(question_title(&v, "q-silent"), "from daemon on x-9f8e");
-        assert_eq!(question_title(&v, "q-node-only"), "on x-9f8e");
+        assert_eq!(question_title(&v, "q-silent"), "from daemon on job-7");
+        assert_eq!(question_title(&v, "q-node-only"), "on job-7");
         // Degraded: the fresh index outvotes the stale projection.
         v.questions_degraded = true;
         assert_eq!(question_title(&v, "q-shared"), "from the index");

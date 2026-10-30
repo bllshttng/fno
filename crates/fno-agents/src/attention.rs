@@ -1296,9 +1296,9 @@ mod tests {
             "no delimiter after the bracket is content"
         );
         // No text: the row names its asker and node instead of a bare id.
-        let silent = row("q-e", "", json!({"asker": "daemon", "node": "x-9f8e"}));
+        let silent = row("q-e", "", json!({"asker": "daemon", "node": "job-7"}));
         let item = &project(&silent, &[], "", 0)[0];
-        assert_eq!(item.title, "from daemon on x-9f8e");
+        assert_eq!(item.title, "from daemon on job-7");
         // Neither asker nor node: empty stays empty, and the reader keeps
         // its own id fallback.
         let bare = row("q-b", "", json!({}));
