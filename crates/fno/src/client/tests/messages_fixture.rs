@@ -238,9 +238,9 @@ async fn messages_reply_board_contracts() {
     b.col2 = ChatTab::Chats;
     // The bubble thread (AC6-HP, AC16-HP, AC17-HP, AC19-HP): the title
     // names the other party with the info affordances, runs share one
-    // label, the time lines separate the five-minute gaps, blanks sit
-    // between runs and never inside one, every body reads left-aligned,
-    // and no delivered-header or envelope text shows.
+    // label, a time line closes each five-minute burst, blanks sit
+    // between runs and never inside one, and no delivered-header or
+    // envelope text shows.
     b.sel_thread = Some("chat-a1".into());
     let (lines3, owners3) = b.thread_lines(50);
     let texts: Vec<String> = lines3.iter().map(|l| l.text.clone()).collect();
@@ -262,16 +262,18 @@ async fn messages_reply_board_contracts() {
             .format("%H:%M")
             .to_string()
     };
-    let t1 = time_of("2026-10-01T09:00:00Z");
+    // Each burst closes with its last message's time on that sender's
+    // side: both bursts end on candor, the selected agent, so both sit
+    // flush right.
+    let t3 = time_of("2026-10-01T09:02:00Z");
     let t4 = time_of("2026-10-01T09:20:00Z");
-    assert_eq!(
-        texts
-            .iter()
-            .filter(|t| t.trim() == t1 || t.trim() == t4)
-            .count(),
-        2,
-        "{texts:?}"
-    );
+    let times: Vec<&String> = texts
+        .iter()
+        .filter(|t| t.trim() == t3 || t.trim() == t4)
+        .collect();
+    assert_eq!(times.len(), 2, "{texts:?}");
+    assert!(times.iter().all(|t| t.len() == 48), "{texts:?}");
+    assert_eq!(texts.last().map(|t| t.trim()), Some(t4.as_str()));
     // Four labels here: the 09:20 time line starts a new run (item 9).
     let label_count = texts
         .iter()
@@ -304,20 +306,21 @@ async fn messages_reply_board_contracts() {
     let two_i = texts4.iter().position(|t| t.ends_with("two")).unwrap();
     assert_eq!(two_i, one_i + 1, "one run, no blank between: {texts4:?}");
     b.sel_thread = Some("chat-a1".into());
-    // Both sides read left-aligned, indented under the sender label; a
-    // stored newline starts a new line and never paints as a cell.
+    // The selected agent's mail sits flush right, the other party's on the
+    // left under its label; a stored newline starts a new line and never
+    // paints as a cell.
     let ship_i = texts
         .iter()
-        .position(|t| t.as_str() == "  Ship it.")
-        .expect("my bubble left-aligned");
+        .position(|t| t.trim() == "Ship it." && t.len() == 48)
+        .expect("my bubble flush right");
     assert!(texts.iter().any(|t| t.as_str() == "  On it."), "{texts:?}");
     assert!(texts.iter().all(|t| !t.contains('\n')), "{texts:?}");
-    let see_i = texts.iter().position(|t| t.as_str() == "  See the log.");
+    let see_i = texts.iter().position(|t| t.trim() == "See the log.");
     assert_eq!(
         see_i,
         texts
             .iter()
-            .position(|t| t.as_str() == "  Landed.")
+            .position(|t| t.trim() == "Landed.")
             .map(|i| i + 1)
     );
     assert!(!texts
@@ -651,8 +654,8 @@ fn fixture_projection() -> serde_json::Value {
 }
 
 /// The Me thread: picking an agent lists the user's own thread with it
-/// first (unread off the chat-id read marks), and the detail paints both
-/// turns left-aligned, per item.
+/// first (unread off the chat-id read marks), and the detail paints the
+/// user's turn flush right and the reply left-aligned, per item.
 #[tokio::test]
 async fn messages_you_tab_contract() {
     use super::super::LayoutView;
@@ -683,7 +686,7 @@ async fn messages_you_tab_contract() {
         "unreadable": 0,
         "you": [
             {"session_id":"older","name":"older-worker","last_ts":"2026-10-01T09:00:00Z","items":[{"ts":"2026-10-01T09:00:00Z","typed_text":"earlier question","reply_text":""}]},
-            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"<pasted_content id=\"7\">\nmid-turn follow-up\n</pasted_content id=\"7\">","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
+            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"<pasted_content id=\"7\">\nmid-turn follow-up\n\n</pasted_content id=\"7\">","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
         ],
     }));
     // The drill is Agent, then Me, then the chat: column 1 lists agents
@@ -711,6 +714,14 @@ async fn messages_you_tab_contract() {
             if name == "Me" && *unread && session_id == "fresh"),
         "{rows:?}"
     );
+    // The Me row keeps a thread row's two marker slots, so its name lines
+    // up with the agent names under it.
+    assert!(
+        b.chats_column(40)
+            .iter()
+            .any(|l| l.text.starts_with(" *Me")),
+        "Me row aligned"
+    );
     b.cursors[1] = 0;
     b.col = Col::Chats;
     // Enter opens the thread: sel_thread you:<sid>, the read mark saves.
@@ -724,18 +735,22 @@ async fn messages_you_tab_contract() {
         marks.get("you:fresh"),
         Some(&"2026-10-01T10:00:00Z".to_string())
     );
-    // The detail: both turns left-aligned under their labels.
+    // The detail: the user's turn flush right, the reply left-aligned.
     let (lines3, _) = b.thread_lines(50);
     let texts: Vec<String> = lines3.iter().map(|l| l.text.clone()).collect();
     assert!(texts[0].starts_with("gavin"), "{texts:?}");
     let typed_i = texts
         .iter()
-        .position(|t| t.as_str() == "  why did the gate refuse?")
+        .position(|t| t.trim() == "why did the gate refuse?")
         .expect("typed bubble");
-    assert_eq!(texts[typed_i - 1], "Me", "{texts:?}");
+    assert_eq!(texts[typed_i].len(), 48, "flush right: {texts:?}");
+    assert_eq!(texts[typed_i - 1].trim(), "Me", "{texts:?}");
+    assert_eq!(texts[typed_i - 1].len(), 48, "Me flush right: {texts:?}");
     // The harness's paste wrapper lines never paint; the pasted words do.
     assert!(
-        texts.iter().any(|t| t.as_str() == "  mid-turn follow-up"),
+        texts
+            .iter()
+            .any(|t| t.trim() == "mid-turn follow-up" && t.len() == 48),
         "{texts:?}"
     );
     assert!(

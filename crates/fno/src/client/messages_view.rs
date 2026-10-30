@@ -95,6 +95,41 @@ fn body_lines(text: &str, w: usize, role: BRole) -> Vec<BLine> {
 
 const BODY_INDENT: &str = "  ";
 
+/// The width a right-side bubble wraps to, so it reads as its own column.
+fn bubble_w(w: usize) -> usize {
+    ((w * 7) / 10).max(12).min(w).max(1)
+}
+
+/// The time under a burst's last message, on that message's side.
+fn time_line(ts_time: String, right: bool, w: usize) -> BLine {
+    let mut line = BLine::meta(ts_time);
+    if right {
+        flush_right(std::slice::from_mut(&mut line), w);
+    }
+    line
+}
+
+/// The reader's own side: each line, trimmed, ends at the pane's right
+/// edge.
+fn flush_right(block: &mut [BLine], w: usize) {
+    for line in block {
+        let start = line.text.len() - line.text.trim_start().len();
+        // A blank body line trims to nothing; its end never precedes start.
+        let end = line.text.trim_end().len().max(start);
+        let (lead, kept) = (
+            line.text[..start].chars().count(),
+            line.text[start..end].chars().count(),
+        );
+        line.text = line.text[start..end].to_string();
+        line.roles = line.roles.iter().skip(lead).take(kept).copied().collect();
+        let used: usize = line.text.chars().map(super::backlog_style::char_w).sum();
+        let pad = w.saturating_sub(used);
+        line.text.insert_str(0, &" ".repeat(pad));
+        line.roles
+            .splice(0..0, std::iter::repeat_n(BRole::Body, pad));
+    }
+}
+
 /// True for a participant name that is only a session id: a UUID or its
 /// 8-hex handle, never a registry name.
 fn is_raw_id(name: &str) -> bool {
@@ -134,6 +169,22 @@ fn push_blank(lines: &mut Vec<BLine>, owners: &mut Vec<Option<usize>>) {
     }
     lines.push(BLine::meta(""));
     owners.push(None);
+}
+
+/// Close a burst: its last message's HH:MM, on that message's side, at
+/// the body's right edge (`w` less the two-column margin).
+fn push_time(
+    lines: &mut Vec<BLine>,
+    owners: &mut Vec<Option<usize>>,
+    ts: &str,
+    right: bool,
+    w: usize,
+) {
+    let time = MessagesBoard::ts_time(ts);
+    if !time.is_empty() {
+        lines.push(time_line(time, right, w.saturating_sub(2).max(1)));
+        owners.push(None);
+    }
 }
 
 /// A JSON bool the reader trusts; the projection carries real booleans.
@@ -795,6 +846,8 @@ impl MessagesBoard {
                     unread,
                     ..
                 } => BLine::of(&[
+                    // The same two slots as a thread row, so names line up.
+                    seg(" ", BRole::Warn),
                     seg(if *unread { "*" } else { " " }, BRole::Meta),
                     seg(name.clone(), BRole::Body),
                     seg(format!(" \u{b7} {}", Self::ts_time(last_ts)), BRole::Meta),
@@ -883,8 +936,9 @@ impl MessagesBoard {
 
     /// Column 3's lines, with the conversation row each line belongs to
     /// (`None` for separators) so the click map mirrors the paint. A
-    /// thread: every body left-aligned under its sender's label,
-    /// one centered HH:MM before a gap of five minutes or more, one name
+    /// thread: the selected agent's own mail flush right, the other party's
+    /// on the left, each burst closed by its last message's HH:MM on that
+    /// message's side (a gap of five minutes or more ends a burst), one name
     /// label per run of consecutive same-sender rows, and the body only -
     /// no envelopes, no delivered-header lines (item 9 runs, item 12
     /// padding).
@@ -915,73 +969,69 @@ impl MessagesBoard {
         }
         let mine = self.sel_agent.as_deref().unwrap_or("");
         let wrap_w = w.saturating_sub(2).max(1);
-        let mut last_ts = String::new();
+        // The previous row's ts and side: a gap of five minutes or more
+        // closes its burst with the time on the side that sent last.
+        let mut last: Option<(String, bool)> = None;
         let mut run_key: Option<String> = None;
         for (index, r) in rows.iter().enumerate() {
             let selected = self.selected_message_id.as_deref() == Some(text_of(r, "id"))
                 || index == self.cursors[2];
             let ts = text_of(r, "ts");
-            if last_ts.is_empty() || Self::ts_gap_minutes(&last_ts, ts).is_none_or(|g| g >= 5) {
-                let time = Self::ts_time(ts);
-                if !time.is_empty() {
-                    push_blank(&mut lines, &mut owners);
-                    let pad = w.saturating_sub(time.len()) / 2;
-                    lines.push(BLine::meta(format!("{}{time}", " ".repeat(pad))));
-                    owners.push(None);
-                    push_blank(&mut lines, &mut owners);
-                }
-                run_key = None;
-            }
-            last_ts = ts.to_string();
             let key = text_of(r, "from_key");
             let sys = bool_of(r, "system");
+            let right = key == mine && !sys;
+            if let Some((prev, prev_right)) = &last {
+                if Self::ts_gap_minutes(prev, ts).is_none_or(|g| g >= 5) {
+                    push_time(&mut lines, &mut owners, prev, *prev_right, w);
+                    run_key = None;
+                }
+            }
+            last = Some((ts.to_string(), right));
             let sender = if sys {
                 display_label(&text_of(r, "from"))
             } else {
                 self.participant_name(key)
             };
+            let width = if right { bubble_w(wrap_w) } else { wrap_w };
+            let mut block = Vec::new();
             if run_key.as_deref() != Some(key) {
                 push_blank(&mut lines, &mut owners);
                 // The name line is the envelope's formal structure, so it
                 // paints in the label color, distinct from the dim meta and
                 // the bold subject under it.
-                let mut label = BLine::of(&[seg(sender.clone(), BRole::Label)]);
-                label.band = selected;
-                lines.push(label);
-                owners.push(Some(index));
+                block.push(BLine::of(&[seg(sender.clone(), BRole::Label)]));
             }
             run_key = Some(key.to_string());
             // The sender's --subject rides the row; a headline line under
             // the sender, only when one was given.
             let subject = text_of(r, "subject");
             if !subject.is_empty() {
-                for mut line in body_lines(subject, wrap_w, BRole::Head) {
-                    line.band = selected;
-                    lines.push(line);
-                    owners.push(Some(index));
-                }
+                block.extend(body_lines(subject, width, BRole::Head));
             }
-            for mut line in body_lines(text_of(r, "body"), wrap_w, BRole::Body) {
+            block.extend(body_lines(text_of(r, "body"), width, BRole::Body));
+            // A sent row says what the recipient's harness did with it, and
+            // a stuck one names the key that moves it.
+            if let Some((text, role)) = right.then(|| state_line(r)).flatten() {
+                block.extend(body_lines(&text, width, role));
+            }
+            if right {
+                flush_right(&mut block, wrap_w);
+            }
+            for mut line in block {
                 line.band = selected;
                 lines.push(line);
                 owners.push(Some(index));
             }
-            // A sent row says what the recipient's harness did with it, and
-            // a stuck one names the key that moves it.
-            if let Some((text, role)) = (key == mine).then(|| state_line(r)).flatten() {
-                for mut line in body_lines(&text, wrap_w, role) {
-                    line.band = selected;
-                    lines.push(line);
-                    owners.push(Some(index));
-                }
-            }
+        }
+        if let Some((prev, prev_right)) = &last {
+            push_time(&mut lines, &mut owners, prev, *prev_right, w);
         }
         (lines, owners)
     }
 
-    /// Column 3 for a selected You thread: the operator's typed turn, then
-    /// the assistant's reply, both left-aligned, one item at a time, with
-    /// the same gap-clock and wrap idioms `thread_lines` uses. Owners index
+    /// Column 3 for a selected You thread: the operator's typed turn flush
+    /// right, then the assistant's reply on the left, one item at a time,
+    /// with the same burst clock and wrap idioms `thread_lines` uses. Owners index
     /// ITEMS (two bubbles per item), so the cursor indexes `item = cur/2`.
     fn you_thread_lines(&self, w: usize, sid: &str) -> (Vec<BLine>, Vec<Option<usize>>) {
         let title = self.thread_title();
@@ -999,37 +1049,32 @@ impl MessagesBoard {
             .you_row(sid)
             .map(|t| text_of(t, "name").to_string())
             .unwrap_or_else(|| sid.get(..8).unwrap_or(sid).to_string());
-        let mut last_ts = String::new();
+        let mut last: Option<(String, bool)> = None;
         for (item_index, item) in items.iter().enumerate() {
             let selected = item_index == self.cursors[2];
             let ts = item.get("ts").and_then(Value::as_str).unwrap_or("");
-            if last_ts.is_empty() || Self::ts_gap_minutes(&last_ts, ts).is_none_or(|g| g >= 5) {
-                let time = Self::ts_time(ts);
-                if !time.is_empty() {
-                    push_blank(&mut lines, &mut owners);
-                    let pad = w.saturating_sub(time.len()) / 2;
-                    lines.push(BLine::meta(format!("{}{time}", " ".repeat(pad))));
-                    owners.push(None);
-                    push_blank(&mut lines, &mut owners);
+            let typed = item.get("typed_text").and_then(Value::as_str).unwrap_or("");
+            let reply = item.get("reply_text").and_then(Value::as_str).unwrap_or("");
+            if let Some((prev, prev_right)) = &last {
+                if Self::ts_gap_minutes(prev, ts).is_none_or(|g| g >= 5) {
+                    push_time(&mut lines, &mut owners, prev, *prev_right, w);
                 }
             }
-            last_ts = ts.to_string();
-            // The operator's typed turn, under its own Me label.
-            let typed = item.get("typed_text").and_then(Value::as_str).unwrap_or("");
+            // The reply is the item's last send; with none, the user's turn.
+            last = Some((ts.to_string(), reply.is_empty()));
+            // The operator's typed turn, flush right under its own Me label.
             if !typed.is_empty() {
                 push_blank(&mut lines, &mut owners);
-                let mut label = BLine::of(&[seg("Me", BRole::Label)]);
-                label.band = selected;
-                lines.push(label);
-                owners.push(Some(item_index));
-                for mut line in body_lines(typed, wrap_w, BRole::Body) {
+                let mut block = vec![BLine::of(&[seg("Me", BRole::Label)])];
+                block.extend(body_lines(typed, bubble_w(wrap_w), BRole::Body));
+                flush_right(&mut block, wrap_w);
+                for mut line in block {
                     line.band = selected;
                     lines.push(line);
                     owners.push(Some(item_index));
                 }
             }
             // The assistant's reply, under the session's name.
-            let reply = item.get("reply_text").and_then(Value::as_str).unwrap_or("");
             if !reply.is_empty() {
                 push_blank(&mut lines, &mut owners);
                 let mut label = BLine::of(&[seg(agent_name.clone(), BRole::Label)]);
@@ -1042,6 +1087,9 @@ impl MessagesBoard {
                     owners.push(Some(item_index));
                 }
             }
+        }
+        if let Some((prev, prev_right)) = &last {
+            push_time(&mut lines, &mut owners, prev, *prev_right, w);
         }
         (lines, owners)
     }
