@@ -192,7 +192,7 @@ pub(crate) fn walk(
                     continue;
                 }
                 let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or("");
-                let Some(typed) = typed_part(prompt) else {
+                let Some(typed_prompt) = typed_part(prompt) else {
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 };
@@ -215,8 +215,11 @@ pub(crate) fn walk(
                     turn_stamp(&obj).unwrap_or("").to_string(),
                     // argv-fence: exempt. A plain Rust call, not an argv
                     // build: open_new is the walk's own closure, no launcher
-                    // parser touches this path.
-                    typed,
+                    // parser touches this path. The .to_string() on the
+                    // String is the element shape the fence-gate scanner
+                    // reads; dropping it hides this site from the census
+                    // and re-breaks the pinned exemption count.
+                    typed_prompt.to_string(),
                     line_start,
                 );
             }

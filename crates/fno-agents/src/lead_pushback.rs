@@ -1,6 +1,7 @@
 //! The per-lead pushback reading: from the decision_span rows the traced
-//! decision envelope already journals (ask, route, correction spans), how
-//! many asks reached this lead, how many routes it answered itself versus
+//! decision envelope already journals (ask, route, correction spans) plus the
+//! question cards the intake writes (a lead-rung card IS an ask), how many
+//! asks reached this lead, how many routes it answered itself versus
 //! escalated, and how many of its route spans a later correction
 //! overturned. The score rides the check-in beside the refusal rate: the
 //! useful lead metric is worker pushback where the lead turned out wrong.
@@ -23,7 +24,7 @@ pub(crate) fn reading() -> Result<Value, String> {
     }
     let rows = crate::event_store::query_events(
         &journal,
-        &crate::event_store::EventQuery::of_types(&["decision_span"]),
+        &crate::event_store::EventQuery::of_types(&["decision_span", "operator_question"]),
     )?;
     Ok(fold(&rows, &session))
 }
@@ -40,29 +41,40 @@ fn fold(rows: &[crate::event_store::EventRow], session: &str) -> Value {
     let mut overturned = 0u64;
     let mut route_ids: Vec<String> = Vec::new();
     for row in rows {
-        let Some(data) = parse_span(&row.line) else {
+        let Some((row_kind, data)) = parse_row(&row.line) else {
             continue;
         };
-        match span_kind(&data).unwrap_or("") {
-            "ask" => {
-                if is_ask_for_me(&data, &me) {
-                    asks += 1;
-                }
-            }
-            "route" => {
-                if actor_is_me(&data, &me) {
-                    routes += 1;
-                    route_ids.push(span_id(&data));
-                    match route(&data).unwrap_or("") {
-                        "self" => answered_self += 1,
-                        "escalate" => escalated += 1,
-                        _ => {}
+        match row_kind {
+            "decision_span" => match span_kind(&data).unwrap_or("") {
+                "ask" => {
+                    if is_ask_for_me(&data, &me) {
+                        asks += 1;
                     }
                 }
-            }
-            "correction" => {
-                if overturns_one_of(&data, &route_ids) {
-                    overturned += 1
+                "route" => {
+                    if actor_is_me(&data, &me) {
+                        routes += 1;
+                        route_ids.push(span_id(&data));
+                        match route(&data).unwrap_or("") {
+                            "self" => answered_self += 1,
+                            "escalate" => escalated += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                "correction" => {
+                    if overturns_one_of(&data, &route_ids) {
+                        overturned += 1
+                    }
+                }
+                _ => {}
+            },
+            // A question card IS an ask: a lead-rung row names this lead as
+            // its rung holder (the intake stamps the holder as the trace
+            // recipient too), a board row asks the user, never the lead.
+            "operator_question" => {
+                if question_is_for_me(&data, &me) {
+                    asks += 1;
                 }
             }
             _ => {}
@@ -80,13 +92,16 @@ fn fold(rows: &[crate::event_store::EventRow], session: &str) -> Value {
     })
 }
 
-/// One journal line's decision_span data object, None for every other row.
-fn parse_span(line: &str) -> Option<Value> {
+/// One journal line's data object for the two row kinds the fold reads,
+/// paired with which kind it is; None for every other row.
+fn parse_row(line: &str) -> Option<(&'static str, Value)> {
     let value: Value = serde_json::from_str(line).ok()?;
-    if value.get("type").and_then(Value::as_str) != Some("decision_span") {
-        return None;
-    }
-    value.get("data").cloned()
+    let kind = match value.get("type").and_then(Value::as_str)? {
+        "decision_span" => "decision_span",
+        "operator_question" => "operator_question",
+        _ => return None,
+    };
+    Some((kind, value.get("data").cloned()?))
 }
 
 fn span_kind(data: &Value) -> Option<&str> {
@@ -103,6 +118,18 @@ fn actor_is_me(data: &Value, me: &str) -> bool {
 /// recipient, or names no session but recipient_kind lead.
 fn is_ask_for_me(data: &Value, me: &str) -> bool {
     recipient_is_me(data, me)
+}
+
+/// A question card asks this lead when the trace names this session as the
+/// recipient (the intake stamps the rung holder for lead-rung cards) or the
+/// card's rung does: rows written before the recipient stamp carry only the
+/// rung.
+fn question_is_for_me(data: &Value, me: &str) -> bool {
+    recipient_is_me(data, me)
+        || data
+            .pointer("/rung/holder_session")
+            .and_then(Value::as_str)
+            .is_some_and(|holder| crate::identity::canonical_handle(holder) == me)
 }
 
 fn recipient_is_me(data: &Value, me: &str) -> bool {
@@ -214,5 +241,77 @@ mod tests {
         assert_eq!(empty["asks"], 0);
         assert_eq!(empty["routes"], 0);
         assert_eq!(empty["score"], Value::Null);
+    }
+
+    /// One operator_question journal row for the fold.
+    fn question_row(rung: Value, trace: Value) -> crate::event_store::EventRow {
+        crate::event_store::EventRow {
+            seq: 0,
+            event_id: String::new(),
+            ts_ms: 0,
+            r#type: "operator_question".into(),
+            source: "target".into(),
+            scope: None,
+            retention_class: "durable".into(),
+            reject_reason: None,
+            line: json!({
+                "type": "operator_question",
+                "source": "target",
+                "data": {
+                    "question_id": "q-1",
+                    "rung": rung,
+                    "trace": trace,
+                },
+            })
+            .to_string(),
+            history_only: false,
+            recovery_batch: None,
+        }
+    }
+
+    #[test]
+    fn question_cards_count_as_asks_for_their_rung_holder() {
+        let rows = vec![
+            // A fresh lead-rung row: the intake stamps the holder as the
+            // trace recipient.
+            question_row(
+                json!({"level": "lead", "holder_session": "sess-lead"}),
+                json!({
+                    "trace_id": "x-1",
+                    "span_id": "q-1",
+                    "actor_session": "sess-w1",
+                    "actor_kind": "worker",
+                    "comms": "question",
+                    "recipient_session": "sess-lead",
+                    "recipient_kind": "lead",
+                }),
+            ),
+            // A row from before the recipient stamp carries only the rung.
+            question_row(
+                json!({"level": "lead", "holder_session": "sess-lead"}),
+                json!({
+                    "trace_id": "x-2",
+                    "span_id": "q-2",
+                    "actor_session": "sess-w2",
+                    "actor_kind": "worker",
+                    "comms": "question",
+                }),
+            ),
+            // A board card asks the user, never the lead.
+            question_row(
+                json!(null),
+                json!({
+                    "trace_id": "x-3",
+                    "span_id": "q-3",
+                    "actor_session": "sess-w3",
+                    "actor_kind": "worker",
+                    "comms": "question",
+                    "recipient_kind": "user",
+                }),
+            ),
+        ];
+        let folded = fold(&rows, "sess-lead");
+        assert_eq!(folded["asks"], 2, "the rung holder reads two asks");
+        assert_eq!(folded["routes"], 0);
     }
 }
