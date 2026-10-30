@@ -395,7 +395,7 @@ fn resolve_coordinate(
 
 /// The command line the retasked worker receives: the builtin no-merge
 /// target dispatch, or the normalized `<command> {id}` for every other
-/// verb. An undeclared harness refuses (the irreversible direction).
+/// command. An undeclared harness refuses (the irreversible direction).
 fn target_command(target: &RetaskTarget, node: &str) -> Result<String, String> {
     let contract =
         crate::harness_capabilities::HarnessContract::packaged().map_err(|e| e.to_string())?;
