@@ -49,7 +49,8 @@ fn node_command_folds_the_legacy_key_and_strips_the_slash() {
     let declared =
         json!({"id": "x-1", "difficulty": "medium", "dispatch_command": "/fno:blueprint"});
     assert_eq!(node_command(&declared).unwrap(), "blueprint");
-    let legacy = json!({"id": "x-1", "difficulty": "medium", "nb": "/fno:blueprint"});
+    // The stored key predates the rename, so the guard's marker rides along.
+    let legacy = json!({"id": "x-1", "difficulty": "medium", "dispatch_verb": "/fno:blueprint"}); // verb-wording: allow (stored key)
     assert_eq!(node_command(&legacy).unwrap(), "blueprint");
     let stub = json!({"id": "x-1"});
     assert!(node_command(&stub).is_err());
