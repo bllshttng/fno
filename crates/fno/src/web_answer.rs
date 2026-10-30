@@ -78,6 +78,31 @@ pub(crate) fn same_origin(headers: &HeaderMap) -> Result<(), &'static str> {
     }
 }
 
+/// The door's refusal line in plain words for the page. The door speaks to a
+/// terminal ("fno-agents: not open: q-1 (state answered)"); the drawer speaks
+/// to a person. An unknown line keeps its text without the program prefix.
+pub(crate) fn plain_refusal(line: &str) -> String {
+    let body = line.trim().trim_start_matches("fno-agents:").trim();
+    if body.starts_with("not open:") {
+        return if body.contains("(state answered)") {
+            "This question already has an answer."
+        } else {
+            "This question is closed."
+        }
+        .to_string();
+    }
+    if body.starts_with("not found:") {
+        return "This question no longer exists.".to_string();
+    }
+    if body.contains("is outside 1..=") {
+        return "That option does not exist for this question.".to_string();
+    }
+    if body.contains("was asked on ") {
+        return "This question was asked on another machine. Answer it there.".to_string();
+    }
+    body.to_string()
+}
+
 /// A question id the door can look up: the ledger's own alphabet, bounded.
 pub(crate) fn valid_id(id: &str) -> bool {
     (1..=128).contains(&id.len())
@@ -153,6 +178,19 @@ mod tests {
     }
 
     fn web_answer_ids_and_scope_chain() {
+        assert_eq!(
+            plain_refusal("fno-agents: not open: q-1 (state answered)"),
+            "This question already has an answer."
+        );
+        assert_eq!(
+            plain_refusal("fno-agents: not open: q-1 (state closed)"),
+            "This question is closed."
+        );
+        assert_eq!(
+            plain_refusal("fno-agents: not found: q-1"),
+            "This question no longer exists."
+        );
+        assert_eq!(plain_refusal("fno-agents: something new"), "something new");
         assert!(valid_id("q-door"));
         assert!(!valid_id(""));
         assert!(!valid_id("a/b"));

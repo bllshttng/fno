@@ -1569,7 +1569,11 @@ async fn command_answer(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             },
-            &f.message,
+            &if f.refused {
+                crate::web_answer::plain_refusal(&f.message)
+            } else {
+                f.message
+            },
         ),
     }
 }
