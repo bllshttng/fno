@@ -1038,5 +1038,67 @@ fn a_lost_row_is_dead_lettered_by_type_and_busy_locks_are_matched() {
     assert!(!lock_busy(""));
 }
 
+#[test]
+fn query_runs_folds_two_carriers_to_the_newest_and_drops_a_covered_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("events.jsonl");
+    append(
+        &journal,
+        &[
+            json!({"ts":"2026-01-01T00:00:01Z","type":"run_recorded","source":"target",
+                   "data":{"run":{"fno_id":"s1","cost_usd":1.0}}}),
+            json!({"ts":"2026-01-01T00:00:02Z","type":"run_recorded","source":"target",
+                   "data":{"run":{"fno_id":"s1","cost_usd":2.0,"verifier_verdict":"pass"}}}),
+            json!({"ts":"2026-01-01T00:00:03Z","type":"run_imported","source":"migration",
+                   "data":{"run":{"fno_id":"s1","cost_usd":9.0}}}),
+            json!({"ts":"2026-01-01T00:00:04Z","type":"run_imported","source":"migration",
+                   "data":{"run":{"fno_id":"s2","cost_usd":5.0}}}),
+        ],
+    );
+    import_all(&journal).unwrap();
+    let runs = runs::query_runs(&journal, &runs::RunFilter::default()).unwrap();
+    assert_eq!(runs.len(), 2, "newest carrier wins; covered import drops");
+    assert_eq!(runs[0]["fno_id"], "s1");
+    assert_eq!(runs[0]["cost_usd"], 2.0);
+    assert_eq!(runs[0]["verifier_verdict"], "pass");
+    assert_eq!(runs[1]["fno_id"], "s2", "uncovered import still answers");
+}
+
+#[test]
+fn query_runs_filters_by_node_and_pr() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("events.jsonl");
+    append(
+        &journal,
+        &[
+            json!({"ts":"2026-01-01T00:00:01Z","type":"run_recorded","source":"target",
+                   "data":{"run":{"fno_id":"s1","graph_node_id":"node-runa","pr_number":4200}}}),
+            json!({"ts":"2026-01-01T00:00:02Z","type":"run_recorded","source":"agents",
+                   "data":{"run":{"fno_id":"s2","graph_node_id":"node-runb","pr_number":4201}}}),
+        ],
+    );
+    import_all(&journal).unwrap();
+    let by_node = runs::query_runs(
+        &journal,
+        &runs::RunFilter {
+            node_id: Some("node-runa".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(by_node.len(), 1);
+    assert_eq!(by_node[0]["fno_id"], "s1");
+    let by_pr = runs::query_runs(
+        &journal,
+        &runs::RunFilter {
+            pr_number: Some(4201),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(by_pr.len(), 1);
+    assert_eq!(by_pr[0]["fno_id"], "s2");
+}
+
 mod coverage;
 mod observation;

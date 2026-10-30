@@ -6,6 +6,7 @@ crates/fno/src/harness_capabilities.toml	crates/fno-agents/src/harness_capabilit
 crates/fno/src/event_store.rs	crates/fno-agents/src/event_store.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/event_store/observation.rs	crates/fno-agents/src/event_store/observation.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/event_store/validate.rs	crates/fno-agents/src/event_store/validate.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/event_store/runs.rs	crates/fno-agents/src/event_store/runs.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno-agents/src/event_store/events_schema.json	cli/src/fno/events/schema.yaml	FNO_SYNC_EVENTS_SCHEMA=1 cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/event_store/events_schema.json	crates/fno-agents/src/event_store/events_schema.json	FNO_SYNC_EVENTS_SCHEMA=1 cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/live_store_fence.rs	crates/fno-agents/src/live_store_fence.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
