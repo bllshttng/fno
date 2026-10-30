@@ -977,11 +977,6 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         eprintln!("fno-agents: not open: {item_id} (state {})", item.state);
         return 2;
     }
-    // The clear door refuses a copy, so an answer recorded here never lands.
-    if let Some(host) = &item.host {
-        eprintln!("fno-agents: {item_id} was asked on {host}; answer it there");
-        return 2;
-    }
     let answer = if let Some(n) = args.option {
         if n as usize > item.options.len() {
             eprintln!(
@@ -998,6 +993,12 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         }
         crate::attention_file::FileAnswer::Done
     } else if args.delegate {
+        // A copy's team ladder lives on the asking machine, so delegating
+        // here would record an act this machine can never deliver.
+        if let Some(host) = &item.host {
+            eprintln!("fno-agents: {item_id} was asked on {host}; delegate it there");
+            return 2;
+        }
         if let Err(reason) = delegable(item, cwd) {
             eprintln!("fno-agents: {reason}");
             return 2;
@@ -1017,7 +1018,7 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         Ok((_, superseded)) => {
             println!(
                 "{}",
-                json!({"recorded": true, "item_id": item_id, "superseded": superseded})
+                answer_receipt(item_id, item.host.as_deref(), superseded)
             );
             0
         }
@@ -1026,6 +1027,16 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
             1
         }
     }
+}
+
+/// The door's stdout receipt. `carries_to` names the asking machine's host
+/// when the item is a copy, so the operator sees the answer will travel.
+fn answer_receipt(item_id: &str, host: Option<&str>, superseded: bool) -> Value {
+    let mut receipt = json!({"recorded": true, "item_id": item_id, "superseded": superseded});
+    if let Some(host) = host {
+        receipt["carries_to"] = json!(host);
+    }
+    receipt
 }
 
 /// Whether the agents may decide `item` for the user: a question (a pin has
@@ -2647,6 +2658,57 @@ mod tests {
             !raw.contains("attention_answer"),
             "refusals write nothing: {raw}"
         );
+    }
+
+    #[test]
+    fn ac2_hp_the_door_records_an_answer_for_a_peer_copy() {
+        let (dir, _root, mut args) = door_setup("needs_door_peer_hp_");
+        let cwd = dir.path().join("repo");
+        let home = crate::paths::AgentsHome::from_env();
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        // A copy of a question asked on hosta, riding this machine's board.
+        let copy = serde_json::json!({
+            "ts": "2026-09-26T05:00:00Z", "type": "operator_question", "source": "test",
+            "data": {
+                "question_id": "q-copy@hosta", "question": "pick one", "ask": "copy ask",
+                "session_id": "s9", "cwd": "/repo/fno", "asker": "w9", "node": "x-9",
+                "options": ["a", "b"], "host": "hosta", "origin_machine": "m-other"
+            }
+        });
+        crate::event_store::append_envelope(&space, &copy.to_string(), None).unwrap();
+        // A delegate on the copy refuses and names the asking machine; a
+        // refusal writes nothing, so a second id keeps the test honest.
+        args.answer = Some("q-del@hostb".to_string());
+        args.delegate = true;
+        args.option = None;
+        assert_eq!(
+            run_answer(&home, &cwd, &args, "q-del@hostb"),
+            2,
+            "delegate on a copy refuses"
+        );
+        // The option answer records through the shared seam, keyed to the
+        // copy id, and the projection reads the copy answered.
+        args.answer = Some("q-copy@hosta".to_string());
+        assert_eq!(
+            run_answer(&home, &cwd, &args, "q-copy@hosta"),
+            0,
+            "the copy answer records"
+        );
+        let home2 = crate::paths::AgentsHome::from_env();
+        let raw =
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home2), &[]);
+        assert!(
+            raw.contains("\"item_id\":\"q-copy@hosta\""),
+            "the copy answer row landed: {raw}"
+        );
+        let fno_dir = home2.root().parent().map(Path::to_path_buf).unwrap();
+        let (items, _, _) = crate::attention_arm::read_items_at(&fno_dir, &cwd);
+        let item = items.iter().find(|i| i.id == "q-copy@hosta").unwrap();
+        assert_eq!(item.state, "answered");
+        // The receipt names the carrier.
+        let receipt = answer_receipt("q-copy@hosta", Some("hosta"), false);
+        assert_eq!(receipt["carries_to"], json!("hosta"));
+        assert_eq!(answer_receipt("q-x", None, false).get("carries_to"), None);
     }
 
     #[test]
