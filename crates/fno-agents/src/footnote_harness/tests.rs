@@ -159,6 +159,12 @@ fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
     let saved = set_env(&[
         ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
         ("ANTHROPIC_AUTH_TOKEN", "k"),
+        // The sessions tree rides beside the spaces root, so the spaces pin
+        // is what isolates it now that the agents home plays no part there.
+        (
+            "FNO_SPACES_DIR",
+            &tmp.path().join("spaces").display().to_string(),
+        ),
     ]);
     let id = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58";
     let named = write_pane_spec(tmp.path(), "glm-test", None, None, Some(id));
