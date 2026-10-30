@@ -32,3 +32,19 @@ case "${1:-} ${2:-} ${3:-}" in
   "agents lead drain") exec fno-agents lead-state --drain "${@:4}" ;;
   "agents lead ledger") exec fno-agents lead-rundown --ledger "${@:4}" ;;
 esac
+# Every other agents word has no Python leg either: the front door's route
+# (crates/fno/src/agents_client_route.rs) execs the client, so the fake does too.
+case "${1:-}" in
+  agents)
+    case "${2:-}" in
+      claim) shift; set -- claim "${@:2}" ;;
+      capabilities|target-family|register|name|whoami|registry-repair|heal-token|pane-identity|watch|truth|peek|team|role|liveness)
+        exec fno-agents status "--$2" "${@:3}" ;;
+      watchdog|sweep|stale-escalate|friction-escalate|distress-verdicts|gate-status|codex-session-for-pid|spawn-guard|discovered-json)
+        exec fno-agents census "${@:2}" ;;
+      top) exec fno-agents census --workers "${@:3}" ;;
+      orphans) exec fno-agents census --orphans "${@:3}" ;;
+      incident) exec fno-agents fleet-incident "${@:3}" ;;
+      *) exec fno-agents "${@:2}" ;;
+    esac ;;
+esac
