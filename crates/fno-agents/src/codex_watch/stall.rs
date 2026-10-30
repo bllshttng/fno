@@ -184,8 +184,29 @@ fn own_live_claim(sid: &str, node: &str) -> bool {
     true
 }
 
-fn command(args: &[&str], cwd: &str) -> (i32, String, String) {
-    crate::burn_watch::run_command(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), cwd)
+/// One `fno agents mail send` through the scheduler sender: `to` is a
+/// session id, or `--to-lead <scope>` when `to` is a lead scope.
+fn mail(to: Option<&str>, lead_scope: Option<&str>, text: &str, cwd: &str) -> bool {
+    let mut args = vec![
+        "fno".to_string(),
+        "agents".to_string(),
+        "mail".to_string(),
+        "send".to_string(),
+        "--from-name".to_string(),
+        SENDER.to_string(),
+        "--origin".to_string(),
+        "scheduler".to_string(),
+    ];
+    if let Some(scope) = lead_scope {
+        args.push("--to-lead".to_string());
+        args.push(scope.to_string());
+    }
+    if let Some(sid) = to {
+        args.push(sid.to_string());
+    }
+    args.push(text.to_string());
+    let (code, out, _error) = crate::burn_watch::run_command(args, cwd);
+    crate::mail_inject::mail_send_accepted(code, &out)
 }
 
 /// The worker nudge: one mail to the stalled worker's session.
@@ -194,22 +215,7 @@ fn nudge(entry: &RegistryEntry, sid: &str, node: &str, stall: &Stall) -> bool {
         "control: blueprint stall on {node}: finish or emit <help>; the lead may reseat this work on claude. [{basis}]",
         basis = stall.basis
     );
-    let (code, out, _error) = command(
-        &[
-            "fno",
-            "agents",
-            "mail",
-            "send",
-            "--from-name",
-            SENDER,
-            "--origin",
-            "scheduler",
-            sid,
-            &text,
-        ],
-        &entry.cwd,
-    );
-    crate::mail_inject::mail_send_accepted(code, &out)
+    mail(Some(sid), None, &text, &entry.cwd)
 }
 
 /// The lead mail: the reseat-on-claude line is the remedy this lane exists
@@ -219,23 +225,7 @@ fn mail_lead(entry: &RegistryEntry, scope: &str, node: &str, stall: &Stall) -> b
         "control: <help class=\"stuck\" reason=\"blueprint-stall\">{node}: codex worker {} ({}) {} in {}. Remedy: reseat on claude - stop the codex worker and respawn the node's work with -H claude. Nudged once.</help>",
         entry.name, entry.harness_session_id.as_deref().unwrap_or("?"), stall.basis, entry.cwd
     );
-    let (code, out, _error) = command(
-        &[
-            "fno",
-            "agents",
-            "mail",
-            "send",
-            "--from-name",
-            SENDER,
-            "--origin",
-            "scheduler",
-            "--to-lead",
-            scope,
-            &text,
-        ],
-        &entry.cwd,
-    );
-    crate::mail_inject::mail_send_accepted(code, &out)
+    mail(None, Some(scope), &text, &entry.cwd)
 }
 
 /// The episode file under `<agents home>/blueprint-stall/`: one json per
