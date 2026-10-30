@@ -658,7 +658,7 @@
       "type": "object"
     },
     "CollisionThresholdsBlock": {
-      "description": "Collision severity scoring thresholds (config.collision.severity_thresholds).\n\nDefaults lifted verbatim from the former\n``collision.py:DEFAULT_THRESHOLDS`` (US2 converges that private loader here).",
+      "description": "Collision severity scoring thresholds (config.collision.severity_thresholds).\n\nDefaults lifted verbatim from the collision module's original private\nloader; the native thresholds reader holds the same contract.",
       "properties": {
         "high_count": {
           "default": 3,
@@ -1198,7 +1198,7 @@
       "type": "object"
     },
     "LeadBlock": {
-      "description": "The lead loop (config.lead). Field detail is in registry.py's Meta\ntext, surfaced by `fno config schema`.\n\n``RunAtLoad`` is false for the pr-watcher LaunchAgent by design, so a\nmachine that never ran ``launchctl load`` has no waker; ``wake_enabled``\ndoes not change that.",
+      "description": "The lead loop (config.lead). Field detail is in registry.py's Meta\ntext, surfaced by `fno config schema`.\n\nThe wake arm runs inside the fno-agents daemon, so a machine without the\ndaemon has no waker; ``wake_enabled`` does not change that.",
       "properties": {
         "autonomous_merge": {
           "default": false,
@@ -3081,6 +3081,21 @@
           "default": false,
           "title": "Share Backlog",
           "type": "boolean"
+        },
+        "ssh_peers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ssh Peers"
         }
       },
       "title": "StoreBlock",
@@ -3205,7 +3220,7 @@
       "type": "object"
     },
     "ThinkSpawnBlock": {
-      "description": "Context-carrying /think spawn settings (nested under 'config.think_spawn').\n\nThe opt-in for node : when enabled, the node-birth path (``fno backlog\nidea``) OFFERS a context-carrying ``/think`` thread for a generated organic\nnode (a birth trigger never auto-spawns -), handing it the *resolved*\norigin transcript pointer (not a paraphrase) so a later pickup starts from\nground truth. A real spawn still happens for the explicit conversational\ncommand, an armed lifecycle trigger (``on_work_start``), or a\nconsented decompose fan-out.\n\nDefault ``False`` (Locked Decision 2): shipping this changes nothing until\nthe operator arms it; an absent key reads as off. The fail-safe posture\nmirrors ``config.auto_continue``: a malformed block degrades to disabled\nrather than failing the whole settings load - false-enabled (a background\n``/think`` dispatched against the operator's intent) is the dangerous\ndirection. The enable + presence + spawn logic lives in\n:mod:`fno.provenance.spawn_think`.\n\n``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):\na bulk run exceeding it skips the remainder and logs the truncation.\n``idle_threshold_s`` is the discretionary activity-recency refinement\n(Claude's Discretion 1); ``0`` (default) disables it so the primary\nattended-vs-headless signal stands alone.\n\nActual context-think launches use the shared ``config.dispatch`` profile;\nthis block controls when to offer or launch them, not their harness or\nsubstrate.",
+      "description": "Context-carrying /think spawn settings (nested under 'config.think_spawn').\n\nThe opt-in for node : when enabled, the node-birth path (``fno backlog\nidea``) OFFERS a context-carrying ``/think`` thread for a generated organic\nnode (a birth trigger never auto-spawns -), handing it the *resolved*\norigin transcript pointer (not a paraphrase) so a later pickup starts from\nground truth. A real spawn still happens for the explicit conversational\ncommand, an armed lifecycle trigger (``on_work_start``), or a\nconsented decompose fan-out.\n\nDefault ``False`` (Locked Decision 2): shipping this changes nothing until\nthe operator arms it; an absent key reads as off. The fail-safe posture\nmirrors ``config.auto_continue``: a malformed block degrades to disabled\nrather than failing the whole settings load - false-enabled (a background\n``/think`` dispatched against the operator's intent) is the dangerous\ndirection. The enable + presence + spawn logic lives in\n``crates/fno-agents/src/think_dispatch.rs`` and ``backlog/birth.rs``.\n\n``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):\na bulk run exceeding it skips the remainder and logs the truncation.\n``idle_threshold_s`` is the discretionary activity-recency refinement\n(Claude's Discretion 1); ``0`` (default) disables it so the primary\nattended-vs-headless signal stands alone.\n\nActual context-think launches use the shared ``config.dispatch`` profile;\nthis block controls when to offer or launch them, not their harness or\nsubstrate.",
       "properties": {
         "attended": {
           "default": "offer",
