@@ -297,7 +297,7 @@ fn compose_probe(argv: &[String], cwd: &Path) -> Result<Vec<String>, ComposeExit
     let payload = json!({
         "argv": normalized.argv,
         "node_command": Value::Null,
-        "env_node": std::env::var("FNO_NODE").ok().filter(|v| !v.is_empty()),
+        "env_node": Value::Null,
         "permission_builtin": Value::Null,
         "scan": scan,
         "facts": {"role_resolves": Value::Null, "role_protected": Value::Null},
@@ -361,12 +361,11 @@ fn resolve_coordinate(
     // spawn door, so the operator's values overlay the composed answer.
     let mut harness = flag_value(&composed, &["--harness", "-H"]).unwrap_or_default();
     if harness.is_empty() {
-        let mut env = serde_json::Map::new();
-        for (key, value) in std::env::vars() {
-            env.insert(key, json!(value));
-        }
+        // The probe carries an EMPTY env map, the way the Python front
+        // passed dict(None or {}): ambient session stamps (FNO_AGENT_*)
+        // must not pick the harness a retask lands on.
         harness = crate::route_slot::resolve_slot_payload(&json!({
-            "mode": "resolve", "explicit": Value::Null, "env": Value::Object(env),
+            "mode": "resolve", "explicit": Value::Null, "env": {},
         }))
         .get("harness")
         .and_then(Value::as_str)
