@@ -41,9 +41,11 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
 }
 
 /// The set for one named graph, so a keeper serving a non-default graph
-/// assembles against the store it owns, not the layout default.
+/// assembles against the store it owns, not the layout default. The journal
+/// derives from the graph path: the home journal would name another store's
+/// laws, and a bad graph path would answer ok with them missing.
 pub fn rule_set_in(graph: &Path, cwd: &Path) -> Result<RuleSet, String> {
-    let jsonl = decision_index::default_state_path("decisions.jsonl");
+    let jsonl = decision_index::graph_journal(graph);
     let (rows, damaged) = decision_index::read_store_rows(graph, &jsonl)?;
     let laws = decision_index::laws_of(decision_index::derive_rows(rows, damaged));
     let (triggers, unread) = match decision_index::read_law_triggers(&jsonl) {
@@ -862,6 +864,102 @@ mod tests {
         );
         assert_eq!(implicit.scope.as_deref(), None, "global scope rides open");
         assert_eq!(set.laws.rows.len(), 2);
+        match prev {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+    }
+
+    #[test]
+    fn a_named_graph_reads_its_own_journal() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", td.path().join("fno-home"));
+        let graph = td.path().join("iso").join("graph.json");
+        std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        std::fs::write(
+            graph.parent().unwrap().join("decisions.jsonl"),
+            envelope(
+                "2026-10-30T00:00:00Z",
+                json!({
+                    "decision_id": "d-1234abcd",
+                    "subject": "iso store",
+                    "decision": "the named store serves its own laws",
+                    "authority_source": "operator",
+                    "scope": "global",
+                }),
+            ),
+        )
+        .unwrap();
+        let set = rule_set_in(&graph, Path::new("/"))
+            .unwrap_or_else(|e| panic!("the named store reads: {e}"));
+        assert!(
+            set.rules.iter().any(|r| r.id == "law-d-1234abcd"),
+            "the named store's law must build a rule; unread: {:?}",
+            set.unread
+        );
+        match prev {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+    }
+
+    #[test]
+    fn a_named_graph_never_reads_or_writes_the_home_journal() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("FNO_HOME");
+        let home = td.path().join("fno-home");
+        std::env::set_var("FNO_HOME", &home);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("decisions.jsonl"),
+            envelope(
+                "2026-10-30T00:00:00Z",
+                json!({
+                    "decision_id": "d-deadbeef",
+                    "subject": "home store",
+                    "decision": "the home store's own law",
+                    "authority_source": "operator",
+                    "scope": "global",
+                }),
+            ),
+        )
+        .unwrap();
+        let graph = td.path().join("iso").join("graph.json");
+        std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        std::fs::write(
+            graph.parent().unwrap().join("decisions.jsonl"),
+            envelope(
+                "2026-10-30T01:00:00Z",
+                json!({
+                    "decision_id": "d-feedface",
+                    "subject": "iso store",
+                    "decision": "the named store serves its own laws",
+                    "authority_source": "operator",
+                    "scope": "global",
+                }),
+            ),
+        )
+        .unwrap();
+        let set = rule_set_in(&graph, Path::new("/"))
+            .unwrap_or_else(|e| panic!("the named store reads: {e}"));
+        assert!(
+            set.rules.iter().any(|r| r.id == "law-d-feedface"),
+            "the named store's law, never the home one; unread: {:?}",
+            set.unread
+        );
+        assert!(
+            !set.rules.iter().any(|r| r.id == "law-d-deadbeef"),
+            "the home law leaks into a named store's set"
+        );
+        assert!(
+            !home.join("decisions.db").exists(),
+            "a read never materializes a store under the home"
+        );
         match prev {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),

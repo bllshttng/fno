@@ -38,6 +38,18 @@ pub fn default_state_path(name: &str) -> PathBuf {
     home.join(".fno").join(name)
 }
 
+/// The decisions journal of the store a graph spelling names: the anchor's
+/// directory (`backlog::anchor_path`, so a writer holding the anchor and a
+/// reader holding the db twin derive one journal), never the home path. For
+/// the default graph this is `default_state_path("decisions.jsonl")`.
+pub fn graph_journal(graph: &Path) -> PathBuf {
+    let anchor = crate::backlog::anchor_path(graph);
+    anchor
+        .parent()
+        .map(|p| p.join("decisions.jsonl"))
+        .unwrap_or_else(|| default_state_path("decisions.jsonl"))
+}
+
 /// The envelope flatten: JSONL text into flattened rows plus the damaged
 /// count. The index stores event ENVELOPES (`{type, ts, data}`) that the
 /// Python reader flattens (data fields at the top plus `_event_type` and

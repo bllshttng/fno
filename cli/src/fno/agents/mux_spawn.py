@@ -1215,6 +1215,13 @@ def _mesh_env_pairs(
         from fno.agents.harnesses.claude import claude_stop_hook_block_cap
 
         pairs.append(f"CLAUDE_CODE_STOP_HOOK_BLOCK_CAP={claude_stop_hook_block_cap()}")
+    if harness == "footnote":
+        # fnh resolves its rules store from FNO_GRAPH_JSON (env-vars.md): the
+        # pane TUI gets the store the porcelain readers serve, so a sandboxed
+        # pane never falls back to the machine's ~/.fno.
+        from fno.paths import graph_json
+
+        pairs.append(f"FNO_GRAPH_JSON={graph_json()}")
     # Per-spawn account overlay and any route compose through ONE
     # function, same as bg/headless: scrub inherited auth vars
     # (env -u), layer the account (profile + its own login), layer the route

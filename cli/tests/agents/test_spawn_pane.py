@@ -925,6 +925,20 @@ def test_mesh_env_wrapper_routed_pane_scrubs_anthropic_creds(monkeypatch):
     assert "ANTHROPIC_AUTH_TOKEN=zk" in wrapped
 
 
+def test_mesh_env_wrapper_footnote_names_the_graph_store(tmp_path, monkeypatch):
+    """The footnote pane TUI gets the store the porcelain readers serve, so a
+    sandboxed pane never falls back to the machine's ~/.fno (env-vars.md)."""
+    from fno.agents import mux_spawn
+
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("FNO_GRAPH_JSON", raising=False)
+    wrapped = mux_spawn._mesh_env_wrapper("w", "footnote", None, ["footnote"])
+    pair = next(t for t in wrapped if t.startswith("FNO_GRAPH_JSON="))
+    value = pair.split("=", 1)[1]
+    assert value.startswith(str(tmp_path / "state"))
+    assert value.endswith("graph.json")
+
+
 def test_mesh_env_wrapper_clears_inherited_provenance(monkeypatch):
     """A pane must not inherit its spawner's node.
 

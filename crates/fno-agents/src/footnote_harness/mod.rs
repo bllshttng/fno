@@ -121,10 +121,11 @@ fn spawn(cwd: &Path) -> Result<Child, AskOutcome> {
         cmd.env_remove(name);
     }
     // fnh resolves its rules store from FNO_GRAPH_JSON; naming it here keeps
-    // the child off the $HOME/.fno fallback its own resolver would take.
+    // the child off the $HOME/.fno fallback its own resolver would take, and
+    // a declared sandbox beats an inherited value.
     cmd.env(
         "FNO_GRAPH_JSON",
-        crate::feed::graph_path(&AgentsHome::from_env()),
+        crate::backlog::settings::graph_path_at(Some(cwd)),
     );
     // SAFETY: setpgid is async-signal-safe; it runs between fork and exec.
     unsafe {
