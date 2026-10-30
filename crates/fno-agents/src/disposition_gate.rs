@@ -102,9 +102,14 @@ fn row_head(row: &Value) -> &str {
 /// rows is terminal at the disposing round's own head: a scoped
 /// fix-verification re-read the finding's site there, so no later commit is
 /// owed - and when the fix landed before the first attested head, the fix
-/// delta is empty and no later head can ever exist to witness it. A caller
-/// that holds only the chain passes an empty set and keeps the head-move
-/// requirement: fail closed.
+/// delta is empty and no later head can ever exist to witness it. The
+/// disposing row's own `data.verify_fixes` stamp (written by the attest
+/// emitter from the same resolved flags its empty-diff carve-out reads) is a
+/// second, join-free witness for the same acceptance: the invocation join
+/// dies when the review-hold claim expires before the attest read it, and
+/// the lost join must not strand a scoped verification the attest side
+/// already accepted. A caller that holds only the chain passes an empty set
+/// and keeps the head-move requirement: fail closed.
 ///
 /// Terminal means: fixed (and a LATER round reviewed a head the finding's
 /// last raise did not sit on, or the disposing round carried --verify-fixes),
@@ -121,8 +126,8 @@ pub fn disposition_blockers_on_chain(
     }
 
     let mut findings: Vec<(String, &Value, usize, String)> = Vec::new(); // key, primitive, raised round, raised head
-    let mut dispositions: std::collections::HashMap<String, (&str, &str, Option<&str>)> =
-        std::collections::HashMap::new(); // key -> (disposition, reason, disposing row's invocation_id)
+    let mut dispositions: std::collections::HashMap<String, (&str, &str, Option<&str>, bool)> =
+        std::collections::HashMap::new(); // key -> (disposition, reason, disposing row's invocation_id, row stamped verify_fixes)
     let mut truncated = false;
     for (index, val) in chain.iter().enumerate() {
         if val
@@ -151,6 +156,7 @@ pub fn disposition_blockers_on_chain(
                 }
             }
         }
+        let row_stamped = val.pointer("/data/verify_fixes").and_then(|v| v.as_bool()) == Some(true);
         for entry in val
             .pointer("/data/dispositions")
             .and_then(|v| v.as_array())
@@ -171,7 +177,10 @@ pub fn disposition_blockers_on_chain(
                 .and_then(|v| v.as_str())
                 .filter(|id| !id.is_empty() && *id != "UNJOINED");
             if !key.is_empty() {
-                dispositions.insert(key.to_string(), (disposition, reason, invocation));
+                dispositions.insert(
+                    key.to_string(),
+                    (disposition, reason, invocation, row_stamped),
+                );
             }
         }
     }
@@ -194,7 +203,7 @@ pub fn disposition_blockers_on_chain(
                 axis: "open",
                 hard: hard_finding(primitive),
             }),
-            Some(("fixed", _, disposed_by)) => {
+            Some(("fixed", _, disposed_by, row_stamped)) => {
                 // Terminal when a LATER round reviewed the fix delta, or the
                 // disposing round itself carried --verify-fixes: the scoped
                 // fix-verification re-read the finding's site at the head it
@@ -204,11 +213,18 @@ pub fn disposition_blockers_on_chain(
                 // rows AFTER the last raise, not the disposition entry: the
                 // disposition rides one event, so a last-wins copy of its
                 // head pinned the gate to a stale same-head dispose forever
-                // when the real fix's round re-emitted nothing.
-                let verify_witnessed = match disposed_by {
-                    Some(id) => verify_invocations.contains(*id),
-                    None => false,
-                };
+                // when the real fix's round re-emitted nothing. The row stamp
+                // (`data.verify_fixes`, written by emit-attestation from the
+                // same resolved flags the attest side's x-ec79 carve-out
+                // reads) is the second witness: it survives the join being
+                // lost when the review-hold claim expired before the attest
+                // read it - the attestation carries its own scoped-verify
+                // declaration, so the join is not the only path.
+                let verify_witnessed = *row_stamped
+                    || match disposed_by {
+                        Some(id) => verify_invocations.contains(*id),
+                        None => false,
+                    };
                 let delta_witnessed = verify_witnessed
                     || chain[*raised + 1..]
                         .iter()
@@ -221,7 +237,7 @@ pub fn disposition_blockers_on_chain(
                     });
                 }
             }
-            Some(("declined", reason, _)) => {
+            Some(("declined", reason, _, _)) => {
                 if reason.trim().is_empty() {
                     blockers.push(DispositionBlocker {
                         finding_key: key.clone(),
@@ -346,6 +362,62 @@ mod tests {
             disposition_blockers_on_chain(&chain, &HashSet::new()).len(),
             1
         );
+    }
+
+    #[test]
+    fn a_stamped_same_head_row_clears_without_a_join() {
+        // The attest emitter stamps data.verify_fixes on the row whose
+        // dispositions came from a scoped --verify-fixes round (x-ec79's
+        // carve-out evidence). The raise and the fix share one head and the
+        // invocation join is lost (UNJOINED: the review-hold claim expired
+        // before the attest read it), yet the scoped verification is the
+        // witness - the same acceptance the attest side already gives.
+        // Fail closed: the identical chain without the stamp still blocks.
+        use serde_json::json;
+        let finding = json!({
+            "finding_key": "f.py:1:correctness",
+            "category": "correctness",
+            "verdict": "CONFIRMED",
+            "has_required_fields": true,
+        });
+        let row = |head: &str,
+                   verdict: &str,
+                   stamped: bool,
+                   findings: Vec<serde_json::Value>,
+                   dispositions: Vec<serde_json::Value>| {
+            let mut data = json!({
+                "head_sha": head,
+                "verdict": verdict,
+                "branch": "feature/x",
+                "invocation_id": "UNJOINED",
+                "findings": findings,
+                "dispositions": dispositions,
+            });
+            if stamped {
+                data.as_object_mut()
+                    .unwrap()
+                    .insert("verify_fixes".into(), json!(true));
+            }
+            json!({"type": "review_attestation", "data": data})
+        };
+        let fixed_disp = json!({
+            "finding_key": "f.py:1:correctness",
+            "disposition": "fixed",
+            "reason": "verified in place by the scoped pass",
+        });
+        let stamped_chain = vec![
+            row("h1", "fail", false, vec![finding.clone()], vec![]),
+            row("h1", "pass", true, vec![], vec![fixed_disp.clone()]),
+        ];
+        assert!(disposition_blockers_on_chain(&stamped_chain, &HashSet::new()).is_empty());
+
+        let unstamped_chain = vec![
+            row("h1", "fail", false, vec![finding], vec![]),
+            row("h1", "pass", false, vec![], vec![fixed_disp]),
+        ];
+        let blockers = disposition_blockers_on_chain(&unstamped_chain, &HashSet::new());
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].axis, "fixed-unreviewed");
     }
 
     #[test]
