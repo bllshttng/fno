@@ -136,6 +136,20 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
                                 e.harness_session_id.as_deref() == Some(stopped_session.as_str())
                             }) {
                                 state::record_stop(entry, "terminal-sweep", Some(stopped_reason));
+                                // The same evidence every other registry stop
+                                // writes: quiet recovery's skip arm reads
+                                // agent_stopped, not this sweep's own kind, so
+                                // a stop that skips the journal leaves the
+                                // worker reading merely dead to the resume
+                                // ladder. The session rides the payload, so
+                                // the reader needs no registry join.
+                                let _ = EventEmitter::new(sweep_home.events_jsonl(), "daemon")
+                                    .emit(
+                                        "agent_stopped",
+                                        &json!({"name": entry.name.clone(),
+                                            "session_id": stopped_session,
+                                            "reason": "terminal-sweep"}),
+                                    );
                                 // best-effort: a failed stamp costs a later
                                 // wake its name, never the stop.
                                 crate::wake_name::stamp_from_row(&sweep_home, entry);
