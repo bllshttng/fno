@@ -507,7 +507,7 @@ pub(crate) struct SpawnJournal {
 }
 
 pub(crate) fn scan_spawn_journal() -> SpawnJournal {
-    let live = agents_view::registry_path().with_file_name("events.jsonl");
+    let live = agents_view::runtime_home().join("events.jsonl");
     scan_journal_at(&live)
 }
 
@@ -553,7 +553,7 @@ impl std::ops::DerefMut for JournalCache {
 impl JournalCache {
     /// Scan once at construction (the server's birth read).
     pub(crate) fn load() -> Self {
-        Self::load_at(&agents_view::registry_path().with_file_name("events.jsonl"))
+        Self::load_at(&agents_view::runtime_home().join("events.jsonl"))
     }
 
     /// Path-injected core of [`JournalCache::load`], so the stamp gate is
@@ -568,7 +568,7 @@ impl JournalCache {
     /// whether it rescanned, so a caller can tell a real refresh from a
     /// no-op stat pass.
     pub(crate) fn refresh(&mut self) -> bool {
-        self.refresh_at(&agents_view::registry_path().with_file_name("events.jsonl"))
+        self.refresh_at(&agents_view::runtime_home().join("events.jsonl"))
     }
 
     /// Path-injected core of [`JournalCache::refresh`]. A standing read

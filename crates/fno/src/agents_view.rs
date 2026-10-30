@@ -1315,20 +1315,27 @@ pub type TruthBadges = HashMap<String, String>;
 /// Claim-live + a fire within this window reads Working; older/absent stays no-badge.
 const TRUTH_RECENCY_WINDOW_S: u64 = 1800; // 30 min
 
-/// The `.fno` state base for events.jsonl, off the daemon's runtime home
-/// (`FNO_AGENTS_HOME`'s parent > `$HOME/.fno`). The runtime home stays
-/// state-dir independent, unlike [`registry_path`].
-fn fno_dir() -> PathBuf {
+/// The daemon's runtime agents home (`FNO_AGENTS_HOME` > `$HOME/.fno/agents`):
+/// where the supervisor socket, events.jsonl, the otel receiver, the join
+/// markers, the keep overlay, the reap receipts and the fleet breaker live.
+/// State-dir independent - the daemon never moves - unlike [`registry_path`].
+pub(crate) fn runtime_home() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
-        return Path::new(&v)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".fno"));
+        return PathBuf::from(v);
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".fno")
+        .join("agents")
+}
+
+/// The `.fno` state base for events.jsonl, off [`runtime_home`]'s parent.
+fn fno_dir() -> PathBuf {
+    runtime_home()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(".fno"))
 }
 
 /// The GLOBAL claims dir, mirroring Python `global_claims_root` + `claims_dir`
@@ -1743,10 +1750,9 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         .as_array()?;
     let mut out = Vec::with_capacity(rows.len());
     let mut unattributable = 0usize;
-    // One store read per derive, not per row: registry_path resolves through
-    // the config hub, so a per-row call would walk the config chain again for
-    // every agent on the board.
-    let team_titles = crate::org_titles::titles(&registry_path().with_file_name("team_names.json"));
+    // One store read per derive, not per row: the title store lives beside
+    // the daemon (runtime home), where its writers keep it.
+    let team_titles = crate::org_titles::titles(&runtime_home().join("team_names.json"));
     for row in rows {
         let Some(name) = row.get("name").and_then(|v| v.as_str()) else {
             // tolerate an alien row; the registry owners validate. It still
@@ -2183,17 +2189,10 @@ pub fn derive_rows(raw: &str, now_secs: u64) -> Option<Vec<RegistryAgent>> {
 }
 
 /// The fno-agents daemon's supervisor socket, under the daemon's runtime
-/// home (`FNO_AGENTS_HOME` > `$HOME/.fno/agents`): the socket lives beside
-/// the daemon, whose home stays state-dir independent, unlike
-/// [`registry_path`].
+/// home: the socket lives beside the daemon, whose home stays state-dir
+/// independent, unlike [`registry_path`].
 pub fn supervisor_sock_path() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
-        return PathBuf::from(v).join("supervisor.sock");
-    }
-    let base = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join(".fno").join("agents").join("supervisor.sock")
+    runtime_home().join("supervisor.sock")
 }
 
 /// One daemon RPC round trip: connect, write one length-prefixed request
