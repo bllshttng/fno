@@ -175,7 +175,7 @@ pub(crate) fn rate_limit_window(
 ) -> (&'static str, Option<f64>, String) {
     for (_epoch, text) in records.iter().rev() {
         let swaps = crate::recovery_sweep::classify_session_error(text)
-            .is_some_and(|err| err.triggers_swap());
+            .is_some_and(|err| err.error_class.triggers_swap());
         if !swaps {
             continue;
         }

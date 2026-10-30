@@ -50,7 +50,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub(crate) use crate::territory::compile_scope_ids;
-pub(crate) use budget::{fno_py_cmd, now_secs_board, run_json, Budget, HAND_RUN_BUDGET_MS};
+pub(crate) use budget::{now_secs_board, Budget, HAND_RUN_BUDGET_MS};
 pub(crate) use claims::read_claims;
 pub(crate) use classify::{entry_by_id, node_has_pr, read_claimed_nodes};
 pub(crate) use prs::{read_pr_gates, read_prs};

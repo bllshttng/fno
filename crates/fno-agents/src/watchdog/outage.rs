@@ -788,7 +788,7 @@ fn prune_snapshots(snapshot_dir: &Path) {
 /// intent) when the declared fields are absent, the cap actor's observed-first
 /// precedence. `(None, None)` leaves the named refusal standing.
 fn route_fallback_identity(
-    entry: Option<&crate::state::AgentEntry>,
+    entry: Option<&crate::state::RegistryEntry>,
     entries: Option<&[Value]>,
 ) -> (Option<String>, Option<String>) {
     let observed = entries.and_then(|records| {
@@ -838,7 +838,7 @@ pub(crate) fn measure_provider_outages(
             return report;
         }
     };
-    let by_session: HashMap<&str, &crate::state::AgentEntry> = registry
+    let by_session: HashMap<&str, &crate::state::RegistryEntry> = registry
         .entries
         .iter()
         .filter_map(|e| {
