@@ -1404,9 +1404,6 @@ fn lead_walk_proceeds_past_driver_validation_into_preflight() {
                 "FNO_AGENTS_HOME",
                 &dir.path().join("agents").display().to_string(),
             ),
-            // The lead manifest seeds under the state root's spaces/, so
-            // the child must resolve the same root the seed wrote to.
-            ("FNO_STATE_DIR", &dir.path().display().to_string()),
         ],
     );
 
@@ -1458,9 +1455,6 @@ fn lead_walk_terminates_budget_at_the_respawn_ceiling() {
                 "FNO_AGENTS_HOME",
                 &dir.path().join("agents").display().to_string(),
             ),
-            // The lead manifest seeds under the state root's spaces/, so
-            // the child must resolve the same root the seed wrote to.
-            ("FNO_STATE_DIR", &dir.path().display().to_string()),
         ],
     );
 
@@ -1538,9 +1532,6 @@ fn lead_walk_dispatches_past_a_prior_lead_terminal_and_bills_one_respawn() {
                 "FNO_AGENTS_HOME",
                 &dir.path().join("agents").display().to_string(),
             ),
-            // The lead manifest seeds under the state root's spaces/, so
-            // the child must resolve the same root the seed wrote to.
-            ("FNO_STATE_DIR", &dir.path().display().to_string()),
         ],
     );
 
@@ -1627,9 +1618,6 @@ fn lead_wake_mode_dispatches_past_a_spent_ceiling_without_billing_it() {
                 "FNO_AGENTS_HOME",
                 &dir.path().join("agents").display().to_string(),
             ),
-            // The lead manifest seeds under the state root's spaces/, so
-            // the child must resolve the same root the seed wrote to.
-            ("FNO_STATE_DIR", &dir.path().display().to_string()),
         ],
     );
 
@@ -1703,9 +1691,6 @@ fn lead_walk_without_wake_still_refuses_at_the_spent_ceiling() {
                 "FNO_AGENTS_HOME",
                 &dir.path().join("agents").display().to_string(),
             ),
-            // The lead manifest seeds under the state root's spaces/, so
-            // the child must resolve the same root the seed wrote to.
-            ("FNO_STATE_DIR", &dir.path().display().to_string()),
         ],
     );
 
@@ -1764,9 +1749,6 @@ fn lead_wake_mode_over_an_empty_board_terminates_nowork() {
                 "FNO_AGENTS_HOME",
                 &dir.path().join("agents").display().to_string(),
             ),
-            // The lead manifest seeds under the state root's spaces/, so
-            // the child must resolve the same root the seed wrote to.
-            ("FNO_STATE_DIR", &dir.path().display().to_string()),
         ],
     );
 
@@ -1835,9 +1817,6 @@ fn lead_wake_reason_without_wake_is_refused() {
                 "FNO_AGENTS_HOME",
                 &dir.path().join("agents").display().to_string(),
             ),
-            // The lead manifest seeds under the state root's spaces/, so
-            // the child must resolve the same root the seed wrote to.
-            ("FNO_STATE_DIR", &dir.path().display().to_string()),
         ],
     );
 
@@ -1901,9 +1880,6 @@ fn lead_wake_reason_board_and_backstop_clauses_reach_the_prompt() {
                     "FNO_AGENTS_HOME",
                     &dir.path().join("agents").display().to_string(),
                 ),
-                // The lead manifest seeds under the state root's spaces/, so
-                // the child must resolve the same root the seed wrote to.
-                ("FNO_STATE_DIR", &dir.path().display().to_string()),
             ],
         );
 
