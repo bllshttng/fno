@@ -1240,7 +1240,7 @@ event_types:
     consumers: [operator]
 
   - name: backlog_refused_flush
-    description: "A shared-backlog flush the primary refused took this machine's rows back for every row the batch touched. The take-back reverted this machine's own writes; the refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
+    description: "A shared-backlog flush the primary refused. The take-back covers only the nodes the refusal named (the whole batch when the refusal names no node, as with a global table or a failed request): the primary's copy comes back for those nodes' rows, every other change in the batch re-queues for the next flush, and an INSERT the take-back covers keeps its local row. The refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
     sources: [daemon]
     data:
       required: [nodes, tables, batch, error]
