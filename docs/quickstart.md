@@ -2,7 +2,7 @@
 
 ## Is this page for you?
 
-You installed fno and want to see it ship something. This page takes you from an installed plugin to a green, reviewed PR in about ten minutes of your time. The loop does the rest while you are away.
+You installed fno and want to see it ship something. This page takes you from an installed plugin to a green, reviewed PR. You run a few commands, and the loop does the rest while you are away. Run time depends on your repo and your CI: one small fix in fno's own repo took 1 hour 53 minutes, most of it CI.
 
 Not for: installing fno. If `fno --version` fails, start at [install](install.md).
 
@@ -24,6 +24,12 @@ fno config setup run --yes
 ```
 
 ## Ship your first feature
+
+These steps use Claude Code. On another harness, see the [command matrix](harness-command-matrix.md) for its form of the command.
+
+Your repo needs a GitHub remote, and `gh` must be signed in. Check with `gh auth status`.
+
+Your repo also needs CI. With no checks on the PR, the loop blocks and says so, because it never reads "no checks" as green. A one-job GitHub Actions workflow is enough.
 
 Open a Claude Code session in a git repo you can push to. Point the loop at a small task:
 
