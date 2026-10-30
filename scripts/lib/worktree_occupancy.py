@@ -39,6 +39,29 @@ _SHELL_NAMES = frozenset({"zsh", "bash", "sh"})
 _SNAPSHOT_TOKEN = "~/.claude/shell-snapshots/"
 _DESCENT_CAP = 32
 
+#: argv[1] tokens the Claude Code background daemon gives its pre-warm pool.
+#: Both spellings are live: a pool child runs `claude bg-spare ...` while the
+#: app-bundle path runs `claude --bg-pty-host ...`.
+_CLAUDE_SPARE_POOL_ARGS = frozenset(
+    {"bg-spare", "bg-pty-host", "--bg-spare", "--bg-pty-host"}
+)
+
+
+def is_claude_spare_pool(command: str) -> bool:
+    """True for a Claude Code background-daemon pre-warm process.
+
+    Moved here when the footprint family went native (its Python home is
+    deleted): this classifier is the one remaining consumer, and an import
+    of a deleted module fail-closed every pid as a holder.
+
+    Matched on argv[0] plus argv[1], never a substring scan of the whole
+    command line: a claude session whose PROMPT says bg-spare is a session.
+    """
+    argv = command.split()
+    if len(argv) < 2:
+        return False
+    return argv[0].rsplit("/", 1)[-1] == "claude" and argv[1] in _CLAUDE_SPARE_POOL_ARGS
+
 
 @dataclass
 class Hit:
@@ -95,8 +118,6 @@ def _direct_verdict(pid: int, row: dict, *, keeper_verdicts, job_of_pid, job_sta
         return Hit(pid, HOLDS, KEEP, reason=reason, cmd=_cmd(row))
 
     cmd = _cmd(row)
-    from fno.footprint import is_claude_spare_pool
-
     if is_claude_spare_pool(cmd):
         # The identity join is the daemon's rv socket farm, never a recorded
         # cwd. The agents-registry cwd field AND the job state.json cwd field
@@ -251,7 +272,7 @@ def main(argv: List[str]) -> int:
     One tab-separated row per pid: ``pid verdict action job reason cmd``.
     Any failure exits 2 with nothing on stdout, so the bridge fails closed."""
     try:
-        from fno.agents.orphans import iter_processes
+        from fno.agents.keeper_lane import iter_processes
     except Exception:  # noqa: BLE001
         return 2
     try:

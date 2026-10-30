@@ -117,11 +117,7 @@ backfill). The hand-off is a top-level `## Schema Reconciliation` section,
 grepped exactly like the `## Discovery` skip above so the later phase reuses it
 instead of regenerating.
 
-1. **Generate the schema-aware codemap.** `fno doctor codemap --db-schema` appends a
-   `## Database Schema` section. The connection is discovered from the shell
-   `DATABASE_URL` or a dev `.env` file (`.env.production` / `.env.staging` are
-   never auto-connected); with no reachable DB it parses migration files for
-   tables and keys. The connection string is never echoed.
+1. **Read the schema at its source.** The receipt's `database.signals` name the files to read: migrations, `prisma/schema.prisma`, or the drizzle schema. Never connect to `.env.production` or `.env.staging`. Never echo a connection string.
 2. **Dedup against the backlog.** Run `fno backlog find "<feature keywords>"`
    (title tokens plus the one-line summary) to surface an existing node that
    already covers this ground. This is plan-level dedup ("are we already
@@ -131,7 +127,3 @@ instead of regenerating.
    narrow scope or supersede"), and any shaping constraint under the
    `## Schema Reconciliation` heading. A DB-backed repo whose feature touches
    no tables records "no schema surface" and proceeds without a citation.
-
-`/blueprint` then enforces a graduated citation gate: a DB-touching plan that
-never names a real table/enum/constraint fails closed (full / large) or warns
-(quick / small). See the Schema Citation Gate in `skills/blueprint/SKILL.md`.

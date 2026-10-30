@@ -48,12 +48,21 @@ READ_ALLOWLIST = (
     "crates/fno-agents/src/pr_nudge.rs",  # the merge-order hold's read-only decision join (read_store_live over the state dir)
     "crates/fno-agents/src/scratch.rs",  # the sweep's status read routes through graph_store::read_rows
     "crates/fno-agents/src/route_slot.rs",  # the routing audit's read-only decision projection
+    "crates/fno-agents/src/observer/isolation.rs",  # the replay leak scan names the real graph.json path to police it, never a read
     # Not readers: store plumbing and path builders. note_history.rs
     # defaults the journal's derived file name; note_migrate.rs help text
     # names the default store path.
     "crates/fno-agents/src/backlog/mod.rs",
     "crates/fno-agents/src/backlog/note_history.rs",
     "crates/fno-agents/src/backlog/note_migrate.rs",
+    # The config doctor's state-roots report: graph_json() builds the
+    # default store path it reports roots against, a path builder that
+    # never opens the store.
+    "crates/fno/src/config_doctor/mod.rs",
+    # The state lane's fixture writer: populate_state_profile builds a
+    # synthetic graph.json inside the session sandbox for the state canary.
+    # It never opens the real store.
+    "crates/fno-agents/src/test_smoke.rs",
     # The pr-watch installer's plist template: its doc comment names the
     # store the launchd tick polls, and the rendered bytes are golden-frozen;
     # the installer itself never opens the store, never a read.

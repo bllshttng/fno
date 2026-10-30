@@ -4,7 +4,7 @@ An operator edits a config file and wants one answer. Did the edit take effect?
 
 `fno config get <leaf>` answers it one leaf at a time. Its `source:` line names the deciding file and the files it overrode, and that line is the only place precedence is visible. It requires already knowing which leaf to ask about.
 
-`fno config doctor` is the command an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `cli/src/fno/config_readback.py` close that gap. `cli/src/fno/setup/doctor.py` only prints them.
+`fno config doctor` is the command an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `crates/fno/src/config_doctor/checks.rs` close that gap, and the unknown-key and enum walks in `schema_walk.rs` beside it read the committed schema table. The loader keeps its own half in `cli/src/fno/config/_readback.py`: the unknown-key walk it warns through and the refusal text `SettingsRefused` carries.
 
 ## The parse the doctor can see
 
@@ -20,7 +20,7 @@ An empty file exits 0. That is correct and stays correct.
 
 `check_config_files_read` names every candidate that exists and failed to parse, and every document that parsed to a non-table, with the type it parsed to.
 
-`check_unknown_keys` walks each candidate layer SEPARATELY rather than the merged result, so every message names the file that actually holds the key. It reads `_aliased_layers`, the loader's own per-file collector, so a legacy spelling the loader accepts is never called a typo. `extra="ignore"` is forward compatibility. It also means a typo'd section or leaf is accepted in silence. `warn_unknown_keys` already found them and, without `FNO_DEBUG`, said nothing.
+`unknown_key_problems` walks each candidate layer SEPARATELY rather than the merged result, so every message names the file that actually holds the key. It reads `_aliased_layers`, the loader's own per-file collector, so a legacy spelling the loader accepts is never called a typo. `extra="ignore"` is forward compatibility. It also means a typo'd section or leaf is accepted in silence. `warn_unknown_keys` already found them and, without `FNO_DEBUG`, said nothing.
 
 `check_enabled_with_empty_population` reports a switch that is on with nothing that can satisfy it. `review.cross_model` is the one pair here, and it is here because its consumer was read. The assurance verdict widens the reviewer set from the review-policy kinds door (`fno-agents review-policy kinds`), whose `available` list is the populated read. With no dispatchable non-claude provider the diversity requirement can never be met.
 
@@ -40,7 +40,7 @@ The node's own acceptance asked for every leaf name appearing in more than one s
 
 ## Naming the decider
 
-When a config file decides `key`, `source_note(key)` returns `set in <file>`. Otherwise it returns `None`. It is the one renderer, reading `resolve_source`'s answer rather than re-deriving one. `_state_root_selector` in `config_cli.py` and the doctor's accessor loop both call it.
+When a config file decides `key`, `source_note(key)` in `crates/fno/src/config_doctor/mod.rs` returns `set in <file>`. Otherwise it returns `None`. It is the one renderer, reading the native `resolve_source` answer rather than re-deriving one. `state_root_selector` in `reporters.rs` and the doctor's accessor loop both call it.
 
 The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers`, in precedence order. It named the highest-priority file PRESENT before, so an unreadable project config was printed as the source of values the global file decided.
 
@@ -56,7 +56,7 @@ The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers
 
 ## The module loads fno.config by importlib
 
-`config_readback.py` reaches `fno.config` through `_cfg()`, which calls `importlib.import_module`. A plain import puts `fno.config` in a mypy strongly-connected component. There the lazy `__getattr__` re-exports in `graph/_constants.py` degrade to `Optional[Path]`, and two files this feature never touches fail.
+`config/_readback.py` reaches `fno.config` through `_cfg()`, which calls `importlib.import_module`. A plain import puts `fno.config` in a mypy strongly-connected component. There the lazy `__getattr__` re-exports in `graph/_constants.py` degrade to `Optional[Path]`, and two files this feature never touches fail.
 
 The number came from a measurement, not from reasoning. `origin/main` is clean at 567 files. The branch reported three errors at 568. Hiding the module made them vanish, which named the cause. Removing the doctor's import edge did not, and neither did moving the module out of the package.
 

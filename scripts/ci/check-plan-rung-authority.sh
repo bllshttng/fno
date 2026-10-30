@@ -388,11 +388,21 @@ crates/fno-agents/src/delivery_eval.rs
 crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
 crates/fno-agents/src/merge_hold.rs
+crates/fno-agents/src/observer/fold.rs
+crates/fno-agents/src/observer/mod.rs
 crates/fno-agents/src/plan_carry.rs
+crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
-crates/fno-agents/src/verify_advise.rs"
+crates/fno-agents/src/verify_advise.rs
+crates/fno-agents/src/wave.rs"
+# wave.rs reads a plan's Execution Strategy and `## Changes` headings for its
+# task list; it never extracts a plan status, so the shelling rule does not
+# apply to it.
 # plan_carry.rs reads a plan body only to hash it and copy it across hosts;
 # it never parses frontmatter, so the shelling rule does not apply to it.
+# scoreboard/plan_join.rs reads plan frontmatter (ACs, probes, ownership) to
+# score plan fidelity for the scoreboard and the plan-fidelity gate; it never
+# extracts a plan status, so the shelling rule does not apply to it.
 # create_cli.rs reads only the plan frontmatter `status` scalar and hands it
 # to the shared rung table (graph_store::supplied_plan_rung) for the wave
 # append's plan-rung map; it classifies nothing itself, so the shelling rule
@@ -431,6 +441,10 @@ crates/fno-agents/src/verify_advise.rs"
 # The plan-doc writer writes the status line the graph decides (stamp,
 # graduate, projection). It reads status only to keep its writes forward-only,
 # so it is exempt from both scans; readiness stays with `fno do plan rung`.
+# observer/mod.rs reads a corpus item's plan text only to score it (the
+# judge's section checks and the replay's plan input); observer/fold.rs
+# names the Python plan loader in a parity comment. Neither extracts a plan
+# status, so the shelling rule does not apply to them.
 # verify_advise.rs reads only the plan's acceptance-criteria section
 # (`read_plan_acs`) to build the verification prompt; it never extracts a
 # plan status, so the shelling rule does not apply to it.
@@ -564,6 +578,28 @@ while IFS= read -r reader; do
                 | grep -vE '\.get\("status"\)' \
                 | grep -vE 'str_field\(response, "status"\)' \
                 | grep -vE '"status": status,' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/scoreboard/plan_join.rs" ]; then
+        # plan_join's "status" literals are LEDGER-row reads and the
+        # plan-fidelity view envelope (unjoined/joined delivery fidelity),
+        # the merge_hold row-vocabulary precedent; its plan read walks ACs,
+        # probes and ownership, never a `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\.get\("status"\)' \
+                | grep -vE '"status":[[:space:]]*"unjoined",' \
+                | grep -vE '"status"\.to_string\(\)' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/wave.rs" ]; then
+        # wave's "status" literals are `git status --porcelain` argv for the
+        # wave worktree checks; its plan read is the task list, never `status:`.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\["status", "--porcelain"' \
                 || true
         )"
     fi

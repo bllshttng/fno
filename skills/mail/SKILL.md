@@ -44,7 +44,8 @@ happens when that misses, and it is recovery, not delivery.**
 
 `fno agents mail send` tries a live inject first. On success the header-framed turn lands in the recipient's session and an audit-only `delivery: hosted` row records it in `messages.jsonl`. Recipient drains ignore that row because delivery already happened. When no live inject confirms, the envelope instead enters the durable queue and waits on a drain the recipient does not reliably run. Both exit 0, so **read the receipt, not the exit code**:
 
-- `msg-<id> delivered (hosted)` - the live inject was accepted. It does not prove the recipient read it.
+- `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's own turn record holds the envelope id. It does not prove the recipient acted on it.
+- `msg-<id> parked` or `injected` - the bytes reached the recipient, but no turn took them yet. Peek before you resend: a resend reaches it twice.
 - `msg-<id> queued (durable)` - live delivery was not confirmed. This is durable fallback, not delivery.
 - the receipt ends `landed (...)` or a `NOT LANDED` block - the send command re-checked the recipient after a settle window, and NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
 
@@ -139,7 +140,7 @@ fno agents mail send --to-project "<to_project>" "<body>"
 
 `fno agents mail send` exits 0 for both outcomes, so the receipt line is the only signal:
 
-- `msg-<id> delivered (hosted)` - the live inject was accepted. That does not prove the recipient read it.
+- `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's turn record holds it. That does not prove the recipient acted on it. `parked` and `injected` are not taken yet.
 - `msg-<id> queued (durable)` - **report this as NOT delivered**, not as success.
   The CLI prints the recovery ladder on stderr; relay it. Offer to `resume` the
   session and re-send rather than telling the user to wait for a drain.

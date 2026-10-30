@@ -36,8 +36,9 @@
 # Exit 0 = all assertions passed.
 #
 # HOW THIS RUNS IN CI: auto-discovered, no registry entry. `scripts/tests/*.sh` is
-# in _SMOKE_HARNESS_GLOBS (cli/src/fno/test_cmd.py), so the smoke runner picks it
-# up, and cli-ci.yml runs `fno-py doctor test smoke` on `scripts/**`. Confirm with
+# in HARNESS_GLOBS (crates/fno-agents/src/test_smoke_registry.rs), so the smoke
+# runner picks it up, and cli-ci.yml runs the native `fno doctor test smoke` on
+# `scripts/**`. Confirm with
 # `fno doctor test smoke --list | grep proto-version-bump` - worth stating, because the
 # glob makes the wiring invisible to a grep for this filename.
 set -uo pipefail

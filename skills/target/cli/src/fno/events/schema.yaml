@@ -415,6 +415,9 @@ event_types:
         review_round:
           type: integer
           description: "The declared round this verdict is, as a running max across the PR's life. A round is one reviewed HEAD, so two verdicts at one unchanged head are one round; CI failures, lint failures and rebases are not rounds. A row carrying this field bypasses the head collapse, because the declared number is already the round's identity. The round budget (config.review.max_rounds) counts these. OPTIONAL."
+        verify_fixes:
+          type: boolean
+          description: "The dispositions on THIS row came from a scoped --verify-fixes round: the attest emitter (skills/review/scripts/emit-attestation.sh) writes it from the same resolved invocation flags its empty-diff carve-out reads, so a fixed disposition rides the stamp terminal at the disposing row's own head (disposition_gate) even when the invocation join was lost - the review-hold claim is a 15-minute TTL lock and a review that outlives it attests UNJOINED. OPTIONAL: absent on every plain round and every pre-landed row; a reader treats absent as false. True only ever beside dispositions; a stamped row with none clears nothing."
         level:
           type: string
           description: "The invocation's review level (low | medium | high | xhigh | max | unset), mirrored from the sibling review_invocation started row's own `level` field at emit time. Read by publish_round (crates/fno-agents/src/publish_review.rs) to name the level in the GitHub review summary it posts. OPTIONAL: an attestation emitted before this field, or one whose started row resolved no level, carries neither key nor the literal 'unset' - a reader treats both the same way."
@@ -975,6 +978,21 @@ event_types:
         nonce:
           type: string
     consumers: [postmortem]
+
+  - name: transcript_record
+    retention: ephemeral
+    description: "One raw transcript line pushed over the daemon socket by a session's turn hook, for a session whose transcript file the host-side readers cannot read (a sandboxed worker). Stored through the judged event store; readers read stored records first and fall back to the file."
+    sources: [hook]
+    data:
+      required: [session_id, line]
+      properties:
+        session_id:
+          type: string
+          description: "The harness session id the record belongs to; projected to the store's session_id column, so readers query by session."
+        line:
+          type: string
+          description: "The raw transcript JSON line, byte-for-byte, exactly as the harness wrote it."
+    consumers: [operator]
 
   - name: polling_external_review
     description: "Emitted by /fno:ship pr check at every external-review check tick. Counted as the fifth thrash-fingerprint signal so polling iterations register as progress and the thrash detector does not force-cancel the loop while waiting for a slow external reviewer."
@@ -2138,7 +2156,7 @@ event_types:
     consumers: [fno agents workspace worktree overlaps]
 
   - name: config_write
-    description: "One config key changed on disk. Emitted by the fno.config.writer choke point after the atomic replace lands, once per changed leaf key. Answers when a key changed, from what to what, in which resolved root, and which session made the change, with no transcript search."
+    description: "One config key changed on disk. Emitted by the native config writer (fno config set, unset, rm) after the atomic replace lands, once per changed leaf key. Answers when a key changed, from what to what, in which resolved root, and which session made the change, with no transcript search."
     sources: [config]
     data:
       required: [key, scope, root_kind, config_path, present_before, present_after, attester_session_id, attester_witness]
@@ -2791,6 +2809,38 @@ event_types:
       required: [name, reason]
       properties:
         name: { type: string }
+        reason: { type: string }
+
+  - name: blueprint_stall
+    description: "The blueprint-stall lane observed codex stall evidence, nudged the worker once, or mailed the lead the reseat-on-claude remedy."
+    sources: [daemon]
+    data:
+      required: [session_id, node, kind, stage]
+      properties:
+        session_id: { type: string }
+        node: { type: string }
+        kind: { type: string, enum: [verify-loop, goal-paused] }
+        basis: { type: string }
+        stage: { type: string, enum: [observed, nudged, lead-notified] }
+        lead: { type: string }
+
+  - name: blueprint_stall_error
+    description: "The blueprint-stall lane could not inspect one registry row."
+    sources: [daemon]
+    data:
+      required: [name, reason]
+      properties:
+        name: { type: string }
+        reason: { type: string }
+
+  - name: quiet_worker_skip
+    description: "A deliberately stopped worker on a delivered node was skipped, never revived; the revival rule's recorded skip."
+    sources: [daemon]
+    data:
+      required: [session_id, node, reason]
+      properties:
+        session_id: { type: string }
+        node: { type: string }
         reason: { type: string }
   - name: agent_followup_started
     description: "An fno-agents followup ask started against a live registry entry."
@@ -4538,7 +4588,7 @@ event_types:
           description: "Optional backlog node ids that stop while the question remains open."
         subject:
           type: string
-          description: "Optional. The decision subject the question is about; the ask verb refuses it when live law rules that subject."
+          description: "Optional. The decision subject the question is about; the ask action refuses it when live law rules that subject."
         context:
           type: object
           description: "Optional. The structured context the Rust intake writes: blocked_because, options_rationale, recommendation {option, why, downside}, unknowns, reversible, cost_if_wrong, meanwhile. Keys are open; the attention projection reads each by name."
@@ -4803,7 +4853,7 @@ event_types:
           description: "Optional. Who the law governs: `global`, or `project:<slug>`. A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening to global is an explicit --global, because law is never inherited by silence. Readers filter to global plus the session's project and fail open with a named reason when the project cannot be resolved."
         paths:
           type: array
-          description: "Optional. Repo-relative globs. A live law with paths prints at the first Edit or Write of a matching file in each session (hooks/law-stage-inject.sh)."
+          description: "Optional. Repo-relative globs. A live law with paths becomes a pre-tool rule on Edit and Write of a matching file, printed once per session (hooks/rules-dispatch.sh)."
         trace:
           type: object
           description: "Optional. The traced-decision envelope (shape: decision_span.trace). The answer row carries span_id = decision_id and parent_span_id = the question_id it answers, so one query on trace_id reads the whole chain."
@@ -4821,8 +4871,8 @@ event_types:
       properties:
         span_kind:
           type: string
-          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno]
-          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha). More values land as later surfaces adopt the envelope."
+          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno, rule]
+          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha), rule (fno::rules::decide fired a rule at a hook or door, attrs rule/law/event/verdict/tool). More values land as later surfaces adopt the envelope."
         trace:
           type: object
           required: [trace_id, span_id, actor_kind, comms]
@@ -4877,15 +4927,27 @@ event_types:
           description: "Optional, span_kind=correction. The span id this correction overturns."
         rule:
           type: string
-          description: "Optional, span_kind=block, nudge or notify. The event_rules row id that fired (docs/architecture/event-rules.md)."
+          description: "Optional, span_kind=block, nudge, notify or rule. The rule id that fired (docs/architecture/event-rules.md)."
+        law:
+          type: [string, "null"]
+          description: "Optional, span_kind=rule. The decision id behind a law-sourced rule; null for a shipped or project rule."
+        event:
+          type: string
+          description: "Optional, span_kind=rule. The decision point: prompt, skill, pre-tool, plan-start or door:<name>."
+        verdict:
+          type: string
+          description: "Optional, span_kind=rule. The action decide() applied to this fire: inform, warn or block."
+        tool:
+          type: [string, "null"]
+          description: "Optional, span_kind=rule. The tool name at a pre-tool event; null elsewhere."
         matched_event:
           type: string
           description: "Optional, span_kind=block, nudge or notify. The event id or Stop turn key the row fired on; with rule it is the fire's dedupe ledger entry."
     consumers: [notifications, evals]
 
   - name: operator_notice
-    description: "One operator-attention notice left the notify chokepoint (fno.notify._impl.send_notification). The local OS toast is one leg; this row is the other: a status sink with events=[operator_notice] carries it off the host, so a remote operator sees it. A notice is a POINTER to the durable queue, never a copy: pointer names the verb that shows the content, and body carries counts, never rows."
-    sources: [python, daemon, test]
+    description: "One operator-attention notice left the notify dispatch (the native `fno inbox notify` command). The local OS toast is one leg; this row is the other: a status sink with events=[operator_notice] carries it off the host, so a remote operator sees it. A notice is a POINTER to the durable queue, never a copy: pointer names the command that shows the content, and body carries counts, never rows."
+    sources: [python, daemon, rust, test]
     data:
       required: [title, body]
       properties:
@@ -5255,6 +5317,18 @@ event_types:
         outcome:
           enum: [refused, unanswered]
           description: "refused: the run never started. unanswered: the verb reached the server and no reply came back inside the deadline; the server's side is unknown."
+    consumers: [operator]
+
+  - name: law_trigger
+    description: "One imported trigger for a live law, written by `fno inbox law match rules-import` under operator authority. Append-only: the newest row per decision_id wins and nothing rewrites a law row. Rule rows carry the row's TOML text (rule_toml); disposition rows carry the disposition object."
+    sources: [backlog]
+    data:
+      required: [decision_id, trigger_kind]
+      properties:
+        decision_id: { type: string, description: "The law the trigger governs" }
+        trigger_kind: { type: string, description: "rule or disposition" }
+        rule_toml: { type: string, description: "For trigger_kind rule: the [[rule]] row's TOML text below its header" }
+        disposition: { type: object, description: "For trigger_kind disposition: the [[disposition]] row object" }
     consumers: [operator]
 
   - name: mail_origin_classified
@@ -6041,7 +6115,7 @@ event_types:
           description: "The resolved provider record id the launch proceeded on."
         reason:
           type: string
-          description: "QuotaSignal.reason: why headroom could not be resolved."
+          description: "The route signal's reason: why headroom could not be resolved."
         snapshot_age_s:
           type: number
           description: "Age in seconds of the usage snapshot at decision time; absent when none exists."
@@ -6540,7 +6614,7 @@ event_types:
           description: "Wall-clock seconds from tick entry to this record."
         phase:
           type: string
-          description: "Last stage marker reached: one of entry, settings, lock, discover, sweep, dispatch, recovery, watchdog, lead_wake, heal, stranded, catchup."
+          description: "Last stage marker reached: one of entry, settings, lock, discover, sweep, dispatch, recovery, watchdog, heal, stranded, catchup."
         why:
           type: string
           enum: [deadline_exceeded, slice_starved, self_killed, killed]
@@ -6656,6 +6730,9 @@ event_types:
         check:
           type: string
           description: "The check name that flapped."
+        repo:
+          type: string
+          description: "The origin slug as owner--repo. Readers count a flake only in the repo that recorded it."
         node_id:
           type: string
           description: "The backlog node named on the PR branch, when one resolved."
@@ -6675,6 +6752,19 @@ event_types:
         reason:
           type: string
           description: "Why that remedy was chosen, from the finding's signature."
+
+  - name: pr_heal_hold
+    description: "CI heal drive loop: one row per rerun held for a live Actions incident, keyed like the rerun ledger so the unchanged-PR skip opens for a held head and the next tick re-probes the incident. Rust-emitted into the global journal."
+    sources: [pr-heal, daemon]
+    data:
+      required: [key, run_id]
+      properties:
+        key:
+          type: string
+          description: "The (sha, run id) dedup key of the held rerun."
+        run_id:
+          type: string
+          description: "The CI run id the held rerun would have re-queued."
 
   - name: daemon_fleet_scope
     description: "Daemon startup scope declaration: whether this daemon owns a sandbox home or the operator's shared home. Readers key fleet gating and board routing off it instead of probing paths."
@@ -8582,6 +8672,38 @@ event_types:
     description: "The ci_cadence arm read a pushed head's CI at one offset. outcome names what it did: pending, green, superseded, flake_wait, flake_rerun, stale_red, woke, red_no_session or unreadable."
     sources: [daemon]
     data: {required: [branch, sha, offset_s, outcome]}
+  - name: main_revert_check
+    description: "The main_revert arm read a red main head. outcome names what it did: seen, ambiguous, flaky, opened, failed or unreadable."
+    sources: [daemon]
+    data: {required: [slug, head, outcome]}
+  - name: ci_tier_pass
+    description: "One ci_tier arm pass over a repo's open PRs: the active tier, the ranked PRs and their branches, and the runs it cancelled or reran. Written when the tier changes, when it acts, and every 10 minutes."
+    sources: [daemon]
+    data: {required: [slug, slots, active]}
+  - name: ci_tier_held
+    description: "fno do pr push held a push because the CI tier was full and the PR ranked below every PR in it."
+    sources: [daemon, rust]
+    data: {required: [slug, branch, pr, cwd]}
+  - name: ci_tier_wake
+    description: "The ci_tier arm found a held push whose hold cleared and woke the session to push again."
+    sources: [daemon]
+    data: {required: [slug, branch, held_ms]}
+  - name: look_hold_cancel
+    description: "The look_hold arm cancelled a paint PR's runs, all but the look shots, because the head waits for the user's look."
+    sources: [daemon]
+    data: {required: [slug, pr, sha, runs]}
+  - name: look_hold_release
+    description: "The user's look cleared at the head, so the look_hold arm reran the runs it had cancelled there."
+    sources: [daemon]
+    data: {required: [slug, pr, sha, runs]}
+  - name: merge_queue_entry
+    description: "authorized_merge queued a PR head in place of merging it, because merge_queue.enabled is on. The merge queue arm lands it in a batch tested on main."
+    sources: [daemon, rust]
+    data: {required: [slug, pr, head]}
+  - name: merge_queue_step
+    description: "One merge queue act on a batch. step names it: build, rerun, land, split, eject, rebuild or hold."
+    sources: [daemon]
+    data: {required: [slug, step, batch]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

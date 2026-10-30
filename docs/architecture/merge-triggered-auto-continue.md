@@ -96,7 +96,7 @@ The worker spawn routes through the shared resolver (`fno.agents.harness_map.res
 When the resolved provider is out of quota headroom, `advance` consults `config.dispatch.on_exhaustion`:
 
 - **`defer`** (default, byte-identical to before): the node stays `ready` and the tick after the provider's window reset re-dispatches it (`advance_skipped{quota-deferred}`). No combo is read.
-- **`failover`**: instead of deferring, `advance` picks the next non-exhausted provider from the **active combo** (`config.accounts.active_combo`, resolved via the CG8 `settings_combo` rung) and dispatches there. Selection reuses the live `headroom()` read (the same primitive as quota-aware ordering; `UNKNOWN`/`LOW`/`OK` all count as healthy targets, fail-open, so a GLM/gemini record with no headroom signal is a valid destination, only `EXHAUSTED` is skipped) and walks the operator's configured priority order (`next_healthy_provider`, `rotation.py`). An account record carries its own `harness`, so the combo can span accounts (`CLAUDE_CONFIG_DIR`), backends (`base_url`), **and** harnesses: a **claude to codex** failover is in scope and resolves to `headless` automatically.
+- **`failover`**: instead of deferring, `advance` picks the next non-exhausted provider from the **active combo** and dispatches there. The combo resolves via the CG8 `settings_combo` rung (`config.accounts.active_combo`). Selection reuses the live `headroom()` read, the same primitive as quota-aware ordering. `UNKNOWN`/`LOW`/`OK` all count as healthy targets, fail-open. A GLM/gemini record with no headroom signal is a valid destination. Only `EXHAUSTED` is skipped. The walk follows the operator's configured priority order in `crates/fno-agents/src/backlog/quota_route.rs`. An account record carries its own `harness`, so the combo can span accounts (`CLAUDE_CONFIG_DIR`), backends (`base_url`), **and** harnesses. A **claude to codex** failover is in scope and resolves to `headless` automatically.
 
 Failover is pinned once at dispatch (the worker never re-switches mid-run) and degrades to the `defer` floor on every miss: an explicit `--provider`/node provider pin (precedence `explicit > node pin > combo`), no active combo, a whole-combo exhaustion, an unresolvable destination harness, or any config/combo read error.
 A single `dispatch_failover{from, to, harness_to?, window?, reason?}` receipt follows the successful spawn and precedes the paired `advance_dispatched`; a spawn that fails leaves no receipt, because a routing decision is not a completed cutover.
@@ -104,7 +104,9 @@ A single `dispatch_failover{from, to, harness_to?, window?, reason?}` receipt fo
 ### One selector, both launchers
 
 The decision itself is not `advance`'s.
-`fno.agents.autonomous_route.select_autonomous_route` is the single seam: it takes one quota probe and returns `stay`, `defer`, `cutover`, or `unknown-proceed`, and for a cutover the whole destination tuple (record id, harness, account overlay).
+
+`crates/fno-agents/src/backlog/quota_route.rs` `select_autonomous_route` is the single seam. It takes one quota probe and returns `stay`, `defer`, `cutover`, or `unknown-proceed`. A cutover carries the whole destination tuple: record id, harness, account overlay.
+
 Three autonomous entry points consume it, so identical node, config, and quota fixtures resolve to the identical destination on every path:
 
 - `backlog advance` (the active backlog and the merge trigger route through it) calls the selector directly.
@@ -122,9 +124,11 @@ The sibling context-think resolver and per-harness pane capability are owned els
 Attended operator spawns stay outside the automatic policy entirely.
 
 Precedence is explicit invocation pin > node pin > configured dispatch harness > quota policy > built-in harness default.
-A pinned launch may still defer; it is never rerouted, because quota policy must not change a billing or harness choice a human made.
-Every explicit intent pins, not just a provider: a model pin counts too, because a cutover swaps the harness and a claude-only model forwarded to codex launches a worker that cannot start.
-`fno.agents.autonomous_route.launch_is_pinned` is the one implementation of that rule, shared by the launchers so they cannot drift on what counts as a pin.
+
+A pinned launch may still defer. It is never rerouted, because quota policy must not change a billing or harness choice a human made.
+Every explicit intent pins, not just a provider. A model pin counts too. A cutover swaps the harness, and a claude-only model forwarded to codex launches a worker that cannot start.
+
+`crates/fno-agents/src/backlog/quota_route.rs` `launch_is_pinned` is the one implementation of that rule, shared by the launchers so they cannot drift on what counts as a pin.
 
 **Proactive LOW cutover (`config.dispatch.cutover_low_after_minutes`, default 0 = off).**
 An `EXHAUSTED` window cuts over immediately when a healthy candidate exists.
@@ -140,7 +144,7 @@ Do not reuse the defer horizon here - it answers the opposite question.
 `advance_dependents()` (same module) closes that gap by following `blocked_by` **edges** instead of a project-scoped selection. After a node closes, for each now-unblocked **direct** dependent in a **different** project it spawns the node's derived command (`/target --no-merge <dep>` on a planless low or ready node, `/blueprint <dep>` on a planless medium/high one) with `--cwd <dep work-map root>`. The two paths are deliberately distinct (dispatch-by-edge vs select-next). `advance()` is untouched, so a pure single-project close dispatches nothing new. The same-project continuation keeps using `next`.
 
 - **Unblocked == ready.** `_direct_dependents` reads the graph fresh (after the close commits under `locked_mutate_graph`), so `recompute_statuses` already reflects the merge: a dependent whose only open blocker was the closed node reads `ready`. The filter is `status == "ready"` + cross-project + direct edge - no hand-written unblock predicate. Plan-less (`idea`) dependents are not auto-dispatched.
-- **Root from the work map, never guessed.** The dependent's `--cwd` is `project_root_from_settings(dep.project)` (exposed standalone as `fno backlog project-root <project>`). An unmapped project is refused by name (`advance_skipped{unmapped-project, detail=<project>}`), never launched against a guessed cwd.
+- **Root from the work map, never guessed.** The dependent's `--cwd` is the native map read (`settings.rs` `project_root(dep.project)`, exposed standalone as `fno backlog project-root <project>`). An unmapped project is refused by name (`advance_skipped{unmapped-project, detail=<project>}`), never launched against a guessed cwd.
 - **At most one worker.** Reuses the same `dispatch:<id>` TTL reservation + `node:<id>` liveness gate. A successor seen by both `advance()` and `advance_dependents()` dispatches exactly once. The same holds for reconcile and the explicit `backlog advance --closed` (both fire in `/fno:ship pr merged`). One decision event per dependent, and strictly non-fatal.
 
 Wired alongside `advance()` in `reconcile` and `cmd_advance`. The session-side mirror is **G2** (the `/execute` session-project invariant): a `/execute` wave in a foreign project is spawned (unblocked) or deferred via `fno backlog carveout` (blocked, picked up later by this G1 path on merge), never executed in place. See `skills/execute/references/session-project-invariant.md`.

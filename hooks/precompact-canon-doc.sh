@@ -135,10 +135,29 @@ lvl = r.get("role_level")
 scp = r.get("role_scope")
 print("1" if (mine and (lvl is not None or scp is not None)) else "0")
 print(scp if isinstance(scp, str) else "")
+print(r.get("project_root") or r.get("cwd") or "")
 ' 2>/dev/null || true)"
 IS_TEAMED="$(printf '%s' "$TEAM_INFO" | sed -n 1p)"
 TEAM_SCOPE="$(printf '%s' "$TEAM_INFO" | sed -n 2p)"
+ROLE_ROOT="$(printf '%s' "$TEAM_INFO" | sed -n 3p)"
 [[ "$IS_TEAMED" == "1" ]] || IS_TEAMED=0
+
+# A teamed session's facts come from the role's project, never the shell's
+# cwd: a lead whose shell sat in a job tmp dir refreshed a doc listing zero
+# open PRs. Same rule as the native role commands. A worktree of the role's
+# own repo shares its git common dir and stays put.
+_git_common() {
+  (cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+}
+if [[ -n "$TEAM_SCOPE" && -n "$ROLE_ROOT" ]]; then
+  if [[ -d "$ROLE_ROOT" ]]; then
+    if [[ "$(_git_common "$PWD")" != "$(_git_common "$ROLE_ROOT")" ]]; then
+      cd "$ROLE_ROOT" 2>/dev/null || true
+    fi
+  else
+    echo "precompact-canon-doc.sh: cwd $PWD is outside role $TEAM_SCOPE's project $ROLE_ROOT, which does not exist; facts read from the cwd" >&2
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve the canon doc path. A manual /compact <path> carries a path the
@@ -618,6 +637,19 @@ if [[ -n "$_TMP_OUT" ]]; then
   echo "<!-- fno:user -->"
   printf '%s\n' "$USER_BLOCK"
   echo "<!-- /fno:user -->"
+  # The read check: a fresh word once per compaction, last in the doc. A
+  # teamed lead's org checkin refuses until --recall names it, so only a read
+  # to the end gets the first beat past a compaction. A real compaction hands
+  # this hook its event on stdin; org refresh-canon hands it none and keeps
+  # the word, so a routine beat pays no full read.
+  if [[ "$IS_TEAMED" == "1" ]]; then
+    _recall="$(sed -n 's/^Recall word: *\([0-9a-f]\{1,8\}\).*/\1/p' "$DOC_PATH" 2>/dev/null | tail -1)"
+    if [[ -n "$(printf '%s' "$INPUT" | tr -d '[:space:]')" || -z "$_recall" ]]; then
+      _recall="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    fi
+    echo ""
+    echo "Recall word: ${_recall}"
+  fi
   } > "$_TMP_OUT" 2>/dev/null || true
   mv -f "$_TMP_OUT" "$DOC_PATH" 2>/dev/null || true
   _TMP_OUT=""

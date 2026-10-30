@@ -54,7 +54,35 @@ The tier-0 match (`rules::matches`) reads every set field of `when` against an `
 
 The Stop runtime keeps its own action names. `parse_table` maps `warn` to `nudge`, `inform` with `deliver = "notify"` to `notify`, and `inform` with `deliver = "emit"` to `emit`.
 
-Two modes on `fno inbox law match` read a rule file. `{"mode":"rules-check","file":"<path>"}` validates it against the live laws and names every live law no rule or `[[disposition]]` carries. `{"mode":"rules-measure","cases":"<path>"}` scores BM25 and the stage keywords over labeled cases. `scripts/probes/law-corpus-check.sh <file>` runs the check. It checks three facts. Every live law is covered. No row is invalid. Each of the hold, freeze and naming families holds a tier-0 rule. If all three hold, it exits 0.
+Two modes on `fno inbox law match` read a rule file. `{"mode":"rules-check","file":"<path>"}` validates it against the live laws and names every live law no rule or `[[disposition]]` carries. `{"mode":"rules-measure","cases":"<path>"}` scores BM25 recall and precision over labeled cases. `scripts/probes/law-corpus-check.sh <file>` runs the check. It checks three facts. Every live law is covered. No row is invalid. Each of the hold, freeze and naming families holds a tier-0 rule. If all three hold, it exits 0.
+
+## decide(event)
+
+`fno::rules::decide(rules, event, today)` answers one decision point. It is pure, so the hooks, the doors and the fnh harness reach the same answer. fno-agents owns `src/rules.rs`, and its build copies the module into the `fno` crate, as it does for the other shared twins. The answer carries `verdict`, `fires`, `reasons` and `unevaluated`.
+
+- If its scope fits the event and its `expires` date has not passed, a rule takes part. A rule with `predicates` belongs to the Stop engine and never takes part.
+- Tier 0 runs `matches`. Tier 1 runs only at `prompt` and `skill` events. It ranks the tier-1 `retrieval` texts against the event text with BM25. At most three fire, each with a score of at least `TIER1_FLOOR`. Tier 2 is listed in `unevaluated` and never decided.
+- A tier-1 or tier-2 deny fire becomes `warn`, so a ranked match never refuses a tool.
+- `require-ack` blocks until the event's `acks` name the rule.
+- The verdict is the strongest fire: `block`, then `warn`, then `inject` (an inform delivered as context), then `allow`. A block verdict carries only the refusals.
+
+`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agents/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live laws. A law with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A law with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live law is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
+
+The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt` at `UserPromptSubmit` and `--event pre-tool` at `PreToolUse`, where a Skill call is the skill event. A block prints the PreToolUse deny with the rule ids. A warn or an inform prints `## Rules governing this <event>` as `additionalContext`. An inform at a pre-tool event prints once per session.
+
+The four doors ask the same way through `rules_source::rule`. The merge door reads one `door:merge` event per PR. The subject is `<owner/repo>#<n>`. The node comes from the body. A block holds the merge with blocker `rule`. The preview carries the same answer, so `fno do pr status` never says ready where merge refuses.
+
+The send door reads `door:send` with the recipient as subject. A block exits 3.
+
+The spawn gate reads `door:spawn` (harness, model, node, phase). A block refuses with exit 93 before any capacity math runs. `--force` does not clear a rule.
+
+Plan start reads `plan-start` from the init input. A block refuses before the helper runs.
+
+At every door a warn or an unread source prints and the door proceeds. Rules never fail a door closed.
+
+Two modes on the same door write and report. `{"mode":"rules-import","file":"<path>"}` validates the file through the rules-check validator. It demands the operator floor through the law door's resolver, so an agent caller is refused with exit 3. Then it appends one `law_trigger` event per rule that carries `law`, storing the raw TOML block verbatim. The write is append-only, and the newest import wins.
+
+`{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
 
 ## Events
 
@@ -96,6 +124,17 @@ Each row is a guess about a failure, so check it against its fires. `fno-agents 
 A block on a row that names `last_message_decision_ask` also asks fnod, the local decision model, the `is_ask` question about the same message. The span then carries `keyword_ask: true` and either `fnod_is_ask` (the probability) with `fnod_ms`, or `fnod_error` with the reason the score is missing. The score is advice only. The keyword verdict has already fired the block, and fnod's answer changes nothing.
 
 fnod is the `kev.serve` server on loopback. Start it with `python -m kev.serve --run <student run dir> --port 8008` from the kev checkout. `fnod.url` in fno config moves it (default `http://127.0.0.1:8008`). It must resolve to a loopback address, or the call is refused and the message never leaves the machine. An empty value turns the score off. `fnod.timeout_ms` bounds the connect and the reply wait (default 500). No server, a timeout or a malformed reply writes `fnod_error` and the Stop goes on.
+
+## The tier-1 scorer: BM25 stays
+
+The tier-1 ranked match was measured against an embedding scorer before either got more code (the rule-engine wiring plan, 2026-10-29). The case set: 72 cases over the 12 measured tier-1 laws. 36 prompts name a law that must rank. 36 are real node titles from unrelated work, where none must rank. Pool: the 170 live laws. Both scorers answer top-3.
+
+| Scorer | recall@3 | precision@3 | false-fire on unrelated prompts |
+|---|---|---|---|
+| BM25 with `TIER1_FLOOR = 2.0` | 0.667 | 0.222 | 0.000 |
+| nomic-embed-text cosine | 0.750 | 0.250 | 0.333 |
+
+Embeddings beat BM25 by 0.083 recall@3, under the 0.15 bar the plan set for shipping them. They also fire on a third of the unrelated prompts the floored BM25 answer leaves silent. Tier 1 stays BM25. The floor is a cheap in-process score gate, and the false-fire record keeps an inform from becoming noise. The case set and the numbers live beside the plan (`bm25-tier1-cases.json`, `bm25-tier1-result.json`).
 
 ## Overrides
 

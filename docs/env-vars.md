@@ -13,8 +13,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CARGO_BUILD_BUILD_DIR` | rs | unclear: crates/fno-agents/src/hook/stop.rs:519 |
 | `CARGO_HOME` | py+rs | Cargo install root; the default is ~/.cargo. |
 | `CARGO_MANIFEST_DIR` | rs | Cargo sets it on each process that it starts. The live-store fence then refuses to open a store under the operator home `.fno`. Only the admission call of the rustc wrapper removes it. |
-| `CENSUS_DEFERRED_FILE` | py | unclear: cli/src/fno/test_cmd.py:2250 |
-| `CENSUS_KILL_BOUND_S` | py | unclear: cli/src/fno/test_cmd.py:2297 |
+| `CENSUS_DEFERRED_FILE` | rs | Overrides the census deferred set for a targeted run: crates/fno-agents/src/test_census.rs |
+| `CENSUS_KILL_BOUND_S` | rs | Ceiling for each census entry before its group is killed: crates/fno-agents/src/test_census.rs |
 | `CI` | py+rs | unclear: cli/src/fno/llm.py:40 |
 | `CLAUDECODE` | rs | unclear: crates/fno-agents/src/hook/stop.rs:440 |
 | `CLAUDECODE_SESSION_ID` | py+rs | unclear: crates/fno-agents/src/backlog/workflows.rs |
@@ -26,7 +26,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_DIR_OVERRIDE` | rs | Redirects the Claude config root the corrections-verify reads the rule repo's git log from; mirrors the bash-side override in autocorrect-pack.sh. |
 | `CLAUDE_EFFORT` | rs | The effort level an encounter vote records, on claude only. |
 | `CLAUDE_JOB_DIR` | rs | Set by Claude Code in a `claude --bg` job. Its `state.json` names the job, and the SessionStart launch claim reads that name to match the launcher's record. The write gate also falls back to its tmp dir in a refusal when the payload carries no session id; the payload's session wins when present. |
-| `CLAUDE_PLUGIN_ROOT` | py+rs | unclear: cli/src/fno/doctor.py:3465 |
+| `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agents/src/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agents/src/loop_dispatch.rs:198 |
 | `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
@@ -36,7 +36,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `COLORFGBG` | rs | The rxvt-style `fg;bg` terminal color report; a background field of 7 or 15 reads as a light terminal, which picks the `footnote-paper` mux theme default, and anything else keeps `footnote-superscript`. |
 | `COLORTERM` | rs | unclear: crates/fno/src/mux_cli.rs:1508 |
 | `CRON_JOB` | py | unclear: cli/src/fno/agents/context.py:94 |
-| `DATABASE_URL` | py | unclear: cli/src/fno/codemap_cli/db-schema.py:208 |
 | `EDITOR` | rs | The editor the board's full description edit runs in; `vi` when unset. |
 | `EVENTS_FILE` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:932 |
 | `FNO_A2A_NO_CONFIRM` | py | unclear: cli/src/fno/agents/dispatch.py:5376 |
@@ -46,9 +45,9 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/daemon.rs:2093 |
 | `FNO_AGENTS_FIXTURES` | rs | Overrides the scratch sweep fixtures directory. |
 | `FNO_AGENTS_FRONT` | py+rs | unclear: cli/src/fno/graph/store.py:213 |
-| `FNO_AGENTS_HOME` | py+rs | unclear: cli/src/fno/agents/cli.py:801 |
+| `FNO_AGENTS_HOME` | py+rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. |
 | `FNO_AGENTS_IDLE_EXIT_SECS` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:67 |
-| `FNO_AGENTS_NAME_MODEL` | py | Raw model string; the agent-name mint appends its short code to the worker name. |
+| `FNO_AGENTS_NAME_MODEL` | rs | Raw model string; the agent-name mint appends its short code to the worker name. |
 | `FNO_AGENTS_NO_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:87 |
 | `FNO_AGENTS_RESPONSE_DEADLINE_MS` | rs | unclear: crates/fno-agents/src/client.rs:68 |
 | `FNO_AGENTS_RUNNER_BIN` | rs | Overrides the binary the detached `mail-hold --run-parked` runner execs (mail_hold.rs runner_bin); empty falls through to the process's own executable. A test suite that parks through the real gate pins a stub here so no detached runner escapes the sandbox. |
@@ -57,13 +56,14 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_STARTUP_RECONCILE_DELAY_MS` | rs | unclear: crates/fno-agents/src/daemon.rs:2082 |
 | `FNO_AGENTS_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENTS_WORKER` | py+rs | Marks the process as a footnote worker. |
-| `FNO_AGENTS_WORKER_BIN` | py+rs | unclear: cli/src/fno/agents/dispatch.py:888 |
-| `FNO_AGENT_HARNESS` | py | unclear: cli/src/fno/harness_identity.py:77 |
+| `FNO_AGENTS_WORKER_BIN` | rs | Path to the worker binary. The daemon lazy-start passes it on, so a test harness runs its own build. |
+| `FNO_AGENT_HARNESS` | py+rs | unclear: cli/src/fno/harness_identity.py:77 |
 | `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
 | `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
-| `FNO_AGENT_ROW_PENDING` | py | unclear: cli/src/fno/agents/register_session.py:200 |
+| `FNO_AGENT_PROVIDER` | rs | Pre-cutover name for `FNO_AGENT_HARNESS`. whoami reads it only when the new name is unset, and prints one rename line on stderr. |
+| `FNO_AGENT_ROW_PENDING` | py+rs | unclear: cli/src/fno/agents/register_session.py:200 |
 | `FNO_AGENT_SELF` | py+rs | unclear: cli/src/fno/agent/cli.py:363 |
-| `FNO_AGENT_SESSION` | py | unclear: cli/src/fno/agents/context.py:237 |
+| `FNO_AGENT_SESSION` | py+rs | unclear: cli/src/fno/agents/context.py:237 |
 | `FNO_AGENT_SUBSTRATE` | py+rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agents/src/target_init.rs `substrate_marks_unattended`. |
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agents/src/attest.rs `run_pull`. |
 | `FNO_ATTEST_ENV_ONLY` | rs | `1` makes the retract arm's retractor identity resolve as an environment-only witness (no process ancestry), skipping the CLAUDE_CODE_SESSION_ID conflict read; the identity-conflict unit test pins it. Read in crates/fno-agents/src/attest.rs `resolve_retractor_identity`. |
@@ -73,7 +73,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/backlog_view.rs:333 |
 | `FNO_BOOTSTRAP_WHEEL` | rs | unclear: crates/fno/src/bootstrap.rs:280 |
 | `FNO_BUS_DIR` | py+rs | unclear: cli/src/fno/paths.py:1204 |
-| `FNO_BUS_LOCK_TIMEOUT_SECS` | py+rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
+| `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
 | `FNO_BUS_RETAIN` | rs | Rotated bus segments the append door keeps; malformed degrades to 5. |
 | `FNO_CALLER_KIND` | rs | The surface that shelled this fno-agents command; `mux` stamps `caller_kind` on its events. |
@@ -84,27 +84,26 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CARGO_MAX_HOLD_SECS` | rs | The longest time in seconds that an agent cargo can hold an admission claim. After this time, the next cargo frees the claim and stops the holder. The default is 3600. A whole-suite run is exempt. |
 | `FNO_CARGO_RUN_PROGRAM` | rs | The program cargo is about to start, which the rustc wrapper passes to the run door only. The door refuses an agent session's test binary or doctest with exit 86. The program itself never sees the variable. |
 | `FNO_CARGO_TARGETS_BASE` | rs | Overrides the managed fno cargo build base the `cargo_build_dirs` lane sweeps and the tree-removal reclaim deletes under; test escape hatch. |
-| `FNO_CC_DAEMON_RV_ROOT` | py | unclear: cli/src/fno/agents/session_procs.py:40 |
+| `FNO_CC_DAEMON_RV_ROOT` | py+rs | unclear: cli/src/fno/agents/session_procs.py:40 |
 | `FNO_CHROME` | rs | The Chrome or Chromium binary `fno mux serve --snapshot --format png` runs. |
 | `FNO_CLAIMS_ROOT` | py+rs | The global claims tree root, else `$HOME`. `accounts::credentials::seal` pins it around a moved HOME so a worker's claims stay on the parent's root. |
 | `FNO_CLAUDE_DAEMON_DIR` | py+rs | unclear: cli/src/fno/agents/discover.py:2353 |
 | `FNO_CLAUDE_PROJECTS_DIR` | py+rs | Overrides the claude transcript projects root the announce status scan reads. |
 | `FNO_CLAUDE_SESSIONS_DIR` | py | Overrides Claude Code's per-session registry directories on this host. |
 | `FNO_CLAUDE_SESSION_RECENCY_SECONDS` | py | Transcript-mtime liveness window in seconds (positive only; default 600). |
-| `FNO_CLAUDE_THEME` | py+rs | The Claude Code theme (`custom:fno:footnote-*`) the mux pins for a worker pane. A `claude --bg` spawn from that pane writes it into the thread's settings file. |
+| `FNO_CLAUDE_THEME` | rs | The Claude Code theme (`custom:fno:footnote-*`) the mux pins for a worker pane. A `claude --bg` spawn from that pane writes it into the thread's settings file. |
 | `FNO_CODEX_ASK_WAIT_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:56 |
 | `FNO_CODEX_BIN` | rs | Overrides the codex CLI the readiness and upgrade paths resolve, for private roots and tests; PATH order otherwise. |
 | `FNO_CODEX_INTERRUPT_BOUND_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:80 |
 | `FNO_CODEX_SESSIONS_DIR` | py+rs | Overrides the codex sessions root the announce status scan reads. |
 | `FNO_CODEX_VERSION` | py+rs | Pins the codex version the hook-trust gate reads, so tests and private roots skip the `codex --version` probe. |
 | `FNO_CONFIG` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:436 |
+| `FNO_CONFIG_LOCK_TIMEOUT` | rs | Seconds `fno config set` waits for the config file lock before it refuses; unset waits without bound. The a2a first-use persist sets it. |
 | `FNO_CONFIG_SEARCH_ROOT` | py | Test-only bound on config discovery, read by the Rust readers (`within_search_ceiling`). Python only widens it to the pytest basetemp (conftest). |
 | `FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS` | rs | unclear: crates/fno-agents/src/context_run.rs |
 | `FNO_CONTROL_PLANE_SCHEDULER` | py+rs | unclear: cli/src/fno/control_plane.py:22; native twin crates/fno-agents/src/backlog/reconcile_cli.rs |
-| `FNO_CURSOR_AGENT_MODEL` | py+rs | unclear: cli/src/fno/agents/harnesses/cursor_agent.py:326 |
-| `FNO_CURSOR_AGENT_PROVIDER` | py+rs | unclear: cli/src/fno/agents/harnesses/cursor_agent.py:321 |
-| `FNO_DEBUG` | py | unclear: cli/src/fno/agents/mux_spawn.py:1854 |
-| `FNO_DISPATCH_ACCOUNT_ENV` | py+rs | The proven-credential carrier of a cutover spawn: a flat JSON map `accounts::launch` stages verbatim for `--dispatch-account`. Both spawn doors claim it, and a spawn without the flag refuses. |
+| `FNO_CURSOR_AGENT_MODEL` | rs | unclear: crates/fno-agents/src/cursor_agent.rs:304 |
+| `FNO_DISPATCH_ACCOUNT_ENV` | rs | The proven-credential carrier of a cutover spawn: a flat JSON map `accounts::launch` stages verbatim for `--dispatch-account`. The spawn door claims it, and a spawn without the flag refuses. |
 | `FNO_DRIVER_LIB` | rs | unclear: crates/fno-agents/src/finalize.rs:849 |
 | `FNO_DRIVER_LIB_DIR` | rs | unclear: crates/fno-agents/src/loop_target.rs:616 |
 | `FNO_E2E` | rs | unclear: crates/fno/src/client.rs:539 |
@@ -114,6 +113,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_E2E_PTY_OUTPUT_DELAY_MS` | rs | unclear: crates/fno/src/pty.rs:1873 |
 | `FNO_EVENTS_PATH` | py+rs | Redirects the agents journal (events.jsonl) to one file; the hermetic guard honors it on both legs. |
 | `FNO_FOOTNOTE_BIN` | rs | The `footnote` harness binary `-H footnote` launches, built from bllshttng/fnh; unset, fno-agents looks beside its own executable, then on PATH. |
+| `FNO_FRONT_DOOR` | rs | Overrides the fno binary the footprint cause's rv-pane check runs, for tests; PATH order otherwise. |
 | `FNO_GH_BUDGET_POINTS_PER_MIN` | rs | Overrides the fleet GitHub request budget cap in points per 60s window (default 450). |
 | `FNO_GH_BUDGET_TEST_ARMED` | rs | Re-arms the in-process budget consult inside a unit-test build, which disarms it by default so the suite's gh-named stubs never stamp the machine-wide ledger; production builds ignore it. |
 | `FNO_GH_CALLER` | rs | Pins the spend journal's caller label outright, checked per admission and ahead of the ancestry walk; a test or a wrapper that knows the caller better than the ancestor argv sets it. |
@@ -134,10 +134,10 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_INBOX_ROOT` | py+rs | unclear: cli/src/fno/inbox/store.py:218 |
 | `FNO_INIT_PROGRESS_FILE` | rs | Step-marker file `fno do target start` hands its init door; the door appends begin/done markers and the parent prints the last marker in the 540s timeout receipt. Unset (a bare `fno do target init`), the markers are skipped. See target_init.rs `init_progress`. |
 | `FNO_INSTALL_BUILD` | rs | unclear: cli/src/fno/update.py:1748 |
-| `FNO_KEEP_GOING` | py+rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
+| `FNO_KEEP_GOING` | rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KILLCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:58 |
-| `FNO_LAUNCH_ACCOUNT` | py+rs | Launch account the spawn seam stamps after it applies an account overlay: the Rust spawn arm in process, cmd_spawn on the Python lane. Cleared on a spawn with no account so a stale value never mislabels the next row. |
+| `FNO_LAUNCH_ACCOUNT` | rs | Launch account the spawn seam stamps after it applies an account overlay: the Rust spawn arm, in process. Cleared on a spawn with no account so a stale value never mislabels the next row. |
 | `FNO_LAUNCH_ACCOUNT_SOURCE` | py+rs | Provenance twin of FNO_LAUNCH_ACCOUNT: `caller` for a typed flag, `config` for an env-carried pick. |
 | `FNO_LAW_DOOR_TIMEOUT_SECONDS` | py | Law-door timeout knob in seconds; an explicit `timeout=` argument outranks it, junk falls back to 60. |
 | `FNO_LEAD_WALK_SESSION_KEY` | rs | Per-invocation key a lead walk is spawned with; tags the pass's terminal so the walk's resume guard never sees a prior lead's terminal (falls back to the manifest fno_id). |
@@ -153,7 +153,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MACHINE_BRAKE` | rs | Overrides the machine runaway brake file path (default `$HOME/.fno/machine-brake.json`, written by the machine arm, honored by spawn admission). Lets a test point it at a tempdir. An armed brake refuses agent-origin callers (a non-empty `FNO_AGENT_SELF`) and admits everyone else with one warning that names the fleet/machine core split the arm measured. |
 | `FNO_MACHINE_LOAD_ASK` | rs | Overrides the machine arm's pending-ask file path (default `$HOME/.fno/machine-load-ask.json`, written by the machine arm, holding the open outside-load or budget question's qid, the groups an answer would act on, and the pids a pause holds). Lets a test point it at a tempdir. |
 | `FNO_MAIL_FENCE` | rs | `1` on the pane-prepare child only (`mux_cli.rs`): the envelope render fences the delivered body (open fence marked `fno-pane`). Hook and mail lanes leave it unset and render unfenced. |
-| `FNO_MAIL_LANDED_SETTLE_S` | py+rs | Seconds a just-sent durable row waits before the send command re-reads the recipient for the `landed`/`NOT LANDED` verdict. Tests read 0. |
+| `FNO_MAIL_HOP` | rs | The relay depth a `mail-remote` forward stamps on the process it starts (`mail_remote.rs`). The front door clears it on every route but the relay's own. An entry at depth 3 refuses with `relay hop limit`, exit 2, so a forwarding loop stops after two hops. |
+| `FNO_MAIL_LANDED_SETTLE_S` | rs | Seconds a just-sent durable row waits before the send command re-reads the recipient for the `landed`/`NOT LANDED` verdict. Tests read 0. |
 | `FNO_MAIL_LOCAL_FORWARD` | rs | `1` on the same-host forward `mail-remote` execs (`mail_remote.rs`). The front door's cross-host intercept skips any argv carrying it, so a forwarded send reaches the local command instead of re-entering the relay. |
 | `FNO_MAIL_SUBJECT` | py+rs | The peeled `mail send --subject`; the front exports it, the envelope render and the bus-append door stamp it as `meta.subject`. |
 | `FNO_MERGE_AUTHORITY` | rs | Selects the `fno do pr merge` authority arm: `durable_grant` swaps the manifest posture for the durable-grant resolution a parked worker rides; unset or any other value rides the manifest fields as written. |
@@ -169,6 +170,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MUX_PANE_GROUP_MAX` | rs | unclear: crates/fno/src/process_admission.rs:378 |
 | `FNO_MUX_SCROLLBACK_LINES` | rs | unclear: crates/fno/src/vt.rs:68 |
 | `FNO_MUX_SHELL_INTEGRATION` | rs | unclear: crates/fno/src/client.rs:577 |
+| `FNO_MUX_STATS_JSON` | rs | The mux server's stats snapshot the front door hands the native scoreboard door (`server_stats::snapshot_for_scoreboard` sets it; `scoreboard/door.rs` reads it): the human_touch emission-failure counter and its measurement window as one JSON object. Unset, the door reports the counter unavailable, never zero. |
 | `FNO_MUX_WINDOW_SIZE` | rs | Which window sizes a tab that several windows view: `smallest`, `latest` (default) or `largest`. The client latches `mux.window_size` into it at server spawn; see docs/architecture/mux-window-size.md. |
 | `FNO_NODE` | py+rs | unclear: cli/src/fno/agents/harnesses/claude.py:725 |
 | `FNO_NODE_CLAIM_HOLDER` | rs | unclear: crates/fno-agents/src/backlog/session_cli.rs:370 |
@@ -177,14 +179,14 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_NO_CANONICAL_CONFIG` | py+rs | unclear: cli/src/fno/config/__init__.py:4677 |
 | `FNO_NO_OPEN` | rs | unclear: crates/fno-agents/src/backlog/projections.rs:949 |
 | `FNO_NUDGE_DISABLED` | rs | unclear: crates/fno-agents/src/nudge.rs:32 |
-| `FNO_OBSERVER_GH_CAP` | py | unclear: cli/src/fno/observer/cli.py:184 |
-| `FNO_OBSERVER_PR_LIST_LIMIT` | py | unclear: cli/src/fno/observer/cli.py:456 |
+| `FNO_OBSERVER_GH_CAP` | rs | crates/fno-agents/src/observer/mod.rs `gh_cap` |
+| `FNO_OBSERVER_PR_LIST_LIMIT` | rs | crates/fno-agents/src/observer/mod.rs `pr_list_limit` |
 | `FNO_OPENCODE_BIN` | rs | Names the opencode binary an install classifies and asks for its config root; unset or empty falls back to `opencode` on PATH. |
 | `FNO_OPENCODE_LIVE_TOKEN` | rs | unclear: crates/fno-agents/src/opencode_archive_tests.rs:340 |
 | `FNO_OPENCODE_LIVE_URL` | rs | unclear: crates/fno-agents/src/opencode_archive_tests.rs:338 |
 | `FNO_OPENCODE_STORAGE_DIR` | py+rs | Moves opencode's storage root, and with it the sibling `opencode.db` session store: the discover default and the dispatch brief's transcript tail read the store beside it. |
 | `FNO_OPERATOR_CAPTURE_DIR` | rs | Moves the operator-capture dir that holds each session's ack ledger and scan cursor; unset, it is `<state dir>/operator-capture`. |
-| `FNO_ORPHANS_SKIP_PROBE` | py | unclear: cli/src/fno/agents/cli.py:3732 |
+| `FNO_ORPHANS_SKIP_PROBE` | rs | unclear: crates/fno-agents/src/orphans.rs:706 |
 | `FNO_OWNER_BIRTH` | rs | The owner process start token paired with FNO_OWNER_PID; protects sandbox process cleanup from PID reuse. |
 | `FNO_OWNER_PID` | rs | The owner process for an owner-bound sandbox server and its descendants; shared fleet launches leave it unset. |
 | `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. |
@@ -213,6 +215,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_RECLAIM_TEMP_ROOT` | rs | unclear: crates/fno-agents/src/reclaim.rs:80 |
 | `FNO_REGISTRY_ALLOW_ROW_LOSS` | rs | Set to 1 when a registry write that drops live rows is deliberate. The bulk-loss guard refuses otherwise. |
 | `FNO_RELEASE_REPO` | rs | The `owner/repo` whose `bin-cache` pre-release `fno update` downloads the CI-built binaries from; the default is bllshttng/fno (`crates/fno/src/update_prebuilt.rs`, `crates/fno-agents/src/sync_canonical.rs`, `scripts/install/fno.sh`), pending the GitHub repo rename. The curl installer reads the same name for the nightly. |
+| `FNO_RELEASE_STAMP` | rs | Set by scripts/release/sync-version.sh in CI when it stamps the release version into the workspace; a stamped build reads the tree clean in both build.rs files instead of baking -dirty. |
 | `FNO_REPO_ROOT` | py+rs | unclear: the storage-root ladder reads it first (crates/fno-agents/src/outstanding.rs); the law matcher reads it to place the project events journal (crates/fno-agents/src/law_match.rs). |
 | `FNO_REVIEW_HOLD_GH` | rs | Overrides the gh binary the review-hold door's PR head read shells out to (review_hold.rs `pr_head_ref_and_oid`); unset resolves plain `gh`. A test suite pins a stub here so no real gh call escapes the sandbox. |
 | `FNO_REVIEW_INVOCATION_ID` | rs | unclear: crates/fno/src/mux_cli.rs:6090 |
@@ -233,10 +236,10 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SESSION_ID` | rs | Current session id. `fleet-incident` uses it for caller attribution; `loops pause-all` records a full UUID or `ses_` id as the mail-hold owner, falling back to `fno whoami --json` otherwise. |
 | `FNO_SESSION_PID` | rs | The launcher-stamped pid half of the session-proof pair; must be a positive, live pid or the pair is ignored (spawn_context.rs stamp_pid_is_live). |
 | `FNO_SIDECAR_SOCKET` | rs | Overrides the MCP sidecar's socket path (default `$XDG_RUNTIME_DIR/fno/sidecar.sock`, else the state dir's `sidecar.sock`). The client's lazy-start forwards it to the spawned sidecar, so a caller asking for a non-default path never races the default. Set by callers and tests; read at `crates/fno-agents/src/mcp/sidecar.rs` (`socket_path`). |
-| `FNO_SKIP_MIGRATION` | py | unclear: cli/src/fno/cli.py:402 |
+| `FNO_SKIP_MIGRATION` | rs | crates/fno/src/path_migration.rs run_if_needed |
 | `FNO_SOURCE` | rs | unclear: crates/fno/src/doctor_update.rs:388 |
 | `FNO_SPACES_DIR` | py+rs | unclear: cli/src/fno/paths.py:299 |
-| `FNO_SPAWN_GATE` | py+rs | unclear: cli/src/fno/agents/spawn_gate.py:1554 |
+| `FNO_SPAWN_GATE` | rs | unclear: crates/fno-agents/src/backlog/dispatch_resolve.rs:911 |
 | `FNO_SPAWN_ORIGIN` | py+rs | Explicit dispatch-origin JSON the spawn door validates onto the request; malformed refuses. |
 | `FNO_SPAWN_OWNER` | py+rs | Explicit dispatch-owner JSON the spawn door validates onto the request; must be exported together with FNO_SPAWN_ORIGIN. |
 | `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agents spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. Never passed on to the child. |
@@ -250,6 +253,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_STORE_KEEPER_RSS_KB` | py | Store keeper resident-memory bound in KiB for the watchdog's over-bound reap verdict; overrides the 2 GiB default. |
 | `FNO_STYLE_ENFORCE` | rs | Zero disables the mail style gate and the encounter prose check at their readers (send vet_body, send_raw, team, pane-prepare, encounter_cli.rs:115); any other value enforces. |
 | `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agents fleet top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
+| `FNO_SUPERVISOR_SOCKET` | rs | Pins the daemon socket a client connects to. A devcontainer spawn sets it inside the box to the mounted socket directory. Set, the client never forks a daemon of its own, and the transcript-push hook posts. Unset, the client uses the agents home socket and the hook posts nothing. |
 | `FNO_SYNC_EVENTS_SCHEMA` | rs | Regenerate-on-build escape for the tracked events-schema copies: unset or any value but `1` keeps the build checking them (drift fails the build); `1` restores writing so a drift can be regenerated and committed. |
 | `FNO_TASK_CONTEXT_FILE` | rs | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
 | `FNO_TEST_BUILD_IDLE_SECS` | rs | Test seam: seconds a build-admit waiter lets the `build:cargo` holder run no compile before it takes the slot (default 30), so admission tests need not wait out the real window. |
@@ -259,10 +263,12 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_FOOTPRINT_PAYLOAD_SEQ` | rs | Test seam: newline-separated footprint probe results consumed once per read; `ERR <message>` simulates probe failure, and the last line sticks so gate tests can verify retries and sample counts. |
 | `FNO_TEST_FULL` | rs | The whole-suite lane mark: the guard reads it typed on the command, and the test-run door stamps it into a whole run's cargo env, so its slot asks queue instead of try-locking. |
 | `FNO_TEST_HERMETIC` | py+rs | unclear: cli/src/fno/hermetic.py:557 |
+| `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
 | `FNO_TEST_LIVE_CARGO_CWDS` | rs | Test seam: colon-separated cwd paths that stand in for a live `lsof` scan of running cargo processes, so cargo_build_dirs tests can drive the tree-to-shard mapping without a real cargo process. |
 | `FNO_TEST_MARKER_HOLD_MS` | rs | unclear: crates/fno/src/proto/startup_guard.rs:97 |
-| `FNO_TEST_MODE` | py | unclear: cli/src/fno/setup/doctor.py:229 |
+| `FNO_TEST_MODE` | rs | `1` makes `fno config doctor` skip the claim-store write probe and the temp-dir path patterns (crates/fno/src/config_doctor/checks.rs). |
 | `FNO_TEST_NEVER_WAIT_AFTER_SECS` | rs | Test seam: seconds a cargo admission waiter waits before printing the CI-first push reminder. The default is 0, so a waiting agent hears "push now" from its first line. |
+| `FNO_TEST_NOW` | rs | Test seam: an RFC3339 instant the worktree overlap ops use as now, so the parity goldens pin the fold window. |
 | `FNO_TEST_ORPHAN_MIN_ELAPSED_SECONDS` | rs | Env override of `config.test.orphan_min_elapsed_seconds` (900). Lets a positive control plant a fresh orphan and still exercise the kill. |
 | `FNO_TEST_OWNED_HOLD_MS` | rs | unclear: crates/fno/src/proto/startup_guard.rs:109 |
 | `FNO_TEST_OWNER_BIRTH` | rs | unclear: crates/fno-agents/src/test_run.rs:145 |
@@ -271,8 +277,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_PR_WATCH_LAUNCH_AGENTS_DIR` | rs | Test seam: the LaunchAgents dir the `pr-watch status` command reads the plist from, standing in for `$HOME/Library/LaunchAgents` so the parity fixtures pin the plist the way the Python leg's `launch_agents_dir` parameter did. |
 | `FNO_TEST_PR_WATCH_LOADED` | rs | Test seam: pins the launchctl load state the `pr-watch status` command reports (`1` loaded, anything else not loaded) so the parity goldens do not depend on the capture machine's own registration. |
 | `FNO_TEST_PR_WATCH_TICK_PID` | rs | Test seam: pins the tick-in-flight answer the `pr-watch refresh` command defers on (`0` reads as no tick, a positive pid defers the bounce) so the parity goldens never probe the real launchd. |
-| `FNO_TEST_TIMEOUT_SECONDS` | py | unclear: cli/src/fno/test_runner.py:31 |
-| `FNO_THINK_SPAWN` | py | Forces the born-with-why /think spawner on or off above `think_spawn.enabled`, below the autonomy master switch; `fno agents admit autonomy status` reports it as the `env` rank. |
+| `FNO_TEST_TIMEOUT_SECONDS` | rs | Overrides the suite timeout the native test command passes the bounded owner: crates/fno-agents/src/test_command.rs |
+| `FNO_THINK_SPAWN` | rs | Forces the born-with-why /think spawner on or off above `think_spawn.enabled`, below the autonomy master switch; `fno agents admit autonomy status` reports it as the `env` rank. The native test command pins it to 0 in every hermetic child: crates/fno-agents/src/test_env.rs. |
 | `FNO_THINK_SPAWN_WAVE0` | rs | unclear: crates/fno-agents/src/backlog/decompose.rs:2382 |
 | `FNO_THREAD_TURN_REFRESH_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:105 |
 | `FNO_TOUCH_EMIT` | rs | unclear: crates/fno/src/server.rs:10464 |
@@ -290,8 +296,10 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_WORKTREE_POLICY` | py+rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
 | `GEMINI_SANDBOX` | rs | unclear: crates/fno-agents/src/gemini_ask.rs:103 |
 | `GEMINI_SESSION_ID` | rs | Gemini's provider session id, used by exact-session loop readiness. |
-| `GITHUB_ACTIONS` | py | unclear: cli/src/fno/test_cmd.py:1859 |
+| `GITHUB_ACTIONS` | rs | Folds the smoke step headers into ::group:: in CI: crates/fno-agents/src/test_smoke.rs |
 | `GITHUB_EVENT_BEFORE` | py | unclear: cli/src/fno/lint_cli.py:622 |
+| `GIT_CONFIG_GLOBAL` | rs | the VCS tool's own ambient global-config channel; the birth display_name test guard redirects it beside HOME. |
+| `GIT_CONFIG_SYSTEM` | rs | the VCS tool's own ambient system-config channel; the birth display_name test guard redirects it beside HOME. |
 | `GLOBAL_EVENTS_PATH` | rs | unclear: crates/fno-agents/src/hook/stop.rs:462 |
 | `GROK_HOME` | rs | grok's base directory, sessions live under its `sessions` child: crates/fno-agents/src/grok_store.rs:18 |
 | `GROK_SESSION_ID` | rs | fallback session id when a grok Stop payload omits sessionId: crates/fno-agents/src/hook/stop.rs:150 |
@@ -300,15 +308,15 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `HOME` | py+rs | The user's home directory. |
 | `HOST` | rs | This machine's name for the join profile header: an agent session names itself through it when set; the hostname fallback follows. |
 | `INVOCATION_ID` | py | unclear: cli/src/fno/agents/context.py:94 |
-| `LOGNAME` | rs | unclear: crates/fno-agents/src/mail_remote.rs:148 |
+| `LOGNAME` | rs | The login name when `USER` is unset (a launchd daemon); the last fallback of the person (crates/fno-agents/src/identity.rs:218). |
 | `MCP_CHANNEL_INBOUND_POKE` | py | unclear: cli/src/fno/agents/context.py:92 |
 | `NO_COLOR` | rs | unclear: crates/fno/src/pty.rs:1976 |
 | `OPENCODE_CONFIG` | rs | Points the plugin-array audit at one extra OpenCode config file; unset, the audit reads only the standard paths. |
-| `OPENCODE_CONFIG_DIR` | py+rs | Moves OpenCode's config dir; the installer, the doctor leg and the scratch-install tests read it. |
+| `OPENCODE_CONFIG_DIR` | rs | Moves OpenCode's config dir; the installer and the doctor's surface report read it. |
 | `OPENCODE_DB` | rs | Points the intel fold at one opencode store; unset, every `opencode*.db` in the data dir is read. |
 | `OPENROUTER_API_KEY` | rs | OpenRouter API key for `fno config accounts benchmarks refresh`; the refresh refuses without it, naming this var. |
 | `OUT_DIR` | rs | unclear: crates/fno-agents/build.rs:51 |
-| `PATH` | py+rs | Executable search path. |
+| `PATH` | rs | Executable search path. |
 | `PI_CODING_AGENT_DIR` | rs | pi's agent dir; fno installs the extension under it and resolves the session store from it. |
 | `PI_CODING_AGENT_SESSION_DIR` | rs | pi's flat session store override; fno matches a session by the file header's cwd. |
 | `POSTMORTEMS_DIR` | rs | unclear: crates/fno-agents/src/finalize.rs:2981 |
@@ -322,21 +330,22 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `SCCACHE_DIR` | rs | Where sccache keeps its compile cache; `fill_sccache_env` pins the fleet cache to `<fno build base>/sccache` when unset and sccache is installed, beside the build-dir shards the same lane sweeps. The footnote rustc wrapper sets the same default for an opted-in build. fno never exports it to a shell rc or harness env, so other Rust projects keep their own cache. |
 | `SCCACHE_DISABLE` | rs | Set to `1` to force bare rustc everywhere; the rustc wrapper reads it ahead of every opt-in, and the daemon's sccache server keep-alive reads it the same way, so a disabled machine runs no server even with `build.sccache = true` or `FNO_SCCACHE=1` set. |
 | `SCCACHE_IDLE_TIMEOUT` | rs | `fill_sccache_env` and the rustc wrapper default this to `0` (never stop on idle): a server that exits on idle mid-build fell compiles back to local rustc under fleet load. A shorter operator-set value survives both defaults. The daemon's `ensure_sccache_server` starts a replacement with `0` when it finds no live server on an opted-in machine. |
-| `SHELL` | py+rs | The user's login shell. |
-| `SMOKE_CHANGED_RECEIPT` | py | unclear: cli/src/fno/test_cmd.py:1726 |
-| `SMOKE_FAILURE_RECORD` | py | unclear: cli/src/fno/test_cmd.py:2066 |
-| `SMOKE_REGISTRY_FILE` | py | unclear: cli/src/fno/test_cmd.py:2046 |
+| `SHELL` | rs | The user's login shell. |
+| `SMOKE_CHANGED_RECEIPT` | rs | Overrides the changed-mode receipt path: crates/fno-agents/src/test_changed.rs |
+| `SMOKE_FAILURE_RECORD` | rs | Overrides the failure-record path: crates/fno-agents/src/test_smoke.rs |
+| `SMOKE_REGISTRY_FILE` | rs | Test seam naming a JSON registry ({"steps": [[name, cwd, cmd], ...]}): crates/fno-agents/src/test_smoke.rs |
 | `SSH_CONNECTION` | rs | Set by sshd to `client_ip client_port server_ip server_port`. `fno mux serve --observe` names the watcher `user from client_ip` from it. |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | rs | unclear: crates/fno-agents/src/ledger_register.rs:617 |
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
 | `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
-| `TARGET_INPUT` | py | unclear: cli/src/fno/target_cli.py:1369 |
-| `TARGET_NO_MERGE` | py+rs | unclear: cli/src/fno/agents/harness_map.py:215 |
-| `TARGET_PLAN_PATH` | py | unclear: cli/src/fno/target_cli.py:1369 |
+| `TARGET_INPUT` | rs | unclear: crates/fno-agents/src/target_gates.rs:473 |
+| `TARGET_NO_MERGE` | rs | The merge-refusal carrier. The Rust spawn lane (`merge_posture::apply_env_from_message`) arms it when the command carries `--no-merge` and clears it otherwise, so every child it spawns inherits the verdict. |
+| `TARGET_PLAN_PATH` | rs | unclear: crates/fno-agents/src/target_gates.rs:474 |
 | `TARGET_SESSION_ID` | py+rs | Run id a driver pre-assigns its workers; init adopts it verbatim as session id and claim owner, and the decide door matches it against a live claim's `target-session:<id>` holder to say whether this caller holds the node. |
 | `TARGET_SIZE` | rs | Size profile the init door hands the writer. The blast read also takes it from the caller's env as an operator pin that a low-blast downgrade must not strip. Read in crates/fno-agents/src/target_init.rs `run`. |
 | `TARGET_SUMMARY_PATH` | rs | unclear: crates/fno-agents/src/ledger_register.rs:584 |
+| `TARGET_TRANSCRIPT_ID` | rs | The hook's claude session id under its transcript spelling; the owned-identity gate reads it when CLAUDE_CODE_SESSION_ID is absent. |
 | `TARGET_UNATTENDED` | rs | unclear: crates/fno-agents/src/target_orient.rs:329 |
 | `TASK_DO_TTL_HOURS` | rs | unclear: crates/fno-agents/src/graph_store.rs:1046 |
 | `TASK_LOCK_TTL_HOURS` | py+rs | unclear: cli/src/fno/graph/_constants.py:331 |
@@ -347,7 +356,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `USERPROFILE` | rs | unclear: crates/fno-agents/src/publish_review.rs:195 |
 | `UV_CACHE_DIR` | rs | Authoritative uv cache directory: the cache root a bounded codex worker is granted as a writable root; set but missing grants nothing (no fallback, uv reads exactly this variable). |
 | `UV_PROJECT_ENVIRONMENT` | rs | The venv path an `uv sync` would write; the spawn-door venv guard holds a worktree whose value resolves into the canonical checkout, so a worktree install cannot rewrite the canonical cli venv's scripts. |
-| `WORKTREE_STATUS_REGISTRY` | py | unclear: cli/src/fno/agents/registry.py:2525 |
+| `WORKTREE_STATUS_REGISTRY` | py+rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agents/src/worktree/status.rs. |
 | `XDG_BIN_HOME` | rs | Where Astral's installer put uv; `fno uninstall` removes a fno-installed uv and uvx there, else from ~/.local/bin. |
 | `XDG_CACHE_HOME` | rs | unclear: crates/fno/src/bootstrap.rs:1395 |
 | `XDG_CONFIG_HOME` | rs | Relocates OpenCode's config dir ($XDG_CONFIG_HOME/opencode) ahead of the ~/.config/opencode default; unset reads the default. |

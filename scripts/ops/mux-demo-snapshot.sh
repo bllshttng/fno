@@ -127,6 +127,10 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
   if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
+  # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
+  if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
+    printf '[sideline]\nlayout = "%s"\n' "$FNO_DEMO_LAYOUT"
+  fi
 } >"$ROOT/config.toml"
 # The bootstrap's dev-pin reader resolves HOME/.fno/config.toml and runs
 # before FNO_CONFIG is honored, so the pin has to live at the stock HOME
@@ -399,7 +403,8 @@ agents = [
     row("archer", "codex", "gpt-6-sol", ids[0], "working", sids[1]),
     row("scout", "claude", "opus", ids[1], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2], "working", sids[2]),
-    row("pager", "pi", "glm-5", ids[3], "working"),
+    # Blocked, so the strip's need-input count and the Input word render.
+    row("pager", "pi", "glm-5", ids[3], "blocked"),
     row("scribe", "claude", "sonnet", ids[4], "done"),
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.
@@ -552,9 +557,34 @@ def write(chat, rows):
         for r in rows:
             f.write(json.dumps(r) + "\n")
 
+def state(i, mins_ago, word, reason=None):
+    # A delivery-state line: what the recipient's harness did with a send.
+    return {"type": "delivery", "id": f"fmail-demo-{i}", "how": word, "reason": reason,
+            "ts": ts(mins_ago)}
+
+# Every delivery state a sent row shows. A chat whose last row is parked or
+# failed waits on the sender, so the chat list marks it with `!`.
 write("chat-demo-review", [
     msg(1, 9, "rowan", "scout", "Rate-limit review pass today? PR 118 is up."),
+    state(1, 9, "accepted-new-turn"),
     msg(2, 6, "scout", "rowan", "Landed: 60 req/min per key, the 429 carries Retry-After."),
+    # A failed send the user retried with r, and it then delivered.
+    msg(11, 5, "rowan", "scout", "Pin the limit in the README too."),
+    state(11, 5, "failed", "not-confirmed"),
+    state(11, 4, "accepted-new-turn"),
+    msg(7, 2, "rowan", "scout", "Good. Add the 429 case to the journey test before merge."),
+    state(7, 2, "parked"),
+    msg(9, 1, "rowan", "scout", "And tag the release once CI is green."),
+    state(9, 1, "failed", "not-confirmed"),
+    # The r retry failed too, so the line offers the copy rung.
+    state(9, 0, "failed", "waited-3s;no-pane-ref"),
+    # A first failure: its cause and r retry, no copy rung yet.
+    msg(10, 0, "rowan", "scout", "Then post the 429 shot on the visual page."),
+    state(10, 0, "failed", "not-confirmed"),
+])
+write("chat-demo-keys", [
+    msg(8, 4, "rowan", "archer", "Rotate the staging key once the deploy is green."),
+    state(8, 4, "failed", "bus-only"),
 ])
 write("chat-demo-scope", [
     msg(3, 21, "wren", "archer", "Webhook retry landed behind a flag; the dead-letter queue drains nightly."),
@@ -574,10 +604,23 @@ write("chat-demo-broadcast", [
 ])
 
 # Questions journal: the feed's questions leg (operator_question,
-# operator_decision envelopes).
+# operator_decision envelopes). The first question carries one screenshot,
+# so the question page shows its screens row.
+import struct, zlib
+def png(path, w, h, rgb):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+os.makedirs(f"{root}/screens", exist_ok=True)
+shot = f"{root}/screens/q-demo-a1-1-bell.png"
+png(shot, 160, 90, (40, 120, 200))
 qs = [
     {"ts": ts(4), "type": "operator_question", "source": "target",
-     "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?"}},
+     "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?",
+              "images": [shot]}},
     {"ts": ts(14), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
     {"ts": ts(26), "type": "operator_decision", "source": "target",
@@ -587,6 +630,14 @@ with open(f"{root}/.fno/questions.jsonl", "w") as f:
     for q in qs:
         f.write(json.dumps(q) + "\n")
 PY
+
+# FNO_DEMO_PIN=1 pins the scout row: a keep marker on its session id, the
+# file `fno agents reap --keep` writes.
+if [ -n "${FNO_DEMO_PIN:-}" ]; then
+  mkdir -p "$FNO_AGENTS_HOME/keep"
+  printf '{"session_id":"%s","name":"scout","set_at":"2026-10-28T12:00:00Z","set_by":"human"}' \
+    "${SIDS[0]}" >"$FNO_AGENTS_HOME/keep/${SIDS[0]}.json"
+fi
 
 sleep 6
 

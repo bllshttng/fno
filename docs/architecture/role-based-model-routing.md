@@ -28,7 +28,7 @@ Claude Code internally requests opus/sonnet/haiku tiers (background tasks use ha
 ## Shape
 
 ```
-cmd_spawn --role  ->  dispatch_spawn  ->  _claude_create_path  ->  bg_create(role=...)
+dispatch_spawn(role=...)  ->  _claude_create_path  ->  bg_create(role=...)
                                                                        |
                                                             resolve_route(role)
                                                                        |
@@ -213,7 +213,7 @@ A small built-in table sits under this key as a **fallback**, never the authorit
 
 The fallback keeps a tier request answerable where nothing is declared. Review level names a model for every level. Answering nothing drops `/code-review` to the provider default everywhere. The grid is unaffected and stays config-first. A virgin install records `grid=no-inventory-declared` and injects nothing. The grid asks whether config declared a row, not whether any row exists.
 
-`cli/src/fno_routing_sample/routing_sample.toml` ships as a labelled sample inside the package, so an installed wheel finds it too. No routing code path reads it. `fno config route init` appends it to your config commented out. `fno doctor route` lists every declared row with its resolved band and reachability verdict. A row on an uninstalled harness refuses BY NAME on stderr. The row table itself is rendered by the route-slot binary. With that binary unavailable the command prints a `route-slot-unavailable` refusal instead of a table.
+The labelled sample ships inside the binary. No routing code path reads it. `fno config route init` appends it to your config commented out. `fno doctor route` lists every declared row with its resolved band and reachability verdict. A row on an uninstalled harness refuses BY NAME on stderr. The row table itself is rendered by the route-slot binary. With that binary unavailable the command prints a `route-slot-unavailable` refusal instead of a table.
 
 A codex row's `model` can name a family instead of a version: `sol`, `astra`, `terra`, or `luna`. At spawn, route-slot resolves the family to the newest `gpt-<version>-<family>` in codex's own `models_cache.json`. Codex refreshes that list without an fno release. The resolution prints a `slot family` chain line. A claude row can name the alias (`opus`, `sonnet`, `haiku`, `fable`), and the claude harness resolves it. A value that is already a full id is a pin: route-slot never rewrites it. A codex row pinned below the newest listed version of its family prints one `drift` line under `fno doctor route`.
 
@@ -274,7 +274,7 @@ Six commands over the same machinery (`model_routing.py` stays the single source
 | `fno config route unset <role>` | Revert a lane to its built-in default (or unrouted); idempotent no-op if unconfigured. |
 | `fno config route env <role \| provider/model>` | Print an eval-able export block for an interactive session: `eval "$(fno config route env build)" && claude`. Fails closed on a missing key (no partial block). |
 | `fno config route inventory [-J]` (also `fno doctor route`) | Every declared `[[routing.models]]` row with its resolved band and reachability verdict; an uninstalled harness refuses by name on stderr. |
-| `fno config routing init` | Append the shipped routing sample (`fno_routing_sample/routing_sample.toml`), commented out, to your config. |
+| `fno config routing init` | Append the shipped routing sample, commented out, to your config. |
 
 `route env` is the sanctioned interactive switch - never editing `~/.claude/settings.json` (global, restart-bound, races parallel sessions). The `ccz`-style alias becomes a one-liner over it.
 
