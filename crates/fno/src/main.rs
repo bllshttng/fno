@@ -222,6 +222,10 @@ enum Role {
     /// carried tail is empty by contract; the door resolves the plugin root
     /// itself and refuses naming every source it tried.
     AgentsLeadRefreshCanon(Vec<OsString>),
+    /// `fno agents <word>` no earlier door claims: the mapped client argv.
+    AgentsClient(Vec<OsString>),
+    /// `fno agents claim ...` past its native leaves: the claims CLI in the wheel.
+    AgentsPython(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
     /// `fno whoami scoreboard ...`: the telemetry views, native via the
@@ -635,14 +639,8 @@ fn classify_agents_restart(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "restart")
 }
 
-/// `fno agents status ...`: claimed natively like agents_top. The one
-/// documented escape keeps working: `FNO_AGENTS_RUNTIME=python` forces the
-/// Python path, whose status command refuses with its "no Python implementation"
-/// message, so the front door does not claim the argv out from under it.
+/// `fno agents status ...`: claimed natively like agents_top.
 fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
-    if std::env::var_os("FNO_AGENTS_RUNTIME").is_some_and(|v| v.to_str() == Some("python")) {
-        return None;
-    }
     classify_agents_command(args, "status")
 }
 
@@ -1545,6 +1543,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(door) = fno::config_cli::classify(args) {
         return Role::ConfigCli(door);
     }
+    match fno::agents_client_route::classify(args) {
+        Some(fno::agents_client_route::Route::Client(argv)) => return Role::AgentsClient(argv),
+        Some(fno::agents_client_route::Route::Python(argv)) => return Role::AgentsPython(argv),
+        None => {}
+    }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
         FrontDoor::Usage { message } => {
@@ -1784,6 +1787,8 @@ fn main() {
     }
     match role {
         Role::Forward => bootstrap::forward(&args),
+        Role::AgentsClient(argv) => std::process::exit(fno_agents_exec("fno agents", &[], &argv)),
+        Role::AgentsPython(argv) => bootstrap::forward(&argv),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
@@ -2447,11 +2452,11 @@ mod tests {
         );
         assert_eq!(
             decide_role(&os(&["agents", "history", "d23c3d68"]), false),
-            Role::Forward
+            Role::AgentsHistory(os(&["d23c3d68"]))
         );
         assert_eq!(
             decide_role(&os(&["agents", "history", "--help"]), false),
-            Role::Forward
+            Role::AgentsHistory(os(&["--help"]))
         );
         // The canon-refresh door claims the front's rewrite exactly; the
         // sibling lead commands answer through the lead route.

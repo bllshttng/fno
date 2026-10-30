@@ -145,11 +145,15 @@ def stalls_command(ctx: typer.Context) -> None:
 
 
 def _route_harness(argv: list[str]) -> None:
-    from fno.agents.rust_runtime import refuse_without_binary, route_to_rust
+    import os
+
     from fno.rust_binary import resolve_installed_binary
 
-    binary = resolve_installed_binary() or refuse_without_binary("harness")
-    route_to_rust(argv, binary=binary)
+    binary = resolve_installed_binary()
+    if binary is None:
+        typer.echo("fno doctor harness: fno-agents binary not found; run `fno doctor update --rust`", err=True)
+        raise typer.Exit(code=127)
+    os.execv(str(binary), [str(binary), *argv])
 
 
 @doctor_app.command("harness", hidden=True)
