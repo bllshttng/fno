@@ -507,6 +507,13 @@ pub const UNLANED: &str = "unlaned";
 pub(crate) const KANBAN_COLUMNS: [&str; 6] =
     ["In Progress", "Now", "Next", "Later", "Triage", "Done"];
 
+/// The column a card carries when `kanban_column` declines it (deferred,
+/// superseded, roadmap-typed). Not a [`KANBAN_COLUMNS`] member, so lane and
+/// cell consumers render it nowhere; the read model keeps the card so list
+/// queries reach it and the board payload can name what its default view
+/// leaves out.
+pub(crate) const OFF_BOARD: &str = "Off-board";
+
 /// A lane's position in [`KANBAN_COLUMNS`]; anything unrecognized sorts last.
 fn lane_rank(lane: &str) -> usize {
     KANBAN_COLUMNS
