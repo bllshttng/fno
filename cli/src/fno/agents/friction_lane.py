@@ -43,7 +43,8 @@ def run(*, json_out: bool) -> None:
     import json
 
     from fno.agents import watchdog as wd
-    from fno.carveout.core import resolve_carveout_root, resolve_session_id
+    from fno.paths import resolve_canonical_repo_root
+    from fno.rust_binary import carveout_session_id
 
     payload, rows = wd.run_sweep()
     if payload.get("refused"):
@@ -55,14 +56,12 @@ def run(*, json_out: bool) -> None:
             if data["verdict"] in (wd.CONTENDED, wd.POLLING_SETTLED)
         ]
         try:
-            from fno.paths import resolve_repo_root
-
-            session_id = resolve_session_id(resolve_repo_root())
+            session_id = carveout_session_id()
         except Exception:  # noqa: BLE001 - an unbound ask still records
             session_id = None
         outcome, qid = reconcile_friction(
             pairs,
-            root=resolve_carveout_root(),
+            root=resolve_canonical_repo_root(),
             session_id=session_id,
             cwd=Path.cwd(),
         )

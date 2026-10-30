@@ -309,7 +309,7 @@ The deleter: a whole space (or a `<space>/worktrees/<name>` slice) whose source 
 | `<space>/leads/<scope>.md.wake.log` | `lead_wake_triggers.rs` (detached wake-mode walk) | append-only stdout of the walks the arm spawned; the events journal is the receipt, this log is diagnosis |
 | `<space>/plans/` | `paths.plans_dir()` default (a configured vault template still wins) | permanent plan docs |
 | `<space>/status-sinks/` | `fno-agents state path status-sinks` | per-sink cursors + error logs |
-| `<space>/carveouts.jsonl`, `.lock.d/` | `cli/src/fno/carveout/core.py` via `paths.project_log` | append-only ledger; consumed by the retro-triage harvest |
+| `<space>/carveouts.jsonl`, `.lock.d/` | `crates/fno-agents/src/retro/ledger.rs` | append-only ledger; consumed by the retro-triage harvest |
 | `<space>/worktree-log.jsonl` | `hooks/worktree-setup.sh` | append-only worktree lifecycle log |
 | `<space>/wake-signals/` | `cli/src/fno/wake/signal.py` | one-shot records; drained by the wake readers |
 | `<space>/artifacts/consolidated/` | `scripts/lib/consolidate-artifacts.sh` | per-PR consolidated gate artifacts, shared across worktrees |

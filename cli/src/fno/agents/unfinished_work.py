@@ -1215,16 +1215,16 @@ def publish_report(
     # kept listing the findings and the exit code stayed 0.
     try:
         from fno.agents.stale_escalate import escalate_unfinished
-        from fno.carveout.core import resolve_carveout_root, resolve_session_id
-        from fno.paths import resolve_repo_root
+        from fno.paths import resolve_canonical_repo_root
+        from fno.rust_binary import carveout_session_id
 
         try:
-            session_id = resolve_session_id(resolve_repo_root())
+            session_id = carveout_session_id()
         except Exception:  # noqa: BLE001 - an unbound sweep still records the ask
             session_id = None
         outcome, qid = escalate_unfinished(
             list(snapshot.findings),
-            root=resolve_carveout_root(),
+            root=resolve_canonical_repo_root(),
             session_id=session_id,
             cwd=Path.cwd(),
             unknown_dimensions=unknown,

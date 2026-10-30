@@ -2,9 +2,9 @@
 //!
 //! The ledger lives in the repo's space (`<space>/carveouts.jsonl`), with a
 //! one-time migration from the legacy `<repo>/.fno/carveouts.jsonl`. Every
-//! rewriter takes the sibling `carveouts.jsonl.lock.d` mkdir mutex the
-//! Python capture writer also takes, and replaces the file atomically, so a
-//! torn write never loses the rows it was not touching.
+//! writer takes the sibling `carveouts.jsonl.lock.d` mkdir mutex, and every
+//! rewriter replaces the file atomically, so a torn write never loses the
+//! rows it was not touching.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -82,6 +82,96 @@ fn rewrite(path: &Path, lines: &[String]) -> std::io::Result<()> {
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
+}
+
+/// Append one row under the mutex. A failure is an error: a failed capture is
+/// never a silent success.
+pub fn append_row(root: &Path, row: &Value) -> Result<(), String> {
+    let path = ledger_path(root);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    with_lock(&path, || {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        writeln!(file, "{row}")
+    })
+    .ok_or_else(|| format!("carveouts.jsonl lock timeout: {}", path.display()))?
+    .map_err(|e| e.to_string())
+}
+
+/// Why [`rewrite_row`] did not land. An absent id must not read as a failed
+/// write: the first means the edit cannot apply, the second that it did not.
+pub enum RewriteError {
+    NotFound(String),
+    Failed(String),
+}
+
+/// Edit the row named `id` in one locked rewrite and return it. Never creates
+/// the row, since that would resurrect one `/fno:ship pr merged` consumed. A
+/// malformed neighbouring line is kept verbatim.
+pub fn rewrite_row(
+    root: &Path,
+    id: &str,
+    edit: impl FnOnce(&mut serde_json::Map<String, Value>),
+) -> Result<Value, RewriteError> {
+    let path = ledger_path(root);
+    if !path.exists() {
+        return Err(RewriteError::NotFound(format!(
+            "no carve-out ledger at {}",
+            path.display()
+        )));
+    }
+    with_lock(&path, || {
+        let text = std::fs::read_to_string(&path).map_err(|e| {
+            RewriteError::Failed(format!(
+                "cannot read carve-out ledger {}: {e}",
+                path.display()
+            ))
+        })?;
+        let mut edit = Some(edit);
+        let mut updated = None;
+        let mut kept = Vec::new();
+        for line in py_splitlines(&text) {
+            let stripped = line.trim();
+            if stripped.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Value>(stripped) {
+                Ok(Value::Object(mut rec))
+                    if rec.contains_key("id") && py_str(rec.get("id")) == id =>
+                {
+                    if let Some(edit) = edit.take() {
+                        edit(&mut rec);
+                    }
+                    let rec = Value::Object(rec);
+                    kept.push(rec.to_string());
+                    updated = Some(rec);
+                }
+                _ => kept.push(stripped.to_string()),
+            }
+        }
+        let Some(updated) = updated else {
+            return Err(RewriteError::NotFound(format!(
+                "{id} is not on the ledger (already resolved, or recorded under a different project root)"
+            )));
+        };
+        rewrite(&path, &kept).map_err(|e| {
+            RewriteError::Failed(format!(
+                "cannot write carve-out ledger {}: {e}",
+                path.display()
+            ))
+        })?;
+        Ok(updated)
+    })
+    .unwrap_or_else(|| {
+        Err(RewriteError::Failed(format!(
+            "carveouts.jsonl lock timeout: {}",
+            path.display()
+        )))
+    })
 }
 
 /// Remove `ids` from the ledger and return how many rows went. A malformed

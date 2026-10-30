@@ -167,7 +167,7 @@ cd "$SBX"   # isolate: hook latches (.fno/), git root (carveouts), and events al
 # is inert now that write and read both resolve project_log().
 clear_carveouts() {
   PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
-    'from fno.carveout.core import CARVEOUTS_NAME; from fno.paths import project_log; p = project_log(CARVEOUTS_NAME); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("")'
+    'from fno.paths import project_log; p = project_log("carveouts.jsonl"); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("")'
 }
 
 # registry.json on disk at state_dir/agents/registry.json: {"schema_version":<current>,"agents":[...]}.

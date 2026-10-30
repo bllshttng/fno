@@ -342,7 +342,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.25x | 5 | 4 | `cli/src/fno/agents/harness_map.py:264` | `effort_values` |
 | 1.25x | 5 | 4 | `cli/src/fno/agents/test_harness_map.py:23` | `test_default_harness_is_claude_bg_with_bypass` |
 | 1.25x | 5 | 4 | `cli/src/fno/agents/test_harness_map.py:246` | `test_config_non_slash_prose_template_untouched` |
-| 1.25x | 20 | 16 | `cli/src/fno/agents/whoami.py:274` | `find_held_node` |
 | 1.25x | 5 | 4 | `cli/src/fno/bundle/cli.py:99` | `_default` |
 | 1.25x | 10 | 8 | `cli/src/fno/claims/core.py:597` | `_atomic_replace` |
 | 1.25x | 15 | 12 | `cli/src/fno/graph/render_html.py:42` | `_load_obsidian_vault` |
@@ -413,7 +412,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.14x | 8 | 7 | `cli/src/fno/agents/cli.py:2733` | `cmd_stop` |
 | 1.14x | 8 | 7 | `cli/src/fno/agents/model_routing.py:391` | `emit_env_scrub_warning` |
 | 1.14x | 8 | 7 | `cli/src/fno/agents/peek.py:252` | `_parse_opencode_record` |
-| 1.14x | 16 | 14 | `cli/src/fno/carveout/cli.py:231` | `resolve_carveouts` |
 | 1.14x | 8 | 7 | `cli/src/fno/config/__init__.py:627` | `_reviewer_hint` |
 | 1.14x | 8 | 7 | `cli/src/fno/graph/cli.py:4914` | `cmd_backfill_slugs` |
 | 1.14x | 8 | 7 | `cli/src/fno/harness_identity.py:253` | `present_harness_markers` |

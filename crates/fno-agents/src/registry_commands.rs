@@ -128,8 +128,13 @@ pub(crate) fn scan_field(text: &str, key: &str) -> Option<String> {
 /// The node this worker holds, as `node:<id>`, only when the cwd manifest's
 /// claude session id proves it is this process's.
 fn find_held_node(session: Option<&str>) -> Option<String> {
+    find_held_node_at(Path::new("."), session)
+}
+
+/// [`find_held_node`] over the manifest of the checkout at `root`.
+pub(crate) fn find_held_node_at(root: &Path, session: Option<&str>) -> Option<String> {
     let session = session?;
-    let text = std::fs::read_to_string(Path::new(".fno").join("target-state.md")).ok()?;
+    let text = std::fs::read_to_string(root.join(".fno").join("target-state.md")).ok()?;
     let owner = scan_field(&text, "claude_session_id")
         .or_else(|| scan_field(&text, "claude_transcript_id"))?;
     if owner != session {
