@@ -1,24 +1,15 @@
 """Spawn gate readers shared with the pane lane, watchdog and reachability.
 
-``crates/fno-agents/src/spawn_gate.rs`` gates every ``fno agents spawn``;
-this module keeps the Python readers and the provider admission the pane
-lane still consumes.
-
-The gate is READ-ONLY: the ``max_live`` slot cap counts fno registry rows
-(worker provenance) and the RAM floor reads real system RAM. The claude daemon
-roster is never a population to count toward the slot cap (: only a row
-ALSO in the fno registry counts). Its only writes are its own claims under the
-GLOBAL claims root - the RAM budget is machine-wide. Global guards fail OPEN
-on read errors; the per-provider cap is stricter: an unreadable live count
-refuses, never assumes zero.
+``crates/fno-agents/src/spawn_gate.rs`` gates every ``fno agents spawn``.
+This module keeps the Python readers other modules import: pid liveness,
+the roster path, the capacity probe, the QoS wrap and the exit-code table.
 """
 from __future__ import annotations
 
-import contextvars
 import os
 import sys
 from pathlib import Path
-from typing import Any, NoReturn, Optional
+from typing import Optional
 
 
 # THE exit-code allocation table for the gate band across both trees (this
@@ -155,91 +146,6 @@ _KNOWN_UNROUTED_PROVIDER = "__uncapped__"
 # ---------------------------------------------------------------------------
 # The gate
 # ---------------------------------------------------------------------------
-
-class GateRefused(SystemExit):
-    """Raised (as SystemExit subclass) when the gate refuses the spawn."""
-
-    def __init__(self, code: int, receipt: Optional[dict[str, object]] = None) -> None:
-        super().__init__(code)
-        self.receipt = receipt
-
-
-#: The spawn `run_gate` is currently deciding, as ``(name, substrate)``.
-#: Set once at gate entry and read by :func:`_refuse`, so a refusal event can
-#: name the spawn it refused without threading `name` through four helper
-#: signatures that have no other use for it. A leftover value is harmless: the
-#: next `run_gate` overwrites it, and only a refusal inside a gate run reads it.
-_CURRENT_SPAWN: "contextvars.ContextVar[tuple[Optional[str], Optional[str]]]" = (
-    contextvars.ContextVar("fno_spawn_gate_current", default=(None, None))
-)
-
-#: AC13: axes read so far plus the axis being decided, stamped onto
-#: refusals that carry no explicit axis fields.
-_CURRENT_AXES_READ: "contextvars.ContextVar[dict[str, str]]" = (
-    contextvars.ContextVar("fno_spawn_gate_axes_read", default={})
-)
-_CURRENT_AXIS: "contextvars.ContextVar[Optional[str]]" = (
-    contextvars.ContextVar("fno_spawn_gate_axis", default=None)
-)
-
-
-def _refuse(
-    exit_code: int,
-    receipt: Optional[dict[str, object]] = None,
-    **event: Any,
-) -> NoReturn:
-    """The one seam every gate refusal exits through: emit, then raise.
-
-    Before this existed a refusal lived only in the stderr of a process that
-    had already exited, so nobody could ask afterward why a node did not
-    launch. Measured 2026-09-01: the global journal carried 4815
-    ``claim_acquired`` rows (the positive control that the file is read) and
-    zero rows of any kind naming a gate refusal.
-
-    ``receipt`` is the caller-facing shape ``fno agents spawn`` prints on
-    stdout and is passed through untouched. Every event carries
-    ``gate: "python"`` and the spawn's ``substrate``, so a reader can tell
-    this journal's population (the pane substrate, the sole leg this gate
-    covers) from the Rust gate's refusals, which owns.
-
-    ``event`` is extra telemetry for
-    the refusals that deliberately carry no receipt, so a refusal can name
-    its measured value against its threshold in the log without changing
-    what stdout has always printed.
-
-    The emit is best-effort - ``_emit_gate_event`` swallows everything - so
-    telemetry can never change a gate outcome.
-    """
-    spawn_name, substrate = _CURRENT_SPAWN.get()
-    event_data = {**(receipt or {}), **event}
-    # AC13: an explicit axis field wins; the contextvar is the best
-    # effort a non-CPU refusal site can supply.
-    axes_read = _CURRENT_AXES_READ.get()
-    if axes_read and "axes_read" not in event_data:
-        event_data["axes_read"] = dict(axes_read)
-    axis = _CURRENT_AXIS.get()
-    if axis and "axis" not in event_data:
-        event_data["axis"] = axis
-    # The seam-owned fields win on collision: a future receipt carrying `name`
-    # or `gate` must not silently rewrite the identity this journal entry is
-    # attributed by.
-    event_data.update(
-        exit_code=exit_code, name=spawn_name, substrate=substrate, gate="python"
-    )
-    _emit_gate_event("spawn_gate_refused", **event_data)
-    refusal = GateRefused(exit_code, receipt)
-    raise refusal
-
-
-def _emit_gate_event(kind: str, **data: Any) -> None:
-    """Best-effort agents-log event. Never raises, never blocks a spawn."""
-    try:
-        from fno.agents import events
-
-        events.emit(kind, **data)
-    except Exception:  # noqa: BLE001 - telemetry never changes a gate outcome
-        pass
-
 
 def probe_capacity(only: Optional[list[str]] = None) -> dict:
     """Answer "would a dispatch be admitted right now" - by asking the ONE

@@ -116,9 +116,9 @@ The last `spawn-gate: refused on <axis> (<reason>, exit <code>): <figures>` line
 
 A stderr with no `spawn-gate:` line means the gate admitted and something after it failed. The real error is the first non-note line there, never a `spawn-gate note:` line.
 
-## Refusal events: Python via the seam, routing from Rust
+## Refusal events come from Rust
 
-Some spawns ENTER Python: pane, routed, and account. For them the command returns the event fields, and the Python transport emits `spawn_gate_refused` through `_refuse`. The journal vocabulary is unchanged. The native unrouted arms now emit too. The route-slot command appends one `spawn_gate_refused` row, `gate: "routing"`, at the command entry, so a refused native spawn leaves a trace beside the Python rows. The Rust side has no config-resolved state-dir parity yet, so the row lands in the space journal rather than the global one. The command read is the answer: `fno doctor event find spawn_gate_refused --field gate=routing` scans every journal and rotation. The emit and its guard test live in `crates/fno-agents/src/route_slot.rs` (`journal_routing_refusal` and the `journal_rows` tests). See `scripts/ci/check-gate-refusals-emit.sh` for the Python seam guard.
+Every gate refusal is a Rust refusal now. The Python transport and its `_refuse` seam are deleted with their last caller, the Python mail wake. The route-slot command appends one `spawn_gate_refused` row, `gate: "routing"`, at the command entry, so a refused native spawn leaves a trace. The Rust side has no config-resolved state-dir parity yet, so the row lands in the space journal rather than the global one. The command read is the answer: `fno doctor event find spawn_gate_refused --field gate=routing` scans every journal and rotation. The emit and its guard test live in `crates/fno-agents/src/route_slot.rs` (`journal_routing_refusal` and the `journal_rows` tests).
 
 ## The registry schema check refuses writes it cannot understand
 

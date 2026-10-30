@@ -84,7 +84,7 @@ def _force_python_runtime(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_spawn_uuid_capture(monkeypatch):
+def _isolate_session_uuid_resolution(monkeypatch):
     """Keep full-UUID resolution host-independent.
 
     The suite stubs the registry reader to ``None`` (no read of the
