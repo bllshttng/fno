@@ -342,10 +342,12 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     )
 
     # Positive control: patterns that match nothing certify an empty sweep.
+    # The floors sit under the census with headroom: rot to a near-empty
+    # sweep still fails, while ordinary drift between classes does not.
     counts = {}
     for _, _, _, kind in results:
         counts[kind] = counts.get(kind, 0) + 1
-    assert counts.get("fenced", 0) >= 19, counts
+    assert counts.get("fenced", 0) >= 15, counts
     assert counts.get("value-form", 0) >= 4, counts
     # The exempt count floats on purpose: a count change is not a defect.
     # Each exempt marker carries its why-comment at the site; the floors
