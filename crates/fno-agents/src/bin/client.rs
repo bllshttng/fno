@@ -3812,6 +3812,16 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             "--answer" => {
                 params.insert("answer".into(), str_arg(&mut it, "--answer")?);
             }
+            // The one dangling retired short: -p is tombstoned above and -P
+            // rides the vendor tombstone, so -r would otherwise fall to the
+            // positionals and launch under a nonsense seed. The LONG form
+            // forwards; the short names no spawn flag here.
+            "-r" if command == "spawn" => {
+                return Err(
+                    "-r is not a spawn flag here; pass --resume <id> to forward it to the harness argv"
+                        .to_string(),
+                );
+            }
             "--yolo" | "-Y" if command == "spawn" => {
                 // The never-prompt flag is the harness's own vocabulary: it
                 // rides verbatim, and a lane that cannot carry it refuses by
