@@ -2137,8 +2137,9 @@ fn decide_gate(
                                     ));
                                 }
                             }
-                            // bg path: keep the mutex until the caller's dispatch returns
-                            // (registry/roster row exists) — released via GateGuard.
+                            // bg path: keep the mutex and the seat claim until
+                            // the caller's dispatch returns (registry/roster
+                            // row exists) — released via GateGuard.
                             return Ok(guard);
                         }
                         // At cap: drop the mutex before waiting.
