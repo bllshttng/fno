@@ -779,6 +779,7 @@ pub(crate) fn default_session_witness() -> (
         std::cell::RefCell::new(None),
         std::cell::RefCell::new(std::collections::HashMap::new()),
         None,
+        None,
     )
 }
 
@@ -793,6 +794,7 @@ fn memoized_session_witness(
     index: std::cell::RefCell<Option<SessionRegistryIndex>>,
     memo: std::cell::RefCell<std::collections::HashMap<String, crate::claims::SessionLiveness>>,
     lazy_until: Option<std::time::Instant>,
+    codex_root: Option<std::path::PathBuf>,
 ) -> (
     impl Fn(&crate::claims::ClaimRecord) -> crate::claims::SessionLiveness,
     std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
@@ -801,7 +803,15 @@ fn memoized_session_witness(
         std::rc::Rc::new(std::cell::RefCell::new(None));
     let cell = last_answer.clone();
     let witness = move |rec: &crate::claims::ClaimRecord| -> crate::claims::SessionLiveness {
-        let answer = session_liveness_answer(rec, &index, &memo, lazy_until);
+        let harness_shared = !crate::claims::pid_dies_with_session(rec.harness.as_deref());
+        let answer = session_liveness_answer(
+            rec,
+            &index,
+            &memo,
+            lazy_until,
+            harness_shared,
+            codex_root.as_deref(),
+        );
         *last_answer.borrow_mut() = Some(match &answer {
             crate::claims::SessionLiveness::Live(basis) => *basis,
             crate::claims::SessionLiveness::Absent => crate::claims::basis::SESSION_ABSENT,
@@ -860,14 +870,19 @@ pub(crate) fn session_witness_primed_within(
             std::cell::RefCell::new(None),
             std::cell::RefCell::new(std::collections::HashMap::new()),
             deadline,
+            None,
         );
     }
     let index: std::cell::RefCell<Option<SessionRegistryIndex>> = std::cell::RefCell::new(None);
     load_session_registry_index(&index);
     let mut subjects: std::collections::BTreeMap<String, Vec<&crate::claims::ClaimRecord>> =
         std::collections::BTreeMap::new();
+    let mut shared_hosts: std::collections::HashSet<String> = Default::default();
     for rec in &records {
         if let Some(session) = resolve_subject_session(rec, &index) {
+            if !crate::claims::pid_dies_with_session(rec.harness.as_deref()) {
+                shared_hosts.insert(session.clone());
+            }
             subjects.entry(session).or_default().push(rec);
         }
     }
@@ -877,13 +892,13 @@ pub(crate) fn session_witness_primed_within(
             .as_ref()
             .expect("session registry index initialized");
         subjects
-            .into_iter()
-            .filter(|(session, group)| {
-                registry_session_live(registry, session).is_none()
+            .iter()
+            .filter_map(|(session, group)| {
+                (registry_session_live(registry, session).is_none()
                     && !row_verdict_live(registry, session)
-                    && group.iter().any(|rec| may_consult_transcript(rec))
+                    && group.iter().any(|rec| may_consult_transcript(rec)))
+                .then(|| session.clone())
             })
-            .map(|(session, _)| session)
             .collect()
     };
     let memo = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -891,15 +906,20 @@ pub(crate) fn session_witness_primed_within(
     {
         let registry_known = index.borrow().as_ref().is_some_and(|r| r.known);
         for (session, probe) in &map {
-            let answer = session_liveness_from_observations(
+            let mut answer = session_liveness_from_observations(
                 registry_known,
                 None,
                 probe.reachability.as_deref(),
             );
+            if matches!(answer, crate::claims::SessionLiveness::Unresolved)
+                && shared_hosts.contains(session)
+            {
+                answer = codex_rollout_rung(session, &index, None, true);
+            }
             memo.borrow_mut().insert(session.clone(), answer);
         }
     }
-    memoized_session_witness(index, memo, deadline)
+    memoized_session_witness(index, memo, deadline, None)
 }
 
 /// The worker name a dispatcher-minted holder names, or `None` when the
@@ -973,12 +993,15 @@ fn holder_session_fields(
     (worker, dispatcher)
 }
 
-/// Whether this record's classification can still reach the transcript leg: a
-/// same-machine record whose pid is provably alive classifies live off the
-/// pid alone, so its witness answer would be seeded into the memo and never
-/// read. Conservative by construction: a session dropped here that the
-/// classifier does consult still probes lazily on its first witness call, so
-/// a policy change in the classifier costs perf, never a verdict.
+/// Whether this record's classification can still reach the transcript leg. A
+/// same-machine record whose pid is provably alive AND whose harness forks a
+/// process per session classifies live off the pid alone, so its witness
+/// answer would be seeded into the memo and never read - skip the wire for
+/// it. A shared-host pid (codex) never decides by itself, so its session
+/// always rides the wire. Conservative by construction: a session dropped
+/// here that the classifier does consult still probes lazily on its first
+/// witness call, so a policy change in the classifier costs perf, never a
+/// verdict.
 fn may_consult_transcript(rec: &crate::claims::ClaimRecord) -> bool {
     !(crate::claims::is_same_machine(&rec.host, rec.machine_id.as_deref())
         && rec.pid.is_some_and(|pid| {
@@ -986,7 +1009,8 @@ fn may_consult_transcript(rec: &crate::claims::ClaimRecord) -> bool {
                 crate::claims::probe_pid(pid),
                 crate::claims::PidProbe::Created(_)
             )
-        }))
+        })
+        && crate::claims::pid_dies_with_session(rec.harness.as_deref()))
 }
 
 /// The witness's answer for one record: registry row first, then transcript.
@@ -996,6 +1020,8 @@ fn session_liveness_answer(
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
     memo: &std::cell::RefCell<std::collections::HashMap<String, crate::claims::SessionLiveness>>,
     lazy_until: Option<std::time::Instant>,
+    harness_shared_host: bool,
+    codex_root: Option<&std::path::Path>,
 ) -> crate::claims::SessionLiveness {
     let Some(session) = resolve_subject_session(rec, index) else {
         return crate::claims::SessionLiveness::Unresolved;
@@ -1003,7 +1029,13 @@ fn session_liveness_answer(
     if let Some(answer) = memo.borrow().get(&session) {
         return answer.clone();
     }
-    let answer = session_liveness_answer_uncached(&session, index, lazy_until);
+    let answer = session_liveness_answer_uncached(
+        &session,
+        index,
+        lazy_until,
+        harness_shared_host,
+        codex_root,
+    );
     memo.borrow_mut().insert(session, answer.clone());
     answer
 }
@@ -1194,16 +1226,21 @@ pub(crate) fn session_is_absent(id: &str) -> bool {
     };
     let index = std::cell::RefCell::new(None);
     matches!(
-        session_liveness_answer_uncached(&session, &index, None),
+        session_liveness_answer_uncached(&session, &index, None, false, None),
         crate::claims::SessionLiveness::Absent
     )
 }
 
-/// The uncached resolution: registry row first, then transcript.
+/// The uncached resolution: registry row first, then transcript. A
+/// shared-host record (codex) whose transcript read ended Unresolved gets one
+/// more rung: its own rollout mtime, the per-thread instrument the shared pid
+/// cannot be.
 fn session_liveness_answer_uncached(
     session: &str,
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
     lazy_until: Option<std::time::Instant>,
+    harness_shared_host: bool,
+    codex_root: Option<&std::path::Path>,
 ) -> crate::claims::SessionLiveness {
     load_session_registry_index(index);
     let (registry_known, registry_live) = {
@@ -1238,13 +1275,60 @@ fn session_liveness_answer_uncached(
     // the transcript still answers. Reachability is the liveness reading;
     // "waiting" or "stalled" names a wedged session, never a dead one.
     let probe = crate::truth_probe::family1_truth_probe(session);
-    session_liveness_from_observations(
+    let answer = session_liveness_from_observations(
         registry_known,
         None,
         probe
             .as_ref()
             .and_then(|probe| probe.reachability.as_deref()),
-    )
+    );
+    if !matches!(answer, crate::claims::SessionLiveness::Unresolved) {
+        return answer;
+    }
+    codex_rollout_rung(session, index, codex_root, harness_shared_host)
+}
+
+/// The per-thread instrument for a shared-host claim whose witness read ended
+/// Unresolved: the session's own rollout mtime, the same store the row
+/// ladder's freshness rung reads. A rollout written within the freshness
+/// window proves the thread is advancing (Live). A rollout that exists but is
+/// quiet answers Absent only when the worker row is GONE: the row's removal
+/// was deliberate, the thread stopped writing, and the only remaining "alive"
+/// evidence is the shared host pid, which proves nothing. A missing rollout,
+/// an unreadable store or registry, or a row still present keep Unresolved:
+/// fail closed, never free a claim on evidence nobody read.
+fn codex_rollout_rung(
+    session: &str,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    codex_root: Option<&std::path::Path>,
+    harness_shared_host: bool,
+) -> crate::claims::SessionLiveness {
+    if !harness_shared_host {
+        return crate::claims::SessionLiveness::Unresolved;
+    }
+    let (registry_known, row_gone) = {
+        let borrowed = index.borrow();
+        let registry = borrowed
+            .as_ref()
+            .expect("session registry index initialized");
+        (registry.known, registry.rows.get(session).is_none())
+    };
+    if !registry_known || !row_gone {
+        return crate::claims::SessionLiveness::Unresolved;
+    }
+    let Some(idx) = crate::codex_store::codex_rollout_index(codex_root) else {
+        return crate::claims::SessionLiveness::Unresolved;
+    };
+    if crate::codex_store::codex_rollout_fresh(&idx, session, crate::claude_ask::now_epoch_secs()) {
+        return crate::claims::SessionLiveness::Live(crate::claims::basis::ROLLOUT_FRESH_LIVE);
+    }
+    if idx
+        .iter()
+        .any(|(name, _)| crate::codex_store::codex_rollout_matches(name, session))
+    {
+        return crate::claims::SessionLiveness::Absent;
+    }
+    crate::claims::SessionLiveness::Unresolved
 }
 
 fn session_liveness_from_observations(
@@ -1813,8 +1897,13 @@ mod tests {
             served: std::collections::HashMap::new(),
             rows: std::collections::HashMap::new(),
         }));
-        let answer =
-            session_liveness_answer_uncached("s-gone", &index, Some(std::time::Instant::now()));
+        let answer = session_liveness_answer_uncached(
+            "s-gone",
+            &index,
+            Some(std::time::Instant::now()),
+            false,
+            None,
+        );
         assert!(
             matches!(
                 answer,
@@ -1822,5 +1911,98 @@ mod tests {
             ),
             "{answer:?}"
         );
+    }
+
+    /// The rung reads the thread's own rollout: fresh proves advancing
+    /// (Live), quiet beside a removed worker row proves gone (Absent).
+    #[test]
+    fn the_rollout_rung_answers_from_the_thread_rollout() {
+        let root = std::env::temp_dir().join(format!("fno-rung-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout-2026-10-30-thr1.jsonl");
+        std::fs::write(&path, "{}").unwrap();
+        let index = std::cell::RefCell::new(Some(SessionRegistryIndex {
+            known: true,
+            by_session: Default::default(),
+            by_name: Default::default(),
+            by_fno_id: Default::default(),
+            served: Default::default(),
+            rows: Default::default(),
+        }));
+        let answer = session_liveness_answer_uncached("thr1", &index, None, true, Some(&root));
+        assert!(
+            matches!(
+                answer,
+                crate::claims::SessionLiveness::Live(crate::claims::basis::ROLLOUT_FRESH_LIVE)
+            ),
+            "{answer:?}"
+        );
+        age_the_file(&path, 4000);
+        let answer = session_liveness_answer_uncached("thr1", &index, None, true, Some(&root));
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Absent),
+            "{answer:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The rung fails closed: no rollout, a row still present, or a
+    /// non-shared harness all keep the Unresolved answer.
+    #[test]
+    fn the_rollout_rung_fails_closed() {
+        let root = std::env::temp_dir().join(format!("fno-rung-b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout-2026-10-30-thr2.jsonl");
+        std::fs::write(&path, "{}").unwrap();
+        age_the_file(&path, 4000);
+        let index = std::cell::RefCell::new(Some(SessionRegistryIndex {
+            known: true,
+            by_session: Default::default(),
+            by_name: Default::default(),
+            by_fno_id: Default::default(),
+            served: Default::default(),
+            rows: Default::default(),
+        }));
+        let answer = session_liveness_answer_uncached("thr2", &index, None, true, Some(&root));
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Absent),
+            "{answer:?}"
+        );
+        // A row still present: the rung stays silent, the row paths own it.
+        let with_row = std::cell::RefCell::new(Some(SessionRegistryIndex {
+            known: true,
+            by_session: Default::default(),
+            by_name: Default::default(),
+            by_fno_id: Default::default(),
+            served: Default::default(),
+            rows: [("thr2".to_string(), RegistryEntry::default())]
+                .into_iter()
+                .collect(),
+        }));
+        let answer = session_liveness_answer_uncached("thr2", &with_row, None, true, Some(&root));
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Unresolved),
+            "{answer:?}"
+        );
+        // A per-session harness never reaches the rung.
+        let answer = session_liveness_answer_uncached("thr2", &index, None, false, Some(&root));
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Unresolved),
+            "{answer:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Backdate a rollout's mtime past the freshness window.
+    fn age_the_file(path: &std::path::Path, secs_ago: u64) {
+        use std::time::{Duration, SystemTime};
+        let past = SystemTime::now()
+            .checked_sub(Duration::from_secs(secs_ago))
+            .unwrap();
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(past))
+            .unwrap();
     }
 }
