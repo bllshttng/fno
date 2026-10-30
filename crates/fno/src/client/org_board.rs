@@ -435,15 +435,6 @@ pub(crate) fn open(view: &mut View) {
     view.region_owner = super::region_focus::RegionOwner::Board;
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
 }
-pub(crate) fn restore(view: &mut View) {
-    match view.sideline_view {
-        SidelineView::Org if view.experimental_org_board => open(view),
-        SidelineView::Org => super::backlog_board::set_sideline_view(view, SidelineView::Agents),
-        SidelineView::Backlog => View::open(view),
-        SidelineView::Agents => {}
-        SidelineView::Messages => {} // restored by the caller's messages arm
-    }
-}
 pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     let Some(b) = view.org_board.as_mut() else {
         return;
