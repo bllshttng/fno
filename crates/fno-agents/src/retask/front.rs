@@ -26,10 +26,9 @@
 use serde_json::{json, Value};
 use std::path::Path;
 
+use super::transport::refused_receipt_from_transport;
 use super::transport::{self, LiveSeams};
-use super::{
-    execute_retask, refused_receipt, refused_receipt_from_transport, RetaskRow, RetaskTarget,
-};
+use super::{execute_retask, refused_receipt, RetaskRow, RetaskTarget};
 
 /// The bounded subprocess seam, injected by the tests the way the Python
 /// tests monkeypatched `subprocess.run`.
@@ -280,7 +279,6 @@ fn node_command(row: &Value) -> Result<String, String> {
 /// raised SystemExit with.
 pub struct ComposeExit {
     pub code: i32,
-    pub stderr: Vec<String>,
 }
 fn compose_probe(argv: &[String], cwd: &Path) -> Result<Vec<String>, ComposeExit> {
     let normalized = crate::spawn_admission::normalize(argv, None, cwd);
@@ -288,10 +286,7 @@ fn compose_probe(argv: &[String], cwd: &Path) -> Result<Vec<String>, ComposeExit
         for line in &normalized.stderr {
             eprintln!("{line}");
         }
-        return Err(ComposeExit {
-            code,
-            stderr: normalized.stderr,
-        });
+        return Err(ComposeExit { code });
     }
     let scan = crate::spawn_admission::scan_projection(&normalized.argv[1..]);
     let payload = json!({
@@ -309,10 +304,7 @@ fn compose_probe(argv: &[String], cwd: &Path) -> Result<Vec<String>, ComposeExit
         for line in &answer.stderr {
             eprintln!("{line}");
         }
-        return Err(ComposeExit {
-            code: answer.exit,
-            stderr: answer.stderr,
-        });
+        return Err(ComposeExit { code: answer.exit });
     }
     Ok(if answer.argv.is_empty() {
         normalized.argv
@@ -541,8 +533,10 @@ pub fn run_retask_cli(args: &[String]) -> i32 {
             Ok((session, pane_id)) => Some((session, pane_id)),
             Err(error) => {
                 let mut receipt = refused_receipt(&error.word);
-                if let Some(obj) = receipt.as_object_mut() {
-                    obj.insert("detail".into(), json!(error.detail));
+                if let Some(detail) = error.detail {
+                    if let Some(obj) = receipt.as_object_mut() {
+                        obj.insert("detail".into(), json!(detail));
+                    }
                 }
                 return emit_receipt(&receipt, 1);
             }
