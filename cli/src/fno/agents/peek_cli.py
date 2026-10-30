@@ -1,7 +1,6 @@
 """``fno agents peek``: read-only peer observation; registered here so the file-budget gate keeps ``agents/cli.py`` shrinking."""
 from __future__ import annotations
 
-import sys
 from typing import Optional
 
 import typer
@@ -45,36 +44,12 @@ def cmd_peek(
     Tails the transcript (claude/codex), preferring normalized status
     events; a pane worker resolves through the registry's mux ref. Never
     writes anything the peer reads. Exit 13 unknown peer, 1 no reader,
-    0 observed (or "no activity yet").
+    0 observed (or "no activity yet"). The read is native
+    (crates/fno-agents/src/peek.rs); with an installed binary the runtime
+    router execs it before this function runs, so this front keeps only its
+    signature for --help and refuses without one.
     """
-    from fno.agents.peek import peek
-    from fno.paths import state_dir
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    if all_sessions and handle is not None:
-        sys.stderr.write("--all searches every session; drop the handle argument\n")
-        raise typer.Exit(code=2)
-    if not all_sessions and handle is None:
-        sys.stderr.write("usage: fno agents peek <handle>  (or --all)\n")
-        raise typer.Exit(code=2)
-    if follow and (all_sessions or grep is not None):
-        sys.stderr.write("--follow streams one peer; --all/--grep read a tail\n")
-        raise typer.Exit(code=2)
-
-    if lines < 0:
-        sys.stderr.write(f"--lines must be >= 0 (got {lines})\n")
-        raise typer.Exit(code=2)
-
-    events_path = state_dir() / "events.jsonl"
-    rc = peek(
-        handle or "",
-        lines=lines,
-        follow=follow,
-        json_out=json_out,
-        grep=grep,
-        all_sessions=all_sessions,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-        events_path=events_path if events_path.exists() else None,
-    )
-    if rc != 0:
-        raise typer.Exit(code=rc)
+    _ = (handle, lines, follow, grep, all_sessions, json_out)
+    refuse_without_binary("peek")

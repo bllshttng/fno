@@ -4973,7 +4973,7 @@ fn cleanup_lead_manifest(entry: &state::RegistryEntry) {
         return;
     };
     let path = leads.join("leads").join(format!("{scope}.md"));
-    // Owner guard, the Rust half of Python remove_lead_manifest's
+    // Owner guard, the daemon twin of role_grant's remove_manifest
     // expected_harness_session_id: a successor teamed over this scope after
     // the row went terminal can have re-armed the manifest with ITS session
     // id, and deleting unconditionally would disarm that live lead. Skip only

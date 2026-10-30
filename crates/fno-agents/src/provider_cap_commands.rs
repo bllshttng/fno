@@ -490,17 +490,11 @@ fn real_deps() -> crate::provider_cap::LeaveDeps {
                 ));
             }
             // The handle we pass to confirm is the NAME we chose, not the
-            // receipt: `fno agents truth` resolves a registry handle, and the
+            // receipt: the truth read resolves a registry handle, and the
             // spawn receipt is prose no lookup accepts.
             Ok(name)
         }),
-        confirm: Box::new(|sid| {
-            run_fno(
-                &["agents", "truth", sid],
-                None,
-                std::time::Duration::from_secs(60),
-            )
-        }),
+        confirm: Box::new(|sid| crate::truth_cli::resolves(sid)),
         stop: Box::new(|member| {
             let who = member
                 .session_id
