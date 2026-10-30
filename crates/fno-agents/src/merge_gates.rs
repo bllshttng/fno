@@ -9,6 +9,7 @@ use crate::authorized_merge::{
 };
 use crate::loopcheck::coverage_gate::{refusal_line, GateState};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -779,8 +780,8 @@ fn approval_carries<P: Probes>(
         return false;
     }
     match (
-        paint_patch(probes, cwd, &base, approved, paint_paths),
-        paint_patch(probes, cwd, &base, head, paint_paths),
+        paint_files(probes, cwd, &base, approved, paint_paths),
+        paint_files(probes, cwd, &base, head, paint_paths),
     ) {
         (Some(was), Some(now)) => adds_no_paint_surface(&was, &now),
         _ => false,
@@ -790,11 +791,8 @@ fn approval_carries<P: Probes>(
 /// An approval sticks to the PR: every paint file the head changes was
 /// already in the approved patch, so the user saw that surface. A paint file
 /// the approval never showed is a new look.
-fn adds_no_paint_surface(
-    was: &std::collections::BTreeMap<String, String>,
-    now: &std::collections::BTreeMap<String, String>,
-) -> bool {
-    !now.is_empty() && now.keys().all(|f| was.contains_key(f))
+fn adds_no_paint_surface(was: &BTreeSet<String>, now: &BTreeSet<String>) -> bool {
+    !now.is_empty() && now.is_subset(was)
 }
 
 /// Did the user decline the paint at a commit pushed after the approval?
@@ -806,59 +804,15 @@ fn declined_after(declines: &[String], newer: &[&str]) -> bool {
         .any(|text| newer.iter().any(|sha| text.contains(sha)))
 }
 
-/// One changed patch line with its direction marker and its string-literal
-/// contents dropped, so the `-` and `+` sides of a pair that differs only
-/// inside literals compare equal: copy is not a look, and a copy edit must
-/// not void an approved carry (user ruling 2026-10-30). Masking never
-/// erases code outside quotes, so a scanner miss fails toward holding.
-fn mask_copy(line: &str) -> String {
-    if !line.starts_with('+') && !line.starts_with('-') {
-        return line.to_string();
-    }
-    let mut out = String::with_capacity(line.len());
-    out.push(' ');
-    let mut in_string = false;
-    for c in line.chars().skip(1) {
-        match (in_string, c) {
-            (true, '\\') => {}
-            (true, '"') => {
-                in_string = false;
-                out.push('"');
-            }
-            (true, _) => {}
-            (false, '"') => {
-                in_string = true;
-                out.push('"');
-            }
-            (false, _) => out.push(c),
-        }
-    }
-    out
-}
-
-/// The patch body the carry compares: status, then the hunk lines with
-/// changed lines copy-masked.
-fn patch_body(status: &str, patch: &str) -> String {
-    let body: Vec<String> = patch
-        .lines()
-        .filter(|l| !l.starts_with("@@"))
-        .map(mask_copy)
-        .collect();
-    format!("{status}\n{}", body.join("\n"))
-}
-
-/// The PR's paint patch at one commit: each paint file the three-dot
-/// compare against the base changes, with its status and its patch body.
-/// Hunk headers drop out, so a main merge that only shifts line numbers
-/// still matches, and copy-only edits mask to the same body. A file with
-/// no patch (binary or too large) keys on its blob sha instead.
-fn paint_patch<P: Probes>(
+/// The paint files the PR's three-dot compare against the base changes at
+/// one commit.
+fn paint_files<P: Probes>(
     probes: &P,
     cwd: &Path,
     base: &str,
     sha: &str,
     paint_paths: &[String],
-) -> Option<std::collections::BTreeMap<String, String>> {
+) -> Option<BTreeSet<String>> {
     let lines = gh_lines(
         probes,
         cwd,
@@ -866,26 +820,15 @@ fn paint_patch<P: Probes>(
             "api",
             &format!("repos/{{owner}}/{{repo}}/compare/{base}...{sha}"),
             "--jq",
-            ".files[] | [.filename, .status, (.patch // \"\"), .sha]",
+            ".files[].filename",
         ],
     )?;
-    let mut out = std::collections::BTreeMap::new();
-    for line in lines {
-        let row: Vec<String> = serde_json::from_str(&line).ok()?;
-        let [name, status, patch, blob] = row.as_slice() else {
-            return None;
-        };
-        if !path_matches_paint(name, paint_paths) {
-            continue;
-        }
-        let body = if patch.is_empty() {
-            format!("{status} blob {blob}")
-        } else {
-            patch_body(status, patch)
-        };
-        out.insert(name.clone(), body);
-    }
-    Some(out)
+    Some(
+        lines
+            .into_iter()
+            .filter(|name| path_matches_paint(name, paint_paths))
+            .collect(),
+    )
 }
 
 /// One `gh` read as its non-empty trimmed lines; `None` on a failed read.
@@ -1431,24 +1374,12 @@ mod tests {
     }
 
     #[test]
-    fn a_paint_change_only_inside_string_literals_reads_as_no_change() {
-        let was = "\n-    footer(\"Say f[no] to mostly done.\")";
-        let copy = "\n+    footer(\"Say F[no] to mostly done.\")";
-        assert_eq!(patch_body("modified", was), patch_body("modified", copy));
-        let code = "\n+    footer(footer_text())";
-        assert_ne!(patch_body("modified", was), patch_body("modified", code));
-        // Context lines keep their bytes; only changed lines mask.
-        let ctx = " footer(\"unchanged\")";
-        assert_eq!(patch_body("modified", ctx), format!("modified\n{ctx}"));
-    }
-
-    #[test]
     fn an_approval_holds_for_edits_to_files_it_showed_and_not_for_a_new_surface() {
         let map = |names: &[&str]| {
             names
                 .iter()
-                .map(|n| ((*n).to_string(), "body".to_string()))
-                .collect::<std::collections::BTreeMap<_, _>>()
+                .map(|n| (*n).to_string())
+                .collect::<BTreeSet<_>>()
         };
         let was = map(&["a.rs", "b.rs"]);
         assert!(adds_no_paint_surface(&was, &map(&["a.rs"])));
