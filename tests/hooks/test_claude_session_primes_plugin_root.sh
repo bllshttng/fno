@@ -25,14 +25,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT_REAL="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOOK="${REPO_ROOT_REAL}/hooks/session-start-using-fno.sh"
-HELPER="${REPO_ROOT_REAL}/hooks/helpers/prime-plugin-root.sh"
+LIB_HOOK="${REPO_ROOT_REAL}/hooks/session-start.sh"
 
 log()  { printf '[prime-ptr] %s\n' "$*"; }
 fail() { printf '[prime-ptr] FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf '[prime-ptr] PASS: %s\n' "$*"; }
 
 [[ -f "$HOOK" ]] || fail "hook not found at $HOOK"
-[[ -f "$HELPER" ]] || fail "helper not found at $HELPER"
+[[ -f "$LIB_HOOK" ]] || fail "library hook not found at $LIB_HOOK"
 
 WORK="$(mktemp -d -t prime-ptr-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
@@ -126,10 +126,10 @@ OUT_E="$(run_claude_start "$ROOT_E" '')" || fail "(e) hook exited nonzero: $OUT_
 [[ "$(cat "$(ptr)")" == "$ROOT_E" ]] || fail "(e) prime did not run before the noop; pointer reads '$(cat "$(ptr)")'"
 pass "(e) prime runs ahead of the early noop"
 
-# ── direct unit check: the helper sources cleanly under set -u ───────────
-( set -u; source "$HELPER"; PLUGIN_ROOT="$ROOT_A"; FNO_HOME="$WORK/home2"; prime_plugin_root_pointer; [[ "$(cat "$WORK/home2/install/plugin-root")" == "$ROOT_A" ]] ) \
-    || fail "direct helper source+call failed"
-pass "helper sources and primes standalone"
+# ── direct unit check: library mode sources the function cleanly ─────────
+( set -u; export FNO_SESSION_START_LIB=1; source "$REPO_ROOT_REAL/hooks/session-start.sh"; PLUGIN_ROOT="$ROOT_A"; FNO_HOME="$WORK/home2"; prime_plugin_root_pointer; [[ "$(cat "$WORK/home2/install/plugin-root")" == "$ROOT_A" ]] ) \
+    || fail "library-mode source+call failed"
+pass "library mode sources and primes standalone"
 
 log "all scenarios passed"
 exit 0

@@ -44,9 +44,10 @@ fi
 # pi, agy, cursor and copilot carriers all start through here and none of them
 # runs session-start.sh, so without this the env-less init resolves whatever
 # copy the last codex or gemini session primed (measured 2026-10-30: a stale
-# copy refused a worker's own spawn handover).
-# shellcheck source=helpers/prime-plugin-root.sh
-source "$HOOK_DIR/helpers/prime-plugin-root.sh" 2>/dev/null || true
+# copy refused a worker's own spawn handover). Library mode sources the
+# function out of session-start.sh and runs none of that hook's body.
+FNO_SESSION_START_LIB=1 source "$HOOK_DIR/session-start.sh" 2>/dev/null || true
+unset FNO_SESSION_START_LIB
 prime_plugin_root_pointer || true
 
 noop() { echo '{}'; exit 0; }
