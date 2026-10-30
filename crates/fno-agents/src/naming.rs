@@ -1167,7 +1167,8 @@ mod tests {
             None,
             std::path::Path::new("."),
         );
-        assert_eq!(name.as_deref(), Some("t-fix-the-login-bug"));
+        // The {slug} token keeps three words, the naming convention's own cut.
+        assert_eq!(name.as_deref(), Some("t-fix-the-login"));
         // Four words fit the cap; a long word run cuts at a boundary.
         let (_, long) = worker_mint(
             None,

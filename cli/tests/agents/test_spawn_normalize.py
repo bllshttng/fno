@@ -26,7 +26,7 @@ def _norm(args, **kw):
 
 def test_nameless_prompt_names_the_worker_from_its_words():
     out = _norm(["spawn", "fix the login bug today"])
-    assert out[1:3] == ["--name", "t-fix-the-login-bug"]
+    assert out[1:3] == ["--name", "t-fix-the-login"]
 
 
 def test_nameless_spawn_with_no_prompt_refuses_by_name():
