@@ -4949,30 +4949,7 @@ impl View {
             // same reading, its species/rarity/team/first-sighting from the
             // identity fold. A failed fold degrades to readings-only, never
             // blocks, never guesses a species.
-            let crowd = self.yard_crowd();
-            let sel = yv.sel.min(crowd.len().saturating_sub(1));
-            let identity = crowd
-                .get(sel)
-                .and_then(|(name, _, _)| self.yard_identity(name));
-            let frame = (yv.opened_at.elapsed().as_millis() / YARD_FRAME_MS)
-                % crate::sprites::FRAME_COUNT as u128;
-            let (lines, yard_cursor) =
-                yard_overlay_cursor(&crowd, sel, identity, frame as usize, self.yard_footer());
-            let chrome =
-                chrome::Chrome::new("the yard", Anchor::Center).footer("n/N pick · q close");
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                &lines,
-                &self.theme,
-                // The spotlight caption names the picked citizen: it is the
-                // yard's cursor row.
-                yard_cursor,
-            );
+            self.draw_yard(yv, &mut cells, rows, cols);
         } else if let Some(picker) = &self.move_pick {
             // move picker: `move tab to:` / `move pane to:` + one
             // numbered line per candidate squad.
@@ -5029,20 +5006,7 @@ impl View {
             // Connections modal: accounts + combos lists. Drawn from the
             // modal's own render (pure). This and the settings modal are the
             // pair from the operator's screenshot - they now share one chrome.
-            let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
-            let (conn_lines, conn_cursor) =
-                conn.render_cursor(&self.layout.agents, overlay_text_cols(overlay_dims.1));
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                &conn_lines,
-                &self.theme,
-                conn_cursor,
-            );
+            self.draw_connections(conn, &mut cells, rows, cols);
         } else if let Some(peek) = &self.peek {
             // peek overlay: the peeked agent row (re-read LIVE from the
             // layout, navigator-style) header + transcript. Drawn above nav
@@ -6957,7 +6921,6 @@ struct YardSel {
 /// keeps the one call site and its tests reading the same as before.
 #[cfg(test)]
 use crate::yard_overlay::overlay_lines as yard_overlay_lines;
-use crate::yard_overlay::overlay_lines_cursor as yard_overlay_cursor;
 
 /// The yard overlay body width: the 12-column sprite plus a label margin,
 /// padded to a block rectangle like the needs overlay.
