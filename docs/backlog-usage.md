@@ -440,6 +440,14 @@ fno config set backlog.render_targets '[{"path": "~/notes/fno/backlog.html", "sc
 
 `fno config set` writes the global config by default. Keep these rows there. The renderer reads the global config only and warns about a project-local list.
 
+Set `backlog.render_default` to `false` in the global config to stop the automatic page render. The daemon then re-renders only your `backlog.render_targets` rows, and `fno backlog view` rebuilds the page on demand before it opens. This suits machines where the ~28 MB page rewrite after every graph burst costs more than the page is worth.
+
+```bash
+fno config set backlog.render_default false
+```
+
+Like `render_targets`, the renderer reads `backlog.render_default` from the global config only.
+
 The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
 
 Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
