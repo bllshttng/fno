@@ -1402,9 +1402,9 @@ mod tests {
         let attested = |r: &str| row_attests_identifier_only(&json!({ "rationale": r }));
         assert!(attested(
             "Visual approval is granted by the lead. The paint-file edits rename local \
-             identifiers only (verb to command). Every rendered string stays \
-             byte-identical, e.g. tab_prune.rs still prints 'would retire' and 'pruned'. \
-             No pixel changes."
+             identifiers only (the action name became the command name). Every rendered \
+             string stays byte-identical, e.g. tab_prune.rs still prints 'would retire' \
+             and 'pruned'. No pixel changes."
         ));
         assert!(attested(
             "identifier-only paint diff: fn run renamed to fn cmd; footer still prints \
