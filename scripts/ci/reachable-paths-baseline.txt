@@ -355,3 +355,5 @@ A	{one_line} - run `fno agents mail drain-self`	py=cli/src/fno/mail/receipts.py;
 A	{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped	py=cli/src/fno/agents/watchdog.py;rs=crates/fno-agents/src/backlog/worked.rs	# CLASSIFY protocol|msg-twin|data
 A	{task_id} is already done	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	{ts} {kind} {sender} -> {recipient} rid={rid} caller={ck}	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_commands.rs	# CLASSIFY protocol|msg-twin|data
+A	thread_pane_listing_unreadable	py=cli/src/fno/agents/retask.py;rs=crates/fno-agents/src/retask/front.rs	# CLASSIFY protocol|msg-twin|data
+A	thread_view_open_timeout	py=cli/src/fno/agents/retask.py;rs=crates/fno-agents/src/retask/front.rs	# CLASSIFY protocol|msg-twin|data
