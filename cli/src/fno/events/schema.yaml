@@ -2808,6 +2808,28 @@ event_types:
         name: { type: string }
         reason: { type: string }
 
+  - name: blueprint_stall
+    description: "The blueprint-stall lane observed codex stall evidence, nudged the worker once, or mailed the lead the reseat-on-claude remedy."
+    sources: [daemon]
+    data:
+      required: [session_id, node, kind, stage]
+      properties:
+        session_id: { type: string }
+        node: { type: string }
+        kind: { type: string, enum: [verify-loop, goal-paused] }
+        basis: { type: string }
+        stage: { type: string, enum: [observed, nudged, lead-notified] }
+        lead: { type: string }
+
+  - name: blueprint_stall_error
+    description: "The blueprint-stall lane could not inspect one registry row."
+    sources: [daemon]
+    data:
+      required: [name, reason]
+      properties:
+        name: { type: string }
+        reason: { type: string }
+
   - name: quiet_worker_skip
     description: "A deliberately stopped worker on a delivered node was skipped, never revived; the revival rule's recorded skip."
     sources: [daemon]
