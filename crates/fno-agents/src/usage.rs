@@ -14,7 +14,6 @@
 ///.
 pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "spawn <name> [-H <harness>] [--as pane|thread|headless|cloud] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--] [flags spawn does not own ride the harness argv verbatim; one token per flag, values in the --flag=value form] | --argv -- <cmd...>",
-
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",

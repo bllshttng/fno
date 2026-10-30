@@ -125,6 +125,10 @@ An agent-typed `claude --bg` line must carry `--name`. Without it, claude titles
 
 A launched session is adopted through the SessionStart hook file named in its row. A pi session reports through fno's own pi extension, so no pi-code install is needed. The adopted session joins the registry with the row shape a spawned worker gets. `fno agents session list`, `fno agents session peek`, mail and the stop command reach it like any other.
 
+## Boxed headless workers
+
+The `[sandbox]` table boxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The box holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Box a worker](https://fno.sh/docs/guides/box-a-worker).
+
 ## What this means in practice
 
 - **Skills are portable markdown** and work on every CLI in scope.

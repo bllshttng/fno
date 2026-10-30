@@ -182,9 +182,10 @@ fn mark_row(home: &AgentsHome, name: &str, transcript: &Path, spec: &LaunchSpec,
         .and_then(|r| r["data"]["reported_model"].as_str())
         .map(str::to_string);
     if let Some(row) = execution_row(&records, spec, reported.as_deref()) {
-        if let Err(e) = crate::ledger_axes::upsert_execution(ledger, row) {
+        if let Err(e) = crate::ledger_axes::upsert_execution(ledger, row.clone()) {
             eprintln!("fno-agents: footnote spend not recorded: {e}");
         }
+        crate::ledger_register::emit_run_recorded(&spec.cwd, "agents", &row);
     }
     let _ = update_registry(&home.registry_json(), |reg| {
         let Some(e) = reg.find_mut(name) else {

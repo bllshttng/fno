@@ -24,8 +24,47 @@ pub(crate) fn database_path(path: &Path) -> Result<PathBuf, StateError> {
         .ok_or_else(|| failure(path, "registry has no state root"))
 }
 
+/// The crash artifact a first import leaves when it died between fencing and
+/// publishing: a dot-dir beside the registry named for the fence it would
+/// have become.
+fn pending_fence_path(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
+        ".{}.table-fence",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+    ))
+}
+
 fn open(path: &Path) -> Result<Connection, StateError> {
     let database = database_path(path)?;
+    // A migration fence dir stands only where an import put it: a completed
+    // one at `path`, a crashed one still pending. A store lost under one is a
+    // deleted or truncated graph.db, not a fresh install, so refuse BEFORE
+    // `open_write` mints a replacement - a minted 0-byte store would make the
+    // next open read the loss as a first import and answer an empty roster
+    // over it (the keeper sweep registry loss of 2026-10-30). The one
+    // legitimate 0-byte shape is a crashed first attempt whose db file
+    // open_write already made and whose fence is still pending: its resume
+    // passes. A completed fence over a 0-byte store is post-commit
+    // truncation - SQLite never leaves a committed store at zero bytes - so
+    // it refuses like an absent file. A fresh install has neither fence.
+    let store_len = std::fs::metadata(&database).map(|m| m.len()).unwrap_or(0);
+    let store_absent = !database.exists();
+    let store_lost = store_absent || store_len == 0;
+    let fence_published = path.is_dir();
+    let fence_pending = pending_fence_path(path).is_dir();
+    if (store_absent && (fence_published || fence_pending)) || (store_lost && fence_published) {
+        return Err(failure(
+            path,
+            format!(
+                "the store {} is gone while the migration fence still stands; \
+                 refusing to re-import an empty roster over the loss \
+                 (restore the store file, or remove the fence dir to reset)",
+                database.display(),
+            ),
+        ));
+    }
     let mut connection = crate::store_conn::open_write(&database).map_err(|e| failure(path, e))?;
     connection
         .execute_batch(DDL)
@@ -85,7 +124,7 @@ fn refence_stray_file(path: &Path) -> Result<(), StateError> {
         .file_name()
         .and_then(|v| v.to_str())
         .ok_or_else(|| failure(path, "registry filename is not UTF-8"))?;
-    let pending = parent.join(format!(".{filename}.table-fence"));
+    let pending = pending_fence_path(path);
     let snapshots = parent.join("registry-snapshots");
     std::fs::create_dir_all(&snapshots)?;
     match std::fs::create_dir(&pending) {
@@ -196,6 +235,62 @@ mod tests {
                     .starts_with("stray.registry.json.")
             });
         assert!(aside, "the stale file is kept, not deleted");
+    }
+
+    #[test]
+    fn a_lost_store_under_a_standing_fence_refuses_to_reimport_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let agents = temp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let path = agents.join("registry.json");
+        let legacy = json!({"schema_version": 4, "agents": []});
+        std::fs::write(&path, legacy.to_string()).unwrap();
+        super::read(&path).unwrap();
+        // The store vanishes under the standing fence (the 2026-10-30 CI
+        // loss shape): both doors must refuse, never mint a fresh empty
+        // roster over the loss.
+        let database = super::database_path(&path).unwrap();
+        std::fs::remove_file(&database).unwrap();
+        let err = super::read(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("is gone while the migration fence"),
+            "the refusal names the loss: {err}"
+        );
+        assert!(super::begin(&path).is_err(), "the write door refuses too");
+        assert!(path.is_dir(), "the fence survives the refusal");
+
+        // A store truncated to zero bytes under the completed fence is the
+        // same loss: SQLite never leaves a committed store empty.
+        std::fs::write(&database, b"").unwrap();
+        assert!(
+            super::read(&path).is_err(),
+            "a zero-byte store under a completed fence refuses"
+        );
+
+        // A 0-byte store under a PENDING fence only is the crashed-first-
+        // attempt resume: it must pass and publish the fence.
+        let agents3 = temp.path().join("agents3");
+        std::fs::create_dir_all(&agents3).unwrap();
+        let path3 = agents3.join("registry.json");
+        let pending3 = super::pending_fence_path(&path3);
+        std::fs::create_dir(&pending3).unwrap();
+        std::fs::write(
+            pending3.join("migration.json"),
+            serde_json::to_vec(&json!({"storage": "graph.db"})).unwrap(),
+        )
+        .unwrap();
+        let db3 = super::database_path(&path3).unwrap();
+        std::fs::create_dir_all(db3.parent().unwrap()).unwrap();
+        std::fs::write(&db3, b"").unwrap();
+        super::read(&path3).unwrap();
+        assert!(path3.is_dir(), "the resume publishes the fence");
+
+        // A fresh install next door still imports: no fence, no store.
+        let agents2 = temp.path().join("agents2");
+        std::fs::create_dir_all(&agents2).unwrap();
+        let path2 = agents2.join("registry.json");
+        super::read(&path2).unwrap();
+        assert!(path2.is_dir(), "a fresh install gets its fence");
     }
 }
 
@@ -520,7 +615,7 @@ fn retire_registry(path: &Path) -> Result<Value, StateError> {
         .file_name()
         .and_then(|v| v.to_str())
         .ok_or_else(|| failure(path, "registry filename is not UTF-8"))?;
-    let pending = parent.join(format!(".{filename}.table-fence"));
+    let pending = pending_fence_path(path);
     let source = parent
         .join("registry-snapshots")
         // Outside the `registry.json.` snapshot prefix, so rotation never

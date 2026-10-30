@@ -190,6 +190,22 @@ const ARCHIVE_OLD: &str = "INSERT INTO claim_history(retired_at, record) VALUES 
 pub(crate) fn open_directory(dir: &Path) -> Result<Connection, String> {
     let path = database_path_from_directory(dir)?;
     crate::state_layout_sqlite::wait_for_fence(dir.parent().unwrap());
+    // Same doctrine the registry door holds: a claims marker file stands
+    // only where an import published it, so a store absent under one is a
+    // deleted graph.db, not a fresh install. Refuse before open_write mints
+    // a replacement the next open reads as a first import. Absence only: a
+    // 0-byte store under a published marker is a real crash-resume shape
+    // here (the marker publishes before the import commits), unlike the
+    // registry fence, where a published fence over 0 bytes is truncation.
+    if !path.exists() && std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_file()) {
+        return Err(format!(
+            "the store {} is gone while the claims migration marker {} still stands; \
+             refusing to re-import the claims table over the loss \
+             (restore the store file, or remove the marker to reset)",
+            path.display(),
+            dir.display(),
+        ));
+    }
     let mut connection = crate::store_conn::open_write(&path)?;
     connection
         .execute_batch(DDL)
@@ -1447,6 +1463,32 @@ pub(crate) fn reap_in_directory<'w>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lost_store_under_a_published_marker_refuses_to_reimport_claims() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("claims");
+        std::fs::create_dir_all(&dir).unwrap();
+        open_directory(&dir).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_file()),
+            "the first import publishes the marker file"
+        );
+        // The store vanishes: the door must refuse, never mint a replacement
+        // and re-import the table over the loss.
+        let database = database_path_from_directory(&dir).unwrap();
+        std::fs::remove_file(&database).unwrap();
+        let err = open_directory(&dir).unwrap_err();
+        assert!(
+            err.contains("is gone while the claims migration marker"),
+            "the refusal names the loss: {err}"
+        );
+
+        // A crash between publishing the marker and committing the import
+        // leaves a 0-byte store; that resume must still pass.
+        std::fs::write(&database, b"").unwrap();
+        open_directory(&dir).unwrap();
+    }
 
     #[test]
     fn the_shared_budget_hold_reads_back_and_never_moves_backwards() {

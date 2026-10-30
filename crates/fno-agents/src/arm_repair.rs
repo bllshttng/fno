@@ -64,6 +64,11 @@ fn entry(
             None,
             None,
         ),
+        "overloaded" => (
+            "the machine's runaway brake held (or the sweep hit its wall clock); the arm recovers when load drops",
+            None,
+            Some(AUTO),
+        ),
         "budget_spent" => (
             "the pass ran out of its slice before it covered every unit it enumerated; the detail names how many of N it reached",
             Some(WATCH_STATUS),
@@ -376,6 +381,8 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
         ("timeout".to_string(), None)
     } else if skip == "grant_queue_timeout" {
         ("grant_queue_timeout".to_string(), None)
+    } else if skip == "overloaded" {
+        ("overloaded".to_string(), None)
     } else if detail.contains("TimeoutExpired") {
         ("timeout".to_string(), None)
     } else if detail.contains("printed no path") {
@@ -833,6 +840,21 @@ mod tests {
         assert!(mc.line.ends_with("heal=operator"), "{}", mc.line);
         assert!(!mc.line.contains("repair:"), "{}", mc.line);
         assert!(mc.repair.is_none());
+
+        // An empty sweep under the runaway brake is a transient: it heals
+        // itself when load drops, so nobody gets paged.
+        let mut mc = row("merge_close", SCHED_DAEMON);
+        mc.failing = true;
+        mc.skip_reason = Some("overloaded".into());
+        mc.detail = Some(
+            "reconcile wrote no output while the machine runaway brake holds (600s left)".into(),
+        );
+        let mut rows = vec![mc];
+        annotate(&mut rows, &facts(false));
+        let mc = &rows[0];
+        assert!(mc.line.contains("cause=overloaded"), "{}", mc.line);
+        assert!(mc.repair.is_none(), "{}", mc.line);
+        assert!(mc.line.ends_with("heal=auto"), "{}", mc.line);
 
         // A rename ghost: the subprocess answered but its stdout carries no
         // line the arm greps, so the row names the contract, not
