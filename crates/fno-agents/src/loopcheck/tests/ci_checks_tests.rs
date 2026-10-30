@@ -1,15 +1,38 @@
 use super::*;
 
-/// A cancelled check is a failure, and a skipping sibling never masks it.
+/// A cancelled check is NO verdict: a run the tier keeper cancelled (or a
+/// newer push superseded) reads Pending - the legal wait - never a live red
+/// that refuses every idle ending. A skip sibling never masks a real
+/// fail.
 #[test]
-fn ci_conclusion_cancel_is_failure() {
-    let checks = serde_json::json!([
+fn ci_conclusion_cancel_only_is_pending() {
+    let cancel_only = serde_json::json!([
+        {"name": "deploy", "state": "CANCELLED", "bucket": "cancel"}
+    ]);
+    assert_eq!(
+        compute_ci_conclusion(&cancel_only).unwrap(),
+        CiConclusion::Pending
+    );
+    let pass_and_cancel = serde_json::json!([
         {"name": "ci", "state": "SUCCESS", "bucket": "pass"},
         {"name": "deploy", "state": "CANCELLED", "bucket": "cancel"}
     ]);
     assert_eq!(
+        compute_ci_conclusion(&pass_and_cancel).unwrap(),
+        CiConclusion::Pending
+    );
+}
+
+/// A `fail` bucket is a verdict, beside any number of cancels.
+#[test]
+fn ci_conclusion_fail_beside_cancels_is_failure() {
+    let checks = serde_json::json!([
+        {"name": "deploy", "state": "CANCELLED", "bucket": "cancel"},
+        {"name": "smoke", "state": "FAILED", "bucket": "fail"}
+    ]);
+    assert_eq!(
         compute_ci_conclusion(&checks).unwrap(),
-        CiConclusion::Failure(Some("deploy".to_string()))
+        CiConclusion::Failure(Some("smoke".to_string()))
     );
 }
 
