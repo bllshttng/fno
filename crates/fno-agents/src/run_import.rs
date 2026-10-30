@@ -346,7 +346,9 @@ mod tests {
             |(name, status)| name == "spaces/-Users-bb16-code-two/ledger.json"
                 && matches!(status, Status::Refused(_))
         ));
-        assert!(out.iter().any(|(name, _)| name == "run-history"));
+        // A refused file blocks the marker: the import retries until the
+        // file reads, so no run-history row lands on this pass.
+        assert!(out.iter().all(|(name, _)| name != "run-history"));
         assert_eq!(stored(&journal, "run_imported").len(), 1);
         assert_eq!(
             stored(&journal, "run_imported")[0]["data"]["run"]["session_id"],
