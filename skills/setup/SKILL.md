@@ -57,7 +57,7 @@ The run writes `<state_dir>/sidecar/wizard-report.json` and prints `wizard-repor
 
 ## The keys the wizard does not ask
 
-For the advanced config tier and the post-merge parking lot, `fno config setup plan --advanced` and `fno config setup post-merge` remain the commands.
+For the advanced config tier and the post-merge parking lot, `fno config setup plan --advanced` and `fno config setup post-merge` remain the commands. The `[sandbox]` key is also set by hand: `provider = "devcontainer"` boxes each `--as headless` worker in a devcontainer. The guide: [Box a worker](https://fno.sh/docs/guides/box-a-worker).
 
 ## Known Limitations and Deferred Work
 
