@@ -134,6 +134,18 @@ fn proven_session_pid(rec: &ClaimRecord) -> bool {
         && pid_dies_with_session(rec.harness.as_deref())
 }
 
+/// The record's key is a node or task lock, the keys target runs hold.
+fn is_node_or_task(rec: &ClaimRecord) -> bool {
+    rec.key.starts_with("node:") || rec.key.starts_with("task:")
+}
+
+/// A shared-host harness (measured codex): the recorded pid is the
+/// multiplexer that hosts every session on the machine, so its liveness says
+/// nothing about the holder's.
+fn shared_host(rec: &ClaimRecord) -> bool {
+    !pid_dies_with_session(rec.harness.as_deref())
+}
+
 /// Classify with optional sweep-time sibling evidence. `None` is the honest
 /// value for single-key reads; a full scan passes the PID exclusivity map's
 /// result for the record being classified. `session_witness` is the
@@ -269,6 +281,15 @@ pub fn classify_with_basis_and_exclusivity(
     }
     let (live, cause) = liveness_reading(rec, probe);
     if rec.expires_at.is_none() {
+        if live && shared_host(rec) && is_node_or_task(rec) {
+            // The answering pid is the shared host: it cannot tell a live
+            // thread from a live multiplexer, so it never decides a node
+            // claim. A claim with a session id returned above (the witness
+            // arm); a claim without one has no witness to speak, so Suspect
+            // is the honest verdict - held, never trusted, never freed on
+            // host evidence.
+            return (ClaimState::Suspect, basis::PID_SHARED);
+        }
         if live {
             return (ClaimState::Live, cause);
         }
@@ -304,6 +325,13 @@ pub fn classify_with_basis_and_exclusivity(
         && matches!(witnessed, Some(SessionLiveness::Absent))
     {
         return (ClaimState::Stale, basis::SESSION_ABSENT);
+    }
+    if live && shared_host(rec) && is_node_or_task(rec) {
+        // The same shared-host rule inside the TTL window: the host pid alone
+        // proves nothing. A record with a session id returned earlier (the
+        // witness arm), so `witnessed` is None here and Suspect is the honest
+        // verdict - held, never trusted, never freed on host evidence.
+        return (ClaimState::Suspect, basis::PID_SHARED);
     }
     if live {
         (ClaimState::Live, cause)

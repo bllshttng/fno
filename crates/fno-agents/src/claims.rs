@@ -2984,6 +2984,9 @@ mod claims_gate_tests;
 #[cfg(test)]
 #[path = "claims_session_absence_tests.rs"]
 mod claims_session_absence_tests;
+#[cfg(test)]
+#[path = "claims_shared_host_tests.rs"]
+mod claims_shared_host_tests;
 
 #[cfg(test)]
 #[path = "claims_identity_tests.rs"]
