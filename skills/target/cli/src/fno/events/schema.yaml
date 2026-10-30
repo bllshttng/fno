@@ -1060,9 +1060,9 @@ event_types:
 
   - name: cost_subprocess_failed
     description: |
-      Emitted when register_session_cost's session-cost.py subprocess returns
-      non-zero. The direct-JSON fallback still writes to ledger.json; this
-      event is the forensic trail.
+      Emitted when a session's cost-pricing subprocess returns non-zero. The
+      row still lands with the price it could read; this event is the
+      forensic trail, and the run row (run_recorded) is the record.
     sources: [fno-loop, hook]
     data:
       required:
@@ -1073,16 +1073,16 @@ event_types:
       properties:
         session_id:
           type: string
-          description: "The footnote session ID passed to register_session_cost."
+          description: "The footnote session ID the cost row is attributed to."
         returncode:
           type: integer
-          description: "Exit code (or signal-negated value) returned by session-cost.py subprocess."
+          description: "Exit code (or signal-negated value) returned by the pricing subprocess."
         stderr_snippet:
           type: string
-          description: "First 4KB of session-cost.py stderr, or empty string if none."
+          description: "First 4KB of the pricing subprocess stderr, or empty string if none."
         fallback_succeeded:
           type: boolean
-          description: "True when the direct-JSON fallback ledger write succeeded after the subprocess failure."
+          description: "True when the fallback row write succeeded after the subprocess failure."
         cost_usd:
           type: number
           description: "Cost in USD attributed to this session (optional; present when known)."
@@ -8838,6 +8838,17 @@ event_types:
     sources: [hook]
     data:
       required: [session_id, pr, bot, handle]
+  - name: run_recorded
+    retention: durable
+    description: "One run's full record: who ran, node, PR, cost, tokens, and how the run ended. Finalize registers target rows; the footnote harness registers execution rows; the newest row per run key is the live record, so done work keeps only its provenance."
+    sources: [target, agents]
+    data:
+      required: [run]
+      properties:
+        run:
+          type: object
+          description: "The row as written, keyed by fno_id or session_id."
+    consumers: [operator]
   - name: session_finalized
     description: "Every finalize sub-step succeeded: the terminal event naming the termination reason, the ship receipt, and the auto-merge posture."
     sources: [hook]
