@@ -836,20 +836,12 @@ def _transcript_says_finished(session_id: str, cwd: str) -> bool:
     unreadable input answers False, and False keeps the claim.
     """
     try:
-        import time
+        from fno.rust_binary import call_binary_json
 
-        from fno.agents.watchdog import (
-            QUIET_AFTER_S,
-            finished_with_the_tree,
-            harness_for_session,
-            tail_facts,
+        err, answer = call_binary_json(
+            "census", ["watchdog-tail", "--session", session_id, "--cwd", cwd], timeout=10
         )
-
-        return finished_with_the_tree(
-            tail_facts(session_id, cwd, agent=harness_for_session(session_id)),
-            time.time(),
-            QUIET_AFTER_S,
-        )
+        return err is None and isinstance(answer, dict) and answer.get("finished") is True
     except Exception:  # noqa: BLE001 - an unreadable transcript proves nothing
         return False
 

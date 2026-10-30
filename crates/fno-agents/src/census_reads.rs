@@ -11,6 +11,7 @@ pub fn dispatch(args: &[String]) -> Option<i32> {
         "watchdog-tick" => crate::watchdog::tick::run(rest),
         "watchdog-tail" => crate::watchdog::tick::run_tail(rest),
         "watchdog-arming" => crate::watchdog::tick::run_arming(),
+        "watchdog-fleet" => crate::watchdog::tick::run_fleet(),
         "sweep" => crate::silence_sweep::run(rest),
         "stale-escalate" => crate::stale_lane::run_stale(rest),
         "friction-escalate" => crate::stale_lane::run_friction(rest),
@@ -18,6 +19,7 @@ pub fn dispatch(args: &[String]) -> Option<i32> {
         "distress-verdicts" => run_distress_verdicts(rest),
         "gate-status" => run_gate_status(),
         "codex-session-for-pid" => run_codex_session_for_pid(rest),
+        "discovered-json" => crate::discovered_sessions::run_discovered_json(rest),
         "spawn-guard" => run_spawn_guard(rest),
         _ => return None,
     })

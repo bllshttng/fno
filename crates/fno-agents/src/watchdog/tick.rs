@@ -370,6 +370,30 @@ fn run_leg(clock: &Clock) -> Value {
     })
 }
 
+/// `census watchdog-fleet`: the roster the claim readers index by node. The
+/// warnings travel with the rows, since a blocking one refuses the whole read.
+pub fn run_fleet() -> i32 {
+    let (rows, warnings) = super::sweep::fleet_rows();
+    let rows: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "row_id": row.row_id,
+                "name": row.name,
+                "state": row.state,
+                "node": row.node,
+                "cwd": row.cwd,
+                "pid": row.pid,
+                "pid_start_time": row.pid_start_time,
+                "mux": row.mux,
+                "stopped_at": row.stopped_at,
+            })
+        })
+        .collect();
+    println!("{}", json!({"rows": rows, "warnings": warnings}));
+    0
+}
+
 /// `census watchdog-tick --budget-s N`: one JSON answer on stdout, always exit 0
 /// once the budget parses, so the tick's own wrap stays the only fatal path.
 pub fn run(args: &[String]) -> i32 {
