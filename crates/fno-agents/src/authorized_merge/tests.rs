@@ -1167,7 +1167,7 @@ fn the_journal_match_reads_the_pr_head_not_the_checkout() {
     // another head must not shadow the matching one, and another PR's
     // covered event at the same head must not pin this PR's merge.
     const MINE: &str = "0b7fd460ce82dd3888de71a651dc36dfb1f488f8";
-    const OTHER_HEAD: &str = "aa11bb22aa11bb22aa11bb22aa11bb22aa11bb22";
+    const UNREVIEWED: &str = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     let journal = concat!(
         r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"covered","reviewed_count":2,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
         "\n",
@@ -1187,7 +1187,7 @@ fn the_journal_match_reads_the_pr_head_not_the_checkout() {
     // No covered event at this head: uncovered, and an unreadable head
     // holds instead of pinning an arbitrary event. Another PR's covered
     // row at the same head never pins this PR.
-    assert_eq!(covered_head_from_text(journal, 4165, OTHER_HEAD), None);
+    assert_eq!(covered_head_from_text(journal, 4165, UNREVIEWED), None);
     assert_eq!(covered_head_from_text(journal, 4166, MINE), None);
     assert_eq!(covered_head_from_text(journal, 4165, ""), None);
 }
