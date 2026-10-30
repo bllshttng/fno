@@ -49,6 +49,7 @@ If `fno backlog get <scope>` finds no node, this machine's backlog does not hold
 ## On titling
 
 - `fno agents org init --scope <scope> --harness-session-id <full session id>`. Read the full id with `printenv CLAUDE_CODE_SESSION_ID` on claude, or `printenv CODEX_THREAD_ID` on codex. The stop hook matches the manifest id to the transcript name. So the 8-character handle from `fno agents registry whoami --json` does not work. Print level, scope, mail handle. The output can carry a settled-findings section. Those titles are what this epic already established. Read them before the first check-in. Never re-derive them.
+- Session id changed under a live role? Run `fno agents org init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
 - Declare the shape now: `fno agents org chart shape pass` for a one-wave pass, and `fno agents org chart shape team` THE MOMENT the lead spawns its first worker. This is the field the Stop nudge reads; an undeclared org is nagged at every stop.
