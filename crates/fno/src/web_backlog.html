@@ -290,6 +290,28 @@ function hiddenLine(hidden) {
   return "off-board " + hidden.total + " (deferred " + (hidden.deferred || 0) +
     ", superseded " + (hidden.superseded || 0) + ", roadmap " + (hidden.roadmap || 0) + ")";
 }
+// The off-board facts: the served model names them directly (`hidden` +
+// `offboard`); the snapshot payload predates those fields and hands the
+// page flat cards (`snap.cards`; the rebuilt board drops them), so the
+// same disclosure computes from what the page holds.
+function offBoardFacts(board) {
+  const b = board || {};
+  if (b.hidden) return { hidden: b.hidden, cards: b.offboard || [] };
+  const cards = b.cards ||
+    (typeof snap !== "undefined" && snap && snap.cards) || [];
+  const off = cards.filter((c) => c.column === "Off-board");
+  const count = (s) =>
+    off.filter((c) => (s === "roadmap" ? c.kind === "roadmap" : c.status === s)).length;
+  return {
+    hidden: {
+      deferred: count("deferred"),
+      superseded: count("superseded"),
+      roadmap: count("roadmap"),
+      total: off.length,
+    },
+    cards: off.slice(0, 200),
+  };
+}
 // What a session row can do from this page: the attach or resume command to
 // copy, or null when the row renders dim with the reason the model sent.
 // The page copies; it never launches.
@@ -1167,7 +1189,8 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   function drawOffboard() {
     const el = document.getElementById("offboard");
     const btn = document.getElementById("f-offboard");
-    const line = hiddenLine(board && board.hidden);
+    const facts = offBoardFacts(board);
+    const line = hiddenLine(facts.hidden);
     if (btn) {
       btn.hidden = !line;
       btn.textContent = line || "off-board";
@@ -1177,7 +1200,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     el.hidden = !state.showOffboard || !line;
     el.textContent = "";
     if (el.hidden) return;
-    const cards = (board && board.offboard) || [];
+    const cards = facts.cards;
     const head = document.createElement("div");
     head.className = "dim obhead";
     head.textContent = line + " - showing the first " + cards.length + " matching the current filters; narrow the search for the rest";
