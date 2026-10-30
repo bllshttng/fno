@@ -23,9 +23,6 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     if args.first().map(String::as_str) != Some("spawn") {
         return Ok(args);
     }
-    if let Some(admitted) = strip_admitted_marker(&args) {
-        return Ok(admitted);
-    }
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     refuse_codex_without_git_grant(&args, &here)?;
 
@@ -75,23 +72,6 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
         std::env::remove_var(name);
     }
     Ok(argv)
-}
-
-/// The Python spawn bridges (`rust_spawn.py`) build an argv their caller
-/// already composed and stamp it `--defaults-applied`. Such an argv skips
-/// admission, minus the marker. Only the fno-arg head is read: past the
-/// `--argv` payload or the `--` fence the token is the worker's own text.
-fn strip_admitted_marker(args: &[String]) -> Option<Vec<String>> {
-    let head = args
-        .iter()
-        .position(|a| a == "--argv" || a == "--")
-        .unwrap_or(args.len());
-    let at = args[..head]
-        .iter()
-        .position(|a| a == "--defaults-applied" || a.starts_with("--defaults-applied="))?;
-    let mut out = args.to_vec();
-    out.remove(at);
-    Some(out)
 }
 
 /// The spawn's effective working directory: `--cwd`/`-c`, else the caller's.
@@ -340,22 +320,6 @@ mod tests {
             "--",
             "/fno:target x-1"
         ])));
-
-        // A bridge's marked argv skips admission, minus the marker; a fenced
-        // marker is the worker's text and admits as usual.
-        assert_eq!(
-            strip_admitted_marker(&argv(&[
-                "spawn",
-                "--defaults-applied=unenforced",
-                "-H",
-                "codex"
-            ])),
-            Some(argv(&["spawn", "-H", "codex"]))
-        );
-        assert_eq!(
-            strip_admitted_marker(&argv(&["spawn", "w", "--", "--defaults-applied"])),
-            None
-        );
     }
 
     #[test]
