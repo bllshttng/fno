@@ -1208,16 +1208,12 @@ pub fn resolve_branch(cwd: &Path) -> Option<String> {
     (head.len() == 40 && head.chars().all(|c| c.is_ascii_hexdigit())).then(|| head[..8].to_string())
 }
 
-/// The registry path, resolved exactly as fno-agents' `AgentsHome::from_env`
-/// does (`FNO_AGENTS_HOME` > `$HOME/.fno/agents` > `./.fno/agents`).
+/// The registry path, through the one shared ladder the Python hub and
+/// fno-agents both read (`config_doctor::agents_registry_path`): a declared
+/// `FNO_AGENTS_HOME` wins, else the configured state root's `agents/`, else
+/// `$HOME/.fno/agents`.
 pub fn registry_path() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
-        return PathBuf::from(v).join("registry.json");
-    }
-    let base = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join(".fno").join("agents").join("registry.json")
+    crate::config_doctor::agents_registry_path(&crate::config_doctor::Settings::load())
 }
 
 /// The registry document text at [`registry_path`], read through the table
@@ -1319,8 +1315,9 @@ pub type TruthBadges = HashMap<String, String>;
 /// Claim-live + a fire within this window reads Working; older/absent stays no-badge.
 const TRUTH_RECENCY_WINDOW_S: u64 = 1800; // 30 min
 
-/// The `.fno` state base for events.jsonl, off the same anchor as
-/// `registry_path` (`FNO_AGENTS_HOME`'s parent > `$HOME/.fno`).
+/// The `.fno` state base for events.jsonl, off the daemon's runtime home
+/// (`FNO_AGENTS_HOME`'s parent > `$HOME/.fno`). The runtime home stays
+/// state-dir independent, unlike [`registry_path`].
 fn fno_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
         return Path::new(&v)
@@ -1746,6 +1743,10 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         .as_array()?;
     let mut out = Vec::with_capacity(rows.len());
     let mut unattributable = 0usize;
+    // One store read per derive, not per row: registry_path resolves through
+    // the config hub, so a per-row call would walk the config chain again for
+    // every agent on the board.
+    let team_titles = crate::org_titles::titles(&registry_path().with_file_name("team_names.json"));
     for row in rows {
         let Some(name) = row.get("name").and_then(|v| v.as_str()) else {
             // tolerate an alien row; the registry owners validate. It still
@@ -1975,11 +1976,8 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        // The people title rides the row: one tolerant store read per
-        // derive, keyed on the row's canonical scope. No record, no title -
-        // the sideline falls back to the scope.
-        let team_titles =
-            crate::org_titles::titles(&registry_path().with_file_name("team_names.json"));
+        // The people title rides the row: keyed on the row's canonical
+        // scope. No record, no title - the sideline falls back to the scope.
         let role_title = role_scope
             .as_ref()
             .and_then(|scope| team_titles.get(scope.trim()).cloned());
@@ -2184,9 +2182,10 @@ pub fn derive_rows(raw: &str, now_secs: u64) -> Option<Vec<RegistryAgent>> {
     derive_rows_counted(raw, now_secs).map(|(rows, _)| rows)
 }
 
-/// The fno-agents daemon's supervisor socket, resolved the
-/// same way [`registry_path`] resolves the registry home (`FNO_AGENTS_HOME` >
-/// `$HOME/.fno/agents`): the two live side by side under one agents home.
+/// The fno-agents daemon's supervisor socket, under the daemon's runtime
+/// home (`FNO_AGENTS_HOME` > `$HOME/.fno/agents`): the socket lives beside
+/// the daemon, whose home stays state-dir independent, unlike
+/// [`registry_path`].
 pub fn supervisor_sock_path() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
         return PathBuf::from(v).join("supervisor.sock");

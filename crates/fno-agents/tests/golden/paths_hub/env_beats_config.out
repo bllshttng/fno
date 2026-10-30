@@ -8,3 +8,4 @@ worktrees_base=<FIXTURE>/envstate/worktrees
 memory_dir=<FIXTURE>/envstate/memory
 hook_logs_dir=<FIXTURE>/envstate/hook-logs
 space_dir=<FIXTURE>/envstate/spaces/<FIXTURE_SLUG>-proj
+agents_registry_path=<FIXTURE>/envstate/agents/registry.json

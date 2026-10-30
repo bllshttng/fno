@@ -39,6 +39,7 @@ ACCESSORS = (
     "memory_dir",
     "hook_logs_dir",
     "space_dir",
+    "agents_registry_path",
 )
 
 SNIPPET = (
