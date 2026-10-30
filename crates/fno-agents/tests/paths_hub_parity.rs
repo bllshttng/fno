@@ -15,6 +15,10 @@
 //! Rust owners still disagree; each one must keep disagreeing, so a fix fails
 //! the test until its entry goes. The stage flips to characterization when
 //! the hub is deleted.
+//!
+//! `env_agents_home` marks `space_dir` divergent: the Rust spaces chain keeps
+//! an agents-home leg the Python hub never had, so under that env the two
+//! roots legitimately differ. The entry goes when the leg goes.
 
 use common::python_executable;
 use std::path::{Path, PathBuf};
