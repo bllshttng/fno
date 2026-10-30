@@ -29,7 +29,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 
 ### footnote
 
-`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path.
+`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path. The release tarball ships no footnote binary; an update installs only a compat stub at that name. The spawn row stays deliberately `capable`, so the thread lane keeps the honest seat refusal instead of launching the stub.
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -38,6 +38,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `~/.fno/cache/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
 | `session <id> has a live writer` | Another process holds the session's `<fno_id>.lock` | `fno agents session stop <name>`, then ask again |
 | `the footnote host exited before the session opened` | The binary refused the launch spec, often a version skew | Read the host log the refusal names, under `~/.fno/agents/fnh/` |
+| `footnote is retired; use fno` | The release tarball no longer ships the harness; the name on PATH is the updater-compat stub | Build fnh from its checkout and point `FNO_FOOTNOTE_BIN` at it, or spawn another harness |
 
 Tools run with your own permissions. There is no sandbox.
 
