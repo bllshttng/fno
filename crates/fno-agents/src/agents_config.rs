@@ -1994,8 +1994,12 @@ mod tests {
         )
         .unwrap();
 
-        // Pin alone: the pin answers for the global tier.
+        // Pin alone: the pin answers for the global tier. The suite's
+        // clear_config_env pins FNO_GLOBAL_SETTINGS_PATH at an isolated dir
+        // rather than unsetting it, so the true sandbox shape (the variable
+        // absent) is set explicitly here.
         std::env::set_var("FNO_CONFIG", &pin);
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         assert_eq!(
             global_config_path().as_deref(),
             Some(pin.as_path()),
@@ -2015,7 +2019,9 @@ mod tests {
             "an explicit global path outranks the pin for global-scope reads"
         );
 
-        // The sandbox turning share on itself is honored.
+        // The sandbox turning share on itself is honored. The variable stays
+        // absent here so the pin remains the global tier; the trailing
+        // clear_config_env re-establishes the suite's isolated-global shape.
         std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         std::fs::write(
             &pin,
