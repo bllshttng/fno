@@ -83,7 +83,6 @@ inbox user list
 inbox user status
 lint
 mail
-mail send !--origin !--provider
 mux
 paths
 plan

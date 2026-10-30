@@ -318,7 +318,7 @@ mail list	T1	mail list	15
 mail pane-prepare	T1	mail pane-prepare	0
 mail reply	T1	mail reply	18
 mail seed-provenance	T1	mail seed-provenance	0
-mail send	KEEP	mail send	184	deliberate readability slack for a high-traffic distinct operation
+mail send	T1	mail send	184
 mail sent	T1	mail sent	2
 mail status	T1	mail status	9
 mail team	T1	mail team	0
