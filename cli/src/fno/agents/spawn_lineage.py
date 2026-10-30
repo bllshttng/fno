@@ -115,21 +115,6 @@ def _report_unlinked_parent(session_id: Optional[str]) -> Optional[str]:
     return reason
 
 
-def _parent_edge(
-    parent_edge: Optional[tuple],
-    carried: dict,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """The triple a created row records: the revival carry wins when it
-    names a source spawner, so the original spawner keeps the row in its
-    orphan check; else the caller's explicit edge, then the ambient."""
-    inherited = (
-        carried.get("spawned_by_session"),
-        carried.get("spawned_by_harness"),
-        carried.get("spawned_by_cwd"),
-    )
-    return inherited if inherited[0] else (parent_edge or _capture_parent_edge())
-
-
 def build_spawn_provenance(
     *,
     explicit_origin: Optional[dict] = None,

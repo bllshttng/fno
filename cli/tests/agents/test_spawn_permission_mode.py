@@ -129,11 +129,7 @@ def _no_harness_markers(monkeypatch):
 
 def _stub_pane_path(monkeypatch) -> dict:
     received: dict = {}
-    from fno.agents import mux_spawn, spawn_gate
-
-    class _Gate:
-        def release(self) -> None:
-            pass
+    from fno.agents import mux_spawn
 
     def fake_dispatch_spawn_pane(**kwargs):
         received.update(kwargs)
@@ -146,8 +142,6 @@ def _stub_pane_path(monkeypatch) -> dict:
             session_uuid=None,
         )
 
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *a, **k: None)
     monkeypatch.setattr(
         mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch_spawn_pane
     )

@@ -959,16 +959,6 @@ def test_dispatch_send_envelope_write_oserror_exit12(tmp_path: Path, monkeypatch
     _register_claude_peer()
 
     from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses._claude_session_registry import SessionLocator
-
-    monkeypatch.setattr(
-        claude_mod, "locate_session",
-        lambda short_id, home=None: SessionLocator(
-            pid=12345, short_id=short_id,
-            messaging_socket_path=str(tmp_path / "agent.sock"),
-            jobs_dir=tmp_path / "jobs",
-        ),
-    )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
 
     from fno.inbox import store as store_mod
@@ -1086,16 +1076,6 @@ def test_dispatch_send_events_carry_context_envelope(tmp_path: Path, monkeypatch
     _register_claude_peer()
 
     from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses._claude_session_registry import SessionLocator
-
-    monkeypatch.setattr(
-        claude_mod, "locate_session",
-        lambda short_id, home=None: SessionLocator(
-            pid=12345, short_id=short_id,
-            messaging_socket_path=str(tmp_path / "agent.sock"),
-            jobs_dir=tmp_path / "jobs",
-        ),
-    )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
 
     captured: list = []

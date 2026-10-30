@@ -30,51 +30,6 @@ def _isolated_world(tmp_path, monkeypatch):
     yield
 
 
-@pytest.fixture(autouse=True)
-def _no_live_cpu_axis(monkeypatch):
-    """The CPU axis is stubbed admitting unless a test asks otherwise.
-
-    Since x-7783 every spawn takes the footprint reading, and that read is a
-    ps snapshot against the real machine. Left unstubbed these tests refuse
-    or hold according to what the developer's box happens to be computing.
-    The prefetch is pinned too: run_gate takes the read before the decider,
-    and an unpinned read would price a real census run per pass. The census
-    owns the admission math (Rust tests pin it); the gate's mapping is what
-    these tests stub past.
-    """
-    idle_payload = {
-        "admission": {
-            "verdict": "admit",
-            "reason": "test admit",
-            "share_low": 0.1,
-            "share_high": 0.1,
-            "bound": "exact",
-            "fleet_cores": 1.2,
-            "machine_cores": 6.0,
-            "capacity_cores": 12.0,
-            "ceiling": 0.5,
-            "gap": None,
-        }
-    }
-    monkeypatch.setattr(
-        spawn_gate, "_prefetch_fleet_reading", lambda: (idle_payload, None)
-    )
-    admit = spawn_gate.Admission(
-        verdict="admit",
-        axis="fleet_cpu",
-        reason="test admit",
-        share_low=0.1,
-        share_high=0.1,
-        bound="exact",
-        fleet_cores=1.2,
-        machine_cores=6.0,
-        capacity_cores=12.0,
-        ceiling=0.5,
-        gap=None,
-    )
-    monkeypatch.setattr(spawn_gate, "_cpu_axis", lambda *a, **k: admit)
-
-
 def _write_roster(tmp_path, workers: dict) -> None:
     roster = {"proto": 1, "supervisorPid": 1, "workers": workers}
     (tmp_path / "daemon" / "roster.json").write_text(json.dumps(roster))
@@ -146,100 +101,6 @@ def _stub_command(monkeypatch, answer=None, error=None):
     return fake
 
 
-class TestTransport:
-    """The transport contract: run_gate asks the ONE gate command and carries
-    the answer out; the axes themselves are pinned in Rust."""
-
-    def test_admitted_answer_becomes_a_guard_holding_the_commands_keys(self, monkeypatch):
-        stub = _stub_command(
-            monkeypatch,
-            {
-                "status": "admitted",
-                "gate_key": "gate:spawn",
-                "gate_holder": "spawn-gate:4242:w1",
-                "worker_key": None,
-                "worker_holder": None,
-            },
-        )
-        guard = spawn_gate.run_gate("w1", "bg")
-        assert guard._gate_holder == "spawn-gate:4242:w1"
-        assert guard._worker_key is None
-        assert guard._route_provider is None
-        assert guard._spawn_name == "w1"
-        assert guard._substrate == "bg"
-        # The caller's pid travels in the payload: the command's claims are
-        # owned by the CALLER across the process boundary (locked decision 3).
-        assert stub.payload["holder_pid"] == os.getpid()
-        assert stub.payload["mode"] == "gate"
-
-    def test_refused_answer_raises_gate_refused_with_the_receipt(self, monkeypatch, capsys):
-        events = []
-        monkeypatch.setattr(
-            spawn_gate, "_emit_gate_event", lambda kind, **data: events.append((kind, data))
-        )
-        receipt = {
-            "status": "refused",
-            "reason": "provider_cap",
-            "provider": "zai",
-            "cap": 5,
-            "count": 5,
-            "current_count": 5,
-        }
-        _stub_command(
-            monkeypatch,
-            {
-                "status": "refused",
-                "exit_code": spawn_gate.EXIT_PROVIDER_CAP,
-                "receipt": receipt,
-                "event": {"reason": "provider_cap", "provider": "zai"},
-            },
-        )
-        with pytest.raises(spawn_gate.GateRefused) as exc:
-            spawn_gate.run_gate("w", "pane", route_provider="zai")
-        assert exc.value.code == spawn_gate.EXIT_PROVIDER_CAP
-        assert exc.value.receipt == receipt
-        # Exactly ONE refusal event lands, carrying the receipt fields.
-        kinds = [k for k, _ in events]
-        assert kinds == ["spawn_gate_refused"]
-        data = events[0][1]
-        assert data["exit_code"] == spawn_gate.EXIT_PROVIDER_CAP
-        assert data["reason"] == "provider_cap"
-        assert data["provider"] == "zai"
-        assert data["gate"] == "python"
-        assert data["name"] == "w"
-        assert data["substrate"] == "pane"
-
-    def test_missing_binary_refuses_exit_87_gate_unavailable(self, monkeypatch, capsys):
-        from fno.rust_binary import CommandUnavailable
-
-        events = []
-        monkeypatch.setattr(
-            spawn_gate, "_emit_gate_event", lambda kind, **data: events.append((kind, data))
-        )
-        _stub_command(monkeypatch, error=CommandUnavailable("the fno-agents binary was not found"))
-        with pytest.raises(spawn_gate.GateRefused) as exc:
-            spawn_gate.run_gate("w", "pane")
-        assert exc.value.code == spawn_gate.EXIT_GATE_UNAVAILABLE
-        assert exc.value.receipt["reason"] == "gate_unavailable"
-        assert "not found" in exc.value.receipt["error"]
-        assert [k for k, _ in events] == ["spawn_gate_refused"]
-        # The transport prints its OWN verdict line, so a spawn-failure reader
-        # keys on it the same way it keys on the Rust gate's verdict (x-d769).
-        err_lines = [ln for ln in capsys.readouterr().err.splitlines() if ln.strip()]
-        assert err_lines[-1].startswith(
-            f"spawn-gate: refused on gate (gate_unavailable, exit {spawn_gate.EXIT_GATE_UNAVAILABLE})"
-        )
-
-    def test_probe_never_raises_on_an_unanswered_gate(self, monkeypatch):
-        from fno.rust_binary import CommandUnavailable
-
-        _stub_command(monkeypatch, error=CommandUnavailable("exited 1"))
-        answer = spawn_gate.probe_capacity()
-        assert answer["verdict"] == "unknown"
-        assert answer["reason"] == "gate_unavailable"
-        assert "exited 1" in answer["error"]
-
-
 # --- parent-edge visibility (x-7b36 change 12) --------------------------------
 # A null spawned_by_session is sometimes correct (an ambiguous identity resolve
 # records no lineage rather than a wrong one); the defect was its SILENCE. The
@@ -251,7 +112,7 @@ class TestParentEdgeNotice:
     def test_parent_edge_notice_names_reason_and_orphan_check(
         self, monkeypatch, capsys
     ):
-        from fno.agents.dispatch import _report_unlinked_parent
+        from fno.agents.spawn_lineage import _report_unlinked_parent
         from fno.harness_identity import OwnedHarnessIdentity
 
         monkeypatch.setattr(
@@ -299,23 +160,3 @@ def _point_binary(monkeypatch, fake: Path) -> None:
     monkeypatch.setattr(rust_binary, "resolve_binary", lambda: fake)
 
 
-class TestGateExitReporting:
-
-    def test_run_gate_refusal_names_the_real_exit_not_the_strip_error(
-        self, tmp_path, monkeypatch
-    ):
-        fake = _fake_gate_binary(tmp_path, "#!/bin/sh\nexit 87\n")
-        _point_binary(monkeypatch, fake)
-        events = []
-        monkeypatch.setattr(
-            spawn_gate,
-            "_emit_gate_event",
-            lambda kind, **data: events.append((kind, data)),
-        )
-        with pytest.raises(spawn_gate.GateRefused):
-            spawn_gate.run_gate("w", "pane")
-        assert [k for k, _ in events] == ["spawn_gate_refused"]
-        data = events[0][1]
-        assert data["reason"] == "gate_unavailable"
-        assert "exited 87" in data["error"]
-        assert "NoneType" not in data["error"]

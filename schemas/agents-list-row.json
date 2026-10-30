@@ -182,7 +182,7 @@
     "predecessor_session_ids": {
       "mode": "conditional",
       "surface": "persisted_and_projected",
-      "writer": "record_session_observation succession classification and fork_lineage.predecessor_ids",
+      "writer": "record_session_observation succession classification",
       "test": "cli/tests/agents/test_session_lineage.py"
     },
     "live_status": {

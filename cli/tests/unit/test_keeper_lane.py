@@ -222,6 +222,36 @@ def _build_worker_bin() -> Path | None:
     return worker_bin
 
 
+def _keeper_identify(sock: Path, timeout_sec: float) -> None:
+    """Send the keeper an Identify frame; return once its IdentifyReply
+    arrives, else raise TimeoutError. Frames (pane_keeper.rs): u8 tag,
+    u32 LE length, payload; Identify is tag 4, its reply tag 5."""
+    import socket
+    import time
+
+    deadline = time.monotonic() + timeout_sec
+    last_err: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2.0)
+                s.connect(str(sock))
+                s.sendall(b"\x04" + (0).to_bytes(4, "little"))
+                buf = b""
+                while time.monotonic() < deadline and (chunk := s.recv(4096)):
+                    buf += chunk
+                    while len(buf) >= 5 and len(buf) >= 5 + int.from_bytes(buf[1:5], "little"):
+                        tag, length = buf[0], int.from_bytes(buf[1:5], "little")
+                        buf = buf[5 + length:]
+                        if tag == 5:
+                            return
+                last_err = TimeoutError("keeper closed the socket before replying")
+        except OSError as exc:
+            last_err = exc
+        time.sleep(0.05)
+    raise TimeoutError(f"no keeper answered Identify on {sock}: {last_err}")
+
+
 def _spawn_planted_keeper(worker_bin: Path, tmp_path: Path) -> tuple[int, Path, subprocess.Popen, Path]:
     """Plant one real keeper over a `bash while-read` child, exactly the
     measured orphan shape, and wait for its Identify reply (a positive
@@ -243,8 +273,6 @@ def _spawn_planted_keeper(worker_bin: Path, tmp_path: Path) -> tuple[int, Path, 
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
     )
-    from fno.agents.dispatch import _keeper_identify
-
     try:
         _keeper_identify(sock, timeout_sec=15.0)  # raises unless a keeper answered
     except Exception:

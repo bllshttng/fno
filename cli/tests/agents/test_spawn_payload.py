@@ -29,34 +29,6 @@ def _setup_tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_python_background_spawn_appends_brevity_marker_after_exact_payload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-
-    from fno.agents import dispatch as dispatch_mod
-    from fno.agents.dispatch import DispatchAskResult, dispatch_spawn
-
-    captured: dict[str, Any] = {}
-
-    def fake_create(**kwargs: Any) -> DispatchAskResult:
-        captured.update(kwargs)
-        return DispatchAskResult(kind="create", short_id="abc12345")
-
-    monkeypatch.setattr(dispatch_mod, "_claude_create_path", fake_create)
-
-    dispatch_spawn(
-        name="brief-worker",
-        message=ORIGINAL_PAYLOAD,
-        harness="claude",
-        cwd=tmp_path,
-    )
-
-    delivered = captured["message"]
-    assert delivered.startswith(ORIGINAL_PAYLOAD + "\n\n")
-    assert delivered.count(BREVITY_MARKER) == 1
-
-
 def test_python_opencode_pane_submits_brevity_marker_after_exact_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
