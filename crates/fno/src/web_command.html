@@ -25,7 +25,7 @@
 .panel{border:1px solid var(--surface0);background:var(--mantle);padding:10px 12px;display:flex;flex-direction:column;gap:6px}.panel h2,.panel h3{margin:4px 0 2px;font-size:11px;color:var(--overlay1);font-weight:700}.panel h2::before,.panel h3::before{content:"## "}
 .lk{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--surface0);background:var(--base)}.lt{display:flex;flex-direction:column;min-width:0;gap:2px;flex:1}.lt b{font-weight:600;overflow-wrap:anywhere}.lt code{font:inherit;font-size:11px;color:var(--yellow);overflow-wrap:anywhere}
 .empty{color:var(--overlay1);margin:0}.qrow{cursor:pointer}
-.ans{display:flex;flex-direction:column;gap:8px}.ans .opts{display:flex;flex-direction:column;gap:6px}.ans .lkb{text-align:left;min-height:30px;padding:4px 10px}.ans .lkb[disabled]{opacity:.5;cursor:default}.ans textarea{width:100%;box-sizing:border-box;min-height:56px;resize:vertical;background:var(--base);border:1px solid var(--surface1);color:var(--text);padding:6px 8px;font:12px var(--mono)}.ans .note{margin:0;font-size:11.5px;color:var(--subtext0);overflow-wrap:anywhere}
+.ans{display:flex;flex-direction:column;gap:8px}.ans .opts{display:flex;flex-direction:column;gap:6px}.ans .lkb{text-align:left;min-height:30px;padding:4px 10px}.ans .lkb[disabled]{opacity:.5;cursor:default}.ans textarea{width:100%;box-sizing:border-box;min-height:56px;resize:vertical;background:var(--base);border:1px solid var(--surface1);color:var(--text);padding:6px 8px;font:12px var(--mono)}.ans .note{margin:0;font-size:11.5px;color:var(--subtext0);overflow-wrap:anywhere}.ans .note.err{color:var(--red);border-left:2px solid var(--red);padding-left:8px}.ans .note.ok{color:var(--text)}
 .filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.filters label{font-size:12px;color:var(--overlay1);margin-right:2px}
 .chip{border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);font-size:12px;padding:3px 10px;cursor:pointer;min-height:26px}.chip:hover{border-color:var(--text)}.chip[aria-pressed="true"]{color:var(--text);border-color:var(--text)}.chip[aria-checked="true"]{background:var(--text);color:var(--base);border-color:var(--text)}
 .view{display:flex;flex-direction:column;gap:12px}.view[hidden]{display:none}
@@ -139,7 +139,7 @@ function waiting(model) {
   box.replaceChildren();
   const w = model.waiting;
   if (w.questions_error) box.append(el("p", "empty", "questions not read: " + w.questions_error));
-  const qs = w.questions || [];
+  const qs = (w.questions || []).filter((x) => !answered.has(x.id));
   const hosts = [...new Set(qs.map((q) => q.host))].sort((a, b) => (a != null) - (b != null) || String(a).localeCompare(String(b)));
   for (const host of hosts) {
     box.append(el("h3", null, host == null ? "this machine" : host));
@@ -180,6 +180,8 @@ function answerSection(q) {
   const send = async (body) => {
     controls.forEach((c) => { c.disabled = true; });
     note.textContent = "Sending";
+    note.className = "note";
+    note.removeAttribute("role");
     let res = null, text = "";
     try {
       res = await fetch((nav ? nav.dataset.base : "./") + "command/answer/" + encodeURIComponent(q.id) + "?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)});
@@ -188,11 +190,16 @@ function answerSection(q) {
     if (res && res.ok) {
       let receipt = {};
       try { receipt = JSON.parse(text); } catch (e) { /* the 200 is the fact */ }
-      note.textContent = receipt.superseded ? "An earlier answer stands" : "Recorded";
-      toast(note.textContent);
+      note.textContent = receipt.superseded ? "An earlier answer stands" : "Recorded. The row leaves Waiting on you.";
+      note.className = "note ok";
+      toast("Recorded");
+      answered.add(q.id);
+      if (lastModel) waiting(lastModel);
       return;
     }
     note.textContent = text || "Refused (" + (res ? res.status : "no reply") + ")";
+    note.className = "note err";
+    note.setAttribute("role", "alert");
     controls.forEach((c) => { c.disabled = false; });
   };
   const add = (c) => { controls.push(c); return c; };
@@ -735,7 +742,8 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-let canAnswer = false;
+let canAnswer = false, lastModel = null;
+const answered = new Set();
 const nav = document.querySelector("nav.fno-nav");
 const token = new URLSearchParams(location.search).get("t") || "";
 const url = (nav ? nav.dataset.base : "./") + "command/model.json?t=" + encodeURIComponent(token);
@@ -748,6 +756,7 @@ async function load() {
   }
   const model = await res.json();
   canAnswer = model.writable === true;
+  lastModel = model;
   header(model); banners(model); waiting(model); machines(model); seats(model);
 }
 load();
