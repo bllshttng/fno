@@ -259,7 +259,7 @@ fn the_row_takes_the_registry_name_it_joins() {
     let sid = "aaaa1111-2222-3333-4444-555566667777";
     let mut entry = row("lenore", AgentStatus::Live);
     entry.harness_session_id = Some(sid.into());
-    let worker = |name: &str, entry: Option<usize>| Worker {
+    let worker = |name: &str, entry: Option<usize>, session: &str| Worker {
         source: "claude",
         name: name.into(),
         harness: "claude".into(),
@@ -268,12 +268,17 @@ fn the_row_takes_the_registry_name_it_joins() {
         session_pid: None,
         stored_status: "live".into(),
         status_basis: None,
-        session_id: Some(sid.into()),
+        session_id: Some(session.into()),
         spawned_by: None,
         entry,
     };
+    // The second row's session id matches no registry row, so both join
+    // arms (the census entry and the by-session lookup) miss it.
     let c = Census {
-        workers: vec![worker("aaaa1111", Some(0)), worker("zzzz9999", None)],
+        workers: vec![
+            worker("aaaa1111", Some(0), sid),
+            worker("zzzz9999", None, "ffff0000-dead-beef-cafe-000000000001"),
+        ],
         ..Default::default()
     };
     let out = worker_rows(
