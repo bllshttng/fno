@@ -4,7 +4,7 @@
 The Python leg is `fno.paths`, the path hub `fno config doctor` reads its
 accessor lines from. Each case in `golden/paths_hub/cases.json` builds a
 fixture root (a HOME, a project dir, an optional settings file) and runs the
-ten doctor accessors in a fresh interpreter, so no resolver cache crosses
+eleven doctor accessors in a fresh interpreter, so no resolver cache crosses
 cases. `paths_hub_parity.rs` builds the same fixture from the same file and
 compares the Rust owners against each `<case>.out`.
 
