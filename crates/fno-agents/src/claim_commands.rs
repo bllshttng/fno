@@ -1979,7 +1979,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// A registry index that knows nothing: the rung's row-gone precondition.
     fn rung_index(
         rows: std::collections::HashMap<String, RegistryEntry>,
     ) -> std::cell::RefCell<Option<SessionRegistryIndex>> {

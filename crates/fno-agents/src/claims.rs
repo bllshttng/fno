@@ -507,9 +507,8 @@ pub mod basis {
     pub const REGISTRY_SESSION_LIVE: &str = "registry-session-live";
     /// The session witness answered from the transcript reachability probe.
     pub const TRANSCRIPT_LIVE: &str = "transcript-live";
-    /// The session witness answered from the session's own codex rollout
-    /// mtime (the row ladder's rung 4 instrument): a rollout written within
-    /// the freshness window proves a shared-host thread is advancing.
+    /// The witness answered from the session's codex rollout mtime: a
+    /// rollout inside the freshness window proves the thread is advancing.
     pub const ROLLOUT_FRESH_LIVE: &str = "rollout-fresh-live";
     /// The registry has no live row for the holder and the harness truth
     /// probe positively reports that session unreachable.
