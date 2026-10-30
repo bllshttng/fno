@@ -266,10 +266,8 @@ fn manifest_keys(text: &str) -> Map<String, Value> {
 /// never lost over a missing session. The manifest comes from its owning
 /// resolver: a worktree session's lives in the project space.
 fn resolve_session_id(root: &Path) -> Option<String> {
-    let manifest = crate::state_path::resolve("target-state", root)
-        .filter(|p| p.exists())
-        .unwrap_or_else(|| root.join(".fno").join("target-state.md"));
-    let keys = std::fs::read_to_string(manifest)
+    let keys = crate::state_path::resolve("target-state", root)
+        .and_then(|manifest| std::fs::read_to_string(manifest).ok())
         .map(|text| manifest_keys(&text))
         .unwrap_or_default();
     ["fno_id", "session_id"]
