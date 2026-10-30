@@ -1003,14 +1003,22 @@ fn holder_session_fields(
 /// witness call, so a policy change in the classifier costs perf, never a
 /// verdict.
 fn may_consult_transcript(rec: &crate::claims::ClaimRecord) -> bool {
-    !(crate::claims::is_same_machine(&rec.host, rec.machine_id.as_deref())
+    let pid_live = crate::claims::is_same_machine(&rec.host, rec.machine_id.as_deref())
         && rec.pid.is_some_and(|pid| {
             matches!(
                 crate::claims::probe_pid(pid),
                 crate::claims::PidProbe::Created(_)
             )
-        })
-        && crate::claims::pid_dies_with_session(rec.harness.as_deref()))
+        });
+    if !pid_live {
+        return true;
+    }
+    if !crate::claims::pid_dies_with_session(rec.harness.as_deref()) {
+        // The shared pid never decides, but only node/task keys read the
+        // witness, so only their sessions ride the wire.
+        return crate::claims::is_node_or_task(rec);
+    }
+    false
 }
 
 /// The witness's answer for one record: registry row first, then transcript.
@@ -1226,7 +1234,14 @@ pub(crate) fn session_is_absent(id: &str) -> bool {
     };
     let index = std::cell::RefCell::new(None);
     matches!(
-        session_liveness_answer_uncached(&session, &index, None, false, None),
+        session_liveness_answer_uncached(
+            &session,
+            &index,
+            None,
+            matches!(&row, Some(e)
+                if !crate::claims::pid_dies_with_session(Some(e.harness_name()))),
+            None,
+        ),
         crate::claims::SessionLiveness::Absent
     )
 }

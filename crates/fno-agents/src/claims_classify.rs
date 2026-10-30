@@ -135,7 +135,7 @@ fn proven_session_pid(rec: &ClaimRecord) -> bool {
 }
 
 /// The record's key is a node or task lock, the keys target runs hold.
-fn is_node_or_task(rec: &ClaimRecord) -> bool {
+pub(crate) fn is_node_or_task(rec: &ClaimRecord) -> bool {
     rec.key.starts_with("node:") || rec.key.starts_with("task:")
 }
 
@@ -178,7 +178,7 @@ pub fn classify_with_basis_and_exclusivity(
     if !is_expired(rec, now)
         && !pid_dies_with_session(rec.harness.as_deref())
         && rec.session_id.as_deref().is_some_and(|s| !s.is_empty())
-        && (rec.key.starts_with("node:") || rec.key.starts_with("task:"))
+        && is_node_or_task(rec)
         && is_same_machine(&rec.host, rec.machine_id.as_deref())
     {
         return match session_witness.map(|witness| witness(rec)) {
@@ -249,7 +249,7 @@ pub fn classify_with_basis_and_exclusivity(
             // the reaper counts the 1511 revert restored depend on.
             if rec.session_id.as_deref().is_some_and(|s| !s.is_empty()) {
                 let session_state = witness(rec);
-                if (rec.key.starts_with("node:") || rec.key.starts_with("task:"))
+                if is_node_or_task(rec)
                     && is_same_machine(&rec.host, rec.machine_id.as_deref())
                     && matches!(&session_state, SessionLiveness::Absent)
                 {
@@ -316,7 +316,7 @@ pub fn classify_with_basis_and_exclusivity(
         }
         return (ClaimState::Live, cause);
     }
-    if (rec.key.starts_with("node:") || rec.key.starts_with("task:"))
+    if is_node_or_task(rec)
         && is_same_machine(&rec.host, rec.machine_id.as_deref())
         && matches!(witnessed, Some(SessionLiveness::Absent))
     {

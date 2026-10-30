@@ -687,6 +687,7 @@ pub fn process_create_time_ms(pid: i32) -> Option<i64> {
 #[path = "claims_classify.rs"]
 mod claims_classify;
 
+pub(crate) use claims_classify::is_node_or_task;
 pub use claims_classify::{
     classify, classify_for_sweep, classify_with_basis, classify_with_basis_and_exclusivity,
     pid_exclusivity,
