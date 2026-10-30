@@ -148,7 +148,7 @@ function waiting(model) {
       r.tabIndex = 0;
       r.onkeydown = (e) => { if (e.key === "Enter") openQuestion(q); };
       t.append(el("b", null, q.title || q.id));
-      t.append(el("code", null, [q.node || "no node", ago(since(q.created_at)) + " old", "fno inbox outstanding clear " + q.id + " --answer \"…\"" + (host == null ? "" : " (on " + host + ")")].join(" · ")));
+      t.append(el("code", null, [q.node || "no node", ago(since(q.created_at)) + " old"].join(" · ")));
       r.classList.add("qrow");
       r.append(t);
       box.append(r);
