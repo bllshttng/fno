@@ -656,9 +656,9 @@ async fn header_rows() {
     let mut v = view_with_rows(vec![]);
     v.feed = Some(overlay(vec![feed_item(Some("x-a"), Some("s-1"))]));
     v.region_owner = crate::client::region_focus::RegionOwner::Feed;
-    // The cursor band rides keyboard ownership (AC3-HP/AC4-HP): the selected
-    // row wears the theme's band pair while the feed owns typing, and the
-    // band is gone the moment the keyboard returns to the pane.
+    // The cursor inversion rides keyboard ownership (AC3-HP/AC4-HP): the
+    // driven row wears the theme's focus pair while the feed owns typing,
+    // and it is gone the moment the keyboard returns to the pane.
     let frame = v.compose();
     let cols = frame.cols as usize;
     let feed_w = v.feed_panel_w() as usize;
@@ -666,10 +666,11 @@ async fn header_rows() {
     let x0 = cols - feed_w;
     let sel = v.feed.as_ref().unwrap().sel;
     let band_cell = frame.cells[(2 + sel) * cols + x0 + 2];
+    let (_, focus_bg, focus_flags) = crate::theme::focus_style(&v.theme);
     assert_eq!(
-        band_cell.bg,
-        crate::theme::band_style(&v.theme).1,
-        "the selected row wears the band while the feed owns the keyboard"
+        (band_cell.bg, band_cell.flags & focus_flags),
+        (focus_bg, focus_flags),
+        "the driven row inverts while the feed owns the keyboard"
     );
     // The keyboard returns to the pane when the panel CLOSES, not through a
     // release that leaves it open: the release arm is gone.
