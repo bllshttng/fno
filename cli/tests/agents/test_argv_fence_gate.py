@@ -380,7 +380,11 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     # exemption left with the notify family port: the toast body moved into
     # the Rust dispatch (crates/fno/src/notify_dispatch.rs keeps the marker
     # above its body push; the Rust call shape is outside the scanner's
-    # seed-push patterns). Fifteen in all, after the hermes adapter left.
-    assert counts.get("exempt", 0) == 15, counts
+    # seed-push patterns). The you-threads slot closed when the splitter
+    # renamed its seed to a plain `typed` local: the name left the scanner's
+    # seed vocabulary, so the site no longer scans as a seed push at all,
+    # and the exemption has nothing left to mark. Fourteen in all, after the
+    # hermes adapter left.
+    assert counts.get("exempt", 0) == 14, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

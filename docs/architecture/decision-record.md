@@ -157,7 +157,7 @@ Every cross-rung ask is one traced decision. The ask, the lead's route (answer-s
 |---|---|---|
 | ask | `decision_span` span_kind=ask | `fno-agents mail-record` at the mail send chokepoint, when the body opens `Approval:` |
 | route | `decision_span` route=self or escalate, with the class | `mail-record --reply-to` (self), or the question intake on `answers_ask:` (escalate), or `fno inbox decide --answers-ask` (self) |
-| question | `operator_question` + trace | the question intake; span_id = question_id, parent = the route span |
+| question | `operator_question` + trace | the question intake; span_id = question_id, parent = the route span; the trace names the rung holder for a lead-rung card, else the user |
 | answer | `operator_decision` + trace | `fno inbox outstanding clear` or the decide door; span_id = decision_id, parent = the question or route span |
 | correction | `decision_span` span_kind=correction + `operator_decision.overturns` | `fno inbox decide --overturns <span-or-decision-id> --authority operator` |
 
