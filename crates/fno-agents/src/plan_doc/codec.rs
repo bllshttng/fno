@@ -848,11 +848,12 @@ mod tests {
 
     #[test]
     fn write_plan_file_saves_an_untouched_drift_word_status() {
-        // The regression the vocabulary-at-the-chokepoint shape caused: a
-        // writer that does not set status (set-expected) must write a plan
-        // whose current status is a drift word.
+        // The regression the vocabulary-at-the-chokepoint shape caused: the
+        // read-mutate-write flow (set-expected) writes back the full field
+        // map including a drift-word status the writer did not touch.
         let doc = write_tmp("writegate", "plan.md", "---\nstatus: draft\n---\n# body\n");
         let mut fields = Fields::new();
+        fields.insert("status", Value::Scalar("draft".into()));
         fields.insert("expected_url_count", Value::Scalar("3".into()));
         write_plan_file(&doc, &fields, &"# body\n").unwrap();
         let after = std::fs::read_to_string(&doc).unwrap();
