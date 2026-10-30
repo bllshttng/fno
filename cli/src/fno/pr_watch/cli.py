@@ -407,6 +407,35 @@ _TICK_TIMEOUT_EXIT = 75
 
 _ENV_TICK_TIMEOUT = "FNO_PR_WATCH_TICK_TIMEOUT"
 
+#: A stranded sweep is one batched git fetch plus a rev-list and a
+#: last-commit-age call per worktree - cheap, but not free at 60+
+#: worktrees. Skipping under this floor costs nothing: the next tick
+#: sweeps from scratch, there is no partial state to lose.
+_STRANDED_FLOOR_S = 10.0
+
+#: Merge's 245s cap reserves the 150s sweep after the worst settings + wake
+#: caps on a 480s tick, while leaving room for the 90s queue read + merge floor.
+_EVERY_TICK_CAP_S: dict[str, float] = {
+    "settings": 10,
+    "sweep": 150,
+    # The notify phase pays the arm subprocess over every catch-up root
+    # (armed pass: 23.1s measured over 12 roots 2026-09-27). 15s still cut
+    # it mid-arm; 30s fits at the 0.85x deadline.
+    "notify_watch": 30,
+    "heal": 10,
+    "evals": 10,
+}
+_FLEET_CAP_S: dict[str, float] = {
+    "stranded": 60,
+    "recovery": 90,
+    "watchdog": 30,
+}
+_PHASE_CAP_S: dict[str, float] = {**_EVERY_TICK_CAP_S, **_FLEET_CAP_S, "merge": 245.0}
+
+_GRANT_QUEUE_READ_TIMEOUT_S = 90.0
+_MERGE_WINDOW_S = _PHASE_CAP_S["merge"] + _EVERY_TICK_CAP_S["sweep"]
+
+
 class _StrandedBudgetSpent(Exception):
     """The tick has too little left to sweep. Not a failure of the sweep."""
 
