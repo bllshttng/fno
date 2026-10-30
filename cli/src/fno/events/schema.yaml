@@ -3615,7 +3615,7 @@ event_types:
           type: string
         blocker:
           type: string
-          enum: [ci, review, merge_slot, local, unknown]
+          enum: [ci, review, merge_slot, merge_hold, local, unknown]
         task_id:
           type: [string, "null"]
         expires_at_ms:
@@ -5411,8 +5411,8 @@ event_types:
           description: "PR number the tag names, or null when the tag names no positive PR number (a local run carries no pr)."
         blocker:
           type: string
-          enum: [ci, review, merge_slot, local, unknown]
-          description: "The blocker being waited on, taken from the <watching> tag's reason: 'ci' (checks pending), 'review' (a bot review outstanding), 'merge_slot' (waiting for a merge slot), 'local' (a run on this machine: a test suite, a build, a review fork), or 'unknown' (any other reason; the idle verifies nothing)."
+          enum: [ci, review, merge_slot, merge_hold, local, unknown]
+          description: "The blocker being waited on, taken from the <watching> tag's reason: 'ci' (checks pending or a cancelled run awaiting its rerun), 'review' (a bot review outstanding), 'merge_slot' (waiting for a merge slot), 'merge_hold' (a recorded merge freeze), 'local' (a run on this machine: a test suite, a build, a review fork), or 'unknown' (any other reason; the idle verifies nothing)."
         task_id:
           type: [string, "null"]
           description: "Harness task identifier from the <watching> tag, or null when the tag does not name one. Missing ids remain visible and are never guessed."
