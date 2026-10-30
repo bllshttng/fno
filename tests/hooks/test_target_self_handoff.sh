@@ -136,7 +136,7 @@ else
 fi
 
 # ── S5: foreign_claim ────────────────────────────────────────────────────────
-FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO agents claim acquire "node:$NODE" --holder other-session >/dev/null 2>&1
+FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO claim acquire "node:$NODE" --holder other-session >/dev/null 2>&1
 run_validate
 REASON="$(printf '%s' "$VAL" | field reason)"
 if [[ "$VAL_RC" -ne 0 && "$REASON" == "foreign_claim" ]]; then
@@ -144,7 +144,7 @@ if [[ "$VAL_RC" -ne 0 && "$REASON" == "foreign_claim" ]]; then
 else
   fail "S5: expected foreign_claim, got rc=$VAL_RC reason='$REASON'"
 fi
-FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO agents claim release "node:$NODE" --holder other-session >/dev/null 2>&1 || true
+FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO claim release "node:$NODE" --holder other-session >/dev/null 2>&1 || true
 
 # ── S6: duplicate_generation (delegated event from a foreign session) ────────
 printf '{"type":"delegated","ts":"2026-07-26T02:30:00Z","data":{"node_id":"%s","harness":"claude","generation":2,"from_session":"other"}}\n' "$NODE" >> "$TMP/.fno/events.jsonl"
@@ -205,7 +205,7 @@ fi
 # ── S10: corrupted claim fails closed (not collapsed to free) ────────────────
 # A claim row that cannot decode cannot confirm ownership; validate must fail
 # closed with corrupted_claim rather than treat it as a free claim and grant ok.
-FNO agents claim acquire "node:$NODE" --holder other-session >/dev/null 2>&1
+FNO claim acquire "node:$NODE" --holder other-session >/dev/null 2>&1
 CLAIM_DB="$CLAIMS_HOME/.fno/db/graph.db"
 claim_sql() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(sys.argv[2], (sys.argv[3],)); c.commit()' "$CLAIM_DB" "$1" "node:$NODE"; }
 claim_sql "UPDATE claims SET metadata='{not json' WHERE key=?"

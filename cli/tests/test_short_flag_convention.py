@@ -58,8 +58,6 @@ PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
     "-I": ("--ideas", "graph/cli.py"),
     # The -b --blocked row moved with the pick port: the native arm owns the
     # surface now, and the wheel-side scan can no longer see a Rust flag decl.
-    "-n": ("--tail", "agents/cli.py"),
-    "-f": ("--follow", "agents/cli.py"),
     "-m": ("--note", "done/cli.py"),
 }
 
@@ -219,7 +217,7 @@ def test_no_short_collision_within_a_command(decls: list[Decl]) -> None:
 
 
 def test_pre_existing_shorts_unchanged(decls: list[Decl]) -> None:
-    """AC3: the 7 pre-existing (short, long) pairs still exist at their home.
+    """AC3: the pre-existing (short, long) pairs still exist at their home.
 
     Lowercase shorts are per-command under the convention, so this pins each
     pair to its home file rather than demanding codebase-wide exclusivity
