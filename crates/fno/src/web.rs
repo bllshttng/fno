@@ -861,10 +861,16 @@ pub(crate) fn caller_of(
             .get("tailscale-user-login")
             .and_then(|v| v.to_str().ok()),
         loopback_bind,
-        loopback_host: headers
-            .get(header::HOST)
-            .and_then(|h| h.to_str().ok())
-            .is_some_and(names_loopback),
+        // A proxy can rewrite Host, but tailscale serve and every common
+        // reverse proxy add a forwarding header, so one of those marks the
+        // request as proxied whatever Host says.
+        loopback_host: !["x-forwarded-for", "x-forwarded-host", "forwarded"]
+            .iter()
+            .any(|h| headers.contains_key(*h))
+            && headers
+                .get(header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .is_some_and(names_loopback),
     }
 }
 
@@ -3700,6 +3706,13 @@ console.log("recent searches: 12 cases ok");
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         let reply = get(None, format!("127.0.0.1:{}", addr.port())).await;
         assert!(reply.starts_with("HTTP/1.1 200"), "local user: {reply}");
+        // A proxy that rewrote Host to loopback still shows a forwarding header.
+        let head = format!(
+            "GET /command?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Forwarded-For: 100.64.0.9\r\nConnection: close\r\n\r\n",
+            addr.port()
+        );
+        let reply = raw_request(addr, &head, b"").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "proxied: {reply}");
         server.abort();
         let (addr, server) = serve_state(answer_state(true, None)).await;
         let head = "GET /command?t=right HTTP/1.1\r\nHost: box.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";

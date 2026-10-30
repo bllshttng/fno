@@ -93,7 +93,8 @@ pub(crate) struct Caller<'a> {
     pub(crate) login: Option<&'a str>,
     /// The bridge is bound to loopback.
     pub(crate) loopback_bind: bool,
-    /// The request's Host names loopback, so it did not come through the proxy.
+    /// The request's Host names loopback and it carries no forwarding header,
+    /// so it did not come through a proxy.
     pub(crate) loopback_host: bool,
 }
 
