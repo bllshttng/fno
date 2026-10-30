@@ -3,10 +3,37 @@
 
 use serde_json::{json, Value};
 
+const READ_USAGE: &[(&str, &str)] = &[
+    ("watchdog-tick", "--budget-s SECONDS"),
+    ("watchdog-tail", "--session ID --cwd DIR [--harness NAME]"),
+    ("watchdog-arming", ""),
+    ("watchdog-fleet", ""),
+    ("sweep", "[--tick] [--json]"),
+    ("stale-escalate", "[--json]"),
+    ("friction-escalate", "[--json]"),
+    ("distress-verdicts", "--sessions JSON"),
+    ("gate-status", ""),
+    ("codex-session-for-pid", "PID"),
+    (
+        "spawn-guard",
+        "NODE --holder H [--ttl T] [--no-reserve] [--cwd DIR] [--json]",
+    ),
+    ("discovered-json", "[--cwd PATH] [--harness NAME]"),
+];
+
 /// The read `args` names, or None when the census action owns them.
 pub fn dispatch(args: &[String]) -> Option<i32> {
     let rest = args.get(1..).unwrap_or(&[]);
-    Some(match args.first()?.as_str() {
+    let word = args.first()?.as_str();
+    // Several reads write when they run, so help never reaches them. `watchdog`
+    // and `recovery-sweep` render their own.
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        if let Some((_, usage)) = READ_USAGE.iter().find(|(read, _)| *read == word) {
+            println!("usage: fno agents {word} {usage}");
+            return Some(0);
+        }
+    }
+    Some(match word {
         "watchdog" => crate::watchdog::cli::run(rest),
         "watchdog-tick" => crate::watchdog::tick::run(rest),
         "watchdog-tail" => crate::watchdog::tick::run_tail(rest),

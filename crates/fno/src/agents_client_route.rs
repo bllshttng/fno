@@ -61,6 +61,9 @@ pub fn classify(args: &[OsString]) -> Option<Route> {
         let argv = std::iter::once(OsString::from("claim")).chain(rest.iter().cloned());
         return Some(Route::Python(argv.collect()));
     }
+    if word == "harness" && matches!(rest.first().and_then(|a| a.to_str()), Some("--help" | "-h")) {
+        return Some(Route::Client(prefixed(&["harness-probe", "--help"], &[])));
+    }
     if word == "harness" && rest.first().and_then(|a| a.to_str()) == Some("probe") {
         return Some(Route::Client(prefixed(
             &["harness-probe", "fields"],

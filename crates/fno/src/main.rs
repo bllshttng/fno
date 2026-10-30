@@ -2800,7 +2800,7 @@ mod tests {
     fn agents_flat_spellings_reach_their_native_doors() {
         assert_eq!(
             decide_role(&os(&["agents", "whoami"]), false),
-            Role::Forward
+            Role::AgentsClient(os(&["status", "--whoami"]))
         );
         // `top` skips the Python front: the lead check-in reads it every beat.
         assert_eq!(
@@ -2840,7 +2840,7 @@ mod tests {
         );
         assert_eq!(
             decide_role(&os(&["agents", "roles", "promote"]), false),
-            Role::Forward
+            Role::AgentsClient(os(&["roles", "promote"]))
         );
         // The function-pack group is native whole, under both spellings.
         assert_eq!(

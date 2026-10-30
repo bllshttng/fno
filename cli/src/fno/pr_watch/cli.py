@@ -747,12 +747,12 @@ def tick() -> None:
                     if err is not None or not isinstance(answer, dict):
                         raise RuntimeError(f"recovery sweep door failed: {err}")
                     _fleet_candidates = int(answer.get("candidates") or 0)
-                    _fleet_refused = sum(
-                        1
-                        for event in answer.get("events") or []
-                        if event.get("type") == "worker_refused"
-                    )
-                    _fleet_swept = True
+                    events = answer.get("events") or []
+                    _fleet_refused = sum(1 for event in events if event.get("type") == "worker_refused")
+                    for event in events:
+                        _emit_event(str(event.get("type")), event.get("data") or {})
+                    # A disarmed sweep measured nothing, so it stamps no heartbeat.
+                    _fleet_swept = answer.get("swept") is True
                     typer.echo(f"recovery sweep: candidates={_fleet_candidates}")
                 except Exception as exc:  # noqa: BLE001 - never let recovery break pr-watch
                     log.warning("pr-watch: recovery sweep failed: %s", exc)
