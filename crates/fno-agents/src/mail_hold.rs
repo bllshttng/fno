@@ -4,7 +4,7 @@
 //! binary path like the other early dispatches).
 //!
 //! The hold is the registry row's `delivery_policy = "bus-only"` stamp plus
-//! the sidecar clock `fno.mail.hold` reads. The conversation rules (C2-C4,
+//! the sidecar clock. The conversation rules (C2-C4,
 //! C6) arm and rewrite that one clock: a real user message whose Enter the
 //! mux witnessed arms the answering clock, the session's Stop fire shortens
 //! it to the grace, and the release timer lifts it. A hold the user set on

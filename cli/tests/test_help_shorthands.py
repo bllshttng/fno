@@ -101,7 +101,8 @@ def _resolves(path: str) -> None:
         return
     from tests._native_door import run_native
 
-    code, _out, _err = run_native(*path.split(), "--help")
+    # The binary's mail group has no `agents` word above it.
+    code, _out, _err = run_native(*path.removeprefix("agents ").split(), "--help")
     assert code == 0, f"legend names `fno {path}`, which does not resolve"
 
 

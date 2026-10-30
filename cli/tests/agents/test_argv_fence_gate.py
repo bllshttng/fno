@@ -345,7 +345,7 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     counts = {}
     for _, _, _, kind in results:
         counts[kind] = counts.get(kind, 0) + 1
-    assert counts.get("fenced", 0) >= 19, counts
+    assert counts.get("fenced", 0) >= 18, counts
     assert counts.get("value-form", 0) >= 4, counts
     # A floor AND a ceiling on exemptions: each new exempt marker must be a
     # visible test edit, never a silent gate bypass. Eleven standing

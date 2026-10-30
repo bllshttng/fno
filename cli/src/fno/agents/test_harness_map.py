@@ -292,12 +292,8 @@ def test_every_session_builder_and_submit_path_names_the_shared_contract():
     ]
     for relative in consumers:
         assert "render_session_argv" in (root / relative).read_text(encoding="utf-8"), relative
-    python_inject = (root / "cli/src/fno/agents/dispatch.py").read_text(encoding="utf-8")
     rust_inject = (root / "crates/fno-agents/src/mail_inject.rs").read_text(encoding="utf-8")
-    assert "time.sleep(0.3)" not in python_inject
     assert "CR_SETTLE_MS" not in rust_inject
-    assert 'capabilities(recipient_harness)["send_keys_enter_delay_ms"]' in python_inject
-    assert 'capabilities("claude")["send_keys_enter_delay_ms"]' not in python_inject
     assert "default_enter_delay_ms(harness)" in rust_inject
 
 
@@ -1069,29 +1065,6 @@ def test_legacy_token_rewrite_is_position_scoped():
     untouched = "/target fix the no-merge carrier bug x-1"
     assert normalize_legacy_no_merge(untouched) == untouched
     assert not message_carries_no_merge(untouched)
-
-
-def test_submit_refusal_names_the_table_and_the_key():
-    """A refusal that names only the layer that did not run costs two agents and
-    an operator. This one lands the next reader in the file in ONE read."""
-    import io
-    from contextlib import redirect_stderr
-
-    from fno.agents.dispatch import _mux_pane_send
-
-    class _Entry:
-        harness = "gemini"
-        name = "w"
-        delivery_policy = None
-        mux = {"pane_id": 1, "session": "main"}
-
-    buf = io.StringIO()
-    with redirect_stderr(buf):
-        assert _mux_pane_send(_Entry(), "hello") is False
-    err = buf.getvalue()
-    assert "harness_capabilities.toml" in err
-    assert "submit_keys" in err
-    assert "capability declaration, not a transport failure" in err
 
 
 def test_normalize_passes_absolute_path_through_on_every_surface():

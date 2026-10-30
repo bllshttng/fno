@@ -37,6 +37,7 @@ import tempfile
 import time
 import uuid as _uuid
 from dataclasses import dataclass
+import base64
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -1339,10 +1340,19 @@ PROVENANCE_KEYS: tuple[str, ...] = (
     "FNO_NODE_CLAIM_HOLDER",
 )
 
-#: Re-exported, never redefined: the clear list must not drift from the
-#: module that writes the fields, and this module's `_mesh_env_wrapper` is one of
-#: several callers that clear them.
-from fno.mail.seed_provenance import SEED_PROVENANCE_KEYS  # noqa: E402
+from fno.harness_identity import (  # noqa: E402
+    ENV_FROM,
+    ENV_FROM_SESSION,
+    ENV_HARNESS,
+    ENV_MSG_ID,
+    ENV_NODE,
+    ENV_SEED_B64,
+    SEED_PROVENANCE_KEYS,
+)
+
+#: A sidecar that quotes a seed must quote all of it, so an over-long seed gets
+#: none. A handoff caps at 80 words; 16 KiB is far above any honest seed.
+MAX_SEED_BYTES = 16 * 1024
 
 
 def _seed_provenance_env(
@@ -1354,16 +1364,46 @@ def _seed_provenance_env(
     ``fno agents spawn`` in a shell authored the seed, and stamping a peer
     envelope on it would name an agent sender that does not exist.
 
-    Never refuses a spawn. `build_env` returns empty whenever it cannot honestly
-    attribute the seed -- an operator spawn, an over-long seed, or one that
-    already carries its own envelope -- and an unattributed launch is the right
-    outcome for all three. It briefly raised on that last case, which killed the
-    mail wake-fork rung: that rung seeds a worker with the wrapped message
-    itself, so its seed carries an envelope by construction.
+    Never refuses a spawn. An unprovable identity, an over-long seed, and a seed
+    that already carries an envelope all launch unattributed: a mail wake seeds a
+    worker with the wrapped message itself, and refusing that seed once killed
+    every mail send to an asleep-but-resumable peer.
     """
-    from fno.mail.seed_provenance import build_env
+    from fno.agents.self_stamp import (
+        resolve_self_harness,
+        resolve_self_session_id,
+        stamp_from,
+    )
+    from fno.inbox.store import generate_msg_id
+    from fno.rust_binary import mail_shape
 
-    return build_env(message, node=(provenance or {}).get("FNO_NODE"))
+    if mail_shape([message])[0]["holds_tag"]:
+        return {}
+    from_session = resolve_self_session_id()
+    if not from_session:
+        return {}
+    raw = message.encode("utf-8")
+    if len(raw) > MAX_SEED_BYTES:
+        print(
+            f"note: seed is {len(raw)} bytes, over the {MAX_SEED_BYTES}-byte "
+            f"provenance cap; spawning without a provenance sidecar. A sidecar "
+            f"that quotes the seed must quote all of it.",
+            file=sys.stderr,
+        )
+        return {}
+    env = {
+        ENV_SEED_B64: base64.b64encode(raw).decode("ascii"),
+        ENV_FROM: stamp_from(None),
+        ENV_FROM_SESSION: from_session,
+        ENV_MSG_ID: generate_msg_id(),
+    }
+    sender_harness = resolve_self_harness()
+    if sender_harness:
+        env[ENV_HARNESS] = sender_harness
+    node = (provenance or {}).get("FNO_NODE")
+    if node:
+        env[ENV_NODE] = node
+    return env
 
 
 def _run_mux(

@@ -13,9 +13,7 @@
 
 use serde_json::json;
 
-/// The Rust name for the Python receipts' NOT LANDED exit
-/// (`cli/src/fno/mail/receipts.py` owns the meaning): the local send wrote
-/// its durable copy and could not confirm the live inject. The copy exists,
+/// The NOT LANDED exit: the local send wrote its durable copy and could not confirm the live inject. The copy exists,
 /// so the receiver's mail owns the body and a retry would duplicate it -
 /// the daemon's pull arm reads this exit as delivered for that reason.
 pub(crate) const NOT_LANDED_EXIT: i32 = 14;

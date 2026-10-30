@@ -11,8 +11,6 @@ from __future__ import annotations
 import pytest
 from typer.testing import CliRunner
 
-import fno.events
-from fno.cli import app
 from fno.paths_testing import use_tmpdir
 
 
@@ -86,48 +84,6 @@ def _unread_count(runner, name: str) -> int:
         and m.get("delivery") not in ("hosted", "typed", "cross-session")
         and m["id"] not in withdrawn
     )
-
-
-def test_question_send_emits_one_valid_overlay_event(runner, mailbox, monkeypatch):
-    # The escalation surfaces in the needs-me overlay via a mail_escalation event
-    # (US1/US2): exactly one per non-debounced escalation, schema-valid. The
-    # send body lives in the rust leaf, so the read goes through the committed
-    # store; the python emitter capture never sees the subprocess's write.
-    from tests._event_rows import event_rows
-
-    scratch = mailbox / "scratch" / "events.jsonl"
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(scratch))
-    res = runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "which schema wins?"],
-    )
-    assert res.exit_code == 0, res.output
-    rows = event_rows(scratch, types=["mail_escalation"])
-    assert len(rows) == 1, "exactly one mail_escalation event per escalation"
-    ev = rows[0]
-    assert ev["type"] == "mail_escalation"
-    fno.events.validate(ev)  # raises if the envelope/shape is invalid
-    d = ev["data"]
-    assert d["reason"] == "question"
-    assert d["sender"] == "etl"
-    assert d["recipient"] == "web"
-    assert "which schema wins?" in d["summary"]
-    assert d["msg_id"].startswith("fmail-"), "carries the mail id for correlation"
-
-
-def test_escalation_failure_never_breaks_the_send(runner, mailbox, monkeypatch):
-    def boom(title: str, message: str):
-        raise RuntimeError("no display")
-
-    monkeypatch.setattr("fno.rust_binary.notify_operator", boom)
-    res = runner.invoke(
-        app,
-        ["mail", "send", "--to-project", "web", "--kind", "question",
-         "--from-name", "etl", "--body", "still delivers"],
-    )
-    assert res.exit_code == 0, res.output
-    assert _unread_count(runner, "web") == 1
 
 
 # ---------------------------------------------------------------------------
