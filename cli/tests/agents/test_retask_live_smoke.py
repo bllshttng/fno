@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -13,7 +14,6 @@ from types import SimpleNamespace
 import pytest
 
 from fno.agents.mux_spawn import dispatch_spawn_pane
-from fno.agents.retask import run_retask
 from fno.agents.registry import load_registry
 
 
@@ -24,27 +24,6 @@ pytestmark = [
         reason="set RETASK_SMOKE=1 and ensure codex is on PATH",
     ),
 ]
-
-
-def _settings(*, model: str, effort: str) -> SimpleNamespace:
-    defaults = SimpleNamespace(
-        provider="",
-        model="",
-        effort="",
-        substrate="",
-        permission_mode="",
-        route="",
-        account="",
-        pane_group="",
-        lanes=[],
-    )
-    profile = SimpleNamespace(
-        **{**vars(defaults), "provider": "codex", "model": model, "effort": effort}
-    )
-    return SimpleNamespace(
-        agents=SimpleNamespace(defaults=defaults, profiles={"target": profile}, max_lanes={}),
-        model_routing=None,
-    )
 
 
 def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None:
@@ -196,7 +175,7 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
         else:
             pytest.fail(f"worker did not reach idle: {last_receipt}")
 
-        # The transaction runs inside the fno-agents binary run_retask hands
+        # The transaction runs inside the fno-agents binary the front execs;
         # off to; there are no Python-side pane seams left to patch.
         monkeypatch.setenv("HOME", real_home)
         monkeypatch.setenv("FNO_HOME", str(Path(real_home) / ".fno"))
@@ -205,15 +184,26 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
         )
         monkeypatch.delenv("FNO_CONFIG_SEARCH_ROOT", raising=False)
         monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
-        last_receipt = run_retask(
-            worker,
-            node=target,
-            settings=_settings(model=model, effort=effort),
-            model=model,
-            effort=effort,
-            env={},
-            registry_path=registry,
+        # The native front runs the whole transaction inside fno-agents;
+        # the smoke drives the public shim spelling, not a library entry.
+        out = run(
+            [
+                *cli,
+                "agents",
+                "retask",
+                worker,
+                "--node",
+                target,
+                "--model",
+                model,
+                "--effort",
+                effort,
+                "--json",
+            ],
+            timeout=1200,
+            env=env,
         )
+        last_receipt = json.loads(out.stdout.strip().splitlines()[-1])
         assert last_receipt.get("status") == "retasked", last_receipt
         assert last_receipt.get("switch") == "skipped_same_tier", last_receipt
         assert last_receipt.get("switch_verified") is True, last_receipt

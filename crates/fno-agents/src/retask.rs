@@ -1,48 +1,11 @@
 //! The retask transaction, native: clear one finished worker's pane, restamp
 //! its registry row through a verified session succession, rename the row to
-//! the next dispatch name, and resubmit the node's command. Ported from the
-//! Python transaction that `fno agents retask` used to own; the Python leaf
-//! stays the front door and hands the whole transaction over as one JSON
-//! payload.
+//! the next dispatch name, and resubmit the node's command. The front door
+//! is `fno-agents rename retask` (see the front module); this module holds
+//! the transaction the front runs, plus the seams it drives.
 //!
-//! # Payload contract (op-in-payload on the `rename` client action)
-//!
-//! `fno-agents rename` with NO argv reads one JSON payload on stdin:
-//!
-//! ```json
-//! {
-//!   "op": "retask",
-//!   "worker": "bp-x0e67-planner",
-//!   "node": "x-bbbb",
-//!   "target": {
-//!     "harness": "codex", "provider": null, "model": "gpt-5.6-sol",
-//!     "effort": "high", "substrate": null, "permission_mode": null,
-//!     "route": null, "account": null, "verb": "target"
-//!   },
-//!   "target_command": "$fno:target --no-merge x-bbbb",
-//!   "mux": {"session": "main", "pane_id": 12}
-//! }
-//! ```
-//!
-//! `mux` is absent for a thread row: the Python front opened the thread's
-//! dedicated viewport (`resolve_thread_viewport`, the ONE implementation) and
-//! passes the opened `{"session", "pane_id"}` in the same shape instead. The
-//! Rust side re-reads the worker row from the registry itself
-//! (`find_agent_entry`), so the row it acts on is read at run time, never
-//! trusted from the payload. The `target` object is trusted: the payload's
-//! only producer is the Python front door, the action is unadvertised, and a
-//! hand-written payload with a wrong tier would switch the pane to that tier.
-//!
-//! Two optional keys carry store paths the Python front resolved through the
-//! config layer: `"graph"` (graph.json, honoring `config.paths.graph_json`)
-//! and `"registry"` (registry.json, honoring run_retask's registry_path).
-//! Absent keys fall back to the ambient resolution.
-//!
-//! Exit codes: 0 with the receipt as one stdout JSON line for both
-//! `retasked` and `refused`; 2 for a usage or payload error (stderr names the
-//! problem). The receipt keys and refusal words are byte-for-byte the ones
-//! the Python transaction emitted, because the lead loop and
-//! `fno backlog advance` read them.
+//! The receipt keys and refusal words are the ones the Python transaction
+//! emitted, because the lead loop and `fno backlog advance` read them.
 
 use serde_json::{json, Value};
 
@@ -708,6 +671,7 @@ fn settled_read<S: RetaskSeams>(seams: &mut S) -> Result<String, TransportFailur
     seams.read_frame()
 }
 
+pub mod front;
 pub mod transport;
 
 #[cfg(test)]

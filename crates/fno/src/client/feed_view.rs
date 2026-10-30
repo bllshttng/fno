@@ -40,7 +40,7 @@ pub(crate) mod search;
 /// arrows while it is focused - the panel consumes keys only then.
 pub(crate) struct FeedOverlay {
     pub(crate) win: page::FeedWindow,
-    /// Hovered row in display order; the `▸` marker paints here.
+    /// Hovered row in display order; the cursor fill paints here.
     pub(crate) sel: usize,
     /// The typed fold failure, if the last fold failed. `Some` renders its
     /// reason verbatim; a success fold clears it.
@@ -431,10 +431,9 @@ pub(crate) fn feed_panel_rows(
             Some(Slot::Item(i)) => {
                 let item = &o.win.items[*i];
                 let selected = focused && d == o.sel;
-                let marker = if d == o.sel { '▸' } else { ' ' };
                 let mut row = Vec::new();
                 row.push(Span {
-                    text: format!(" {marker} "),
+                    text: "   ".to_string(),
                     bold: selected,
                     brand: selected,
                 });
@@ -929,9 +928,9 @@ impl View {
         let x0 = cols - w;
         let focused = self.input_owner() == super::region_focus::RegionOwner::Feed;
         let span_rows = feed_panel_rows(f, focused, w - 1, rows, self.feed_offset_clamped());
-        // The selected row wears the full-width cursor band while the panel
-        // owns the keyboard: the theme's own band pair (selection surface,
-        // stamp text), the same vocabulary the backlog board bands with.
+        // The driven row inverts like the bell's and the sideline's: the row
+        // about to take Enter reads on both theme families, and the band
+        // pair stays with hover/selection surfaces only.
         let band_row = if focused {
             Some(2 + f.sel.saturating_sub(self.feed_offset_clamped()))
         } else {
@@ -982,7 +981,7 @@ impl View {
                 }
             }
             if band_row == Some(r) {
-                let (bfg, bbg, bflags) = crate::theme::band_style(&self.theme);
+                let (bfg, bbg, bflags) = crate::cursor::cursor_style(&self.theme);
                 for c in (x0 + 1)..(x0 + w) {
                     let cell = &mut cells[r * cols + c];
                     cell.fg = bfg;

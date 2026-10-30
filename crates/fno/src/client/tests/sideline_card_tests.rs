@@ -633,7 +633,7 @@ fn hovered_card_paints_one_background_across_both_lines_including_gaps() {
     let cols = frame.cols as usize;
     let text_w = v.sideline_paint_w().saturating_sub(1);
     let offset = v.sideline_offset();
-    let (band_fg, band_bg, _) = crate::theme::band_style(&v.theme);
+    let (band_fg, band_bg, _) = crate::cursor::resting_band_style(&v.theme);
     let rects = v.worker_column_rects(text_w as u16);
     let in_col =
         |j: usize, c: usize| j >= rects[c].x as usize && j < (rects[c].x + rects[c].width) as usize;
@@ -839,7 +839,7 @@ fn a_named_theme_bands_on_its_surface_and_never_paints_a_signal_across_a_row() {
     let (agent_i, detail_i) = card_rows_for(&v, "w1");
     v.hover_row = Some(agent_i);
     let frame = v.compose();
-    let (band_fg, _, _) = crate::theme::band_style(&v.theme);
+    let (band_fg, _, _) = crate::cursor::resting_band_style(&v.theme);
     assert_eq!(band_fg, v.theme.stamp, "the band text is the neutral stamp");
     let cols = frame.cols as usize;
     let text_w = v.sideline_paint_w().saturating_sub(1);
@@ -1043,7 +1043,7 @@ fn band_pairs_hold_luminance_contrast_on_dark_and_light() {
     // against each lens theme's real palette; named themes paint fixed RGB
     // pairs, which the named-theme lens themes judge directly.
     for t in shipped_mux_themes() {
-        let (fg, bg, flags) = crate::theme::band_style(&t);
+        let (fg, bg, flags) = crate::cursor::resting_band_style(&t);
         assert_eq!(flags, 0, "no INVERSE and no DIM inside the band");
         assert!(fg != Color::Default, "band fg must be explicit");
         assert!(bg != Color::Default, "band bg must be explicit");

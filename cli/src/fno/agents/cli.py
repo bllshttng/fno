@@ -209,48 +209,10 @@ def cmd_role(
     grantor, and the receipt reports what was vacated. `--reclaim` returns a
     transferred role to its recorded grantor and never creates a session.
     """
-    from fno.agents import events
-    from fno.agents.role import RolePromotionError, promote_existing_session
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    if reclaim:
-        from fno.agents.role import reclaim_role
-
-        try:
-            receipt = reclaim_role(handle or None)
-        except RolePromotionError as exc:
-            print(f"role reclaim: {exc}", file=sys.stderr)
-            raise typer.Exit(code=2) from exc
-        events.emit(
-            "agent_role_reclaimed",
-            reclaimed=receipt["reclaimed"],
-            from_holder=receipt["from_holder"],
-            scope=receipt["scope"],
-            grantor=receipt["grantor"],
-        )
-        print(json.dumps(receipt))
-        return
-
-    if not handle or not scopes:
-        print("role: HANDLE and at least one --scope are required", file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    try:
-        receipt = promote_existing_session(handle, scopes)
-    except RolePromotionError as exc:
-        print(f"role: {exc}", file=sys.stderr)
-        raise typer.Exit(code=2) from exc
-
-    events.emit(
-        "agent_promoted",
-        name=receipt["promoted"],
-        level=receipt["level"],
-        scope=receipt["scope"],
-        grantor=receipt["grantor"],
-        vacated_scope=receipt["vacated_scope"],
-        vacated_level=receipt["vacated_level"],
-        stranded_subordinates=receipt["stranded_subordinates"],
-    )
-    print(json.dumps(receipt))
+    _ = (handle, scopes, reclaim)
+    refuse_without_binary("role")
 
 
 # The team command moved to fno.agents.team (file budget); the
@@ -286,8 +248,8 @@ def cmd_name(
 
 
 # `rename` moved to the Rust client (`agent.rename` over the daemon RPC; rust_runtime's router
-# entry resolves it). The retask transaction is native too: the empty-argv rename payload door
-# in fno-agents runs it, and run_retask is the thin front that builds the payload.
+# entry resolves it). The retask transaction is native too: `fno-agents rename retask` runs the
+# whole front, and cmd_retask below is the shim that execs it (like top/orphans).
 
 
 @agents_app.command("retask", hidden=True)
@@ -299,27 +261,24 @@ def cmd_retask(
     json_out: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
     """Retask one finished worker (pane or thread) onto the node's next command."""
-    from fno.agents.retask import run_retask
+    import subprocess
 
-    try:
-        receipt = run_retask(
-            worker,
-            node=node,
-            model=model,
-            effort=effort,
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        typer.secho(
+            "fno agents retask: fno-agents binary not found; `fno doctor update --rust` or set FNO_AGENTS_BIN",
+            err=True,
         )
-    except (OSError, RuntimeError, ValueError) as exc:
-        typer.echo(f"agents retask: {exc}", err=True)
-        raise typer.Exit(code=2)
-    if json_out:
-        typer.echo(json.dumps(receipt))
-    else:
-        # Same JSON either way (sorted keys are the only difference): the
-        # receipt is machine-parsed by the lead loop, so there is no human
-        # rendering to switch to.
-        typer.echo(json.dumps(receipt, sort_keys=True))
-    if receipt.get("status") != "retasked":
         raise typer.Exit(code=1)
+    argv = [str(binary), "rename", "retask", worker, "--node", node]
+    if model:
+        argv.extend(["--model", model])
+    if effort:
+        argv.extend(["--effort", effort])
+    proc = subprocess.run(argv)
+    raise typer.Exit(code=proc.returncode if proc.returncode >= 0 else 1)
 
 
 @agents_app.command("spawn-guard", hidden=True)
@@ -895,159 +854,6 @@ agents_app.command("pane-identity", hidden=True)(cmd_pane_identity)
 
 
 
-def _registry_falsifiers(
-    handles: list[str],
-    *,
-    errors: dict[str, str | None] | None = None,
-) -> dict[str, str | None]:
-    """One registry read for N handles. Same three-key match as the single form.
-
-    A handle with no registry row (a discovered-but-unadopted session) carries
-    no falsifier, which is absence of evidence and NOT a death sentence.
-
-    Matched on name, session id, AND short id, because callers key on different
-    ones: a human types the name, while the Rust list path passes
-    ``harness_session_id`` (``registry_truth_handle`` in daemon.rs). A
-    name-only lookup silently returns "no falsifier" for every row on that path,
-    which reads exactly like a healthy process and is how a guard ends up
-    decorative on one of two reachable paths.
-
-    The batch is why ``--handles`` exists at all: ``load_registry`` was the
-    per-handle cost inside a per-handle subprocess. First matching row wins per
-    handle, exactly as the single-handle ``next()`` lookup did. A raising
-    falsifier is recorded for only the handles matched by that row; other rows
-    continue to answer normally.
-    """
-    from fno.agents.reachability import registry_falsifier
-
-    out: dict[str, str | None] = dict.fromkeys(handles, None)
-    error_map: dict[str, str | None] = errors if errors is not None else {}
-    wanted = {h for h in handles if h}
-    if not wanted:
-        return out
-    try:
-        from fno.agents.registry import load_registry
-
-        rows = list(load_registry())
-    except Exception:  # noqa: BLE001 -- an unreadable registry falsifies nothing
-        return out
-    # `registry_falsifier` stays OUTSIDE the except, as it was on the
-    # single-handle path. A falsifier that raises is a malfunction, and
-    # swallowing it here would report "no falsifier" - indistinguishable from a
-    # healthy row, which is the decorative-guard shape this docstring warns
-    # about.
-    resolved: set[str] = set()
-    for row in rows:
-        # `harness_session_id` is Optional, so drop the empties before matching.
-        # A None could never be in `wanted` anyway - that set already excludes
-        # falsy handles - so this narrows the type without changing the match.
-        row_keys = {
-            key for key in (row.name, row.harness_session_id, row.short_id) if key
-        }
-        keys = (row_keys & wanted) - resolved
-        if not keys:
-            continue
-        try:
-            falsifier = registry_falsifier(row)
-        except Exception as exc:  # noqa: BLE001 -- preserve the row's malfunction
-            for key in keys:
-                error_map[key] = type(exc).__name__
-            resolved |= keys
-            continue
-        for key in keys:
-            out[key] = falsifier
-        resolved |= keys
-        if resolved == wanted:
-            break
-    return out
-
-
-def _batch_resolver():
-    """The ORDINARY resolver with its two expensive reads hoisted out of the
-    per-handle path.
-
-    ``resolve_or_suggest`` re-reads the registry (74 ms) on every call, and a
-    NAME handle misses the registry fast path and falls through to a full
-    discovery scan (483 ms of psutil sweep plus transcript globbing). Profiled
-    on the live roster, twelve handles spent 5.8 of 8.3 seconds running that
-    one scan twelve times. Hoisting both is what makes a batch actually cheap
-    rather than merely co-located in one process.
-
-    A hoist, never a second resolver. Every match stays inside
-    ``resolve_or_suggest``, so a batch resolves a handle through the same code
-    a single call does. Growing a second matcher here is the drift a Rust
-    reimplementation of the probe was rejected for.
-
-    Degrades to the per-call read if the hoisted one fails, so a batch is never
-    less able to resolve a handle than a single call is.
-    """
-    from fno.agents.discover import _discover_from_registry, resolve_or_suggest
-
-    try:
-        rows = _discover_from_registry(None)
-    except Exception:  # noqa: BLE001 -- fall back to the per-call read
-        rows = None
-    cache: dict = {}
-
-    def resolve(handle: str):
-        return resolve_or_suggest(
-            handle,
-            require_alive=False,
-            registry_rows=rows,
-            discovery_cache=cache,
-        )
-
-    return resolve
-
-
-def _truth_line(result: dict, falsifier: str | None) -> str:
-    """The human truth line: dead, or exited (resumable) when a resume could relaunch it."""
-    from fno.agents.session_truth import RESUMABLE_BASES, render_truth
-
-    payload = _truth_payload(result, falsifier=falsifier)
-    if payload["reachability"] == "unreachable":
-        result = {**result, "state": (
-            "exited" if payload["basis"] in RESUMABLE_BASES and result.get("session_id") else "dead")}
-    return f"{render_truth(result)} [{payload['reachability']}: {payload['basis']}]"
-
-
-def _truth_payload(result: dict, *, falsifier: str | None = None) -> dict:
-    """The ``truth --json`` wire shape: the Python/Rust boundary.
-
-    ``family1_truth_probe`` (crates/fno-agents/src/claude_ask.rs) reads this,
-    and ``resume`` decides "is live" from it. The reachability verdict has to
-    be ON this wire or Rust keeps re-deriving liveness from the raw transcript
-    ``state`` and never sees the falsifier. ``state`` stays exactly as it was;
-    overloading a field Rust already matches on is a silent contract break.
-    """
-    from fno.agents.reachability import classify_reachability
-
-    reach = classify_reachability(
-        truth_state=result.get("state"),
-        age_s=result.get("last_activity_age_s"),
-        falsifier=falsifier,
-        observed_model=result.get("observed_model"),
-    )
-    payload = {
-        k: result.get(k)
-        for k in (
-            "handle",
-            "state",
-            "reason",
-            "last_activity_age_s",
-            "last_event_at", "last_activity_basis",
-            "last_message",
-            "provider_refusal",
-            "session_id",
-            "observed_model",
-            "harness_title",
-        )
-    }
-    payload["reachability"] = reach.verdict
-    payload["basis"] = reach.basis
-    payload["falsifier_error"] = result.get("falsifier_error")
-    return payload
-
 
 @agents_app.command("truth", hidden=True)
 def cmd_truth(
@@ -1059,12 +865,7 @@ def cmd_truth(
         "--handles",
         help=(
             "BATCH MODE. Comma-separated handles, answered in ONE process. "
-            "Emits a JSON object keyed by handle (with --json), else one "
-            "handle-prefixed line each. Batch mode ALWAYS exits 0, even when a "
-            "handle is unresolvable: a batch has no single exit code to carry, "
-            "so every entry carries its own state and reason instead. A caller "
-            "reading exit 0 as 'all resolved' is reading an absence; read the "
-            "per-entry state."
+            "Always exits 0: every entry carries its own state and reason."
         ),
     ),
     json_out: bool = typer.Option(
@@ -1073,99 +874,17 @@ def cmd_truth(
 ) -> None:
     """Classify a worker's supervision state from its transcript TAIL.
 
-    done | watching | your-move | working | stalled | unknown -- read from the
-    transcript, the only surface that does not lie about a live bg worker (argv,
-    pid, the daemon record, and state.json's state field were each caught lying
-    in one evening). This is the supervision state agent-view's working/idle
-    cannot express. Read-only; exits 13 on an unresolvable handle (peek parity),
-    0 otherwise.
-
-    The line also names the model the worker is ACTUALLY answering as, read
-    from the same transcript -- so a route that silently fell back to the
-    primary vendor shows a `claude-*` id here and disagrees visibly with what
-    the spawn asked for. A worker that came up and never answered reads "no
-    model yet"; one with no transcript yet omits the clause entirely.
-
-    `--handles a,b,c` answers many in ONE process. The Rust daemon probes every
-    roster row on every sweep, and one interpreter cold start (780 ms measured)
-    per row against 0.83 ms of real work is a 940-to-1 overhead ratio. Batching
-    pays that start once per sweep. It stays a batch rather than a Rust port
-    because `state` and `observed_model` must come from the SAME reader (see
-    `TruthProbe` in `crates/fno-agents/src/claude_ask.rs`); a Rust
-    reimplementation would grow the second transcript reader that constraint
-    exists to prevent.
+    done | watching | your-move | working | stalled | unknown. Read-only;
+    exits 13 on an unresolvable handle, 0 otherwise. The read is native
+    (crates/fno-agents/src/truth_cli.rs, over the daemon's own truth
+    reader); with an installed binary the runtime router execs it before
+    this function runs, so this front keeps only its signature for --help
+    and refuses without one.
     """
-    import json as _json
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    from fno.agents.session_truth import resolve_session_truth
-
-    # Split rather than one combined test, so the positional narrows to `str`
-    # for the single-handle path below without an assert standing in for the
-    # control flow.
-    usage = "pass exactly one of: a positional handle, or --handles a,b,c"
-
-    if handles is not None:
-        if handle is not None:
-            print(usage, file=sys.stderr)
-            raise typer.Exit(code=2)
-        # ponytail: handles ride argv. Ceiling is roughly 125 handles at 36
-        # chars, under 5 KB and far below ARG_MAX; read the list from stdin if
-        # a roster ever outgrows that.
-        names = [h.strip() for h in handles.split(",") if h.strip()]
-        falsifier_errors: dict[str, str | None] = {}
-        falsifiers = _registry_falsifiers(names, errors=falsifier_errors)
-        resolver = _batch_resolver()
-        from fno.provenance.resolver import transcript_listing
-
-        with transcript_listing():
-            answers = [
-                (
-                    name,
-                    {
-                        **resolve_session_truth(name, resolve=resolver),
-                        "falsifier_error": falsifier_errors.get(name),
-                    },
-                    falsifiers[name],
-                )
-                for name in names
-            ]
-        if json_out:
-            sys.stdout.write(
-                _json.dumps(
-                    {
-                        name: _truth_payload(result, falsifier=falsifier)
-                        for name, result, falsifier in answers
-                    }
-                )
-                + "\n"
-            )
-        else:
-            for name, result, falsifier in answers:
-                sys.stdout.write(f"{name}: {_truth_line(result, falsifier)}\n")
-        sys.stdout.flush()
-        # Always 0: an unresolvable handle is reported in its own entry, never
-        # in an exit code the whole batch would have to share.
-        return
-
-    if handle is None:
-        print(usage, file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    result = resolve_session_truth(handle)
-    falsifier = _registry_falsifiers([handle])[handle]
-    if json_out:
-        sys.stdout.write(_json.dumps(_truth_payload(result, falsifier=falsifier)) + "\n")
-    else:
-        sys.stdout.write(_truth_line(result, falsifier) + "\n")
-    sys.stdout.flush()
-    # Both are unresolvable-handle exits (13, the lifecycle not-found code); the
-    # reason distinguishes the routine miss from a crashing resolver, which
-    # callers use to decide whether the failure is worth surfacing.
-    if result.get("state") == "unknown" and result.get("reason") in (
-        "not-found",
-        "resolver-error",
-    ):
-        raise typer.Exit(code=13)
+    _ = (handle, handles, json_out)
+    refuse_without_binary("truth")
 
 
 def _run_unfinished_report(

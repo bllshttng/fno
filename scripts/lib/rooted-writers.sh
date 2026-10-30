@@ -34,7 +34,7 @@
 # checkout, and the failure direction is a refusal, which is the safe one.
 
 foreign_rooted_writers() {
-    local checkout="$1" my_sid="${2:-}" lifecycle
+    local checkout="$1" my_sid="${2:-}" lifecycle lifecycle_dir
     lifecycle="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/worktree-lifecycle.sh"
     [[ -f "$lifecycle" ]] || return 2
     # worktree-lifecycle.sh's `case "${1:-status}"` main dispatch is unguarded,
@@ -44,6 +44,12 @@ foreign_rooted_writers() {
     eval "$(sed -n '/^_wt_refresh_cwd_snapshot()/,/^}/p; /^_wt_pids()/,/^}/p' "$lifecycle" 2>/dev/null)" || return 2
     declare -F _wt_refresh_cwd_snapshot >/dev/null 2>&1 || return 2
     declare -F _wt_pids >/dev/null 2>&1 || return 2
+    # The cache lib sits beside the lifecycle lib; source it so the refresh
+    # below can take the cached path. Absent (partial deploy), the refresh's
+    # own presence guard keeps today's uncached read.
+    lifecycle_dir="$(dirname "$lifecycle")"
+    [[ -f "$lifecycle_dir/worktree-cwd-cache.sh" ]] \
+        && source "$lifecycle_dir/worktree-cwd-cache.sh"
     _wt_refresh_cwd_snapshot || return 2
     local rooted rc
     rooted="$(_wt_pids "$checkout")"; rc=$?

@@ -1153,6 +1153,13 @@ pub(crate) fn status_payload<P: GhProbe>(
         Value::Null
     };
 
+    // The base name outlives the move below: the green memo write reads it
+    // after `pr_json` has gone into the compose inputs.
+    let base_ref_name = pr_json
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .unwrap_or("main")
+        .to_string();
     let inputs = compose::ComposeInputs {
         pr: pr.to_string(),
         pr_json,
@@ -1174,7 +1181,46 @@ pub(crate) fn status_payload<P: GhProbe>(
         review_lane: lane,
         platform_incident,
     };
-    compose::compose_payload(&inputs)
+    let (code, payload, stderr) = compose::compose_payload(&inputs);
+    // A green verdict at a head is a GitHub fact that never changes once
+    // read: memo it so a later main-merge-only head move can carry it
+    // (green_carry). A red or pending read writes nothing, and so does a
+    // head whose code identity does not resolve - the carry only rides rows
+    // with a recorded base and patch hash.
+    if green && !is_terminal && !head_sha.is_empty() {
+        let base = base_ref_name.as_str();
+        if let Some(identity) = crate::review_freshness::pr_code_diff_identity(
+            "git",
+            cwd,
+            &crate::green_carry::qualified_base(base),
+            &head_sha,
+        ) {
+            let prefix = crate::pr_status::memo::memo_prefix(slug, pr);
+            let row = serde_json::json!({
+                "ts": now_ms(),
+                "base": base,
+                "patch_hash": identity.hash,
+                "optional_unresolved": payload.get("optional_reviews_unresolved").cloned().unwrap_or(Value::Null),
+                "rerun_recovered": payload.get("rerun_recovered").cloned().unwrap_or(Value::Null),
+                "rerun_failures": payload.get("recovered_failures").cloned().unwrap_or(Value::Null),
+            });
+            crate::pr_status::memo::write(
+                cwd,
+                crate::pr_status::memo::GREEN_VERDICT,
+                &format!("{prefix}{head_sha}"),
+                &row,
+                Some(&prefix),
+            );
+        }
+    }
+    (code, payload, stderr)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Serializes tests that point the process-global FNO_PR_STATUS_CACHE_DIR

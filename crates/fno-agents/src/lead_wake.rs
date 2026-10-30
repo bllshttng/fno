@@ -161,7 +161,12 @@ fn parse_ts(raw: &str) -> Option<i64> {
 }
 
 /// The newest `lead_wake` receipt per live team scope: the dedupe memory.
-/// Rows for scopes with no live team are ignored.
+/// Rows for scopes with no live team are ignored. A receipt whose `acted` is
+/// 0 woke nobody: the wake mail sat behind a quiet-gate hold and demoted to
+/// the durable queue. Counting it suppressed retries for the whole beat
+/// (55m default), so a held wake reached the lead up to two beats late -
+/// the 2 h measured 2026-10-10. A zero-acted receipt does not count, and
+/// the arm re-plans the wake at its next tick instead.
 pub(crate) fn wake_receipts(
     journals: &[std::path::PathBuf],
     teams: &[Team],
@@ -173,6 +178,15 @@ pub(crate) fn wake_receipts(
             let Ok(row) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
+            // An absent `acted` predates the field; it counts, so an upgrade
+            // never re-wakes a lead already told.
+            let acted = row
+                .get("data")
+                .and_then(|d| d.get("acted"))
+                .and_then(Value::as_i64);
+            if acted == Some(0) {
+                continue;
+            }
             let (Some(scope), Some(ts)) = (
                 row.get("data")
                     .and_then(|d| d.get("scope"))
@@ -812,5 +826,25 @@ mod tests {
         let manifest =
             beat_resume_target("s-l2a", &manifest_path).expect("admits the woken codex lead");
         assert_eq!(manifest.scope, "x-aaa");
+    }
+
+    #[test]
+    fn wake_receipts_counts_only_wakes_that_reached_someone() {
+        let repo = tempfile::tempdir().unwrap();
+        let journal = repo.path().join("events.jsonl");
+        let row = |acted: &str| {
+            format!(
+                "{{\"type\":\"lead_wake\",\"ts\":\"2026-10-29T18:00:00Z\",\"data\":\
+                 {{\"scope\":\"fno\",\"acted\":{acted}}}}}\n"
+            )
+        };
+        std::fs::write(&journal, row("0")).unwrap();
+        let teams = vec![team("fno", 1, "vellum", "s-head")];
+        // A zero-acted receipt woke nobody: it must not suppress the next
+        // plan, so the arm retries the wake at its next tick.
+        assert!(wake_receipts(&[journal.clone()], &teams).is_empty());
+        std::fs::write(&journal, row("1")).unwrap();
+        // A delivered wake still dedupes within the beat.
+        assert_eq!(wake_receipts(&[journal], &teams).len(), 1);
     }
 }

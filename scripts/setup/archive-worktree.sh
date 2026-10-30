@@ -211,6 +211,15 @@ if [[ -f "$_REMOVAL_EVENT_LIB" ]]; then
   source "$_REMOVAL_EVENT_LIB"
 fi
 
+# The machine-wide cwd snapshot cache, shared with worktree-lifecycle.sh. No
+# stub: the snapshot block below guards on the functions' presence, so a
+# partial deploy keeps today's uncached read.
+_CWD_CACHE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/worktree-cwd-cache.sh"
+if [[ -f "$_CWD_CACHE_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_CWD_CACHE_LIB"
+fi
+
 # The occupancy classifier bridge. A partial deploy that dropped it
 # reads every pid as holds, which keeps today's confirm-or-decline path.
 _OCCUPANCY_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/worktree-occupancy.sh"
@@ -508,20 +517,33 @@ fi
 # walking every file below the worktree.
 PIDS=""
 CWD_SNAPSHOT_OK=0
-if command -v lsof >/dev/null 2>&1; then
-  CWD_ROWS=""
-  if CWD_ROWS="$(lsof -a -d cwd -Fpn 2>/dev/null)"; then
-    CWD_SNAPSHOT_OK=1
-    TARGET_PHYSICAL="$(cd "$TARGET" 2>/dev/null && pwd -P)" || TARGET_PHYSICAL="$TARGET"
-    PIDS="$(printf '%s\n' "$CWD_ROWS" | awk -v root="$TARGET_PHYSICAL" -v logical="$TARGET" '
-      /^p[0-9]+$/ { pid = substr($0, 2); next }
-      /^n/ && pid != "" {
-        cwd = substr($0, 2)
-        if (cwd == root || index(cwd, root "/") == 1 ||
-            cwd == logical || index(cwd, logical "/") == 1) print pid
-      }
-    ' | sort -u)"
+CWD_ROWS=""
+# A fresh machine-wide cache serves the snapshot without the read; the
+# payload is the raw lsof stdout either way, so the parser below is
+# untouched. The presence guard keeps a partial deploy on the uncached read.
+if declare -F wt_cwd_cache_load >/dev/null 2>&1; then
+  CWD_ROWS="$(wt_cwd_cache_load 2>/dev/null)" && CWD_SNAPSHOT_OK=1
+fi
+if [[ "$CWD_SNAPSHOT_OK" -eq 0 ]]; then
+  if command -v lsof >/dev/null 2>&1; then
+    if CWD_ROWS="$(lsof -a -d cwd -Fpn 2>/dev/null)"; then
+      CWD_SNAPSHOT_OK=1
+      if declare -F wt_cwd_cache_store >/dev/null 2>&1; then
+        printf '%s' "$CWD_ROWS" | wt_cwd_cache_store >/dev/null 2>&1 || true
+      fi
+    fi
   fi
+fi
+if [[ "$CWD_SNAPSHOT_OK" -eq 1 ]]; then
+  TARGET_PHYSICAL="$(cd "$TARGET" 2>/dev/null && pwd -P)" || TARGET_PHYSICAL="$TARGET"
+  PIDS="$(printf '%s\n' "$CWD_ROWS" | awk -v root="$TARGET_PHYSICAL" -v logical="$TARGET" '
+    /^p[0-9]+$/ { pid = substr($0, 2); next }
+    /^n/ && pid != "" {
+      cwd = substr($0, 2)
+      if (cwd == root || index(cwd, root "/") == 1 ||
+          cwd == logical || index(cwd, logical "/") == 1) print pid
+    }
+  ' | sort -u)"
 fi
 # `pgrep -f` matches its pattern as an extended regex against the full
 # cmdline. Pass TARGET unescaped and any `.`/`+`/`[` in the path matches
@@ -566,8 +588,12 @@ if [[ "$CWD_SNAPSHOT_OK" -ne 1 ]]; then
   exit 2
 fi
 
-# Removal-time classification. The sweep's step-4 read is a moment
-# old; this re-enumeration is authoritative. All-inert rows release the tree:
+# Removal-time classification. The enumeration above may be up to the cwd
+# cache TTL (30s) old; each pid's liveness is re-proven here (the kill -0
+# checks above, the classifier's own reads now). A pid that entered the tree
+# inside that window is absent from the set - the accepted cache trade,
+# bounded by the 30m reap grace and the claim and lock gates that hold each
+# tree on their own. All-inert rows release the tree:
 # only terminate rows are signalled here, retire rows are the sweep's claude
 # rm business. Any holds row - including a classifier that cannot answer,
 # which reads all holds - keeps today's confirm-or-decline path. --yes keeps

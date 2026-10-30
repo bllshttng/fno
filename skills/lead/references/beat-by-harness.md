@@ -4,7 +4,7 @@ The lead has one push contract on every harness. When a covered PR settles green
 
 | Harness | Beat | Heartbeat |
 |---|---|---|
-| claude | `loop` | Mail wake lands as a conversation turn, and `/loop 55m` is the cheap heartbeat the role arms itself. `internal/claude/docs/code/scheduled-tasks.md:33`. The row flips to `daemon` once the wake has a delivery bound past the user-typing hold and SessionStart reports a stopped daemon. |
+| claude | `daemon` | Mail wake lands as a conversation turn; the daemon's lead-wake mail is the beat and no native `/loop` is armed. A held wake retries at the next arm tick (a zero-acted receipt does not suppress), and SessionStart prints a line when the daemon is down. |
 | codex | `goal` | Mail wake lands through the fno Codex RPC lane. No in-thread timer is documented. App automations start a new run. `Codex best-practices.md:176` |
 | opencode | `daemon` | Mail wake lands through the fno opencode serve lane. No native timer is verified. `internal/opencode/docs/ecosystem.md:44` |
 | grok | `daemon` | unverified |

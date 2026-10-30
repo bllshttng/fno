@@ -994,7 +994,7 @@ fn node_seed_rewrite(args: &[String]) -> Result<(Vec<String>, Option<String>), S
     let row = crate::spawn_compose::graph_row_for(&node);
     let (effective_command, derive_error) = match &row {
         Some(r) => match crate::backlog_ready::effective_command(r) {
-            Ok((_, cmd)) => (Some(cmd), None),
+            Ok((command, _note)) => (command, None),
             Err(e) => (None, Some(e)),
         },
         None => (None, None),
@@ -1269,5 +1269,88 @@ mod tests {
         let at = drawn.argv.iter().position(|t| t == "--name").unwrap();
         let name = &drawn.argv[at + 1];
         assert!(crate::team_names::valid_person_name(name), "{name}");
+    }
+
+    /// A plan-ready node derives /target, and a /target payload agrees with
+    /// it, so the spawn passes. The note that rides the derivation
+    /// ("command=lifecycle(plan ready -> /target)") is display text: feeding
+    /// it to the decide as the node's command refused every /target payload.
+    #[test]
+    fn a_plan_ready_node_passes_a_target_payload() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        std::fs::write(
+            &plan,
+            "---\nstatus: ready\nkind: plan\n---\n\n## Execution Strategy\n\none wave.\n",
+        )
+        .unwrap();
+        let entries = vec![serde_json::json!({
+            "id": "x-bbbb", "slug": "x-bbbb", "title": "the drag", "type": "feature",
+            "status": "ready", "priority": "p2", "project": "proj", "domain": "code",
+            "created_at": "2026-09-07T00:00:00Z",
+            "plan_path": plan.display().to_string(),
+        })];
+        crate::graph_store::seed_rows(&dir.path().join("graph.json"), &entries).unwrap();
+        let prior = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path());
+        let argv: Vec<String> = [
+            "spawn",
+            "--node",
+            "x-bbbb",
+            "--message",
+            "/fno:target x-bbbb fix the drag",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let outcome = node_seed_rewrite(&argv);
+        match prior {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        let (rewritten, profile) = outcome.unwrap();
+        assert_eq!(rewritten, argv);
+        assert_eq!(profile, None);
+    }
+
+    /// The filing's measured shape: a planless low node derives /target by the
+    /// lean-dispatch arm, and its /fno:target payload passes. The lean-dispatch
+    /// note is long prose ("lean dispatch: planless low node plans inline..."),
+    /// which is exactly what the wrong-element read fed to the decide.
+    #[test]
+    fn a_planless_low_node_passes_a_target_payload() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let entries = vec![serde_json::json!({
+            "id": "x-cccc", "slug": "x-cccc", "title": "the drag", "type": "feature",
+            "status": "idea", "priority": "p2", "project": "proj", "domain": "code",
+            "created_at": "2026-09-07T00:00:00Z", "difficulty": "low",
+        })];
+        crate::graph_store::seed_rows(&dir.path().join("graph.json"), &entries).unwrap();
+        let prior = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path());
+        let argv: Vec<String> = [
+            "spawn",
+            "--node",
+            "x-cccc",
+            "--message",
+            "/fno:target x-cccc fix the drag",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let outcome = node_seed_rewrite(&argv);
+        match prior {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        let (rewritten, profile) = outcome.unwrap();
+        assert_eq!(rewritten, argv);
+        assert_eq!(profile, None);
     }
 }

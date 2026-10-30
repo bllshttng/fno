@@ -150,6 +150,7 @@ pub fn measure_answer(cases: &str, laws: &[Value]) -> Value {
             "stage": case.stage,
             "expected": expected.len(),
             "bm25_top10": ranked.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            "bm25_scores": ranked.iter().map(|(id, score)| json!({"id": id, "score": score})).collect::<Vec<_>>(),
             "bm25_recall_at_5": row[0],
             "bm25_recall_at_10": row[1],
             "bm25_precision_at_10": row[2],

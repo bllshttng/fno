@@ -112,6 +112,7 @@ use crate::client::{pad_to, NeedsFooter, YARD_OVERLAY_W};
 /// NO sprite - a species with no reading is a guessed cat, and the yard does
 /// not guess. The hat reads the ROW's `role_level` (the same wire value the
 /// sideline orders by), never a payload copy.
+#[cfg(test)]
 pub(crate) fn overlay_lines(
     crowd: &[(&str, crate::sprites::Eye, u32)],
     sel: usize,
@@ -119,6 +120,18 @@ pub(crate) fn overlay_lines(
     frame: usize,
     footer: NeedsFooter,
 ) -> Vec<String> {
+    overlay_lines_cursor(crowd, sel, identity, frame, footer).0
+}
+
+/// [`overlay_lines`] and the caption line the cursor fill covers.
+pub(crate) fn overlay_lines_cursor(
+    crowd: &[(&str, crate::sprites::Eye, u32)],
+    sel: usize,
+    identity: Option<&crate::yard_overlay::YardItem>,
+    frame: usize,
+    footer: NeedsFooter,
+) -> (Vec<String>, Option<usize>) {
+    let mut cursor = None;
     let mut lines = vec![pad_to(" the yard · n/N pick · q close", YARD_OVERLAY_W)];
     if crowd.is_empty() {
         // The true failure state of a dispatch system: nothing was sent out.
@@ -142,10 +155,11 @@ pub(crate) fn overlay_lines(
         lines.push(pad_to("", YARD_OVERLAY_W));
         let sel = sel.min(crowd.len() - 1);
         let (name, eye, team) = crowd[sel];
+        cursor = Some(lines.len());
         match identity {
             Some(id) => {
                 let mut caption =
-                    format!(" ▸ {name} · {}", crate::sprites::species_name(id.species));
+                    format!("   {name} · {}", crate::sprites::species_name(id.species));
                 if !id.rarity.is_empty() {
                     caption.push_str(&format!(" · {}", id.rarity));
                 }
@@ -177,7 +191,7 @@ pub(crate) fn overlay_lines(
                     NeedsFooter::Degraded => "identity fold unavailable".to_string(),
                     NeedsFooter::AsOf => "no yard identity (not a registry citizen)".to_string(),
                 };
-                lines.push(pad_to(&format!(" ▸ {name} · {why}"), YARD_OVERLAY_W));
+                lines.push(pad_to(&format!("   {name} · {why}"), YARD_OVERLAY_W));
             }
         }
     }
@@ -187,7 +201,7 @@ pub(crate) fn overlay_lines(
         NeedsFooter::AsOf => format!("   {} citizens", crowd.len()),
     };
     lines.push(pad_to(&footer_line, YARD_OVERLAY_W));
-    lines
+    (lines, cursor)
 }
 
 #[cfg(test)]
