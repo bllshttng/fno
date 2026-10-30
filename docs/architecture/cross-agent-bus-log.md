@@ -146,7 +146,7 @@ The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that 
 
 ## `fno inbox` alias + legacy migration
 
-`fno agents send` (with `fno agents send --to-project <project>` for project-destination anycast) routes through `write_durable_thread` in `mail_cli/send/mod.rs`, which mirrors a canonical envelope into the bus on every write: one log line per send, the md render and the envelope agree (no md-store divergence), and the existing triage drain finds it. The mirror is best-effort (the md render is the durable copy); a mirror failure warns loudly on stderr because a bus reader would otherwise diverge from the md drain until backfill.
+A send routes through `write_durable_thread` in `mail_cli/send/mod.rs`. That includes `--to-project`, the project anycast. It appends one canonical envelope to the bus on every write. A failed append warns loudly on stderr.
 
 **Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` command during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects command skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
 
