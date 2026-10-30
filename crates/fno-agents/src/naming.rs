@@ -562,8 +562,8 @@ pub fn worker_template(cwd: &std::path::Path) -> String {
         .unwrap_or_else(|| DEFAULT_WORKER_TEMPLATE.to_string())
 }
 
-/// A seed whose first word is node-shaped binds that node (`x-2604` as the
-/// whole prompt names the worker for x-2604 the way a `/target` seed would).
+/// A seed whose first word is node-shaped binds that node: a bare node id as
+/// the whole prompt names the worker for it, the way a `/target` seed would.
 fn bare_seed_node(seed: &str) -> Option<String> {
     let word = seed
         .split_whitespace()
