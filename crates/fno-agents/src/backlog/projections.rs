@@ -646,8 +646,8 @@ fn names_canonical_page(targets: &[RenderTarget]) -> bool {
 /// The target list `fno backlog view` renders: the configured targets, plus
 /// the canonical page when no target names it. With `render_default` off the
 /// keeper never writes the page, so the view renders it here on demand.
-fn view_targets(global: &Value) -> Vec<RenderTarget> {
-    let mut targets = targets_from_global(global, &[]);
+fn view_targets(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarget> {
+    let mut targets = targets_from_global(global, unreadable);
     if !names_canonical_page(&targets) {
         targets.push(default_target());
     }
@@ -771,9 +771,9 @@ fn board_render(request: &Value) -> Result<std::process::Output, String> {
 /// Write every configured `local` board target through `fno board-render`
 /// and return the count of failures. Retired projections warn and skip.
 pub(crate) fn render_local_targets() -> usize {
-    let (global, _) = super::advance_settings::load_global_merged();
+    let (global, unreadable) = super::advance_settings::load_global_merged();
     render_board_targets(
-        &targets_from_global(&global, &[]),
+        &targets_from_global(&global, &unreadable),
         global_obsidian_vault(&global),
     )
 }
@@ -989,8 +989,8 @@ pub fn run_view(tail: &[String]) -> i32 {
     if let Some(arg) = tail.first() {
         return usage_error("view", arg);
     }
-    let (global, _) = super::advance_settings::load_global_merged();
-    let targets = view_targets(&global);
+    let (global, unreadable) = super::advance_settings::load_global_merged();
+    let targets = view_targets(&global, &unreadable);
     let failures = render_board_targets(&targets, global_obsidian_vault(&global));
     if failures > 0 {
         eprintln!(
@@ -2082,7 +2082,7 @@ mod tests {
         let targets = targets_from_global(&off, &[]);
         assert!(!names_canonical_page(&targets));
         // `fno backlog view` renders the page on demand when the keeper skips it.
-        assert!(names_canonical_page(&view_targets(&off)));
+        assert!(names_canonical_page(&view_targets(&off, &[])));
         // Unset reads as on: exactly one target, the canonical page.
         let on = targets_from_global(&json!({}), &[]);
         assert_eq!(on.len(), 1);
@@ -2106,7 +2106,7 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].path, page.to_string_lossy());
         // The view list carries the explicit row plus the on-demand page.
-        let view = view_targets(&global);
+        let view = view_targets(&global, &[]);
         assert_eq!(view.len(), 2);
         assert_eq!(view[0].path, page.to_string_lossy());
         assert!(names_canonical_page(&view));
