@@ -1594,7 +1594,7 @@ pub fn deliver_via_keeper_socket_in(
 /// codex awaits [`crate::codex_inject::deliver_via_codex_daemon`] on the caller's
 /// runtime (no nested runtime).
 /// Read a brevity-cap env knob as an int, falling back to `default` when unset or
-/// non-numeric. Mirrors Python `_cap_env_int` (cli/src/fno/mail/cli.py): the SAME
+/// non-numeric. The SAME
 /// knob name governs BOTH front doors onto this transport, so the thresholds
 /// cannot drift between the Python `fno agents mail send --raw` entry and this binary.
 /// Trims surrounding whitespace because Python `int()` does (`int(" 4000 ")` ==
@@ -1608,7 +1608,7 @@ pub(crate) fn cap_env_int(name: &str, default: i64) -> i64 {
 }
 
 /// Two-tier brevity cap on an UNWRAPPED body's byte length, mirroring Python
-/// `_enforce_body_cap` (cli/src/fno/mail/cli.py). `n` is UTF-8 byte length (Rust
+/// the body cap. `n` is UTF-8 byte length (Rust
 /// `String::len`), matching Python's `len(body.encode("utf-8"))`. Returns
 /// `Some(exit_code)` to refuse (caller returns it without injecting); `None` to
 /// proceed. The warn tier is a stderr note only and does not block, matching

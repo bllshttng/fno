@@ -1,6 +1,6 @@
 //! The node-dispatch launch half of the native advance port: the spawn
 //! preference resolution and `fno agents spawn` argv that
-//! `fno/agents/node_dispatch.py` built, over the native owners it already
+//! the deleted Python dispatch built, over the native owners it already
 //! has (naming, route-slot, graph store, settings, territory verdict).
 //!
 
