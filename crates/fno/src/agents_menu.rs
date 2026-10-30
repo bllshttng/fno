@@ -4,8 +4,7 @@
 //! flat spelling still answers for one release: it prints one stderr line
 //! naming the nested form, then runs as before (stderr, because callers
 //! parse stdout). `fno doctor lint menu-caps` counts this table as the
-//! `agents` group; the flat Python registrations it forwards to are the
-//! compat leg, held in scripts/ci/menu-caps-debt.tsv until the window ends.
+//! `agents` group.
 
 use std::ffi::OsString;
 

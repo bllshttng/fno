@@ -69,7 +69,6 @@ fn birth_under_a_dirty_env_is_clean() {
     let state = dir.join("state");
 
     let poison = [
-        "FNO_AGENTS_RUNTIME",
         "FNO_WAKE_MSG",
         "FNO_ROUTE_PROVIDER",
         "FNO_PLAN_PROBE",
@@ -177,7 +176,6 @@ fn birth_exec_fences_the_client_argv_and_cleans_the_supervisor_env() {
         .env_remove("FNO_CLAUDE_DAEMON_DIR")
         .env("CLAUDE_CONFIG_DIR", &dir)
         .env("FNO_TEST_HERMETIC", "1")
-        .env("FNO_AGENTS_RUNTIME", "python")
         .env("FNO_ROUTE_PROVIDER", "zai")
         .env("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
         .env("FAKE_STATE", &state)
@@ -193,7 +191,6 @@ fn birth_exec_fences_the_client_argv_and_cleans_the_supervisor_env() {
     );
     let birth_env = fs::read_to_string(birth_dump).unwrap();
     for key in [
-        "FNO_AGENTS_RUNTIME",
         "FNO_ROUTE_PROVIDER",
         "ANTHROPIC_BASE_URL",
     ] {

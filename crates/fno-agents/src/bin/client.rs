@@ -1815,10 +1815,8 @@ async fn run(args: Vec<String>) -> i32 {
                     discover_flag,
                 ) {
                     // ask FOLLOW-UP prints the reply verbatim with no added
-                    // newline, matching Python `sys.stdout.write(result.reply or "")`
-                    // (Codex P2 on PR #361 - relevant under FNO_AGENTS_RUNTIME=rust,
-                    // the only path that routes ask to this client). Every other
-                    // formatted output (ask create short_id, stop/rm/list/reconcile)
+                    // newline, matching Python `sys.stdout.write(result.reply or "")`.
+                    // Every other formatted output (ask create short_id, stop/rm/list/reconcile)
                     // keeps the trailing newline.
                     let ask_followup = command_owned == "ask"
                         && !result

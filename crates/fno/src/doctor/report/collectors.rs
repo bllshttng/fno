@@ -504,15 +504,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 // ---------------------------------------------------------------------------
 
 fn daemon_drift_warning() -> Value {
-    let binary = if std::env::var("FNO_AGENTS_RUNTIME")
-        .map(|v| v == "rust")
-        .unwrap_or(false)
-    {
-        resolve_binary()
-    } else {
-        resolve_installed_binary()
-    };
-    let Some(binary) = binary else {
+    let Some(binary) = resolve_installed_binary() else {
         return Value::Null;
     };
     let Ok(out) = Command::new(&binary).args(["status", "--json"]).output() else {

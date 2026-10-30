@@ -65,13 +65,11 @@ if [[ "$(printf '%s' "$HOOK_INPUT" | jq -r '.invocationNum // empty' 2>/dev/null
     # lead-postcompact-reinject.sh): `fno agents internal registry-json` is a daemon-free
     # file read; this session's row matches session_id OR harness_session_id.
     command -v fno >/dev/null 2>&1 || { emit; exit 0; }
-    # A hook is never a delegated one-command child, so a FNO_AGENTS_RUNTIME pin here
-    # has leaked off a spawned worker: strip it for this read and keep the exit
-    # code, so a broken read never reads silently as "no row".
-    AGENTS_JSON="$(env -u FNO_AGENTS_RUNTIME fno agents internal registry-json 2>/dev/null)"
+    # Keep the exit code, so a broken read never reads silently as "no row".
+    AGENTS_JSON="$(fno agents internal registry-json 2>/dev/null)"
     REG_RC=$?
     [[ "$REG_RC" -ne 0 ]] \
-      && echo "agy-team-inject.sh: fno agents internal registry-json exited $REG_RC; team treated as unknown (the FNO_AGENTS_RUNTIME pin was stripped before the read)" >&2
+      && echo "agy-team-inject.sh: fno agents internal registry-json exited $REG_RC; team treated as unknown" >&2
     MY_ROW="$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$CONVERSATION_ID" \
         '.agents[] | select(.session_id == $sid or .harness_session_id == $sid)' 2>/dev/null | head -1)"
     [[ -n "$MY_ROW" ]] || { emit; exit 0; }

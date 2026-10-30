@@ -2871,25 +2871,13 @@ mod tests {
     }
 
     #[test]
-    fn agents_status_claims_natively_python_runtime_keeps_its_refusal_path() {
+    fn agents_status_claims_natively() {
         // The read command every hook and wait loop spends skips the Python
         // front, whose status command only execs the same binary.
         assert_eq!(
             decide_role(&os(&["agents", "status", "--json"]), false),
             Role::AgentsStatus(os(&["--json"]))
         );
-        // The documented escape: FNO_AGENTS_RUNTIME=python keeps the Python
-        // path, whose status command refuses with its own message.
-        let prev = std::env::var_os("FNO_AGENTS_RUNTIME");
-        std::env::set_var("FNO_AGENTS_RUNTIME", "python");
-        assert_eq!(
-            decide_role(&os(&["agents", "status", "--json"]), false),
-            Role::Forward
-        );
-        match prev {
-            Some(v) => std::env::set_var("FNO_AGENTS_RUNTIME", v),
-            None => std::env::remove_var("FNO_AGENTS_RUNTIME"),
-        }
     }
 
     #[test]

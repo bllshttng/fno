@@ -514,7 +514,7 @@ The paragraph below is the superseded theory, kept as the historical record of t
 
 A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt. It can have no model turn in flight. Non-interactive `claude attach` has no pty. It can print "Attaching..." and exit without delivery. The Rust live arm reads the target account's Claude roster. When a message was requested, it refuses `working` or `done` rows. It sends the wrapped message over `control.sock` and confirms it in the transcript. Python no longer wakes Claude rows.
 
-**The Rust arm owns live Claude resume directly.** The `resume` command routes to the installed `fno-agents` binary because it is in `RUST_CLIENT_COMMANDS`. Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. It no longer delegates to Python or pins `FNO_AGENTS_RUNTIME=python`. Python `resume_cli.py` refuses Claude rows with exit 13. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
+**The Rust client owns live Claude resume.** Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
 
 Both doors apply the same usability rule, not just an existence check: a recorded
 file that is missing, unparseable, or carries only the auth-scrub floor all

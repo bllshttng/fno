@@ -34,7 +34,7 @@ from .core import (
 from fno.tombstones import tombstone_group_cls
 
 RosterReading = _roster.RosterReading
-_finished_row_states = _roster._finished_row_states
+_FINISHED_ROW_STATES = _roster._FINISHED_ROW_STATES
 classify_workers = _roster.classify_workers
 read_roster = _roster.read_roster
 
@@ -1111,7 +1111,7 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
                 reasons[claim.key] = "row-absent-transcript-unfinished"
                 return None
             return True
-        if row.get("state") not in _finished_row_states():
+        if row.get("state") not in _FINISHED_ROW_STATES:
             return False
         # The row state alone does NOT authorize a reap. `_TERMINAL_STATES`
         # carries its own warning: the roster called a WORKING session done on

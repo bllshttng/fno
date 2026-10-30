@@ -1,4 +1,4 @@
-//! Characterization against `fno.agents.watchdog`, captured to
+//! Characterization against the deleted Python watchdog, captured to
 //! tests/golden/watchdog/verdicts.json before the Python leg was deleted.
 
 use super::sweep::{digest_text, provider_outage_lines, union_signature, verdict_signature};

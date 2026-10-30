@@ -43,8 +43,6 @@ codex now delegates to this module; its 58-test regression suite proves the extr
 
 The one case that previously stayed on Python — an `ask` with no resolvable provider (new agent, no `--provider`) — is now surfaced by the Rust client itself in `bin/client.rs::unresolvable_ask_exit`: it reproduces Python's `select_provider` exit-2 error byte-for-byte (`provider is required for new agent <repr(name)>; pass --provider one of: claude, codex, gemini`, or the `unknown provider` variant) rather than falling through to the daemon PTY path (Locked Decision 3). `py_repr` (from `claude_ask.rs`) reproduces Python's `{name!r}` quoting.
 
-`FNO_AGENTS_RUNTIME=python` still forces the Python dispatch for every provider, and an absent installed binary still falls back to Python — the fallback is intact.
-
 ## Test surfaces
 
 | Surface | What it pins |

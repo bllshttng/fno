@@ -81,7 +81,7 @@ fn merge_scan_jv(scan: &MergeScan) -> Jv {
 }
 
 /// The watchdog freshness read: `lane_armed` + `sweep_staleness` ported from
-/// `fno.agents.watchdog`. `None` arm means the lane is off on purpose or its
+/// `crate::watchdog`. `None` arm means the lane is off on purpose or its
 /// keys are unreadable, and the block stays silent - a freshness reader that
 /// does not share the producer's own gate once printed STALE for a cadence
 /// that was off on purpose.

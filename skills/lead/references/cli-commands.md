@@ -120,7 +120,7 @@ It is a dry run by default. `--apply` executes the wake lane only, the one actio
 
 `fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>`.
 
-A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands. A session that carries `FNO_AGENTS_RUNTIME=python` reaches the older Python leg, which refuses a Done row. Run the command with `env -u FNO_AGENTS_RUNTIME` until spawned sessions stop inheriting that pin.
+A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands.
 
 On the one path that forwards it, the warning `timed out after 3.0s, falling back to registry-only view` is noise. The roster probe times out, the command falls back to the registry view, and the message still lands.
 

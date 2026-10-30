@@ -168,7 +168,6 @@ esac
                 "FNO_AGENTS_HOME": str(agents_home),
                 "FNO_CLAIMS_ROOT": str(claims_root),
                 "FNO_EVENTS_PATH": str(project / ".fno" / "events.jsonl"),
-                "FNO_AGENTS_RUNTIME": "python",
                 # The invoking-harness marker is how a spawn names its harness
                 # since the axis flags retired: the child infers codex from
                 # this marker, the way a real codex-hosted session would.

@@ -2,8 +2,7 @@
 //! parity-oracle: fno.agents.whoami.resolve_self
 //!
 //! The name, whoami, registry-repair and heal-token commands, frozen against
-//! goldens captured from their Python legs (tests/golden/registry_commands/
-//! capture.py) before those legs were deleted. The fixtures here rebuild the
+//! goldens captured from their Python legs before those legs were deleted. The fixtures here rebuild the
 //! capture's homes and stores case for case. Exit codes and stderr compare
 //! byte for byte everywhere; stdout does too, except heal-token's row, which
 //! compares by field (the Python leg printed every dataclass field, the

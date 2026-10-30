@@ -868,7 +868,7 @@ pub fn escalate_unfinished(
 mod tests {
     use super::*;
 
-    /// Oracle: fno.agents.unfinished_work and fno.agents.stale_escalate.
+    /// Oracle: the deleted Python unfinished-work and stale-escalate lanes.
     const GOLDEN: &str = include_str!("../../tests/golden/watchdog/unfinished.json");
 
     #[test]

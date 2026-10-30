@@ -3,10 +3,8 @@
 //!
 //! Characterization harness for the `logs` command port. The goldens were
 //! captured from the Python leg (cli/src/fno/agents/read.py) while it still
-//! ran its own body, through the recipe in this directory (`capture.py` plus
-//! the README): one throwaway root per case, a registry seed, the empty
-//! harness stores, a PATH shim with the fake `claude` the case needs, and
-//! `FNO_AGENTS_RUNTIME=python python -m fno.cli agents logs ...`.
+//! ran its own body: one throwaway root per case, a registry seed, the empty
+//! harness stores, and a PATH shim with the fake `claude` the case needs.
 //!
 //! Normalization mirrors the capture pipeline exactly: the five setup-noise
 //! drops, the events.emit multi-line skip, rstrip, then the ROOT scrub
@@ -16,8 +14,7 @@
 //! `unknown_name`. The registry resolver became session-id-first and its
 //! not-found message changed shape, so the deleted Python leg printed
 //! "agent not found: ghost" where the surviving resolver prints the
-//! accepted-forms line below. capture.py's SURVIVOR_BYTES records the same
-//! override, so re-running the recipe reproduces the frozen files exactly.
+//! accepted-forms line below.
 
 mod common;
 
@@ -46,9 +43,7 @@ fn binary_path() -> &'static str {
 }
 
 /// The capture's env block, applied over the inherited environment. Identity
-/// markers are blanked so the resolver scans only the fixture stores, and
-/// `FNO_AGENTS_RUNTIME` is REMOVED so the client never re-execs a Python leg
-/// (the capture set it to run the other side of this pair).
+/// markers are blanked so the resolver scans only the fixture stores.
 fn logs_env<'a>(cmd: &'a mut Command, root: &Path, shimmed: bool) -> &'a mut Command {
     // The test-owner env rides along so the client's attribution rows name
     // this test process, not the operator's environment.
@@ -75,8 +70,7 @@ fn logs_env<'a>(cmd: &'a mut Command, root: &Path, shimmed: bool) -> &'a mut Com
         .env("CLAUDE_SESSION_ID", "")
         .env("CLAUDE_CODE_SESSION_ID", "")
         .env_remove("FNO_AGENT_SELF")
-        .env_remove("FNO_RUST_FRONT")
-        .env_remove("FNO_AGENTS_RUNTIME");
+        .env_remove("FNO_RUST_FRONT");
     if shimmed {
         let path = std::env::var("PATH").unwrap_or_default();
         let shim = root.join("shim");

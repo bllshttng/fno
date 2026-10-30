@@ -2,7 +2,7 @@
 //! parity-oracle: fno.agents.registry.register_existing_session
 //!
 //! The `fno agents register` command, pinned against goldens captured
-//! from the Python leg (tests/golden/register/capture.py). The oracle leg is
+//! from the Python leg. The oracle leg is
 //! deliberately LIVE: the SessionStart pane restamp still calls
 //! register_existing_session, so the provenance gate reads this file as a
 //! differential pin and asserts the oracle resolves. When a later wave

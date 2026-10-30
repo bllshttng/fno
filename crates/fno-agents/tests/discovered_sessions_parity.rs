@@ -1,5 +1,5 @@
-//! parity-stage: characterization
-//! parity-oracle: fno.agents.discover
+//! parity-stage: differential
+//! parity-oracle: fno.agents.discover.discover_live_sessions
 
 use fno_agents::discovered_sessions::aliases::{
     default_alias, disambiguate, fit_sid_alias, is_accreted, is_legacy_handle,
