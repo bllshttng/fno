@@ -30,28 +30,12 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STATE_FILE=".fno/target-state.md"
 
 # ── Plugin-root pointer (best-effort, idempotent) ────────────────────
-# Persist the plugin root to ~/.fno/install/plugin-root so `fno do target init` and
-# `fno gate set` can find their plugin scripts when run from a foreign project
-# with no env hint. `fno` is a uv-tool install whose wheel does not carry
-# hooks/, and CLAUDE_PLUGIN_ROOT is not propagated to arbitrary `fno`
-# subprocesses - the pointer is then the only env-less source. The hook copy
-# that runs can live in a linked worktree (a spawned worker's feature
-# worktree), so a worktree root must never become the machine-global value:
-# every env-less reader would run that unmerged branch, and the merge sweep
-# would later leave the pointer dangling. A linked worktree has a .git FILE;
-# a canonical checkout has a .git DIRECTORY; an installed stage has none.
-# Read by fno.paths._read_persisted_plugin_root. errexit-safe.
-prime_plugin_root_pointer() {
-    [[ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]] || return 0
-    [[ -f "$PLUGIN_ROOT/.git" ]] && return 0
-    local home="${FNO_HOME:-$HOME/.fno}"
-    local ptr="$home/install/plugin-root"
-    if [[ -f "$ptr" ]] && [[ "$(cat "$ptr" 2>/dev/null)" == "$PLUGIN_ROOT" ]]; then
-        return 0
-    fi
-    mkdir -p "$home/install" 2>/dev/null || return 0
-    printf '%s\n' "$PLUGIN_ROOT" > "$ptr" 2>/dev/null || true
-}
+# The function lives in hooks/helpers/prime-plugin-root.sh, shared with
+# session-start-using-fno.sh: every harness's session start keeps the pointer
+# at its own copy, so a claude worker's env-less init never resolves whatever
+# copy the last codex session installed.
+# shellcheck source=helpers/prime-plugin-root.sh
+source "$SCRIPT_DIR/helpers/prime-plugin-root.sh"
 prime_plugin_root_pointer || true
 
 # ── heal a wired Claude WorktreeRemove hook after a plugin move ──────
