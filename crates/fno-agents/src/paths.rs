@@ -945,12 +945,10 @@ pub(crate) fn dirs_home() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 /// The spaces ROOT (the directory holding `<slug>` space dirs): `FNO_SPACES_DIR`
-/// verbatim -- it names the root itself, like Python `spaces_root` -- else
-/// `<FNO_AGENTS_HOME parent>/spaces`, else `$HOME/.fno/spaces`.
-/// The spaces ROOT: `FNO_SPACES_DIR`, then the `config.paths.spaces_dir`
-/// override, then the state chain's `spaces` dir -- Python
-/// `paths.spaces_root`'s chain (the slug contract below is a cross-language
-/// wire format).
+/// verbatim -- it names the root itself, like Python `spaces_root` -- else the
+/// state chain's `spaces` dir: `FNO_STATE_DIR`, the configured `state_dir`,
+/// `$HOME/.fno`. Spaces are operator state, so `FNO_AGENTS_HOME` plays no
+/// part (the daemon's runtime home is state-dir independent).
 fn spaces_root_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_SPACES_DIR").filter(|v| !v.is_empty()) {
         let root = PathBuf::from(v);
