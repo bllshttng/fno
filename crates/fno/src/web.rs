@@ -1526,15 +1526,20 @@ async fn command_answer(
             )
         }
     };
-    let fold = match crate::needs_overlay::questions_now().await {
-        Ok(f) => f,
-        Err(e) => return plain_status(StatusCode::SERVICE_UNAVAILABLE, &e),
-    };
-    let Some(item) = fold.items.iter().find(|i| i.id == id) else {
-        return plain_status(StatusCode::NOT_FOUND, "no such question");
+    // The page only offers a question it already holds, so the cache answers
+    // the node. A question the cache has not seen yet takes one fold read.
+    let node = match st.command.question_node(&id).await {
+        Some(node) => node,
+        None => match crate::needs_overlay::questions_now().await {
+            Ok(fold) => match fold.items.iter().find(|i| i.id == id) {
+                Some(item) => item.node.clone(),
+                None => return plain_status(StatusCode::NOT_FOUND, "no such question"),
+            },
+            Err(e) => return plain_status(StatusCode::SERVICE_UNAVAILABLE, &e),
+        },
     };
     let inputs = model_inputs(&st).await;
-    let chain = crate::web_answer::chain_of(&inputs.rows, item.node.as_deref());
+    let chain = crate::web_answer::chain_of(&inputs.rows, node.as_deref());
     let person = match crate::web_invites::decide(
         &caller_of(&headers, st.writable),
         st.invites.as_deref().map(Vec::as_slice),
