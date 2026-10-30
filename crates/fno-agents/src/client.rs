@@ -355,9 +355,7 @@ pub async fn ensure_daemon(
     // parent (laundered lineage) while `resolve_harness` tags the daemon's own
     // claims with a harness it does not own - the exact leak the two-family
     // refusal exists to prevent, on the one path it could not see.
-    for (marker, _) in crate::claims::HARNESS_SESSION_MARKERS {
-        cmd.env_remove(marker);
-    }
+    crate::claims::scrub_identity_env(cmd.as_std_mut());
     // Inherit the worker/daemon bin overrides so a test harness's binaries are used.
     if let Some(v) = std::env::var_os("FNO_AGENTS_WORKER_BIN") {
         cmd.env("FNO_AGENTS_WORKER_BIN", v);

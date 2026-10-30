@@ -835,32 +835,6 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
     return [*out[:boundary], "--account", picked, *out[boundary:]]
 
 
-#: Commands whose Rust-client handling launches a harness child that would inherit
-#: the exec'd client's env verbatim. ``worker_environment`` scrubs identity for
-#: every Python adapter seam, but a spawn/ask that execs the binary crosses no
-#: Python seam, and the Rust spawn arms only scrub model vars
-#: (model_env_scrub), so without this the identity floor is one of two
-#: reachable implementations - decorative for the default installed-binary
-#: route. Direct ``fno-agents`` invocations still need the Rust-side twin.
-_WORKER_LAUNCHING_COMMANDS = frozenset({"spawn", "ask"})
-
-
-def _scrub_ambient_identity_at_exec(command: str) -> None:
-    """Drop ambient identity markers from ``os.environ`` right before the exec,
-    so the Rust client (and the worker it launches) cannot inherit them.
-
-    Only the exec branches call this: the process is replaced immediately, so
-    the mutation never reaches a Python code path (parent-edge capture in
-    ``cmd_spawn`` still sees the markers on the fall-through route). Scoped to
-    worker-launching commands because the client itself resolves identity for
-    other commands and must keep seeing the ambient markers."""
-    if command not in _WORKER_LAUNCHING_COMMANDS:
-        return
-    from fno.harness_identity import scrub_ambient_identity
-
-    scrub_ambient_identity()
-
-
 #: d-fe66560a keeps the binary's action list shrink-only, so these read
 #: leaves have no action of their own: the router rewrites each into an
 #: argument of the `status` action before the exec.
@@ -1108,13 +1082,11 @@ def make_agents_group_cls() -> type:
                 mode = runtime_mode()
                 if mode == "rust":
                     _pin = _worktree_policy_pin_at_seam(args)
-                    _scrub_ambient_identity_at_exec(command)
                     route_to_rust(list(args), env_pin=_pin or None)  # execs; does not return
                 elif mode == "auto" and command in AUTO_ROUTE_COMMANDS:
                     binary = rust_binary.resolve_installed_binary()
                     if binary is not None:
                         _pin = _worktree_policy_pin_at_seam(args)
-                        _scrub_ambient_identity_at_exec(command)
                         route_to_rust(list(args), binary=binary, env_pin=_pin or None)  # execs
                     # else: no installed binary -> Python dispatch below.
                 # mode == "python", or no installed binary -> Python dispatch below.
