@@ -253,6 +253,15 @@
       "doc": "Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file)."
     },
     {
+      "path": "backlog.render_default",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). Set false to stop the store keeper rewriting the page after every burst: only explicit [[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand before opening. GLOBAL config file only, like render_targets."
+    },
+    {
       "path": "backlog.page_reload_s",
       "type": "int",
       "default": 60,
@@ -1897,7 +1906,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false."
+      "doc": "Arm the fno-agents daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agents daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false."
     },
     {
       "path": "lead.wake_ceiling",

@@ -189,7 +189,7 @@ pub fn load_global_merged() -> (serde_json::Value, Vec<PathBuf>) {
     (serde_json::Value::Object(merged), unreadable)
 }
 
-fn coerce_bool(value: Option<&serde_json::Value>, default: bool) -> bool {
+pub(crate) fn coerce_bool(value: Option<&serde_json::Value>, default: bool) -> bool {
     match value {
         Some(serde_json::Value::Bool(b)) => *b,
         Some(serde_json::Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
