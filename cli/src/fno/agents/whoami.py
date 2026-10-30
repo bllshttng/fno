@@ -6,8 +6,6 @@ role authorization and succession checks use. Read-only by construction.
 """
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Optional
 
 from fno.agents.registry import AgentEntry
