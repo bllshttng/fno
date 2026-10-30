@@ -1,0 +1,4 @@
+{"kind":"task_started","short_id":"b2b2"}
+{"type":"task_done","data":{"short_id":"b2b2"}}
+{"kind":"heartbeat","short_id":"b2b2"}
+{"kind":"blocked","source":"worker:zz99"}

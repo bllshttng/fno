@@ -1,0 +1,5 @@
+{"schema_version": 43, "agents": [
+ {"name": "alpha", "cwd": "/fixture/proj", "log_path": "", "harness": "claude", "status": "idle", "harness_session_id": "a1a1a1a1-0000-4000-8000-00000000000a", "short_id": "a1a1"},
+ {"name": "beta", "cwd": "/fixture/proj", "log_path": "", "harness": "claude", "status": "idle", "harness_session_id": "b2b2b2b2-0000-4000-8000-00000000000b", "short_id": "b2b2"},
+ {"name": "gamma", "cwd": "/fixture/proj", "log_path": "", "harness": "claude", "status": "busy", "short_id": "c3c3"}
+]}

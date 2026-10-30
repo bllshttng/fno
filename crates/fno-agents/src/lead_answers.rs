@@ -4,8 +4,8 @@
 //! The answered reading reads every answered question page in the questions
 //! directory (state path `questions`), matching on NODE membership in the
 //! team scope, so a ruling recorded on another lead's page still shows.
-//! The quiet reading reads each quiet scope worker through
-//! `fno agents peek`, printing its last RESULT line or help block; a
+//! The quiet reading reads each quiet scope worker with the peek reader,
+//! in process, printing its last RESULT line or help block; a
 //! failed read keeps its row and says READER FAILED, never blanks.
 
 use std::collections::BTreeSet;
@@ -283,33 +283,14 @@ pub(crate) fn scope_live_worker_count(rows: &[Value], scope_ids: &BTreeSet<Strin
 /// The worker's own last word, read in process from its transcript tail:
 /// the same records a peek renders, with no interpreter per worker. A worker
 /// with no transcript yet (a pane row before reconcile backfills its session)
-/// falls back to one `fno agents peek`, which reads the pane screen.
+/// falls back to the pane screen, read in process the way peek reads it.
 fn peek_last_report(handle: &str) -> Result<String, String> {
     let texts = match crate::session_truth::tail_texts(handle, PEEK_RECORDS) {
         Ok(texts) => texts,
-        Err(_) => peek_texts(handle)?,
+        Err(_) => crate::peek::pane_texts(handle, PEEK_RECORDS)?,
     };
     last_report(&texts)
         .ok_or_else(|| format!("no RESULT or help block in the last {PEEK_RECORDS} records"))
-}
-
-fn peek_texts(handle: &str) -> Result<Vec<String>, String> {
-    let n = PEEK_RECORDS.to_string();
-    let (code, out, err) =
-        crate::lead_checkin::fno_command(&["agents", "peek", handle, "--json", "-n", &n])?;
-    if code != 0 {
-        let cause = crate::lead_checkin::stderr_cause(&err);
-        return Err(if cause == "no stderr" {
-            format!("peek exited {code}")
-        } else {
-            cause
-        });
-    }
-    Ok(out
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter_map(|rec| rec.get("text").and_then(Value::as_str).map(str::to_string))
-        .collect())
 }
 
 /// The last report in a record tail, newest record winning; inside one

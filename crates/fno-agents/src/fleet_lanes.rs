@@ -491,32 +491,35 @@ fn fleet_cost(
 }
 
 /// The team census: leads, workers, tests. Leads and workers are ROW counts,
-/// tests is a PROCESS count, never folded together. The team roles fold
-/// (gather_team) stays with the Python leg until the agents family ports it,
-/// so those two counts read null with the reason named - the rule every arm
-/// follows: an unread count NAMES why.
+/// tests is a PROCESS count, never folded together. Leads are the team read's
+/// role total and workers the rest of the roster; an unreadable team leaves
+/// both null.
 fn census_of(
     reading: Option<&crate::footprint_cause::CauseReading>,
     row_count: Option<usize>,
-    share: Value,
+    team: &Value,
+    probe: &Value,
     read_ms: u128,
 ) -> Value {
     let tests = reading.map(|r| r.footprint.test_process_count);
     let gap = reading.and_then(|r| r.footprint.attribution_gap.clone());
+    let leads = team["summary"]["total"]
+        .as_u64()
+        .filter(|_| row_count.is_some());
+    let workers = leads.and_then(|l| row_count.and_then(|c| (c as u64).checked_sub(l)));
+    let conflicts = leads.and(team["conflicts"].as_array().map(Vec::len));
     json!({
-        "leads": Value::Null,
-        "lead_conflicts": Value::Null,
-        "workers": Value::Null,
+        "leads": leads,
+        "lead_conflicts": conflicts,
+        "workers": workers,
         "tests": tests.map(|t| json!(t)).unwrap_or(Value::Null),
         "roster_rows": row_count.map(|c| json!(c)).unwrap_or(Value::Null),
-        "gate_notes": [
-            "team roles fold unreadable in the native reading: leads/workers stay with the Python team fold until the agents family ports it"
-        ],
+        "gate_notes": probe.get("warnings").cloned().unwrap_or_else(|| json!([])),
         "attribution_gap": gap.map(|g| json!(g)).unwrap_or(Value::Null),
         "top_consumers": reading
             .map(|r| Value::Array(crate::footprint_cause::top_consumers(&r.footprint.top, 5)))
             .unwrap_or(Value::Null),
-        "share": share,
+        "share": probe.get("share").cloned().unwrap_or(Value::Null),
         "roster_error": row_count.map(|_| Value::Null).unwrap_or(json!("roster unavailable")),
         "read_ms": json!(read_ms),
     })
@@ -543,8 +546,8 @@ pub(crate) fn read_lanes() -> LaneReading {
     let mut reading = LaneReading::default();
     reading.arms = vec![load_arm.clone(), cpu_arm, mem_arm, power_arm];
     let full_probe = probe_answer(&json!({"mode": "probe", "caller_session": Value::Null}));
-    let share = full_probe.get("share").cloned().unwrap_or(Value::Null);
-    reading.census = census_of(footprint.as_ref(), row_count, share, read_ms);
+    let team = row_count.map_or(Value::Null, |_| crate::team_read::gather_team());
+    reading.census = census_of(footprint.as_ref(), row_count, &team, &full_probe, read_ms);
     // The refusal rule: the lane number needs BOTH resource arms measured.
     let cpu_dark = reading
         .arms
@@ -742,4 +745,32 @@ fn render(reading: &LaneReading) -> String {
     ));
     lines.extend(census_lines(&reading.census));
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_census_splits_the_roster_into_leads_and_workers() {
+        let team = json!({"summary": {"total": 2}, "conflicts": [{"scope": "alpha"}]});
+        let probe = json!({"warnings": ["stale stamp"], "share": {"share": 3}});
+        let census = census_of(None, Some(5), &team, &probe, 7);
+        assert_eq!(census["leads"], 2);
+        assert_eq!(census["workers"], 3);
+        assert_eq!(census["lead_conflicts"], 1);
+        assert_eq!(census["gate_notes"], json!(["stale stamp"]));
+        assert_eq!(census["share"], json!({"share": 3}));
+
+        let unread = census_of(
+            None,
+            Some(5),
+            &json!({"summary": {"total": null}}),
+            &json!({}),
+            7,
+        );
+        assert!(unread["leads"].is_null() && unread["workers"].is_null());
+        assert!(unread["lead_conflicts"].is_null());
+        assert_eq!(unread["gate_notes"], json!([]));
+    }
 }

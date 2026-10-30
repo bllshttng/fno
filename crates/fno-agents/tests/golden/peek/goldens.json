@@ -1,0 +1,148 @@
+{
+ "tail": {
+  "argv": [
+   "alpha"
+  ],
+  "exit": 0,
+  "out": "peer alpha: agent=claude short_id=a1a1 recorded_cwd=/fixture/proj\nuser: start the ledger sweep\nassistant: Reading the ledger now. [tool_use: Bash]\npeer: <cross-session-message from-name=\"lead\">\nstatus?\n</cross-session-message>\nassistant: Sweep done: 3 rows.\n",
+  "err": ""
+ },
+ "tail-json": {
+  "argv": [
+   "alpha",
+   "--json"
+  ],
+  "exit": 0,
+  "out": "{\"role\": \"user\", \"text\": \"start the ledger sweep\"}\n{\"role\": \"assistant\", \"text\": \"Reading the ledger now. [tool_use: Bash]\"}\n{\"role\": \"peer\", \"text\": \"<cross-session-message from-name=\\\"lead\\\">\\nstatus?\\n</cross-session-message>\"}\n{\"role\": \"assistant\", \"text\": \"Sweep done: 3 rows.\"}\n",
+  "err": ""
+ },
+ "tail-two": {
+  "argv": [
+   "alpha",
+   "-n",
+   "2"
+  ],
+  "exit": 0,
+  "out": "peer alpha: agent=claude short_id=a1a1 recorded_cwd=/fixture/proj\npeer: <cross-session-message from-name=\"lead\">\nstatus?\n</cross-session-message>\nassistant: Sweep done: 3 rows.\n",
+  "err": ""
+ },
+ "grep-hit": {
+  "argv": [
+   "alpha",
+   "--grep",
+   "ledger"
+  ],
+  "exit": 0,
+  "out": "peer alpha: agent=claude short_id=a1a1 recorded_cwd=/fixture/proj\nuser: start the ledger sweep\nassistant: Reading the ledger now. [tool_use: Bash]\n",
+  "err": "grep 'ledger': 2 matching record(s) in claude a1a1a1a1-0000-4000-8000-00000000000a\n"
+ },
+ "grep-miss": {
+  "argv": [
+   "alpha",
+   "--grep",
+   "nomatch",
+   "-J"
+  ],
+  "exit": 0,
+  "out": "{\"status\": \"no activity yet\"}\n",
+  "err": "grep 'nomatch': 0 matching record(s) in claude a1a1a1a1-0000-4000-8000-00000000000a\n"
+ },
+ "lines-zero": {
+  "argv": [
+   "alpha",
+   "-n",
+   "0"
+  ],
+  "exit": 0,
+  "out": "peer alpha: agent=claude short_id=a1a1 recorded_cwd=/fixture/proj\nno activity yet\n",
+  "err": ""
+ },
+ "status-events": {
+  "argv": [
+   "beta"
+  ],
+  "exit": 0,
+  "out": "peer beta: agent=claude short_id=b2b2 recorded_cwd=/fixture/proj\n  [task_started] b2b2\n  [task_done] b2b2\n",
+  "err": ""
+ },
+ "status-events-json": {
+  "argv": [
+   "beta",
+   "--json"
+  ],
+  "exit": 0,
+  "out": "{\"status\": \"[task_started] b2b2\"}\n{\"status\": \"[task_done] b2b2\"}\n",
+  "err": ""
+ },
+ "incomplete-identity": {
+  "argv": [
+   "gamma"
+  ],
+  "exit": 1,
+  "out": "",
+  "err": "registry row gamma exists with status=busy but harness_session_id is missing; worker identity is incomplete\n"
+ },
+ "not-found": {
+  "argv": [
+   "zzzz-nobody"
+  ],
+  "exit": 13,
+  "out": "",
+  "err": "peer not found in the registry: zzzz-nobody\nthe registry is not the transcript. A reaped row leaves its transcript on disk.\ntry: fno agents adopt zzzz-nobody\n"
+ },
+ "all": {
+  "argv": [
+   "--all"
+  ],
+  "exit": 0,
+  "out": "# claude a1a1a1a1-0000-4000-8000-00000000000a\nuser: start the ledger sweep\nassistant: Reading the ledger now. [tool_use: Bash]\npeer: <cross-session-message from-name=\"lead\">\nstatus?\n</cross-session-message>\nassistant: Sweep done: 3 rows.\n# claude b2b2b2b2-0000-4000-8000-00000000000b\n",
+  "err": "2 session(s) read\n"
+ },
+ "all-grep-json": {
+  "argv": [
+   "--all",
+   "--grep",
+   "ledger",
+   "--json"
+  ],
+  "exit": 0,
+  "out": "{\"session_id\": \"a1a1a1a1-0000-4000-8000-00000000000a\", \"agent\": \"claude\", \"role\": \"user\", \"text\": \"start the ledger sweep\"}\n{\"session_id\": \"a1a1a1a1-0000-4000-8000-00000000000a\", \"agent\": \"claude\", \"role\": \"assistant\", \"text\": \"Reading the ledger now. [tool_use: Bash]\"}\n",
+  "err": "grep 'ledger': 2 matching record(s) across 2 session(s)\n"
+ },
+ "usage-none": {
+  "argv": [],
+  "exit": 2,
+  "out": "",
+  "err": "usage: fno agents peek <handle>  (or --all)\n"
+ },
+ "usage-all-and-handle": {
+  "argv": [
+   "--all",
+   "alpha"
+  ],
+  "exit": 2,
+  "out": "",
+  "err": "--all searches every session; drop the handle argument\n"
+ },
+ "usage-follow-grep": {
+  "argv": [
+   "alpha",
+   "-f",
+   "--grep",
+   "x"
+  ],
+  "exit": 2,
+  "out": "",
+  "err": "--follow streams one peer; --all/--grep read a tail\n"
+ },
+ "usage-negative-lines": {
+  "argv": [
+   "alpha",
+   "-n",
+   "-1"
+  ],
+  "exit": 2,
+  "out": "",
+  "err": "--lines must be >= 0 (got -1)\n"
+ }
+}
