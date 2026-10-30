@@ -826,8 +826,8 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::authorized_merge::run_authorized_merge(&args[1..]);
     }
 
-    if command == "rename" && args.len() == 1 {
-        return fno_agents::retask::transport::run_payload();
+    if command == "rename" && args.len() > 1 && args[1] == "retask" {
+        return fno_agents::retask::front::run_retask_cli(&args[2..]);
     }
 
     if command == "route-slot" {

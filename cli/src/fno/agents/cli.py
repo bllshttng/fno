@@ -248,8 +248,8 @@ def cmd_name(
 
 
 # `rename` moved to the Rust client (`agent.rename` over the daemon RPC; rust_runtime's router
-# entry resolves it). The retask transaction is native too: the empty-argv rename payload door
-# in fno-agents runs it, and run_retask is the thin front that builds the payload.
+# entry resolves it). The retask transaction is native too: `fno-agents rename retask` runs the
+# whole front, and cmd_retask below is the shim that execs it (like top/orphans).
 
 
 @agents_app.command("retask", hidden=True)
@@ -261,27 +261,24 @@ def cmd_retask(
     json_out: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
     """Retask one finished worker (pane or thread) onto the node's next command."""
-    from fno.agents.retask import run_retask
+    import subprocess
 
-    try:
-        receipt = run_retask(
-            worker,
-            node=node,
-            model=model,
-            effort=effort,
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        typer.secho(
+            "fno agents retask: fno-agents binary not found; `fno doctor update --rust` or set FNO_AGENTS_BIN",
+            err=True,
         )
-    except (OSError, RuntimeError, ValueError) as exc:
-        typer.echo(f"agents retask: {exc}", err=True)
-        raise typer.Exit(code=2)
-    if json_out:
-        typer.echo(json.dumps(receipt))
-    else:
-        # Same JSON either way (sorted keys are the only difference): the
-        # receipt is machine-parsed by the lead loop, so there is no human
-        # rendering to switch to.
-        typer.echo(json.dumps(receipt, sort_keys=True))
-    if receipt.get("status") != "retasked":
         raise typer.Exit(code=1)
+    argv = [str(binary), "rename", "retask", worker, "--node", node]
+    if model:
+        argv.extend(["--model", model])
+    if effort:
+        argv.extend(["--effort", effort])
+    proc = subprocess.run(argv)
+    raise typer.Exit(code=proc.returncode if proc.returncode >= 0 else 1)
 
 
 @agents_app.command("spawn-guard", hidden=True)
