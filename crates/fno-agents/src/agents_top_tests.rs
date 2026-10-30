@@ -286,6 +286,9 @@ fn the_row_takes_the_registry_name_it_joins() {
     );
     let joined = &out[0];
     assert_eq!(joined["name"], "lenore");
-    assert_eq!(joined["handle"], "lenore");
+    assert!(
+        joined["handle"].is_null(),
+        "the handle never repeats the display name"
+    );
     assert_eq!(out[1]["name"], "zzzz9999", "unjoined keeps the short id");
 }

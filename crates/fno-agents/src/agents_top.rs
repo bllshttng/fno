@@ -385,7 +385,7 @@ fn worker_rows(
                 .map(|e| e.name.as_str())
                 .filter(|n| !n.is_empty())
                 .unwrap_or(&w.name);
-            let handle = entry.map(|e| e.name.as_str()).filter(|n| *n != w.name);
+            let handle = entry.map(|e| e.name.as_str()).filter(|n| *n != display);
             let joined = w
                 .session_id
                 .as_deref()
