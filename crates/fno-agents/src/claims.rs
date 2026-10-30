@@ -507,6 +507,9 @@ pub mod basis {
     pub const REGISTRY_SESSION_LIVE: &str = "registry-session-live";
     /// The session witness answered from the transcript reachability probe.
     pub const TRANSCRIPT_LIVE: &str = "transcript-live";
+    /// The witness answered from the session's codex rollout mtime: a
+    /// rollout inside the freshness window proves the thread is advancing.
+    pub const ROLLOUT_FRESH_LIVE: &str = "rollout-fresh-live";
     /// The registry has no live row for the holder and the harness truth
     /// probe positively reports that session unreachable.
     pub const SESSION_ABSENT: &str = "session-absent";
@@ -684,6 +687,7 @@ pub fn process_create_time_ms(pid: i32) -> Option<i64> {
 #[path = "claims_classify.rs"]
 mod claims_classify;
 
+pub(crate) use claims_classify::is_node_or_task;
 pub use claims_classify::{
     classify, classify_for_sweep, classify_with_basis, classify_with_basis_and_exclusivity,
     pid_exclusivity,
@@ -2984,6 +2988,9 @@ mod claims_gate_tests;
 #[cfg(test)]
 #[path = "claims_session_absence_tests.rs"]
 mod claims_session_absence_tests;
+#[cfg(test)]
+#[path = "claims_shared_host_tests.rs"]
+mod claims_shared_host_tests;
 
 #[cfg(test)]
 #[path = "claims_identity_tests.rs"]
