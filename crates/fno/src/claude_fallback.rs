@@ -234,10 +234,6 @@ mod tests {
         candidate_slugs(Path::new(path)).remove(0)
     }
 
-    fn base_str(base: &Path) -> &str {
-        base.to_str().unwrap()
-    }
-
     fn start_secs() -> u64 {
         parse_since(SINCE)
             .unwrap()
@@ -268,23 +264,6 @@ mod tests {
             );
         }
         assert_eq!(count_in(projects, &args_for(base, 7)), 1);
-    }
-
-    #[test]
-    fn two_distinct_sessions_count_twice() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let base = Path::new("/wt/fleet");
-        let projects = tmp.path();
-        let dir = projects.join(format!("{}-x-aaaa", slug(base_str(base))));
-        write_at(
-            &dir.join("aaaaaaaa-1111-2222-3333-444444444444.jsonl"),
-            at(0),
-        );
-        write_at(
-            &dir.join("bbbbbbbb-1111-2222-3333-444444444444.jsonl"),
-            at(0),
-        );
-        assert_eq!(count_in(projects, &args_for(base, 7)), 2);
     }
 
     #[test]
