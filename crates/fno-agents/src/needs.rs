@@ -1008,6 +1008,7 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         crate::attention_file::FileAnswer::Words(args.words.clone().unwrap_or_default())
     };
     match crate::attention_arm::append_answer_row(
+        home,
         item_id,
         "mux",
         &answer,
@@ -2687,8 +2688,12 @@ mod tests {
             "delegate on a copy refuses"
         );
         // The option answer records through the shared seam, keyed to the
-        // copy id, and the projection reads the copy answered.
+        // copy id, and the projection reads the copy answered. The refusal
+        // above set delegate and left option unset; clear both so this call
+        // answers as an option.
         args.answer = Some("q-copy@hosta".to_string());
+        args.delegate = false;
+        args.option = Some(1);
         assert_eq!(
             run_answer(&home, &cwd, &args, "q-copy@hosta"),
             0,
@@ -2764,7 +2769,9 @@ mod tests {
         // First answer wins across writers: the second row records
         // superseded and changes nothing.
         let _root = crate::paths::DeclaredRoot::declare("needs_door_edge_sup");
+        let home = crate::paths::AgentsHome::from_env();
         let first = crate::attention_arm::append_answer_row(
+            &home,
             "q-sup",
             "questions",
             &crate::attention_file::FileAnswer::Words("narrow".to_string()),
@@ -2775,6 +2782,7 @@ mod tests {
         .unwrap();
         assert_eq!(first.1, false, "the first row wins");
         let second = crate::attention_arm::append_answer_row(
+            &home,
             "q-sup",
             "mux",
             &crate::attention_file::FileAnswer::Words("wide".to_string()),
@@ -2786,6 +2794,7 @@ mod tests {
         assert_eq!(second.1, true, "the second row records superseded");
         // A delegate row carries the flag and the delegate sentence as words.
         crate::attention_arm::append_answer_row(
+            &home,
             "q-dlg",
             "mux",
             &crate::attention_file::FileAnswer::Delegate,
@@ -2794,7 +2803,6 @@ mod tests {
             "mux",
         )
         .unwrap();
-        let home = crate::paths::AgentsHome::from_env();
         let raw =
             crate::event_store::journal_text(&crate::provider_cap::questions_path(&home), &[]);
         let row = raw.lines().find(|l| l.contains("q-dlg")).unwrap();

@@ -60,16 +60,21 @@ pub(crate) fn peer_origin(question: &Value) -> Option<&str> {
 }
 
 /// Who this machine is and where its `questions.jsonl` lives (the state
-/// root). Tests build one per fake machine.
+/// root). The home is the agents home the store belongs to: the apply half
+/// records an applied peer answer through it, so the row lands in this
+/// machine's journal and the answer lock stays beside it. Tests build one
+/// per fake machine.
 pub(crate) struct Host {
     pub machine: String,
     pub host: String,
     pub root: PathBuf,
+    pub home: crate::paths::AgentsHome,
 }
 
 impl Host {
     fn live() -> Self {
-        let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        let home = crate::paths::AgentsHome::from_env();
+        let index = crate::provider_cap::questions_path(&home);
         Host {
             machine: crate::claims::machine_id(),
             host: crate::mail_bus::normalize_host(&crate::claims::hostname()),
@@ -77,6 +82,7 @@ impl Host {
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from(".fno")),
+            home,
         }
     }
 
@@ -383,6 +389,7 @@ WHERE origin_machine = ? AND applied_at IS NULL",
         let answer = record_to_answer(&record);
         let answerer_host = record["data"]["host"].as_str().unwrap_or(answerer);
         match crate::attention_arm::append_answer_row(
+            &me.home,
             &origin_id,
             &format!("peer:{answerer_host}"),
             &answer,
@@ -396,7 +403,9 @@ WHERE origin_machine = ? AND applied_at IS NULL",
                     answerer.clone(),
                     copy_id.clone(),
                     vec![
-                        SqlValue::Text(me.machine.clone()),
+                        // The carrier row's machine_id is the answerer, not
+                        // the origin: the stamp must match the insert keys.
+                        SqlValue::Text(answerer.clone()),
                         SqlValue::Text(copy_id.clone()),
                     ],
                 ));
@@ -620,11 +629,13 @@ mod tests {
             machine: "m-A".into(),
             host: "hosta".into(),
             root: ta.path().into(),
+            home: crate::paths::AgentsHome::at(ta.path().join("agents")),
         };
         let b = Host {
             machine: "m-B".into(),
             host: "hostb".into(),
             root: tb.path().into(),
+            home: crate::paths::AgentsHome::at(tb.path().join("agents")),
         };
 
         // B asks; A's beat copies it once, stamped with B's host, beside
@@ -695,11 +706,13 @@ mod tests {
             machine: "m-A".into(),
             host: "hosta".into(),
             root: ta.path().into(),
+            home: crate::paths::AgentsHome::at(ta.path().join("agents")),
         };
         let b = Host {
             machine: "m-B".into(),
             host: "hostb".into(),
             root: tb.path().into(),
+            home: crate::paths::AgentsHome::at(tb.path().join("agents")),
         };
 
         // A asks; B copies. The copy carries the origin stamps.

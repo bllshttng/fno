@@ -810,6 +810,7 @@ mod tests {
     /// Append one answer row to the declared questions.jsonl.
     fn record_answer(item_id: &str) {
         crate::attention_arm::append_answer_row(
+            &crate::paths::AgentsHome::from_env(),
             item_id,
             "mux",
             &crate::attention_file::FileAnswer::Option(1),
