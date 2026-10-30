@@ -1,0 +1,72 @@
+[
+  {
+    "row": {
+      "name": "w1",
+      "harness": "claude",
+      "harness_session_id": "00847995-e0db-47c2-ab5b-24468ba1a4f5",
+      "short_id": "00847995"
+    },
+    "handle": "00847995-e0db-47c2-ab5b-24468ba1a4f5",
+    "notice": "WARN: removing the claude session record for w1 (00847995-e0db-47c2-ab5b-24468ba1a4f5).\n      The transcript stays on disk.\n      Keep this full harness session UUID as the resume handle and recovery handle.\n      Reverse it with: fno agents adopt 00847995-e0db-47c2-ab5b-24468ba1a4f5\n"
+  },
+  {
+    "row": {
+      "name": "w2",
+      "harness": "claude",
+      "harness_session_id": "",
+      "short_id": "0a6e775f"
+    },
+    "handle": "0a6e775f",
+    "notice": "WARN: removing the claude session record for w2 (0a6e775f).\n      The transcript stays on disk.\n      This short id is a best-effort lookup only while durable harness evidence still resolves it.\n      Reverse it with: fno agents adopt 0a6e775f\n"
+  },
+  {
+    "row": {
+      "name": "w3",
+      "harness": "codex",
+      "harness_session_id": "  019a-long-id  ",
+      "short_id": ""
+    },
+    "handle": "019a-long-id",
+    "notice": "WARN: removing the codex session record for w3 (019a-long-id).\n      The transcript stays on disk.\n      Keep this full harness session UUID as the resume handle and recovery handle.\n      Reverse it with: fno agents adopt 019a-long-id\n"
+  },
+  {
+    "row": {
+      "name": "w4",
+      "harness": "codex",
+      "harness_session_id": "",
+      "short_id": ""
+    },
+    "handle": null,
+    "notice": null
+  },
+  {
+    "row": {
+      "name": "w5",
+      "harness": "opencode",
+      "harness_session_id": "ses_1",
+      "short_id": ""
+    },
+    "handle": "ses_1",
+    "notice": null
+  },
+  {
+    "row": {
+      "name": "w6",
+      "harness": "gemini",
+      "harness_session_id": "abc",
+      "short_id": ""
+    },
+    "handle": "abc",
+    "notice": null
+  },
+  {
+    "row": {
+      "name": "w7",
+      "harness": "claude",
+      "harness_session_id": "0A6E775F",
+      "short_id": ""
+    },
+    "handle": "0A6E775F",
+    "notice": "WARN: removing the claude session record for w7 (0A6E775F).\n      The transcript stays on disk.\n      Keep this full harness session UUID as the resume handle and recovery handle.\n      Reverse it with: fno agents adopt 0A6E775F\n"
+  }
+]

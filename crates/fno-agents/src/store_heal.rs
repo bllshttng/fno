@@ -94,7 +94,7 @@ pub(crate) fn codex_sessions_dir() -> PathBuf {
     home_dir().join(".codex").join("sessions")
 }
 
-fn opencode_storage_dir() -> PathBuf {
+pub(crate) fn opencode_storage_dir() -> PathBuf {
     env_dir("FNO_OPENCODE_STORAGE_DIR").unwrap_or_else(|| {
         home_dir()
             .join(".local")

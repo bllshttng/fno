@@ -195,7 +195,7 @@ pub fn node_id_hex_width() -> usize {
 /// Lexical `normpath`: drop `.` components and resolve `..` against the
 /// buffer, never touching the filesystem. The Python readers compared paths
 /// in this form (os.path.normpath), so a `dir/./x/..` entry still matches.
-fn normalize(path: &std::path::Path) -> PathBuf {
+pub(crate) fn normalize(path: &std::path::Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in path.components() {
         match comp {

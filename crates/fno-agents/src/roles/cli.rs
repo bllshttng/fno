@@ -100,7 +100,7 @@ fn python_compact_json(value: &Value) -> String {
     ensure_ascii(&serde_json::to_string(&sorted).expect("a Value always serializes"))
 }
 
-fn ensure_ascii(text: &str) -> String {
+pub(crate) fn ensure_ascii(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         if ch.is_ascii() {
