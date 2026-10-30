@@ -733,7 +733,14 @@ pub fn plan_link(plan_path: Option<&Path>, cfg: &ObsidianCfg) -> PlanLink {
         // reader is permissive. Unavailable rather than synthesise a name.
         return PlanLink::Unavailable(PlanUnavailable::ObsidianOff);
     };
-    match vault_file_uri(plan, vault_cfg).or_else(|| linked_vault_uri(plan, vault_cfg)) {
+    // Obsidian opens a note, never a folder: a plan directory gets no link.
+    let note = plan
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+    match note
+        .then(|| vault_file_uri(plan, vault_cfg).or_else(|| linked_vault_uri(plan, vault_cfg)))
+        .flatten()
+    {
         Some(uri) => PlanLink::Obsidian { uri },
         None => PlanLink::PlainFile(plan.to_path_buf()),
     }
@@ -1371,13 +1378,20 @@ mod tests {
                 "{shape}"
             );
         }
-        assert!(matches!(
-            plan_link(
-                Some(Path::new("notes/x.md")),
-                &cfg(true, Some("/opt/myvault"))
-            ),
-            PlanLink::PlainFile(_)
-        ));
+        // A plan folder, inside the vault or under a linked dir, is no note.
+        for shape in [
+            "notes/x.md",
+            "/opt/myvault/internal/fno/plans/waves",
+            "internal/fno/plans/waves/",
+        ] {
+            assert!(
+                matches!(
+                    plan_link(Some(Path::new(shape)), &cfg(true, Some("/opt/myvault"))),
+                    PlanLink::PlainFile(_)
+                ),
+                "{shape}"
+            );
+        }
     }
 
     #[test]
