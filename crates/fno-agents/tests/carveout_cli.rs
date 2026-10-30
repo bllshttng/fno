@@ -22,7 +22,10 @@ impl Env {
 
     fn command(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
-        cmd.args(["backlog"]).args(args).current_dir(self.repo());
+        cmd.envs(fno_agents::test_run::self_owner_env())
+            .args(["backlog"])
+            .args(args)
+            .current_dir(self.repo());
         for (name, _) in std::env::vars() {
             if name.contains("SESSION_ID") || name == "CODEX_THREAD_ID" {
                 cmd.env_remove(name);
