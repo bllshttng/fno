@@ -997,6 +997,10 @@ mod tests {
                     "workflow": "release", "sha": "old",
                     "created_at": "2026-09-28T11:00:00Z",
                 }],
+                "last_settled": {
+                    "workflow": "release", "sha": "old", "verdict": "red",
+                    "created_at": "2026-09-28T11:00:00Z", "age": "2d old",
+                },
             })
         );
     }
