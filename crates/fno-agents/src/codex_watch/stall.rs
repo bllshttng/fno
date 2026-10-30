@@ -442,7 +442,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn stall_of(kind: &str) -> Stall {
+    fn stall_of(kind: &'static str) -> Stall {
         Stall {
             kind,
             basis: "basis".into(),
