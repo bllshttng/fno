@@ -146,7 +146,7 @@ fn tail_text(path: &Path) -> Option<(String, bool)> {
 /// first-edit read. A checkout git cannot read is never evidence.
 fn commits_past_base(cwd: &str) -> Option<i64> {
     let base = crate::burn_watch::run_command(
-        vec![
+        &[
             "git".into(),
             "rev-parse".into(),
             "--abbrev-ref".into(),
@@ -161,7 +161,7 @@ fn commits_past_base(cwd: &str) -> Option<i64> {
     .trim()
     .to_string();
     crate::burn_watch::run_command(
-        vec![
+        &[
             "git".into(),
             "rev-list".into(),
             "--count".into(),
@@ -216,7 +216,7 @@ fn mail(to: Option<&str>, lead_scope: Option<&str>, text: &str, cwd: &str) -> bo
         args.push(sid.to_string());
     }
     args.push(text.to_string());
-    let (code, out, _error) = crate::burn_watch::run_command(args, cwd);
+    let (code, out, _error) = crate::burn_watch::run_command(&args, cwd);
     crate::mail_inject::mail_send_accepted(code, &out)
 }
 
@@ -332,8 +332,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             let goal_paused = entry
                 .harness_session_id
                 .as_deref()
-                .and_then(crate::lead_goal::read_codex_goal_for_stop)
-                .ok()
+                .and_then(|sid| crate::lead_goal::read_codex_goal_for_stop(sid).ok())
                 .flatten()
                 .is_some_and(|goal| goal.status == crate::codex_thread::GoalStatus::Paused);
             let mut episode: Episode = match std::fs::read(dir.join(format!("{sid}.json"))) {
