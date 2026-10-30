@@ -126,7 +126,7 @@ pub(crate) fn is_linked_worktree(cwd: &str) -> bool {
     !cwd.is_empty() && Path::new(cwd).join(".git").is_file()
 }
 
-pub(crate) pub(crate) fn node_id_from_worktree(cwd: &str) -> Option<String> {
+pub(crate) fn node_id_from_worktree(cwd: &str) -> Option<String> {
     let text = std::fs::read_to_string(Path::new(cwd).join(".fno").join("target-state.md")).ok()?;
     for line in text.lines() {
         let s = line.trim();
@@ -353,7 +353,9 @@ pub(crate) fn fleet_rows_from(
         });
     }
     for entry in entries.into_iter().flatten() {
-        if entry.harness.as_deref() == Some("claude") || (entry.role_level.is_some() && !with_promoted) {
+        if entry.harness.as_deref() == Some("claude")
+            || (entry.role_level.is_some() && !with_promoted)
+        {
             continue;
         }
         if !is_live_status(entry.status) {
@@ -1349,7 +1351,8 @@ mod tests {
             ],
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(vendor_lead, Some(&[lead, codex_lead, window_lead]), false);
+        let (rows, warnings) =
+            fleet_rows_from(vendor_lead, Some(&[lead, codex_lead, window_lead]), false);
         let _ = std::fs::remove_dir_all(&tree);
         assert!(
             !warnings.iter().any(|w| w.contains("node=n-dispatched")),
