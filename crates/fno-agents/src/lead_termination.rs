@@ -468,7 +468,7 @@ impl GateProbe {
 pub(crate) fn probe_dispatch_capacity(fno_bin: &str, cwd: &Path) -> Result<GateProbe, String> {
     let out = crate::loopcheck::bounded_read(
         std::ffi::OsStr::new(fno_bin),
-        &["agents", "gate-status"],
+        &["agents", "census", "gate-status"],
         cwd,
         "spawn gate status",
         crate::loopcheck::stopgate_read_timeout(),

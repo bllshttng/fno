@@ -701,7 +701,7 @@ fn r_capacity() -> Result<Value, String> {
     }
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("footprint payload did not parse: {e}"))?;
-    let (_, gate_out, gate_err) = fno_command(&["agents", "gate-status"])?;
+    let (_, gate_out, gate_err) = fno_command(&["agents", "census", "gate-status"])?;
     let gate: Value = serde_json::from_str(gate_out.trim())
         .map_err(|e| format!("gate payload did not parse: {e}: {}", gate_err.trim()))?;
     r_capacity_pair(&payload, &gate)

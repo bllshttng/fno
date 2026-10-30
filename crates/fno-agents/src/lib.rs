@@ -102,6 +102,7 @@ pub mod cargo_build_dirs;
 pub(crate) mod cargo_builds;
 pub(crate) mod cargo_orphans;
 pub mod census;
+pub mod census_reads;
 pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;

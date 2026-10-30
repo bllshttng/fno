@@ -456,12 +456,7 @@ impl FleetArms {
             tokio::task::spawn_blocking(move || {
                 let _gate = SweepGate(flag);
                 stale_sweep(&home, &emitter, now_epoch_secs(), &|| {
-                    std::process::Command::new(crate::scrape::fno_bin())
-                        .args(["agents", "stale-escalate", "--json"])
-                        .output()
-                        .ok()
-                        .filter(|o| o.status.success())
-                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                    Some(crate::stale_lane::stale_escalate().to_string())
                 });
             });
         }
