@@ -226,7 +226,7 @@ The helper writes a minimal `config.toml` and sets `FNO_CONFIG`. The settings ca
 
 Confirm with a read before the first write: `fno backlog get <live node id>` must answer "No node matching". A read that returns the live node means the sandbox is not on. Do not write.
 
-The pin is the whole config world: the Rust legs resolve their global-scope reads (the store keys that decide the backlog share, the accounts records, the fleet owner) through `FNO_CONFIG` too, so a machine global with `store.share_backlog = true` cannot sync a sandbox into the shared primary. The sandbox config turning share on itself is honored. The graph follows the `state_dir` the sandbox config declares, so `FNO_GLOBAL_SETTINGS_PATH`, `FNO_GRAPH_JSON` and `FNO_STATE_DIR` exports are no longer part of this recipe. `scripts/ops/mux-demo-snapshot.sh` also sets `HOME`, so the mux sideline lists no real sessions.
+The pin is the whole config world. The Rust legs resolve their global-scope reads through `FNO_CONFIG` too: the store keys that decide the backlog share, the accounts records, the fleet owner. A machine global with `store.share_backlog = true` cannot sync a sandbox into the shared primary. The sandbox config turning share on itself is honored. The graph follows the `state_dir` the sandbox config declares, so `FNO_GLOBAL_SETTINGS_PATH`, `FNO_GRAPH_JSON` and `FNO_STATE_DIR` exports are no longer part of this recipe. `scripts/ops/mux-demo-snapshot.sh` also sets `HOME`, so the mux sideline lists no real sessions.
 
 ## Settings cache key
 
