@@ -605,11 +605,6 @@ fn ask_rows() {
 /// passthrough law verbatim into harness_args.
 #[test]
 fn spawn_flag_rows() {
-    let harness_args = |args: &[&str]| {
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        let (_m, params) = build_request("spawn", &args).expect("spawn argv parses");
-        params["harness_args"].clone()
-    };
     // The harness's own flags typed before the fence are shorthand for the
     // same flag behind it: they join the fenced tail in harness_args.
     let harness_args = |args: &[&str]| {
