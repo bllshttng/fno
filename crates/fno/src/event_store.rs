@@ -2683,4 +2683,6 @@ fn gc_ephemeral_inner(store: &Path, cutoff_ms: i64, dry_run: bool) -> Result<GcR
 
 mod observation;
 
+pub mod runs;
+
 pub mod validate;
