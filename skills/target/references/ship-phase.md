@@ -36,15 +36,7 @@ fno backlog idea "docs: <the surface> user journey" \
   --size S --difficulty low
 ```
 
-Append the details the docs worker needs: the changed surface, the doc path
-under `fno-sh-docs/`, the two skills the doc is written and checked with
-(fno-doc-writing, asd-ste100), and the dispatch constraint (the docs
-subagent runs on a non-GLM model). The blocked_by link routes the node: it
-stays unblocked until the code PR merges, `fno backlog advance` dispatches
-it to the fno-web lead on merge, and the same link exempts it from
-stale-ready auto-defer (a blocked node never quarantines). The doc PR then
-holds at merge for the user's look: real screenshots on the Footnote Visual
-Log before the doc merges, the same hold a UI PR takes.
+Append the details the docs worker needs: the changed surface, the doc path under `fno-sh-docs/`, the two skills the doc is written and checked with (fno-doc-writing, asd-ste100), and the dispatch constraint (the docs subagent runs on a non-GLM model). The blocked_by link routes the node: it stays unblocked until the code PR merges, `fno backlog advance` dispatches it to the fno-web lead on merge, and the same link exempts it from stale-ready auto-defer (a blocked node never quarantines). The doc PR then holds at merge for the user's look: real screenshots on the Footnote Visual Log before the doc merges, the same hold a UI PR takes.
 
 ## Preflight before a push (opt-in rehearsal, decided by policy)
 
