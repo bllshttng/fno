@@ -1067,9 +1067,8 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                                 // reads on its own thread and a late answer drops.
                                 let (tx, rx) = std::sync::mpsc::channel();
                                 std::thread::spawn(move || {
-                                    let _ = tx.send(crate::watchdog::cli::distress_verdicts(
-                                        &sessions,
-                                    ));
+                                    let _ =
+                                        tx.send(crate::watchdog::cli::distress_verdicts(&sessions));
                                 });
                                 match rx.recv_timeout(verdict_bound) {
                                     Ok(payload) => SourceRead::ok(payload),

@@ -711,7 +711,9 @@ mod tests {
                 }
             }
             if !held.contains("FNO_ROUTE_PROVIDER") {
-                return Err("FNO_ROUTE_PROVIDER must remain in the supervisor held list".to_string());
+                return Err(
+                    "FNO_ROUTE_PROVIDER must remain in the supervisor held list".to_string()
+                );
             }
             if !is_poison("FNO_WAKE_MSG") {
                 return Err("FNO_WAKE_MSG must remain poison by the FNO_ default".to_string());

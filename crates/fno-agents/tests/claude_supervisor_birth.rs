@@ -190,10 +190,7 @@ fn birth_exec_fences_the_client_argv_and_cleans_the_supervisor_env() {
         String::from_utf8_lossy(&output.stderr)
     );
     let birth_env = fs::read_to_string(birth_dump).unwrap();
-    for key in [
-        "FNO_ROUTE_PROVIDER",
-        "ANTHROPIC_BASE_URL",
-    ] {
+    for key in ["FNO_ROUTE_PROVIDER", "ANTHROPIC_BASE_URL"] {
         assert!(
             !birth_env
                 .lines()

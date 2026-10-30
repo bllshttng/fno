@@ -235,7 +235,9 @@ pub fn classify_worker_refusal_at(
     }
     let lead: Option<String> =
         last_message.map(|text| text.chars().take(REFUSAL_LEAD_CHARS).collect());
-    lead.as_deref().and_then(swap).map(|err| (err, "transcript"))
+    lead.as_deref()
+        .and_then(swap)
+        .map(|err| (err, "transcript"))
 }
 
 /// Read `graph_node_id` from a worktree's `.fno/target-state.md`; any read or
@@ -418,10 +420,7 @@ fn surface_stuck(
     if worktree_is_node_less(cwd) {
         return;
     }
-    let nudges = counts
-        .get(&c.short_id)
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let nudges = counts.get(&c.short_id).and_then(Value::as_i64).unwrap_or(0);
     if nudges >= cfg.max_nudges {
         let key = format!("capped:{}", c.short_id);
         if !flagged(counts, &key) {
