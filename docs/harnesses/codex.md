@@ -157,8 +157,9 @@ Codex-supported subset needed for target loops: `Stop` first runs the synchronou
 an exact-turn `exited_review_mode` or `item_completed`/`ExitedReviewMode`
 transcript marker, then runs
 `hooks/target-stop-hook.sh` (`fno-agents loop-check` + `finalize`). `PostToolUse`
-carries claim heartbeat/context monitoring, compact handoff hooks, subagent
-guards, and the PreToolUse state/git protection guards.
+carries the gh merge-capture backstop, claim heartbeat/context monitoring,
+compact handoff hooks, subagent guards, and the PreToolUse state/git
+protection guards.
 
 Codex provider goals are a separate controller surface. The provider goal receipt proves the objective and continuation owner; the Footnote `Stop` receipt separately proves that the loop hook can drive the next turn. Treat the verified provider goal as primary continuation state, but never infer Stop from it. A readable quiet state parks by pausing the goal and preserving its objective; it does not clear the goal or create a replacement session. Codex returns the thread id, objective, and status; Footnote derives the continuation owner from the exact role scope or target session in its controller receipt.
 
