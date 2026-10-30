@@ -62,6 +62,11 @@ pub(crate) fn rebind(
         .harness_session_id
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("manifest names no session: {}", manifest_path.display()))?;
+    if new_session == old {
+        return Err(format!(
+            "the manifest already names {old}; nothing to rebind"
+        ));
+    }
     if let Some(from) = from {
         if from != old {
             return Err(format!(
@@ -179,6 +184,26 @@ fn move_registry_row(
     let path = home.registry_json();
     let retire: std::collections::BTreeSet<String> = retiring.iter().cloned().collect();
     crate::state::update_registry_retiring(&path, &retire, |reg| {
+        // Fold first: re-check each stray's role under the lock (the
+        // preflight read is stale by then), carry its name onto the holder's
+        // aliases, then remove it. An alias keeps mail and resolve_agent
+        // answering the label the backgrounded session registered under.
+        let mut folded_aliases: Vec<String> = Vec::new();
+        for name in retiring {
+            let Some(pos) = reg.entries.iter().position(|e| &e.name == name) else {
+                continue;
+            };
+            if reg.entries[pos]
+                .role_scope
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+            {
+                return Err(format!(
+                    "stray row {name} gained a role under the lock; rerun the rebind"
+                ));
+            }
+            folded_aliases.push(reg.entries.remove(pos).name);
+        }
         let mut holder = Vec::new();
         for (i, e) in reg.entries.iter().enumerate() {
             if e.harness.as_deref() == Some(harness) && e.harness_session_id.as_deref() == Some(old)
@@ -195,6 +220,11 @@ fn move_registry_row(
             if !row.predecessor_session_ids.iter().any(|p| p == old) {
                 row.predecessor_session_ids.push(old.to_string());
             }
+            for alias in &folded_aliases {
+                if !row.aliases.contains(alias) {
+                    row.aliases.push(alias.clone());
+                }
+            }
             row.harness_session_id = Some(new_session.to_string());
             if harness == "claude" && row.mux.is_none() {
                 let lead = new_session
@@ -206,11 +236,6 @@ fn move_registry_row(
                 if row.short_id.is_empty() || row.short_id == stale {
                     row.short_id = lead;
                 }
-            }
-        }
-        for name in retiring {
-            if let Some(pos) = reg.entries.iter().position(|e| &e.name == name) {
-                reg.entries.remove(pos);
             }
         }
         Ok(())
@@ -338,6 +363,10 @@ mod tests {
         assert!(row.predecessor_session_ids.iter().any(|p| p == OLD));
         assert_eq!(row.role_scope.as_deref(), Some(SCOPE));
         assert_eq!(row.short_id, "bbbbbbbb");
+        assert!(
+            row.aliases.iter().any(|a| a == "bbbbbbbb"),
+            "stray name kept as alias"
+        );
         let after = std::fs::read_to_string(
             crate::paths::space_dir(&repo)
                 .join("leads")
