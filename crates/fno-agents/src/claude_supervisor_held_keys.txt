@@ -1,5 +1,4 @@
 # A name here names one session, route, or delegation; machine-wide keys belong in SUPERVISOR_WIDE_FNO_KEYS.
-FNO_A2A_NO_CONFIRM
 FNO_AGENT_HARNESS
 FNO_AGENT_NAME
 FNO_AGENT_NO_ROW
