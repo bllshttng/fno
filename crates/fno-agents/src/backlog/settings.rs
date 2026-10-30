@@ -18,12 +18,6 @@ use std::path::PathBuf;
 /// entries are DISCOVERED, so they honor `FNO_CONFIG_SEARCH_ROOT`
 /// ([`crate::agents_config::within_search_ceiling`]); the FNO_CONFIG and
 /// FNO_GLOBAL_SETTINGS_PATH entries are explicit and read as-is.
-///
-/// Under a pin the machine-global tier is dropped: the fall-through to
-/// `~/.fno` for keys the pin lacks is the leak that once synced a pinned
-/// sandbox against the shared primary. The cwd tier stays - the work map and
-/// project detection are properties of the checkout the process runs in, and
-/// Python's work-map readers read the repo-local candidate the same way.
 pub(crate) fn candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut push_dir = |dir: PathBuf| {
@@ -36,10 +30,12 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
             push_dir(dir);
         }
     }
-    // The explicit file is usually its parent's settings.yaml sibling, so the
-    // sibling push already covers it: skip the repeat so one file is read
-    // once (a doubled work map was the symptom; Python's FNO_CONFIG branch
-    // reads the file exactly once).
+    // The project config the FNO_CONFIG redirect names (python's
+    // `config_file()` candidate), then the global file. The explicit file is
+    // usually its parent's settings.yaml sibling, so the sibling push already
+    // covered it: skip the repeat so one file is read once (a doubled work
+    // map was the symptom; Python's FNO_CONFIG branch reads the file exactly
+    // once).
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         let cfg = PathBuf::from(cfg);
         if let Some(parent) = cfg.parent() {
@@ -48,9 +44,6 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
         if !out.contains(&cfg) {
             out.push(cfg);
         }
-        let mut seen = std::collections::HashSet::new();
-        out.retain(|p| seen.insert(p.clone()));
-        return out;
     }
     match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         Some(v) if !v.is_empty() => out.push(PathBuf::from(v)),
