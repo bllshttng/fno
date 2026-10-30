@@ -32,7 +32,7 @@ fn a_sandbox_pinned_by_fno_config_alone_never_shares() {
     let prior_config = std::env::var_os("FNO_CONFIG");
     let prior_global = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
     std::env::set_var("FNO_CONFIG", &pin);
-    std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.yaml"));
+    std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
 
     let shared = fno_agents::store_remote::share_backlog().unwrap();
     assert!(

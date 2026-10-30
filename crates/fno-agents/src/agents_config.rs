@@ -35,17 +35,18 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 }
 
 /// The per-user global config.toml, mirroring Python's `_global_settings_path` +
-/// `_prefer_toml`: `$FNO_CONFIG` when it pins one (the pinned file IS the global
-/// config there, so machine-posture keys - `store.share_backlog`, the accounts
-/// records, the fleet owner - resolve from the sandbox config and stay at their
-/// stock off when it does not set them), else the config.toml SIBLING of
-/// `$FNO_GLOBAL_SETTINGS_PATH` when set, else `$HOME/.fno/config.toml`.
+/// `_prefer_toml`: the config.toml SIBLING of `$FNO_GLOBAL_SETTINGS_PATH` when
+/// set (an explicit global relocation is the more specific directive), else
+/// `$FNO_CONFIG` when it pins one (the pinned file IS the global config there,
+/// so machine-posture keys - `store.share_backlog`, the accounts records, the
+/// fleet owner - resolve from the sandbox config and stay at their stock off
+/// when it does not set them), else `$HOME/.fno/config.toml`.
 pub(crate) fn global_config_path() -> Option<PathBuf> {
-    if let Some(p) = non_empty_env("FNO_CONFIG") {
-        return Some(PathBuf::from(p));
-    }
     if let Some(p) = non_empty_env("FNO_GLOBAL_SETTINGS_PATH") {
         return Some(PathBuf::from(p).with_file_name("config.toml"));
+    }
+    if let Some(p) = non_empty_env("FNO_CONFIG") {
+        return Some(PathBuf::from(p));
     }
     std::env::var_os("HOME").map(|h| Path::new(&h).join(".fno/config.toml"))
 }
@@ -1970,11 +1971,14 @@ mod tests {
         clear_config_env();
     }
 
-    /// A sandbox pinned by `FNO_CONFIG` alone must not inherit the machine
-    /// global's share posture: the pinned file IS the global config, so
-    /// `store.share_backlog` resolves from the sandbox config and stays off
-    /// when it does not set it (a docs screenshot sandbox once synced 4,976
-    /// live rows because this lookup skipped the pin and read `~/.fno`).
+    /// A sandbox pinned by `FNO_CONFIG` ALONE must not inherit the machine
+    /// global's share posture: with no explicit global relocation the pinned
+    /// file IS the global config, so `store.share_backlog` resolves from the
+    /// sandbox config and stays off when it does not set it (a docs
+    /// screenshot sandbox once synced 4,976 live rows because this lookup
+    /// skipped the pin and read `~/.fno`). An explicit
+    /// `FNO_GLOBAL_SETTINGS_PATH` still outranks the pin - it is the more
+    /// specific directive, and the route scope owns it.
     #[test]
     fn a_pinned_config_is_the_global_config() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1982,20 +1986,20 @@ mod tests {
         let sandbox = tempfile::tempdir().unwrap();
         let pin = sandbox.path().join("config.toml");
         std::fs::write(&pin, "schema_version = 1\n").unwrap();
-        std::env::set_var("FNO_CONFIG", &pin);
         let global = std::env::temp_dir().join(format!("fno-pinned-global-{}", std::process::id()));
         std::fs::create_dir_all(&global).unwrap();
-        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.json"));
         std::fs::write(
             global.join("config.toml"),
             "[store]\nremote_url = \"http://primary.example\"\nshare_backlog = true\n",
         )
         .unwrap();
 
+        // Pin alone: the pin answers for the global tier.
+        std::env::set_var("FNO_CONFIG", &pin);
         assert_eq!(
             global_config_path().as_deref(),
             Some(pin.as_path()),
-            "the pin outranks the global-settings path for global-scope reads"
+            "with no explicit global path, the pin is the global config"
         );
         assert_eq!(
             config_lookup_global(&["store", "share_backlog"]),
@@ -2003,7 +2007,16 @@ mod tests {
             "the machine global's share posture must not reach the sandbox"
         );
 
+        // An explicit global relocation outranks the pin.
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.json"));
+        assert_eq!(
+            global_config_path(),
+            Some(global.join("config.toml")),
+            "an explicit global path outranks the pin for global-scope reads"
+        );
+
         // The sandbox turning share on itself is honored.
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         std::fs::write(
             &pin,
             "schema_version = 1\n\n[store]\nremote_url = \"http://primary.example\"\nshare_backlog = true\n",

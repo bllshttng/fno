@@ -203,7 +203,7 @@ class TestGlobalScopeUnderPin:
         machine_global = tmp_path / "machine" / ".fno" / "config.toml"
         _write_settings(machine_global, _valid_providers_block(active="claude-primary"))
         monkeypatch.setenv("FNO_CONFIG", str(pin))
-        monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(machine_global))
+        monkeypatch.delenv("FNO_GLOBAL_SETTINGS_PATH", raising=False)
 
         assert _global_settings_path() == pin
         assert load_scope_config("global").records == []

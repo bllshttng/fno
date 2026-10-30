@@ -143,15 +143,16 @@ def _unwrap_config_dict(raw: dict[str, object]) -> dict[str, object]:
 def _global_settings_path() -> Path:
     """Resolve the per-user global settings.yaml path.
 
-    Returns ``Path($FNO_CONFIG)`` when that pin is set: the pinned file IS the
-    global config in a sandbox, so global-scope reads (the work map, lane
-    overrides, provider accounts) resolve from the sandbox config and never
-    from the machine's real global (a sandbox with only ``FNO_CONFIG`` set
-    must not inherit the machine's ``store.share_backlog`` posture or its
-    accounts). Otherwise returns ``Path(FNO_GLOBAL_SETTINGS_PATH)`` when that
-    environment variable is set to a non-empty value (use ``/dev/null`` to
-    disable the global candidate in test isolation), otherwise the default
-    ``~/.fno/settings.yaml``.
+    Returns ``Path($FNO_CONFIG)`` when that pin is set AND no explicit global
+    path is set: the pinned file IS the global config in a sandbox, so
+    global-scope reads (the work map, lane overrides, provider accounts)
+    resolve from the sandbox config and never from the machine's real global
+    (a sandbox with only ``FNO_CONFIG`` set must not inherit the machine's
+    ``store.share_backlog`` posture or its accounts). Otherwise returns
+    ``Path(FNO_GLOBAL_SETTINGS_PATH)`` when that environment variable is set
+    to a non-empty value (use ``/dev/null`` to disable the global candidate
+    in test isolation) - an explicit global relocation outranks the pin -
+    otherwise the default ``~/.fno/settings.yaml``.
 
     This hook exists so unit tests pinning ``repo_root=tmp_path`` cannot leak
     the developer's real ``~/.fno/settings.yaml`` into assertions that
@@ -162,10 +163,10 @@ def _global_settings_path() -> Path:
     silently bypass the global config). An operator that genuinely wants to
     point at the CWD must say so explicitly: ``FNO_GLOBAL_SETTINGS_PATH=.``.
     """
-    env = os.environ.get("FNO_CONFIG")
+    env = os.environ.get("FNO_GLOBAL_SETTINGS_PATH")
     if env:
         return Path(env)
-    env = os.environ.get("FNO_GLOBAL_SETTINGS_PATH")
+    env = os.environ.get("FNO_CONFIG")
     if env:
         return Path(env)
     return Path.home() / ".fno" / "settings.yaml"
