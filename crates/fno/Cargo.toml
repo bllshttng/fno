@@ -27,11 +27,12 @@ path = "src/main.rs"
 required-features = ["full"]
 
 [features]
-# The contract build is `--no-default-features`: only the five modules an
+# The contract build is `--no-default-features`: only the four modules an
 # external harness links (footnote_transcript, effect_map, version,
-# provider_key, bootstrap) plus their five light dependencies (serde,
-# serde_json, sha2, toml, blake3). `full` is everything the `fno` binary
-# needs: the mux, the TUI, the server, the web bridge. fnh pins this crate
+# provider_key) plus their three light dependencies (serde,
+# serde_json, sha2). `full` is everything the `fno` binary
+# needs: the mux, the TUI, the server, the web bridge, and the bootstrap
+# python resolver behind version_json's receipt. fnh pins this crate
 # with default-features = false, so a new dependency must either join the
 # light set or stay behind `full`; an unconditional heavy dep silently
 # re-inflates every fnh build.
@@ -57,6 +58,8 @@ full = [
     "dep:clap",
     "dep:clap_complete",
     "dep:unicode-width",
+    "dep:toml",
+    "dep:blake3",
     "dep:rusqlite",
     "dep:chrono",
     "dep:strsim",
@@ -117,7 +120,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"], 
 # injecting. Must match the daemon's hash byte-for-byte across
 # processes, so the same content hash both sides use - not a per-process
 # DefaultHasher.
-blake3 = "1"
+blake3 = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: the `mux thread reseat` command round-trips registry.json as
 # raw JSON to clear one row's mux ref; without it serde_json would reorder
@@ -131,7 +134,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = { version = "0.10", optional = true }
 # Read the flat `config.toml` (stage 3): the interactive server reads
 # `config.mux.*` directly (digest_overlay Pattern B) instead of shelling `fno`.
-toml = "0.8"
+toml = { version = "0.8", optional = true }
 # The spawn floor setter parses and rewrites config.toml keeping comments
 # (spawn_floor.rs); `toml` only reads. Already resolved through `toml`.
 toml_edit = { version = "0.22", optional = true }
