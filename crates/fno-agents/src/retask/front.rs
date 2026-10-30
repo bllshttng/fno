@@ -367,7 +367,7 @@ fn resolve_coordinate(
     let route = flag_value(&composed, &["--route"]);
     let provider_flag = flag_value(&composed, &["--provider", "-P"]);
     let (provider, route_model) = match route.as_deref() {
-        Some(route) => match route.replace(',', '/').split_once('/') {
+        Some(route) => match route.replace(',', "/").split_once('/') {
             Some((p, m)) => (Some(p.to_string()), Some(m.to_string())),
             None => (Some(route.to_string()), None),
         },
@@ -429,8 +429,8 @@ fn parse_args(args: &[String]) -> Result<CliArgs, String> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--node" => node = iter.next().ok_or("--node needs a value")?.clone(),
-            "--model" => model = iter.next().ok_or("--model needs a value")?.clone(),
-            "--effort" => effort = iter.next().ok_or("--effort needs a value")?.clone(),
+            "--model" => model = Some(iter.next().ok_or("--model needs a value")?.clone()),
+            "--effort" => effort = Some(iter.next().ok_or("--effort needs a value")?.clone()),
             "--registry" => {
                 registry = Some(std::path::PathBuf::from(
                     iter.next().ok_or("--registry needs a value")?,

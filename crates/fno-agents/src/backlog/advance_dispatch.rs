@@ -1108,6 +1108,7 @@ fn reuse_planner(
     ]
     .map(str::to_string);
     let self_bin = std::env::current_exe()
+        .ok()
         .filter(|exe| exe.file_stem().is_some_and(|stem| stem == "fno-agents"))
         .map(|exe| exe.to_string_lossy().into_owned())
         .unwrap_or_else(|| "fno-agents".to_string());

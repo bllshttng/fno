@@ -13,9 +13,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::{
-    execute_retask, refused_receipt, RetaskRow, RetaskSeams, RetaskTarget, TransportFailure,
-};
+use super::{refused_receipt, RetaskRow, RetaskSeams, TransportFailure};
 use crate::bounded_cmd::output_with_timeout_result;
 use crate::claude_drive;
 use crate::state::{classify_session_transition, rename_agent, update_registry, RegistryEntry};
