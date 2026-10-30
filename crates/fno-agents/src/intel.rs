@@ -277,7 +277,10 @@ impl FoldCtx {
 /// `sessions[]` arrays, keyed per member id) and the worktree manifests
 /// (`<fno>/spaces/*/worktrees/*/target-state.md`, whose `harness_session_id`
 /// maps to the `input` node). The manifest fills only ids the ledger missed.
-fn session_join(fno_dir: &Path) -> HashMap<String, (Vec<String>, Option<String>, Option<u64>)> {
+fn session_join(
+    fno_dir: &Path,
+    spaces: &Path,
+) -> HashMap<String, (Vec<String>, Option<String>, Option<u64>)> {
     let mut join = HashMap::new();
     let ledger = fno_dir.join("ledger.json");
     if let Ok(raw) = std::fs::read_to_string(&ledger) {
@@ -310,8 +313,7 @@ fn session_join(fno_dir: &Path) -> HashMap<String, (Vec<String>, Option<String>,
             }
         }
     }
-    let spaces = fno_dir.join("spaces");
-    let Ok(spaces_read) = std::fs::read_dir(&spaces) else {
+    let Ok(spaces_read) = std::fs::read_dir(spaces) else {
         return join;
     };
     for space in spaces_read.flatten() {
@@ -1403,7 +1405,8 @@ fn fold_all(
     scorecard: Option<(HashMap<String, String>, Vec<Value>)>,
 ) -> Report {
     let bus = BusIndex::load(&bus_log_path(fno_dir));
-    let join = session_join(fno_dir);
+    let spaces = crate::paths::spaces_root_opt().unwrap_or_else(|| fno_dir.join("spaces"));
+    let join = session_join(fno_dir, &spaces);
     let events = read_events(&fno_dir.join("events.jsonl"));
     let witness = crate::operator_witness::SubmitIndex::load(events_journal);
     let now = std::time::SystemTime::now()
@@ -1864,7 +1867,7 @@ mod tests {
         let bus = BusIndex::load(&fx.dir.join("bus").join("messages.jsonl"));
         let mut ctx = FoldCtx {
             bus,
-            join: session_join(&fx.dir),
+            join: session_join(&fx.dir, &fx.dir.join("spaces")),
             events: read_events(&fx.dir.join("events.jsonl")),
             witness: crate::operator_witness::SubmitIndex::load(
                 &fx.dir.join("witness").join("events.jsonl"),
@@ -1985,7 +1988,7 @@ mod tests {
     fn fold_fixture_ctx(fx: &Fixture) -> FoldCtx {
         FoldCtx {
             bus: BusIndex::load(&fx.dir.join("bus").join("messages.jsonl")),
-            join: session_join(&fx.dir),
+            join: session_join(&fx.dir, &fx.dir.join("spaces")),
             events: read_events(&fx.dir.join("events.jsonl")),
             witness: crate::operator_witness::SubmitIndex::load(
                 &fx.dir.join("witness").join("events.jsonl"),

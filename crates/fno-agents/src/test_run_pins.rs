@@ -25,8 +25,8 @@ pub(crate) enum Pins {
 
 /// Each root, and where it lands under the sandbox. The layout mirrors the
 /// live one: the claims root is a home, the state dir its `.fno`, and the
-/// agents home `.fno/agents`. The spaces root is pinned too: a set
-/// `FNO_SPACES_DIR` outranks the agents home it would otherwise derive from.
+/// agents home `.fno/agents`. The spaces root is pinned too, so a test run
+/// that sets its own `FNO_STATE_DIR` cannot move spaces off the sandbox.
 const ROOTS: [(&str, &str); 4] = [
     ("FNO_CLAIMS_ROOT", ""),
     ("FNO_STATE_DIR", ".fno"),
