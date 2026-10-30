@@ -2609,9 +2609,10 @@ console.log("backlog page helpers: 9 cases ok");
     /// the recent-search store hold their contracts when run for real:
     /// lift cardKeeps / laneKeyOf, the date-filter and sort helpers,
     /// statusLabel / clampPanelWidth / fuzzyHit, nestChildren,
-    /// shortcutAction / isTypingTarget / copiedToast and pushRecent /
-    /// loadRecent from the shipped page and run every case under node, the
-    /// same rule as the board helpers.
+    /// shortcutAction / isTypingTarget / copiedToast, pushRecent /
+    /// loadRecent, and the theme store's loadTheme / nextTheme / themeAttr
+    /// from the shipped page and run every case under node, the same rule
+    /// as the board helpers.
     #[test]
     fn snapshot_page_helpers_hold_under_node() {
         let asserts = r#"
@@ -2780,6 +2781,17 @@ eq(mixed[0], "a", "strings keep order");
 eq(loadRecent('{\"a\":1}'), [], "a non-array payload loads empty");
 eq(loadRecent('[\"s1\",\"s2\",\"s3\",\"s4\",\"s5\",\"s6\",\"s7\",\"s8\",\"s9\",\"s10\",\"s11\"]').length, 10, "a long stored list caps at ten");
 console.log("recent searches: 12 cases ok");
+// The theme store: one of three modes, cycling, and the attribute it sets.
+eq(loadTheme(null), "auto", "no stored value loads auto");
+eq(loadTheme("junk"), "auto", "a corrupt stored value loads auto");
+eq(loadTheme("light"), "light", "a stored light loads light");
+eq(loadTheme("dark"), "dark", "a stored dark loads dark");
+eq(nextTheme("auto"), "light", "auto cycles to light");
+eq(nextTheme("light"), "dark", "light cycles to dark");
+eq(nextTheme("dark"), "auto", "dark cycles back to auto");
+eq(themeAttr("auto"), null, "auto sets no attribute");
+eq(themeAttr("light"), "light", "light sets the light attribute");
+console.log("theme store: 9 cases ok");
 "#;
         let src = format!(
             "{}\n{}\n{}\n{}",
@@ -2822,6 +2834,9 @@ console.log("recent searches: 12 cases ok");
                 "copiedToast",
                 "pushRecent",
                 "loadRecent",
+                "loadTheme",
+                "nextTheme",
+                "themeAttr",
                 "requestIssueUrl",
                 "upvoteIssueUrl",
             ]
@@ -2867,6 +2882,10 @@ console.log("recent searches: 12 cases ok");
                 assert!(
                     stdout.contains("recent searches: 12 cases ok"),
                     "the shipped recent-search store did not clear every case:\n{stdout}{stderr}"
+                );
+                assert!(
+                    stdout.contains("theme store: 9 cases ok"),
+                    "the shipped theme store did not clear every case:\n{stdout}{stderr}"
                 );
             }
         }
