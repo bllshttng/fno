@@ -1910,23 +1910,17 @@ mod tests {
         );
     }
 
-    /// The rung reads the thread's own rollout: fresh proves advancing
-    /// (Live), quiet beside a removed worker row proves gone (Absent).
+    /// The rung: fresh rollout proves advancing (Live), quiet beside a
+    /// removed row proves gone (Absent).
     #[test]
     fn the_rollout_rung_answers_from_the_thread_rollout() {
+        let root = std::env::temp_dir().join(format!("fno-rung-{}", std::process::id()));
         let root = std::env::temp_dir().join(format!("fno-rung-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("rollout-2026-10-30-thr1.jsonl");
         std::fs::write(&path, "{}").unwrap();
-        let index = std::cell::RefCell::new(Some(SessionRegistryIndex {
-            known: true,
-            by_session: Default::default(),
-            by_name: Default::default(),
-            by_fno_id: Default::default(),
-            served: Default::default(),
-            rows: Default::default(),
-        }));
+        let index = rung_index(Default::default());
         let answer = session_liveness_answer_uncached("thr1", &index, None, true, Some(&root));
         assert!(
             matches!(
@@ -1945,7 +1939,7 @@ mod tests {
     }
 
     /// The rung fails closed: no rollout, a row still present, or a
-    /// non-shared harness all keep the Unresolved answer.
+    /// non-shared harness keep Unresolved.
     #[test]
     fn the_rollout_rung_fails_closed() {
         let root = std::env::temp_dir().join(format!("fno-rung-b-{}", std::process::id()));
@@ -1954,14 +1948,7 @@ mod tests {
         let path = root.join("rollout-2026-10-30-thr2.jsonl");
         std::fs::write(&path, "{}").unwrap();
         age_the_file(&path, 4000);
-        let index = std::cell::RefCell::new(Some(SessionRegistryIndex {
-            known: true,
-            by_session: Default::default(),
-            by_name: Default::default(),
-            by_fno_id: Default::default(),
-            served: Default::default(),
-            rows: Default::default(),
-        }));
+        let index = rung_index(Default::default());
         let answer = session_liveness_answer_uncached("thr2", &index, None, true, Some(&root));
         assert!(
             matches!(answer, crate::claims::SessionLiveness::Absent),
@@ -1990,6 +1977,20 @@ mod tests {
             "{answer:?}"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A registry index that knows nothing: the rung's row-gone precondition.
+    fn rung_index(
+        rows: std::collections::HashMap<String, RegistryEntry>,
+    ) -> std::cell::RefCell<Option<SessionRegistryIndex>> {
+        std::cell::RefCell::new(Some(SessionRegistryIndex {
+            known: true,
+            by_session: Default::default(),
+            by_name: Default::default(),
+            by_fno_id: Default::default(),
+            served: Default::default(),
+            rows,
+        }))
     }
 
     /// Backdate a rollout's mtime past the freshness window.
