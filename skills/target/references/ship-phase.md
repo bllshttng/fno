@@ -23,6 +23,29 @@ back and run it before creating the PR. The ship phase itself should NOT
 create missing docs - that would couple concerns and hide bugs in the phase
 resolver.
 
+## The fno-web doc node (user-facing features)
+
+A user-facing feature (CLI help, config schema, a skill, a hook users see,
+mux paint) ships its fno-web doc with it. At ship time, when the PR body
+carries a `Docs:` line naming a doc (not the `Docs: none, <reason>`
+exemption), file the doc node in the fno-web project and link it:
+
+```bash
+fno backlog idea "docs: <the surface> user journey" \
+  --project fno-web --blocked-by <this-node-id> --source-node <this-node-id> \
+  --size S --difficulty low
+```
+
+Append the details the docs worker needs: the changed surface, the doc path
+under `fno-sh-docs/`, the two skills the doc is written and checked with
+(fno-doc-writing, asd-ste100), and the dispatch constraint (the docs
+subagent runs on a non-GLM model). The blocked_by link routes the node: it
+stays unblocked until the code PR merges, `fno backlog advance` dispatches
+it to the fno-web lead on merge, and the same link exempts it from
+stale-ready auto-defer (a blocked node never quarantines). The doc PR then
+holds at merge for the user's look: real screenshots on the Footnote Visual
+Log before the doc merges, the same hold a UI PR takes.
+
 ## Preflight before a push (opt-in rehearsal, decided by policy)
 
 Distinct from the environment preflight in Step 3g (working-tree / deps / auth

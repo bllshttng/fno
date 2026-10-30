@@ -177,6 +177,7 @@ pub mod dispatch_credit;
 pub mod dispatch_harness;
 pub mod disposition_gate;
 pub mod distress;
+pub mod docs_gate;
 pub mod drift;
 pub mod duration;
 pub mod effect_gate;
