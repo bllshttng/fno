@@ -5858,8 +5858,7 @@ pub(crate) fn run_reconcile_sweep(
     );
     // The sweep budget starts HERE, after the truth batch and roster load:
     // charging them to the probe loop's 5s window is why 79 rows went
-    // unprobed every sweep. The probe loop and the roster-progress loop
-    // below share this one clock.
+    // unprobed every sweep.
     let start = Instant::now();
     // The reboot arm plans FIRST, before `prober` moves into plan_reconcile:
     // its changes append after the main plan's, so a revived row's Live is
@@ -5944,40 +5943,6 @@ pub(crate) fn run_reconcile_sweep(
                 "to": to,
             }),
         );
-    }
-
-    // Roster-progress refresh (SECOND HALF): the same per-tick set the
-    // reconcile sweep just probed. These git/gh subprocesses are not covered
-    // by the probe loop's budget, so re-check the SAME
-    // `start`/`RECONCILE_SWEEP_BUDGET` clock: a large changed-row set must
-    // not extend a sweep that runs synchronously at daemon startup. Deferred
-    // rows land on the next tick; an I/O failure here never fails the sweep
-    // that already wrote the registry. Full-only: the serve-only tick runs
-    // every 60s and does not serve this stamp.
-    if matches!(mode, SweepMode::Full) {
-        let progress_path = home.roster_progress_json();
-        for ch in &changes {
-            if start.elapsed() >= RECONCILE_SWEEP_BUDGET {
-                break;
-            }
-            let Some(e) = entries.iter().find(|e| e.name == ch.name) else {
-                continue;
-            };
-            if e.cwd.is_empty() {
-                continue;
-            }
-            if let Err(err) = crate::roster_progress::refresh_row(
-                &progress_path,
-                &e.name,
-                Path::new(&e.cwd),
-                &now,
-            ) {
-                eprintln!(
-                    "reconcile: roster-progress refresh failed for {}: {err}",
-                    e.name
-                );
-            }
-        }
     }
 
     // The outcome events stay on the full sweeps: the tick's product is the
