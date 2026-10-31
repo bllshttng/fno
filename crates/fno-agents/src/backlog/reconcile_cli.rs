@@ -2938,6 +2938,7 @@ mod tests {
         let closeable = vec![record("ab-chil001"), record("ab-par001")];
         let sweep = Sweep {
             closeable: Vec::new(),
+            closed_unmerged: Vec::new(),
             failures: Vec::new(),
             strandable_epics: Vec::new(),
             strandable_contained: Vec::new(),
