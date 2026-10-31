@@ -2155,12 +2155,21 @@ mod tests {
         std::fs::create_dir_all(&graph_dir).unwrap();
         let saved_home = std::env::var_os("FNO_HOME");
         std::env::set_var("FNO_HOME", dir.path());
+        // The store resolves through the state dir, not FNO_HOME: pin it to
+        // the sandbox too, or a machine with a live graph reads the real
+        // store and the row reads unscoped instead of unknown.
+        let saved_state = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path());
         let rows = seed_fixture();
         let mut entries: Option<Vec<Value>> = None;
         let out = list_core_over(rows, 0, &mut entries, None, None, None, true);
         match saved_home {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),
+        }
+        match saved_state {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
         }
         drop(lock);
         assert_eq!(lifecycle_of(&out, "d-bbbb0002"), "unknown");

@@ -46,7 +46,7 @@ From the Messages tab, the user types a reply into the chosen pane. After focus 
 
 ### Control lane word ledger
 
-Before any outward control send, `fno.mail.budget.reserve_control` charges the authored word count to one canonical sender-recipient pair. The fixed policy is 60 masked words over a rolling 10-minute window. An ordinary send writes no ledger row: rule 7 is its only word gate.
+Before any outward control send, the native send (`mail_cli/send/mod.rs`) charges the authored word count to one canonical sender-recipient pair. The fixed policy is 60 masked words over a rolling 10-minute window. An ordinary send writes no ledger row: rule 7 is its only word gate.
 
 An authored inbound `send`, `heads-up`, `question`, or `fyi` resets earlier reservations. Self-sends, migrations, withdrawals, and other non-authored rows do not reset them.
 
@@ -123,7 +123,7 @@ Two gates, in order, for `to_rank`. With no resolved recipient session id, the a
 
 ## Job-address lane
 
-`fno agents mail send node:<id> <msg>` (or `pr:<n>`, normalized to `node:<id>` by the graph lookup) addresses the WORK, not the process. The lane lives in `cli/src/fno/mail/job_lane.py`.
+`fno agents mail send node:<id> <msg>` (or `pr:<n>`, normalized to `node:<id>` by the graph lookup) addresses the WORK, not the process. The lane lives in `crates/fno-agents/src/mail_cli/send/lanes.rs`.
 
 A job address outlives its holder. That is the structural fix for the dead-handle strand. A session handle expired faster than the message. Mail to it then piled up on a queue the dead session never drained.
 
@@ -136,7 +136,7 @@ The inject targets the session id. Both `control.sock` and the codex daemon are 
 
 ## Name-lane address resolution
 
-`_name_lane_send` in `cli/src/fno/mail/cli.py` is the one choke point every delivery rung lives in. Two rules there are easy to break by moving a line.
+The name lane in `crates/fno-agents/src/mail_cli/send/lanes.rs` is the one choke point every delivery rung lives in. Two rules there are easy to break by moving a line.
 
 The durable copy must be addressed to the RESOLVED session's canonical handle. Deriving it from the raw token misaddresses every alias. A full session id is the collision escape hatch. It is written verbatim, never canonicalized. Two same-window codex sessions share their first eight characters, so canonicalizing a full id collapses both onto one durable key. `drain-self` reads the full id.
 
@@ -146,7 +146,7 @@ The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that 
 
 ## `fno inbox` alias + legacy migration
 
-`fno agents send` (with `fno agents send --to-project <project>` for project-destination anycast) routes through `write_new_thread`, which mirrors a canonical envelope into the bus on every write: one log line per send, the md render and the envelope agree (no md-store divergence), and the existing triage drain finds it. The mirror is best-effort (the md render is the durable copy); a mirror failure warns loudly on stderr because a bus reader would otherwise diverge from the md drain until backfill.
+A send routes through `write_durable_thread` in `mail_cli/send/mod.rs`. That includes `--to-project`, the project anycast. It appends one canonical envelope to the bus on every write. A failed append warns loudly on stderr.
 
 **Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` command during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects command skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
 

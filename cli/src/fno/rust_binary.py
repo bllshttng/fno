@@ -18,8 +18,10 @@ Resolution order, widest first:
 
 from __future__ import annotations
 
+import json as _json
 import os
 import shutil
+import subprocess
 import sys
 
 from functools import lru_cache
@@ -252,19 +254,67 @@ def settings_read(detect: Optional[str] = None) -> Optional[dict]:
     return receipt
 
 
-def style_word_count_checked(text: str) -> int:
-    """Masked word count for an ENFORCING site: raises
-    ``budget.BudgetCountUnavailable`` on a door failure instead of answering a
-    silent zero (a zero would read as unlimited traffic under the control
-    lane's rolling cap). Imported lazily: budget.py never imports this module,
-    so there is no cycle.
-    """
-    from fno.mail.budget import BudgetCountUnavailable
+def plan_schema(payload: dict) -> Optional[dict]:
+    """One plan-frontmatter validation read through the door; None on failure.
 
-    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
+    ``payload`` carries the op (``validate-frontmatter`` or ``gates``) with
+    its arguments. YAML dates are flattened to ISO strings so the payload is
+    JSON-safe, and a door failure reads as None: the caller keeps its own
+    failure posture.
+    """
+    import datetime
+    import json
+
+    def _plain(value):
+        if isinstance(value, (datetime.datetime, datetime.date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {k: _plain(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_plain(v) for v in value]
+        return value
+
+    # The dev build outranks the installed copy: a validating surface must
+    # answer with its own checkout's schema, never a stale binary that lacks
+    # the op (the rule command_call states for the same reason).
+    err, receipt = call_binary_json(
+        "state",
+        ["plan-schema"],
+        binary=find_dev_binary() or resolve_binary(),
+        input_text=json.dumps(_plain(payload), default=str),
+    )
     if err or not isinstance(receipt, dict):
-        raise BudgetCountUnavailable(f"style count unavailable: {err or 'no receipt'}")
-    return int(receipt.get("word_count") or 0)
+        return None
+    return receipt
+
+
+class MailShapeError(RuntimeError):
+    """The Rust mail-shape classifier failed or returned malformed output."""
+
+
+def mail_shape(texts: list) -> list[dict]:
+    """Per text: framing, msg_id, ids, holds_tag, envelope_block,
+    legacy_tags, header_turns, relay_parse."""
+    binary = find_dev_binary() or resolve_binary() or "fno-agents"
+    try:
+        result = subprocess.run(
+            [str(binary), "mail-envelope", "--classify"],
+            input=_json.dumps(texts),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MailShapeError("mail-envelope --classify timed out after 5s") from exc
+    if result.returncode:
+        raise MailShapeError(result.stderr.strip() or "mail-envelope --classify failed")
+    try:
+        parsed = _json.loads(result.stdout)
+    except _json.JSONDecodeError as exc:
+        raise MailShapeError(f"malformed classifier output: {exc}") from None
+    if not isinstance(parsed, list) or len(parsed) != len(texts):
+        raise MailShapeError(f"classifier returned {len(parsed)} items for {len(texts)} texts")
+    return parsed
 
 
 def mint_fno_id() -> str:

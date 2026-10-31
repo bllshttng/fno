@@ -1,1 +1,1 @@
-[{"body":"hello","claimable":false,"claimed":false,"delivery":"typed","id":"m-t1","kind":"send","landed":null,"to":"worker4","to_kind":null,"ts":"TS"}]
+[{"body":"hello","claimable":false,"claimed":false,"delivery":"typed","id":"m-t1","kind":"send","landed":null,"state":"injected","state_detail":"","to":"worker4","to_kind":null,"ts":"TS"}]

@@ -36,10 +36,24 @@ pub(crate) fn reset_derive_queue_calls() {
 const CARD_CAP: usize = 40;
 
 /// The graph path, resolved as `fno.paths` does: `FNO_GRAPH_JSON` >
-/// `$HOME/.fno/graph.json` > `./.fno/graph.json`, through the layout table.
+/// the sandbox state root (`FNO_STATE_DIR`, or the `state_dir` the
+/// `FNO_CONFIG` pin declares - a sandbox serves its own graph, never the
+/// machine's) > `$HOME/.fno/graph.json`, through the layout table.
 pub fn graph_path() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_GRAPH_JSON") {
         return PathBuf::from(v);
+    }
+    let sandboxed = ["FNO_STATE_DIR", "FNO_CONFIG"].iter().any(|key| {
+        std::env::var_os(key)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    });
+    if sandboxed {
+        let settings = crate::config_doctor::Settings::load();
+        return crate::state_layout::place(
+            &crate::config_doctor::state_dir(&settings),
+            "graph.json",
+        );
     }
     let base = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -492,6 +506,13 @@ pub const UNLANED: &str = "unlaned";
 /// awaiting-ack queue, Done is terminal.
 pub(crate) const KANBAN_COLUMNS: [&str; 6] =
     ["In Progress", "Now", "Next", "Later", "Triage", "Done"];
+
+/// The column a card carries when `kanban_column` declines it (deferred,
+/// superseded, roadmap-typed). Not a [`KANBAN_COLUMNS`] member, so lane and
+/// cell consumers render it nowhere; the read model keeps the card so list
+/// queries reach it and the board payload can name what its default view
+/// leaves out.
+pub(crate) const OFF_BOARD: &str = "Off-board";
 
 /// A lane's position in [`KANBAN_COLUMNS`]; anything unrecognized sorts last.
 fn lane_rank(lane: &str) -> usize {

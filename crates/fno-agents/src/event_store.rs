@@ -60,6 +60,7 @@ pub const EPHEMERAL_EVENT_TYPES: &[&str] = &[
     "mux_pane_counters",
     "orphan_reap_sweep",
     "single_flight_gate",
+    "transcript_record",
 ];
 
 /// Event types the schema declares `retention: gate`: rows merge gates read
@@ -2680,6 +2681,8 @@ fn gc_ephemeral_inner(store: &Path, cutoff_ms: i64, dry_run: bool) -> Result<GcR
 }
 
 mod observation;
+
+pub mod runs;
 
 pub mod validate;
 

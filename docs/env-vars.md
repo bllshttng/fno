@@ -36,17 +36,16 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `COLORFGBG` | rs | The rxvt-style `fg;bg` terminal color report; a background field of 7 or 15 reads as a light terminal, which picks the `footnote-paper` mux theme default, and anything else keeps `footnote-superscript`. |
 | `COLORTERM` | rs | unclear: crates/fno/src/mux_cli.rs:1508 |
 | `CRON_JOB` | py | unclear: cli/src/fno/agents/context.py:94 |
-| `DATABASE_URL` | py | unclear: cli/src/fno/codemap_cli/db-schema.py:208 |
 | `EDITOR` | rs | The editor the board's full description edit runs in; `vi` when unset. |
 | `EVENTS_FILE` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:932 |
-| `FNO_A2A_NO_CONFIRM` | py | unclear: cli/src/fno/agents/dispatch.py:5376 |
+| `FNO_ACTOR_KIND` | rs | The launcher stamp a machine arm's parent sets on its child so `decision_trace::actor_kind` reads `sweep` for work with no ambient session (merge_close.rs `run_reconcile`, hook/stop.rs `spawn_finalize_detached`). Only the exact value `sweep` is honored; any other value falls through to session resolution. |
 | `FNO_AGENTS_ANSWER_MINUTES` | rs | The conversation mail-hold backstop in minutes: a hold armed on the user's last real message ends this long after it, whichever comes first with the Stop grace. Unset, the global config's `mail.hold.answer_minutes` reads; unset too, the default is 10. A value below 1 coerces to the default, one above 1440 clamps to 1440 (mail_hold.rs answer_minutes). |
 | `FNO_AGENTS_BIN` | py+rs | Explicit override path to the fno-agents binary; unset, empty, or non-executable falls through to the search rather than failing. |
 | `FNO_AGENTS_DAEMON_BIN` | rs | unclear: crates/fno-agents/src/client.rs:125 |
 | `FNO_AGENTS_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/daemon.rs:2093 |
 | `FNO_AGENTS_FIXTURES` | rs | Overrides the scratch sweep fixtures directory. |
 | `FNO_AGENTS_FRONT` | py+rs | unclear: cli/src/fno/graph/store.py:213 |
-| `FNO_AGENTS_HOME` | py+rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. |
+| `FNO_AGENTS_HOME` | py+rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. It does not move spaces or sessions. Set `FNO_SPACES_DIR` or `FNO_STATE_DIR` to move those. |
 | `FNO_AGENTS_IDLE_EXIT_SECS` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:67 |
 | `FNO_AGENTS_NAME_MODEL` | rs | Raw model string; the agent-name mint appends its short code to the worker name. |
 | `FNO_AGENTS_NO_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:87 |
@@ -57,7 +56,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_STARTUP_RECONCILE_DELAY_MS` | rs | unclear: crates/fno-agents/src/daemon.rs:2082 |
 | `FNO_AGENTS_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENTS_WORKER` | py+rs | Marks the process as a footnote worker. |
-| `FNO_AGENTS_WORKER_BIN` | py+rs | unclear: cli/src/fno/agents/dispatch.py:888 |
+| `FNO_AGENTS_WORKER_BIN` | rs | Path to the worker binary. The daemon lazy-start passes it on, so a test harness runs its own build. |
 | `FNO_AGENT_HARNESS` | py+rs | unclear: cli/src/fno/harness_identity.py:77 |
 | `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
 | `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
@@ -92,7 +91,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CLAUDE_PROJECTS_DIR` | py+rs | Overrides the claude transcript projects root the announce status scan reads. |
 | `FNO_CLAUDE_SESSIONS_DIR` | py | Overrides Claude Code's per-session registry directories on this host. |
 | `FNO_CLAUDE_SESSION_RECENCY_SECONDS` | py | Transcript-mtime liveness window in seconds (positive only; default 600). |
-| `FNO_CLAUDE_THEME` | py+rs | The Claude Code theme (`custom:fno:footnote-*`) the mux pins for a worker pane. A `claude --bg` spawn from that pane writes it into the thread's settings file. |
+| `FNO_CLAUDE_THEME` | rs | The Claude Code theme (`custom:fno:footnote-*`) the mux pins for a worker pane. A `claude --bg` spawn from that pane writes it into the thread's settings file. |
 | `FNO_CODEX_ASK_WAIT_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:56 |
 | `FNO_CODEX_BIN` | rs | Overrides the codex CLI the readiness and upgrade paths resolve, for private roots and tests; PATH order otherwise. |
 | `FNO_CODEX_INTERRUPT_BOUND_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:80 |
@@ -104,7 +103,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS` | rs | unclear: crates/fno-agents/src/context_run.rs |
 | `FNO_CONTROL_PLANE_SCHEDULER` | py+rs | unclear: cli/src/fno/control_plane.py:22; native twin crates/fno-agents/src/backlog/reconcile_cli.rs |
 | `FNO_CURSOR_AGENT_MODEL` | rs | unclear: crates/fno-agents/src/cursor_agent.rs:304 |
-| `FNO_DEBUG` | py | unclear: cli/src/fno/agents/mux_spawn.py:1854 |
 | `FNO_DISPATCH_ACCOUNT_ENV` | rs | The proven-credential carrier of a cutover spawn: a flat JSON map `accounts::launch` stages verbatim for `--dispatch-account`. The spawn door claims it, and a spawn without the flag refuses. |
 | `FNO_DRIVER_LIB` | rs | unclear: crates/fno-agents/src/finalize.rs:849 |
 | `FNO_DRIVER_LIB_DIR` | rs | unclear: crates/fno-agents/src/loop_target.rs:616 |
@@ -124,7 +122,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_GH_PROXY_DEPTH` | rs | unclear: crates/fno-agents/src/pr_status/proxy.rs:146 |
 | `FNO_GH_PROXY_DIR` | rs | Names the directory holding the `gh` proxy shim. The Python front sets it for its subprocesses (prepend the shim to PATH), and the Rust transport consult reads it to stand down when a spawned `gh` resolves into it (unknown always means charge). |
 | `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:48 |
-| `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. |
+| `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. The fno-agents supervisor sets it on every footnote launch, resolved through the supervisor's own graph resolver. |
 | `FNO_GUARD_TRACE` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:25 |
 | `FNO_HARNESS` | rs | The arming session's harness, the fallback a new lead manifest names when the holder row carries none. |
 | `FNO_HARNESS_NAME` | py+rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |
@@ -156,9 +154,9 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MACHINE_LOAD_ASK` | rs | Overrides the machine arm's pending-ask file path (default `$HOME/.fno/machine-load-ask.json`, written by the machine arm, holding the open outside-load or budget question's qid, the groups an answer would act on, and the pids a pause holds). Lets a test point it at a tempdir. |
 | `FNO_MAIL_FENCE` | rs | `1` on the pane-prepare child only (`mux_cli.rs`): the envelope render fences the delivered body (open fence marked `fno-pane`). Hook and mail lanes leave it unset and render unfenced. |
 | `FNO_MAIL_HOP` | rs | The relay depth a `mail-remote` forward stamps on the process it starts (`mail_remote.rs`). The front door clears it on every route but the relay's own. An entry at depth 3 refuses with `relay hop limit`, exit 2, so a forwarding loop stops after two hops. |
-| `FNO_MAIL_LANDED_SETTLE_S` | py+rs | Seconds a just-sent durable row waits before the send command re-reads the recipient for the `landed`/`NOT LANDED` verdict. Tests read 0. |
+| `FNO_MAIL_LANDED_SETTLE_S` | rs | Seconds a just-sent durable row waits before the send command re-reads the recipient for the `landed`/`NOT LANDED` verdict. Tests read 0. |
 | `FNO_MAIL_LOCAL_FORWARD` | rs | `1` on the same-host forward `mail-remote` execs (`mail_remote.rs`). The front door's cross-host intercept skips any argv carrying it, so a forwarded send reaches the local command instead of re-entering the relay. |
-| `FNO_MAIL_SUBJECT` | py+rs | The peeled `mail send --subject`; the front exports it, the envelope render and the bus-append door stamp it as `meta.subject`. |
+| `FNO_MAIL_SUBJECT` | rs | The peeled `mail send --subject`; the front exports it, the envelope render and the bus-append door stamp it as `meta.subject`. |
 | `FNO_MERGE_AUTHORITY` | rs | Selects the `fno do pr merge` authority arm: `durable_grant` swaps the manifest posture for the durable-grant resolution a parked worker rides; unset or any other value rides the manifest fields as written. |
 | `FNO_MERGE_STEP_TRACE` | rs | Non-empty: each probe of the authorized-merge decide chain prints a began and a took line on stderr. `fno do pr merge` sets it for its child, so a timeout names the step the child was inside. Unset prints nothing. |
 | `FNO_MUSE_BIN` | rs | The `muse` binary `-H muse` launches for `muse serve` and `muse exec`; unset, fno-agents looks on PATH. |
@@ -255,6 +253,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_STORE_KEEPER_RSS_KB` | py | Store keeper resident-memory bound in KiB for the watchdog's over-bound reap verdict; overrides the 2 GiB default. |
 | `FNO_STYLE_ENFORCE` | rs | Zero disables the mail style gate and the encounter prose check at their readers (send vet_body, send_raw, team, pane-prepare, encounter_cli.rs:115); any other value enforces. |
 | `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agents fleet top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
+| `FNO_SUPERVISOR_SOCKET` | rs | Pins the daemon socket a client connects to. A devcontainer spawn sets it inside the box to the mounted socket directory. Set, the client never forks a daemon of its own, and the transcript-push hook posts. Unset, the client uses the agents home socket and the hook posts nothing. |
 | `FNO_SYNC_EVENTS_SCHEMA` | rs | Regenerate-on-build escape for the tracked events-schema copies: unset or any value but `1` keeps the build checking them (drift fails the build); `1` restores writing so a drift can be regenerated and committed. |
 | `FNO_TASK_CONTEXT_FILE` | rs | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
 | `FNO_TEST_BUILD_IDLE_SECS` | rs | Test seam: seconds a build-admit waiter lets the `build:cargo` holder run no compile before it takes the slot (default 30), so admission tests need not wait out the real window. |

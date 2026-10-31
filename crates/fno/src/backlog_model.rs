@@ -2,7 +2,7 @@
 //! purely, and let two renderers draw the same structs.
 use crate::backlog_view::{
     board_scope_from_spawn_env, external_backend_selected, has_open_dependency, kanban_column,
-    read_snapshot, run_claim_sweep, BoardScope, KANBAN_COLUMNS,
+    read_snapshot, run_claim_sweep, BoardScope, KANBAN_COLUMNS, OFF_BOARD,
 };
 use crate::proto::AgentRow;
 use crate::store_client;
@@ -329,6 +329,16 @@ pub struct Stats {
     pub flow: Value,
 }
 
+/// Off-board disclosure: per-bucket counts over every in-scope card the
+/// default board view leaves out, shown or not.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Hidden {
+    pub deferred: usize,
+    pub superseded: usize,
+    pub roadmap: usize,
+    pub total: usize,
+}
+
 /// Values present after the scope and before the model's own filters, for
 /// filter menus. `kinds` is the set of row `type` values; `tags` the set of
 /// row `tags`, empty while no row carries one.
@@ -381,6 +391,12 @@ pub struct Board {
     pub query: Query,
     pub lanes: Vec<Lane>,
     pub stats: Stats,
+    /// Off-board cards (deferred, superseded, roadmap-typed) that pass the
+    /// scope and the query, absent from every lane and tile; the page's
+    /// reveal control renders these.
+    pub offboard: Vec<Card>,
+    /// What the default view leaves out, named per bucket.
+    pub hidden: Hidden,
     pub facets: Facets,
     pub unavailable: Vec<Unavailable>,
     pub errors: Vec<String>,
@@ -596,12 +612,16 @@ pub(crate) fn card_of(
     );
     let claimed = status_claimed || inp.live_claims.contains_key(&id);
     let underway = inp.underway.contains(&id);
+    // A deferred/superseded/roadmap row is off every board lane but still a
+    // row the store holds: keep the card under the sentinel column so list
+    // queries reach it and the board payload can name what it leaves out.
     let column = kanban_column(
         e,
         claimed,
         underway,
         inp.effective_priority.get(&id).map(String::as_str),
-    )?;
+    )
+    .unwrap_or(OFF_BOARD);
     let (encounters, encounters_operator, encounters_external) = encounter_counts(e);
     Some(Card {
         order: order.get(&id).copied().unwrap_or(usize::MAX),
@@ -789,6 +809,8 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
             scope: inp.scope.describe(),
             query: q.clone(),
             lanes: vec![],
+            offboard: vec![],
+            hidden: Hidden::default(),
             stats: Stats {
                 open: vec![],
                 statuses: vec![],
@@ -861,11 +883,17 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
     } else {
         cards
     };
+    // Off-board cards (deferred, superseded, roadmap-typed) stay out of
+    // tiles, facets, lanes and column stats so the default board renders
+    // exactly as before. They ride the `offboard` payload for the page's
+    // reveal, and `hidden` names what the default view leaves out.
+    let (on_board, off_board_cards): (Vec<Card>, Vec<Card>) =
+        scoped.into_iter().partition(|c| c.column != OFF_BOARD);
     // Facets and per-status totals: values present after scope, before
     // filters. A tile's count is what selecting it would show.
-    let facets = facets_of(&scoped, inp);
+    let facets = facets_of(&on_board, inp);
     let mut status_totals: BTreeMap<String, usize> = BTreeMap::new();
-    for c in &scoped {
+    for c in &on_board {
         if let Some(s) = &c.status {
             *status_totals.entry(s.clone()).or_insert(0) += 1;
         }
@@ -878,7 +906,7 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
             .transpose()
             .ok()
             .flatten();
-    let filtered: Vec<Card> = scoped
+    let filtered: Vec<Card> = on_board
         .into_iter()
         .filter(|c| {
             keeps_query(
@@ -891,6 +919,30 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
             )
         })
         .collect();
+    let mut hidden = Hidden::default();
+    for c in &off_board_cards {
+        match off_board_bucket(c) {
+            Some("deferred") => hidden.deferred += 1,
+            Some("superseded") => hidden.superseded += 1,
+            Some("roadmap") => hidden.roadmap += 1,
+            _ => {}
+        }
+    }
+    hidden.total = hidden.deferred + hidden.superseded + hidden.roadmap;
+    let mut offboard: Vec<Card> = off_board_cards
+        .into_iter()
+        .filter(|c| {
+            keeps_query(
+                inp,
+                &by_ref,
+                c,
+                by_ref.get(c.id.as_str()).copied(),
+                q,
+                parsed.as_ref(),
+            )
+        })
+        .collect();
+    offboard.truncate(OFFBOARD_CAP);
     // Per-column totals over the filtered set; `open` excludes Done, the
     // header counts keep it.
     let mut open_totals: HashMap<&'static str, usize> = HashMap::new();
@@ -928,10 +980,26 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
         query: q.clone(),
         lanes,
         stats,
+        offboard,
+        hidden,
         facets,
         unavailable: unavailable(inp),
         errors: inp.errors.clone(),
         search_keys: None,
+    }
+}
+
+/// Which off-board bucket a card falls into, for the hidden counts. A
+/// roadmap-typed row is off-board on type regardless of its status; the
+/// status buckets take everything else `kanban_column` declines.
+pub(crate) fn off_board_bucket(c: &Card) -> Option<&'static str> {
+    if c.kind.as_deref() == Some("roadmap") {
+        return Some("roadmap");
+    }
+    match c.status.as_deref() {
+        Some("deferred") => Some("deferred"),
+        Some("superseded") => Some("superseded"),
+        _ => None,
     }
 }
 
@@ -1004,6 +1072,10 @@ fn facets_of(cards: &[Card], inp: &Inputs) -> Facets {
 const CELL_CAP: usize = 50;
 /// The Done cap per cell.
 const DONE_CAP: usize = 20;
+/// The off-board payload cap: the counts stay complete, the page names the
+/// first slice and a narrower query reaches the rest, so a 10 s poll never
+/// carries two thousand cards for wire size.
+const OFFBOARD_CAP: usize = 200;
 
 /// Group the filtered cards into lanes and six-column cells, with caps.
 fn build_lanes(

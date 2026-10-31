@@ -454,11 +454,12 @@ fn ask_rows() {
     assert_eq!(params["name"], "myagent");
     assert_eq!(params["from_name"], "fno");
     assert_eq!(params["timeout"], 30u64);
-    // --yolo retired with the spawn axes, on every command and in both spellings.
+    // --yolo is spawn vocabulary (the passthrough law forwards it there);
+    // off spawn the unknown-flag refusal answers both spellings.
     for flag in ["--yolo", "-Y"] {
         let err = build_request("ask", &["a".to_string(), "m".to_string(), flag.to_string()])
             .unwrap_err();
-        assert!(err.contains("--yolo is retired"), "{flag}: {err}");
+        assert!(err.contains("unknown flag"), "{flag}: {err}");
     }
 
     let args = vec![
@@ -600,18 +601,10 @@ fn ask_rows() {
 /// instead of reaching the dispatch. The harness axis is `--harness`
 /// (wire param `provider`); `--provider=...` is a tombstone (AC3).
 
-/// The retired spawn axes refuse by name in both space- and equals-form: the
-/// lane template owns the value, and no spelling may reach the request.
+/// The spawn flags parse into params; the flags spawn does not own ride the
+/// passthrough law verbatim into harness_args.
 #[test]
 fn spawn_flag_rows() {
-    let refused = |args: &[&str], flag: &str| {
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        let err = build_request("spawn", &args).unwrap_err();
-        assert!(
-            err.contains(&format!("{flag} is retired")),
-            "{args:?}: {err}"
-        );
-    };
     // The harness's own flags typed before the fence are shorthand for the
     // same flag behind it: they join the fenced tail in harness_args.
     let harness_args = |args: &[&str]| {
@@ -689,10 +682,20 @@ fn spawn_flag_rows() {
         "portal + placement on the thread lane is the legal combination"
     );
 
-    refused(
-        &["wk", "--harness", "claude", "--substrate", "thread"],
-        "--substrate",
-    );
+    // --substrate is a live alias of --as: the same lane rides
+    // both spellings.
+    let (_m, sub) = build_request(
+        "spawn",
+        &[
+            "wk".to_string(),
+            "--harness".to_string(),
+            "claude".to_string(),
+            "--substrate".to_string(),
+            "thread".to_string(),
+        ],
+    )
+    .expect("--substrate thread is a live alias");
+    assert_eq!(sub["substrate"], "thread");
 
     let (_m, space) = build_request(
         "spawn",
@@ -708,9 +711,51 @@ fn spawn_flag_rows() {
         .expect("--account= must parse");
     assert_eq!(eq["account"], "makers");
 
-    // --deny-tools is fno's own spelling, not a harness flag, so it still
-    // refuses by name; the real claude flags forward.
-    refused(&["wk", "--deny-tools", "x"], "--deny-tools");
+    // The passthrough law: flags spawn does not own ride the
+    // harness argv verbatim, one token per token, and a lane that cannot
+    // carry one refuses by name.
+    assert_eq!(
+        harness_args(&["wk", "--yolo"]),
+        serde_json::json!(["--yolo"])
+    );
+    // The one dangling retired short refuses by name instead of falling to
+    // the positionals; the long form forwards above.
+    let err = build_request(
+        "spawn",
+        &["wk".to_string(), "-r".to_string(), "6501096a".to_string()],
+    )
+    .unwrap_err();
+    assert!(err.contains("-r is not a spawn flag here"), "{err}");
+    // A table value flag consumes the next token (`--resume <id>` forwards
+    // the pair); the equals form carries its own value.
+    assert_eq!(
+        harness_args(&["wk", "--resume", "6501096a"]),
+        serde_json::json!(["--resume", "6501096a"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--resume=6501096a"]),
+        serde_json::json!(["--resume=6501096a"])
+    );
+    // The shorthand axes stay the loose path for their own set.
+    assert_eq!(
+        harness_args(&["wk", "--permission-mode", "plan"]),
+        serde_json::json!(["--permission-mode", "plan"])
+    );
+    assert_eq!(harness_args(&["wk", "-Y"]), serde_json::json!(["--yolo"]));
+    assert_eq!(
+        harness_args(&["wk", "--deny-tools", "Bash"]),
+        serde_json::json!(["--deny-tools", "Bash"])
+    );
+    // An unowned flag forwards as one token; the equals form carries its
+    // own value.
+    assert_eq!(
+        harness_args(&["wk", "--some-future-flag"]),
+        serde_json::json!(["--some-future-flag"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--some-future-flag=value"]),
+        serde_json::json!(["--some-future-flag=value"])
+    );
     assert_eq!(
         harness_args(&[
             "wk",
@@ -899,21 +944,35 @@ fn substrate_rows() {
     assert_eq!(params["substrate"], "headless");
     assert!(params.get("host_mode").is_none());
 
-    // Every --substrate spelling, the retired bg included, refuses at scan.
-    for sub in ["pane", "thread", "headless", "bg"] {
-        let err = build_request(
-            "spawn",
-            &[
+    // Every lane word parses on both spellings (--substrate is a live
+    // alias of --as); only a word outside the vocabulary refuses, and
+    // the line names the lanes.
+    for sub in ["pane", "thread", "headless", "cloud"] {
+        for flag in ["--as", "--substrate"] {
+            let args = vec![
                 "wk".to_string(),
                 "--harness".to_string(),
                 "claude".to_string(),
-                "--substrate".to_string(),
+                flag.to_string(),
                 sub.to_string(),
-            ],
-        )
-        .unwrap_err();
-        assert!(err.contains("--substrate is retired"), "{sub}: {err}");
+            ];
+            let (_m, params) = build_request("spawn", &args).expect("live lane parses");
+            assert_eq!(params["substrate"], sub, "{flag} {sub}");
+        }
     }
+    let err = build_request(
+        "spawn",
+        &[
+            "wk".to_string(),
+            "--substrate".to_string(),
+            "bg".to_string(),
+        ],
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("must be one of: pane, thread, headless, cloud"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -935,13 +994,14 @@ fn harness_flag_rows() {
         );
     }
 
-    // On spawn the vendor axis retired with the rest: a harness name or a
-    // vendor typed after --provider/-P refuses by name before any routing.
+    // On spawn --provider/-P refuses too (the scan refusal is lifted, so
+    // the axis-rename tombstone is the one teacher left): a vendor is
+    // not a harness, and it must not route.
     for v in ["claude", "codex", "zai"] {
         for flag in ["--provider", "-P"] {
             let args = vec!["wk".to_string(), flag.to_string(), v.to_string()];
             let err = build_request("spawn", &args).unwrap_err();
-            assert!(err.contains("--provider is retired"), "{flag}: {err}");
+            assert!(err.contains("split at the axis rename"), "{flag}: {err}");
         }
     }
 
@@ -1820,3 +1880,75 @@ fn resume_by_predecessor_full_id_refuses_13() {
 // -----------------------------------------------------------------------
 // the client-side gate receives the route provider
 // -----------------------------------------------------------------------
+
+// -----------------------------------------------------------------------
+// spawn request lineage: the client stamps the caller's ambient parent edge
+// -----------------------------------------------------------------------
+
+/// Every name `claims::ambient_parent_edge` reads. Clearing them all is what
+/// "the caller carries no marker" means; `AMBIENT_IDENTITY_NAMES` is
+/// crate-private to the lib, so the bin's tests name the set here.
+const IDENTITY_ENV_NAMES: &[&str] = &[
+    "FNO_HARNESS_NAME",
+    "FNO_HARNESS_SESSION_ID",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "GEMINI_SESSION_ID",
+    "OPENCODE_SESSION_ID",
+];
+
+/// Clears every identity marker for the test, restoring the caller's own on
+/// Drop so a panic cannot leak the mutation into the rest of this binary.
+struct IdentityEnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl IdentityEnvGuard {
+    fn take(set: &[(&'static str, &str)]) -> Self {
+        let saved = IDENTITY_ENV_NAMES
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for name in IDENTITY_ENV_NAMES {
+            std::env::remove_var(name);
+        }
+        for (name, value) in set {
+            std::env::set_var(name, value);
+        }
+        Self(saved)
+    }
+}
+
+impl Drop for IdentityEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.0 {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+#[test]
+fn spawn_request_carries_the_callers_codex_edge() {
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    // One codex id under both names is the measured thread shape.
+    let _guard = IdentityEnvGuard::take(&[("CODEX_THREAD_ID", "T"), ("CODEX_SESSION_ID", "T")]);
+    let (_method, params) = build_request("spawn", &["wk".to_string(), "hi".to_string()])
+        .expect("a plain spawn request parses");
+    assert_eq!(params["spawned_by_session"], serde_json::json!("T"));
+    assert_eq!(params["spawned_by_harness"], serde_json::json!("codex"));
+}
+
+#[test]
+fn spawn_request_without_markers_carries_no_edge() {
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    // A daemon arm or a bare shell carries nothing: the request says so, and
+    // the mint stamps its honest null rather than a guessed parent.
+    let _guard = IdentityEnvGuard::take(&[]);
+    let (_method, params) = build_request("spawn", &["wk".to_string(), "hi".to_string()])
+        .expect("a plain spawn request parses");
+    assert!(params.get("spawned_by_session").is_none(), "{params:?}");
+    assert!(params.get("spawned_by_harness").is_none(), "{params:?}");
+}

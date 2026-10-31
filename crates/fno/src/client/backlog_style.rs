@@ -5,7 +5,8 @@
 //! INVERSE) and every backlog surface inherits it.
 
 use super::super::chrome::{self, Join};
-use super::super::theme::{band_style, cell_style, Role, Theme};
+use super::super::cursor::cursor_style;
+use super::super::theme::{cell_style, Role, Theme};
 use crate::proto::{cell_flags, Cell};
 
 /// What a piece of backlog text is. The mapping through [`role_of`] is the
@@ -19,6 +20,8 @@ pub(crate) enum BRole {
     Pill,
     /// The active tab cell of a tab strip (inverted).
     Tab,
+    /// A line that needs the reader, such as a failed delivery.
+    Warn,
 }
 
 /// One styled segment.
@@ -256,6 +259,7 @@ pub(crate) fn role_of(role: BRole) -> Role {
         BRole::Body => Role::PanelBody,
         BRole::Pill => Role::PanelPill,
         BRole::Tab => Role::PanelTab,
+        BRole::Warn => Role::PanelWarn,
     }
 }
 
@@ -445,7 +449,7 @@ pub(crate) fn paint_panel(
             theme,
         );
         if band && r < rows {
-            let (fg, bg, flags) = band_style(theme);
+            let (fg, bg, flags) = cursor_style(theme);
             let row_base = r * cols;
             for c in 0..text_w.min(cols) {
                 let cell = &mut cells[row_base + c];
@@ -478,7 +482,7 @@ pub(crate) fn paint_panel_at(
         (x0, top, text_w, area_h),
         lines,
         follow,
-        band_style(theme),
+        cursor_style(theme),
         theme,
     );
 }
@@ -607,7 +611,7 @@ pub(crate) fn paint_framed_band(
     if r >= rows {
         return;
     }
-    let (fg, bg, flags) = band_style(theme);
+    let (fg, bg, flags) = cursor_style(theme);
     let c0 = (origin.1 + 1).min(cols);
     let c1 = (origin.1 + frame_w.saturating_sub(1)).min(cols);
     for c in c0..c1 {
@@ -641,7 +645,7 @@ pub(crate) fn paint_title_row(
         return;
     }
     if focused {
-        let (fg, _, _) = band_style(theme);
+        let (fg, _, _) = cursor_style(theme);
         for c in left..left + width {
             cells[row * cols + c] = Cell {
                 c: ' ',

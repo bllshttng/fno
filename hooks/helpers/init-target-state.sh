@@ -1637,6 +1637,33 @@ PYEOF
             if [[ -n "${_SELF_NAME:-}" && "${_DISK_HOLDER}" == "spawn-handover:${_SELF_NAME}" ]]; then
               _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
             fi
+            if [[ -z "${_HANDOVER_FLAGS:-}" && -n "${_HARNESS_SESSION:-}" ]]; then
+              # The session-id proof: a spawn-side claim records the creating
+              # session two ways - proven identity lands in session_id, and an
+              # ambient-only creator is demoted to dispatched_by_session
+              # metadata until a renew proves it. Either way a window naming
+              # THIS session was minted for it: the disk-read form of the env
+              # carrier. A respawned worker reaches init while its own earlier
+              # process still holds the window (measured live 2026-10-30: the
+              # registry row was not resolvable yet and the pid still alive,
+              # so the name and suspect rungs both missed and the beneficiary
+              # refused its own pre-claim, stranding a claimless manifest).
+              # Case folds like the engine's same_session_id; an exact match
+              # is the only proof, never a prefix.
+              _DISK_CLAIM_SESSION="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              if [[ -z "$_DISK_CLAIM_SESSION" ]]; then
+                _DISK_CLAIM_SESSION="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                  | sed -n 's/.*"dispatched_by_session"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              fi
+              if [[ -n "$_DISK_CLAIM_SESSION" ]] \
+                 && { [[ "$_DISK_CLAIM_SESSION" == "$_HARNESS_SESSION" ]] \
+                      || { [[ "$_DISK_CLAIM_SESSION" != ses_* && "$_HARNESS_SESSION" != ses_* ]] \
+                           && [[ "$(printf '%s' "$_DISK_CLAIM_SESSION" | tr '[:upper:]' '[:lower:]')" \
+                                 == "$(printf '%s' "$_HARNESS_SESSION" | tr '[:upper:]' '[:lower:]')" ]]; }; }; then
+                _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
+              fi
+            fi
             if [[ -z "${_HANDOVER_FLAGS:-}" ]]; then
               # A launch window that outlived its launcher: the recorded pid
               # is the spawner's, the pid probe proves it gone (basis
@@ -1918,8 +1945,8 @@ PYEOF
       # before comparing. The key is documented in SKILL.md as
       # `join: <manual|auto>   # who hands out the remaining waves`, so without
       # this the documented shape yields "auto # who hands out..." and never
-      # matches - the doc would describe a trigger it disables. PlanFrontmatter
-      # parses the same file as YAML and reads a bare `auto`, so the two
+      # matches - the doc would describe a trigger it disables. The plan-schema
+      # door parses the same file as YAML and reads a bare `auto`, so the two
       # readers of one key have to agree.
       _jt_fm="$(awk '/^---[[:space:]]*$/{c++; if(c==2) exit; next} c==1' "$_jt_plan" 2>/dev/null | sed -n 's/^join:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]*#.*$//' | tr -d '"' | tr -d "'" | xargs)"
       # The retired spelling is NOT an alias - reviving it would keep a key

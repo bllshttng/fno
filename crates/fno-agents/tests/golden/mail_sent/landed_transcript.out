@@ -1,1 +1,1 @@
-[{"body":"<fno_mail id=\"m-tx\">","claimable":true,"claimed":true,"delivery":"durable","id":"m-tx","kind":"send","landed":true,"to":"worker7","to_kind":null,"ts":"TS"}]
+[{"body":"<fno_mail id=\"m-tx\">","claimable":true,"claimed":true,"delivery":"durable","id":"m-tx","kind":"send","landed":true,"state":"accepted-new-turn","state_detail":"(landed)","to":"worker7","to_kind":null,"ts":"TS"}]

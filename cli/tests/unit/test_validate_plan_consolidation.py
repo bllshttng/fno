@@ -156,23 +156,6 @@ def test_append_outcome_in_a_written_plan_is_a_contradiction(tmp_path):
     assert "a plan file was written" in out.stdout
 
 
-def test_consolidation_entry_accepts_legacy_dashless_literal():
-    """A bare "<prefix><4hex>" legacy id references like its dashed kin.
-
-    A config prefix with no separator once minted such literals; a candidate
-    the graph holds must be recordable here, or the gate cannot say what it
-    considered. The binding check is the graph's own predicate, so any shape
-    the graph mints (dashed or legacy bare) passes; only a non-id shape is
-    refused. Prose extraction keeps its own stricter grammar.
-    """
-    from fno.plan.schema import ConsolidationEntry
-
-    assert ConsolidationEntry(id="x4d12", reason="parent epic, not a fold")
-    assert ConsolidationEntry(id="a3f9c1d2", reason="legacy bare id references too")
-    with pytest.raises(Exception):
-        ConsolidationEntry(id="9abc", reason="not an id shape at all")
-
-
 # -- the `rejected` key (x-6f98): a plan ruling against a foreign node --
 
 

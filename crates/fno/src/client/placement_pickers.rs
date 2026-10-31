@@ -195,7 +195,6 @@ impl View {
                 .find(|s| s.id == sid)
                 .map(|s| s.name.as_str())
                 .unwrap_or("(gone)");
-            let marker = if i == picker.cursor { '›' } else { ' ' };
             // Only the first nine are digit-addressable; the rest get a blank
             // gutter rather than a number no key produces.
             let ord = if i < 9 {
@@ -203,7 +202,7 @@ impl View {
             } else {
                 " ".into()
             };
-            lines.push(pad_to(&format!(" {marker} {ord} {name}"), W));
+            lines.push(pad_to(&format!("   {ord} {name}"), W));
         }
         // Two lines, not three: enter/t and space/. are each one action under
         // two keys, so they collapse to one entry apiece. The split row spells
@@ -248,14 +247,13 @@ impl View {
     /// index space stays reachable through the cursor keys the footer names -
     /// the index column shows the true `0..=255` address, the gutter only ever
     /// hides a jump no key produces.
-    pub(crate) fn portal_pick_lines(&self, pick: &PortalPick) -> Vec<String> {
+    pub(crate) fn portal_pick_lines(&self, _pick: &PortalPick) -> Vec<String> {
         // 62, not the attach picker's 54: the footer names four axes on ONE
         // line and pad_to would ellipsize it at 54.
         const W: usize = 62;
         let rows = self.open_portal_rows();
         let mut lines = vec![pad_to(" portal placement", W)];
         for (i, (a, idx)) in rows.iter().enumerate() {
-            let marker = if i == pick.cursor { '›' } else { ' ' };
             let ord = if i < 9 {
                 (i + 1).to_string()
             } else {
@@ -266,22 +264,14 @@ impl View {
                 Some(TabContext::Named(name)) => format!("·{name}  "),
                 None => String::new(),
             };
-            lines.push(pad_to(
-                &format!(" {marker} {ord} ◫{idx}  {tab}{}", a.name),
-                W,
-            ));
+            lines.push(pad_to(&format!("   {ord} ◫{idx}  {tab}{}", a.name), W));
         }
-        let marker = if pick.cursor == rows.len() {
-            '›'
-        } else {
-            ' '
-        };
         let ord = if rows.len() < 9 {
             (rows.len() + 1).to_string()
         } else {
             " ".into()
         };
-        lines.push(pad_to(&format!(" {marker} {ord} +   new portal"), W));
+        lines.push(pad_to(&format!("   {ord} +   new portal"), W));
         lines.push(pad_to(
             " arrows/hjkl move · 1-9 jump · enter place · esc/q cancel",
             W,

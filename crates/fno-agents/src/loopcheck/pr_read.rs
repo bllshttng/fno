@@ -81,7 +81,10 @@ pub(super) struct PrInfo {
     pub(super) ci_conclusion: CiConclusion,
     /// Every failing check/job name on the PR head (bucket fail|cancel), at the
     /// same granularity as `gh pr checks .name`. Feeds the DoneAwaitingMerge
-    /// subset rule against main's failing set. Empty when CI is green/pending.
+    /// subset rule against main's failing set, and tells a cancelled run (a
+    /// `Pending` conclusion beside cancel-named rows) from a running one in
+    /// the block render. Empty when CI is green, or pending with no
+    /// cancelled row.
     pub(super) failing_checks: Vec<String>,
     /// True iff any check on the PR head is still pending (a non-terminal
     /// bucket). `ci_conclusion` reports `Failure` as soon as ONE check fails even
@@ -95,8 +98,13 @@ pub(super) struct PrInfo {
     pub(super) mergeable: String,
     /// Live merge-slot holder for this PR's base ref when ANOTHER PR holds it.
     /// A fail-open read of the local claims store - no GitHub spend.
-    /// None on no hold, a self-held slot, or an unreadable store.
+    /// None on no hold, a hand-built PrInfo, or an unreadable store.
     pub(super) merge_slot_holder: Option<u64>,
+    /// The rendered merge-freeze hold line when a live freeze covers this PR,
+    /// from the same local record the authorized-merge owner probes. None on
+    /// no freeze, on an unreadable record or store (status quo: block, never
+    /// idle on a freeze we cannot read), and on a hand-built PrInfo.
+    pub(super) merge_hold: Option<String>,
     /// GitHub `mergeStateStatus` == BEHIND (REST `mergeable_state` == behind):
     /// the base moved past this PR's head, so a rebase is work to do now and a
     /// merge-slot hold must not idle: the refusal stays for a hold the
@@ -1046,6 +1054,27 @@ pub(super) fn read_pr_info(
     } else {
         None
     };
+    // The merge-freeze hold (the authorized-merge hold-set): a local record
+    // read, same fail-open store shape as the slot read above, gated on the
+    // cheap preconditions the classifier reads it behind - an open,
+    // non-conflicting PR with no unaddressed findings. Everything a frozen
+    // PR must still DO (rebase, push, reply) refuses the idle before this
+    // field is consulted, and an unreadable record reads None: status quo
+    // block, never an idle granted on a freeze we cannot read.
+    let merge_hold = if state == PrState::Open
+        && mergeable != "CONFLICTING"
+        && unaddressed_findings.is_empty()
+    {
+        crate::paths::AgentsHome::from_env_opt().and_then(|home| {
+            crate::merge_freeze::holds_pr_line(
+                &home,
+                number.unsigned_abs(),
+                Some(repo_slug).filter(|s| !s.is_empty()),
+            )
+        })
+    } else {
+        None
+    };
     Ok(PrInfo {
         range_tiling: tiling,
         state,
@@ -1056,6 +1085,7 @@ pub(super) fn read_pr_info(
         ci_has_pending,
         mergeable,
         merge_slot_holder,
+        merge_hold,
         base_behind,
         latest_review_ts,
         reviewed,

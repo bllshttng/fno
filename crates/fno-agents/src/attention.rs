@@ -368,6 +368,57 @@ fn project_of(cwd: &str) -> String {
     basename(cwd).to_string()
 }
 
+/// The row's visible title: the question's first line with a leading
+/// machine-internal dedupe bracket dropped (`[watchdog-stale:key] prose` ->
+/// `prose`); a marker-only first line yields the next prose line. The stored
+/// body keeps the full text - the bracket is the `already_asked` dedupe key
+/// (`fno.agents.stale_escalate.already_asked` folds it), so it never leaves
+/// the body, only the title.
+pub(crate) fn display_title(question: &str) -> String {
+    let mut lines = question.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let prose = strip_marker_bracket(first);
+    if !prose.is_empty() {
+        return prose.to_string();
+    }
+    lines.next().unwrap_or("").to_string()
+}
+
+/// `[<multiword-kebab-token>:<key>]` followed by a space or end-of-line: the
+/// durable askers' dedupe bracket (`watchdog-stale`, `reap-hold`, ... - every
+/// shipped token is hyphenated). A bracket a question opens with on purpose -
+/// a single-word or uppercase token, a key with no colon inside - stays
+/// untouched.
+fn strip_marker_bracket(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix('[') else {
+        return line;
+    };
+    let Some(close) = rest.find(']') else {
+        return line;
+    };
+    let Some((token, key)) = rest[..close].split_once(':') else {
+        return line;
+    };
+    let kebab = token.contains('-')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !kebab || key.is_empty() {
+        return line;
+    }
+    let after = &rest[close + 1..];
+    match after.chars().next() {
+        // End of line: the marker-only line display_title falls through from.
+        None => after,
+        // The emitters write `] ` before the prose; a bracket followed by
+        // any other character is content the title keeps.
+        Some(ch) if ch.is_whitespace() => after.trim_start(),
+        Some(_) => line,
+    }
+}
+
 /// Build one item from an `operator_question` row (`data` fields read
 /// envelope-agnostically). `data.context`, when present, carries the
 /// structured context fields the Rust intake writes (wave 3); bare
@@ -375,7 +426,7 @@ fn project_of(cwd: &str) -> String {
 fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
     let qid = str_field(row, "question_id")?;
     let question = str_field(row, "question").unwrap_or("");
-    let title = question.lines().next().unwrap_or("").to_string();
+    let title = display_title(question);
     let ask = str_field(row, "ask").unwrap_or("");
     let options: Vec<ItemOption> = arr_field(row, "options")
         .map(|arr| {
@@ -546,6 +597,16 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         "high"
     }
     .to_string();
+    // A question with no text names its asker and node instead of showing a
+    // bare id down every consumer: the row always carries who asked.
+    if item.title.is_empty() {
+        if let Some(handle) = item.asker.as_ref().map(|a| a.handle.as_str()) {
+            item.title = match item.node.as_deref() {
+                Some(node) if !node.is_empty() => format!("from {handle} on {node}"),
+                _ => format!("from {handle}"),
+            };
+        }
+    }
     item.seal_readiness();
     Some(item)
 }
@@ -1135,7 +1196,7 @@ mod tests {
             "\n",
             r#"{"ts":"2026-09-26T05:01:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-a","sink":"mux","option":1,"answered_at":"2026-09-26T05:01:00Z","superseded":false}}"#,
             "\n",
-            r#"{"ts":"2026-09-26T05:02:00Z","type":"attention_delivery","source":"daemon","data":{"item_id":"q-a","rung":"mail","outcome":"landed","evidence":"outstanding: q-a answered; mail to w1: delivered (hosted)"}}"#,
+            r#"{"ts":"2026-09-26T05:02:00Z","type":"attention_delivery","source":"daemon","data":{"item_id":"q-a","rung":"mail","outcome":"landed","evidence":"outstanding: q-a answered; mail to w1: accepted-new-turn"}}"#,
             "\n",
         );
         // now = 05:10:00Z: the answer is 9 minutes old, inside the TTL.
@@ -1196,5 +1257,51 @@ mod tests {
             item.recommendation.as_ref().unwrap().downside.as_deref(),
             Some("Waiting may miss the window.")
         );
+    }
+
+    #[test]
+    fn title_strips_the_dedupe_bracket_and_falls_back_to_asker_and_node() {
+        // The bracket the emitters embed is the already_asked dedupe key: the
+        // title drops it, the body keeps it.
+        let journals = row(
+            "q-m",
+            "[session-transition-branch:t-opus:a:b] Branch f (opus) forked. Inherit or clean?",
+            json!({}),
+        );
+        let item = &project(&journals, &[], "", 0)[0];
+        assert_eq!(item.title, "Branch f (opus) forked. Inherit or clean?");
+        assert!(item
+            .body
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("[session-transition-branch:"));
+        // A marker-only first line yields the next prose line.
+        assert_eq!(
+            display_title("[watchdog-stale:k]\nThe fleet holds two rows."),
+            "The fleet holds two rows."
+        );
+        // A bracket that is not the emitters' shape stays.
+        assert_eq!(
+            display_title("[Not a marker] keep me"),
+            "[Not a marker] keep me"
+        );
+        assert_eq!(
+            display_title("[a:b] keep me"),
+            "[a:b] keep me",
+            "a single-word token is not a marker"
+        );
+        assert_eq!(
+            display_title("[client-side:render]Which implementation?"),
+            "[client-side:render]Which implementation?",
+            "no delimiter after the bracket is content"
+        );
+        // No text: the row names its asker and node instead of a bare id.
+        let silent = row("q-e", "", json!({"asker": "daemon", "node": "job-7"}));
+        let item = &project(&silent, &[], "", 0)[0];
+        assert_eq!(item.title, "from daemon on job-7");
+        // Neither asker nor node: empty stays empty, and the reader keeps
+        // its own id fallback.
+        let bare = row("q-b", "", json!({}));
+        assert_eq!(project(&bare, &[], "", 0)[0].title, "");
     }
 }

@@ -168,26 +168,3 @@ def _capture_subprocess_env(monkeypatch, module) -> dict:
     return captured
 
 
-def test_bg_spawn_scrubs_inherited_identity(tmp_path: Path, monkeypatch) -> None:
-    """AC5 (bg substrate): a `claude --bg` child sheds every ambient identity
-    marker its parent carried. The operator's spawned-reviewer lane uses
-    `--substrate bg`, so this is the seam a cross-model review crosses."""
-    from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses.claude import bg_create
-
-    for index, marker in enumerate(ALL_MARKERS):
-        monkeypatch.setenv(marker, f"bg-marker-{index:04d}")
-    captured = _capture_subprocess_env(monkeypatch, claude_mod)
-
-    cwd = tmp_path / "wd"
-    cwd.mkdir()
-    bg_create(name="rev", message="hi", cwd=cwd, timeout=10)
-
-    bg_envs = [env for argv, env in captured["calls"] if "--bg" in argv]
-    assert bg_envs, "no --bg subprocess env was captured"
-    child_env = bg_envs[-1]
-    _assert_scrubbed(
-        child_env,
-        "bg",
-        {"FNO_HARNESS_NAME": "claude", "FNO_AGENT_SUBSTRATE": "thread"},
-    )

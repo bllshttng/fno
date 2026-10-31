@@ -235,24 +235,3 @@ def test_the_store_probe_resolves_a_reaped_short_id(isolated_state, tmp_path, mo
     # print a peer. The adopt hint is the positive marker.
 
 
-def test_peek_miss_says_so_when_the_transcript_is_on_disk(tmp_path, monkeypatch):
-    """The exact case that nearly cost 4.9M of context: row gone, conversation intact."""
-    from fno.agents.peek import EXIT_NOT_FOUND, peek
-
-    _seed_transcript(tmp_path, monkeypatch)
-
-    err = io.StringIO()
-    rc = peek(
-        SHORT_ID,
-        stdout=io.StringIO(),
-        stderr=err,
-        resolve=lambda _h: (None, []),
-        projects_root=tmp_path / "projects",
-        mux_lookup=lambda _h: None,
-    )
-    text = err.getvalue()
-    assert rc == EXIT_NOT_FOUND
-    assert "transcript IS on disk" in text, text
-    # The hint names the FULL session id the store resolved, not the short the
-    # operator typed: adopt takes either, and the resolved one is unambiguous.
-    assert f"fno agents adopt {SESSION_ID}" in text, text

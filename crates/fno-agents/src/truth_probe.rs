@@ -465,7 +465,7 @@ fn ask_daemon(
     if budget.is_zero() {
         return None;
     }
-    let sock = crate::paths::AgentsHome::from_env().supervisor_sock();
+    let sock = crate::client::client_sock(&crate::paths::AgentsHome::from_env());
     let result = crate::protocol::blocking_call(
         &sock,
         "agent.truth",

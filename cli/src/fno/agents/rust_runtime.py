@@ -149,6 +149,18 @@ RUST_CLIENT_COMMANDS = frozenset(
         # The stream-json observe surface: polls the worker's own
         # stream.read_frames socket, never the daemon. A read.
         "watch",
+        # The transcript-tail supervision classifier over the daemon's own
+        # truth reader, answered in process. A read.
+        "truth",
+        # The read-only observe leg (twin of `fno agents mail send`) over the
+        # same transcript reader. A read.
+        "peek",
+        # The whole-team read: every live role and whether the registry and
+        # the graph agree, over native readers in one process. A read.
+        "team",
+        # The in-place role grant and reclaim: one locked registry write plus
+        # its lead-manifest and team-thread effects, no daemon. A write.
+        "role",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -274,10 +286,11 @@ RUST_CLIENT_COMMANDS = frozenset(
         "bash-census",
         "session-start-bytes",
         "judge",
-        # Orphan-role sweep for `fno agents team`: daemon-free read, never `fno agents`.
+        # Orphan-role sweep (the native team read calls it in process): daemon-free read, never `fno agents`.
         "org-vacancies",
         # Role scope fold for `fno agents team --nodes`: daemon-free read;
-        # graph.json and claims in, per-scope fold out; Python passes the roles.
+        # graph.json and claims in, per-scope fold out; the native team read
+        # calls the same fold in process.
         "org-fold",
         # Role-scope checkin readback: the front door execs it for `fno
         # agents org history` and `verdict`; escalate's verdict relay
@@ -367,16 +380,7 @@ RUST_CLIENT_COMMANDS = frozenset(
 #: ``_resolve_ask_provider``) is gone; the ``AUTO_ROUTE_COMMANDS`` identity below is
 #: now the whole routing contract except for ``send``.
 PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
-    # Human-attended in-place role grant. Pure shared-registry transaction;
-    # spawn-time grant and succession remain on the Rust-backed spawn path.
-    "role",
-    #: the whole-team read (every live role + registry/graph
-    # agreement). Pure Python (fno.agents.team reads the registry and the
-    # graph); no Rust client port, so it must never auto-route to the daemon.
-    "team",
-    # Messaging commands are not direct agents actions. They live below the
-    # Python-owned `fno agents mail` subgroup and therefore never auto-route as
-    # direct send, inbox, or ack Rust commands. `incident` relays argv.
+    # `incident` relays argv.
     "incident",
     "distress-verdicts", #: blocked_child's verdict lookup; no Rust port.
     # The stop hook's read-only spawn-gate capacity probe. Pure Python (the
@@ -397,6 +401,9 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # The bundle transfer: the Python shim execs the native fno binary's
     # `agents transcript` role (the history pattern, not a client action).
     "transcript",
+    # The retask front: the Python shim execs the native binary's
+    # `rename retask` form (crates/fno-agents/src/retask/front.rs); no
+    # Rust client command of this name exists, so it must never auto-route.
     "retask",
     # The cadence-deadline silence backstop. Pure Python: it reads the registry
     # and each row's transcript truth through fno.agents.sweep, writes nothing,
@@ -411,14 +418,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # that execs `fno-agents census --workers`; the `fno` front execs it
     # directly. `top` is no client action, so it must never auto-route.
     "top",
-    #: the read-only observe leg (twin of `fno agents mail send`). Reads a
-    # peer's on-disk transcript / status events via fno.agents.peek. No Rust
-    # client port, so it must never auto-route to the daemon.
-    "peek",
-    #: the transcript-tail supervision classifier (`fno agents truth`).
-    # Read-only, pure Python (fno.agents.session_truth reads the transcript via
-    # peek); no Rust client port, so it must never auto-route to the daemon.
-    "truth",
     # The orphan sweep. The registered Python command is a shim that execs
     # `fno-agents census --orphans` (crates/fno-agents/src/orphans.rs); the
     # body routes in every runtime mode, and `orphans` is no client action, so
@@ -491,6 +490,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "wait": "Block until an agent's registry row reaches idle|blocked|done: --agent <name> --state <s> [--timeout-ms N] [--json].",
     "subscribe": "Stream registry state transitions + pane exits as NDJSON (follows events.jsonl): [--agent <name>] [--kinds state,exit] [--json].",
     "digest": "Catch-up 'while you were gone' fold over events + ledger for a session: --session <s> --since <ts> [--json].",
+    "trace": "An agent's dispatch lifecycle from the event store: [name] [--all] [--request-id X] [--since S] [--limit N] [--json].",
     "needs": "Needs-me queue fold over events + ledger across all sessions (review_wedged/budget_stop): [--since-epoch <secs>] [--fires-floor <n>] [--json].",
     "liveness": "One 'is this worker alive' answer per handle: <handle...> [-J|--json] reads the registry row, the transcript age (the one reader), and the pid through the one verdict door; the caller's own row (FNO_AGENT_SELF or a harness session env) rides along as the positive control. Exit 0 all live, 1 any finished, 2 any unknown, 3 no handle resolved. Daemon-free; starts nothing.",
     "select-read": "One bounded backlog read (next|undispatched) under [auto_continue] select_timeout_s; prints an ok/unmeasured/error receipt JSON.",
@@ -505,8 +505,8 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "bash-census": "Bash-call compound/cd/heredoc shares and top command/command tables over recent transcripts; invoked directly by `fno doctor bash-census`.",
     "session-start-bytes": "Session-start preamble byte total; invoked directly by `fno doctor`'s session-start byte report.",
     "judge": "Blueprint judge: grade a plan against the five product questions, --budget <secs> to bound the whole pass (default 600s), or --labels/--split to calibrate against evals/blueprint-judge/labels.yaml; invoked by the observer ops door (crate observer mod.rs) through its own subprocess round-trip (judge_via_rust), not `fno agents` routing.",
-    "org-vacancies": "Roles whose registry row is gone but whose manifest holds them: --root <spaces-root> --held <scope> (repeatable, one flag per scope); invoked directly by `fno agents team`, not `fno agents` routing.",
-    "org-fold": "The role scope fold: --graph <graph.json> --promotes-json <roles> --claims-dir <dir> --format json; invoked directly by `fno agents team`, not `fno agents` routing.",
+    "org-vacancies": "Roles whose registry row is gone but whose manifest holds them: --root <spaces-root> --held <scope> (repeatable, one flag per scope); read in process by the native team read, not `fno agents` routing.",
+    "org-fold": "The role scope fold: --graph <graph.json> --promotes-json <roles> --claims-dir <dir> --format json; read in process by the native team read, not `fno agents` routing.",
     "lead-history": "The role-scope lead_checkin readback: --scope <scope> --events-path <events.jsonl> [--events-path ...] [--json]; --verdict selects the term tenure verdict read (assembles its own inputs natively: role, manifest, config, graph scope, window, delivery split); exec'd by the front door for `fno agents org history` and `verdict`, which resolve their own journals natively; escalate's verdict relay invokes it directly.",
     "evals-macro": "The macro-eval failure-pattern leaderboard fold: --events <journal.jsonl> [--events ...] [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json]; invoked directly by `fno doctor evals macro`, which resolves the journal defaults.",
     "lead-checkin": "One command runs the term check-in body: --scope <scope> --events-path <events.jsonl> [--events-path ...] --graph <graph.json> --handoffs-dir <dir> [--faqs-dir <dir>] [--board-state <manifest>] [--emit-path <events.jsonl>] [--no-emit] [--json]; invoked directly by `fno agents lead checkin`, which resolves the role and the paths.",
@@ -798,10 +798,7 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
         # A revive continues an EXISTING transcript, and that transcript lives
         # under the config dir it was created in - so an injected --account
         # points CLAUDE_CONFIG_DIR at a directory where the uuid does not exist.
-        # It also collides with the recorded-route restore in `dispatch_spawn`,
-        # which reads any --account as operator intent and refuses the pair:
-        # the operator would be told to drop a flag they never typed. Nothing to
-        # pick - the transcript already decided where it lives.
+        # Nothing to pick - the transcript already decided where it lives.
         return out
     if _has_flag(out, longs=("--dispatch-account",)):
         # A cutover already SELECTED its account, and picking a second one here
@@ -834,32 +831,6 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
     return [*out[:boundary], "--account", picked, *out[boundary:]]
 
 
-#: Commands whose Rust-client handling launches a harness child that would inherit
-#: the exec'd client's env verbatim. ``worker_environment`` scrubs identity for
-#: every Python adapter seam, but a spawn/ask that execs the binary crosses no
-#: Python seam, and the Rust spawn arms only scrub model vars
-#: (model_env_scrub), so without this the identity floor is one of two
-#: reachable implementations - decorative for the default installed-binary
-#: route. Direct ``fno-agents`` invocations still need the Rust-side twin.
-_WORKER_LAUNCHING_COMMANDS = frozenset({"spawn", "ask"})
-
-
-def _scrub_ambient_identity_at_exec(command: str) -> None:
-    """Drop ambient identity markers from ``os.environ`` right before the exec,
-    so the Rust client (and the worker it launches) cannot inherit them.
-
-    Only the exec branches call this: the process is replaced immediately, so
-    the mutation never reaches a Python code path (parent-edge capture in
-    ``cmd_spawn`` still sees the markers on the fall-through route). Scoped to
-    worker-launching commands because the client itself resolves identity for
-    other commands and must keep seeing the ambient markers."""
-    if command not in _WORKER_LAUNCHING_COMMANDS:
-        return
-    from fno.harness_identity import scrub_ambient_identity
-
-    scrub_ambient_identity()
-
-
 #: d-fe66560a keeps the binary's action list shrink-only, so these read
 #: leaves have no action of their own: the router rewrites each into an
 #: argument of the `status` action before the exec.
@@ -873,6 +844,10 @@ _STATUS_ARG_LEAVES = {
     "heal-token": "--heal-token",
     "pane-identity": "--pane-identity",
     "watch": "--watch",
+    "truth": "--truth",
+    "peek": "--peek",
+    "team": "--team",
+    "role": "--role",
     "liveness": "--liveness",
 }
 
@@ -1103,13 +1078,11 @@ def make_agents_group_cls() -> type:
                 mode = runtime_mode()
                 if mode == "rust":
                     _pin = _worktree_policy_pin_at_seam(args)
-                    _scrub_ambient_identity_at_exec(command)
                     route_to_rust(list(args), env_pin=_pin or None)  # execs; does not return
                 elif mode == "auto" and command in AUTO_ROUTE_COMMANDS:
                     binary = rust_binary.resolve_installed_binary()
                     if binary is not None:
                         _pin = _worktree_policy_pin_at_seam(args)
-                        _scrub_ambient_identity_at_exec(command)
                         route_to_rust(list(args), binary=binary, env_pin=_pin or None)  # execs
                     # else: no installed binary -> Python dispatch below.
                 # mode == "python", or no installed binary -> Python dispatch below.

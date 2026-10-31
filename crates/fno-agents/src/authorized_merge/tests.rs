@@ -12,6 +12,9 @@ struct Fake {
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
     merge_freeze: Option<ProbeOutcome>,
+    rules: Option<ProbeOutcome>,
+    /// Per-PR rules answer, so a test can hold one PR and clear the next.
+    other_rules: RefCell<HashMap<u64, ProbeOutcome>>,
     review_posted: Option<ProbeOutcome>,
     /// The `reviewed_head` argument review_posted_gate last passed in, so a
     /// test can prove it threaded the attestation's own head, not a guess.
@@ -285,6 +288,12 @@ impl Probes for Fake {
     fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.merge_freeze.clone().unwrap_or(ProbeOutcome::Clear)
     }
+    fn rules(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        if let Some(ruling) = self.other_rules.borrow().get(&facts.number) {
+            return ruling.clone();
+        }
+        self.rules.clone().unwrap_or(ProbeOutcome::Clear)
+    }
     fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
         *self.review_posted_head_seen.borrow_mut() = Some(reviewed_head.to_string());
         self.review_posted.clone().unwrap_or(ProbeOutcome::Clear)
@@ -367,7 +376,7 @@ impl Probes for Fake {
             rerun_failures: None,
         }
     }
-    fn covered_head(&self, _cwd: &Path) -> Option<String> {
+    fn covered_head(&self, _cwd: &Path, _pr: u64, _pr_head: &str) -> Option<String> {
         self.covered_head.clone()
     }
     fn auto_merge_enabled(&self, _cwd: &Path) -> bool {
@@ -1151,6 +1160,39 @@ fn a_push_between_validation_and_effect_reads_as_head_changed() {
 }
 
 #[test]
+fn the_journal_match_reads_the_pr_head_not_the_checkout() {
+    // A lead merges from the canonical checkout, whose HEAD is main's tip,
+    // never the PR head. The covered event sits at the PR head, so a
+    // cwd-anchored match can never clear. The newest covered event at
+    // another head must not shadow the matching one, and another PR's
+    // covered event at the same head must not pin this PR's merge.
+    const MINE: &str = "0b7fd460ce82dd3888de71a651dc36dfb1f488f8";
+    const UNREVIEWED: &str = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    let journal = concat!(
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"covered","reviewed_count":2,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
+        "\n",
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"uncovered","reviewed_count":2,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
+        "\n",
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"covered","reviewed_count":0,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
+        "\n",
+        r#"{"type":"review_coverage","data":{"pr":4165,"coverage":"covered","reviewed_count":3,"head_sha":"aa11bb22aa11bb22aa11bb22aa11bb22aa11bb22"}}"#,
+        "\n",
+        r#"{"type":"review_coverage","data":{"pr":4166,"coverage":"covered","reviewed_count":4,"head_sha":"0b7fd460ce82dd3888de71a651dc36dfb1f488f8"}}"#,
+        "\n",
+    );
+    assert_eq!(
+        covered_head_from_text(journal, 4165, MINE).as_deref(),
+        Some(MINE)
+    );
+    // No covered event at this head: uncovered, and an unreadable head
+    // holds instead of pinning an arbitrary event. A PR the journal never
+    // covered cannot ride another PR's covered row at the same head.
+    assert_eq!(covered_head_from_text(journal, 4165, UNREVIEWED), None);
+    assert_eq!(covered_head_from_text(journal, 9999, MINE), None);
+    assert_eq!(covered_head_from_text(journal, 4165, ""), None);
+}
+
+#[test]
 fn an_arm_receipt_names_the_head_and_is_never_merged() {
     // AC2-EDGE. A queue entry is not a landed merge.
     let journal = crate::merge_provenance::TestJournal::opt_in();
@@ -1588,6 +1630,58 @@ fn preview_blockers(fake: &Fake, req: &Request) -> Vec<Blocker> {
     }
 }
 
+/// AC13: a fixture `door:merge` rule holds PR 7 with blocker `rule`
+/// naming the rule id, and PR 8 clears - merge and preview answer alike.
+#[test]
+fn a_door_merge_rule_holds_one_pr_and_clears_the_next() {
+    let sentence = "Refused by rule: r-release-freeze: the release freeze is on";
+    let fake = clean();
+    fake.other_rules
+        .borrow_mut()
+        .insert(7, ProbeOutcome::Refused(sentence.to_string()));
+
+    let held = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert_eq!(held.word(), "held");
+    assert!(
+        held.detail().contains("r-release-freeze"),
+        "{:?}",
+        held.detail()
+    );
+
+    let blockers = preview_blockers(&fake, &preview_request(7));
+    assert_eq!(blockers[0].code, "rule");
+    assert!(
+        blockers[0].detail.contains("r-release-freeze"),
+        "{}",
+        blockers[0].detail
+    );
+
+    // PR 8 carries no rule fire: the decision clears.
+    fake.other_facts.borrow_mut().insert(
+        8,
+        PrFacts {
+            number: 8,
+            ..open_facts()
+        },
+    );
+    let cleared = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            pr: Some(8),
+            decide_only: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(matches!(cleared, Outcome::Authorized { .. }), "{cleared:?}");
+}
+
 #[test]
 fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
     // AC2: for each gate made to refuse in turn, the Merge outcome's
@@ -1656,6 +1750,15 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
             Fake {
                 merge_freeze: Some(ProbeOutcome::Refused(
                     "merge_freeze: PR #7 is off the pin merge-freeze:o/r@prs:6".to_string(),
+                )),
+                ..base()
+            },
+        ),
+        (
+            "rule",
+            Fake {
+                rules: Some(ProbeOutcome::Refused(
+                    "Refused by rule: r-release-freeze: the release freeze is on".to_string(),
                 )),
                 ..base()
             },
@@ -2008,33 +2111,26 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     // A push after the user looked holds again.
     let pushed: String = "b".repeat(40);
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
-    // A main merge or a test-only commit leaves the PR's paint patch alone:
-    // the look carries. Only a hunk header moved, and a test file changed.
-    let paint = |hunk: &str, line: &str| {
-        format!(r#"["crates/fno/src/client/theme.rs","modified","{hunk}\n-old\n+{line}","s1"]"#)
-    };
-    let test_file = r#"["cli/tests/test_x.py","modified","@@ -1 +1 @@\n+t","s2"]"#;
-    let routes = |now: String| {
+    // The approval sticks to the PR: a later head that edits only files the
+    // approved head painted keeps the look, whatever the edit.
+    let routes = |now: &str| {
         vec![
             ("/commits".to_string(), format!("{head}\n{pushed}\n")),
             (".base.ref".to_string(), "main\n".to_string()),
             (
                 format!("compare/main...{head}"),
-                paint("@@ -1,2 +1,2 @@", "new"),
+                "crates/fno/src/client/theme.rs\n".to_string(),
             ),
-            (
-                format!("compare/main...{pushed}"),
-                format!("{now}\n{test_file}"),
-            ),
+            (format!("compare/main...{pushed}"), now.to_string()),
         ]
     };
-    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "new"));
+    fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncli/tests/test_x.py\n");
     assert!(
         crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none(),
-        "an unchanged paint patch carries the look to the new head"
+        "the look carries to the new head"
     );
-    // A real paint change at the new head holds.
-    fake.gh_routes = routes(paint("@@ -9,2 +9,2 @@", "newer"));
+    // A paint file the approval never showed is a new look and holds.
+    fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncrates/fno/src/client/splash.rs\n");
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
     fake.gh_routes.clear();
     // The page archives into done/; the approval must not lapse.

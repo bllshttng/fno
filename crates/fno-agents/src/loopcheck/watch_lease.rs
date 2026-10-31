@@ -90,6 +90,7 @@ pub(super) fn watch_target(reason: &str, pr: Option<&str>) -> (&'static str, Opt
         "ci" => "ci",
         "review" => "review",
         "merge_slot" => "merge_slot",
+        "merge_hold" => "merge_hold",
         "local" => "local",
         _ => "unknown",
     };
@@ -324,15 +325,58 @@ pub(super) fn renew_cause(
     }
 }
 
+/// Whether the fire's renewal attempt leaves this session holding the node
+/// lease. `Ok(true)` is renewed outright. `Ok(false)` is ALSO renewed when
+/// the claim is a pid-liveness claim - `claim acquire --pid` with no TTL,
+/// the spawn-handover shape - whose `expires_at` is NULL: there is no
+/// deadline for `renew` to extend, so the store answers `unchanged`
+/// (`refreshed: false`) for a perfectly healthy one, and the anchored pid
+/// IS the lease. Reads the claim once and applies the same verdict
+/// `fno agents claim status` prints, so the answer is never a second
+/// liveness opinion. A claim another holder owns, a dead or unprovable
+/// pid, or an unreadable record reads not-held, exactly as before.
+pub(super) fn renewal_holds(
+    key: &str,
+    holder: &str,
+    outcome: &Result<bool, String>,
+    root: Option<&std::path::Path>,
+) -> bool {
+    match outcome {
+        Ok(true) => true,
+        Ok(false) => {
+            let Ok(path) = crate::claims::claim_path(key, root) else {
+                return false;
+            };
+            match crate::claims::read_claim_file(&path) {
+                Ok(rec) if rec.holder == holder && rec.expires_at.is_none() => {
+                    crate::claim_commands::status_verdict(&rec).0 == crate::claims::ClaimState::Live
+                }
+                _ => false,
+            }
+        }
+        Err(_) => false,
+    }
+}
+
 /// Classify a declined renewal of this session's recorded claim pair.
 /// `outcome` is what `renew` answered; `None` on either side means the
-/// manifest recorded no pair or renew never ran, and the cause stays None.
+/// manifest recorded no pair, renew never ran, or the `unchanged` answer
+/// still holds the lease (a pid-liveness claim), and the cause stays None.
 pub(super) fn declined_cause(
     claim: Option<&(String, String)>,
     outcome: Option<&Result<bool, String>>,
 ) -> Option<RenewCause> {
-    claim.zip(outcome).map(|((key, holder), res)| {
-        renew_cause(key, holder, res.as_ref().err().map(String::as_str), None)
+    claim.zip(outcome).and_then(|((key, holder), res)| {
+        if renewal_holds(key, holder, res, None) {
+            None
+        } else {
+            Some(renew_cause(
+                key,
+                holder,
+                res.as_ref().err().map(String::as_str),
+                None,
+            ))
+        }
     })
 }
 
@@ -557,6 +601,134 @@ mod tests {
         assert!(after.expires_at.unwrap() > crate::claims::now_ms());
     }
 
+    /// A pid-anchored claim with no TTL, acquired the spawn-handover way.
+    fn pid_liveness_opts(root: &std::path::Path) -> crate::claims::AcquireOpts {
+        crate::claims::AcquireOpts {
+            root: Some(root.to_path_buf()),
+            pid: Some(std::process::id()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pid_liveness_unchanged_renewal_holds_the_lease_for_a_live_pid() {
+        //: a spawn-handover worker (claim acquire --pid, no TTL) arms the
+        // sanctioned watcher and stops. Its claim carries a NULL expires_at,
+        // so renew has no deadline to extend and answers unchanged
+        // (refreshed: false) on every stop; the old classification read that
+        // as Contended and refused every watching idle, 5+ consecutive. The
+        // anchored pid IS the lease: unchanged plus a LIVE verdict is a held
+        // lease, and the tag idles. The store answer itself must stay
+        // unchanged - the interpretation changes, never the wire answer.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let home = td.path().join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let saved_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", &home);
+
+        let _ = crate::claims::acquire(
+            "node:x-p1dl",
+            "target-session:me",
+            pid_liveness_opts(td.path()),
+        );
+        let outcome =
+            crate::claims::renew("node:x-p1dl", "target-session:me", 60_000, Some(td.path()));
+        assert!(
+            matches!(outcome, Ok(false)),
+            "a ttl-less claim has no deadline to extend: {outcome:?}"
+        );
+        let holds = renewal_holds(
+            "node:x-p1dl",
+            "target-session:me",
+            &outcome,
+            Some(td.path()),
+        );
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        assert!(holds, "live pid + unchanged must read as a held lease");
+    }
+
+    #[test]
+    fn unchanged_still_declines_for_another_holder_and_for_ttl_claims() {
+        // The carve-out is exactly: holder match + NULL expiry + LIVE pid.
+        // A claim another session owns never reads held, and a TTL'd claim's
+        // unchanged answer keeps the old declined classification - there is
+        // a deadline, so unchanged means contention or staleness, not health.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let home = td.path().join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let saved_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", &home);
+
+        let _ = crate::claims::acquire(
+            "node:x-p1dl-held",
+            "target-session:other",
+            pid_liveness_opts(td.path()),
+        );
+        let declined: Result<bool, String> = Ok(false);
+        let held_by_other = renewal_holds(
+            "node:x-p1dl-held",
+            "target-session:me",
+            &declined,
+            Some(td.path()),
+        );
+        let cause = renew_cause(
+            "node:x-p1dl-held",
+            "target-session:me",
+            None,
+            Some(td.path()),
+        );
+
+        //: a TTL'd claim past its deadline with a dead pid renews as
+        // unchanged through the stale gate; that must keep reading declined.
+        let mut o = pid_liveness_opts(td.path());
+        o.ttl_ms = Some(60_000);
+        o.pid = Some(999_999_999);
+        let _ = crate::claims::acquire("node:x-p1dl-ttl", "target-session:me", o);
+        let path = crate::claims::claim_path("node:x-p1dl-ttl", Some(td.path())).unwrap();
+        let mut rec = crate::claims::read_claim_file(&path).unwrap();
+        rec.session_id = None;
+        rec.expires_at = Some(crate::claims::now_ms() - 1);
+        crate::claim_store::replace_observed_at(
+            &path,
+            &crate::claims::read_claim_file(&path).unwrap(),
+            &rec,
+        )
+        .unwrap()
+        .unwrap();
+        let stale_outcome = crate::claims::renew(
+            "node:x-p1dl-ttl",
+            "target-session:me",
+            60_000,
+            Some(td.path()),
+        );
+        let ttl_declined = renewal_holds(
+            "node:x-p1dl-ttl",
+            "target-session:me",
+            &stale_outcome,
+            Some(td.path()),
+        );
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        assert!(!held_by_other);
+        assert!(matches!(cause, RenewCause::HeldByOther(_)), "{cause:?}");
+        assert!(matches!(stale_outcome, Ok(false)), "{stale_outcome:?}");
+        assert!(
+            !ttl_declined,
+            "a TTL'd unchanged answer is not a held lease"
+        );
+    }
+
     #[test]
     fn watch_target_maps_known_reasons_and_local() {
         assert_eq!(watch_target("ci", Some("404")), ("ci", Some(404)));
@@ -564,6 +736,10 @@ mod tests {
         assert_eq!(
             watch_target("merge_slot", Some("1")),
             ("merge_slot", Some(1))
+        );
+        assert_eq!(
+            watch_target("merge_hold", Some("1")),
+            ("merge_hold", Some(1))
         );
         assert_eq!(watch_target("local", None), ("local", None));
         assert_eq!(watch_target("cargo-test", None), ("unknown", None));

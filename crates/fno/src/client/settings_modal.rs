@@ -152,7 +152,7 @@ impl View {
         // the review found both the toggles and the key table cramped at the
         // content's own minimum. render() clamps min_width to WIDTH_CAP, so
         // the cap IS the widest this modal can go.
-        let mut popup = Popup::new(rows, Anchor::Center)
+        let popup = Popup::new(rows, Anchor::Center)
             .title("settings")
             .tabs(vec![
                 ("general".to_string(), tab == SettingsTab::General),
@@ -167,7 +167,6 @@ impl View {
             })
             .min_width(widest.max(crate::popup::WIDTH_CAP))
             .plain_body();
-        popup.focus_invert = true;
         AuxPopup { popup, actions }
     }
 

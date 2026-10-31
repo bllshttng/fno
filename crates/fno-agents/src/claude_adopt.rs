@@ -139,16 +139,28 @@ pub fn transcript_title_in(base: &Path, session_id: &str) -> Option<String> {
 }
 
 /// The provider axis a spawn gate decides on: the spawn seam's bound
-/// `FNO_ROUTE_PROVIDER` stamp wins, else the recorded route-settings lookup
-/// by the request's model. `None` keeps the axis-skipped semantics for an
-/// unrouted spawn, the same posture the Python lane's gate takes when it
-/// resolved no route.
+/// `FNO_ROUTE_PROVIDER` stamp wins, else the spawn's own `--route` value
+/// (pair form or a declared lane's vendor), else the recorded route-settings
+/// lookup by the request's model. The route step exists for the FIRST spawn
+/// of a model: the gate can run before any route-settings file is written,
+/// and a routed spawn often carries no `--model` for the lookup to match on.
+/// A route naming no vendor keeps the recorded lookup. `None` keeps the
+/// axis-skipped semantics for an unrouted spawn, the same posture the Python
+/// lane's gate takes when it resolved no route.
 pub fn gate_route_provider(params: &serde_json::Value) -> Option<String> {
     if let Some(stamp) = std::env::var_os("FNO_ROUTE_PROVIDER")
         .map(|v| v.to_string_lossy().trim().to_string())
         .filter(|v| !v.is_empty())
     {
         return Some(stamp);
+    }
+    if let Some(route) = params.get("route").and_then(|v| v.as_str()) {
+        // The cwd read mirrors `route_settings_root` below: the gate runs in
+        // the spawning process, whose cwd is the spawn's.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        if let Some(provider) = crate::spawn_route::route_vendor(route, &cwd) {
+            return Some(provider);
+        }
     }
     let model = params.get("model").and_then(|v| v.as_str());
     provider_from_route_settings(model)
@@ -563,6 +575,78 @@ mod tests {
             provider_from_route_settings(Some("glm-5.3-flash[1m]")),
             None
         );
+        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn gate_resolves_a_routed_spawns_vendor_before_any_settings_file() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // First spawn of a model: nothing is recorded yet, so the file lookup
+        // has nothing to match. The spawn's own --route names the vendor.
+        let base = seed_route_settings("gate-route-first", &[]);
+        std::env::remove_var("FNO_ROUTE_PROVIDER");
+        let params = serde_json::json!({"route": "ZAI/glm-5.3-flash[1m]"});
+        assert_eq!(gate_route_provider(&params).as_deref(), Some("zai"));
+        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn gate_env_stamp_wins_over_the_route_param() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = seed_route_settings("gate-route-stamp", &[]);
+        std::env::set_var("FNO_ROUTE_PROVIDER", "anthropic");
+        let params = serde_json::json!({"route": "zai/glm-5.3-flash[1m]"});
+        assert_eq!(gate_route_provider(&params).as_deref(), Some("anthropic"));
+        std::env::remove_var("FNO_ROUTE_PROVIDER");
+        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn gate_unknown_lane_name_keeps_the_recorded_lookup() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // A route naming no pair and no declared lane keeps the recorded
+        // route matching the request model. FNO_CONFIG pins an empty config
+        // so the lane lookup reads nothing ambient.
+        let base = seed_route_settings("gate-route-lane", &["zai"]);
+        let cfg = base.join("config.toml");
+        std::fs::write(&cfg, "").unwrap();
+        std::env::set_var("FNO_CONFIG", &cfg);
+        std::env::remove_var("FNO_ROUTE_PROVIDER");
+        let params = serde_json::json!({"route": "my-lane", "model": "glm-5.3-flash[1m]"});
+        assert_eq!(gate_route_provider(&params).as_deref(), Some("zai"));
+        std::env::remove_var("FNO_CONFIG");
+        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn gate_resolves_a_declared_lane_names_vendor() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // A declared lane's route names the vendor half, so a lane-name
+        // first spawn resolves its lane the same way a pair-form one does.
+        let base = seed_route_settings("gate-route-lanename", &[]);
+        let cfg = base.join("config.toml");
+        std::fs::write(
+            &cfg,
+            "[[routing.models]]\nname = \"my-lane\"\nroute = \"zai/glm-5.3-flash\"\n",
+        )
+        .unwrap();
+        std::env::set_var("FNO_CONFIG", &cfg);
+        std::env::remove_var("FNO_ROUTE_PROVIDER");
+        let params = serde_json::json!({"route": "my-lane"});
+        assert_eq!(gate_route_provider(&params).as_deref(), Some("zai"));
+        std::env::remove_var("FNO_CONFIG");
         std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
         std::fs::remove_dir_all(&base).ok();
     }

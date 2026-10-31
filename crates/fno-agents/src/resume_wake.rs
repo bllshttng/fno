@@ -2753,7 +2753,7 @@ mod tests {
             &deliveries,
             |argv| {
                 sends.borrow_mut().push(argv.to_vec());
-                (0, "msg-1 delivered (hosted)\n".to_string(), String::new())
+                (0, "msg-1 accepted-new-turn\n".to_string(), String::new())
             },
         );
         assert_eq!(code, 0, "a hosted mail receipt confirms live delivery");
@@ -2786,7 +2786,7 @@ mod tests {
             &deliveries,
             |argv| {
                 sends.borrow_mut().push(argv.to_vec());
-                (0, "msg-2 delivered (hosted)\n".to_string(), String::new())
+                (0, "msg-2 accepted-new-turn\n".to_string(), String::new())
             },
         );
         assert_eq!(code, 0);

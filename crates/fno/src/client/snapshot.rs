@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -116,6 +116,11 @@ pub enum ViewKind {
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
     Connections,
+    /// The yard overlay on its first citizen.
+    Yard,
+    /// The needs-me overlay with its first row picked, after the same
+    /// questions gather the bell shots run.
+    Needs,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -187,6 +192,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
         "connections" => Some(ViewKind::Connections),
+        "yard" => Some(ViewKind::Yard),
+        "needs" => Some(ViewKind::Needs),
         _ => None,
     }
 }
@@ -638,8 +645,8 @@ fn live_frame(
         Some(ViewKind::MessagesThread) => Some((Col::Thread, ChatTab::Chats)),
         Some(ViewKind::MessagesSystem) => Some((Col::Chats, ChatTab::System)),
         Some(ViewKind::MessagesArchive) => Some((Col::Chats, ChatTab::Archive)),
-        Some(ViewKind::MessagesYou) => Some((Col::Chats, ChatTab::You)),
-        Some(ViewKind::MessagesYouThread) => Some((Col::Thread, ChatTab::You)),
+        Some(ViewKind::MessagesYou) => Some((Col::Chats, ChatTab::Chats)),
+        Some(ViewKind::MessagesYouThread) => Some((Col::Thread, ChatTab::Chats)),
         _ => None,
     };
     let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
@@ -662,13 +669,15 @@ fn live_frame(
             .is_none_or(|t| t.is_empty());
         // The You views refuse the same way: a gather with no `you` rows
         // paints "(no You threads)" and proves nothing (law d-9f18c4d5).
-        let you_empty = matches!(messages_shot, Some((_, ChatTab::You)))
-            && mail
-                .as_ref()
-                .ok()
-                .and_then(|p| p.get("you"))
-                .and_then(Value::as_array)
-                .is_none_or(|t| t.is_empty());
+        let you_empty = matches!(
+            kind,
+            Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread)
+        ) && mail
+            .as_ref()
+            .ok()
+            .and_then(|p| p.get("you"))
+            .and_then(Value::as_array)
+            .is_none_or(|t| t.is_empty());
         crate::client::messages_view::apply_gather(&mut view, gen, mail, Err("no org tree".into()));
         if board_empty || you_empty {
             return Err(
@@ -681,8 +690,29 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
             b.col = col;
             b.col2 = tab;
         }
-        // The You detail opens on the newest thread: one shot shows the typed
-        // bubble right and the reply left.
+        // The You views select the first agent with a Me row (the user's own
+        // thread one step down); the thread view then opens that Me thread.
+        let you_view = matches!(
+            kind,
+            Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread)
+        );
+        if let (true, Some(b)) = (you_view, view.messages_board.as_mut()) {
+            let rows = b.tree_rows();
+            let pick = rows.iter().enumerate().find_map(|(i, r)| match r {
+                crate::client::messages_view::TreeRow::Agent { key, .. }
+                    if b.chat_rows(key).iter().any(|c| {
+                        matches!(c, crate::client::messages_view::ChatRow::YouThread { .. })
+                    }) =>
+                {
+                    Some((i, key.clone()))
+                }
+                _ => None,
+            });
+            if let Some((i, key)) = pick {
+                b.cursors[0] = i;
+                b.sel_agent = Some(key);
+            }
+        }
         if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
             if let Some(sid) = b.active_chat_rows().into_iter().find_map(|row| match row {
                 crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
@@ -826,6 +856,17 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
         }
         Some(ViewKind::Keys) => {
             view.open_keys_modal();
+        }
+        Some(ViewKind::Yard) => {
+            view.yard = Some(super::YardSel {
+                sel: 0,
+                opened_at: Instant::now(),
+            });
+        }
+        Some(ViewKind::Needs) => {
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            view.answers = Some(0);
         }
         Some(ViewKind::Connections) => {
             view.open_connections();
@@ -1191,6 +1232,8 @@ mod tests {
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
             ("connections", ViewKind::Connections),
+            ("yard", ViewKind::Yard),
+            ("needs", ViewKind::Needs),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");

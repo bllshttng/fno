@@ -148,7 +148,7 @@ footnote has five levels of execution, each wrapping the one below:
 | Level | Skill | What it does | When to use |
 |-------|-------|-------------|-------------|
 | 5 | `/fno:target` per node | Multi-feature roadmap: pick ready features (`fno backlog next`), run `/fno:target` on each. | Multi-feature roadmap |
-| 4 | `/target` | Idea to shipped PR. Won't quit until done. | Single feature |
+| 4 | `/target` | Idea to PR for one feature. | Single feature |
 | 3 | `/execute waves` | Execute multi-phase plans with waves and verification. | Plan already exists |
 | 2 | `/execute` | Execute a focused plan in one shot. | Bug fix, small change |
 | 1 | `archer` (agent) | Execute a single task with TDD. | Called by operator |
@@ -184,7 +184,7 @@ Target runs two reliability passes that did not exist in the original loop. They
 
 ### Preflight
 
-At the start of every `/target` run, the `target-preflight` step runs a fast environment audit (under 3 seconds, read-only). It checks: working tree clean, branch state, dependencies installed, codemap fresh, `gh` authenticated, disk space, and (opt-in) test suite green at HEAD.
+At the start of every `/target` run, the `target-preflight` step runs a fast environment audit (under 3 seconds, read-only). It checks: working tree clean, branch state, dependencies installed, `gh` authenticated, disk space, and (opt-in) test suite green at HEAD.
 
 If any check fails, target touches `.fno/.target-cancelled` and emits a `<promise>MISSION BLOCKED: preflight failure ...</promise>` so the stop hook writes `status: BLOCKED` cleanly. Total wall-clock cost on a fast-fail: a few seconds. Without preflight, the same run would have spent 15-20 minutes hitting the same problem at ship time.
 

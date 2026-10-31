@@ -80,6 +80,7 @@ BINDIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
 # The paths commands emit-shell, shell-stub, verify and handoff answer natively
 # (crates/fno-agents/src/paths_cli.rs behind crates/fno/src/paths_route.rs):
+# `agents mail` has no Python leg either, so it takes the same route.
 # the shim routes exactly those to the built Rust front + worker, the way
 # production resolves them, while every other command keeps the worktree Python
 # front this suite pins. Without the routing, the retired Python legs die and
@@ -97,7 +98,7 @@ if [ ! -x "$FRONT_BIN" ] || [ ! -x "$WORKER_BIN" ]; then
   echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agents && cargo build --bins)" >&2
   exit 1
 fi
-printf '#!/usr/bin/env bash\nif [ "$1" = config ] && [ "$2" = paths ] && { [ "$3" = emit-shell ] || [ "$3" = shell-stub ] || [ "$3" = verify ] || [ "$3" = handoff ]; }; then\n  export FNO_AGENTS_WORKER="%s"\n  exec "%s" "$@"\nfi\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$WORKER_BIN" "$FRONT_BIN" "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
+printf '#!/usr/bin/env bash\nif { [ "$1" = agents ] && [ "$2" = mail ]; } || { [ "$1" = config ] && [ "$2" = paths ] && { [ "$3" = emit-shell ] || [ "$3" = shell-stub ] || [ "$3" = verify ] || [ "$3" = handoff ]; }; }; then\n  export FNO_AGENTS_WORKER="%s"\n  exec "%s" "$@"\nfi\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$WORKER_BIN" "$FRONT_BIN" "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
 # fno-py is the console script name; provide it too in case anything resolves it.
 cp "$BINDIR/fno" "$BINDIR/fno-py"
 chmod +x "$BINDIR/fno" "$BINDIR/fno-py"
@@ -262,7 +263,16 @@ run_hook() {  # run_hook <payload> ; sets OUT, RC
   # stderr lands in a file, not /dev/null: a CI-only branch death (AC20 twice
   # on 2026-10-05) was undiagnosable from PASS/FAIL lines alone. The file
   # holds the LAST fire's stderr; the AC20 diagnostic dump reads it.
+  # Hermetic cwd cache: the hook's rooted-writer guard reads the machine-wide
+  # snapshot through the 30s cache, whose accepted blind window (a process
+  # leaving a tree inside the TTL reads as still present) is exactly the
+  # control arms' premise - writer gone, advice must return. Fresh dir per
+  # run keeps every read live, which is the behavior this suite pins.
+  FNO_CWD_CACHE_DIR="$(mktemp -d -t ctx-nudge-cache.XXXXXX)"
+  export FNO_CWD_CACHE_DIR
   OUT=$(printf '%s' "$1" | bash "$HOOK" 2>"$SBX/hook-stderr.log"); RC=$?
+  rm -rf "$FNO_CWD_CACHE_DIR"
+  unset FNO_CWD_CACHE_DIR
 }
 
 # Same resolution order as scripts/lib/events.sh. The store commit is the
@@ -347,6 +357,12 @@ assert_contains "AC7: next band blocks again" "$OUT" '60% used'
 # + session_context_nudge event. Clear latches + registry first.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_registry no no
+# This rewrite lands on the SAME LENGTH bytes as the 600k write above (only the
+# digits differ), so when it follows that write within one stat second the probe
+# cache's size+mtime fingerprint does NOT change and AC17's fire is served the
+# 600k copy (measured '60% used'; smoke-rest red 2026-10-30). sleep 1 forces a
+# later mtime, as in the AC19/AC20 pair below.
+sleep 1
 write_transcript "$SBX/t.jsonl" 500000   # 50% >= general trigger 50
 run_hook "$(payload "$SBX/t.jsonl")"
 assert_eq     "AC17: unpromoted past trigger exits 0" "$RC" "0"
@@ -671,7 +687,7 @@ assert_contains "gate: miss is not a death claim" "$OUT" 'NOT a claim that you a
 # control.sock lane can answer yes to self - and that needs a real daemon roster
 # this sandbox has no business faking. What is under test here is the hook's
 # BRANCHING on the verdict; which verdict each lane deserves is pinned in
-# cli/tests/test_mail_send_check.py, next to the code that decides it.
+# crates/fno-agents/tests/mail_send_raw_parity.rs, beside the native send.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 check_shim() {  # check_shim <line-to-print> <exit-code>
   SHIMDIR="$(mktemp -d)"

@@ -335,10 +335,19 @@ pub fn tick_pages(
             && all_open.contains(page.front.question_id.as_str())
             && !done_ids_now.contains(page.front.question_id.as_str())
         {
+            // A page rendered before the marker strip keeps the residue in
+            // its frontmatter; the live item's title is already clean, so
+            // the index serves it instead of the stored words.
+            let title = match open_by_id.get(page.front.question_id.as_str()) {
+                Some(item) if !item.title.trim().is_empty() => {
+                    attention_file::page_title(&item.title)
+                }
+                _ => attention_file::unescape_text(&page.front.title),
+            };
             open_entries.push(IndexEntry {
                 stem: page.stem.clone(),
                 id: page.front.question_id.clone(),
-                title: attention_file::unescape_text(&page.front.title),
+                title,
                 kind: page.front.kind.clone(),
                 blocks: page.front.blocks.clone(),
                 lead: page.front.lead.clone(),
@@ -1695,6 +1704,7 @@ impl SinkIo for RealIo {
         answer: &FileAnswer,
     ) -> Result<String, String> {
         let (receipt, _) = append_answer_row(
+            &crate::paths::AgentsHome::from_env(),
             &item.id,
             sink_name,
             answer,
@@ -1736,12 +1746,15 @@ pub(crate) fn last_line(text: &str) -> String {
 }
 
 /// The shared durable half of every answer lane: the first-answer-wins check
-/// against `questions.jsonl`, then the `attention_answer` append. Both the
-/// file arm and the `needs --answer` door call this, so the two writers can
-/// never disagree on the row shape. Returns `(receipt, superseded)`. A failed
-/// append fails the caller, so no settle state ever marks a row that did not
-/// land.
+/// against the home's `questions.jsonl`, then the `attention_answer` append.
+/// Both the file arm and the `needs --answer` door call this, so the two
+/// writers can never disagree on the row shape. Callers pass the home whose
+/// store receives the row; the answer carrier passes the machine's own so an
+/// applied peer answer lands where the local fold reads it. Returns
+/// `(receipt, superseded)`. A failed append fails the caller, so no settle
+/// state ever marks a row that did not land.
 pub(crate) fn append_answer_row(
+    home: &crate::paths::AgentsHome,
     item_id: &str,
     sink: &str,
     answer: &crate::attention_file::FileAnswer,
@@ -1765,13 +1778,12 @@ pub(crate) fn append_answer_row(
     let answered_at = chrono::Utc::now().to_rfc3339();
     // First answer wins across writers: an earlier unsuperseded row for
     // this item makes this one a superseded marker that changes nothing.
-    let home = crate::paths::AgentsHome::from_env();
-    let path = crate::provider_cap::questions_path(&home);
+    let path = crate::provider_cap::questions_path(home);
     // First-answer-wins is check-and-append: two lanes racing both read an
     // empty journal and both append unsuperseded rows. The per-agent flock
     // serializes the whole critical section across processes.
     let _lock = crate::agent_lock::AgentLock::acquire(
-        &home,
+        home,
         "attention-answer",
         std::time::Duration::from_secs(5),
     )
@@ -2283,6 +2295,40 @@ mod tests {
         item.ready = true;
         item.missing.clear();
         item
+    }
+
+    #[test]
+    fn the_index_serves_the_live_title_over_a_pre_strip_page_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        let mut item = ready_item("q-old", "question");
+        item.title = "Branch f (opus) forked. Inherit or clean?".into();
+        // A page rendered before the marker strip: its frontmatter title
+        // kept the marker words the old formatter only unwrapped.
+        let rendered = render_page(&item, &Routing::default());
+        let stale = rendered.replace(
+            "title: Branch f (opus) forked. Inherit or clean?",
+            "title: pending-probe:t-opus:a:b Branch f (opus) forked. Inherit or clean?",
+        );
+        assert_ne!(stale, rendered, "fixture: the title line must exist");
+        io.files.insert(dir.path().join("q-old.md"), stale);
+        let mut state = HashMap::new();
+        let _ = tick_pages(
+            &[item],
+            &HashMap::new(),
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1000,
+            120,
+            &mut io,
+        );
+        let index = io
+            .files
+            .get(&dir.path().join("questions.md"))
+            .expect("the tick rewrites the index");
+        assert!(index.contains("Branch f (opus) forked"), "{index}");
+        assert!(!index.contains("pending-probe"), "{index}");
     }
 
     #[test]

@@ -253,6 +253,15 @@
       "doc": "Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file)."
     },
     {
+      "path": "backlog.render_default",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). Set false to stop the store keeper rewriting the page after every burst: only explicit [[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand before opening. GLOBAL config file only, like render_targets."
+    },
+    {
       "path": "backlog.page_reload_s",
       "type": "int",
       "default": 60,
@@ -601,7 +610,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: docs, formatting, naming, nit, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count."
+      "doc": "Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: altitude, conventions, docs, efficiency, formatting, naming, nit, reuse, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count."
     },
     {
       "path": "review.hold_ttl_minutes",
@@ -943,7 +952,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Which rows the roster sweep may retire: off retires nothing and reads roster=off on the tick, provenanced (the default) only rows whose provenance resolves to fno and whose work is done, all widens to rows fno itself spawned (sessions or registry provenance) with open work. The daemon's retire arm runs the sweep after the registry sweep, so off stops the scheduled pass; the manual command keeps its own default. An unowned session retires only on an ownership marker: a sessions[] row fno wrote, or a reap receipt an earlier retirement staged for the same session. A present value that cannot be honored degrades in place to the default and is named by fno config doctor."
+      "doc": "Which rows the roster sweep may retire: off retires nothing and reads roster=off on the tick, provenanced (the default) only rows whose provenance resolves to fno and whose work is done, all widens to rows fno itself spawned (sessions or registry provenance) with open work. The daemon's retire arm runs the sweep after the registry sweep, so off stops the scheduled pass; the manual command keeps its own default. An unowned session retires only on an ownership marker: a sessions[] row fno wrote, a reap receipt an earlier retirement staged for the same session, or a claimed launch record naming the launcher session (the record native_bg_mint reads as origin: spawn). A present value that cannot be honored degrades in place to the default and is named by fno config doctor."
     },
     {
       "path": "agents.state_reap.enabled",
@@ -1897,7 +1906,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false."
+      "doc": "Arm the fno-agents daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agents daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false."
     },
     {
       "path": "lead.wake_ceiling",

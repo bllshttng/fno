@@ -43,11 +43,11 @@ pub fn join_candidate(env: &dyn Fn(&str) -> Option<String>) -> Option<(&'static 
 }
 
 pub fn marker_path(harness: &str, sid: &str) -> PathBuf {
-    let home = crate::agents_view::registry_path()
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join("sessions").join(harness).join(sid).join("joined")
+    crate::agents_view::runtime_home()
+        .join("sessions")
+        .join(harness)
+        .join(sid)
+        .join("joined")
 }
 
 /// Join this session when it has not joined yet. Never fails the command.

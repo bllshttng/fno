@@ -276,9 +276,9 @@ def _render_fidelity(decision: dict) -> None:
     "validate",
     help=(
         "Validate a single-doc plan (read-only). The default checks frontmatter "
-        "against fno.plan.schema; --execution checks the worker/scheduler "
-        "contract instead. Exit 0 on clean input and 1 with a field report "
-        "otherwise."
+        "through the plan-schema door (the native Rust validator); --execution "
+        "checks the worker/scheduler contract instead. Exit 0 on clean input "
+        "and 1 with a field report otherwise."
     ),
 )
 def validate(
@@ -291,10 +291,9 @@ def validate(
     ),
 ) -> None:
     """Report every violation in one read-only pass."""
-    from pydantic import ValidationError
+    from fno import rust_binary
 
     from fno.plan._doc import FrontmatterError, ParseError, load_plan
-    from fno.plan.schema import PlanFrontmatter
 
     # Same repo-root resolution as `brief`: try repo-relative, fall back to bare.
     def _resolve(p: Path) -> Path:
@@ -335,16 +334,22 @@ def validate(
 
         # The creation-time half of the difficulty gate (round-5):
         # validate-plan.sh runs --execution, which used to reach neither this
-        # branch's body checks nor PlanFrontmatter below, so a post-gate plan
-        # with no difficulty sailed through authoring and only died later at
-        # /fno:execute. Frontmatter outranks body: this fires first. Same
-        # helper the model validator uses - one gate. AUTHORING lenience:
-        # validate-plan.sh dates undatable plans itself (filename date,
-        # tolerant reads), so an unreadable created defers to it here rather
-        # than refusing; the minting lanes keep the strict default.
-        from fno.plan.schema import difficulty_gate_error
-
-        gate_error = difficulty_gate_error(doc.frontmatter, undatable_refuses=False)
+        # branch's body checks nor the frontmatter model below, so a post-gate
+        # plan with no difficulty sailed through authoring and only died
+        # later at /fno:execute. Frontmatter outranks body: this fires first.
+        # The door's gates op is the same gate the model validator ran.
+        # AUTHORING lenience: validate-plan.sh dates undatable plans itself
+        # (filename date, tolerant reads), so an unreadable created defers to
+        # it here rather than refusing; the minting lanes keep the strict
+        # default.
+        gates = rust_binary.plan_schema(
+            {
+                "op": "gates",
+                "frontmatter": doc.frontmatter,
+                "undatable_refuses": False,
+            }
+        )
+        gate_error = (gates or {}).get("difficulty_gate")
         if gate_error:
             # Only the difficulty-required refusal can reach this scope:
             # undatable created defers to validate-plan.sh's own dating, so
@@ -421,23 +426,55 @@ def validate(
             typer.echo(f"valid execution: {resolved}")
         return
 
-    try:
-        PlanFrontmatter.model_validate(doc.frontmatter)
-    except ValidationError as exc:
-        errors = exc.errors()
+    answer = rust_binary.plan_schema(
+        {"op": "validate-frontmatter", "frontmatter": doc.frontmatter}
+    )
+    if answer is None:
+        # The door could not run (a missing or stale binary): fail loud rather
+        # than pass a plan nobody validated.
+        msg = f"plan-schema door unavailable; cannot validate {plan_path}"
+        typer.echo(
+            json.dumps(
+                {
+                    "valid": False,
+                    "path": str(resolved),
+                    "violations": [{"field": "door", "message": msg}],
+                }
+            )
+            if json_out
+            else msg,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if not answer.get("valid"):
+        errors = answer.get("errors") or []
         if json_out:
-            typer.echo(json.dumps({"valid": False, "path": str(resolved), "violations": [
-                {"field": ".".join(str(p) for p in e["loc"]), "message": e["msg"], "got": e.get("input")}
-                for e in errors
-            ]}, default=str))
+            typer.echo(
+                json.dumps(
+                    {
+                        "valid": False,
+                        "path": str(resolved),
+                        "violations": [
+                            {
+                                "field": e.get("field") or "<root>",
+                                "message": e.get("message", ""),
+                                "got": e.get("got"),
+                            }
+                            for e in errors
+                        ],
+                    },
+                    default=str,
+                )
+            )
         else:
             typer.echo(f"invalid: {resolved} ({len(errors)} violation(s))", err=True)
             for e in errors:
-                field = ".".join(str(p) for p in e["loc"]) or "<root>"
-                # A "missing" error's input is the whole parent dict - noise; show
-                # the offending value only when the field was actually present.
-                got = "" if e["type"] == "missing" else f" (got {e.get('input')!r})"
-                typer.echo(f"  {field}: {e['msg']}{got}", err=True)
+                field = e.get("field") or "<root>"
+                # The door omits `got` on a missing field: the offending value
+                # prints only when the field was actually present.
+                got = e.get("got")
+                suffix = "" if got is None else f" (got {got!r})"
+                typer.echo(f"  {field}: {e.get('message', '')}{suffix}", err=True)
         raise typer.Exit(code=1)
 
     typer.echo(json.dumps({"valid": True, "path": str(resolved)}) if json_out else f"valid: {resolved}")

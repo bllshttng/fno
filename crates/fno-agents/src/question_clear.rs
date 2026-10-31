@@ -67,6 +67,30 @@ mod tests {
         })
     }
 
+    /// Record one decision in the graph store under an explicit authority:
+    /// the reconciliation lane reads the row the way live_decision does.
+    fn recorded_decision(
+        req: &ClearRequest,
+        qid: &str,
+        decision_id: &str,
+        answer: &str,
+        authority: &str,
+    ) {
+        let mut event = decision(qid, decision_id, answer);
+        event["data"]["authority_source"] = json!(authority);
+        crate::backlog::api::decision_record(&crate::backlog::api::Store::new(&req.graph), event)
+            .unwrap();
+    }
+
+    /// An agent caller with no answer in hand: the bare `fno inbox
+    /// outstanding clear <qid>` shape a worker runs from its own session.
+    fn agent_bare_request(tmp: &TempDir, qid: &str) -> ClearRequest {
+        let mut req = request(tmp, qid, None);
+        req.provenance = json!({});
+        req.caller.as_mut().unwrap().ancestry_handle = Some("bot-closer".to_string());
+        req
+    }
+
     fn seed_question(req: &ClearRequest, event: &Value) {
         crate::event_store::append_envelope(&req.index_path, &event.to_string(), None).unwrap();
     }
@@ -240,6 +264,78 @@ mod tests {
             result.lines[3],
             "outstanding: closed 1 (resumed 0), already closed 1, unknown 1, refused 0"
         );
+    }
+
+    #[test]
+    fn a_recorded_user_answer_lets_an_agent_close_the_question_as_answered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let req = agent_bare_request(&tmp, "q-userans1");
+        seed_question(&req, &ask_from("q-userans1", "bot-asker", "which lane?"));
+        recorded_decision(&req, "q-userans1", "d-user0001", "ship it", "operator");
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result.lines[0].contains("answered by recorded decision d-user0001"),
+            "{:?}",
+            result.lines
+        );
+        let closes = rows(&req.index_path, &["operator_question_closed"]);
+        assert_eq!(closes.len(), 1, "{:?}", result.lines);
+        assert_eq!(closes[0]["data"]["answer"], json!("ship it"));
+    }
+
+    #[test]
+    fn a_matching_agent_answer_resumes_over_the_recorded_user_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-userans2", Some("ship it"));
+        req.provenance = json!({"decided_by": "bot-closer", "authority_source": "agent"});
+        seed_question(&req, &ask_from("q-userans2", "bot-asker", "which lane?"));
+        recorded_decision(&req, "q-userans2", "d-user0002", "ship it", "operator");
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result.lines[0].contains("decision d-user0002 resumed"),
+            "{:?}",
+            result.lines
+        );
+    }
+
+    #[test]
+    fn an_agent_answer_that_differs_from_the_recorded_user_answer_still_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-userans3", Some("no, hold it"));
+        req.provenance = json!({"decided_by": "bot-closer", "authority_source": "agent"});
+        seed_question(&req, &ask_from("q-userans3", "bot-asker", "which lane?"));
+        recorded_decision(&req, "q-userans3", "d-user0003", "ship it", "operator");
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(
+            result.lines[0].contains("already has decision d-user0003 with a different answer"),
+            "{:?}",
+            result.lines
+        );
+    }
+
+    #[test]
+    fn a_coordination_answer_keeps_the_bare_agent_close_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let req = agent_bare_request(&tmp, "q-coordan1");
+        seed_question(&req, &ask_from("q-coordan1", "bot-asker", "which lane?"));
+        recorded_decision(&req, "q-coordan1", "d-agent001", "ship it", "agent");
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(result.lines[0].contains("refused"), "{:?}", result.lines);
+        let (asked, closed) = crate::question_intake::question_rows(&req.index_path);
+        assert!(asked.contains_key("q-coordan1"));
+        assert!(!closed.contains("q-coordan1"));
     }
 
     #[test]
@@ -1277,6 +1373,26 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         // A scope lead's moot withdrawal names its ruling in --answer and
         // closes as coordination: no decision row, no answer mail.
         let mut lead_reason: Option<String> = None;
+        // The reconciliation lane: a live user-kind decision
+        // answering this question turns the close into bookkeeping. An
+        // agent may finish it, and a bare close records the answer, not a
+        // withdrawal. Coordination rows never count: an agent's own ruling
+        // is not the user's. Read once before the gate, so the lane can
+        // outrank the rung and the deny classes.
+        let user_answered = match live_decision(req, qid) {
+            Ok(Some((row, _, _)))
+                if matches!(
+                    row.get("authority_source").and_then(Value::as_str),
+                    Some("operator") | Some("chat_attested")
+                ) && row
+                    .get("decision")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty()) =>
+            {
+                Some(row)
+            }
+            _ => None,
+        };
         if let Some(agent) = closer.as_deref() {
             let own_ask = is_own_ask(req, asker, asker_session, closer.as_deref());
             let authority = req
@@ -1289,17 +1405,20 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .and_then(Value::as_str)
                 .is_some_and(|quote| !quote.trim().is_empty());
             // A moot withdrawal outranks the rung: it closes as coordination,
-            // never as an answer, so the deny classes do not bar it.
+            // never as an answer, so the deny classes do not bar it. The
+            // lead's own moot withdrawal keeps priority over the
+            // reconciliation lane too.
             let lead_withdraw = !own_ask
                 && req.answer.is_some()
                 && lead_may_withdraw(req, &caller, asker_session, node);
+            let user_lane = user_answered.is_some() && !lead_withdraw;
             // The rung holder answers the row the ladder placed on it, unless
             // the class is one only the user rules.
             let holds_rung = !lead_withdraw
                 && crate::question_ladder::holder(&question_event["data"])
                     .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
             let denied = denied_class(question_event);
-            if holds_rung && req.answer.is_some() {
+            if holds_rung && req.answer.is_some() && !user_lane {
                 if let Some(class) = denied {
                     refused += 1;
                     answer.lines.push(format!(
@@ -1308,13 +1427,13 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     continue;
                 }
             }
-            let allowed = if req.answer.is_some() {
+            let allowed = (if req.answer.is_some() {
                 (authority == Some("chat_attested") && quoted)
                     || (own_ask && authority == Some("role") && caller.teamed)
                     || (holds_rung && matches!(authority, Some("role") | Some("agent")))
             } else {
                 own_ask
-            };
+            }) || user_lane;
             if !allowed && lead_withdraw {
                 if let Some(ruling) = req.answer.as_deref() {
                     lead_reason = Some(format!(
@@ -1351,7 +1470,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .unwrap_or(qid);
             refused += 1;
             answer.lines.push(format!(
-                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer {origin_id} on {host}, and the close reaches this machine within a minute."
+                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer the copy here, or answer {origin_id} on {host}, and the close reaches this machine within a minute."
             ));
             continue;
         }
@@ -1568,6 +1687,51 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     decision_id,
                 });
             }
+        } else if let Some(row) = user_answered.filter(|_| lead_reason.is_none()) {
+            // The reconciliation close: the recorded user answer IS
+            // the answer. The close carries it; the receipt names the
+            // decision. No new decision row, no retraction or grant lanes,
+            // no delivery: the CLI holds no answer text to mail, and the
+            // board reads the close.
+            let answer_text = row
+                .get("decision")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let decision_id = row
+                .get("decision_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let (close, close_line) = close_event(req, qid, Some(answer_text), None);
+            if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
+                answer.exit_code = 1;
+                answer.lines.push(format!(
+                    "outstanding: nothing was written for {qid} (close failed: {error})"
+                ));
+                break;
+            }
+            if let Err(error) = crate::provider_cap::append_questions_row(&req.index_path, &close) {
+                answer.exit_code = 1;
+                answer.lines.push(format!(
+                    "outstanding: the project close for {qid} is recorded; the index close did not land ({error}); rerun the same clear to finish"
+                ));
+                break;
+            }
+            answer.lines.push(format!(
+                "outstanding: closed {qid} (answered by recorded decision {decision_id})"
+            ));
+            answer.closed.push(ClosedQuestion {
+                qid: qid.clone(),
+                decision_id: Some(decision_id),
+                decision_event: None,
+                node: question_event
+                    .get("data")
+                    .and_then(|data| data.get("node"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            });
+            newly_closed += 1;
+            closed_ids.insert(qid.clone());
         } else {
             // The reason names who retired it: the asker's own withdrawal
             // is moot; the user's reads plainly "withdrawn".
@@ -2226,8 +2390,26 @@ fn close_event(
     answer: Option<&str>,
     withdrawn_reason: Option<&str>,
 ) -> (Value, String) {
+    close_event_for(
+        &req.journal_path,
+        qid,
+        answer,
+        withdrawn_reason,
+        req.closed_by.as_deref(),
+        req.cap,
+    )
+}
+
+fn close_event_for(
+    journal: &Path,
+    qid: &str,
+    answer: Option<&str>,
+    withdrawn_reason: Option<&str>,
+    closed_by: Option<&str>,
+    cap: usize,
+) -> (Value, String) {
     if let Some((event, line)) =
-        crate::event_store::journal_text(&req.journal_path, &["operator_question_closed"])
+        crate::event_store::journal_text(journal, &["operator_question_closed"])
             .lines()
             .find_map(|line| {
                 let event: Value = serde_json::from_str(line).ok()?;
@@ -2239,7 +2421,7 @@ fn close_event(
     }
     let mut data = json!({"question_id": qid});
     if let Some(answer) = answer {
-        data["answer"] = json!(cut(answer, req.cap));
+        data["answer"] = json!(cut(answer, cap));
     }
     if let Some(reason) = withdrawn_reason {
         // The asker's bare withdrawal is a moot close: the question's own
@@ -2247,7 +2429,7 @@ fn close_event(
         // plainly "withdrawn".
         data["reason"] = json!(reason);
     }
-    if let Some(closed_by) = req.closed_by.as_deref() {
+    if let Some(closed_by) = closed_by {
         data["closed_by"] = json!(closed_by);
     }
     let event = json!({
@@ -2258,6 +2440,48 @@ fn close_event(
     });
     let line = serde_json::to_string(&event).expect("close event serializes");
     (event, line)
+}
+
+/// What closing one question with a recorded answer found. `Closed` wrote
+/// the close to the journal and the index; every other variant wrote
+/// nothing, so the caller renders its own door's note.
+pub(crate) enum AnsweredClose {
+    Closed,
+    AlreadyClosed,
+    Unknown,
+    Peer(String),
+}
+
+/// Close one open question with an already-recorded decision's text: the
+/// answered close the decide door writes beside its ruling, so the
+/// check-in that printed the answer command reads the question closed.
+/// Same close shape the clear door writes, so every reader of
+/// `operator_question_closed` folds the two doors identically. Unknown,
+/// already-closed and peer-copy ids report without writing; a write
+/// failure is the caller's receipt, never a lost ruling.
+pub(crate) fn close_with_recorded_answer(
+    journal_path: &Path,
+    index_path: &Path,
+    qid: &str,
+    answer: &str,
+    closed_by: Option<&str>,
+    cap: usize,
+) -> Result<AnsweredClose, String> {
+    let (asked, closed) = crate::question_intake::question_rows(index_path);
+    let Some(question_event) = asked.get(qid) else {
+        return Ok(AnsweredClose::Unknown);
+    };
+    if closed.contains(qid) {
+        return Ok(AnsweredClose::AlreadyClosed);
+    }
+    if let Some(host) = crate::question_bus::peer_origin(question_event) {
+        return Ok(AnsweredClose::Peer(host.to_string()));
+    }
+    let (close, close_line) =
+        close_event_for(journal_path, qid, Some(answer), None, closed_by, cap);
+    append_close(journal_path, &close_line, qid)?;
+    crate::provider_cap::append_questions_row(index_path, &close)?;
+    Ok(AnsweredClose::Closed)
 }
 
 fn append_close(journal: &Path, line: &str, qid: &str) -> Result<(), String> {

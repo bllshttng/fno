@@ -227,14 +227,13 @@ pub enum Liveness {
 }
 
 /// The harnesses whose transcripts `fno agents session peek` can tail: the
-/// reader arms registered in `recent_records` (cli/src/fno/agents/peek.py).
-/// A static mirror of a Python seam; `thread_reach_mirrors_the_peek_reader_seam`
-/// pins it against that file so the two cannot drift (Rust checked against
-/// Rust proves nothing). Mirrors `_follow_target`, which owns `--follow`'s
-/// tailable-file question, not `recent_records` (opencode answers there -
-/// it has readable history - but writes a directory tree with no tailable
-/// file, so `_follow_target` returns `None` for it and `--follow` would
-/// exit immediately; that gap is why this list omits opencode).
+/// file-backed reader arms in `record_parser`
+/// (crates/fno-agents/src/session_truth.rs), which owns `--follow`'s
+/// tailable-file question. A static mirror of that seam, because this crate
+/// does not link fno-agents; `thread_reach_mirrors_the_peek_reader_seam`
+/// pins it against the source so the two cannot drift. opencode has readable
+/// history but writes a directory tree with no tailable file, so it has no
+/// arm there and this list omits it.
 const PEEK_READER_HARNESSES: [&str; 2] = ["claude", "codex"];
 
 /// The argv that opens pi's OWN interface on `session_id`.
@@ -1209,16 +1208,12 @@ pub fn resolve_branch(cwd: &Path) -> Option<String> {
     (head.len() == 40 && head.chars().all(|c| c.is_ascii_hexdigit())).then(|| head[..8].to_string())
 }
 
-/// The registry path, resolved exactly as fno-agents' `AgentsHome::from_env`
-/// does (`FNO_AGENTS_HOME` > `$HOME/.fno/agents` > `./.fno/agents`).
+/// The registry path, through the one shared ladder the Python hub and
+/// fno-agents both read (`config_doctor::agents_registry_path`): a declared
+/// `FNO_AGENTS_HOME` wins, else the configured state root's `agents/`, else
+/// `$HOME/.fno/agents`.
 pub fn registry_path() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
-        return PathBuf::from(v).join("registry.json");
-    }
-    let base = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join(".fno").join("agents").join("registry.json")
+    crate::config_doctor::agents_registry_path(&crate::config_doctor::Settings::load())
 }
 
 /// The registry document text at [`registry_path`], read through the table
@@ -1320,19 +1315,27 @@ pub type TruthBadges = HashMap<String, String>;
 /// Claim-live + a fire within this window reads Working; older/absent stays no-badge.
 const TRUTH_RECENCY_WINDOW_S: u64 = 1800; // 30 min
 
-/// The `.fno` state base for events.jsonl, off the same anchor as
-/// `registry_path` (`FNO_AGENTS_HOME`'s parent > `$HOME/.fno`).
-fn fno_dir() -> PathBuf {
+/// The daemon's runtime agents home (`FNO_AGENTS_HOME` > `$HOME/.fno/agents`):
+/// where the supervisor socket, events.jsonl, the otel receiver, the join
+/// markers, the keep overlay, the reap receipts and the fleet breaker live.
+/// State-dir independent - the daemon never moves - unlike [`registry_path`].
+pub(crate) fn runtime_home() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
-        return Path::new(&v)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".fno"));
+        return PathBuf::from(v);
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".fno")
+        .join("agents")
+}
+
+/// The `.fno` state base for events.jsonl, off [`runtime_home`]'s parent.
+fn fno_dir() -> PathBuf {
+    runtime_home()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(".fno"))
 }
 
 /// The GLOBAL claims dir, mirroring Python `global_claims_root` + `claims_dir`
@@ -1747,6 +1750,9 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         .as_array()?;
     let mut out = Vec::with_capacity(rows.len());
     let mut unattributable = 0usize;
+    // One store read per derive, not per row: the title store lives beside
+    // the daemon (runtime home), where its writers keep it.
+    let team_titles = crate::org_titles::titles(&runtime_home().join("team_names.json"));
     for row in rows {
         let Some(name) = row.get("name").and_then(|v| v.as_str()) else {
             // tolerate an alien row; the registry owners validate. It still
@@ -1976,11 +1982,8 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        // The people title rides the row: one tolerant store read per
-        // derive, keyed on the row's canonical scope. No record, no title -
-        // the sideline falls back to the scope.
-        let team_titles =
-            crate::org_titles::titles(&registry_path().with_file_name("team_names.json"));
+        // The people title rides the row: keyed on the row's canonical
+        // scope. No record, no title - the sideline falls back to the scope.
         let role_title = role_scope
             .as_ref()
             .and_then(|scope| team_titles.get(scope.trim()).cloned());
@@ -2185,17 +2188,11 @@ pub fn derive_rows(raw: &str, now_secs: u64) -> Option<Vec<RegistryAgent>> {
     derive_rows_counted(raw, now_secs).map(|(rows, _)| rows)
 }
 
-/// The fno-agents daemon's supervisor socket, resolved the
-/// same way [`registry_path`] resolves the registry home (`FNO_AGENTS_HOME` >
-/// `$HOME/.fno/agents`): the two live side by side under one agents home.
+/// The fno-agents daemon's supervisor socket, under the daemon's runtime
+/// home: the socket lives beside the daemon, whose home stays state-dir
+/// independent, unlike [`registry_path`].
 pub fn supervisor_sock_path() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
-        return PathBuf::from(v).join("supervisor.sock");
-    }
-    let base = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join(".fno").join("agents").join("supervisor.sock")
+    runtime_home().join("supervisor.sock")
 }
 
 /// One daemon RPC round trip: connect, write one length-prefixed request
@@ -4695,48 +4692,35 @@ config_dir = "~/.claude-alt"
         assert_eq!(thread_reach(None, None), Reach::Locate);
     }
 
-    /// The Follow set mirrors the reader arms in peek.py's `recent_records`.
-    /// Rust checked against Rust proves nothing: parse the Python seam the
-    /// command actually dispatches on, so adding a reader arm there without
-    /// moving the tier here fails this test.
+    /// The Follow set mirrors the file-backed reader arms `fno agents peek
+    /// --follow` dispatches on: `record_parser` in fno-agents'
+    /// session_truth.rs. This crate does not link fno-agents, so the test
+    /// parses that seam's source; adding a reader arm there without moving
+    /// the tier here fails this test.
     #[test]
     fn thread_reach_mirrors_the_peek_reader_seam() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/src/fno/agents/peek.py");
+            .join("../fno-agents/src/session_truth.rs");
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        // Isolate _follow_target's body, not recent_records': recent_records
-        // answers "can this harness's history be read at all" (opencode
-        // yes), while _follow_target answers "does --follow have a tailable
-        // file" (opencode no - it writes a directory tree). Follow tier
-        // rides the second question, so that is the arm set to mirror.
+        // Isolate record_parser's body: it answers "does --follow have a
+        // tailable file" (opencode no - it writes a directory tree), the
+        // question the Follow tier rides.
         let body = raw
-            .split("def _follow_target(")
+            .split("fn record_parser(")
             .nth(1)
-            .and_then(|s| s.split("\ndef ").next())
-            .expect("_follow_target body");
+            .and_then(|s| s.split("\n}").next())
+            .expect("record_parser body");
         let arms: std::collections::BTreeSet<&str> = body
             .lines()
-            .filter_map(|l| {
-                let l = l.trim();
-                // `if` or `elif`: a future arm written as `elif` must be
-                // collected too, or the mirror would stay green while the
-                // Follow set silently drifted - the exact drift this guards.
-                l.strip_prefix("if agent == ")
-                    .or_else(|| l.strip_prefix("elif agent == "))
-            })
-            .map(|rest| rest.trim_end_matches(':'))
-            .map(|rest| {
-                let r = rest.trim();
-                let un = r.trim_start_matches('"').trim_end_matches('"');
-                un.trim_start_matches('\'').trim_end_matches('\'')
-            })
+            .filter_map(|l| l.trim().split_once("\" =>"))
+            .map(|(arm, _)| arm.trim_start_matches('"'))
             .collect();
         let mirror: std::collections::BTreeSet<&str> =
             super::PEEK_READER_HARNESSES.into_iter().collect();
         assert_eq!(
             arms, mirror,
-            "peek.py reader arms and PEEK_READER_HARNESSES drifted apart"
+            "record_parser arms and PEEK_READER_HARNESSES drifted apart"
         );
     }
 

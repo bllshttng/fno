@@ -18,10 +18,12 @@ mail_header_at = true
 # lead-wake mail is the only beat. `loop`: the lead also arms the native
 # `/loop`. `goal`: the provider goal is the continuation. `schedule`: the
 # harness's own recurring schedule tool. An absent key reads `daemon`.
-# Claude keeps `loop` until the daemon wake has a delivery bound past the
-# user-typing hold and a stopped daemon is reported at SessionStart; then
-# this row flips to `daemon` and the /loop retires.
-beat = "loop"
+# Claude rode `loop` while the daemon wake had no delivery bound past the
+# user-typing hold and a stopped daemon went unreported at SessionStart;
+# the wake dedupe now skips a zero-acted receipt (a held wake retries at
+# the next arm tick) and SessionStart prints a missing-daemon line, so
+# this row reads `daemon` and the /loop retires.
+beat = "daemon"
 permission_bypass = ["--dangerously-skip-permissions"]
 # LAUNCHER CHOICE LISTS. The mux composer's picker chips read these. Three
 # states: key ABSENT = no surface at all (the chip reads "not offered");
@@ -1825,6 +1827,11 @@ pane = "unmeasured"
 thread = "unmeasured"
 headless = "unsandboxed"
 
+# Deliberately capable, never native: the standalone footnote harness left
+# the release tarball, and a release install resolves only the updater-compat
+# stub at that name, so the thread lane has no binary to seat. A flip would
+# turn the honest seat refusal into a launch failure. Revisit if fnh ships
+# again.
 [harness.footnote.features.spawn]
 state = "capable"
 

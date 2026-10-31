@@ -310,16 +310,14 @@ pub(crate) fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 /// Read JSONL records, returning `(raw_line, parsed)` pairs and a malformed
-/// count. Mirrors Python `_read_jsonl`: UTF-8 with replacement, skip blank
-/// lines, count lines that fail to parse or are non-objects.
+/// count: skip blank lines, count lines that fail to parse or are
+/// non-objects. The trace journal is a state-root journal, so the rows come
+/// from the event store's committed rows and a retired raw file never serves
+/// a read; an absent journal reads as no records.
 fn read_jsonl(path: &Path) -> (Vec<(String, Value)>, usize) {
     let mut records = Vec::new();
     let mut malformed = 0usize;
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return (records, 0), // absent file -> no records (Python: path.exists() guard)
-    };
-    let text = String::from_utf8_lossy(&bytes);
+    let text = crate::event_store::journal_text(path, &[]);
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -2237,6 +2235,7 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
     let mut name: Option<String> = None;
     let mut select_session: Option<String> = None;
     let mut print_command = false;
+    let mut boot_failed = false;
     // Same expansion discipline as every sibling parser here: `--session=<id>`
     // splits before the match so no flag arm sees a fused value.
     let rest = expand_eq(rest);
@@ -2244,6 +2243,7 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--print-command" => print_command = true,
+            "--boot-failed" => boot_failed = true,
             "--session" => {
                 select_session = Some(match iter.next() {
                     Some(v) if !v.starts_with("--") => v.clone(),
@@ -2260,9 +2260,20 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
             }
         }
     }
+    if boot_failed {
+        if name.is_some() || select_session.is_some() || print_command {
+            eprintln!(
+                "fno agents session recover: --boot-failed reruns every failed and skipped \
+                 row of this boot's receipt and takes no other argument"
+            );
+            return 2;
+        }
+        return crate::boot_revival::rerun_failed(home);
+    }
     let Some(name) = name else {
         eprintln!(
-            "fno agents recover: an agent name is required. With two recorded ids, \
+            "fno agents recover: an agent name is required, or pass --boot-failed to rerun \
+             this boot's failed and skipped rows. With two recorded ids, \
              pass --session <id> to choose."
         );
         return 2;

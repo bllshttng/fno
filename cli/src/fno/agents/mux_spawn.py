@@ -37,6 +37,7 @@ import tempfile
 import time
 import uuid as _uuid
 from dataclasses import dataclass
+import base64
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -45,12 +46,14 @@ from fno.agents import launch_provenance
 from fno.agents.team_thread import lead_typed_message
 from fno.agents.dispatch import (
     DispatchAskError,
-    _capture_parent_edge,
-    _report_unlinked_parent,
-    build_spawn_provenance,
     _capture_spawn_trigger,
     _touch_log_path,
     validate_spawn_name,
+)
+from fno.agents.spawn_lineage import (
+    _capture_parent_edge,
+    _report_unlinked_parent,
+    build_spawn_provenance,
 )
 from fno.agents.codex_rollout import (  # noqa: F401 - re-export: dispatch and tests bind it here
     _codex_session_id_for_pid,
@@ -1337,10 +1340,19 @@ PROVENANCE_KEYS: tuple[str, ...] = (
     "FNO_NODE_CLAIM_HOLDER",
 )
 
-#: Re-exported, never redefined: the clear list must not drift from the
-#: module that writes the fields, and this module's `_mesh_env_wrapper` is one of
-#: several callers that clear them.
-from fno.mail.seed_provenance import SEED_PROVENANCE_KEYS  # noqa: E402
+from fno.harness_identity import (  # noqa: E402
+    ENV_FROM,
+    ENV_FROM_SESSION,
+    ENV_HARNESS,
+    ENV_MSG_ID,
+    ENV_NODE,
+    ENV_SEED_B64,
+    SEED_PROVENANCE_KEYS,
+)
+
+#: A sidecar that quotes a seed must quote all of it, so an over-long seed gets
+#: none. A handoff caps at 80 words; 16 KiB is far above any honest seed.
+MAX_SEED_BYTES = 16 * 1024
 
 
 def _seed_provenance_env(
@@ -1352,76 +1364,46 @@ def _seed_provenance_env(
     ``fno agents spawn`` in a shell authored the seed, and stamping a peer
     envelope on it would name an agent sender that does not exist.
 
-    Never refuses a spawn. `build_env` returns empty whenever it cannot honestly
-    attribute the seed -- an operator spawn, an over-long seed, or one that
-    already carries its own envelope -- and an unattributed launch is the right
-    outcome for all three. It briefly raised on that last case, which killed the
-    mail wake-fork rung: that rung seeds a worker with the wrapped message
-    itself, so its seed carries an envelope by construction.
+    Never refuses a spawn. An unprovable identity, an over-long seed, and a seed
+    that already carries an envelope all launch unattributed: a mail wake seeds a
+    worker with the wrapped message itself, and refusing that seed once killed
+    every mail send to an asleep-but-resumable peer.
     """
-    from fno.mail.seed_provenance import build_env
+    from fno.agents.self_stamp import (
+        resolve_self_harness,
+        resolve_self_session_id,
+        stamp_from,
+    )
+    from fno.inbox.store import generate_msg_id
+    from fno.rust_binary import mail_shape
 
-    return build_env(message, node=(provenance or {}).get("FNO_NODE"))
-
-
-def resolve_provenance(
-    node: Optional[str],
-    slug: Optional[str] = None,
-    plan: Optional[str] = None,
-) -> dict[str, str]:
-    """Build the ``FNO_NODE``/``FNO_SLUG``/``FNO_PLAN`` provenance map for a
-    node-driven pane spawn.
-
-    ``node`` is the only required input (a node id or slug). ``slug``/``plan``
-    fill from the graph node record when absent - a single graph read that a
-    caller can skip by passing both. An unresolvable node keeps just
-    ``FNO_NODE``; no node at all yields ``{}`` so an ad-hoc pane exports nothing
-    (edge AC: no empty-string exports). ``FNO_PLAN`` is omitted when the node has
-    no linked plan; ``FNO_PR`` is intentionally absent (unknown at spawn)."""
-    if not node:
+    if mail_shape([message])[0]["holds_tag"]:
         return {}
-    # The graph read also NORMALIZES a slug input to an id. Skipping it when the
-    # caller supplied slug+plan would export FNO_NODE=<slug>, and the ambient
-    # origin-capture consumer matches ids exactly - so a slug-driven spawn would
-    # silently file its nodes with no origin at all.
-    from fno.graph._constants import has_node_id_prefix, is_wellformed_node_id
-
-    if slug is None or plan is None or not has_node_id_prefix(node):
-        try:
-            from fno.graph.load import load_graph
-            from fno.graph.store import GRAPH_JSON, read_nodes_by_ids
-
-            fast = read_nodes_by_ids(GRAPH_JSON, [node])
-            for rec in fast["entries"] if fast is not None else load_graph():
-                if not rec.get("archived_at") and (rec.get("id") == node or rec.get("slug") == node):
-                    node = rec.get("id") or node  # normalize a slug input to id
-                    if slug is None:
-                        slug = rec.get("slug") or ""
-                    if plan is None:
-                        plan = rec.get("plan_path") or ""
-                    break
-        except Exception as e:
-            # A graph read failure must not block the spawn -- but it must not
-            # degrade a SLUG into FNO_NODE=<slug> either. The origin-capture
-            # consumer matches ids exactly and would drop a slug as an unknown
-            # node, blaming a bad id for what was a read failure. Keep `node`
-            # only when it is a STRICTLY well-formed id (hex suffix); the liberal
-            # has_node_id_prefix admits a title-derived slug like `x-marks-the-
-            # spot`, which would leak right back into FNO_NODE. An absent-but-
-            # well-formed id is still dropped downstream by the capture side's
-            # known-ids check, so strict-here is safe. Never re-raise: the pane
-            # path degrades. Log under FNO_DEBUG so a missing-origin node is
-            # traceable to the read failure rather than being silently invisible.
-            if not is_wellformed_node_id(node):
-                if os.environ.get("FNO_DEBUG"):
-                    print(
-                        f"resolve_provenance: graph read failed ({type(e).__name__}); "
-                        f"dropping unresolved node '{node}' from provenance",
-                        file=sys.stderr,
-                    )
-                node = None
-    prov = {"FNO_NODE": node, "FNO_SLUG": slug or "", "FNO_PLAN": plan or ""}
-    return {k: v for k, v in prov.items() if v}
+    from_session = resolve_self_session_id()
+    if not from_session:
+        return {}
+    raw = message.encode("utf-8")
+    if len(raw) > MAX_SEED_BYTES:
+        print(
+            f"note: seed is {len(raw)} bytes, over the {MAX_SEED_BYTES}-byte "
+            f"provenance cap; spawning without a provenance sidecar. A sidecar "
+            f"that quotes the seed must quote all of it.",
+            file=sys.stderr,
+        )
+        return {}
+    env = {
+        ENV_SEED_B64: base64.b64encode(raw).decode("ascii"),
+        ENV_FROM: stamp_from(None),
+        ENV_FROM_SESSION: from_session,
+        ENV_MSG_ID: generate_msg_id(),
+    }
+    sender_harness = resolve_self_harness()
+    if sender_harness:
+        env[ENV_HARNESS] = sender_harness
+    node = (provenance or {}).get("FNO_NODE")
+    if node:
+        env[ENV_NODE] = node
+    return env
 
 
 def _run_mux(
@@ -3203,7 +3185,6 @@ def dispatch_spawn_pane(
     route_env: Optional[dict[str, str]] = None,
     monitor: Optional[str] = None,
     route_provider: Optional[str] = None,
-    provider_gate: object | None = None,
     route_provider_id: Optional[str] = None,
     model_name: Optional[str] = None,
     account_record_id: Optional[str] = None,
@@ -3340,15 +3321,12 @@ def dispatch_spawn_pane(
             "its provider cap cannot be evaluated; no worker launched",
             exit_code=2,
         )
-    from fno.agents.spawn_gate import consume_provider_admission
-
-    if route_provider is not None and not (
-        provider_gate is not None
-        and consume_provider_admission(provider_gate, route_provider, name, "pane")
-    ):
+    if route_provider is not None:
+        # Only the Rust spawn gate admits a routed launch, so this lane has
+        # no provider cap to charge. Fail closed rather than launch uncapped.
         raise DispatchAskError(
-            f"provider {route_provider!r} has no matching admission token; "
-            "refusing before dispatch; no worker launched",
+            f"provider {route_provider!r} routes through the native spawn gate; "
+            "run `fno agents spawn` for a routed pane; no worker launched",
             exit_code=2,
         )
 

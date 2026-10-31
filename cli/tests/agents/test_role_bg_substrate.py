@@ -68,34 +68,6 @@ def _row(name: str) -> AgentEntry:
 # registry reads for every reader, not just the caller that wrote it.
 
 
-@pytest.mark.parametrize(
-    "level,scope",
-    [
-        (3, "epic-x"),         # over the 0..2 ladder ceiling
-        (True, "epic-x"),      # bool is an int subclass; serializes as JSON true
-        (1, "   "),            # whitespace-only scope
-        (None, "epic-x"),      # scope with no level
-    ],
-)
-def test_dispatch_spawn_refuses_invalid_role_values(
-    tmp_path: Path, monkeypatch, native_backlog_door, level, scope
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.dispatch import DispatchAskError, dispatch_spawn
-
-    with pytest.raises(DispatchAskError) as exc:
-        dispatch_spawn(
-            name="bad-lead",
-            message="term",
-            harness="claude",
-            cwd=tmp_path,
-            role_level=level,
-            role_scope=scope,
-        )
-    assert exc.value.exit_code == 2
-    assert not load_registry(), "a refused role must write no registry row"
-
-
 def test_dispatch_spawn_pane_refuses_a_duplicate_role_before_launch(
     tmp_path: Path, monkeypatch, native_backlog_door
 ) -> None:

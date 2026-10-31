@@ -36,10 +36,7 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 fn home() -> PathBuf {
-    crate::agents_view::registry_path()
-        .parent()
-        .expect("registry path has a parent")
-        .to_path_buf()
+    crate::agents_view::runtime_home()
 }
 
 fn read_health() -> Result<serde_json::Value, String> {

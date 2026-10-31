@@ -326,6 +326,18 @@ jobs:
         # emission tests that degrade to unrecorded without it.
         run: cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
 
+      - name: Install fno Python package
+        # The bash suites' FNO_PYTHON discovery refuses ("no python can import
+        # fno.cli") without an interpreter holding the CLI deps. The full
+        # smoke-rest shards never hit this: their graduation-probe step's
+        # `uv run --project cli` creates cli/.venv as a side effect before the
+        # shard runs. This lane had no such step, so any packet selecting one
+        # of those suites red at discovery (changed-smoke 3 on the sleep-1
+        # PR, 2026-10-30). Same provisioning the pytest shards get, named for
+        # the reason.
+        working-directory: cli
+        run: uv sync
+
       - name: Changed packet (CHANGED SUBSET)
         env:
           CHANGED_BASE: ${{ github.event.pull_request.base.sha }}
@@ -740,15 +752,23 @@ jobs:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.cargo_agents == 'true' }}
     runs-on: ubuntu-24.04
-    # Widest of 14 passing runs sampled 2026-09-24: 6.9m. The release build
-    # of fno-agents outgrew the 10m cap on cold runners once the crate grew
-    # the native decisions listing, and the job died inside cargo before any
-    # budget ran. Outgrew the 15m cap the same way twice on 2026-10-08 under
-    # fleet load; died inside cargo both times.
+    # With the shared cache key missing release artifacts, every run paid
+    # the full release build cold: passing runs reached 18.1 to 19.2m by
+    # 2026-10-30 (12.6m release build, 6.1m native build, 0.8m budgets) and
+    # one run was cancelled just past the cap. The dedicated release cache
+    # above should return warm runs to minutes; the cap stays 20m until a
+    # warm run says otherwise. History: the cold release build of fno-agents
+    # outgrew 10m once the crate grew the native decisions listing, then
+    # outgrew 15m twice on 2026-10-08 under fleet load, dying inside cargo
+    # before any budget ran each time.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      # Own key: this job builds --release, but the shared cargo- key is
+      # usually saved first by the debug-profile jobs, so an exact hit
+      # restored a debug tree and the release builds below paid full price
+      # every run. Same pattern as the integration job's cache.
       - uses: actions/cache@v5
         with:
           path: |
@@ -756,9 +776,10 @@ jobs:
             ~/.cargo/git
             ~/.cargo/build
             crates/fno-agents/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+            crates/fno/target
+          key: ${{ runner.os }}-cargo-latency-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-latency-
       - name: Install strace
         # Bounded: apt-get update can hang on the hosted runner for the whole
         # job budget. A stall now fails here in minutes, named.
@@ -1385,31 +1406,42 @@ jobs:
           # cap) leaves every output empty: the shards skip on `== 'true'`,
           # and this aggregator used to read that as red with zero real
           # failures. An empty output alongside a cancelled pr-affected now
-          # reads as lane-off. A FAILED selector stays red on purpose: it
-          # broke, so nobody measured anything.
+          # reads as lane-off. The tier keeper cancels out-of-tier runs on
+          # purpose, so a CANCELLED selector is the same no-verdict shape:
+          # it measures nothing, and a rerun lands the measurement. A FAILED
+          # selector stays red on purpose: it broke, so nobody measured
+          # anything.
           [ "${{ needs.test-agents.result }}" = "success" ] || {
-            [ "${{ needs.test-agents.result }}" = "skipped" ] \
+            { [ "${{ needs.test-agents.result }}" = "skipped" ] \
+                || [ "${{ needs.test-agents.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-agents.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-agents-integration.result }}" = "success" ] || {
-            [ "${{ needs.test-agents-integration.result }}" = "skipped" ] \
+            { [ "${{ needs.test-agents-integration.result }}" = "skipped" ] \
+                || [ "${{ needs.test-agents-integration.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_agents }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-agents-integration.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux.result }}" = "success" ] || {
-            [ "${{ needs.test-mux.result }}" = "skipped" ] \
+            { [ "${{ needs.test-mux.result }}" = "skipped" ] \
+                || [ "${{ needs.test-mux.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-mux.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux-integration.result }}" = "success" ] || {
-            [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
+            { [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
+                || [ "${{ needs.test-mux-integration.result }}" = "cancelled" ]; } \
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && { [ "${{ needs.pr-affected.outputs.cargo_mux }}" = "false" ] \
-                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ] \
+                || [ "${{ needs.test-mux-integration.result }}" = "cancelled" ]; }
           } || exit 1
 
   # Selection half of the paint-artifact pair. Runs the same read the merge

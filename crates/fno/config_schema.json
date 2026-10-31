@@ -522,6 +522,11 @@
       "title": "Render Targets",
       "type": "array"
      },
+     "render_default": {
+      "default": true,
+      "title": "Render Default",
+      "type": "boolean"
+     },
      "page_reload_s": {
       "default": 60,
       "title": "Page Reload S",
@@ -4105,6 +4110,15 @@
    "doc": "Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file)."
   },
   {
+   "path": "backlog.render_default",
+   "type": "bool",
+   "default": true,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). Set false to stop the store keeper rewriting the page after every burst: only explicit [[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand before opening. GLOBAL config file only, like render_targets."
+  },
+  {
    "path": "backlog.page_reload_s",
    "type": "int",
    "default": 60,
@@ -4984,7 +4998,7 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "default",
-   "doc": "Which rows the roster sweep may retire: off retires nothing and reads roster=off on the tick, provenanced (the default) only rows whose provenance resolves to fno and whose work is done, all widens to rows fno itself spawned (sessions or registry provenance) with open work. The daemon's retire arm runs the sweep after the registry sweep, so off stops the scheduled pass; the manual command keeps its own default. An unowned session retires only on an ownership marker: a sessions[] row fno wrote, or a reap receipt an earlier retirement staged for the same session. A present value that cannot be honored degrades in place to the default and is named by fno config doctor."
+   "doc": "Which rows the roster sweep may retire: off retires nothing and reads roster=off on the tick, provenanced (the default) only rows whose provenance resolves to fno and whose work is done, all widens to rows fno itself spawned (sessions or registry provenance) with open work. The daemon's retire arm runs the sweep after the registry sweep, so off stops the scheduled pass; the manual command keeps its own default. An unowned session retires only on an ownership marker: a sessions[] row fno wrote, a reap receipt an earlier retirement staged for the same session, or a claimed launch record naming the launcher session (the record native_bg_mint reads as origin: spawn). A present value that cannot be honored degrades in place to the default and is named by fno config doctor."
   },
   {
    "path": "agents.state_reap.enabled",

@@ -20,6 +20,9 @@ use std::ffi::OsString;
 /// command starts never inherits a count.
 pub const MAIL_HOP_ENV: &str = "FNO_MAIL_HOP";
 
+/// The twin const lives in mail_remote.rs.
+pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
+
 /// The full argv, `agents` leading. The claimed tail runs from the command
 /// onward (`send|peek` first), the shape `mail_remote::run` routes on;
 /// `None` forwards byte-verbatim.
@@ -27,12 +30,11 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
     }
-    // The relay's own same-host forward (the twin const lives in
-    // mail_remote.rs): claiming it again recursed every send until the
-    // machine ran out of processes. Clear it so a daemon or session the
-    // local command starts never inherits the bypass.
-    if std::env::var_os("FNO_MAIL_LOCAL_FORWARD").is_some() {
-        std::env::remove_var("FNO_MAIL_LOCAL_FORWARD");
+    // The relay's own same-host forward: claiming it again recursed every send
+    // until the machine ran out of processes. Clear it so a daemon or session
+    // the local command starts never inherits the bypass.
+    if std::env::var_os(LOCAL_FORWARD_ENV).is_some() {
+        std::env::remove_var(LOCAL_FORWARD_ENV);
         return None;
     }
     let tail: Vec<OsString>;

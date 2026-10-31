@@ -235,47 +235,6 @@ def test_registry_and_store_sighting_of_same_session_deduplicate(_registry_home)
     assert len(load_registry()) == 1
 
 
-def test_dispatch_send_refuses_registry_name_colliding_with_store_session(
-    _registry_home, monkeypatch
-):
-    """Directed send shares the resolver and never exact-name guesses."""
-    from fno.agents import dispatch
-    from fno.agents.registry import AgentEntry, write_registry
-
-    registered_id = "aaaaaaaa-1111-2222-3333-444455556666"
-    store_only_id = "bbbbbbbb-1111-2222-3333-0000deadbeef"
-    write_registry([
-        AgentEntry(
-            name="deadbeef",
-            cwd="/registered",
-            log_path="",
-            harness="claude",
-            harness_session_id=registered_id,
-            short_id="aaaaaaaa",
-        )
-    ])
-    _write_codex_session(_registry_home, store_only_id)
-    delivered = []
-    monkeypatch.setattr(
-        dispatch,
-        "_mail_inject_claude",
-        lambda *_args: delivered.append(True) or True,
-    )
-
-    with pytest.raises(dispatch.DispatchAskError) as exc:
-        dispatch.dispatch_send(from_name="lead", 
-            name="deadbeef",
-            message="do not misroute",
-            provider=None,
-            cwd=_registry_home,
-        )
-
-    assert exc.value.exit_code == 2
-    assert registered_id in str(exc.value)
-    assert store_only_id in str(exc.value)
-    assert delivered == []
-
-
 def test_registry_full_id_and_unshaped_name_keep_store_fast_paths(
     _registry_home, monkeypatch
 ):

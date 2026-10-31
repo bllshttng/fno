@@ -990,7 +990,7 @@ fn agents_tab_selector_row_inverts_from_the_theme() {
     let theme = crate::theme::theme_footnote_superscript();
     assert_eq!(
         crate::theme::cell_style(crate::theme::Role::BodyFocus, &theme),
-        crate::theme::focus_style(&theme)
+        crate::cursor::cursor_style(&theme)
     );
     let mk = |name: &str, pane: u64| agent_row(name, pane, Some(AgentBadge::Working), false);
     let mut v = wide_view(vec![mk("a", 4), mk("b", 5)]);

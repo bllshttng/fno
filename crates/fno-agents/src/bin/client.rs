@@ -826,8 +826,8 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::authorized_merge::run_authorized_merge(&args[1..]);
     }
 
-    if command == "rename" && args.len() == 1 {
-        return fno_agents::retask::transport::run_payload();
+    if command == "rename" && args.len() > 1 && args[1] == "retask" {
+        return fno_agents::retask::front::run_retask_cli(&args[2..]);
     }
 
     if command == "route-slot" {
@@ -1262,6 +1262,10 @@ async fn run(args: Vec<String>) -> i32 {
                 return fno_agents::pane_identity::run_pane_identity(&rest[1..])
             }
             Some("--watch") => return fno_agents::watch::run_watch(&rest[1..]),
+            Some("--truth") => return fno_agents::truth_cli::run_truth(&rest[1..]),
+            Some("--peek") => return fno_agents::peek::run_peek(&rest[1..]),
+            Some("--team") => return fno_agents::team_read::run_team(&rest[1..]),
+            Some("--role") => return fno_agents::role_grant::run_role(&rest[1..]),
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
@@ -2295,6 +2299,15 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
+    // `[sandbox] provider`: refuse a spawn the box cannot carry before the
+    // guard and the gate; the box itself comes up after the gate admits.
+    let boxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
+        Ok(boxed) => boxed,
+        Err((code, reason)) => {
+            eprintln!("fno-agents spawn: {reason}");
+            return Some(code);
+        }
+    };
 
     // The fleet-law block composes for the WORKER's cwd (a --cwd foreign-repo
     // spawn must not inherit the spawner's repo freezes), after the dispatch
@@ -2447,6 +2460,16 @@ fn maybe_run_spawn(
             }
             Some(outcome.exit_code)
         }};
+    }
+
+    if boxed {
+        if let Err((code, reason)) = fno_agents::sandbox_launch::arm(home, &cwd) {
+            eprintln!("fno-agents spawn: [sandbox] devcontainer refused: {reason}");
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            return Some(code);
+        }
     }
 
     match (provider, substrate) {
@@ -3789,15 +3812,44 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             "--answer" => {
                 params.insert("answer".into(), str_arg(&mut it, "--answer")?);
             }
-            "--yolo" | "-Y" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis("--yolo"));
+            // The one dangling retired short: -p is tombstoned above and -P
+            // rides the vendor tombstone, so -r would otherwise fall to the
+            // positionals and launch under a nonsense seed. The LONG form
+            // forwards; the short names no spawn flag here. -Y is the same
+            // shape off spawn (its long --yolo is refused by the catch-all
+            // there); the shorts never read as prompt words.
+            "-r" if command == "spawn" => {
+                return Err(
+                    "-r is not a spawn flag here; pass --resume <id> to forward it to the harness argv"
+                        .to_string(),
+                );
             }
-            // fno's own spelling of claude's --disallowedTools: it refuses by
-            // name, since forwarding it would hand claude a flag it lacks.
-            "--deny-tools" => {
-                return Err(fno_agents::cli_args::SpawnAxes::refused_axis(
-                    "--deny-tools",
-                ));
+            "-Y" if command != "spawn" => {
+                return Err(format!("unknown flag: {a}"));
+            }
+            "--yolo" | "-Y" if command == "spawn" => {
+                // The never-prompt flag is the harness's own vocabulary: it
+                // rides verbatim, and a lane that cannot carry it refuses by
+                // name (the thread seat, the pane spine, the daemon-side
+                // vocabulary). Off spawn the catch-all keeps the refusal.
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String("--yolo".to_string()));
+                }
+            }
+            "--deny-tools" if command == "spawn" => {
+                // fno's own spelling of claude's --disallowedTools forwards
+                // with its value; the lane that lacks it refuses by name.
+                let v = str_arg(&mut it, "--deny-tools")?;
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String("--deny-tools".to_string()));
+                    list.push(v);
+                }
             }
             // The front door's carrier for a fenced `--` token a thread or
             // one-shot lane maps (codex: -c/--config/--add-dir). Repeatable;
@@ -3937,6 +3989,25 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             f if command == "spawn" && fno_agents::spawn_bare::owns(f) => {
                 fno_agents::spawn_bare::take_flag(&a, &mut it, &mut params)?;
             }
+            other if other.starts_with("--") && command == "spawn" => {
+                // The passthrough law: a flag spawn does not own
+                // rides the harness argv verbatim. A lane that cannot carry
+                // it refuses by name. A table member consumes the next
+                // token as its value (`--resume <id>` forwards the pair);
+                // every other flag forwards alone, and a value on those
+                // rides the `=`-joined form or --harness-arg.
+                let items = params
+                    .entry(String::from("harness_args"))
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = items {
+                    list.push(Value::String(other.to_string()));
+                    if fno_agents::cli_args::SpawnAxes::PASSTHROUGH_VALUE_FLAGS.contains(&other) {
+                        if let Some(v) = it.next() {
+                            list.push(Value::String(v));
+                        }
+                    }
+                }
+            }
             other if other.starts_with("--") => {
                 return Err(format!("unknown flag: {other}"));
             }
@@ -3946,7 +4017,8 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
 
     // Off spawn the vendor axis routes nothing, so --provider/-P is a
     // tombstone: exit 2 with the axis map, never silently forwarded. On spawn
-    // the token never survives scan (the retired-axis refusal fires first).
+    // it refuses the same way: a vendor is not a harness, and the axis-rename
+    // line is the teacher scan no longer is.
     if vendor_val.is_some() {
         return Err(
             "--provider/-P was split at the axis rename: the CLI binary is \

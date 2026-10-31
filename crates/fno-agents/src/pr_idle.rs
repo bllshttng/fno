@@ -307,7 +307,7 @@ mod tests {
         let mail: RefCell<Vec<(String, String)>> = Default::default();
         let mut deliver = |argv: &[String], _: &str| {
             mail.borrow_mut().push((argv[8].clone(), argv[9].clone()));
-            (0, "delivered (hosted)".into(), String::new())
+            (0, "accepted-new-turn".into(), String::new())
         };
         let phoned: RefCell<Vec<String>> = Default::default();
         let mut phone = |title: &str, _: &str, _: Option<&str>| {
@@ -357,7 +357,7 @@ mod tests {
     fn a_new_head_a_not_ready_read_or_a_closed_pr_resets_the_clock() {
         let temp = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(temp.path().join("agents"));
-        let mut quiet = |_: &[String], _: &str| (0, "delivered (hosted)".into(), String::new());
+        let mut quiet = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
         let mut phone = |_: &str, _: &str, _: Option<&str>| true;
         let open: HashSet<u64> = [7, 8].into();
         let leads: Vec<String> = Vec::new();
@@ -439,7 +439,7 @@ mod tests {
         let open: HashSet<u64> = [7].into();
         let reads = [ready(7, "abc")];
         let mut ok = |_: &str, _: &str, _: Option<&str>| true;
-        let mut quiet = |_: &[String], _: &str| (0, "delivered (hosted)".into(), String::new());
+        let mut quiet = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
         // The clock reads 0 as unset, so the passes start past it.
         let t0 = 1_000;
         run_repo(
@@ -459,7 +459,7 @@ mod tests {
                 (1, String::new(), "transport unavailable".to_string())
             } else {
                 sent.borrow_mut().push(argv[8].clone());
-                (0, "delivered (hosted)".into(), String::new())
+                (0, "accepted-new-turn".into(), String::new())
             }
         };
         let phones = RefCell::new(0);
@@ -481,7 +481,7 @@ mod tests {
         .is_err());
         let mut all_up = |argv: &[String], _: &str| {
             sent.borrow_mut().push(argv[8].clone());
-            (0, "delivered (hosted)".into(), String::new())
+            (0, "accepted-new-turn".into(), String::new())
         };
         run_repo(
             &home,

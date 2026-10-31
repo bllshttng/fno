@@ -206,6 +206,21 @@ pub(super) fn build_block_reason(
         // so a "CI failed" message here would mislead the blocked agent
         // into debugging a nonexistent failure on every quiet fire.
         if pr.ci_conclusion == CiConclusion::Pending {
+            // A `Pending` conclusion beside cancel-named rows is a CANCELLED
+            // run, not a running one: the fold that produced no verdict. The
+            // MUTE_PROBE_N rule above applies doubly - a "CI failed" message
+            // would send the agent debugging a cancellation no rerun
+            // answers, and a keeper holds that rerun until the PR's tier.
+            // Waiting is the legal move; reading the log reads nothing.
+            if !pr.failing_checks.is_empty() {
+                return format!(
+                    "CI runs on PR #{} were cancelled ({}); no rerun has started. \
+                     Waiting on the rerun is a legal wait.{}",
+                    pr.number,
+                    pr.failing_checks.join(", "),
+                    hint("ci")
+                );
+            }
             return format!("CI still running on PR #{}.{}", pr.number, hint("ci"));
         }
         let check_name = match &pr.ci_conclusion {
@@ -221,6 +236,24 @@ pub(super) fn build_block_reason(
             "CI red on PR #{}: {} failed. Read the failing log: `fno do pr logs {}`.",
             pr.number, check_name, pr.number
         );
+    }
+
+    // A recorded merge freeze renders beside the other holds
+    // (conflicting_reason, merge_slot_reason): the classifier's hint rides
+    // by construction, so the ritual appears only when the freeze is the
+    // sole blocker the classifier idles on. A frozen PR whose CI is red or
+    // pending never reaches this arm - the CI section above returned first,
+    // and the classifier labels those waits "ci", not "merge_hold".
+    if let Some(line) = &pr.merge_hold {
+        if idlable == Some("merge_hold") {
+            return format!(
+                "PR #{}: {} - the merge cannot land while the freeze holds, so \
+                 this is a legal wait.{}",
+                pr.number,
+                line,
+                hint("merge_hold")
+            );
+        }
     }
 
     if !pr.reviewed {

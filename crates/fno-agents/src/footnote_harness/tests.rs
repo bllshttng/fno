@@ -159,6 +159,12 @@ fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
     let saved = set_env(&[
         ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
         ("ANTHROPIC_AUTH_TOKEN", "k"),
+        // The sessions tree rides beside the spaces root, so the spaces pin
+        // is what isolates it now that the agents home plays no part there.
+        (
+            "FNO_SPACES_DIR",
+            &tmp.path().join("spaces").display().to_string(),
+        ),
     ]);
     let id = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58";
     let named = write_pane_spec(tmp.path(), "glm-test", None, None, Some(id));
@@ -261,6 +267,46 @@ fn an_ask_resumes_the_session_the_harness_id_names() {
         assert_eq!(spec["fno_id"], want);
         assert!(spec["session_dir"].as_str().unwrap().ends_with(want));
     }
+}
+
+/// A launched footnote learns its graph store from FNO_GRAPH_JSON, resolved
+/// through the supervisor's own feed resolver, so a sandboxed launch names
+/// the sandbox store and never the machine's `$HOME/.fno`.
+#[test]
+fn the_launched_child_is_named_its_graph_store_in_the_env() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let seen = tmp.path().join("graph-env.txt");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!(
+            "#!/bin/sh\nprintenv FNO_GRAPH_JSON > '{}'\n",
+            seen.display()
+        ),
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("FNO_STATE_DIR", tmp.path().join("state").to_str().unwrap()),
+    ]);
+    let saved_graph = std::env::var_os("FNO_GRAPH_JSON");
+    std::env::remove_var("FNO_GRAPH_JSON");
+    let status = spawn(tmp.path()).unwrap().wait().unwrap();
+    // Read while the sandbox env still holds: the exact value the child got.
+    let want = crate::feed::graph_path(&AgentsHome::from_env());
+    restore_env(saved);
+    match saved_graph {
+        Some(v) => std::env::set_var("FNO_GRAPH_JSON", v),
+        None => std::env::remove_var("FNO_GRAPH_JSON"),
+    }
+    assert!(status.success(), "the stub exited {status}");
+    let got = std::fs::read_to_string(&seen).unwrap();
+    assert_eq!(got.trim(), want.to_string_lossy().as_ref());
+    assert!(
+        want.starts_with(tmp.path()),
+        "the sandbox store, never $HOME/.fno: {}",
+        want.display()
+    );
 }
 
 fn set_env(vars: &[(&'static str, &str)]) -> Vec<(&'static str, Option<std::ffi::OsString>)> {

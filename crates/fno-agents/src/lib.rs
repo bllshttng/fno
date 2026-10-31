@@ -177,6 +177,7 @@ pub mod dispatch_credit;
 pub mod dispatch_harness;
 pub mod disposition_gate;
 pub mod distress;
+pub mod docs_gate;
 pub mod drift;
 pub mod duration;
 pub mod effect_gate;
@@ -242,6 +243,7 @@ pub mod glob;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
+pub mod green_carry;
 pub mod grok_ask;
 pub mod grok_store;
 pub mod harness_beat;
@@ -302,6 +304,7 @@ pub mod lead_mail;
 pub mod lead_ops;
 pub mod lead_pushback;
 pub mod lead_reads;
+pub mod lead_rebind;
 pub mod lead_settle;
 pub mod lead_state;
 pub mod lead_term;
@@ -342,6 +345,7 @@ pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
+pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
@@ -425,6 +429,7 @@ pub mod pane_spawn;
 pub mod pane_stop;
 pub mod paths;
 pub mod paths_cli;
+pub mod peek;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
@@ -435,6 +440,7 @@ pub mod pi_transcript;
 mod pi_transcript_tests;
 pub mod plan_carry;
 pub mod plan_doc;
+pub mod plan_schema;
 pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
@@ -532,6 +538,7 @@ pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
 pub mod role_cwd;
+pub mod role_grant;
 pub mod role_migration;
 pub mod roles;
 pub mod roster_progress;
@@ -551,6 +558,7 @@ pub mod rules_source;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
+pub mod sandbox_launch;
 pub mod sandbox_probe;
 pub mod scoreboard;
 pub mod scoreboard_escalation;
@@ -644,6 +652,7 @@ pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;
 pub mod team_names;
+pub mod team_read;
 pub mod team_reap;
 pub mod team_rescope;
 pub mod team_settle;
@@ -683,6 +692,7 @@ pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
 pub mod transcript_turns;
+pub mod truth_cli;
 pub mod truth_probe;
 pub mod update_journal;
 pub mod usage;
@@ -1465,9 +1475,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), five
+        // The allowed files: production binary repair (install_verify), six
         // production dir modes (paths, fleet_incident, chats, the
-        // session-state pin dir, the mcp sidecar's socket-parent tightening),
+        // session-state pin dir, the mcp sidecar's socket-parent tightening,
+        // the daemon's sandbox socket dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -1484,6 +1495,7 @@ mod tests {
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
             ("mcp/sidecar.rs", 1),
+            ("daemon/sandbox_host.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();
@@ -1729,6 +1741,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Who stamped a row bus-only (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",
+    // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,
+    // the one nudge delivered, or the lead's reseat-on-claude mail landed;
+    // plus the per-row error row the run loop emits on a failed entry.
+    "blueprint_stall",
+    "blueprint_stall_error",
     "agent_create_no_session",
     "agent_orphan_reaped",
     "agent_orphan_state_archived",
@@ -2049,6 +2066,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A foreground SessionStart report bound its row to a proven pane claim
     // (pane_claim.rs), moving it off a stale or absent mux ref.
     "session_pane_rebound",
+    // The org init --rebind-from repair (lead_rebind.rs): a role row and its
+    // scope manifest moved onto a new harness session id, old id recorded as
+    // the row's predecessor.
+    "session_id_restamped",
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",

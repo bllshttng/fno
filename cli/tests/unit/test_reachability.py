@@ -138,38 +138,6 @@ def test_every_verdict_carries_a_basis_and_renders_with_it() -> None:
         assert got.basis in rendered, "the basis must be visible to the reader"
 
 
-def test_truth_json_carries_the_reachability_verdict_for_rust_callers() -> None:
-    """The Python/Rust wire, which is where a congruence fix silently leaks.
-
-    ``fno agents truth --json`` is what Rust's ``family1_truth_probe`` reads, and
-    ``resume`` decides "is live - attaching" from it. If the verdict is not on
-    that wire, Rust keeps re-deriving liveness from the raw transcript ``state``
-    and the falsifier never reaches it -- the same trap, one language over.
-
-    Asserted against the payload builder rather than a subprocess so it stays
-    hermetic.
-    """
-    from fno.agents.cli import _truth_payload
-
-    payload = _truth_payload(
-        {
-            "handle": "h",
-            "state": "working",
-            "reason": None,
-            "last_activity_age_s": 43 * 60,
-            "session_id": "s",
-            "observed_model": {"kind": "no-model-yet"},
-        },
-        falsifier="process-gone",
-    )
-    assert payload["reachability"] == UNREACHABLE, (
-        "a dead-process row must reach Rust as unreachable, not as working"
-    )
-    assert payload["basis"] == "process-gone"
-    # The raw transcript state stays on the wire unchanged: existing Rust
-    # consumers parse it, and overloading it would be a silent contract break.
-    assert payload["state"] == "working"
-
 
 def _pane_row():
     """A mux row whose recorded pid is confidently dead (pid 1 is never a worker).

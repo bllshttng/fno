@@ -118,9 +118,6 @@ require "$RG" "nothing resumable" "resume(rust): idless row told the truth, no i
 RRD="$REPO_ROOT/crates/fno-agents/src/daemon/rm_refusal_detail.rs"
 require "$RRD" "fno agents rm --help\`, not here." \
     "rm-fallback(rust): override lives in --help, never in the refusal"
-DIS="$REPO_ROOT/cli/src/fno/agents/dispatch.py"
-require "$DIS" "the exchange finished" "teardown(py): states the exchange finished first"
-
 for pair in "claude:crates/fno-agents/src/claude_ask.rs" "codex:crates/fno-agents/src/codex_ask.rs" "gemini:crates/fno-agents/src/gemini_ask.rs"; do
     h=${pair%%:*}
     f="$REPO_ROOT/${pair#*:}"

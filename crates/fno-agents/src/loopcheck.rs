@@ -242,6 +242,7 @@ use gh_read::{
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use gh_read::{read_pr_view_fields, PR_INFO_FALLBACK_FIELDS};
+pub(crate) use holds::{node_is_done, scan_open_holds};
 pub(crate) use intent::read_tail_lines;
 #[cfg(test)]
 use intent::INTENT_LOOKBACK_ENTRIES;
@@ -1173,9 +1174,12 @@ pub(crate) fn decide_with_payload(
             Some((key, holder)) if matches!(&renewed_lease, Some((k, h)) if k == key && h == holder) => {
                 true
             }
-            Some((key, holder)) => {
-                matches!(crate::claims::renew(key, holder, window_ms, None), Ok(true))
-            }
+            Some((key, holder)) => watch_lease::renewal_holds(
+                key,
+                holder,
+                &crate::claims::renew(key, holder, window_ms, None),
+                None,
+            ),
             None => false,
         };
         // An unclaimed session may still idle on a LOCAL watch: its wake is
@@ -2916,6 +2920,16 @@ pub(crate) use crate::lead_termination::{parse_lead_manifest, LeadManifest};
 
 // ── public entry points ───────────────────────────────────────────────────────
 
+/// The global journal the operator commands write and the question folds
+/// read, when a caller carried no explicit path. The one Rust site of the
+/// hand-built literal; the state-roots baseline row owns draining it.
+pub(crate) fn global_events_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+        .join(".fno/events.jsonl")
+}
+
 fn observe_decision(args: &[String], output: &str) {
     let Ok(parsed) = parse_args(args) else {
         return;
@@ -2955,12 +2969,7 @@ fn observe_decision(args: &[String], output: &str) {
     let project_events = parsed
         .events_path
         .unwrap_or_else(|| crate::paths::events_path(&parsed.cwd));
-    let global_events = parsed.global_events_path.unwrap_or_else(|| {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp"))
-            .join(".fno/events.jsonl")
-    });
+    let global_events = parsed.global_events_path.unwrap_or_else(global_events_path);
     let run_log = crate::paths::worktree_space_dir(&parsed.cwd).join("run-log.jsonl");
     if transition == crate::run_state::RunEvent::TerminalDecided
         && matches!(

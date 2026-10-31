@@ -9,6 +9,7 @@ use crate::authorized_merge::{
 };
 use crate::loopcheck::coverage_gate::{refusal_line, GateState};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -672,7 +673,11 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
          decision whose text names the PR and its head sha (`fno backlog decide <node> \
          'Approved: PR {pr} at {head}' --authority role --rationale 'user in chat: \
          <the user's words>'`). For a board answer, cite the answered page that names \
-         the PR instead (`--rationale 'user answered <q-id> on the board'`). Ask via \
+         the PR instead (`--rationale 'user answered <q-id> on the board'`). When the \
+         paint edits rename identifiers only and every rendered string stays \
+         byte-identical, record the ruling instead (`--rationale 'identifier-only \
+         paint diff: <what renamed>; <a rendered string that proves no pixel \
+         change>'`) - a look would judge nothing and no shots exist to file. Ask via \
          `fno inbox outstanding ask`, then the user answers the page or the lead \
          records the approval. Pass each shot with --image.",
         touched.join(", ")
@@ -707,12 +712,12 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
 /// How many earlier commits of the PR the carry walks, newest first.
 const CARRY_WALK: usize = 30;
 
-/// The user's look carries to a head whose own paint patch is unchanged: a
-/// main merge or a test-only commit moves the head but not what the user
-/// saw. The newest earlier commit of this PR that the user approved is the
-/// reference. The PR's paint patch against its base, at that commit and at
-/// the head, must match file for file. Any paint change holds, and so does
-/// every unreadable read.
+/// The user's look sticks to the PR until merge: a later commit moves the
+/// head, and the approval holds. The newest earlier commit of this PR that
+/// the user approved is the reference, kept on the record for audit. The
+/// hold returns when the user declined a later commit, or when the head
+/// paints a file the approved patch never showed. Every unreadable read
+/// holds.
 fn approval_carries<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -765,27 +770,49 @@ fn approval_carries<P: Probes>(
     .and_then(|l| l.into_iter().next()) else {
         return false;
     };
+    let newer: Vec<&str> = commits
+        .iter()
+        .skip_while(|sha| sha.as_str() != approved.as_str())
+        .skip(1)
+        .map(String::as_str)
+        .collect();
+    if declined_after(&declining_pages(root, pr), &newer) {
+        return false;
+    }
     match (
-        paint_patch(probes, cwd, &base, approved, paint_paths),
-        paint_patch(probes, cwd, &base, head, paint_paths),
+        paint_files(probes, cwd, &base, approved, paint_paths),
+        paint_files(probes, cwd, &base, head, paint_paths),
     ) {
-        (Some(was), Some(now)) => !now.is_empty() && was == now,
+        (Some(was), Some(now)) => adds_no_paint_surface(&was, &now),
         _ => false,
     }
 }
 
-/// The PR's paint patch at one commit: each paint file the three-dot
-/// compare against the base changes, with its status and its patch body.
-/// Hunk headers drop out, so a main merge that only shifts line numbers
-/// still matches. A file with no patch (binary or too large) keys on its
-/// blob sha instead.
-fn paint_patch<P: Probes>(
+/// An approval sticks to the PR: every paint file the head changes was
+/// already in the approved patch, so the user saw that surface. A paint file
+/// the approval never showed is a new look.
+fn adds_no_paint_surface(was: &BTreeSet<String>, now: &BTreeSet<String>) -> bool {
+    !now.is_empty() && now.is_subset(was)
+}
+
+/// Did the user decline the paint at a commit pushed after the approval?
+/// `newer` holds the commits after the approved one. A decline page names
+/// the head it judged.
+fn declined_after(declines: &[String], newer: &[&str]) -> bool {
+    declines
+        .iter()
+        .any(|text| newer.iter().any(|sha| text.contains(sha)))
+}
+
+/// The paint files the PR's three-dot compare against the base changes at
+/// one commit.
+fn paint_files<P: Probes>(
     probes: &P,
     cwd: &Path,
     base: &str,
     sha: &str,
     paint_paths: &[String],
-) -> Option<std::collections::BTreeMap<String, String>> {
+) -> Option<BTreeSet<String>> {
     let lines = gh_lines(
         probes,
         cwd,
@@ -793,27 +820,15 @@ fn paint_patch<P: Probes>(
             "api",
             &format!("repos/{{owner}}/{{repo}}/compare/{base}...{sha}"),
             "--jq",
-            ".files[] | [.filename, .status, (.patch // \"\"), .sha]",
+            ".files[].filename",
         ],
     )?;
-    let mut out = std::collections::BTreeMap::new();
-    for line in lines {
-        let row: Vec<String> = serde_json::from_str(&line).ok()?;
-        let [name, status, patch, blob] = row.as_slice() else {
-            return None;
-        };
-        if !path_matches_paint(name, paint_paths) {
-            continue;
-        }
-        let body = if patch.is_empty() {
-            format!("{status} blob {blob}")
-        } else {
-            let hunks: Vec<&str> = patch.lines().filter(|l| !l.starts_with("@@")).collect();
-            format!("{status}\n{}", hunks.join("\n"))
-        };
-        out.insert(name.clone(), body);
-    }
-    Some(out)
+    Some(
+        lines
+            .into_iter()
+            .filter(|name| path_matches_paint(name, paint_paths))
+            .collect(),
+    )
 }
 
 /// One `gh` read as its non-empty trimmed lines; `None` on a failed read.
@@ -887,13 +902,16 @@ fn visual_page_filed(root: &Path, pr: u64, head: &str) -> bool {
 
 /// The question-file text the gate files: title names the PR, the context
 /// carries head + paint files, and `why_user: taste` is what lets a
-/// reversible question reach the user at all. The shots ride `--image`, so
+/// reversible question reach the user at all. The class word stands bare:
+/// the ask door's asker-decides refusal reads the value as exactly one
+/// class word, and prose after it reads as no class, refusing the very
+/// page this gate files. The shots ride `--image`, so
 /// the page shows them under its Screens heading.
 fn visual_question_markdown(pr: u64, head: &str, short: &str, node: &str, files: &str) -> String {
     format!(
         "---\n\
          recommend: 1\n\
-         why_user: taste - whether the paint looks right is the user's call\n\
+         why_user: taste\n\
          ---\n\n\
          May PR {pr} merge as painted? ({node} at {short})\n\n\
          ## Blocked because\n\
@@ -1033,6 +1051,23 @@ fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Every ANSWERED question page that names the PR and does not pick the
+/// approve option (hold for changes): the page text.
+fn declining_pages(root: &Path, pr: u64) -> Vec<String> {
+    let dir = crate::escalation::questions_dir(root);
+    [dir.clone(), dir.join("done")]
+        .iter()
+        .flat_map(|d| crate::lead_answers::read_question_pages(d).unwrap_or_default())
+        .filter_map(|(_stem, text)| {
+            let (front, _) = crate::attention_file::parse_page(&text)?;
+            (front.status == "answered"
+                && front.answer.as_deref().is_some_and(|a| !answer_approves(a))
+                && page_names_pr(&text, pr))
+            .then_some(text)
+        })
+        .collect()
+}
+
 /// Does a recorded answer pick the approve option? A numbered answer
 /// approves only as option 1 (the filed page's "Merge as painted"). A bare
 /// answer approves when it opens with an approve word. Anything else holds.
@@ -1106,6 +1141,23 @@ fn row_is_chat_attested(row: &Value) -> bool {
         .is_some_and(|r| r.to_lowercase().contains("user in chat"))
 }
 
+/// The rationale attests the paint diff is identifier-only: the edits
+/// rename or rebind code names and every rendered string stays
+/// byte-identical, so no pixel moves and a look would judge nothing. The
+/// shape matters where the ask door refuses a reversible question and no
+/// shots exist to file a page with, which left a held paint PR no lane at
+/// all. Both spellings a lead writes read; the ruling stays role-gated and
+/// head-scoped like the chat attestation, so only the lead whose territory
+/// covers the node can mint it and a push voids it.
+fn row_attests_identifier_only(row: &Value) -> bool {
+    row.get("rationale")
+        .and_then(Value::as_str)
+        .is_some_and(|r| {
+            let r = r.to_lowercase();
+            r.contains("identifiers only") || r.contains("identifier-only")
+        })
+}
+
 /// The rationale cites one of these question ids as a whole token. The
 /// user answered that page on the board, so the board is the channel and
 /// the lead need not write a chat attestation that would be false.
@@ -1122,8 +1174,9 @@ fn row_cites_any(row: &Value, ids: &[String]) -> bool {
 /// True when a live role decision row transcribes the user's approval of
 /// this PR at this head: authority `role`, the PR's bound node as subject
 /// (the decide door lets only the lead whose territory covers that node mint
-/// it), a rationale that attests the user's chat words or cites an answered
-/// question page that approves this PR, and text naming both the PR and the
+/// it), a rationale that attests the user's chat words, cites an answered
+/// question page that approves this PR, or attests the identifier-only paint
+/// shape, and text naming both the PR and the
 /// exact head sha the lead re-pinned. Head-scoped like the operator head grant: a
 /// push invalidates the approval. An unreadable index never clears.
 pub(crate) fn role_chat_clears_pr<P: Probes>(
@@ -1182,7 +1235,9 @@ fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -
                     row.get("lifecycle").and_then(Value::as_str),
                     Some("live") | Some("unscoped")
                 )
-                && (row_is_chat_attested(row) || row_cites_any(row, &approved))
+                && (row_is_chat_attested(row)
+                    || row_cites_any(row, &approved)
+                    || row_attests_identifier_only(row))
         })
         .map(row_text)
         .filter(|text| page_names_pr(text, pr))
@@ -1316,5 +1371,65 @@ mod tests {
         assert!(!page_names_pr("the PR is 3036", 3036));
         assert!(!page_names_pr("PR 30365", 3036));
         assert!(!page_names_pr("plain 3036", 3036));
+    }
+
+    #[test]
+    fn an_approval_holds_for_edits_to_files_it_showed_and_not_for_a_new_surface() {
+        let map = |names: &[&str]| {
+            names
+                .iter()
+                .map(|n| (*n).to_string())
+                .collect::<BTreeSet<_>>()
+        };
+        let was = map(&["a.rs", "b.rs"]);
+        assert!(adds_no_paint_surface(&was, &map(&["a.rs"])));
+        assert!(adds_no_paint_surface(&was, &map(&["a.rs", "b.rs"])));
+        assert!(!adds_no_paint_surface(&was, &map(&["a.rs", "c.rs"])));
+        assert!(!adds_no_paint_surface(&was, &map(&[])));
+    }
+
+    #[test]
+    fn a_decline_after_the_approved_commit_voids_the_carry() {
+        let declines = vec!["May PR 9 merge? answer 2 at c3".to_string()];
+        assert!(declined_after(&declines, &["c3", "c4"]));
+        assert!(!declined_after(&declines, &["c4"]));
+        assert!(!declined_after(&[], &["c3"]));
+    }
+
+    #[test]
+    fn an_identifier_only_ruling_reads_as_attested_and_other_rationales_do_not() {
+        let attested = |r: &str| row_attests_identifier_only(&json!({ "rationale": r }));
+        assert!(attested(
+            "Visual approval is granted by the lead. The paint-file edits rename local \
+             identifiers only (the action name became the command name). Every rendered \
+             string stays byte-identical, e.g. tab_prune.rs still prints 'would retire' \
+             and 'pruned'. No pixel changes."
+        ));
+        assert!(attested(
+            "identifier-only paint diff: fn run renamed to fn cmd; footer still prints \
+             'would retire'"
+        ));
+        // A look lane and a board citation are their own attestations, not
+        // this one; a bare approval with no identifier claim never reads as
+        // identifier-only.
+        assert!(!attested("user in chat: approved the splash"));
+        assert!(!attested("user answered q-1 on the board"));
+        assert!(!attested("Approved without a look"));
+        assert!(!attested(""));
+        assert!(!row_attests_identifier_only(&json!({})));
+    }
+
+    #[test]
+    fn the_visual_template_names_the_taste_class_bare() {
+        // The ask door's asker-decides refusal reads why_user as exactly one
+        // class word; prose after the word reads as no class and would
+        // refuse the page this gate files.
+        let page =
+            visual_question_markdown(3036, "05ea5bcccc12", "05ea5bcc", "x-aaaa", "client/tab.rs");
+        let why = page
+            .lines()
+            .find(|l| l.starts_with("why_user:"))
+            .expect("why_user line");
+        assert_eq!(why, "why_user: taste");
     }
 }

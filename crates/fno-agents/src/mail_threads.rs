@@ -216,6 +216,100 @@ fn expires_at(line: &Value) -> Option<&str> {
         .or_else(|| line.get("expires").and_then(Value::as_str))
 }
 
+/// Each message's delivery state, folded from the store's delivery lines in
+/// order (`landed`, the legacy `hosted`/`typed` marks, and `state` rows). An
+/// accepted line is terminal: a later retry line never lowers it. A legacy
+/// mark is read only for a message with no `state` row: a reached send also
+/// writes `hosted`, which would otherwise turn a parked message accepted.
+fn delivery_states(
+    texts: &[String],
+) -> std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState> {
+    use crate::mail_delivery_state::{DeliveryState, Evidence};
+    let mut out: std::collections::HashMap<String, DeliveryState> = Default::default();
+    let mut stated: std::collections::HashSet<String> = Default::default();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("delivery") {
+            continue;
+        }
+        let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+        let how = v.get("how").and_then(Value::as_str).unwrap_or("");
+        if id.is_empty() || how.is_empty() {
+            continue;
+        }
+        let (state, legacy) = match how {
+            "landed" => (
+                DeliveryState::accepted(
+                    false,
+                    Evidence {
+                        record: "landed".into(),
+                        ..Evidence::default()
+                    },
+                ),
+                false,
+            ),
+            word => {
+                match DeliveryState::from_json(&json!({"state": word, "reason": v.get("reason")})) {
+                    Some(state) => (state, false),
+                    None => (DeliveryState::from_legacy(word), true),
+                }
+            }
+        };
+        let accepted = out.get(id).is_some_and(DeliveryState::is_accepted);
+        if legacy && (accepted || stated.contains(id)) {
+            continue;
+        }
+        if !legacy && accepted && stated.contains(id) {
+            continue;
+        }
+        if !legacy {
+            stated.insert(id.to_string());
+        }
+        out.insert(id.to_string(), state);
+    }
+    out
+}
+
+/// How many delivery lines read `failed` for each message: one failure is
+/// the first send, more mean a retry failed too, and the tab then offers the
+/// copy rung.
+fn failure_counts(texts: &[String]) -> std::collections::HashMap<String, u64> {
+    let mut out: std::collections::HashMap<String, u64> = Default::default();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) == Some("delivery")
+            && v.get("how").and_then(Value::as_str) == Some("failed")
+        {
+            if let Some(id) = v.get("id").and_then(Value::as_str) {
+                *out.entry(id.to_string()).or_default() += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The state word for one message row: its folded delivery lines, else the
+/// legacy reading of its own `delivery` mark.
+fn state_word(
+    states: &std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState>,
+    v: &Value,
+) -> &'static str {
+    let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+    match states.get(id) {
+        Some(state) => state.word(),
+        None => crate::mail_delivery_state::DeliveryState::from_legacy(
+            v.get("delivery")
+                .and_then(Value::as_str)
+                .unwrap_or("durable"),
+        )
+        .word(),
+    }
+}
+
 /// The projection of one chats store. `now` decides which announcements
 /// still stand.
 pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
@@ -252,6 +346,8 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         .filter_map(|entry| std::fs::read_to_string(entry.path().join("messages.jsonl")).ok())
         .collect();
     let aliases = store_aliases(&texts, registry);
+    let states = delivery_states(&texts);
+    let failures = failure_counts(&texts);
     for text in &texts {
         let mut rows: Vec<Value> = Vec::new();
         for line in text.lines() {
@@ -277,12 +373,20 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             // The join reads the RESOLVED key, so a prefix-resolved short id
             // takes its row's display name, not the raw id (item 3).
             let reg_from = registry_lookup(registry, &from_key);
-            let reg_to = registry_lookup(registry, to);
+            let reg_to = registry_lookup(registry, &to_key);
             // A `fleet:` address is a broadcast group, never an agent (the
             // operator's 2026-10-05 screenshots): it names no participant and
             // holds no last-seen vote.
             let to_is_broadcast = to.starts_with("fleet:");
-            note(&mut participants, &from_key, reg_from, Some(from));
+            // A sender that mailed under a bare id still signed its header
+            // with its name; a header carrying this row's own id is trusted.
+            let signed = header_name(&v);
+            note(
+                &mut participants,
+                &from_key,
+                reg_from,
+                Some(signed.as_deref().unwrap_or(from)),
+            );
             if !to_is_broadcast {
                 note(&mut participants, &to_key, reg_to, None);
             }
@@ -316,6 +420,14 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 "expires": expires_at(&v),
                 "in_reply_to": v.get("in_reply_to").and_then(Value::as_str),
                 "delivery": v.get("delivery").and_then(Value::as_str),
+                "state": state_word(&states, &v),
+                "state_reason": v.get("id").and_then(Value::as_str)
+                    .and_then(|id| states.get(id))
+                    .and_then(|s| s.reason()),
+                "state_failures": v.get("id").and_then(Value::as_str)
+                    .and_then(|id| failures.get(id))
+                    .copied()
+                    .unwrap_or(0),
                 "system": system_row,
             });
             match v.get("kind").and_then(Value::as_str) {
@@ -525,7 +637,8 @@ fn note(
             // participant, the stored row adopts its name. A row named by
             // key upgrades on any sighting; a fallback-named row only when
             // the registry actually supplies a name, so a nameless row
-            // cannot clobber the fallback.
+            // cannot clobber the fallback. With no row, a row still named by
+            // its id takes a later sighting's real name.
             let named = v.get("name").and_then(Value::as_str) != Some(key);
             let reg_name = row
                 .and_then(|r| r.get("name"))
@@ -533,9 +646,29 @@ fn note(
                 .filter(|_| !crate::system_sender::is_system_sender(key));
             if row.is_some() && (!named || reg_name.is_some()) {
                 *v = participant_row(key, row, None);
+            } else if row.is_none()
+                && v.get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| key.starts_with(n))
+                && !crate::system_sender::is_system_sender(key)
+            {
+                if let Some(name) = extra.filter(|n| !n.is_empty() && !key.starts_with(n)) {
+                    v["name"] = json!(name);
+                }
             }
         })
         .or_insert_with(|| participant_row(key, row, extra));
+}
+
+/// The name a message's own header signs, when the header carries the
+/// message's id: the send door rendered it, so the body did not forge it.
+fn header_name(v: &Value) -> Option<String> {
+    let id = v.get("id").and_then(Value::as_str)?;
+    let first = v.get("body").and_then(Value::as_str)?.lines().next()?;
+    let turn = crate::mail_header::header_turns(first).into_iter().next()?;
+    let sender = turn.get("sender").and_then(Value::as_str)?;
+    (turn.get("id").and_then(Value::as_str) == Some(id) && !sender.is_empty())
+        .then(|| sender.to_string())
 }
 
 /// One counterparty-scope vote for R3: count per scope, latest ts on a tie.
@@ -578,14 +711,21 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
                 eprintln!("mail-threads: only --format json is supported");
                 return 2;
             }
-            let projection = project_at(&chats_dir(), &registry_rows(), now_secs());
+            // The reader folds the stray bus-dir chats too, so mail the old
+            // send lanes parked there shows before the next send runs.
+            let chats = chats_dir();
+            if let Some(stray_root) = crate::chats::bus_append_live_path().parent() {
+                crate::chats::fold_stray_chats(&chats, stray_root);
+            }
+            let projection = project_at(&chats, &registry_rows(), now_secs());
             println!("{}", serde_json::to_string(&projection).unwrap_or_default());
             0
         }
         "details" => run_details(&args[1..]),
         "journal-reply" => run_journal_reply(&args[1..]),
+        "retry" => crate::mail_cli::send::retry::run(&args[1..]),
         _ => {
-            eprintln!("usage: fno-agents mail-threads [--format json | details --session <id> | journal-reply --to <name> --to-session <id> --in-reply-to <msg-id>]");
+            eprintln!("usage: fno-agents mail-threads [--format json | details --session <id> | journal-reply --to <name> --to-session <id> --in-reply-to <msg-id> | retry <msg-id>]");
             2
         }
     }
@@ -906,6 +1046,9 @@ mod tests {
             json!({"name": "prefix-agent", "fno_id": "f2571a54-full",
                    "harness_session_id": "f2571a54-full",
                    "harness": "claude", "liveness": "alive", "status": "live"}),
+            json!({"name": "prefix-peer", "fno_id": "c0ffee12-full",
+                   "harness_session_id": "c0ffee12-full",
+                   "harness": "codex", "liveness": "alive", "status": "live"}),
         ];
         let root = temp_root("projection");
         let chats = root.join("chats");
@@ -1009,6 +1152,31 @@ mod tests {
                 "Short id ping.",
             )],
         );
+        // A short id that only ever receives mail joins its row too.
+        write_chat(
+            &chats,
+            "chat-qqqqqqqqqqqqqqqq",
+            &[msg(
+                "fmail-c2c2c2c2c2c2",
+                "2026-10-01T09:20:00Z",
+                "s-vellum",
+                "c0ffee12",
+                "Short id inbound.",
+            )],
+        );
+        // A bare-id sender no registry row holds shows the name its own
+        // header signs.
+        write_chat(
+            &chats,
+            "chat-rrrrrrrrrrrrrrrr",
+            &[msg(
+                "fmail-c3c3c3c3c3c3",
+                "2026-10-01T09:20:30Z",
+                "ab12cd34",
+                "s-vellum",
+                "`@nemo · fmail-c3c3c3c3c3c3`\nSigned ping.",
+            )],
+        );
         // An unresolvable leaked fixture reads as Archive, not live-list. It
         // mails candor, whose registry row holds no role scope, so no
         // scope vote ever names it and the unresolved bucket takes it.
@@ -1099,9 +1267,9 @@ mod tests {
             .get("participants")
             .and_then(Value::as_array)
             .unwrap();
-        // a+m+e merge into the one candor/vellum pair thread; b, f0, n, o, p
-        // each stand alone; the system and announce dirs contribute none.
-        assert_eq!(threads.len(), 7, "pair chats only: {threads:?}");
+        // a+m+e merge into the one candor/vellum pair thread; b, f0, n, o, p,
+        // q, r each stand alone; the system and announce dirs contribute none.
+        assert_eq!(threads.len(), 9, "pair chats only: {threads:?}");
         // Old mail: an unmigrated legacy row shows the raw tag (the prompt
         // to run the one-time migration), the pasted header-summary repeat
         // strips once, mid-text mention untouched (AC7-AC9-HP).
@@ -1251,6 +1419,20 @@ mod tests {
                 .any(|p| p.get("key").and_then(Value::as_str) == Some("f2571a54")),
             "the short id never stands alone"
         );
+        let peer_p = participants
+            .iter()
+            .find(|p| p.get("key").and_then(Value::as_str) == Some("c0ffee12-full"))
+            .expect("a recipient short id resolves to its row");
+        assert_eq!(
+            peer_p.get("name").and_then(Value::as_str),
+            Some("prefix-peer")
+        );
+        assert_eq!(peer_p.get("harness").and_then(Value::as_str), Some("codex"));
+        let signed_p = participants
+            .iter()
+            .find(|p| p.get("key").and_then(Value::as_str) == Some("ab12cd34"))
+            .expect("the bare sender stands");
+        assert_eq!(signed_p.get("name").and_then(Value::as_str), Some("nemo"));
         // A fleet address is a group, not an agent.
         assert!(
             !participants
@@ -1360,6 +1542,32 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// A reached send writes its state row and then the legacy `hosted`
+    /// mark. The mark must not turn a parked message accepted, in either
+    /// order, while a message with only the mark still reads from it.
+    #[test]
+    fn delivery_state_rows_outrank_the_legacy_hosted_mark() {
+        let line =
+            |id: &str, how: &str| json!({"type": "delivery", "id": id, "how": how}).to_string();
+        let text = [
+            line("m-parked", "parked"),
+            line("m-parked", "hosted"),
+            line("m-late", "hosted"),
+            line("m-late", "injected"),
+            line("m-old", "hosted"),
+            line("m-landed", "parked"),
+            line("m-landed", "landed"),
+            line("m-landed", "failed"),
+        ]
+        .join("\n");
+        let states = delivery_states(&[text]);
+        let word = |id: &str| states.get(id).map(|s| s.word());
+        assert_eq!(word("m-parked"), Some("parked"));
+        assert_eq!(word("m-late"), Some("injected"));
+        assert_eq!(word("m-old"), Some("accepted-new-turn"));
+        assert_eq!(word("m-landed"), Some("accepted-new-turn"));
     }
 
     #[test]

@@ -1613,11 +1613,23 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
 }
 
 /// The store path, resolved as the fno crate's `backlog_view::graph_path`
-/// does: `FNO_GRAPH_JSON` > `$HOME/.fno/graph.json` (the agents home's parent,
-/// so a test home redirects it too), through the layout table.
+/// does: `FNO_GRAPH_JSON` > the sandbox state root (`FNO_STATE_DIR`, or the
+/// `state_dir` the `FNO_CONFIG` pin declares - a sandbox serves its own
+/// graph, never the machine's) > `$HOME/.fno/graph.json` (the agents home's
+/// parent, so a test home redirects it too), through the layout table.
 pub(crate) fn graph_path(home: &AgentsHome) -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_GRAPH_JSON") {
         return PathBuf::from(v);
+    }
+    let sandboxed = ["FNO_STATE_DIR", "FNO_CONFIG"].iter().any(|key| {
+        std::env::var_os(key)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    });
+    if sandboxed {
+        if let Some(dir) = crate::backlog::settings::state_dir() {
+            return crate::state_layout::graph_anchor(&dir);
+        }
     }
     let root = home
         .root()
@@ -1676,7 +1688,8 @@ fn main_store_journal(
     let Some(parent) = home.root().parent() else {
         return (String::new(), None);
     };
-    let mail = mail_escalation_text(&parent.join("spaces"), since_epoch, until_epoch);
+    let spaces = crate::paths::spaces_root_opt().unwrap_or_else(|| parent.join("spaces"));
+    let mail = mail_escalation_text(&spaces, since_epoch, until_epoch);
     let path = parent.join("events.jsonl");
     if !path.is_file() && !crate::event_store::store_path(&path).is_file() {
         return (

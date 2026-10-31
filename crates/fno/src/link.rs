@@ -733,10 +733,46 @@ pub fn plan_link(plan_path: Option<&Path>, cfg: &ObsidianCfg) -> PlanLink {
         // reader is permissive. Unavailable rather than synthesise a name.
         return PlanLink::Unavailable(PlanUnavailable::ObsidianOff);
     };
-    match vault_file_uri(plan, vault_cfg) {
+    // Obsidian opens a note, never a folder: a plan directory gets no link.
+    let note = plan
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+    match note
+        .then(|| vault_file_uri(plan, vault_cfg).or_else(|| linked_vault_uri(plan, vault_cfg)))
+        .flatten()
+    {
         Some(uri) => PlanLink::Obsidian { uri },
         None => PlanLink::PlainFile(plan.to_path_buf()),
     }
+}
+
+/// The vault's top-level directories a checkout links in by name.
+const VAULT_TOPLEVEL_DIRS: &[&str] = &["internal/"];
+
+/// A plan path the graph recorded outside the vault root: vault-relative
+/// (`internal/...`), or under a checkout's linked vault dir
+/// (`/wt/<tree>/internal/...`). Plans only: a pane's file keeps the strict
+/// under-the-root rule, since any repo may hold an `internal/` of its own.
+fn linked_vault_uri(plan: &Path, vault_cfg: &str) -> Option<String> {
+    let p = plan.to_string_lossy().replace('\\', "/");
+    let rel = if plan.is_relative() {
+        VAULT_TOPLEVEL_DIRS
+            .iter()
+            .any(|d| p.starts_with(d))
+            .then(|| p.clone())?
+    } else {
+        let at = VAULT_TOPLEVEL_DIRS
+            .iter()
+            .filter_map(|d| p.rfind(&format!("/{d}")))
+            .max()?;
+        p[at + 1..].to_string()
+    };
+    let root = resolve_vault_root(vault_cfg);
+    let name = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(vault_cfg);
+    Some(obsidian_open_uri(name, &rel))
 }
 
 /// The `obsidian://open` URI for `path` when it sits under the vault root that
@@ -797,7 +833,7 @@ fn obsidian_open_uri(vault: &str, rel_path: &str) -> String {
 /// Percent-encode for an RFC 3986 query component: preserve unreserved chars
 /// (`A-Za-z0-9-._~`) and the `/` path separator; encode everything else. Kept
 /// local so the URI builder and its round-trip test cannot drift.
-fn percent_encode_query(s: &str) -> String {
+pub(crate) fn percent_encode_query(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for &byte in s.as_bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
@@ -1327,6 +1363,35 @@ mod tests {
             matches!(link, PlanLink::PlainFile(_)),
             "outside vault -> PlainFile, got {link:?}"
         );
+        // The graph's other plan shapes name the same vault file: relative to
+        // the vault, and under a checkout's linked vault dir. Both encode.
+        let want = PlanLink::Obsidian {
+            uri: "obsidian://open?vault=myvault&file=internal/fno/plans/my%20plan.md".into(),
+        };
+        for shape in [
+            "internal/fno/plans/my plan.md",
+            "/wt/footnote/some-tree/internal/fno/plans/my plan.md",
+        ] {
+            assert_eq!(
+                plan_link(Some(Path::new(shape)), &cfg(true, Some("/opt/myvault"))),
+                want,
+                "{shape}"
+            );
+        }
+        // A plan folder, inside the vault or under a linked dir, is no note.
+        for shape in [
+            "notes/x.md",
+            "/opt/myvault/internal/fno/plans/waves",
+            "internal/fno/plans/waves/",
+        ] {
+            assert!(
+                matches!(
+                    plan_link(Some(Path::new(shape)), &cfg(true, Some("/opt/myvault"))),
+                    PlanLink::PlainFile(_)
+                ),
+                "{shape}"
+            );
+        }
     }
 
     #[test]

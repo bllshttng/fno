@@ -45,8 +45,21 @@ fn short(text: &str) -> String {
 // `unreadable reconcile json` alone was a dead end: the row named the
 // symptom but threw away the one thing a reader needs to diagnose it - what
 // the command actually printed. Carry a bounded snippet instead.
-fn unreadable(stdout: &str) -> CloseOutcome {
+fn unreadable(stdout: &str, brake: Option<&str>) -> CloseOutcome {
     let sample = short(stdout.trim());
+    // The 2026-10-19/20 specimen: exit 0, no stdout, runaway brake armed -
+    // the sweep starved under fleet load and the row paged an operator
+    // each time. An empty result while the brake holds is a transient: it
+    // reads overloaded and the lane recovers when load drops.
+    if sample.is_empty() {
+        if let Some(brake) = brake {
+            return CloseOutcome {
+                acted: 0,
+                skip_reason: Some("overloaded".to_string()),
+                detail: format!("reconcile wrote no output while the {brake}"),
+            };
+        }
+    }
     let sample = if sample.is_empty() {
         "<empty>"
     } else {
@@ -75,16 +88,26 @@ fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
 }
 
 /// Turn one reconcile run into a tick outcome. Pure, so tests drive it with
-/// strings. The command pretty-prints its JSON across many lines, so the whole
+/// strings; `brake` is the runaway-brake hold line the caller sampled before
+/// the run started. The command pretty-prints its JSON across many lines, so the whole
 /// trimmed stdout parses as one object - never a search for a `{` line. A
 /// run that did not report a readable `closed` array is an error, never a
 /// zero: a fabricated zero reads as "in sync" (the stale-summary rule). A
 /// GitHub budget refusal is a wait, not a failure: it is counted under
 /// `waiting` and never counts toward the failure verdict.
-pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
+pub fn outcome_from_reconcile(run: Result<String, String>, brake: Option<&str>) -> CloseOutcome {
     let stdout = match run {
         Ok(stdout) => stdout,
         Err(why) => {
+            // A budget kill has no stdout to parse; the wall clock, not the
+            // sweep, decided. The same transient class as the empty read.
+            if why.starts_with("reconcile timed out") {
+                return CloseOutcome {
+                    acted: 0,
+                    skip_reason: Some("overloaded".to_string()),
+                    detail: short(&why),
+                };
+            }
             return CloseOutcome {
                 acted: 0,
                 skip_reason: Some("error".to_string()),
@@ -93,7 +116,7 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
         }
     };
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(stdout.trim()) else {
-        return unreadable(&stdout);
+        return unreadable(&stdout, brake);
     };
     if parsed.get("held").and_then(serde_json::Value::as_bool) == Some(true) {
         // The single-flight receipt: another reconcile owns the scope, and a
@@ -119,7 +142,7 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
         };
     }
     let Some(closed) = parsed.get("closed").and_then(serde_json::Value::as_array) else {
-        return unreadable(&stdout);
+        return unreadable(&stdout, brake);
     };
     let count_of = |key: &str| {
         parsed
@@ -200,15 +223,33 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
     }
 }
 
+/// The sweep's wall budget: 240s on an idle machine, load-scaled, capped at
+/// one interval so a wedged sweep can never span its own cadence.
+const RECONCILE_BUDGET_FLOOR_S: u64 = 240;
+const RECONCILE_BUDGET_CAP_S: u64 = MERGE_CLOSE_INTERVAL_S;
+
 /// The production runner: the bare sweep, cwd-free (the graph is one store).
 /// The native door, not the wheel: the Python command is deleted, and the arm's
-/// JSON contract lives in the Rust arm now.
+/// JSON contract lives in the Rust arm now. Bounded: a sweep wedged under a
+/// runaway brake would otherwise park this arm's one-in-flight gate forever.
 fn run_reconcile() -> Result<String, String> {
-    let output = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["backlog", "reconcile", "--json"])
-        .stdin(std::process::Stdio::null())
-        .output()
+    let budget_s =
+        crate::bounded_cmd::load_scaled_budget_s(RECONCILE_BUDGET_FLOOR_S, RECONCILE_BUDGET_CAP_S);
+    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    cmd.env(crate::decision_trace::ACTOR_KIND_STAMP_ENV, "sweep")
+        .args(["backlog", "reconcile", "--json"]);
+    let output = crate::bounded_cmd::output_with_timeout_result(cmd, budget_s)
         .map_err(|e| format!("spawn: {e}"))?;
+    // A child killed by its budget dies by SIGKILL, which carries no exit
+    // code; only the budget sends signal 9 to this child, so the signal
+    // names the clock.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if output.status.signal() == Some(libc::SIGKILL) {
+            return Err(format!("reconcile timed out after {budget_s}s"));
+        }
+    }
     reconcile_result(output.status.code(), &output.stdout, &output.stderr)
 }
 
@@ -269,7 +310,11 @@ fn emit_one(
             detail: format!("GitHub rate limit backoff, {backoff_s}s left; the sweep waits"),
         }
     } else {
-        outcome_from_reconcile(run())
+        // The brake line is sampled before the run: a bounded sweep can
+        // outlast the brake's hold, and the class must name the load that
+        // starved it, not whatever holds at classification time.
+        let brake = crate::machine_watch::brake_holds();
+        outcome_from_reconcile(run(), brake.as_deref())
     };
     let journal = crate::loop_runtime::Journal::new_raw(
         home.events_jsonl(),
@@ -345,7 +390,7 @@ mod tests {
   "supersession_evidence_failures": [],
   "sync_catchup": {"outcome": "unknown", "detail": "gh unavailable or unauthenticated"}
 }"#;
-        let o = outcome_from_reconcile(Ok(stdout.to_string()));
+        let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("failures"));
         assert_eq!(
@@ -360,7 +405,7 @@ mod tests {
   "failures": [],
   "sync_catchup": {"outcome": "fresh", "detail": "canonical in sync"}
 }"#;
-        let o = outcome_from_reconcile(Ok(stdout.to_string()));
+        let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
         assert_eq!(o.skip_reason.as_deref(), Some("none_to_close"));
         assert_eq!(o.detail, "closed=0 promise_unmet=0 failures=0");
 
@@ -371,7 +416,7 @@ mod tests {
   "failures": [],
   "supersession_evidence_failures": [{"node_id": "x-2", "reason": "stale evidence"}]
 }"#;
-        let o = outcome_from_reconcile(Ok(stdout.to_string()));
+        let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("failures"));
         assert!(
@@ -386,12 +431,39 @@ mod tests {
   "failures": [],
   "supersession_evidence_failures": [{"node_id": "x-2", "reason": "API rate limit exceeded"}]
 }"#;
-        let o = outcome_from_reconcile(Ok(stdout.to_string()));
+        let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
         assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
         assert_eq!(
             o.detail,
             "closed=0 promise_unmet=0 failures=0 waiting=1 (GitHub rate limit)"
         );
+    }
+
+    // The 2026-10-19/20 specimen: exit 0, no stdout, brake armed - the row
+    // paged an operator three times for a load transient that healed itself.
+    #[test]
+    fn an_empty_read_under_a_held_brake_is_a_transient() {
+        let brake = "machine runaway brake holds (600s left): load 12.1/core";
+        let o = outcome_from_reconcile(Ok(String::new()), Some(brake));
+        assert_eq!(o.acted, 0);
+        assert_eq!(o.skip_reason.as_deref(), Some("overloaded"));
+        assert!(o.detail.contains("no output"), "{}", o.detail);
+        assert!(o.detail.contains("600s left"), "{}", o.detail);
+
+        // Empty with no brake is still an anomaly: the row keeps its old
+        // error text for the operator.
+        let o = outcome_from_reconcile(Ok(String::new()), None);
+        assert_eq!(o.skip_reason.as_deref(), Some("error"));
+        assert_eq!(o.detail, "unreadable reconcile json: <empty>");
+
+        // A budget kill reads the same transient class, naming the clock.
+        let o = outcome_from_reconcile(Err("reconcile timed out after 900s".into()), None);
+        assert_eq!(o.skip_reason.as_deref(), Some("overloaded"));
+        assert_eq!(o.detail, "reconcile timed out after 900s");
+
+        // Any other spawn failure keeps the error class.
+        let o = outcome_from_reconcile(Err("spawn: No such file or directory".into()), None);
+        assert_eq!(o.skip_reason.as_deref(), Some("error"));
     }
 
     #[test]
@@ -448,5 +520,40 @@ mod tests {
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
         assert!(o.detail.contains("120s left"), "detail: {}", o.detail);
+    }
+
+    #[test]
+    fn reconcile_child_carries_the_sweep_stamp() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let seen = td.path().join("stamp");
+        // The fake fno exits 0 with empty stdout, which reconcile_result
+        // keeps; it dumps the one env the real child must carry. The stub
+        // goes through write_exec_stub: a sibling test's fork can hold a
+        // plain write fd open and the exec fails with Text file busy.
+        let script = crate::write_exec_stub(
+            td.path(),
+            "fake-fno",
+            &format!(
+                "#!/bin/sh\nprintf '%s' \"$FNO_ACTOR_KIND\" > '{}'\n",
+                seen.display()
+            ),
+        );
+        let prev_bin = std::env::var_os("FNO_BIN");
+        let prev_stamp = std::env::var_os(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
+        std::env::set_var("FNO_BIN", &script);
+        std::env::remove_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
+        let run = run_reconcile();
+        match prev_bin {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+        if let Some(v) = prev_stamp {
+            std::env::set_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV, v);
+        }
+        run.expect("the fake fno exits 0");
+        let stamp = std::fs::read_to_string(&seen).unwrap();
+        assert_eq!(stamp, "sweep");
     }
 }

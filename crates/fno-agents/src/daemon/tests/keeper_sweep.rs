@@ -26,6 +26,86 @@ pub(in crate::daemon) fn keeper_sweep_home(tag: &str) -> AgentsHome {
     home
 }
 
+/// The store state a failed registry read needs in the panic text. The CI
+/// loss on 2026-10-30 unwrapped a None whose cause (absent row vs ambiguous
+/// label vs a writer's drop) the message did not name; a dropped row carries
+/// a `registry_row_removed` event naming the remover, so this dump makes a
+/// recurrence diagnose itself instead of re-filing a blind flake.
+pub(in crate::daemon) fn dump_store_state(home: &AgentsHome) -> String {
+    let path = home.registry_json();
+    let document =
+        crate::registry_read::registry_text(&path).unwrap_or_else(|e| format!("unreadable: {e}"));
+    let journal = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+    format!(
+        "registry path: dir={} file={}\ndocument: {document}\nevents: {journal}\n{}",
+        path.is_dir(),
+        path.is_file(),
+        store_tree(home),
+    )
+}
+
+/// Where the registry store file resolves and what of the test base remains.
+/// The 2026-10-30 CI loss read as a fresh import because the db file had
+/// vanished under a standing fence; this names the missing piece (db file
+/// only, the whole db dir, or the whole base) so the deleter identifies
+/// itself.
+fn store_tree(home: &AgentsHome) -> String {
+    let root = home.root().parent().unwrap_or(home.root());
+    let database = crate::registry_read::database_path(&home.registry_json());
+    let (db_path, db_exists) = match database.as_ref() {
+        Some(p) => (p.display().to_string(), p.exists().to_string()),
+        None => ("unresolvable".into(), "unknown".into()),
+    };
+    let mut out = format!("store db: {db_path} exists={db_exists}\nbase tree:");
+    let Ok(entries) = std::fs::read_dir(root) else {
+        out.push_str(" (base unreadable)");
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_dir() {
+            let width = std::fs::read_dir(&path).map(|d| d.count()).unwrap_or(0);
+            out.push_str(&format!("\n  {name}/ ({width} entries)"));
+            if let Ok(children) = std::fs::read_dir(&path) {
+                for child in children.flatten().take(8) {
+                    let size = child.metadata().map(|m| m.len()).unwrap_or(0);
+                    out.push_str(&format!("\n    {}", child.file_name().to_string_lossy()));
+                    if child.path().is_file() {
+                        out.push_str(&format!(" ({size}B)"));
+                    }
+                }
+            }
+        } else {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push_str(&format!("\n  {name} ({size}B)"));
+        }
+    }
+    out
+}
+
+/// The assert `registry.find(name).unwrap()` wants, with the None cause
+/// named: `find` resolves to None both when the row is absent and when two
+/// rows answer the label, and the store dump rides the panic either way.
+pub(in crate::daemon) fn expect_row<'a>(
+    registry: &'a crate::state::Registry,
+    name: &str,
+    home: &AgentsHome,
+) -> &'a RegistryEntry {
+    match registry.find(name) {
+        Some(entry) => entry,
+        None => panic!(
+            "the {name} row answered nothing after stop ({}): {}",
+            if registry.label_matches_count(name) > 1 {
+                "ambiguous: more than one row answers the label"
+            } else {
+                "absent from the registry"
+            },
+            dump_store_state(home)
+        ),
+    }
+}
+
 /// A registry row shaped exactly like the lane-B spawn writes it (pi
 /// harness, interactive, socket-keyed, session id minted before launch).
 fn lane_b_thread_row(
@@ -269,7 +349,7 @@ async fn keeper_thread_stop_confirms_the_kill_and_stamps_the_row_exited() {
     keeper.join().unwrap();
     assert!(!sock.exists(), "the keeper unlinks its own socket on Kill");
     let registry = load_registry_offloaded(home.registry_json()).await.unwrap();
-    let entry = registry.find("wk-stop").unwrap();
+    let entry = expect_row(&registry, "wk-stop", &home);
     assert_eq!(entry.status, AgentStatus::Exited);
     assert!(
         entry.exited_at.is_some(),

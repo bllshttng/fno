@@ -29,7 +29,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 
 ### footnote
 
-`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path.
+`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path. The release tarball ships no footnote binary; an update installs only a compat stub at that name. The spawn row stays deliberately `capable`, so the thread lane keeps the honest seat refusal instead of launching the stub.
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -38,6 +38,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `~/.fno/cache/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
 | `session <id> has a live writer` | Another process holds the session's `<fno_id>.lock` | `fno agents session stop <name>`, then ask again |
 | `the footnote host exited before the session opened` | The binary refused the launch spec, often a version skew | Read the host log the refusal names, under `~/.fno/agents/fnh/` |
+| `footnote is retired; use fno` | The release tarball no longer ships the harness; the name on PATH is the updater-compat stub | Build fnh from its checkout and point `FNO_FOOTNOTE_BIN` at it, or spawn another harness |
 
 Tools run with your own permissions. There is no sandbox.
 
@@ -118,11 +119,15 @@ Versions measured 2026-10-11: claude 2.1.296, codex 0.162.1, opencode 1.18.33, p
 | pi | `pi --session-id <uuid> --model zai/glm-5.3:high "/skill:target x-aaaa"` | fno keeper via spawn | `--provider`, `--model p/id[:thinking]`, `--thinking L`; no permission prompts | none | `pi --session <id>` from the session's own cwd | the `--session-dir` store | `cli/src/fno/setup/assets/pi/footnote.ts` (`before_agent_start`) |
 | agy | `agy -i "/target x-aaaa" --model M --dangerously-skip-permissions` | fno keeper via spawn | `--model`, `--dangerously-skip-permissions`, `--effort` | none | `agy --conversation <id>` | none measured on 1.3.3 | `hooks/agy-session-report.sh` |
 
-Background mode is a keeper owned by a daemon. For claude that keeper is Claude's own supervisor: `claude --bg`, paneless, with peek, attach, detach and restart from the saved conversation. For every other harness it is fno's daemon and pane keeper. An unattended worker rides the thread lane: `fno agents spawn -H <harness> --node <node-id> --name w '<payload>'`. A watched worker runs the harness's whole line in a keeper pane: `fno mux pane run --cwd <dir> -- <native argv>`. Every word after that `--` reaches the harness verbatim. The spawn `--` fence is different: it carries extra harness flags into a line spawn builds, and it implies a pane.
+Background mode is a keeper owned by a daemon. For claude that keeper is Claude's own supervisor: `claude --bg`, paneless, with peek, attach, detach and restart from the saved conversation. For every other harness it is fno's daemon and pane keeper. An unattended worker rides the thread lane: `fno agents spawn -H <harness> --node <node-id> --name w '<payload>'`. A watched worker runs the harness's whole line in a keeper pane: `fno mux pane run --cwd <dir> -- <native argv>`. Every word after that `--` reaches the harness verbatim. The spawn fence carries the same law. Flags spawn does not own reach the harness argv verbatim, before or after the `--` fence, on the pane, thread and headless lanes. A lane that cannot carry a flag refuses and names it, never drops it. A loose unknown flag forwards as one token. A value rides in the `--flag=value` form or through `--harness-arg`.
 
 An agent-typed `claude --bg` line must carry `--name`. Without it, claude titles the row from the first prompt. A resume copy also keeps the old session's name after the worker moves to another node. A `claude --bg --resume <id>` of a running session starts a copy under a new id. That copy shows the old id in its status line. The Bash hook refuses both lines. Revive a fleet worker with `fno agents session resume <name>`, which passes the row's name.
 
 A launched session is adopted through the SessionStart hook file named in its row. A pi session reports through fno's own pi extension, so no pi-code install is needed. The adopted session joins the registry with the row shape a spawned worker gets. `fno agents session list`, `fno agents session peek`, mail and the stop command reach it like any other.
+
+## Boxed headless workers
+
+The `[sandbox]` table boxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The box holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Box a worker](https://fno.sh/docs/guides/box-a-worker).
 
 ## What this means in practice
 

@@ -281,15 +281,7 @@ These merge with the built-in set automatically.
 
 ## Database-Aware Planning
 
-When your project has a database (Supabase, Postgres, Prisma, Drizzle), spec automatically detects it and appends schema context to the codemap. This means plans include migration tasks when needed, rather than discovering constraint violations at runtime.
-
-```
-/fno:codemap --db              # Manually include DB schema
-```
-
-Spec auto-detects databases and runs this for you. The DB schema section shows enums, CHECK constraints, triggers, and foreign keys so the plan knows what the database accepts before writing insert code.
-
-You can also run codemap with `--db` directly to inspect your schema at any time.
+When your project has a database (Supabase, Postgres, Prisma, Drizzle), `fno do think inspect` names the schema files and env keys it found. Blueprint reads the schema in those files, so a plan includes its migration tasks instead of finding a constraint violation at runtime.
 
 
 ## What-If

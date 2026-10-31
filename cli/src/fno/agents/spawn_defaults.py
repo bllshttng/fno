@@ -9,15 +9,9 @@ never the ambient one; an explicit `-m/--model` always wins; a resolved
 """
 from __future__ import annotations
 
-import json
-import random
 import re
 import sys
 from typing import IO, Callable, List, Mapping, Optional, Sequence, Set, Tuple
-
-#: The take-over reason the Rust compose consumed from the argv, in process
-#: only: the environment never carries it (lead ruling, 2026-10-16).
-PENDING_TAKE_OVER: List[str] = []
 
 # Flags that consume the FOLLOWING token. Scanning for our three flags skips a
 # value flag's value so a value that looks like `--model` / `--effort` can never
@@ -84,8 +78,6 @@ def _scan(args: Sequence[str]) -> Tuple[bool, Optional[str], bool, bool]:
 # long-form `--substrate <s>`. Neither parser learns a new vocabulary.
 # --------------------------------------------------------------------------- #
 
-_SUBSTRATES = ("pane", "thread", "headless", "bg")
-
 # Flags on `spawn` that consume the following token. Needed to tell a flag's
 # VALUE apart from a positional when scanning for the NAME / substrate token. A
 # missing entry would misread that flag's value as a positional (e.g. a Rust-path
@@ -130,24 +122,6 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
 _EXPLICIT_SUBSTRATE_BOOLS = ("-o", "--once")
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-# Two-word slug lists for a nameless spawn (docker/heroku pattern). Curated
-# lowercase-ascii, unambiguous read aloud; no external dependency, no config.
-_SLUG_ADJ = (
-    "amber", "brave", "calm", "clever", "coral", "cosmic", "crisp", "dapper",
-    "eager", "fabled", "gentle", "glossy", "golden", "hardy", "jolly", "keen",
-    "lively", "lucid", "mellow", "merry", "nimble", "noble", "plucky", "quiet",
-    "rapid", "ruddy", "sage", "sleek", "snug", "spry", "stout", "sunny",
-    "swift", "tidy", "vivid", "warm", "witty", "zesty", "bold", "bright",
-)
-_SLUG_NOUN = (
-    "otter", "falcon", "willow", "cedar", "comet", "ember", "harbor", "meadow",
-    "pebble", "quartz", "river", "summit", "thicket", "vale", "walrus", "yak",
-    "badger", "bison", "cobra", "crane", "dingo", "eagle", "ferret", "gecko",
-    "heron", "ibis", "jaguar", "koala", "lemur", "marten", "newt", "osprey",
-    "puffin", "raven", "shrew", "tapir", "urchin", "viper", "wombat", "finch",
-)
-
-
 def _has_explicit_substrate(toks: Sequence[str]) -> Optional[str]:
     """Return the substrate value if pinned by an explicit flag, else None.
 
@@ -242,24 +216,6 @@ def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
     return [*kept, "--", *moved, *toks[cut + 1 :]]
 
 
-def _mint_slug(existing: Set[str], rng: random.Random, err: IO[str]) -> str:
-    """Best-effort collision-avoided ``adjective-noun`` slug.
-
-    Regenerates up to 5 times on a registry hit; the flocked downstream check
-    remains authoritative. Raises SystemExit(2) only if all 5 attempts collide.
-    """
-    for _ in range(5):
-        slug = f"{rng.choice(_SLUG_ADJ)}-{rng.choice(_SLUG_NOUN)}"
-        if slug not in existing:
-            return slug
-    print(
-        "fno agents spawn: could not find a free auto-name after 5 tries; "
-        "pass one explicitly",
-        file=err,
-    )
-    raise SystemExit(2)
-
-
 def _head_flag_value(head: Sequence[str], flags: Tuple[str, ...]) -> Optional[str]:
     """Read one flag's value from a pre-fence head (``--flag v``, ``--flag=v``,
     ``-f v``, ``-f v`` attached). Skips every other value flag's value so it
@@ -291,8 +247,9 @@ def _mint_node_name(
 
     The binary renders it (naming.rs ``render_worker_name``). A name a live worker
     holds gets a ``-2``..``-5`` suffix, so a re-spawn on one node is never a
-    refusal. Any failure returns ``None`` and the adjective-noun mint runs: a
-    spawn must never die on a naming lookup.
+    refusal. Any failure returns ``None`` and the caller refuses with a named
+    line: a spawn with no node slug and no prompt has nothing to name a worker
+    from, and it never launches under an invented one.
     """
     from fno.agents.naming import AgentNameError, BridgeUsageError, worker_name
 
@@ -324,13 +281,13 @@ def normalize_spawn_args(
     *,
     resolver: Optional[Callable[[str], Optional[str]]] = None,
     existing_names: Optional[Set[str]] = None,
-    rng: Optional[random.Random] = None,
     stderr: Optional[IO[str]] = None,
 ) -> List[str]:
     """Canonicalize a ``spawn`` argv (command at index 0); pure argv -> argv.
 
     The single positional is the MESSAGE; the name rides ``--name`` and is
-    minted (``adjective-noun``) when omitted. A second positional -> exit 2.
+    minted (``t-`` plus words from the node slug or the prompt) when
+    omitted. A second positional -> exit 2.
 
     Non-``spawn`` commands and ``spawn --help`` pass through unchanged. Read-only
     (registry names, session resolver); writes no state.
@@ -387,8 +344,14 @@ def normalize_spawn_args(
             _head_flag_value(head, ("--slug",)),
             names,
         )
-        name = minted or _mint_slug(names, rng if rng is not None else random.Random(), err)
-        toks = ["--name", name, *toks]
+        if minted is None:
+            print(
+                "fno agents spawn: no node slug or prompt to name the worker "
+                "from; pass --name",
+                file=err,
+            )
+            raise SystemExit(2)
+        toks = ["--name", minted, *toks]
     extra = _positional_indices(toks)
     if len(extra) > 1:
         print(
@@ -407,13 +370,6 @@ def normalize_spawn_args(
 # token selects `config.agents.profiles.<command>`, layered over `agents.defaults`.
 # No content-based inference of any kind - only an explicit leading slash-command.
 # --------------------------------------------------------------------------- #
-
-# The one built-in answer to "what permission mode does an unattended worker
-# get". Formerly config.agents.spawn_permission_mode's default; a constant now,
-# because a second config key answering the same question is what let a bare
-# mesh spawn land in auto while three other paths were pinned.
-SPAWN_PERMISSION_BUILTIN = "bypassPermissions"
-
 
 def _seed_slot(toks: Sequence[str]) -> Optional[tuple[int, str]]:
     """Where the MESSAGE seed lives: ``(index, form)`` into ``toks``, or
@@ -532,52 +488,6 @@ def _flag_value(toks: Sequence[str], *flags: str) -> Optional[str]:
     return None
 
 
-def _substrate_compatible(substrate: str, provider: str) -> bool:
-    """A config-sourced substrate must be a KNOWN value AND honored by the
-    resolved provider. The vocabulary lives in Rust
-    (crates/fno-agents/src/effort_surface.rs), so this is a transport bridge;
-    the ``provider == "claude"`` arm answers for an unavailable owner."""
-    if substrate not in _SUBSTRATES:
-        return False
-    if substrate == "bg":
-        substrate = "thread"
-    if substrate != "thread":
-        return True
-    from fno.rust_binary import CommandUnavailable, command_call
-
-    try:
-        answer = command_call(
-            "spawn-overlay",
-            {"kind": "compat", "harness": provider, "substrate": substrate},
-            CommandUnavailable,
-        )
-    except CommandUnavailable:
-        return provider == "claude"
-    return bool((answer.get("substrate") or {}).get("compatible"))
-
-
-def _overlay_payload(obj: object) -> dict:
-    """One spawn-defaults block as the command's JSON view. ``model_dump()`` is
-    the pydantic shape (extra=allow keeps smuggled keys visible); getattr is
-    the test-fixture shape."""
-    dump = getattr(obj, "model_dump", None)
-    if callable(dump):
-        return dump()
-    out: dict = {}
-    for k in (
-        "provider", "model", "effort", "substrate", "permission_mode",
-        "route", "account", "pane_group",
-    ):
-        out[k] = getattr(obj, k, "") or ""
-    harness = getattr(obj, "harness", None)
-    if isinstance(harness, Mapping):
-        out["harness"] = {
-            h: (b.model_dump() if callable(getattr(b, "model_dump", None)) else dict(b))
-            for h, b in harness.items()
-        }
-    return out
-
-
 # A model string's implied vendor, by prefix or tier word. A pure string
 # opinion and never a routing input: the warning it drives is advisory, because
 # the pairing is legal and --model is deliberate passthrough (cli.py).
@@ -624,90 +534,6 @@ def resolve_lane_vendor(
     except SpawnOverlayUnavailable:
         # No binary: no vendor opinion (the documented no-opinion answer).
         return None
-
-
-def compose_spawn_argv(
-    args: Sequence[str],
-    *,
-    env: Optional[Mapping[str, str]] = None,
-    stderr: Optional[IO[str]] = None,
-    apply_permission_builtin: bool = True,
-    node_command: Optional[str] = None,
-) -> List[str]:
-    """Return ``args`` with config spawn-defaults injected where absent.
-
-    The composition lives in Rust (crates/fno-agents/src/spawn_compose.rs);
-    this is the transport: normalize, project the argv scan, one command call,
-    apply the answer. Raises SystemExit on the command's refusals (exit 2, or
-    78 with the exhausted payload on stdout). The old seam's degrade-open
-    stance survives as the unavailable-owner arm: a missing binary must not
-    brick an otherwise valid spawn, so it prints one named line and returns
-    the normalized argv.
-    """
-    out = list(args)
-    if not out or out[0] != "spawn":
-        return out
-    # `spawn --help`/`-h` must always render help, even under a broken config.
-    # Stop at the --argv boundary so a payload's own --help is not consumed.
-    for a in out[1:]:
-        if a == "--argv":
-            break
-        if a in ("-h", "--help"):
-            return out
-
-    err = stderr if stderr is not None else sys.stderr
-    # Ergonomic normalization runs FIRST: the substrate-token / -r /
-    # autogen-name rewrites consider only operator-supplied argv, so config
-    # defaults injected by the command never fight the token form.
-    out = normalize_spawn_args(out, stderr=err)
-    tail = out[1:]
-
-    scan = _scan_projection(tail)
-    facts: dict = {"role_resolves": None, "role_protected": None}
-    if scan["role"]:
-        try:
-            from fno.agents.model_routing import PROTECTED_ROLES
-
-            if scan["role"].strip().lower() in PROTECTED_ROLES:
-                facts["role_protected"] = scan["role"].strip().lower()
-        except Exception:  # noqa: BLE001 - the floor is advisory, never fatal
-            pass
-
-    payload = {
-        "kind": "compose",
-        "argv": list(out),
-        "node_command": node_command,
-        "env_node": (env or {}).get("FNO_NODE") or None,
-        "permission_builtin": SPAWN_PERMISSION_BUILTIN if apply_permission_builtin else None,
-        "scan": scan,
-        "facts": facts,
-        "verbose": "--verbose" in out[1 : next((i for i, t in enumerate(out) if t in ("--", "--argv")), len(out))],
-    }
-    try:
-        from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
-
-        answer = spawn_overlay_call(payload, timeout=90)
-    except SpawnOverlayUnavailable as exc:
-        print(
-            f"fno agents spawn: config defaults skipped (spawn-overlay unavailable: {exc})",
-            file=err,
-        )
-        return out
-
-    for line in answer.get("stderr") or []:
-        print(line, file=err)
-    exit_code = int(answer.get("exit") or 0)
-    if exit_code:
-        if answer.get("stdout"):
-            print(json.dumps(answer["stdout"]))
-        raise SystemExit(exit_code)
-    for event in answer.get("events") or []:
-        from fno.agents import events
-
-        events.emit("model_vendor_mismatch", **event)
-    PENDING_TAKE_OVER[:] = [str(answer.get("take_over") or "")] if answer.get("take_over") else []
-    answer_argv = [str(t) for t in answer.get("argv") or out]
-    return answer_argv
 
 
 def _scan_projection(tail: Sequence[str]) -> dict:
@@ -758,36 +584,6 @@ def _scan_projection(tail: Sequence[str]) -> dict:
         "spawn_tokens": [str(t) for t in tail],
     }
 
-
-def substrate_lane_flags(substrate: Optional[str]) -> List[str]:
-    """The spawn argv that picks ``substrate`` now that --substrate is retired:
-    a one-shot is --once, a machine-placed pane is --bounded-placement, and a
-    thread is the door's default, so it needs no flag."""
-    lane = (substrate or "").strip()
-    if lane == "headless":
-        return ["--once"]
-    if lane == "pane":
-        return ["--bounded-placement"]
-    return []
-
-
-def spawn_seam_marker() -> str:
-    """The marker token both bridges carry, straight after the spawn command."""
-    return f"--defaults-applied={routing_enforcement_state()}"
-
-
-def routing_enforcement_state(settings: object = None) -> str:
-    """The marker verdict: the config-blind binary's only record of the
-    seam's decision. Read through the command's policy mode; read failure
-    degrades open, and a strict seam refuses upstream."""
-    del settings
-    try:
-        from fno.rust_binary import command_call
-
-        answer = command_call("route-slot", {"mode": "policy"})
-        return "enforced" if answer.get("enforce_inventory") else "unenforced"
-    except Exception:  # noqa: BLE001 - unknown reads as legacy, never as strict
-        return "unenforced"
 
 # --------------------------------------------------------------------------- #
 # The CLI's substrate posture gates, moved here from cmd_spawn (file budget):

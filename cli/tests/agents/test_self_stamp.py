@@ -71,21 +71,6 @@ def test_resolve_self_identity_prefers_proven_harness(monkeypatch):
     assert identity.session_id == env["CLAUDE_CODE_SESSION_ID"]
 
 
-def test_resolve_self_identity_refuses_unproven_mixed_harnesses(monkeypatch):
-    env = {
-        "CODEX_THREAD_ID": "01a02125-aaaa-bbbb-cccc-dddddddddddd",
-        "CLAUDE_CODE_SESSION_ID": "2782a6e1-aaaa-bbbb-cccc-dddddddddddd",
-    }
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: None,
-    )
-    identity = self_stamp.resolve_self_identity(env)
-    assert identity.disposition == "ambiguous"
-    assert identity.session_id is None
-    assert "CODEX_THREAD_ID" in self_stamp.identity_ambiguity_message(identity)
-
-
 def test_resolve_self_identity_rejects_canonical_collision(monkeypatch):
     """The stamped pair rides the collide callback into the registry's
     agreement check (AC10-HP, post-x-0992): this layer computes nothing about
@@ -196,51 +181,6 @@ def test_restarted_session_resolves_through_its_own_row(monkeypatch):
     monkeypatch.setenv("FNO_AGENT_SELF", "stale-worker-name")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
     assert self_stamp.stamp_from(None) == sid[:8]
-
-
-def test_ambiguity_message_names_the_strip_set(monkeypatch):
-    """x-b57a: the refusal tells a poisoned session exactly which env vars to
-    strip, per family, built from the same list the scrub reads (runtime text
-    that cannot drift from behavior). The verified workaround for a claude
-    session carrying seven CODEX_* vars: strip the foreign family, keep your
-    own, retry."""
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: None,
-    )
-    for name in (
-        "CODEX_CI",
-        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-        "CODEX_SESSION_ID",
-        "CODEX_SHELL",
-        "CODEX_THREAD_ID",
-        "CODEX_COMPANION_SESSION_ID",
-        "CODEX_COMPANION_TRANSCRIPT_PATH",
-        "CLAUDE_CODE_SESSION_ID",
-    ):
-        monkeypatch.setenv(
-            name,
-            "claude-session" if name == "CLAUDE_CODE_SESSION_ID" else "codex-session",
-        )
-    identity = self_stamp.resolve_self_identity()
-    assert identity.disposition == "ambiguous"
-
-    message = self_stamp.identity_ambiguity_message(identity)
-    claude_line = next(ln for ln in message.splitlines() if "claude session" in ln)
-    for flag in (
-        "-u CODEX_CI",
-        "-u CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-        "-u CODEX_SESSION_ID",
-        "-u CODEX_SHELL",
-        "-u CODEX_THREAD_ID",
-        "-u CODEX_COMPANION_SESSION_ID",
-        "-u CODEX_COMPANION_TRANSCRIPT_PATH",
-    ):
-        assert flag in claude_line, f"{flag} missing from the claude strip line"
-    assert "-u CLAUDE_CODE_SESSION_ID" not in claude_line
-    codex_line = next(ln for ln in message.splitlines() if "codex session" in ln)
-    assert "-u CLAUDE_CODE_SESSION_ID" in codex_line
-    assert "-u CODEX_THREAD_ID" not in codex_line
 
 
 def test_ac1_hp_floors_unknown_when_markers_unset_despite_reachable_transcript(

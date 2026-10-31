@@ -2,8 +2,8 @@
 
 Change 3 of x-953b. `check_consolidation_file` cross-checks the plan's
 `decisions_acknowledged` list against the node's LIVE decision-index rulings
-(read through the native decisions door, not through the shape model -
-`ConsolidationBlock` has no access to the index). Each fixture points a fresh
+(read through the native decisions door, not through the shape door - the
+plan-schema door has no access to the index). Each fixture points a fresh
 subprocess at a hermetic decision store the way the door reads one:
 `$FNO_HOME` carries `decisions.jsonl` and `$FNO_CONFIG` names a config.toml
 whose top-level `state_dir` pins the graph read (the Rust reader parses TOML

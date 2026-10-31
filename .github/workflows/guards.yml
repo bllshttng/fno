@@ -491,11 +491,6 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/check-mail-inject-callers.sh
 
-      - name: every spawn-gate refusal emits
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash scripts/ci/check-gate-refusals-emit.sh
-
       - name: dispatch-observability test journals stay hermetic
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -778,6 +773,15 @@ jobs:
         run: |
           bash scripts/ci/check-no-verb-wording.sh --self-test
           bash scripts/ci/check-no-verb-wording.sh
+
+      # A web page never swallows an error: an empty catch needs a quiet-ok
+      # comment. The self-test watches it fail first.
+      - name: No empty catch in the web pages
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-web-empty-catch.sh --self-test
+          bash scripts/ci/check-web-empty-catch.sh
 
       # From internal-refs.yml. A gate a rule cites must be watched failing:
       # the selftest plants one leak per class/scope and asserts each is

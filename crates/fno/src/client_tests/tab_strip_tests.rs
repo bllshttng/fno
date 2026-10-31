@@ -138,7 +138,7 @@ fn tab_strip_pins_the_brand_mark_in_every_workspace() {
     // US4/AC3-HP, restated by the 2026-09-27 ruling: the Ｆ[no] mark is
     // PINNED at the strip's top-left, before tab 1, in every workspace; the
     // workspace label follows as its own span (brand_label passthrough).
-    assert_eq!(brand_label("fno"), "f[no]");
+    assert_eq!(brand_label("fno"), "F[no]");
     assert_eq!(brand_label("footnote"), "footnote");
     let mut view = two_pane_view();
     let spans = view.tab_bar_spans();
@@ -159,7 +159,7 @@ fn tab_strip_pins_the_brand_mark_in_every_workspace() {
         .name = "fno".into();
     let spans = view.tab_bar_spans();
     assert_eq!(spans[0].text, " Ｆ[no] ");
-    assert_eq!(spans[1].text, " f[no] ");
+    assert_eq!(spans[1].text, " F[no] ");
 }
 
 #[test]

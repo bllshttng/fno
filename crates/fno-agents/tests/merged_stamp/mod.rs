@@ -99,6 +99,8 @@ esac"#,
         &format!("--gh-bin={}", gh.display()),
         &format!("--git-bin={}", git.display()),
     ]);
+    // Resolve before the restores: the gate wrote under the rig's state root.
+    let events_path = project_events(&cwd);
     std::env::set_var("FNO_HOME", restore_home);
     std::env::set_var("FNO_STATE_DIR", restore_state);
 
@@ -115,7 +117,7 @@ esac"#,
         d.termination_reason,
         d.message
     );
-    let events = event_text(&project_events(&cwd));
+    let events = event_text(&events_path);
     assert!(
         events.contains("retiring the fire without the REST read"),
         "the termination row must name its evidence; events: {events}"
@@ -168,6 +170,8 @@ esac"#,
         &format!("--gh-bin={}", mock.gh.display()),
         &format!("--git-bin={}", git.display()),
     ]);
+    // Resolve before the restores: the gate wrote under the rig's state root.
+    let events_path = project_events(&cwd);
     std::env::set_var("FNO_HOME", restore_home);
     std::env::set_var("FNO_STATE_DIR", restore_state);
 
@@ -177,7 +181,7 @@ esac"#,
         d.message
     );
     assert_eq!(code, 0, "a block decision still exits 0");
-    let events = event_text(&project_events(&cwd));
+    let events = event_text(&events_path);
     assert!(
         !events.contains("retiring the fire without the REST read"),
         "no stamp row while local work is unshipped; events: {events}"
@@ -233,6 +237,8 @@ esac"#,
         &format!("--gh-bin={}", mock.gh.display()),
         &format!("--git-bin={}", git.display()),
     ]);
+    // Resolve before the restores: the gate wrote under the rig's state root.
+    let events_path = project_events(&cwd);
     std::env::set_var("FNO_HOME", restore_home);
     std::env::set_var("FNO_STATE_DIR", restore_state);
 
@@ -242,7 +248,7 @@ esac"#,
         d.message
     );
     assert_eq!(code, 0, "a block decision still exits 0");
-    let events = event_text(&project_events(&cwd));
+    let events = event_text(&events_path);
     assert!(
         !events.contains("retiring the fire without the REST read"),
         "no stamp row while a finding is open; events: {events}"
@@ -282,6 +288,8 @@ fn x0d87_live_replacement_pr_holds_the_early_allow() {
         &format!("--gh-bin={}", mock.gh.display()),
         &format!("--git-bin={}", mock.git.display()),
     ]);
+    // Resolve before the restores: the gate wrote under the rig's state root.
+    let events_path = project_events(&cwd);
     std::env::set_var("FNO_HOME", restore_home);
     std::env::set_var("FNO_STATE_DIR", restore_state);
 
@@ -295,7 +303,7 @@ fn x0d87_live_replacement_pr_holds_the_early_allow() {
         d.termination_reason.is_none(),
         "no termination while work is in flight"
     );
-    let events = event_text(&project_events(&cwd));
+    let events = event_text(&events_path);
     assert!(
         !events.contains("retiring the fire without the REST read"),
         "no stamp row while a live PR row is open; events: {events}"
@@ -333,6 +341,8 @@ fn x0d87_open_node_keeps_rest_read() {
         &format!("--gh-bin={}", mock.gh.display()),
         &format!("--git-bin={}", mock.git.display()),
     ]);
+    // Resolve before the restores: the gate wrote under the rig's state root.
+    let events_path = project_events(&cwd);
     std::env::set_var("FNO_HOME", restore_home);
     std::env::set_var("FNO_STATE_DIR", restore_state);
 
@@ -343,7 +353,7 @@ fn x0d87_open_node_keeps_rest_read() {
         d.message
     );
     assert!(d.termination_reason.is_none());
-    let events = event_text(&project_events(&cwd));
+    let events = event_text(&events_path);
     assert!(
         !events.contains("retiring the fire without the REST read"),
         "no stamp row for an open node; events: {events}"
