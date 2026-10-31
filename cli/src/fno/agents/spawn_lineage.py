@@ -11,18 +11,11 @@ from typing import Optional
 
 
 def _same_family_parent_edge() -> Optional[tuple[str, str]]:
-    """A parent edge from a ONE-family env, the Python twin of
-    ``same_family_parent_edge_from`` in ``claims.rs``.
-
-    Provenance is lower-stakes than a claim: when every present marker
-    (vendor markers plus the fno stamp) belongs to one harness family, no
-    foreign marker can be laundered through the set, so the family's own ids
-    resolve the edge. The stamp's session id wins when it names that family
-    and carries one; otherwise the first marker in precedence order (the
-    durable one) wins. An invalid stamp, a two-family union, or no markers
-    keep the refusal. Measured 2026-10-30: the strict prover's refusal on
-    this shape minted amber-vale with no parent edge.
-    """
+    """A parent edge from a ONE-family env; the Python twin of
+    ``same_family_parent_edge_from`` in ``claims.rs`` (which carries the full
+    rationale). The stamp's session id wins when it names that family, else
+    the durable marker; an invalid stamp, a two-family union, or no markers
+    keep the refusal."""
     from fno.harness_identity import parse_canonical_identity, present_harness_markers
 
     markers = present_harness_markers(os.environ)
@@ -87,9 +80,8 @@ def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]
     if identity.session_id:
         return identity.session_id, harness, parent_cwd
 
-    # The one-family fallback before the registry voucher: it needs no I/O,
-    # and where a stamp disagrees with a registry-vouchable marker the stamp
-    # wins, matching the Rust writer.
+    # The one-family fallback before the registry voucher: no I/O, and where
+    # a stamp disagrees with a vouchable marker the stamp wins, as in Rust.
     if identity.disposition != "invalid":
         edge = _same_family_parent_edge()
         if edge is not None:
