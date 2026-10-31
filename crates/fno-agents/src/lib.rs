@@ -1615,6 +1615,8 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // A reasoned carve-out retirement (backlog/carveout.rs).
+    "carveout_resolved",
     // A standalone research round ships its brief and records the
     // DoneAdvisory terminal (research/deliverable.rs).
     "termination",
