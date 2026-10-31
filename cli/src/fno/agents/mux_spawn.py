@@ -1133,26 +1133,21 @@ def build_pane_argv(
 
 
 def _footnote_graph_json(cwd=None) -> str:
-    """The store a footnote pane reads. A declared sandbox (FNO_STATE_DIR or
+    """The store a footnote pane reads: a declared sandbox (FNO_STATE_DIR or
     FNO_CONFIG) wins, anchored at the pane cwd; an inherited FNO_GRAPH_JSON
-    is kept when no sandbox is declared; the porcelain answer is last. The
-    state-dir value anchors raw: template expansion stays with the Python
-    readers, which answer the same store."""
+    is kept when no sandbox is declared; the porcelain answer is last."""
     carrier = os.environ.get("FNO_STATE_DIR")
-    pin = os.environ.get("FNO_CONFIG")
     inherited = os.environ.get("FNO_GRAPH_JSON")
-    if not carrier and not pin and inherited:
+    if not carrier and not os.environ.get("FNO_CONFIG") and inherited:
         return inherited
     base = Path(cwd) if cwd else Path.cwd()
     if carrier:
         raw = Path(os.path.expanduser(carrier))
     else:
         from fno.config import load_settings_for_repo
-
         raw = Path(os.path.expanduser(str(load_settings_for_repo(base).state_dir)))
-    root = raw if raw.is_absolute() else base / raw
     from fno.paths import place_anchor
-
+    root = raw if raw.is_absolute() else base / raw
     return str(place_anchor(root.resolve()))
 
 
