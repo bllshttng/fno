@@ -97,6 +97,8 @@ impl CommandCache {
                         "evidence": q.evidence,
                         "on_silence": q.on_silence,
                         "deadline": q.deadline,
+                        "options": q.options.iter().map(|o| json!({"n": o.n, "text": o.text})).collect::<Vec<_>>(),
+                        "recommendation": q.recommendation.as_ref().map(|r| json!({"option": r.option, "why": r.why})),
                         "origin": q.origin,
                         "rung": q.rung,
                         "via": q.via,
@@ -112,6 +114,17 @@ impl CommandCache {
             None => (st.prs, st.prs_error) = (open_prs(backlog), None),
         }
         st.read_at = Some(now);
+    }
+
+    /// The node of a question the page already shows, from the last read. `None`
+    /// means the question is not in the cache; `Some(None)` means it has no node.
+    pub(crate) async fn question_node(&self, id: &str) -> Option<Option<String>> {
+        let st = self.state.lock().await;
+        let items = st.questions.as_ref()?.as_ref().ok()?;
+        let q = items
+            .iter()
+            .find(|q| q.get("id").and_then(Value::as_str) == Some(id))?;
+        Some(q.get("node").and_then(Value::as_str).map(str::to_string))
     }
 
     pub(crate) async fn model(&self) -> Value {
