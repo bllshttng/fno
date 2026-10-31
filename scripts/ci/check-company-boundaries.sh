@@ -115,7 +115,6 @@ fi
 
 python3 - "$ROOT" "$MODE" "$BASELINE_FILE" <<'PY'
 import ast
-import os
 import re
 import sys
 from pathlib import Path
@@ -128,14 +127,12 @@ LAYERS = (
         (
             "fno.paths",
             "fno.config",
-            "fno.handoff",
             "fno.events",
             # Leaf utilities with callers on both sides of the runtime boundary.
             # Declared, not merely moved: an undeclared module is unmapped, and
             # the scan skips unmapped modules entirely, so relocating code
             # without adding it here would clear a finding while leaving the
             # dependency in place.
-            "fno.dispatch_flags",
             "fno.drive_authority",
             "fno.harness_identity",
             "fno.harness_names",
@@ -148,7 +145,7 @@ LAYERS = (
             # writer that stamps a node's session rows - opposite sides of the
             # runtime boundary, which is what makes it a platform leaf.
             # The MODULE, not the fno.provenance package: its siblings
-            # (spawn_think, cli, autobrief) are orchestration that legitimately
+            # (autobrief, runtime_attempts) are orchestration that legitimately
             # reaches up, and declaring the package would map them too. Its one
             # sibling import, provenance.resolver, stays unmapped and reaches
             # fno.agents.discover only on the opencode branch, which
@@ -166,23 +163,8 @@ LAYERS = (
             "fno.graph",
             "fno.claims",
             "fno.plan",
-            "fno.approvals",
-            "fno.delivery",
         ),
     ),
-    (2, "roles", ("fno.roles",)),
-    (
-        3,
-        "composition",
-        (
-            "fno.company.campaign",
-            "fno.company.coordinator",
-            "fno.company.topology",
-            "fno.company.execution",
-            "fno.company.join",
-        ),
-    ),
-    (4, "plugins", ("fno.plugins",)),
     (5, "runtime", ("fno.runtime", "fno.agents")),
 )
 
@@ -207,10 +189,6 @@ def module_name(path: Path) -> str:
 
 
 def layer_for(module: str):
-    if os.environ.get("FNO_BOUNDARY_TEST_COMPANY_PACKAGE_CORE") == "1" and (
-        module == "fno.company" or module.startswith("fno.company.")
-    ):
-        return 1, "core"
     matches = []
     for number, name, prefixes in LAYERS:
         for prefix in prefixes:
@@ -274,9 +252,11 @@ for path, source, tree in parsed:
         for imported in imported_modules(
             node, source_module, source_is_package=path.name == "__init__.py"
         ):
+            # Control edge (was fno.roles.models -> contracts); re-point when
+            # these modules retire.
             if (
-                source_module == "fno.roles.models"
-                and imported == "fno.company.contracts"
+                source_module == "fno.agents.history"
+                and imported == "fno.graph._reconcile"
             ):
                 positive_control = True
             target_layer = layer_for(imported)
@@ -303,7 +283,7 @@ for path, source, tree in parsed:
 if not positive_control:
     print(
         "check-company-boundaries: positive control failed "
-        "(no roles -> core edge observed); scan did not reach content",
+        "(no runtime -> core edge observed); scan did not reach content",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -344,7 +324,7 @@ rendered_cycle = None
 if cycle:
     rendered_cycle = " -> ".join(f"L{number} {names[number]}" for number in cycle)
 
-print("check-company-boundaries: positive control ok (roles -> core edge observed)")
+print("check-company-boundaries: positive control ok (runtime -> core edge observed)")
 # Printed on every run, not only a clean one: an unmapped module is invisible
 # to this scan, so the coverage figure is what tells a reader how much of a
 # green verdict is enforcement and how much is silence.

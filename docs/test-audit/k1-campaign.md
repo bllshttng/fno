@@ -57,7 +57,7 @@ The pass does not reach half. Python lands at 0.64 of its declarations and 0.67 
 
 Each deletion had no caller outside its own tests. The proof is an `rg` over cli/src, hooks, scripts, skills, crates, commands and agents that returns nothing after the delete.
 
-- `worktree_path` and `legacy_worktree_path` in cli/src/fno/worktree_paths.py, with docs/architecture/worktree-paths.md. That doc described the retired `~/.fno/worktrees/{proj}-{slug}` layout and named functions that no longer exist. The live contract is .claude/rules/worktrees.md.
+- `worktree_path` and `legacy_worktree_path` in cli/src/fno/worktree_paths.py, with docs/architecture/worktree-paths.md. That doc described the retired `~/.fno/worktrees/{proj}-{slug}` layout and named functions that no longer exist. The live contract is docs/architecture/worktree-mechanics.md (Placement).
 - `detect_v1_conflict`, `ensure_v2_layout`, `v2_artifacts_dir` and their two private helpers in cli/src/fno/state/v2_paths.py. The one importer reads only the two path functions.
 - scripts/metrics/pr-node-closure-audit.py, scripts/metrics/merge-stray-ledger.py and scripts/diagnostics/classify-user-prompt-payload.py.
 - The impeccable stage-loop model (`ImpeccableStageLoop`, `ImpeccableVerdict` and three constants) in skills/execute/orchestrator.py.
@@ -98,7 +98,6 @@ One row per K1 file. A "Kept:" cell lists the surviving tests by name where the 
 |---|---:|---:|---|
 | `cli/benchmarks/test_measure_fno.py` | 8 | 7 | Kept: decision rule boundary rows, parse session data accepts valid and rejects bad rows, parse session data strict field types, aggregate ratio rows, probe outcome rows, phase scaled call count rows, phase 0 decision event builder rows. |
 | `cli/src/fno/paths_testing.py` | 1 | 1 | No test here: the match is the `def test_foo` usage line in the fixture docstring. |
-| `cli/src/fno/setup/test_recommended_rules.py` | 6 | 5 | Install links each rule, never RULES.md, a user-edited rule survives, a rerun is idempotent, the source resolves as package data, the wizard step defaults to No. |
 | `cli/src/fno/test_worktree_paths.py` | 23 | 11 | `..`, separator and empty names refused (escape from the base), project-id precedence config, top-level, shorthand, remote, SCP URL, basename, unsafe id refused. |
 | `cli/tests/agents/test_command_answer_blueprint_floor.py` | 5 | 4 | Kept: floor rides with the row, unreadable config omits the floor, blueprint floor validator degrades a typo to the lean default, blueprint floor validator accepts the widened ladder. |
 | `cli/tests/goldens/test_advance_golden.py` | 3 | 3 | Kept: advance without auto continue skips itself, advance explain reports the selection grid and declines to act, advance explain with no candidates declines to route. |
@@ -222,7 +221,7 @@ One row per K1 file. A "Kept:" cell lists the surviving tests by name where the 
 | `cli/tests/unit/test_session_cost.py` | 5 | 4 | Missing PR number renders #?, numbered link, None renders ?, delivered mail counted. |
 | `cli/tests/unit/test_session_cost_dedup.py` | 17 | 9 | Duplicates counted once, missing requestId, unpriced model, malformed lines, null usage, compaction count. |
 | `cli/tests/unit/test_session_cost_render.py` | 2 | 0 | Deleted. Repeats test_session_cost. |
-| `cli/tests/unit/test_setup_cli.py` | 2 | 2 | Unchanged: migrate-paths gets state_dir, the summary goes to stderr. |
+| `cli/tests/unit/test_setup_cli.py` | 2 | 0 | Deleted with the retired migrate-paths command. |
 | `cli/tests/unit/test_setup_id.py` | 4 | 2 | A bad prefix and a bad width are each refused with nothing written. |
 | `cli/tests/unit/test_setup_integration.py` | 34 | 16 | One failure never aborts the rest, installed CLI not reinstalled, failures map to failed, pi and agy through Rust. |
 | `cli/tests/unit/test_setup_wizard.py` | 17 | 10 | Defaults validate, re-prompt, project key lands in the project file, cancel keeps earlier writes, a raising doctor is contained. |

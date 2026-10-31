@@ -84,54 +84,6 @@ about the claim - `fno backlog intake` reads the frontmatter directly. When you
 want to override the frontmatter at intake time (e.g. repairing a past
 mistake), use `fno backlog intake <plan>.md --claims ab-XXX`.
 
-## Schema Citation Gate (graduated; DB-touching plans)
-
-A plan that changes the database without ever naming a real table, enum, or
-constraint is planning blind. This gate makes a DB-touching plan cite the
-schema.
-It is graduated: full / large plans fail closed, quick / small plans warn.
-
-**When the gate fires (AC3-FR).** Only when the codemap has a
-`## Database Schema` section (the schema is known). With no schema section
-there is nothing to validate against, so the gate does NOT fire and planning
-proceeds. Reuse the schema written at design time: if the design doc already
-carries a `## Schema Reconciliation` section, the touched tables it names are
-trusted candidate citations; otherwise read `.fno/codemap.md`'s
-`## Database Schema` section directly.
-
-**DB-touch detection (lowest-false-positive signal).** A plan is DB-touching
-when the schema section exists AND the plan's File Ownership Map / Files-to-
-Modify targets a DB path (`migrations/`, `supabase/`, `*.sql`, or a model /
-schema file) OR a task body names a known table/enum from the schema section.
-A heuristic keyword like the bare word "table" does NOT trip the gate.
-
-**Satisfaction.** A DB-touching task is satisfied when it cites at least one
-real identifier present in the schema section. An exact identifier match is
-required; a schema-qualified form is accepted (a task naming `user_accounts`
-matches a schema table `user_accounts`, and `public.user_accounts` is also
-accepted), but a partial token like `account` does not match.
-
-**Enforcement, graduated by size:**
-
-- **Full / L plans -> fail closed.** Refuse: print the message to stderr, halt
-  before any write, and surface a non-zero status. The refusal MUST name the
-  uncited task
-  and list candidate identifiers from the schema section (AC3-ERR / AC3-UI):
-
-  ```
-  Plan task {task-id} touches the database but cites no real schema identifier.
-  Cite one of: {comma-separated tables/enums/constraints from the schema section}.
-  ```
-
-- **Quick / -S plans -> warn, proceed.** Emit a single-line warning on stderr
-  (`Warning: task {task-id} touches the DB without a schema citation`) and
-  continue (AC3-EDGE). Small blast radius does not justify blocking, mirroring
-  how the discovery gate relaxes for `-S`.
-
-Do NOT auto-insert a citation to silence the gate: as with Failure Mode
-Ingestion, the point is to force schema thinking into the plan, not to paper
-over its absence.
-
 ## No new Python (plans that write cli/src/fno Python)
 
 Trigger: a Files to Modify row, a File Ownership Map row, or a task `surface` names a path under `cli/src/fno` ending `.py`.
@@ -182,7 +134,7 @@ Graduated like the No New Python gate. A plan created after 2026-09-17 errors. A
 
 ## Answerer Enumeration Gate (graduated, every plan that changes a read, write, or feed)
 
-A plan that fixes one site of a question asked at several sites ships the symptom again as PR two. This gate makes the plan count the answerers before the PRs do. The protocol that fills the block lives in [answerer-enumeration.md](answerer-enumeration.md): the four steps, the sweep rules, the quote-the-expression rule, and the worked example. This section is the gate contract, modeled on the Schema Citation Gate above.
+A plan that fixes one site of a question asked at several sites ships the symptom again as PR two. This gate makes the plan count the answerers before the PRs do. The protocol that fills the block lives in [answerer-enumeration.md](answerer-enumeration.md): the four steps, the sweep rules, the quote-the-expression rule, and the worked example. This section is the gate contract.
 
 ### Trigger
 
@@ -234,12 +186,12 @@ Transcription is purely mechanical: same Locked Decisions input yields the
 same frontmatter output. No LLM judgment in this step.
 
 ```bash
-# The locked-decision parser is the in-package module fno.executor._locked
-# (the SINGLE source of truth). In a checkout, point PYTHONPATH at cli/src so
-# it imports pre-install; an installed `fno` needs no PYTHONPATH.
-_PKG_SRC="$(cd "${CLAUDE_PLUGIN_ROOT:-$SKILL_DIR/../..}" 2>/dev/null && pwd)/cli/src"
-[[ -f "${_PKG_SRC}/fno/executor/_locked.py" ]] && export PYTHONPATH="${_PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
-LOCKED_VALUE=$(python3 -m fno.executor._locked < "$DESIGN_DOC_PATH")
+# The locked-decision parser is the native executor-route door
+# (crates/fno-agents/src/executor_route.rs, the SINGLE source of truth since
+# the worker-family port deleted the Python leg). Resolve the fno-agents
+# binary through the shared resolver (hooks/lib/agents-bin.sh) and exec the
+# door; a checkout with a built binary needs nothing else.
+LOCKED_VALUE=$(fno-agents executor-route locked < "$DESIGN_DOC_PATH")
 # LOCKED_VALUE is one of: '' | tdd | impeccable | mixed
 ```
 
@@ -303,10 +255,10 @@ sources in precedence order (frontmatter wins):
 ```bash
 # 1. Plan frontmatter `model:` (primary). Scope to the frontmatter block only.
 MODEL_PIN="$(awk '/^---[[:space:]]*$/{c++; next} c==1 && /^model:/{sub(/^model:[[:space:]]*/,""); print; exit}' "$PLAN_INDEX")"
-# 2. Fallback: a `Model: <token>` Locked Decision (same parser module as the
+# 2. Fallback: a `Model: <token>` Locked Decision (same native door as the
 #    executor lock, selected with --key model; empty when none).
 if [[ -z "$MODEL_PIN" ]]; then
-  MODEL_PIN="$(python3 -m fno.executor._locked --key model < "$DESIGN_DOC_PATH")"
+  MODEL_PIN="$(fno-agents executor-route locked --key model < "$DESIGN_DOC_PATH")"
 fi
 ```
 
@@ -332,6 +284,14 @@ Beyond an exact pin, a plan carries a **work-difficulty band** that dispatch joi
 - **`low`** - mechanical work: a rename, a codemod, a doc tweak, boilerplate.
 - **`medium`** - a standard feature or fix that needs real reasoning but no load-bearing judgment.
 - **`high`** - gate semantics, security, concurrency, migrations, or an architecture decision where a weaker model's error is expensive.
+
+Before you pick the band, read where past bands in this domain ended. Take the node's `domain` and its filed band (`difficulty_history[0].value`) from `fno backlog get <node>`, then run:
+
+```bash
+fno backlog calibration -d "<domain>" -J | jq '.revisions[] | select(.filed == "<filed band>")'
+```
+
+Cite the row in the band's rationale line, for example `code/medium: <nodes> shipped, <up> up, <down> down`. When the row has 5 or more nodes and most of the revised ones moved one way, say whether this node is like them. The row informs the judgment. It never sets the band. With fewer than 5 nodes, cite the row and do not lean on it. If the command fails, write that in the rationale line and judge from the node alone.
 
 The blueprint phase is the sanctioned second write: the planner has read the code and knows more than the filer did. Record BOTH the filed estimate and the blueprint revision. The intake path appends a `source: "blueprint"` history entry rather than overwriting. The filed-versus-revised delta is the only signal that eventually says whether filers estimate well.
 
@@ -482,7 +442,7 @@ A probe is what forces that last mile before the session can claim done.
 
 ```yaml
 done_probes:
-  - "fno agents mail list --kind report --since 24h | grep -o groom"
+  - "fno agents mail unread --json | grep -o groom"
 ```
 
 **Assert freshness, never bare existence.**
@@ -496,16 +456,28 @@ lookup) so it can only pass if the thing ran recently.
 `... | grep -q x` exits on the grep; `... | tail -5` exits on the tail and
 masks the real status, so a broken command reads as a pass.
 
-**Emit stdout on success, never a silent flag.** A PASS with empty stdout
-reads as vacuous and is held to `SKIP`, which never satisfies this gate - so
-`grep -q`/`-s` and any other output-suppressing predicate silently blocks a
-probe that would otherwise pass forever. Use `grep -o` (or `grep -c`, or any
-predicate that prints the thing it matched) so a real pass carries evidence.
+**Emit stdout on success, never a silent flag.** A PASS with empty stdout reads as vacuous and is held to `SKIP`.
+
+`grep -q`/`-s` and any other output-suppressing predicate silently blocks a probe that can otherwise pass forever.
+
+Use `grep -o` (or a bare `grep -c` presence assert, or any predicate that prints the thing it matched) so a real pass carries evidence.
+
+Never pipe `grep -c` into a zero-count check: it exits 1 on zero and reads as failure under the pipefail wrapper.
 
 **Use the block form above, or a single-line inline list** (`done_probes: ["cmd"]`).
 A declaration in any other shape (a multi-line inline list, say) refuses done as
 "probes undeterminable" rather than passing as if you had declared nothing -
 declaring a gate the loop cannot read must never read as no gate.
+
+**Portability refusals at plan validation.** The validator refuses three measured probe shapes outright.
+
+A `\b` boundary in a `grep -E` pattern matches nothing on macOS because BSD regex has none in ERE. Use a bracket boundary.
+
+A plain `grep -P` flag fails under `/usr/bin/grep` with exit 2 while interactive shells resolve ugrep.
+
+`grep -c` piped into a zero-count check reads as failure under the pipefail wrapper.
+
+Each refusal message names the portable rewrite.
 
 **Constraints.** At most 3 probes (a gate, not a test suite); each gets a 60s
 native timeout and its whole process group is killed past it; a missing binary
@@ -574,6 +546,17 @@ close_probes:
 ```
 
 It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close commands keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.
+
+### recheck_probes: the symptom stays fixed
+
+A close probe proves the fix at close time. It can read a window (`--since 24h`) or a surface that retires later. A plan that fixes a lasting symptom also declares `recheck_probes:`. That is a promise that the probe holds forever. The daemon re-runs it on every done node every 6 hours. A probe that fails twice in one pass files a bug node with `source_node_id` set to the original node.
+
+```yaml
+recheck_probes:
+  - "fno agents reap --dry-run --json | grep -o '\"kept_open_pr\"'"   # the open-PR keep still fires
+```
+
+Write no window into a recheck probe, and name no file that a later port deletes. The same shape rules apply: at most 3 probes, a 60 s timeout each, and only a FAIL verdict counts. Doc: `docs/architecture/plan-completion-stamp.md`, section "Re-checking after close".
 
 ## Join posture (step 3, every plan carrying an `## Execution Strategy`)
 

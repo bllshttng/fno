@@ -92,8 +92,8 @@ rm -f "$STATE_DIR/.target-starting" "$REPO_ROOT/.fno/.target-starting" 2>/dev/nu
 # command", so treating 2 as a refusal would hard-refuse every direct bootstrap
 # the moment the CLI fell behind source.
 if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
-  if command -v fno >/dev/null 2>&1; then
-    fno do target check-review-gate && _RG_RC=0 || _RG_RC=$?
+  if command -v "${FNO_AGENTS_BIN:-fno-agents}" >/dev/null 2>&1; then
+    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-review-gate && _RG_RC=0 || _RG_RC=$?
     if [[ "$_RG_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: review capability gate (see above). Refusing to write state file." >&2
       exit 2
@@ -103,7 +103,7 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # Plan-level hold gate. Unlike compatibility guards, an unreadable hold
     # state refuses: dispatch cannot prove the plan is unheld. The wrapper runs
     # this in-process; this call covers the documented direct script path.
-    fno do target check-dispatch-hold && _DH_RC=0 || _DH_RC=$?
+    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-dispatch-hold && _DH_RC=0 || _DH_RC=$?
     if [[ "$_DH_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: dispatch hold (see above). Refusing to write state file or claim." >&2
       exit 2
@@ -118,7 +118,7 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # and its own rc, so a broken gate cannot suppress the other one; the node
     # is read from TARGET_INPUT/TARGET_PLAN_PATH by the command, so the shell
     # passes nothing and cannot pass the wrong node.
-    fno do target check-contained && _CT_RC=0 || _CT_RC=$?
+    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-contained && _CT_RC=0 || _CT_RC=$?
     if [[ "$_CT_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: contained node (see above). Refusing to write state file or claim." >&2
       exit 2
@@ -840,7 +840,7 @@ if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
       echo ""
       echo "If this manifest is stale, archive it and re-run init; the claim is"
       echo "taken fresh:"
-      echo "  fno do state archive --path \"$STATE_FILE\""
+      echo "  ${FNO_AGENTS_BIN:-fno-agents} state-cli archive --path \"$STATE_FILE\" --type target"
     } >&2
     exit 1
   fi
@@ -1049,8 +1049,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # precedence) rather than bricking init - the same degrade every other
   # fno do target check-* gate here already uses.
   _OWNED_OUT=""
-  if command -v fno >/dev/null 2>&1; then
-    _OWNED_OUT="$(fno do target resolve-owned-identity 2>/dev/null || true)"
+  if command -v "${FNO_AGENTS_BIN:-fno-agents}" >/dev/null 2>&1; then
+    _OWNED_OUT="$("${FNO_AGENTS_BIN:-fno-agents}" target-gates resolve-owned-identity 2>/dev/null || true)"
   fi
   if [[ -n "$_OWNED_OUT" ]]; then
     # Parse the command's KEY=value lines in one read (zero subprocesses), not four
@@ -1532,7 +1532,7 @@ PYEOF
           continue
         fi
         FNO_CLAIMS_ROOT="$HOME" fno agents claim release "node:${_mnode}" \
-          --holder "$_MULTI_HOLDER" >/dev/null 2>&1 || true
+          --holder "$_MULTI_HOLDER" --rollback-do >/dev/null 2>&1 || true
       done
       _EXTRA_CLAIMED="$_MULTI_KEPT"
     fi
@@ -1615,7 +1615,8 @@ PYEOF
         # its beneficiary, and the identity resolver proves a name is this
         # session's own; only an exact match adopts the handover, so a
         # bystander's init cannot take a live claim it was never minted for.
-        _DISK_HOLDER="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:${_NODE_ID}" --json --no-roster 2>/dev/null \
+        _DISK_CLAIM_JSON="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:${_NODE_ID}" --json --no-roster 2>/dev/null || true)"
+        _DISK_HOLDER="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
           | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
         case "${_DISK_HOLDER:-}" in
           spawn-handover:*)
@@ -1623,11 +1624,66 @@ PYEOF
             # name export first, then the registry binding whoami exposes.
             _SELF_NAME="${FNO_WORKER_NAME:-}"
             if [[ -z "$_SELF_NAME" ]]; then
-              _SELF_NAME="$(fno whoami --json 2>/dev/null \
-                | sed -n 's/.*"worker_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+              # `fno agents whoami` (the native fno-agents door) emits the
+              # canonical JSON shape whenever stdout is not a tty, which
+              # command substitution always is. Top-level `fno whoami` is the
+              # Rust front's native command: it ignores --json and prints
+              # human text, so this rung used to read an empty name and never
+              # arm. The `|| true` keeps set -e + pipefail from aborting init
+              # when whoami refuses an unregistered session (nonzero exit).
+              _SELF_NAME="$(fno agents whoami 2>/dev/null \
+                | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
             fi
             if [[ -n "${_SELF_NAME:-}" && "${_DISK_HOLDER}" == "spawn-handover:${_SELF_NAME}" ]]; then
               _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
+            fi
+            if [[ -z "${_HANDOVER_FLAGS:-}" && -n "${_HARNESS_SESSION:-}" ]]; then
+              # The session-id proof: a spawn-side claim records the creating
+              # session two ways - proven identity lands in session_id, and an
+              # ambient-only creator is demoted to dispatched_by_session
+              # metadata until a renew proves it. Either way a window naming
+              # THIS session was minted for it: the disk-read form of the env
+              # carrier. A respawned worker reaches init while its own earlier
+              # process still holds the window (measured live 2026-10-30: the
+              # registry row was not resolvable yet and the pid still alive,
+              # so the name and suspect rungs both missed and the beneficiary
+              # refused its own pre-claim, stranding a claimless manifest).
+              # Case folds like the engine's same_session_id; an exact match
+              # is the only proof, never a prefix.
+              _DISK_CLAIM_SESSION="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              if [[ -z "$_DISK_CLAIM_SESSION" ]]; then
+                _DISK_CLAIM_SESSION="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                  | sed -n 's/.*"dispatched_by_session"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              fi
+              if [[ -n "$_DISK_CLAIM_SESSION" ]] \
+                 && { [[ "$_DISK_CLAIM_SESSION" == "$_HARNESS_SESSION" ]] \
+                      || { [[ "$_DISK_CLAIM_SESSION" != ses_* && "$_HARNESS_SESSION" != ses_* ]] \
+                           && [[ "$(printf '%s' "$_DISK_CLAIM_SESSION" | tr '[:upper:]' '[:lower:]')" \
+                                 == "$(printf '%s' "$_HARNESS_SESSION" | tr '[:upper:]' '[:lower:]')" ]]; }; }; then
+                _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
+              fi
+            fi
+            if [[ -z "${_HANDOVER_FLAGS:-}" ]]; then
+              # A launch window that outlived its launcher: the recorded pid
+              # is the spawner's, the pid probe proves it gone (basis
+              # pid-absent), and the TTL grace still runs (state suspect), so
+              # the named worker never reached init and nobody is mid-launch.
+              # The builder dispatched for this node adopts the window through
+              # the takeover door - naming the holder is the takeover's own
+              # proof, and the rebind still refuses an off-host or
+              # changed-underneath row. A live window and a pid-unavailable
+              # suspect (death unproven) keep the bystander refusal above: the
+              # named worker may still be coming (measured live 2026-10-28:
+              # a builder parked on an earlier spawn leg's suspect window and
+              # reached PR holding no claim).
+              _DISK_STATE="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              _DISK_BASIS="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
+                | sed -n 's/.*"basis"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+              if [[ "${_DISK_STATE:-}" == "suspect" && "${_DISK_BASIS:-}" == "pid-absent" ]]; then
+                _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
+              fi
             fi
             ;;
         esac
@@ -1651,7 +1707,7 @@ PYEOF
         #
         # `cmd && rc=0 || rc=$?`, not `if ! cmd`: after a negation `$?` is the
         # negation's status, so the rc test would never see the 9.
-        TARGET_INPUT="$_NODE_ID" TARGET_PLAN_PATH="" fno do target check-contained \
+        TARGET_INPUT="$_NODE_ID" TARGET_PLAN_PATH="" "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-contained \
           && _PC_RC=0 || _PC_RC=$?
         # A BROKEN gate on this path degrades silently unless it is said out
         # loud, exactly like the pre-claim gate a hundred lines above: only 9
@@ -1808,8 +1864,9 @@ PYEOF
             fi
             echo "target_claim_blocked_reason: claim_held_by_other" >> "$STATE_FILE"
           fi
-        elif grep -q 'store.remote_url) is unreachable' "$STATE_DIR/.claim-err" 2>/dev/null; then
-          # A shared primary that cannot be reached decides nothing. A peer
+        elif grep -qE 'store\.remote_url\) (is unreachable|did not answer)' "$STATE_DIR/.claim-err" 2>/dev/null; then
+          # A shared primary that cannot be reached, or took the request and
+          # sent no reply in time, decides nothing. A peer
           # machine may hold this node, so this session must not build it.
           printf 'author: init\nreason: store_unreachable\n' > "$STATE_DIR/.target-cancelled"
           echo "target_claim_blocked_reason: store_unreachable" >> "$STATE_FILE"
@@ -1888,8 +1945,8 @@ PYEOF
       # before comparing. The key is documented in SKILL.md as
       # `join: <manual|auto>   # who hands out the remaining waves`, so without
       # this the documented shape yields "auto # who hands out..." and never
-      # matches - the doc would describe a trigger it disables. PlanFrontmatter
-      # parses the same file as YAML and reads a bare `auto`, so the two
+      # matches - the doc would describe a trigger it disables. The plan-schema
+      # door parses the same file as YAML and reads a bare `auto`, so the two
       # readers of one key have to agree.
       _jt_fm="$(awk '/^---[[:space:]]*$/{c++; if(c==2) exit; next} c==1' "$_jt_plan" 2>/dev/null | sed -n 's/^join:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]*#.*$//' | tr -d '"' | tr -d "'" | xargs)"
       # The retired spelling is NOT an alias - reviving it would keep a key

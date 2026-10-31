@@ -135,7 +135,7 @@ Every dispatch path mints its worker name through one contract in `cli/src/fno/a
 
 - **Source** names who launched the worker. The codes:
 - `ab` active-backlog daemon, `ac` merge continuation, `rd` reconcile de-stub.
-- `th` spawn_think, `pm` post-merge judgment, `pw` pr-watch, `rec` recovery.
+- `th` think dispatch, `pm` post-merge judgment, `pw` pr-watch, `rec` recovery.
 - `kg` keep-going, `gr` groom, `ro` restart revive, `ev` evals, `kl` lead loop.
 - `oh` outage handoff, `sh` self-handoff, `ex` foreign wave, `jn` backlog join.
 - An attended operator or lead launch carries no source. The name then starts with the command. A source the bridge does not know refuses with exit 3 before spawn.

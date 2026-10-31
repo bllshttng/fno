@@ -10,7 +10,7 @@ Not for: what each state file means or who owns it. Those are the subsystem docs
 
 ## The project space
 
-Project state lives OUTSIDE the checkout, in one space per repository: `~/.fno/spaces/<slug>/`. The slug is the canonical repo root's path with `/` swapped for `-` (Claude's project-dir shape: read the directory name, see the path), keyed on the canonical checkout (the git common dir's). Every worktree of one repo resolves to the SAME space, so no state is ever committed by accident. Cross-worktree state (the events journal, repo-local claims, leads, plans, inbox, status sinks) sits at the space root. Per-worktree state (the target manifest, the run log, the codemap, the scratchpad) sits at `<space>/worktrees/<worktree basename>/`. The only fno file left inside a checkout is `.fno/config.toml` (committed project config) plus the sandbox-denied breadcrumb. `FNO_SPACES_DIR` overrides the spaces root outright (tests pin it). `config.paths.spaces_dir` is the config form, and unset the root is `<state_dir>/spaces`. The first resolve of a moved file migrates the legacy `<repo>/.fno/<file>` into the space and leaves a `<repo>/.fno/MOVED-TO` pointer naming it.
+Project state lives OUTSIDE the checkout, in one space per repository: `~/.fno/spaces/<slug>/`. The slug is the canonical repo root's path with `/` swapped for `-`. That is Claude's project-dir shape: read the directory name, see the path. The slug is keyed on the canonical checkout (the git common dir's). Every worktree of one repo resolves to the SAME space, so no state is ever committed by accident. Cross-worktree state (the events journal, repo-local claims, leads, plans, inbox, status sinks) sits at the space root. Per-worktree state (the target manifest, the run log, the scratchpad) sits at `<space>/worktrees/<worktree basename>/`. The only fno file left inside a checkout is `.fno/config.toml` (committed project config) plus the sandbox-denied breadcrumb. `FNO_SPACES_DIR` overrides the spaces root outright (tests pin it). `config.paths.spaces_dir` is the config form, and unset the root is `<state_dir>/spaces`. The first resolve of a moved file migrates the legacy `<repo>/.fno/<file>` into the space and leaves a `<repo>/.fno/MOVED-TO` pointer naming it.
 
 ## Quick start
 
@@ -69,7 +69,6 @@ plans_dir = ".fno/plans/"   # the legacy default; unset it resolves to <space>/p
 # worktrees_base  = ...   # default: <state_dir>/worktrees/
 # memory_dir      = ...   # default: <state_dir>/memory/
 # hook_logs_dir   = ...   # default: <state_dir>/hook-logs/
-# inbox_dir       = ...   # default: <space>/inbox/
 # handoffs_dir    = ...   # default: <vault>/internal/{project}/handoffs/ when
 #                         # obsidian.enabled, else <state_dir>/handoffs/<project>/
 # spaces_dir      = ...   # default: <state_dir>/spaces/
@@ -144,7 +143,7 @@ plans_dir = ".fno/plans/"
 enabled = false
 ```
 
-All paths derive from `~/.fno/`. This is also what `fno config setup migrate-paths` writes on first run.
+All paths derive from `~/.fno/`. This is also what the first `fno` run writes.
 
 ## Lookup order for path resolution
 
@@ -160,7 +159,7 @@ The anchor is the key for every path derived from the store: the lock (`graph.js
 
 Under `FNO_TEST_HERMETIC=1`, state accessors reject a resolved path outside the test sandbox. The fence reuses the events `HermeticEscapeError` and allowed-root calculation. `locks_dir()` is the deliberate config-free exception.
 
-Project-relative paths (`plans_dir`, `inbox_dir`) anchor relative strings to the git repo root (or `FNO_REPO_ROOT` in tests).
+Project-relative paths (`plans_dir`) anchor relative strings to the git repo root (or `FNO_REPO_ROOT` in tests).
 
 ## `fno config doctor` output
 
@@ -184,7 +183,7 @@ When a suspicious path is found:
 [doctor] 1 suspicious path(s) detected:
   - state_dir = /private/tmp/fno: temp directory; data will not survive reboot
 
-Run 'fno config setup migrate-paths --force' to regenerate paths.
+Set a durable path with 'fno config set <key> <path>'.
 ```
 
 Suspicious patterns and their reasons:
@@ -198,17 +197,9 @@ Suspicious patterns and their reasons:
 | `~/OneDrive/` | OneDrive sync; conflicted copies on multi-machine setups |
 | `.git/` | Git internal; may be cleaned by git gc |
 
-## `fno config setup migrate-paths` flow
+## First-run config
 
-On first run after install, the CLI automatically writes `~/.fno/config.toml` with built-in defaults. The sentinel `~/.fno/.path-migration-done` prevents re-running.
-
-To regenerate settings explicitly:
-
-```bash
-fno config setup migrate-paths --force
-```
-
-This rewrites `config.toml` from the built-in defaults. Any custom values are overwritten; back up the file first if you have customizations.
+On the first run after install, the CLI writes `~/.fno/config.toml` with built-in defaults. The sentinel `~/.fno/.path-migration-done` prevents a second write. To change a path afterwards, set its key with `fno config set`, or run `fno do wizard`.
 
 ## Deprecation pathway
 
@@ -235,9 +226,7 @@ The helper writes a minimal `config.toml` and sets `FNO_CONFIG`. The settings ca
 
 Confirm with a read before the first write: `fno backlog get <live node id>` must answer "No node matching". A read that returns the live node means the sandbox is not on. Do not write.
 
-The Rust legs read two more locations past `FNO_CONFIG`. They read the global config at `~/.fno/config.toml`, so a global `store.share_backlog = true` still syncs the sandbox with the shared primary. Set `FNO_GLOBAL_SETTINGS_PATH=<tmp dir>/settings.yaml` so the global config resolves to `<tmp dir>/config.toml`. The board renderer reads the graph at `FNO_GRAPH_JSON`, else `~/.fno`, so also set `FNO_GRAPH_JSON=<state dir>/graph.json` and `FNO_STATE_DIR=<state dir>`. `scripts/ops/mux-demo-snapshot.sh` also sets `HOME`, so the mux sideline lists no real sessions.
-
-Known leak: the graph.html render can still drop a file in `~/.fno` under this recipe, even though the store itself stays in the sandbox. A later fix retires this note.
+The pin is the whole config world. The Rust legs resolve their global-scope reads through `FNO_CONFIG` too: the store keys that decide the backlog share, the accounts records, the fleet owner. A machine global with `store.share_backlog = true` cannot sync a sandbox into the shared primary. An explicit `FNO_GLOBAL_SETTINGS_PATH` still relocates the global tier for the ops that own it. The sandbox config turning share on itself is honored. The graph follows the `state_dir` the sandbox config declares, so `FNO_GLOBAL_SETTINGS_PATH`, `FNO_GRAPH_JSON` and `FNO_STATE_DIR` exports are no longer part of this recipe. `scripts/ops/mux-demo-snapshot.sh` also sets `HOME`, so the mux sideline lists no real sessions.
 
 ## Settings cache key
 

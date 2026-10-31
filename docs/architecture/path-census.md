@@ -65,7 +65,7 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
 | 1 | `fno agents fleet truth` | `agents/session_truth.py:151` | KEEP, alive/working truth | — |
-| 2 | `truth_status` + manifest liveness | `agents/truth_status.py:182`, `target/orient.py:181` | KEEP, work ownership truth | — |
+| 2 | `truth_status` + manifest liveness | `agents/truth_status.py:182`, `crates/fno-agents/src/target_orient.rs` | KEEP, work ownership truth | — |
 | 3 | `discover_live_sessions` liveness verdict | `agents/discover.py:1585` | RETIRE verdict; keep enumeration | OPEN |
 | 4 | `peek` | `agents/peek.py:617` | KEEP | — |
 | 5 | Claim PID/TTL classify | `claims/staleness.py:51` | KEEP inside ownership family | — |
@@ -77,12 +77,12 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | Claude control.sock inject | `agents/dispatch.py:4340` | KEEP | — |
+| 1 | Claude control.sock inject | `mail_cli/send/engine.rs` | KEEP | — |
 | 2 | Owned-PTY worker.sock submit | `roundtrip.submit_via_worker` | KEEP | — |
-| 3 | Mux pane send | `agents/dispatch.py:4175`, `mail/cli.py:1125-1145` | KEEP | — |
-| 4 | Codex app-server inject | `agents/dispatch.py:4496` | KEEP | — |
-| 5 | Wake-and-deliver revival | `agents/dispatch.py:4371`, `mail/cli.py:945` | FIX with incarnation lease | OPEN |
-| 6 | Durable bus write | `inbox/store.py:745` | KEEP, fallback | — |
+| 3 | Mux pane send | `mail_cli/send/lanes.rs` | KEEP | — |
+| 4 | Codex app-server inject | `mail_cli/send/engine.rs` | KEEP | — |
+| 5 | Wake-and-deliver revival | `mail_cli/send/engine.rs` | FIX with incarnation lease | OPEN |
+| 6 | Durable bus write | `mail_cli/send/mod.rs` | KEEP, fallback | — |
 
 ## Census 7: graph reads + backlog mutation
 
@@ -126,9 +126,9 @@ Neither reads a field `_apply_graph_defaults` rewrites, so neither is a drift la
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno doctor test` / `fno doctor test rust` / `fno doctor test smoke` | `cli/src/fno/test_cmd.py` | KEEP, canonical | — |
-| 2 | CI smoke job | `.github/workflows/cli-ci.yml` -> `uv run fno-py doctor test smoke` | DONE (was pytest-in-smoke.sh; one entry now) | — |
-| 3 | Shell test registry | `cli/src/fno/test_cmd.py` (`_STRUCTURAL_STEPS` + `discover_shell_harnesses`) | DONE (auto-discover owned trees; smoke.sh retired) | — |
+| 1 | `fno doctor test` / `fno doctor test rust` / `fno doctor test smoke` | `crates/fno-agents/src/test_command.rs` (native) | KEEP, canonical | — |
+| 2 | CI smoke job | `.github/workflows/cli-ci.yml` -> `fno-agents test-run doctor smoke` | DONE (was pytest-in-smoke.sh; one entry now) | — |
+| 3 | Shell test registry | `crates/fno-agents/src/test_smoke_registry.rs` + `test_smoke_discovery.rs` | DONE (auto-discover owned trees; smoke.sh retired) | — |
 | 4 | Bare `pytest` | user-invoked | KEEP external tool; warn in worktrees | OPEN |
 | 5 | RTK wrappers | RTK config | KEEP bypass guard | — |
 

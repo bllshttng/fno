@@ -6,32 +6,32 @@ This unifies the G1 substrate around one send interface, one wire envelope, and 
 
 ## The delivery model
 
-`dispatch_send` (`cli/src/fno/agents/dispatch.py`) runs, in order:
+The native send (`crates/fno-agents/src/mail_cli/send/`) runs, in order:
 
 1. Capture the sender provenance (short sessionId, provider, model) for the envelope.
-2. For a live recipient, attempt one fire-and-forget delivery through `_deliver_live`. After confirmation, write one `delivery: hosted` row with the exact id, addresses, body, provenance, and send-time `word_count`. The row is audit-only. It appears in sender and operator history but never enters delivery, rebuild, unclaimed, or withdrawal paths.
+2. For a live recipient, attempt one fire-and-forget delivery through the live lanes. After confirmation, write one `delivery: hosted` row with the exact id, addresses, body, provenance, and send-time `word_count`. The row is audit-only. It appears in sender and operator history but never enters delivery, rebuild, unclaimed, or withdrawal paths.
 3. Otherwise (offline recipient, or the live attempt did not confirm), write the durable envelope. That copy is the pending-queue an offline recipient drains on wake, and the recovery record when a live inject did not land.
 
-The per-agent flock that `dispatch_send` already holds serializes concurrent sends to the same recipient, so two sends never interleave their envelopes.
+The per-agent flock the send holds serializes concurrent sends to the same recipient, so two sends never interleave their envelopes.
 
-### `_deliver_live` transports
+### Live transports
 
 Every live transport carries the same `<fno_mail>`-wrapped turn:
 
 - **claude**: dual-lane by recipient spawn-style, resolved in one place by `roundtrip.resolve_live_lane` (worker beats control; the two `host_mode`s are mutually exclusive for one uuid):
   - an **owned-PTY worker** (`host_mode == "interactive"`, a footnote-spawned daemon worker) has no `control.sock` handle, so it is driven over its `worker.sock` via `roundtrip.submit_via_worker` (`worker.submit` RPC). Without this lane, mail to an owned-PTY worker silently fell to the durable queue a finished `/think` never drains. The worker inject is framed in bracketed paste (`ESC[200~ ... ESC[201~`, `worker.rs::submit_keys`) so claude's TUI buffers it atomically instead of dropping chars under render load. If the resolved `worker.sock` is gone (a stale live-looking interactive row can coexist with a valid adopted row for one uuid), delivery falls through to the control lane below rather than demoting to durable, mirroring the relay's claim-based dispatch (`daemon.py:351-365`).
   - an **adopted `claude --bg`** session (`host_mode == "attached"`) takes the proven `control.sock` `op:'reply'` inject through the `fno-agents mail-inject` command (see below). The stream-json switchboard and MCP-channel fast lanes still apply first for peers that are live stream threads or MCP-routed; the `control.sock` inject is the successor to the dead per-worker messaging socket.
-  - Both lanes carry the SAME `<fno_mail>` envelope (`_deliver_live` wraps the turn before lane selection), so an owned-PTY worker's turn is the same agent-vs-human-discriminated turn an adopted session gets.
+  - Both lanes carry the SAME `<fno_mail>` envelope. The send wraps the turn before it selects a lane. So an owned-PTY worker gets the same attributed turn as an adopted session.
 - **codex / gemini**: the daemon `agent.deliver` RPC, now carrying the `<fno_mail>` envelope (see [fno-agents-deliver-gate.md](fno-agents-deliver-gate.md)).
-- **A mux-hosted pane** of any harness takes `fno mux pane send` (`dispatch._mux_pane_send`), which writes the text and then the harness's `submit_keys` from `harness_capabilities.toml`. A harness declaring `submit_keys = ["unsupported"]` is refused BEFORE the transport is tried, and the send falls to the durable queue. That refusal is a capability declaration, not a transport failure, and it now says so. The old wording named `mux-send-failed` and the layer that did not run. It read as a broken pane. It cost two agents and an operator a night on a codex worker whose pane was fine. codex declares `["enter"]` with no delay. That value was measured against 0.148.0 by reading the pane, not an exit code. claude needs 800ms after the text. gemini, agy and opencode stay unsupported because nothing has been measured for them.
+- **A mux-hosted pane** of any harness takes `fno mux pane send`. It writes the text and then the harness's `submit_keys` from `harness_capabilities.toml`. A harness that declares `submit_keys = ["unsupported"]` is refused before the transport runs. The send then falls to the durable queue. That refusal is a capability declaration, not a transport failure. codex declares `["enter"]` with no delay, measured against 0.148.0 by reading the pane. claude needs 800ms after the text. gemini, agy and opencode stay unsupported because nothing has measured them.
 
-`_deliver_live` returns `True` on the first successful lane and `False` otherwise. `dispatch_send` writes a hosted audit row after `True` and a deliverable durable row after `False`.
+The first lane that confirms ends the attempt. A confirmed lane gets a hosted audit row. With no confirmed lane, the send writes a deliverable durable row.
 
 Delivery takes exactly one path: a live transport or the durable queue. The bus field distinguishes delivered history from pending mail.
 
 ## The `<fno_mail>` envelope
 
-The wire format is rendered once in Python. `cli/src/fno/mail/envelope.py` is the sole renderer. The Rust mirror in `claude_drive.rs` was deleted as dead code once the live inject path moved to the bracketed-paste transport. The Rust injection door validates `from_rank` claims against the live registry. `test_fno_mail_envelope.py` pins the renderer's own output contract.
+The wire format is rendered once. `crates/fno-agents/src/mail_envelope.rs` is the sole renderer. The Rust injection door validates `from_rank` claims against the live registry.
 
 ```
 <fno_mail from="<full-sid|handle>"[ harness="<harness>"][ from_rank="<role>"][ to="<short-sid>"][ to_rank="<role|none>"][ id="<msg-id>"][ reply_to="<msg-id>"][ node="<id>"][ origin="<origin>"]>
@@ -67,7 +67,7 @@ Provider-agnostic fallback: footnote tees each spawned agent's I/O to a per-agen
 
 ## The `mail-inject` command
 
-`fno-agents mail-inject --session <uuid|short>` (`crates/fno-agents/src/mail_inject.rs`) is the one-shot claude live primitive `_deliver_live` shells out to. It reads the turn text from STDIN (sidestepping the argv size limit), resolves the recipient on the daemon roster, attaches to its `control.sock`, bracketed-pastes the text verbatim as raw keystrokes plus a wire-level CR, and confirms delivery by CONTENT (the injected turn's marker appearing in the recipient transcript after the inject, not mere transcript growth, because the growth proxy false-confirmed on a busy recipient whose transcript was already moving). It prints `{"delivered": bool, "reason": str}` and exits 0 when delivered. Every not-delivered reason (`not-injectable`, `no-transcript`, `attach-failed`, `not-confirmed`, ...) is a clean signal for Python to write the durable fallback.
+`fno-agents mail-inject --session <uuid|short>` (`crates/fno-agents/src/mail_inject.rs`) is the one-shot claude live primitive. It reads the turn text from STDIN, which avoids the argv size limit. It resolves the recipient on the daemon roster and attaches to its `control.sock`. It bracketed-pastes the text verbatim as raw keystrokes plus a wire-level CR. It confirms delivery by CONTENT: the injected turn's marker must appear in the recipient transcript after the inject. Transcript growth alone false-confirmed on a busy recipient. It prints `{"delivered": bool, "reason": str}`. On delivery it exits 0. Every not-delivered reason (`not-injectable`, `no-transcript`, `attach-failed`, `not-confirmed`, ...) is a clean signal to write the durable fallback.
 
 An unwrapped one-line payload rides verbatim. A payload that starts with `/fno:` or with `$fno:` names an fno command. The command rewrites that marker to the form of the receiving harness before delivery. A command typed in one harness's dialect lands in the recipient's native one.
 

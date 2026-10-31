@@ -1,21 +1,53 @@
 # Org view
 
-Press prefix+G to open the org view in one press, and press it again to return to the agents list. Prefix+V still cycles Agents, Backlog and Org, and Org shows each lead's owned nodes and the current and former sessions behind them. Workers without an owned node remain under Unowned. Recently completed nodes stay in the team's departure list for 24 hours.
+Press prefix+G to open the org view, and press it again to return to the agents list. Prefix+V still cycles Agents, Backlog and Org. The view is the fleet's command center. It shows every machine on the fleet map, the leads on each machine and the live sessions that report to them.
 
-Each mode answers one question. Tree: who owns what, and who works on it. Table: what is each worker doing now. Graph: how leads, nodes and workers connect, and what blocks what.
+## Shape
 
-Tree wraps instead of cutting. A row wider than the column wraps at word boundaries onto continuation lines indented under its tree guide. Every row shows in full with folding. Only a session's tail text stops after two continuation lines with an ellipsis, and `d` detail shows a tail whole.
+The explorer fills the left 34 columns. It lists the fleet, then each machine, then the leads on each machine. A lead is the seat a session reports to, such as the mux lead or the fleet lead. The open lead lists its seats, one per live session, with a status glyph: `●` writing, `◐` parked, `○` quiet and `◌` unknown. Feed and System close the list.
 
-Table is one row per worker session, sorted by lead then node, with unowned workers last under a `unowned` lead. Columns show front to back as WORKER, STATE, NODE, LEAD, ACTIVE, CTX, RUNTIME, PR, MAIL, LAST. MAIL appears only for rows with unread mail, and LAST takes the rest of the width. As the column narrows, whole columns drop from the right end, so a 27-col sideline shows WORKER and STATE. A column that does not fit whole does not show. A missing reading shows its basis, never a blank. A former session's CTX and ACTIVE read `ended`, and a live row with no reading reads `?` beside the footer key `? unobserved`.
+The right pane follows the selection. On the fleet, a machine or a lead it shows one of five tabs over that scope:
 
-Graph is a node-link drawing: dots and lines, labels beside. Leads sit on a ring around the center, nodes on a ring around their lead, and workers on a small ring around their node. The layout is deterministic, so a repaint never moves a dot. Lines draw in braille between connected dots, and blocked_by edges draw in the warning color. Lead, node and worker dots paint as `◆`, `●` and `•` over the lines, and labels paint beside each dot. Labels yield: one that cannot fit beside a dot or a painted label is skipped, and the selected dot's label always paints. The header names the selected item in full, cut only by the header width. j/k walk the dots in Tree order. When the fitted layout is wider than the view, arrows pan it. A tap selects the dot or label under it. A font without braille glyphs shows lines as boxes, and dots and labels stay readable.
+- Table: one row per seat, grouped by lead, with its runtime, model, state, age and last turn.
+- Recent: the seats with a published last turn, newest first.
+- Overview: the machines with their beat age, the scope's shape and state counts, then its leads or seats.
+- Graph: one column per lead, one box per seat with its name and model. A lead over six seats wraps into a `↳` column.
+- Health: each machine's verdict, then three signals: no status, parked over two hours, and silent over two hours.
 
-Press `Tab` to switch Tree, Table and Graph. When the new mode holds the cursor's row, Tab keeps the cursor on it. When it does not, the cursor returns to the first row. Press `s` to switch current, former and all sessions. These choices persist across client restarts. Press `F` to toggle full screen. Use `hjkl` or arrows to move. Use `h` and `l` to collapse and expand Tree rows. Press `/` to filter lead, node and worker text, `?` for keys, and `esc` to return to Agents.
+A seat shows its page instead: context, current activity, the node it works, its last turn and its seat facts. The facts include its lead and project. Feed lists the open questions to the user. System lists each machine's state, beat, cap, memory and CPU.
 
-Org reads the Rust org fold and the shared backlog model off the UI loop, with one gather in flight and a 60-second cadence. The org subprocess has a 30-second budget. Team membership uses the org's canonical ownership map. Session joins prefer the full harness session identifier. A unique eight-character identifier can also join a row. Exited registry rows and sessions without a live registry row appear as former. The footer shows read age and names failed reads. A failed refresh retains the last successful tree and its graph inputs. A first failure shows its reason.
+Below 80 columns the explorer paints alone, and the bottom bar names `F` for full screen.
 
-Context, run time and unread counts come from the server's stamped agent rows. Missing readings stay unobserved. Rendering does not probe workers or refresh measurement stamps. Graph layout is cached by gathered generation, viewport size and active filters. Repainting a frame does not run the layout again.
+## Look
 
-Press `Enter` on a lead or session to focus, attach or resume through the sideline's action path. A former session without a registry row reports `no registry row`. Press `Enter` on a node to inspect its existing node detail. Session keys `space`, `x` and `P` use the sideline's peek, stop and portal actions. Stop keeps the existing confirmation policy.
+The view wears the panel slots every fno view wears: body text, bold for emphasis and the dim slot for meta. It paints no accent color and no all-caps word. Headers such as Explorer, Feed, System and Current work are bold sentence case. The right pane's title names the selection: Fleet, a machine such as bb16, a lead or a seat. Tabs, column heads and entries use sentence case too.
 
-Press `d` on a session to inspect its context, activity, model, queue and last message. Detail opens immediately from the served row. A roster read then supplies model observations, requested settings and the full served last message. This read runs off the UI loop with a 30-second bound. Failed reads show their reason. Results for an earlier selection or closed view are discarded.
+## Keys
+
+Use `j` and `k` or the arrows to move in the explorer. The cursor opens each lead it reaches. Use `h` and `l` to change tab, or `1` to `5` to pick one. Press `u` or Backspace to go up from a seat to its lead, its machine and the fleet. PageUp and PageDown scroll the right pane. `F` toggles full screen, `?` shows the keys and Esc returns to Agents. `W` opens the web bridge's `/command` page in the browser. With no live bridge, the notice names the `fno mux serve --web` command to start one. Over ssh, a bridge bound to loopback opens nothing, and the notice names `--bind 0.0.0.0`. The tab persists across client restarts.
+
+Enter on the fleet, a machine or a lead moves to the next row, so Enter on a lead opens its first seat. Enter on a seat attaches it. Space peeks, `x` stops and `P` opens the portal picker. A tap selects a row, a tab or a graph box. A second tap on the selected seat acts like Enter.
+
+The bottom bar is the key bar. It leads with the keys that act on the selection, in body text. The breadcrumb (`fleet → bb16 → rowan → scout`) and the read state follow in the dim slot.
+
+## Reads
+
+The view reads `fno-agents top --machines --json` and the backlog model off the UI loop. One read runs at a time, every 60 seconds, with a 30-second bound. The fleet map comes from the shared primary, so the other machine's seats show beside this one's. With no `store.remote_url`, fleet top answers this machine alone, and the bottom bar shows its notice.
+
+A failed read keeps the last good fleet. The bottom bar names the failure and its age. If the primary fails after a good read, the last good fleet stays too. If the first read fails, the right pane names the failure.
+
+Each fleet session carries `parent`, its spawner's session id prefix. A seat with a role is its own lead. Any other seat walks its spawner chain to the first seat with a role, and that seat is its lead. A seat sits on its own machine under that lead's name, so a lead on another machine still names the group. A chain that reaches no seat with a role, or runs past eight steps, puts the seat under `no lead`. A pane with no harness, or a shell, is not a seat. Within a lead, seats with a role list first, then writing, parked, quiet and unknown seats.
+
+## Local and remote seats
+
+A seat joins this mux's registry row only by its full harness session id. A short id or a name never joins. Only a joined seat takes Enter, space, `x` or `P`. A seat on another machine shows `fno agents session attach <short> on <host>` and no action keys. An unjoined seat on this machine shows the same command and says no pane here carries the session.
+
+## Gaps show their basis
+
+A field with no reading names its basis, never a blank. A machine on an old daemon publishes no seat facts, so its seats read `not published` for model, start, last turn and cwd. Health reads `not sampled` while no machine in scope has a fresh verdict, and never a healthy word.
+
+The fleet map publishes no message text. Recent, Table and the seat page show `not published` and the last turn's age in place of the text.
+
+## Snapshots
+
+`fno mux serve --snapshot --view <view>` shoots eight views: `org-table`, `org-recent`, `org-overview`, `org-graph`, `org-health`, `org-seat`, `org-feed` and `org-system`. A fleet map with no seat refuses the shot. `scripts/ops/mux-demo-snapshot.sh` seeds an invented two-machine fleet map for them.

@@ -38,7 +38,7 @@
 #      scripts/save-session.py's read of the ~/.claude/.session-context.json
 #      statusline sidecar (its OWN transcript writes were re-homed to
 #      ${FNO_HOME}/saved-sessions - see below - so only the sidecar READ remains).
-#      setup/cli_hooks.py WRITES ~/.claude/settings.json for the same reason
+#      crates/fno/src/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
 #      its siblings write ~/.gemini/settings.json and ~/.codex/config.toml:
 #      it wires a hook into the CLI's OWN config. `claude rm` runs with no
 #      agent session and so never loads plugin hooks, which leaves the
@@ -52,7 +52,8 @@
 #      crates/fno-agents/src/plans_path.rs reads Claude Code's own
 #      plansDirectory setting to resolve the user-selected plan location; it
 #      writes no footnote state under .claude/.
-#      context_audit.py reads project-owned .claude/rules/*.md to census the
+#      context_audit.rs (the ported census; was context_audit.py) reads
+#      project-owned .claude/rules/*.md to census the
 #      exact progressive instructions Claude loads; it never writes there.
 #      guard-corpus-sweep.py joins ~/.claude/projects for the same reason: it
 #      READS Claude Code's own transcripts to replay every real Bash command
@@ -93,7 +94,7 @@
 #      Read-only `is_dir`/`is_file` probes against Claude Code's OWN skill
 #      dirs; footnote stores nothing there, and an unreadable root resolves
 #      `unverifiable` rather than being reported absent.
-#      usage.py joins for the same reason account_env.py already is: its
+#      usage.py joins for the same reason accounts/env.rs already does: its
 #      shared-slot probe resolves the CANONICAL ~/.claude to read Claude
 #      Code's own credential for the stamped active account. It must be the
 #      literal path rather than the CLAUDE_CONFIG_DIR-honoring helper,
@@ -110,8 +111,9 @@
 #      accounts_binding_parity.rs builds a canonical ~/.claude and an alt dir
 #      under a temp root to prove two roots keep distinct credential
 #      identity. Read-only; footnote stores nothing under either.
-#      accounts/staging.rs and accounts/env.rs port staging.py, dispatch.py
-#      and the account_env.py overlay: they name a staged account's
+#      accounts/staging.rs, accounts/env.rs and accounts/launch.rs port
+#      staging.py, dispatch.py and the account_env.py overlay: they name a
+#      staged account's
 #      `<id>/.claude` dir and pin the shared ~/.claude slot for the active
 #      managed account. They build env values and write nothing there.
 #      managed.py resolves the same canonical path for the same reason, in
@@ -119,6 +121,12 @@
 #      CLAUDE_CONFIG_DIR, or the repair proves the pinned account and stamps
 #      it onto the shared slot. test_managed.py is its test and asserts on
 #      exactly that path, again under tmp_path.
+#      accounts/store.rs ports managed.py's store layer: it names the same
+#      shared ~/.claude slot to read and write the credential claude reads,
+#      and to tell which live claude pins it. Footnote's own store stays
+#      under the state dir.
+#      accounts/reconcile.rs ports reconcile-slot: it names the canonical
+#      ~/.claude slot in its sign-in remedy text, for the reason above.
 #      test_run.rs's hold-marker tests build fixture checkouts under a
 #      TempDir, including a nested `.claude/worktrees/x` path, to prove a
 #      nested checkout never reads its parent's hold. Fixture paths only;
@@ -133,6 +141,11 @@
 #      crates/fno/src/transcript_tail.rs reads Claude Code's own
 #      ~/.claude/projects transcript tree (the sideline's last-msg column) -
 #      read-only, same category as agents_view.rs above.
+#      crates/fno-agents/src/whoami.rs reads the same transcript stores its
+#      deleted singular-whoami Python twin read: the own-transcript globs
+#      under ~/.claude/projects (FNO_CLAUDE_PROJECTS_DIR overrides) and the
+#      ambiguity refusal whose remedy names those roots as the resolve hint.
+#      Read-only; footnote stores nothing there.
 #      gc_inventory.rs and receipt.rs are the retirement census and the reap
 #      receipt: they resolve Claude Code's own ~/.claude/projects transcript
 #      tree to join a session's store existence and locator - read-only, the
@@ -189,7 +202,7 @@
 #      boundary is hermetic. Read-only against real roots; nothing
 #      accumulates there.
 #      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
-#      removes the hook entry cli_hooks.py merged into its settings.json:
+#      removes the hook entry cli_hooks.rs merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
 #      nothing there.
 #      crates/fno-agents/src/mail_cli/send/resolve.rs reads Claude Code's
@@ -198,6 +211,11 @@
 #      the port of the Python _projects_dir read) and roster_path()
 #      joins ~/.claude/daemon for the daemon roster.json. Read-only;
 #      footnote stores nothing there.
+#      crates/fno-agents/src/register.rs prints the ambiguity refusal's
+#      resolve hint, the same `find ~/.claude/projects` line the Python
+#      identity_ambiguity_message prints: it points the human at Claude
+#      Code's own transcript tree to identify their session. A string in a
+#      refusal; nothing is constructed or stored.
 #   2. The worktree-harness integration: `.claude/worktrees/<name>` is the
 #      documented, SANCTIONED harness-native worktree default (see
 #      .claude/rules/worktrees.md - "this is now allowed"), and
@@ -231,6 +249,21 @@
 #   - scripts/save-session.py stays listed above under category (1): its
 #     transcript WRITES moved to ${FNO_HOME}/saved-sessions, and its only remaining
 #     reference is the legitimate READ of Claude Code's own statusline sidecar.
+#
+#      The native doctor family (the 2026-10 port of the deleted
+#      cli/src/fno/doctor.py) reads the harness's own surfaces in three
+#      files. report.rs detects Claude Code's own plugin-cache layout
+#      (`/.claude/plugins/cache/`) to answer "is the deployed plugin stale";
+#      read-only string comparison and path-segment parsing, no writes.
+#      report/advisors.rs counts auto_merge-armed manifests under the
+#      repo's harness-native `.claude/worktrees` placement; read-only
+#      manifest reads, footnote state never lands there. report/ops.rs
+#      joins ~/.claude/projects for the find-transcript op, the same
+#      own-transcript store its deleted Python twin walked at doctor.py:887;
+#      read-only. Footnote stores nothing in any of them. config_doctor/
+#      checks.rs (the setup-family port) prints an advisory line naming
+#      ~/.claude/settings.json as the file a human edits to widen
+#      permissions.additionalDirectories; message prose, no path is built.
 #
 # A file not on this list that starts referencing .claude/ must be a
 # conscious addition: either it's another instance of (1)-(3) above (add it
@@ -295,12 +328,10 @@ cli/src/fno/adapters/providers/usage.py
 cli/src/fno/adapters/test_claude_code.py
 cli/src/fno/adapters/test_init.py
 cli/src/fno/adapters/test_shared.py
-cli/src/fno/agents/account_env.py
 cli/src/fno/agents/cli.py
 cli/src/fno/agents/discover.py
 cli/src/fno/agents/dispatch.py
 cli/src/fno/agents/format.py
-cli/src/fno/agents/orphans.py
 cli/src/fno/agents/harnesses/_claude_session_registry.py
 cli/src/fno/agents/harnesses/claude.py
 cli/src/fno/agents/model_routing.py
@@ -308,15 +339,22 @@ cli/src/fno/agents/registry.py
 cli/src/fno/agents/rust_runtime.py
 cli/src/fno/agents/self_stamp.py
 cli/src/fno/agents/spawn_gate.py
-cli/src/fno/agents/test_account_env.py
 cli/src/fno/agents/whoami.py
+crates/fno/src/config_doctor/checks.rs
+crates/fno/src/doctor/report.rs
+crates/fno/src/doctor/report/advisors.rs
+crates/fno/src/doctor/report/ops.rs
 crates/fno/src/doctor_update.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
 crates/fno-agents/src/accounts/binding.rs
+crates/fno-agents/src/accounts/credentials.rs
 crates/fno-agents/src/accounts/env.rs
+crates/fno-agents/src/accounts/launch.rs
 crates/fno-agents/src/accounts/staging.rs
+crates/fno-agents/src/accounts/store.rs
+crates/fno-agents/src/accounts/reconcile.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs
@@ -327,50 +365,38 @@ crates/fno-agents/src/backlog/maintenance_tests.rs
 crates/fno-agents/src/review_capability.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
-cli/src/fno/cost/_register.py
-cli/src/fno/cost/_session_cost.py
-cli/src/fno/context_audit.py
-cli/src/fno/doctor.py
+crates/fno-agents/src/context_audit.rs
 cli/src/fno/graph/cli.py
 cli/src/fno/inbox/drain.py
-cli/src/fno/observer/isolation.py
+crates/fno-agents/src/observer/fold.rs
+crates/fno-agents/src/footprint_cause.rs
 cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
 cli/src/fno/recovery.py
-cli/src/fno/relay/registry.py
-cli/src/fno/relay/roundtrip.py
 cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
 cli/src/fno/runtime/cli.py
 cli/src/fno/runtime/worktree.py
-cli/src/fno/scoreboard/fold.py
-cli/src/fno/setup_cli.py
-cli/src/fno/setup/cli_hooks.py
-cli/src/fno/setup/doctor.py
-cli/src/fno/setup/integration.py
+crates/fno-agents/src/scoreboard/views.rs
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
-cli/src/fno/setup/recommended_rules.py
-cli/src/fno/setup/test_recommended_rules.py
 cli/src/fno/target_cli.py
 cli/src/fno/test_dispatch_target.py
-cli/src/fno/test_worktree_paths.py
-cli/src/fno/update.py
 cli/src/fno/wake/detect.py
-cli/src/fno/worker/review.py
-cli/src/fno/worktree_cli/cli.py
-cli/src/fno/worktree_paths.py
-cli/src/fno/worktree.py
 crates/fno-agents/src/claude_adopt.rs
 crates/fno-agents/src/claude_ask.rs
 crates/fno-agents/src/claude_config_tmp.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/claude_drive.rs
 crates/fno-agents/src/claude_roster.rs
+crates/fno-agents/src/whoami.rs
 crates/fno-agents/src/plans_path.rs
+# plan_carry.rs tests build a per-project Claude settings fixture (the same
+# Claude's-own-config class as plans_path.rs); footnote state never lands there.
+crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
 crates/fno-agents/src/client_commands.rs
@@ -385,20 +411,26 @@ crates/fno-agents/src/model_env_scrub.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plans_dirs.rs
 crates/fno-agents/src/plans_path.rs
+crates/fno-agents/src/orphans.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
+crates/fno/src/cli_hooks.rs
 crates/fno-agents/src/provider.rs
 crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs
 crates/fno-agents/src/receipt.rs
+crates/fno-agents/src/register.rs
 crates/fno-agents/src/roster_reap.rs
 crates/fno-agents/src/scratch.rs
 crates/fno-agents/src/session_start_bytes.rs
 crates/fno-agents/src/state.rs
 crates/fno-agents/src/stream_worker.rs
 crates/fno-agents/src/test_run.rs
+crates/fno-agents/src/worktree/ensure.rs
+crates/fno-agents/src/worktree/status.rs
 crates/fno-agents/src/worktree_reapable.rs
 crates/fno-agents/src/bin/client.rs
+crates/fno/src/worktree_door.rs
 crates/fno-agents/tests/claude_ask_dispatch.rs
 crates/fno-agents/tests/claude_ask_parity.rs
 crates/fno-agents/src/mail_cli/reply.rs

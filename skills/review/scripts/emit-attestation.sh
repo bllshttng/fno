@@ -227,13 +227,28 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
 # whichever algorithm computed it - a binary with an older slug shape would
 # file the attestation in a directory no reader of this source resolves.
 session_id=""; harness_session_id=""; harness=""
-if [[ -f "$repo_root/.fno/target-state.md" ]]; then
-  session_id=$(grep '^session_id:' "$repo_root/.fno/target-state.md" \
+# The manifest greps run once per readable path via the door-resolved list:
+# the checkout copy first, then the space-resolved one. An fno-managed
+# worktree keeps its manifest ONLY at the space path (the state-root
+# inventory), so without the second read the sidecar fallback below finds no
+# session and the row attests UNJOINED - the invocation join then dies even
+# though the hold and the pending sidecar are both intact.
+read_manifest_fields() {
+  session_id=$(grep '^session_id:' "$1" \
     | head -1 | sed 's/^session_id:[[:space:]]*//' | tr -d '[:space:]' || true)
-  harness_session_id=$(grep '^harness_session_id:' "$repo_root/.fno/target-state.md" \
+  harness_session_id=$(grep '^harness_session_id:' "$1" \
     | head -1 | sed 's/^harness_session_id:[[:space:]]*//' | tr -d '[:space:]' || true)
-  harness=$(grep '^harness:' "$repo_root/.fno/target-state.md" \
+  harness=$(grep '^harness:' "$1" \
     | head -1 | sed 's/^harness:[[:space:]]*//' | tr -d '[:space:]' || true)
+}
+if [[ -f "$repo_root/.fno/target-state.md" ]]; then
+  read_manifest_fields "$repo_root/.fno/target-state.md"
+fi
+if [[ -z "$harness_session_id" || -z "$session_id" ]]; then
+  space_manifest="$("${FNO_AGENTS_BIN:-fno-agents}" state path target-state --root "$repo_root" 2>/dev/null || true)"
+  if [[ -n "$space_manifest" && "$space_manifest" != "$repo_root/.fno/target-state.md" && -f "$space_manifest" ]]; then
+    read_manifest_fields "$space_manifest"
+  fi
 fi
 local_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 hold_json=""
@@ -329,7 +344,44 @@ reviewed_head_sha="$head_sha"
 # binary diff); the refusal fires only when the diff changed no file at all.
 reviewed_file_count="$(git diff --name-only "${reviewed_base_sha}..HEAD" 2>/dev/null | command grep -c . || true)"
 reviewed_line_count="$(git diff --numstat "${reviewed_base_sha}..HEAD" 2>/dev/null | awk '{ add += $1; del += $2 } END { print add + del + 0 }')"
+# The invocation's flags resolve BEFORE the empty-diff refusal, because the
+# fix-verification carve-out below reads them: a refusal that fires first
+# never learns the run was scoped (the shape: a worker that fixes a
+# finding before its first classify leaves the raise row and the fix commit
+# on one head, so the scoped verify has an empty diff and, without this read,
+# nothing to attest).
+review_flags="$(printf '%s' "$hold_json" | jq -c '.metadata.flags // []' 2>/dev/null || echo '[]')"
+if ! jq -e 'type == "array" and all(.[]; type == "string")' <<<"$review_flags" >/dev/null 2>&1; then
+  review_flags='[]'
+fi
 if (( reviewed_file_count == 0 )); then
+  # The fix-verification carve-out: base == head with a raise AT this head and
+  # a scoped --verify-fixes invocation is an in-place verification, not a
+  # review of nothing. The finding was raised at this exact head and the fix
+  # landed before any attested head (fix delta empty, no later head can ever
+  # witness it), so the scoped verify re-read the finding's site here and its
+  # disposition rides the classified pass - exactly the terminal form the
+  # merge gate reads (disposition_gate: a fixed disposition carried by a
+  # --verify-fixes invocation is terminal at the disposing round's own head).
+  # The witness door answers the word `raised` (exit 0) only when the chain's
+  # newest in-scope row raises at this head, so a contentless verify with
+  # nothing to verify still refuses below. The word, not the exit code, is
+  # the gate: a pre-raise-at-head binary ignores the flag, prints a round
+  # number, and exits 0 - an exit-code check would fail open on staleness.
+  # The door is called only for a scoped run: an unscoped empty diff refuses
+  # on the flags alone and pays no witness read.
+  if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
+    raise_witness="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" \
+      --raise-at-head 2>/dev/null || true)"
+    if [[ "$raise_witness" == "raised" ]]; then
+      echo "emit-attestation: empty diff accepted as an in-place fix-verification (a raise at head ${head_sha:0:8} on branch ${branch}); the disposition rides the classified verdict" >&2
+    else
+      refuse_empty_diff=1
+    fi
+  else
+    refuse_empty_diff=1
+  fi
+  if [[ "${refuse_empty_diff:-}" == "1" ]]; then
   # The refusal is durable, not just stderr: one review_invocation row with
   # stage=refused closes the `sent` row this attempt opened, carrying the same
   # invocation_id and the measured zero. The script still exits 1 whatever
@@ -371,6 +423,7 @@ if (( reviewed_file_count == 0 )); then
   echo "If you are reviewing a worktree from the canonical checkout, hand the review its" >&2
   echo "target explicitly: run from the worktree path, or pass the PR number to the review command." >&2
   exit 1
+  fi
 fi
 
 # The actor reads (repo_root, session_id, harness), the hold, and the
@@ -382,14 +435,9 @@ fi
 review_args_raw="$(printf '%s' "$hold_json" | jq -r '.metadata.args_raw // empty' 2>/dev/null || true)"
 review_level="$(printf '%s' "$hold_json" | jq -r '.metadata.level // "unset"' 2>/dev/null || echo unset)"
 review_level_source="$(printf '%s' "$hold_json" | jq -r '.metadata.level_source // "fallback"' 2>/dev/null || echo fallback)"
-review_flags="$(printf '%s' "$hold_json" | jq -c '.metadata.flags // []' 2>/dev/null || echo '[]')"
 [[ -n "$review_command" ]] || review_command="/code-review"
 [[ -n "$review_level" ]] || review_level="unset"
 [[ -n "$review_level_source" ]] || review_level_source="fallback"
-[[ -n "$review_flags" ]] || review_flags='[]'
-if ! jq -e 'type == "array" and all(.[]; type == "string")' <<<"$review_flags" >/dev/null 2>&1; then
-  review_flags='[]'
-fi
 # A declared scope stamps the round it verifies: when the invocation carried
 # --verify-fixes, the pass declares review_round so the counter reads the
 # round it verified, not a fresh one (law: a scoped fix-verification is not a
@@ -539,7 +587,8 @@ data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdi
   --argjson findings "$findings_json" \
   --arg review_round "$review_round" \
   --arg level "$review_level" \
-  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,execution_context:$execution_context,output_contract:$output_contract,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end) + (if $level == "" or $level == "unset" then {} else {level: $level} end)')"
+  --argjson review_flags "$review_flags" \
+  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,execution_context:$execution_context,output_contract:$output_contract,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end) + (if $level == "" or $level == "unset" then {} else {level: $level} end) + (if ($review_flags | index("--verify-fixes")) then {verify_fixes: true} else {} end)')"
 # FNO overrides the binary (defaults to the mux); tests point it at fno-py,
 # which is on PATH in the uv test env where the mux is not installed.
 "${FNO:-fno}" doctor event emit -t review_attestation -s target -d "$data"

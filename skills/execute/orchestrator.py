@@ -32,7 +32,7 @@ _CLI_SRC = _SKILLS_DIR.parents[1] / "cli" / "src"
 if str(_CLI_SRC) not in sys.path:
     sys.path.insert(0, str(_CLI_SRC))
 
-from fno import dispatch_flags, harness_names  # noqa: E402  (path set above)
+from fno import harness_identity, harness_names  # noqa: E402  (path set above)
 
 
 # PRODUCT.md validation thresholds (mirrors /impeccable's loader contract)
@@ -50,31 +50,6 @@ _PRODUCT_MD_SEARCH_PATHS = (
     ".agents/context/PRODUCT.md",
     "docs/PRODUCT.md",
 )
-
-
-# ---------------------------------------------------------------------------
-# Company topology projection
-# ---------------------------------------------------------------------------
-# The router projects a resolved company topology onto a work order through
-# fno.company.execution.project_execution, which carries the shape alongside the
-# work order's unchanged identity, authority ceiling, approval floor, and
-# required evidence. There is no second router: topology changes execution
-# shape only, so the same WorkOrderRef and delivery requirements pass through
-# direct, loop, squad, and pipeline unchanged. Company work is not yet flowing
-# through this router (is the first consumer); this is the seam.
-
-
-def apply_company_topology(resolution, work_order, authority_ceiling, approval_floor, required_evidence_ids):
-    """Project a resolved topology for a company work order without altering truth."""
-    from fno.company.execution import project_execution
-
-    return project_execution(
-        resolution=resolution,
-        work_order=work_order,
-        authority_ceiling=authority_ceiling,
-        approval_floor=approval_floor,
-        required_evidence_ids=required_evidence_ids,
-    )
 
 
 def find_product_md(repo_root: Path) -> Optional[Path]:
@@ -174,12 +149,12 @@ def resolve_invoking_harness(
     ``"env-marker"`` or ``"env-default"``. An explicit value wins and is
     validated against :data:`fno.harness_names.KNOWN_HARNESSES` (the L0 roster
     every other caller shares); with no explicit value the ambient identity is
-    resolved through :func:`fno.dispatch_flags.infer_invoking_harness`, which
-    maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to opencode
-    and answers None when markers disagree. ``"env-default"`` (claude) is
-    distinguishable from ``"env-marker"``, so a caller that requires a
-    positively identified harness can refuse on the difference. The value is a
-    harness, never a model vendor.
+    resolved through :func:`fno.harness_identity.resolve_harness_identity`,
+    which maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to
+    opencode and answers None when markers disagree. ``"env-default"``
+    (claude) is distinguishable from ``"env-marker"``, so a caller that
+    requires a positively identified harness can refuse on the difference.
+    The value is a harness, never a model vendor.
     """
     if explicit is not None and explicit.strip():
         h = explicit.strip().lower()
@@ -189,7 +164,7 @@ def resolve_invoking_harness(
                 f"{', '.join(harness_names.KNOWN_HARNESSES)}"
             )
         return h, "explicit"
-    inferred = dispatch_flags.infer_invoking_harness(env)
+    inferred = harness_identity.resolve_harness_identity(env).harness
     if inferred:
         return inferred, "env-marker"
     return "claude", "env-default"
@@ -1392,16 +1367,17 @@ def handle_blocked_task(
 
 # Self-contained frontmatter-schema check. Duplicated (not shared) with
 # skills/blueprint: driver skills are CI-enforced self-contained and cannot
-# cross-import. Validation runs under a pydantic-capable python because /execute's
-# ambient python3 lacks pydantic (same reason finalize.rs shells the cli venv).
+# cross-import. Validation runs the plan-schema door out-of-process because
+# /execute's ambient python3 lacks fno on its path (same reason finalize.rs
+# shells the cli venv).
 _VALIDATE_SNIPPET = r"""
 import json, sys
-from pydantic import ValidationError
-from fno.plan.schema import PlanFrontmatter
+from fno.rust_binary import plan_schema
 fm = json.load(sys.stdin)
-try:
-    PlanFrontmatter.model_validate(fm)
-except ValidationError as e:
+answer = plan_schema({"op": "validate-frontmatter", "frontmatter": fm, "undatable_refuses": False})
+if answer is None:
+    sys.exit(0)  # door unavailable - degrade, the later checks still guard
+if not answer.get("valid"):
     # Block only on STRUCTURAL corruption (a bad size, a garbage timestamp).
     # A missing required field is tolerated (a plan binds its node later), and
     # a drifted-but-recognizable `status` (planned/designed/superseded/...) is
@@ -1410,12 +1386,12 @@ except ValidationError as e:
     # frontmatter status. Blocking /execute on status drift would refuse ~5% of real
     # plans that run fine today.
     present = [
-        x for x in e.errors()
-        if x["type"] != "missing" and (x["loc"][:1] != ("status",))
+        x for x in answer.get("errors") or []
+        if x.get("message") != "Field required" and x.get("field") != "status"
     ]
     for x in present:
-        loc = ".".join(str(p) for p in x["loc"]) or "<root>"
-        print(f"  {loc}: {x['msg']} (got {x.get('input')!r})")
+        loc = str(x.get("field") or "<root>")
+        print(f"  {loc}: {x.get('message')} (got {x.get('got')!r})")
     if present:
         sys.exit(7)
 """
@@ -1425,17 +1401,14 @@ def _validate_frontmatter_via_schema(fm: Dict) -> Optional[str]:
     """Return a per-field refusal report if *fm* is invalid, else None.
 
     Refuses only on present-but-invalid fields (missing required fields are
-    tolerated). Best-effort: prefers cli/.venv's python, falls back to the
-    current interpreter when it has pydantic, and skips if neither is found.
+    tolerated). Best-effort: prefers cli/.venv's python (the door snippets
+    need only fno on PYTHONPATH plus the binary rust_binary resolves); any
+    python3 works, so one is always available.
     """
     venv = _CLI_SRC.parent / ".venv" / "bin" / "python"
     if venv.exists():
         py: str = str(venv)
     else:
-        try:
-            import pydantic  # noqa: F401
-        except ImportError:
-            return None
         py = sys.executable
 
     env = dict(os.environ)

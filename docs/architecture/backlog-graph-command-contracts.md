@@ -117,7 +117,7 @@ Delete a node from the graph permanently. This command exists and works.
 
 It had no docstring until 2026-08-11, which is why `fno help backlog --all` printed its name against an empty description and read as a stub. An agent consequently ruled that no delete command existed and made that the load-bearing reason for a decision, and another project kept 23 nodes it believed un-file-able. Hence this paragraph: the command's own help is the one place a caller asking "can this node go away" will actually look.
 
-A HARD delete, unlike ``archive``, which moves the node to ``graph-archive.json`` and keeps it readable. Prefer ``archive`` for shipped work, ``supersede`` when something replaced it, and ``defer`` when it is merely not now. Reach for ``remove`` on a duplicate, a test artifact, or a node filed by mistake - the cases where the record itself is the noise.
+A HARD delete, unlike ``archive``, which stamps the node into archive residency and keeps it readable. Use ``archive`` for shipped work. If something replaced the node, use ``supersede``. If it is merely not now, use ``defer``. Reach for ``remove`` on a duplicate, a test artifact, or a node filed by mistake - the cases where the record itself is the noise.
 
 Repairs every edge that pointed at the node, because nothing else can once the node is gone: drops it from every ``blocked_by``, from the symmetric ``related`` lists, nulls a dependent's ``source_node_id`` rather than leaving a dangling string, and releases contained children (the reconcile heal deliberately skips a MISSING owner, so an orphan there is permanent).
 
@@ -279,9 +279,9 @@ The graph is CROSS-PROJECT: a bare number match, scoped by nothing, would pull i
 
 ## cmd_archive
 
-Sweep old terminal (done/superseded) nodes into graph-archive.json.
+Sweep terminal nodes into archive residency: the sweep stamps ``archived_at`` in the same store, and default reads skip stamped rows. A done node waits for the age gate (``--older-than-days``, default 30). A superseded node sweeps at any age, because its successor carries the work.
 
-Dry-run by default: prints how many would move and why some are held back. ``--apply`` mutates under the graph lock (archive written first, then the working graph, so a crash duplicates rather than loses). Never archives a node an OPEN node still references through a hard edge (blocker, parent, supersede target). A SOFT edge (the open node's ``related`` peer or ``source_node_id`` origin) does not hold the target: the reference is stripped from the open side at apply time and the node leaves; the read-through fallback keeps its id resolvable.
+Dry-run by default: it prints how many rows it can move and why it holds some back. ``--apply`` stamps the rows in one write under the graph lock. Never archives a node an OPEN node still references through a hard edge (blocker, parent, supersede target). A SOFT edge does not hold the target. A soft edge is the open node's ``related`` peer or its ``source_node_id`` origin. At apply time the sweep strips the reference from the open side, and the node leaves. The read-through fallback keeps its id resolvable.
 
 Every run's receipt names all four held-back buckets plus the soft-edge strip count, and every run emits a ``graph_archive_swept`` event, dry-run included: a leg that runs daily and reports bare "ok" is indistinguishable from one that never ran - the count that matters is often the held-back one, not the moved one.
 
@@ -289,11 +289,9 @@ Two receipt additions close the "did the sweep stop?" gap. The receipt ends with
 
 ## cmd_unarchive
 
-Move one node from graph-archive.json back into the working graph.
+Clear one node's archive stamp, so it answers default reads again.
 
 ``archive`` is a bulk hygiene sweep with no way back, so a node swept early (or swept correctly and then needed again) could only be recovered by hand-editing, which a PreToolUse hook forbids. It is the fourth instance of the same shape as the missing ``reopen``, and the audit that produced this command found it in ten minutes.
-
-Write order mirrors ``archive`` inverted, for its reason: the working graph is written FIRST, so a crash between the two writes leaves a duplicate that the next sweep dedupes rather than a lost node. Read-through (``entries_with_archive``) already tolerates the window.
 
 Refuses to guess: 0 moved, or a warning that the node is already in the working graph 1 the id is in neither the working graph nor the archive
 
@@ -504,7 +502,7 @@ Tier-1 auto-emit: a ``gate_escape{reason:dead-bot}`` when
 
 ## scan_merge_drift
 
-Find open nodes whose PR has merged outside the ship gate.
+Find open nodes whose PR has merged outside the ship gate and whose PR closure line (`Fixes <ids>`) names them. A merged PR with no line for a node, such as an earlier wave of a multi-wave node, is not that node's closing evidence.
 
     Returns one record per open node that resolves to a MERGED PR, plus
     records flagged with ``error`` for nodes whose PR state could not be
@@ -1022,11 +1020,7 @@ retry could hold it.
 Four close paths read a reopen; the deliberate command (``cmd_done``, with its
 own ``--force`` plus ``--reason`` ladder) does not:
 
-- ``_cascade_close_parents`` and ``_sweep_close_done_epics`` key on the
-  CHILDREN's closes (``_reopen_outranks_child_closes``). That guard still
-  reads child ``completed_at`` alone: a superseded child carries no
-  ``completed_at``, so it adds no close evidence there, and
-  ``children_all_closed`` does not change it.
+- ``_cascade_close_parents`` and ``_sweep_close_done_epics`` key on the CHILDREN's closes (``_reopen_holds_epic``). A superseded child carries no ``completed_at``, so it adds no close evidence there, and ``children_all_closed`` does not change it. Only a child that joined the epic at or before the reopen can expire the hold. An epic is usually reopened because its owed leaves are not filed yet. A leaf that joins after the reopen is one of those leaves, so its close says nothing about the rest. One epic auto-closed twice this way while its other leaves were still unfiled. The join stamp is ``parented_at``. Both write seams set it under the store lock: ``locked_mutate_with_hook`` and ``mutate_single_row``. A write stamps every row it gives a parent or moves. ``created_at`` cannot serve. A creator stamps it before the lock, so a create racing a reopen reads as earlier. A reparent never changes it. A row written before the stamp existed falls back to ``created_at``. A child with an unreadable stamp counts as after. The Rust twin is ``reopen_holds_epic`` in ``crates/fno-agents/src/graph_store.rs``. The epic stays open until a human closes it. An older child that closes after the reopen also ends the hold.
 - reconcile's PR-merged close leg keys on the MERGE
   (``_reopen_outranks_merge``): it reads no children, so the child-keyed
   guard never reached it.

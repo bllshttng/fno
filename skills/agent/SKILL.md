@@ -91,6 +91,7 @@ Read this table before you seat a worker on a node. Use the harness's own line w
 | opencode | `fno agents spawn -H opencode --name <name> --node <node> '/fno:target <node>'` | not measured on v2 | [launch-opencode.md](references/launch-opencode.md) |
 | pi | `fno agents spawn -H pi --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- pi ... '/skill:target <node>'` | [launch-pi.md](references/launch-pi.md) |
 | agy | `fno agents spawn -H agy --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- agy ... -i '/target <node>'` | [launch-agy.md](references/launch-agy.md) |
+| muse | `fno agents spawn -H muse --as thread --name <name> --node <node> '<task>' -- --yolo` | no pane lane | [launch-muse.md](references/launch-muse.md) |
 
 The implementation lane is claude on glm through zai. A claude route rides a `--settings` file, so ask spawn for the exact line and run what it prints: `fno agents spawn --name <name> '/fno:target <node>' --route 'zai,glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print`.
 
@@ -628,7 +629,7 @@ A final body word such as `question`, `heads-up`, or `fyi` remains body text.
 6. On a CLI refusal, relay its stderr unchanged so the user sees the live-agent and project-note alternatives instead of a skill-layer paraphrase.
 7. On success, relay the real message id and routing receipt exactly as printed.
 
-`delivered (hosted)` confirms the inject was accepted. It does not prove the recipient read the message. `queued (durable)` is not delivered. It is durable fallback awaiting the recipient's next active boundary or recovery. Use `fno agents mail admin sent` to check whether the message `landed` in the recipient's transcript.
+`accepted-new-turn` and `accepted-steer` confirm the recipient's own turn record holds the message. `parked` and `injected` mean the bytes reached it and no turn took them yet. None of them proves the recipient acted on it. `queued (durable)` is not delivered. It is durable fallback awaiting the recipient's next active boundary or recovery. Use `fno agents mail admin sent` to check whether the message `landed` in the recipient's transcript.
 Never upgrade queued mail to delivered, and never invent a receipt when the CLI printed none.
 An unknown agent heads-up exits 16 and writes nothing, so report that exact failure without guessing another recipient.
 `send` is free and never confirms because it is not a billed launch.

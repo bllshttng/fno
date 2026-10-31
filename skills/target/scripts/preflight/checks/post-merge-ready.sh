@@ -5,7 +5,7 @@
 # must not block a /target build (warn/unknown only).
 #
 # Consumes the single readiness oracle so the rule lives in exactly one place
-# (cli/src/fno/config_cli.py:post_merge_readiness). The warn fires only where
+# (crates/fno/src/config_doctor/post_merge.rs:readiness). The warn fires only where
 # the gap actually bites (the oracle's `unconfigured` already requires repo
 # activity); a fresh repo is `dormant` -> pass/silent.
 #

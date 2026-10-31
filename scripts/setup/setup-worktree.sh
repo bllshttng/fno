@@ -50,12 +50,12 @@ fi
 WORKTREE="${WORKTREE:-$(pwd)}"
 
 # Refuse the whole script when the two roots are one directory, BEFORE the
-# mkdir and every link helper. Not a check inside link_artifact/link_file/
-# link_dir: when the roots coincide the script is a no-op at best and
-# destructive at worst, so the answer is to not run it at all. link_artifact
-# `rm -f`s the real file before `ln -sf "$source" "$target"`, which with equal
-# paths leaves a symlink pointing at itself - that is how this repo's
-# .fno/codemap.md was lost on 2026-07-26.
+# mkdir and every link helper. Not a check inside link_file/link_dir: when
+# the roots coincide the script is a no-op at best and destructive at worst,
+# so the answer is to not run it at all. The old link_artifact `rm -f`d the
+# real file before `ln -sf "$source" "$target"`, which with equal paths left
+# a symlink pointing at itself - that is how this repo's .fno/codemap.md was
+# lost on 2026-07-26.
 #
 # `-ef` compares device+inode, so a symlinked, relative, or /tmp-vs-/private/tmp
 # invocation cannot slip past it the way a string equality test would.
@@ -104,29 +104,6 @@ link_file() {
   if [[ -e "$target" && ! -L "$target" ]]; then
     echo "setup-worktree: refusing to overwrite real file: $target" >&2
     return 0
-  fi
-
-  ln -sf "$source" "$target"
-}
-
-# Link a regenerable artifact. Replaces existing real files in the worktree
-# because the canonical copy is authoritative and the artifact is rebuilt
-# on demand (e.g. codemap.md). NEVER call this on user data.
-link_artifact() {
-  local rel="$1"
-  local source="$CANONICAL/$rel"
-  local target="$WORKTREE/$rel"
-
-  if [[ ! -e "$source" ]]; then
-    echo "setup-worktree: source missing, skipping: $rel" >&2
-    return 0
-  fi
-
-  # If the target is a real file (not a symlink), replace it. Real dirs are
-  # NOT replaced by this helper - that's link_dir's job and it has its own
-  # safety check.
-  if [[ -e "$target" && ! -L "$target" && ! -d "$target" ]]; then
-    rm -f "$target"
   fi
 
   ln -sf "$source" "$target"

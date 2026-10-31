@@ -34,13 +34,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # The named backend/storage owners: modules whose direct graph access is the
 # sanctioned storage seam (the tracker backends, the sidecar projection's
-# graph-mode store, the guarded footnote-metadata reader, and the archive
-# machinery inside the store itself).
+# graph-mode store, and the archive machinery inside the store itself).
 READ_ALLOWLIST = (
     "cli/src/fno/graph/store.py",
-    "cli/src/fno/tracker/sidecar.py",
-    "cli/src/fno/tracker/metadata.py",
-    "crates/fno-agents/src/tracker/graph.rs",  # the graph tracker backend: rows over the store (the Rust leg of the deleted graph_backend.py)
+    "cli/src/fno/graph/api.py",  # read_entries: the guarded footnote-metadata reader
+    "crates/fno-agents/src/tracker/graph.rs",  # the graph tracker backend: rows over the store (the Rust leg of the deleted graph_backend.py, now also the sidecar projection)
     "crates/fno/src/backlog_view.rs",  # consumes the neutral snapshot + graph-mode mtime path (task 1.2)
     "crates/fno-agents/src/graph_get.rs",  # refuses the default store under an external backend
     "crates/fno-agents/src/prove_it_verdicts.rs",  # the verdict reader's read-only walk, same external-backend refusal as graph_get
@@ -50,12 +48,21 @@ READ_ALLOWLIST = (
     "crates/fno-agents/src/pr_nudge.rs",  # the merge-order hold's read-only decision join (read_store_live over the state dir)
     "crates/fno-agents/src/scratch.rs",  # the sweep's status read routes through graph_store::read_rows
     "crates/fno-agents/src/route_slot.rs",  # the routing audit's read-only decision projection
+    "crates/fno-agents/src/observer/isolation.rs",  # the replay leak scan names the real graph.json path to police it, never a read
     # Not readers: store plumbing and path builders. note_history.rs
     # defaults the journal's derived file name; note_migrate.rs help text
     # names the default store path.
     "crates/fno-agents/src/backlog/mod.rs",
     "crates/fno-agents/src/backlog/note_history.rs",
     "crates/fno-agents/src/backlog/note_migrate.rs",
+    # The config doctor's state-roots report: graph_json() builds the
+    # default store path it reports roots against, a path builder that
+    # never opens the store.
+    "crates/fno/src/config_doctor/mod.rs",
+    # The state lane's fixture writer: populate_state_profile builds a
+    # synthetic graph.json inside the session sandbox for the state canary.
+    # It never opens the real store.
+    "crates/fno-agents/src/test_smoke.rs",
     # The pr-watch installer's plist template: its doc comment names the
     # store the launchd tick polls, and the rendered bytes are golden-frozen;
     # the installer itself never opens the store, never a read.

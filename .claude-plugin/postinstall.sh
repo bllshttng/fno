@@ -50,9 +50,33 @@ fi
 
 log() { printf "[fno postinstall] %s\n" "$*"; }
 err() { printf "[fno postinstall] ERROR: %s\n" "$*" >&2; }
+# PyPI carries prebuilt wheels (all four Rust binaries inside) for exactly four
+# targets. Any other platform lands on the Python-only source install, which
+# leaves the daemon-backed commands missing. Say so before installing, with the
+# build commands, instead of after a half-working install.
+platform_wheel_notice() {
+  case "$(uname -s)/$(uname -m)" in
+    Darwin/arm64|Darwin/x86_64|Linux/x86_64|Linux/aarch64) return 0 ;;
+  esac
+  log "no prebuilt wheel for $(uname -s)/$(uname -m). PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
+  log "This install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
+}
 # Printed after a successful install so a new user knows the one configuration
 # step exists (install never prompts). Optional: defaults work without it.
-next_steps() { log "Next: run 'fno setup wizard' to configure (optional; defaults work)."; }
+next_steps() { log "Next: run 'fno config setup run --check' to see what this machine still needs."; }
+
+# The two steps fno.sh runs after a verified install (fno.sh wire_harnesses,
+# run_setup_once), so the plugin route leaves the same machine. Best effort:
+# the CLI is installed already. FNO_NO_WIRE skips both, as it does there.
+wire_and_setup() { # wire_and_setup <front-door path>
+  if [[ -n "${FNO_NO_WIRE:-}" ]]; then
+    log "FNO_NO_WIRE is set: skipping plugin wiring and the run-once setup."
+    return 0
+  fi
+  log "wiring the fno plugin into detected agent CLIs (set FNO_NO_WIRE to skip this)..."
+  "$1" config setup auto-wire >&2 || log "plugin wiring did not finish; run 'fno config setup auto-wire' to retry."
+  "$1" config setup run --once ${FNO_YES:+--yes} --json >&2 || log "the run-once setup did not finish; run 'fno config setup run' to retry."
+}
 
 if [[ ! -f "$CLI_DIR/pyproject.toml" ]]; then
   err "expected cli/ at $CLI_DIR but pyproject.toml is missing."
@@ -88,7 +112,7 @@ for a in data.get("assets", []):
     if a.get("name", "").endswith(".whl") and re.search(plat, a["name"]):
         print(a["browser_download_url"]); sys.exit(0)
 sys.exit(1)
-' 2>/dev/null)" || return 1
+' 2>/dev/null <<<"$json")" || return 1
   printf '%s' "$url"
 }
 
@@ -112,16 +136,19 @@ uv_install_verifies() {
 }
 
 # The post-install shim sweep (x-c911): repair any fno* shim in the tool bin
-# that dangles or resolves into a temp dir; fail loud when unrepairable.
+# that is missing, dangles, or resolves into a temp dir; fail loud when
+# unrepairable.
 shim_sweep() {
-  local py td
-  py="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)/fno/bin/fno-py"
+  local fno td
+  # The venv copy of the front door, never the tool-bin shim under check.
+  fno="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)/fno/bin/fno"
   td="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir --bin 2>/dev/null)" || td="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
-  [[ -x "$py" ]] || return 0  # no venv python: the verify gate already failed
-  # An installed fno predating the sweep module has nothing to sweep.
-  "$py" -c "import fno.setup.shim_check" 2>/dev/null || return 0
-  "$py" -m fno.setup.shim_check --repair --bin-dir "$td" && return 0
-  err "fno shims in $td dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $py -m fno.setup.shim_check --bin-dir $td"
+  # A Python-only install has no front door, and one predating the sweep
+  # refuses the command: either way there is nothing to sweep with.
+  [[ -x "$fno" ]] || return 0
+  "$fno" config setup shim-check --help >/dev/null 2>&1 || return 0
+  "$fno" config setup shim-check --repair --bin-dir "$td" && return 0
+  err "fno shims in $td are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $fno config setup shim-check --bin-dir $td"
   return 1
 }
 
@@ -418,6 +445,7 @@ if command -v uv >/dev/null 2>&1; then
           exit 3
         fi
         shim_sweep || exit 1
+        wire_and_setup "$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir)/fno/bin/fno"
         log "restart your shell (or source your env) to pick up PATH."
         finish_success
         next_steps
@@ -433,6 +461,7 @@ if command -v uv >/dev/null 2>&1; then
     fi
   }
 
+  platform_wheel_notice
   case "$CHANNEL" in
     rc)
       log "channel rc: pinning the candidate from PyPI as fno==$SRC_VERSION (a plain by-name install skips pre-releases)..."

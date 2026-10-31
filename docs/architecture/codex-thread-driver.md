@@ -210,7 +210,7 @@ The grant is per THREAD, never per daemon. One shared app-server owns every thre
 
 ## Posture, grant, and the two failure lanes
 
-`workspace-write` grants the worker's checkout but does not grant the repository's `.git` metadata. A plain checkout has `.git` as a directory. A linked worktree has `.git` as a file pointing into the repository's common Git directory. The common directory is the one path that covers the linked-worktree gitdir, shared objects, refs, and index without widening the worker to full access.
+`workspace-write` grants the worker's checkout but does not grant the repository's `.git` metadata. A plain checkout has `.git` as a directory. A linked worktree has `.git` as a file pointing into the repository's common Git directory. The common directory holds the shared objects and refs. It also contains the linked-worktree gitdir. But codex marks the gitdir named by the cwd's `.git` file read-only inside every writable root. So a linked worktree also grants its own gitdir `<repo>/.git/worktrees/<name>` (`provider::git_write_roots`, measured on codex-cli 0.164.0). Neither grant widens the worker to full access.
 
 The registry row records two separate facts. `sandbox_posture` says which sandbox mode the worker launched with. `git_grant` is the resolved absolute Git common-directory path that the policy carried, so a reader can identify the repository covered by the grant. `None` means the grant did not resolve. It is not an empty-string success and it is distinct from a row written before the field existed.
 
@@ -242,7 +242,7 @@ A driver-hosted thread closes this by construction. It appears in `thread/loaded
 
 ## What the fno side holds now
 
-`crates/fno-agents/src/daemon.rs` is the supervisor, and `ctx.codex_threads` holds one entry per codex thread worker. Read those entries as SOCKETS, not children. The supervisor owns no app-server process, so losing one loses a connection while the thread keeps running. `recover_codex_threads` reopens them at startup from the registry's durable `harness_session_id`. Recovery refuses a row whose cwd no longer exists and stamps it Orphaned. A resumed thread with no cwd reads alive and can never run a turn.
+`crates/fno-agents/src/daemon.rs` is the supervisor, and `ctx.codex_threads` holds one entry per codex thread worker. Read those entries as SOCKETS, not children. The supervisor owns no app-server process, so losing one loses a connection while the thread keeps running. `recover_codex_threads` reopens at startup only the rows whose last real turn is recent (row stamps within the rollout-freshness window). An older row stays unhosted and reads resumable, and every ask still resumes it on demand through `ensure_codex_thread_handle`. Recovery refuses a row whose cwd no longer exists and stamps it Orphaned. A resumed thread with no cwd reads alive and can never run a turn.
 
 One actor task per thread owns its connection exclusively. That reasoning is about handle types, so it survived the transport change untouched. `drive_turn` used to hold a mutex guard for a whole turn, so every follow-up ask queued behind it and the steer RPC was unreachable. Consumers now send commands and never touch the driver.
 

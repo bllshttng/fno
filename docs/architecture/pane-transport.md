@@ -20,15 +20,13 @@ An earlier ruling said "an envelope typed as keystrokes is still keystrokes" and
 
 | Caller | Wants | Why |
 |--------|-------|-----|
-| `_forced_pane_send` (`mail/cli.py`) | passthrough | the body is already enveloped by `_name_lane_send` |
-| name-lane pane rung (`mail/cli.py`) | passthrough | same, already enveloped |
-| `_raw_send` (`mail/cli.py`) | `raw=True` | the REPL slash parser must fire, and an envelope defeats it |
-| peer follow-up (`dispatch.py`) | passthrough | carries a `<cross-session-message>` container of its own |
-| `_deliver_live` (`dispatch.py`) | `raw` when `mail is None` | that argument is what says whether this is mail at all |
+| forced pane send (`mail_cli/send/lanes.rs`) | passthrough | the body is already enveloped by the name lane |
+| name-lane pane rung (`mail_cli/send/lanes.rs`) | passthrough | same, already enveloped |
+| raw send (`mail_cli/send_raw.rs`) | `raw=True` | the REPL slash parser must fire, and an envelope defeats it |
 
-The three passthroughs rely on `_already_wrapped`, which tests the FIRST tag of the body. A digest that merely CONTAINS an envelope fails that test. `wrap_fno_mail` then refuses it, because a body must not hold an envelope. So a caller whose payload EMBEDS mail says `raw` rather than trusting the passthrough.
+The passthroughs test the FIRST tag of the body. A digest that merely CONTAINS an envelope fails that test. The renderer then refuses it, because a body must not hold an envelope. So a caller whose payload EMBEDS mail says `raw` rather than trusting the passthrough.
 
-**One renderer.** `cli/src/fno/mail/envelope.py` is the sole `<fno_mail>` renderer. A prior node deleted the Rust mirror as dead code. If the Rust command cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
+**One renderer.** `crates/fno-agents/src/mail_envelope.rs` is the sole `<fno_mail>` renderer. If the Rust command cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
 
 ## The read-back gate
 
@@ -46,18 +44,23 @@ There are THREE cases here and only two flags, which is how one of them got lost
 
 ## Receipt vocabulary
 
-Four words now, and they are not interchangeable.
+A live send reports one of six states, in this order. The receiving harness's own turn record must hold the envelope id before a send reaches an accepted state. A turn that started is not that proof: it can be an earlier queued prompt, with our message still behind it. Text in the composer is a draft, not a delivery.
 
-| Receipt | What it asserts | What it does not assert |
-|---------|-----------------|-------------------------|
-| `delivered (hosted)` | The injector confirmed the payload was accepted at send time | That it reached the recipient's turn, or anything about what the recipient did with it |
-| `landed` | The message id is present in the recipient's own transcript | That the agent read it or acted on it |
-| `typed (pane <id>)` | Bytes were written into that pane | That anyone read them, or that the turn was taken |
-| `queued (durable) [<reason>]` | A durable envelope exists and the named live lane missed | That the recipient is gone. `live-miss` today cannot tell a busy peer from an absent one |
+| State | What it asserts | What it does not assert |
+|-------|-----------------|-------------------------|
+| `queued` | A durable copy is on the bus. No live lane reached the recipient | That the recipient is gone. A busy peer and an absent one look the same here |
+| `injected` | Bytes were written, or an RPC was sent, and no turn record holds the envelope yet | That the harness took it. A harness with no local record (cursor-agent, agy, a claude cloud row) stops here |
+| `parked (composer)` | The body sits typed in the input box and was not submitted | That it will ever run. Someone must submit or clear it |
+| `parked (harness-queue)` | The harness took the body into its own queue behind the running turn | That a turn has read it yet |
+| `accepted-new-turn` | The harness's turn record holds the envelope id, as its own turn | That the agent acted on it |
+| `accepted-steer` | The same record, folded into the turn that was running at send | That the agent acted on it. A steer means it was read mid-turn |
+| `failed (<reason>)` | Nothing sits with the recipient: a refusal before any byte, or a typed line withdrawn on silence | Anything about the recipient's health. The bus copy stays drainable |
 
-`delivered (hosted)` used to be read as proof the recipient's turn was reached. One message disproved that. It printed `delivered (hosted)`. It reached its recipient only because the operator pressed ESC to interrupt a busy loop. The send had confirmed nothing beyond its own injection. `landed` is the row that grew out of that gap. It is proven by grepping the recipient's own transcript for the bare message id (`fno agents mail admin sent --json`). It is a strictly weaker claim than the old wording implied.
+Each lane reads its own proof source. A claude pane or thread reads the session transcript. There a `user` record is a new turn, and a `queued_command` attachment is a steer. A `queue-operation` row alone is the harness queue. A codex pane or thread reads the rollout, where the user message item carries a `turn_id`. That id equal to the turn running at send is a steer. On codex 0.164.0 the rollout held a busy-turn submit within a second. An ACP host (footnote) writes `accepted-new-turn` as its queued prompt starts its `session/prompt`. ACP has no steer. A Muse thread reports the state its MSP events fold to. opencode serve has no steer read, so it reports `accepted-new-turn` for both.
 
-`typed` is deliberately not `delivered`. Bytes written to a PTY is not delivery and is certainly not action. A full payload can arrive, render, and be discarded while the return selects a prompt's default. The confirmation a pane send cannot give is the recipient's own transcript showing the text.
+The bus keeps the history as append-only `kind: state` rows (`meta.of` names the message, `meta.state` the word). Readers fold them with `mail_delivery_state::newest_state`: an accepted row is terminal, so a retry never lowers it. A row from before the states reads through its `delivery` mark: `hosted` reads `accepted-new-turn`, `typed` reads `injected`, and no mark reads `queued`. `fno agents mail admin sent` prints the state of every message you sent, and its `--json` rows carry `state`. The mux Messages tab prints the state under each sent message and marks a chat whose last message is parked or failed with `!`.
+
+The words replace `delivered (...)`. That receipt only ever meant a lane returned Ok. A codex `turn/start` printed it on any turn id, without reading the rollout, and a pane paste printed it with no submit at all. One message printed it and reached its recipient only because the operator pressed ESC to interrupt a busy loop. `landed` stays as the after-the-fact transcript match, and it now folds into `accepted-new-turn`.
 
 The same rule now governs the keeper-hosted threads. A send confirms only from the hosted harness's own accepted-turn record, read past the byte boundary captured before the paste. On pi that record is the session file materialized at the first turn attempt, matched on the full envelope line. Composer echo and scrollback repaint are typing progress, never evidence. A harness with no local record (cursor-agent, agy) types the message and stays unconfirmed for the whole confirm budget. The durable floor then writes the recovery copy. A paint match on a truncated marker prefix once reported delivered for a draft that was never submitted, so the prefix matcher is gone.
 
@@ -91,6 +94,8 @@ The full field contract is `agent_raw_inject` in `cli/src/fno/events/schema.yaml
 
 `--force` keeps every mail semantic and changes only the transport. Before it existed, a live-miss forced the sender to switch commands. Switching commands is what lost the envelope, the message id, the reply handle, and the outbox row.
 
+A thread worker hosts no pane, so `--force` cannot reach it. `fno agents spawn` makes a thread unless the caller asks for `--as pane`. To correct a thread worker that is underway, write the correction on its node with `fno backlog note <node>`. The note has no word cap, and it mails the node's holder a short pointer. The `--force` refusal and the control-lane budget refusal both name this lane.
+
 The bus row records `mail_id` alongside the `pane_id` it was typed into. That one mapping buys three things:
 
 - **Auditability.** A message delivered by keystroke used to be invisible to every mail surface. Now `fno agents mail admin sent` shows it and names the transport.
@@ -117,7 +122,7 @@ The seed is the one message that defines a worker's entire task. It was also the
 
 The envelope cannot ride the payload. `skills/agent/scripts/normalize.sh:710` classifies a payload by a LEADING slash (`case "$msg" in /*) payload_mode="passthrough"`), so anything in front of `/fno:target x-aaaa` destroys routing. Behind the command line is no safer. The harness REPL is a second reader nobody controls. Probe 1 measured what it does with a trailing block. The command still routes, and the whole trailer lands inside `<command-args>`. For `/fno:target <node>` those arguments are load-bearing, so an envelope swallowed into them is a real failure rather than a cosmetic one.
 
-So the prompt stays byte-identical and the attribution arrives beside it. Every launcher exports bounded `FNO_SEED_PROV_*` fields on the child's environment (`cli/src/fno/mail/seed_provenance.py` owns the contract), and `hooks/spawn-seed-provenance-session-start.sh` renders them through the one renderer into startup context. The worker learns who supplied its seed before it acts. The transcript carries a greppable `</fno_mail>` for that seed, with no envelope at byte zero.
+So the prompt stays byte-identical and the attribution arrives beside it. Every launcher exports bounded `FNO_SEED_PROV_*` fields on the child's environment. `SEED_PROVENANCE_KEYS` in `cli/src/fno/harness_identity.py` and its Rust reader in `crates/fno-agents/src/claude_supervisor.rs` hold the contract. `hooks/spawn-seed-provenance-session-start.sh` renders them through the one renderer into startup context. The worker learns who supplied its seed before it acts. The transcript carries a greppable `</fno_mail>` for that seed, with no envelope at byte zero.
 
 The gate is not-a-restart, and it is not the same test on every harness. Claude reports a `source` field, so the hook refuses an explicit `compact` or `resume`. Codex reports no such field. It routes compaction to `PostCompact`, a separate event this hook is not registered for. So a codex payload that parses and carries no `source` is a real start, and it emits. Requiring the literal `startup` silenced the sidecar on the one harness whose head-8 is a clock bucket. A payload that does not parse at all still emits nothing, because that hook cannot tell a start from a compaction.
 
@@ -131,7 +136,7 @@ An operator spawn emits nothing. A person typing `fno agents spawn` in a shell a
 
 Three seeds get no sidecar, and none of them loses its spawn. A seed over the 16 KiB cap: a sidecar must quote the seed in full, and a pasted plan is long rather than dishonest. A seed from an unprovable identity: that is the operator case. And a seed already carrying an `<fno_mail>` envelope.
 
-That last one refused the spawn for a while, and it was wrong twice over. `wake_and_deliver`'s fork rung seeds a worker with the wrapped message itself. So a legitimate seed carries an envelope BY CONSTRUCTION. Refusing killed every mail send to an asleep-but-resumable peer that reached that rung. It demoted to durable blaming a spawn failure that never happened. Refusing was also the wrong instrument. The tag reaches the worker prompt whether or not a sidecar renders. It only ever helped by killing the launch.
+That last one refused the spawn for a while, and it was wrong twice over. The mail wake's fork rung seeded a worker with the wrapped message itself. So a legitimate seed carries an envelope BY CONSTRUCTION. Refusing killed every mail send to an asleep-but-resumable peer that reached that rung. It demoted to durable blaming a spawn failure that never happened. Refusing was also the wrong instrument. The tag reaches the worker prompt whether or not a sidecar renders. It only ever helped by killing the launch.
 
 So this helper never refuses a spawn. It owes the caller an honest sidecar or none, and it has no stake in the work being launched.
 

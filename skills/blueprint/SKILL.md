@@ -24,11 +24,11 @@ Read the argument left to right: an optional leading `subagent` token (stripped 
 
 `subagent` runs the whole skill in a subagent of this session, and it still takes the claim, writes the row and runs every gate. The skill body takes the node claim in every node-seeded run, inline or subagent: Plan Claims Ingestion opens a `blueprint-session:` claim when the node is free, and plans under the holder it finds when one is already held. The wrapper's step 1 below takes it earlier, so a held node refuses before a subagent launches. The reasons are measured, not speed. A subagent cannot orphan: its completion IS the tool result (four of four returned in one measurement; every codex thread blueprint in that same measurement orphaned, one after 623 minutes, one with a negative span). A subagent spends no spawn share: the gate counts spawned workers, so one lead was refused twice at 7 of 7 while two blueprint subagents ran. No timing is claimed. Both wall-clock comparisons on record are confounded, one by unmatched model tiers, one by heavy external machine load, so no trustworthy timing exists in either direction:
 
-1. Run `fno backlog session open <node> --json`. A nonzero exit is the answer. Relay the refusal line and launch nothing. Exit 0 with `status: joined` means the spawn claimed the node for this session: plan under it. The receipt's `holder` is the holder steps 4 and 5 read back and release.
+1. Run `fno backlog session open <node> --json`. A nonzero exit is the answer. Relay the refusal line and launch nothing. Exit 0 with `status: joined` means a claim this session owns already holds the node: plan under it. A `spawn-handover:` holder is the spawn's claim, and steps 4 and 5 read it back and release it. A `target-session:` holder is this session's own target claim. The target run keeps it after the close. Step 4 reads only the session row, and step 5 never releases it.
 2. For several nodes at once, run `fno config assert-subagent-budget --width <n>` first. A refusal means one at a time.
 3. Launch one subagent with the Agent tool and `subagent_type: fno:architect`. Its whole prompt is: `Use the Skill tool to run fno:blueprint with args "<node>". Follow the skill to its end, including the blueprint close and its readback. Do not edit source files. Report the plan path and the readback line.` Add nothing to it. The architect definition (`agents/architect.md`) carries the planner stance and writes the plan file itself. When the Agent tool refuses the type, the plugin install predates it: take step 5's release path. Then run `fno doctor update`. Never relaunch without the type. A spawned blueprint names the same agent with `--agent fno:architect` on the spawn command. A codex session selects it with `spawn_agent` and `agent_type: architect`. A rule typed into a prompt is the drift this token removes. A node-specific constraint goes on the node with `fno backlog update <node> 'dispatch_brief+=...'`, where step 2a reads it.
-4. When it returns, and right after you stop it with TaskStop, read back two positive markers. `fno backlog get <node>` holds a `blueprint` session row with this session's id and an `ended_at`. `fno agents claim status node:<node> --json` no longer names the holder step 1's receipt printed.
-5. When either marker is missing, the subagent did not finish. A stopped subagent never returns, so the stop is the trigger. The release names this session's own id, which the caller always has. It is holder-scoped: each planner holds a different `node:` key, so the parent never frees a sibling planner's node. Run `fno agents claim release node:<node> --holder <the holder step 1's receipt printed>` (never with `--stamp-do`) and report the failure. Never backfill the stamp row. A row records a completion, and nothing completed.
+4. When it returns, and right after you stop it with TaskStop, read back two positive markers. `fno backlog get <node>` holds a `blueprint` session row with this session's id and an `ended_at`. `fno agents claim status node:<node> --json` no longer names the holder step 1's receipt printed. Skip this second marker for a `target-session:` holder, which stays held.
+5. When either marker is missing, the subagent did not finish. Never release a `target-session:` holder: report the failure and stop. A stopped subagent never returns, so the stop is the trigger. The release names this session's own id, which the caller always has. It is holder-scoped: each planner holds a different `node:` key, so the parent never frees a sibling planner's node. Run `fno agents claim release node:<node> --holder <the holder step 1's receipt printed> --rollback-do` and report the failure. The failure release removes the execute row the acquire opened. The default fill records a completion, and nothing completed.
 
 ## Gates (read by state)
 
@@ -41,7 +41,6 @@ Each gate loads only when its trigger fires. The bodies (with verbatim scripts) 
 | Answerer Enumeration Gate | the plan changes a read, write, or feed - step 2b-bis |
 | Consolidation Gate | always, between discovery grounding (2b) and the write (3) - step 2d |
 | Five questions and the judge | every plan - answered at 2a-bis, judged at step 3 after finalize |
-| Schema Citation Gate | the codemap has a `## Database Schema` section AND the plan touches the DB |
 | No new Python | a Files to Modify row, File Ownership Map row, or task surface names `cli/src/fno/**.py` |
 | Code Index Audit | every plan - step 2-index |
 | Executor Lock Transcription | a design doc supplies a Locked Decision (executor) |
@@ -140,51 +139,13 @@ fi
    `## Failure Modes` section, use it as the seed for error-path acceptance
    criteria (AC4-EDGE) cited inline in the Changes section. A research doc
    without one is fine: the `what-if` brief asks that question against source.
-2. **Structural context** — Generate a fresh codemap:
-   ```bash
-   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-   # `fno doctor codemap` writes codemap.md into the repo's space by default and
-   # auto-appends the DB-schema companion when --db-schema is set.
-   # The `.env` clause widens detection to repos whose connection lives only
-   # in a dev .env file (the case `db-schema.py` now discovers).
-   db_env_found=""
-   for ef in .env.local .env.development.local .env.development .env; do
-     if [ -f "$REPO_ROOT/$ef" ] && grep -qE '^(export[[:space:]]+)?(DATABASE_URL|POSTGRES_URL|SUPABASE_DB_URL|DIRECT_URL)=' "$REPO_ROOT/$ef"; then
-       db_env_found=1; break
-     fi
-   done
-   # Reuse-or-regenerate: when /think already wrote a `## Schema Reconciliation`
-   # section AND the codemap is fresh (<24h), schema was grounded at design
-   # time - skip the --db-schema regeneration (mirrors the `## Discovery` skip
-   # below). $DESIGN_DOC_PATH is the resolved design-doc argument, if any.
-   CODEMAP_PATH=$(fno-agents state path codemap 2>/dev/null || true)
-   [ -z "$CODEMAP_PATH" ] && CODEMAP_PATH="$REPO_ROOT/.fno/codemap.md"
-   schema_reused=""
-   if [ -n "${DESIGN_DOC_PATH:-}" ] && grep -q '^## Schema Reconciliation$' "$DESIGN_DOC_PATH" 2>/dev/null \
-      && [ -f "$CODEMAP_PATH" ] && [ -z "$(find "$CODEMAP_PATH" -mmin +1440 2>/dev/null)" ]; then
-     schema_reused=1
-   fi
-   if [ -z "$schema_reused" ] && { [ -d "$REPO_ROOT/supabase" ] || [ -f "$REPO_ROOT/prisma/schema.prisma" ] || [ -f "$REPO_ROOT/drizzle/schema.ts" ] || [ -n "$DATABASE_URL" ] || [ -n "$db_env_found" ]; }; then
-     fno doctor codemap --tokens 2048 --db-schema 2>/dev/null || true
-   elif [ -z "$schema_reused" ]; then
-     fno doctor codemap --tokens 2048 2>/dev/null || true
-   fi
-   ```
-   If `fno` is unavailable or codemap's deps are missing, skip silently. Read `.fno/codemap.md` if it exists - use it to identify god nodes, module boundaries, and dependency flow before Grep/Glob exploration. Top files in the output are highest-importance; changes to these need extra phases.
-
 2-index. **Ask the code index** - every plan, before the premise check. Run `bash "${SKILL_DIR}/scripts/lib/code-index-detect.sh"` and list every symbol, command, flag, file and prior-art claim the node or doc makes. Ask the first `ready` `symbol` provider about each code claim and the first `ready` `semantic` provider about each prior-art claim. Run the manifest's `ask` argv under its `timeout_secs` with `{term}` replaced. When the manifest has a `fresh` probe, run it. Write the `code_index:` frontmatter block (`main_sha`, one provider entry with `status:` and `fresh:`) and the `## Existence audit` table as the plan's first section. An index answers only for the files it indexed. Ask it about the claims on that surface, and open every hit: a hit on another surface is not an answer. For a claim the index does not cover, take the verdict from the AGENTS.md search convention. Say in the evidence cell that the index did not cover it. Verdicts read `exists at <file:line>`, `exists as <other name> at <file:line>`, or `absent after <exact command>`. If neither an index nor a search settles a claim, the verdict reads `unanswered: <why>`. Confirm an `absent` verdict, and every verdict from a provider with `fresh: no` or `unknown`, with the AGENTS.md search convention before you write it. `docs/graph-search.md` says why an index never makes a zero trustworthy. A provider that errors or times out is recorded `status: error` and the step continues. With no provider present, write one line saying so and continue. Never build an index during a blueprint. The Code Index Audit gate ([references/blueprint-gates.md](references/blueprint-gates.md#code-index-audit-every-plan---step-2-index)) refuses a post-gate plan that skipped this. After the index and `rg` sweep, name exact source line ranges and read only those ranges. A whole-file read needs a stated reason in the plan's Existence audit.
 
 2a. **Verify the premise** - applies to node-seeded and raw-prose input; a supplied design doc already carries cited findings. Read the node's `dispatch-brief` field (`dispatch_brief`) first when present; it is confirmed scope and known files or commands, not an ignore list or a fence. Then read the whole node with `fno backlog get <id>`, including `dispatch_brief` and `progress_notes`; a later correcting note wins over the details. When a plan is bound, add `--plan <path>`. Run `fno backlog freshness <id>` before you measure the claim. Its `shipped`, `partly_shipped` and `changed` verdicts are warnings that name the PRs to read before designing. Each reading is recorded as an event, and v1 never halts. Name the one claim the plan rests on (what a line does, a count, a stall). Measure it again at its source, with a positive control, before writing. When it holds, cite the reading in Context. When it does not, record the real reading with `fno backlog note <id> "<reading>"`, then plan the real defect or halt and say the node is wrong. A plan on a premise nobody re-measured sends a worker after a defect that does not exist.
 
 2a-bis. **The five questions** - answer them BEFORE designing, each as a named thing or the word `none`, into a `## Five questions` section: who hits this and what it costs them today (a named person, a sourced cost); which existing command, skill or config it extends; which case the design will not cover; what could be deleted; which existing module already implements this or could be extended. For the last one, ask the `symbol` provider step 2-index found; otherwise run `rg` for the node's key symbols and read `docs/architecture/dual-implementation-inventory.md`. The schema lives in [references/quick-template.md](references/quick-template.md). The pass criteria stay in the judge's own lens files. This skill never links them and never copies them here, so a plan cannot learn to write to its judge. The drafting lenses, and the rule that the grader's own files stay unread while drafting: [references/product-lenses.md](references/product-lenses.md). An answer that changes the deliverable changes the plan; that is the point of asking before designing. Step 3's judge call grades the answers. The rulings this step runs inside: a ruling surfaced in the stage block (`## Law governing blueprint`) or owed an entry in `decisions_acknowledged` is fixed - the blueprint obeys it and neither re-derives it nor re-asks it. A directive from the user or the lead with no ruling behind it gets exactly one challenge: name the alternative, ask once with the cost of each side, then follow the answer; a second challenge on the same subject in the same session is a violation of this rule, not diligence. A blueprint that concludes the node should be superseded or narrowed writes that as a question row (`fno inbox outstanding ask --question-file <file> --node <id>`, which lists it in `fno inbox outstanding`; the port refuses a question whose file carries no what, why, two options, recommendation with its reason, or a reversible one with no `why_user:` - the context fields come from the template in `docs/architecture/attention-items.md` "Asking with context") and closes its session with `--summary`; it never records the decision itself.
-2c. **Schema citation gate** - When a `## Database Schema` section exists in the
-   codemap, run the **Schema Citation Gate** ([references/blueprint-gates.md](references/blueprint-gates.md#schema-citation-gate-graduated-db-touching-plans)) before adopt.
-   Quick mode is `-S`-class, so it WARNS on an uncited DB-touching task and
-   proceeds; it does not block.
-2b. **Discovery grounding** - A supplied design doc carries cited findings, and `/blueprint` compiles it without re-running discovery.
-   When creating a fresh plan from raw prose or a node-seeded path with no cited findings, blueprint grounds itself first. Run `fno do think inspect "<seed>" --json` for the receipt. It reports duplicate candidates, schema status, and the active pitfalls.
-   Then load `references/discovery-gate.md`. Ask at most 3 questions with `quick`, or 5 otherwise.
-   For a plan that needs deeper investigation than the receipt, run `/think` first. Think writes cited findings that blueprint then compiles.
+
+2b. **Discovery grounding** - A supplied design doc carries cited findings, and `/blueprint` compiles it without re-running discovery. When a fresh plan starts from raw prose or a node-seeded path with no cited findings, blueprint grounds itself first. Run `fno do think inspect "<seed>" --json` for the receipt. It reports duplicate candidates, database signals, and the active pitfalls. Then load `references/discovery-gate.md`. Ask at most 3 questions with `quick`, or 5 otherwise. For a plan that needs deeper investigation than the receipt, run `/think` first. Think writes cited findings that blueprint then compiles.
 
 2b-bis. **Answerer enumeration** - every plan that changes a read, write, or feed. Run [references/answerer-enumeration.md](references/answerer-enumeration.md)'s four steps: phrase the question in one line, enumerate every answerer (sites repo-wide, feeds measured at each site the plan changes), state the count as the PR estimate, and dispose of every answerer in principle 9's vocabulary. Record the outcome as a `surface:` frontmatter block (schema: [references/quick-template.md](references/quick-template.md)); `validate-plan.sh` refuses a post-2026-09-03 non-quick plan without one. The step sits here, before the Consolidation Gate (2d), because the order is load-bearing: enumerating answerers finds sibling SITES, consolidation finds sibling NODES, and a question with four answerers often already has two nodes filed against it. Sweeping first is what lets 2d see them.
 
@@ -497,7 +458,7 @@ Write for a fresh-context agent that knows nothing about this conversation:
 | "Use the approach we agreed on" | "Use server actions (not API routes) because Next.js 15 app router" |
 | "Add validation to the API endpoints" | "Add Zod schema to POST /api/facilities in `src/routes/facilities.ts:78`: `{ name: z.string().min(1).max(100), capacity: z.number().int().min(1).max(500) }`. Pattern: `src/routes/users.ts:34`" |
 
-**DB-aware planning** (when codemap.md has a Database Schema section):
+When the receipt detects a database, plan DB-aware:
 
 | Bad (misses DB) | Good (DB-aware) |
 |-----------------|-----------------|
@@ -576,7 +537,7 @@ When the input to `/blueprint` is a path to an existing design doc (produced by 
 |---|---|
 | `subagent` | Run the whole skill in a subagent of this session, see [Substrate](#substrate). |
 | `quick` | Emit ## Execution Strategy as one parallel wave, one task per numbered change (stamp status + kill_criteria) |
-| `group N` | Bounded epic decomposition: after intake, partition the waves into at most `N` cohesive delivery groups (one child node + PR each). See [references/epic-decomposition.md](references/epic-decomposition.md). Omit `N` to fall back to the epic's `max_children`, else `config.blueprint.max_prs_per_epic`. Auto-enabled for `scope: epic` docs. |
+| `group N` | Bounded epic decomposition: after intake, partition the waves into at most `N` cohesive delivery groups (one child node + PR each). See [references/epic-decomposition.md](references/epic-decomposition.md). Omit `N` to fall back to the epic's `max_children`, else `config.blueprint.max_prs_per_epic`. That config value is a hard ceiling: `N` and `max_children` can only tighten it. A group bundles several leaves into one PR. Auto-enabled for `scope: epic` docs. |
 | `no-group` | Opt OUT of auto-decomposition on a `scope: epic` doc: run the single-doc lean mutation (one epic node, one PR), the pre-auto-group behavior. |
 | `greenfield` | Skip File Ownership Map + Patterns to Reuse regardless of codebase state |
 | `brownfield` | Force file binding even on empty-codebase detect |

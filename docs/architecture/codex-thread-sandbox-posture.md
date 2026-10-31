@@ -21,7 +21,7 @@ The machine-level `sandbox_mode = "danger-full-access"` in `~/.codex/config.toml
 
 ## The grant
 
-Every thread now carries `granted_roots` on every `turn/start`. The roots are the caller's state dirs plus the repo's git common dir. The exec lane grants with the same `provider::git_common_dir` resolver. The roots are additive to the workspace. When the server reports a resolved posture, the policy echoes it, so nothing else about the posture changes. Both resolvers are fail-open: an unresolvable root is skipped, never a failed spawn.
+Every thread now carries `granted_roots` on every `turn/start`. The roots are the caller's state dirs plus the repo's git write roots. Those are the common dir and, in a linked worktree, its own gitdir. codex keeps that gitdir read-only inside the common dir. The exec lane grants with the same `provider::git_write_roots` resolver. The roots are additive to the workspace. When the server reports a resolved posture, the policy echoes it, so nothing else about the posture changes. Both resolvers are fail-open: an unresolvable root is skipped, never a failed spawn.
 
 The grant rides every turn rather than only the first, because a turn-level policy becomes the thread default and a resumed thread re-resolves its posture. Sending it per turn makes resume carry it for free.
 
@@ -68,7 +68,7 @@ Footnote reads no `~/.codex/config.toml` and writes none. The one key that sets 
 
 No default widens any existing posture. A configured `bypassPermissions` (a claude-only token) refused by name on a codex lane rather than degrading open to an unnamed posture. The machine-wide alternative - `sandbox_mode = "danger-full-access"` in `~/.codex/config.toml` - stays an open operator decision this project does not make for them.
 
-The one exception is the role. A titled codex spawn is a lead, and a lead must write the state root (`~/.fno`) to spawn, claim and journal. When nothing full-access is already named, the role widens the default to `yolo` (rung `builtin.role`). A role spawn that names a bounded mode (`--permission-mode workspace-write:never`) refuses before launch instead of seating a lead that cannot govern. `-Y`/`--yolo` rides through unchanged. Workers keep the bounded default.
+The one exception is the role. A titled codex spawn is a lead, and a lead must write the state root (`~/.fno`) to spawn, claim and journal. When the spawn names no posture at all, the role widens the lane default to full access at the one resolver (`resolve_thread_posture` for threads, `codex_pane_default_tokens` for panes - rung `builtin.role`); every level 0..=2 is a lead rank. A posture the operator spells always outranks the role default: `--permission-mode workspace-write:never` on a promoted spawn lands bounded, because explicit intent is never widened behind the operator's back. `-Y`/`--yolo` rides through unchanged. Workers keep the bounded default.
 
 ## Native subagent inheritance
 

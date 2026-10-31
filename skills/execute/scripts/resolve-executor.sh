@@ -17,7 +17,8 @@
 # Resolution chain (highest to lowest priority):
 #   1. TASK_EXEC if set and non-empty
 #   2. PLAN_EXEC if set and non-empty
-#   3. Surface inference via fno.executor._surface (if AUTO_ROUTE_FRONTEND != false)
+#   3. Surface inference via the fno-agents executor-route door (if
+#      AUTO_ROUTE_FRONTEND != false)
 #   4. 'tdd' (default)
 #
 # Failure mode: an unrecognized explicit executor name (anything other than
@@ -25,6 +26,31 @@
 # the fail-closed behavior cited by AC1.5-FR.
 
 set -uo pipefail
+
+# Surface inference lives behind the native executor-route door
+# (crates/fno-agents/src/executor_route.rs, the SINGLE source of truth since
+# the worker-family port deleted the Python leg). The fno-agents binary
+# resolver, shared with the hooks; the canonical copy is
+# hooks/lib/agents-bin.sh, this same-shape inline fallback covers a partial
+# deploy whose hooks tree is not beside the skills tree.
+if [[ -f "${BASH_SOURCE[0]%/*}/../../../hooks/lib/agents-bin.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${BASH_SOURCE[0]%/*}/../../../hooks/lib/agents-bin.sh"
+else
+    fno_agents_bin() {
+        local root="${1:-.}"
+        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
+            printf '%s' "${FNO_AGENTS_BIN}"
+        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
+        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        else
+            command -v fno-agents || printf ''
+        fi
+    }
+fi
+EXECUTOR_ROUTE_BIN="$(fno_agents_bin "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)")"
 
 TASK_EXEC="${TASK_EXEC:-}"
 PLAN_EXEC="${PLAN_EXEC:-}"
@@ -136,21 +162,18 @@ resolve() {
         value="$PLAN_EXEC"
     elif [[ -n "$TASK_FILES" ]] && ! is_falsey "$AUTO_ROUTE_FRONTEND"; then
         source="inference"
-        # Surface inference is the in-package module fno.executor._surface (the
-        # SINGLE source of truth, ported from the retired infer-task-executor.sh).
-        # In a checkout, point PYTHONPATH at cli/src so the module imports
-        # pre-install; otherwise rely on the installed `fno` package.
-        local pkg_src
-        pkg_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/cli/src"
-        if [[ -f "${pkg_src}/fno/executor/_surface.py" ]]; then
-            export PYTHONPATH="${pkg_src}${PYTHONPATH:+:${PYTHONPATH}}"
+        # Surface inference is the native executor-route door (the SINGLE
+        # source of truth since the worker-family port deleted the Python
+        # leg). Trailing newline is required: the door reads stdin and drops
+        # empty lines, so printf '%s\n' is safe even when TASK_FILES already
+        # ends in a newline (the door just sees an extra empty line, which is
+        # filtered). If the binary is unavailable, value is empty and the
+        # is_known_executor check below falls closed to 'tdd' (matching the
+        # helper-missing path).
+        value=""
+        if [[ -n "$EXECUTOR_ROUTE_BIN" ]]; then
+            value="$(printf '%s\n' "$TASK_FILES" | "$EXECUTOR_ROUTE_BIN" executor-route surface 2>/dev/null)"
         fi
-        # Trailing newline is required: the module reads stdin and drops empty
-        # lines, so printf '%s\n' is safe even when TASK_FILES already ends in a
-        # newline (the module just sees an extra empty line, which is filtered).
-        # If the module is unavailable, value is empty and the is_known_executor
-        # check below falls closed to 'tdd' (matching the helper-missing path).
-        value="$(printf '%s\n' "$TASK_FILES" | python3 -m fno.executor._surface 2>/dev/null)"
     else
         source="default"
         value="tdd"

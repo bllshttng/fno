@@ -3,7 +3,7 @@
 
 Curated for the role: the commands an adjudicator actually uses, each with the one gotcha that makes it non-obvious.
 
-`fno help --all` is the source of truth for every command this page does not list, and `fno help <group> --all` enumerates a subtree.
+`fno <group> --help` is the source of truth for every command this page does not list, and `fno-py help <group> --all` adds the hidden Python leaves.
 
 A command with no gotcha earns no line here, because the help surface already covers it.
 
@@ -88,12 +88,12 @@ A thread or daemon worker is reaped stop first, then rm.
 |---|---|---|
 | 1 | `fno agents session stop <name>` | Reaches a session on claude rows only. Codex and gemini answer `stop is a no-op between asks`, registry unchanged. |
 | 2 | `fno agents session rm <name>` | Tears down the harness session record FIRST, registry row after. That record is the resume handle. On teardown failure the registry row is KEPT for retry. `--force` drops it anyway and names the orphan left in the harness store. |
-| 2r | `fno agents registry adopt <full-harness-session-id> --cross-project` | Identity-only recovery from a surviving harness store. Use the full session ID. The flag authorizes machine-wide store selection after uniqueness checks. |
+| 2r | `fno agents registry adopt <full-harness-session-id>` | Identity-only recovery from a surviving harness store. Use the full session ID; store selection is machine-wide. |
 
 `rm` alone never stops a running session. Removing a row and stopping a session are separate commands by design.
 
 <!-- retired-ok: names the command in order to forbid it. -->
-Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>` instead.
+Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>` instead.
 
 Measured on a live registry: `fno agents session rm` lands the registry removal, then hangs on harness teardown. A timeout is not a failed removal. Re-read the registry before you believe the receipt.
 
@@ -118,7 +118,7 @@ It is a dry run by default. `--apply` executes the wake lane only, the one actio
 
 ## Delivery to a parked or live session
 
-`fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>`.
+`fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>`.
 
 A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands. A session that carries `FNO_AGENTS_RUNTIME=python` reaches the older Python leg, which refuses a Done row. Run the command with `env -u FNO_AGENTS_RUNTIME` until spawned sessions stop inheriting that pin.
 
@@ -148,7 +148,8 @@ Answer a message with `fno agents mail reply --to <msg-id>`. It threads the repl
 
 | Receipt reads | What it means |
 |---|---|
-| `delivered (hosted)` | Inject accepted. It does not prove it was read. Check `landed` in `fno agents mail admin sent`. |
+| `accepted-new-turn` / `accepted-steer` | The recipient's turn record holds the envelope id. It does not prove it was acted on. |
+| `parked` / `injected` | The bytes reached the recipient; no turn took them yet. `fno agents mail admin sent` shows when that changes. |
 | `queued (durable)` | Can sit undrained. No receipt is no coordination. |
 | `[bus-only]` | Drains by design at the recipient's turn boundary. The receipt IS coordination. |
 
@@ -166,7 +167,7 @@ Draft to a file and run `fno doctor lint style --stdin < file` before sending. T
 
 | Read | The gotcha |
 |---|---|
-| `fno do pr status <n>` | `ready` means green AND `optional_reviews_unresolved == 0`. Advisory, never the exit code. Costs GraphQL quota through its `reviewThreads` read. |
+| `fno do pr status <n>` | `ready` means green AND no counted unresolved optional finding (an unreadable count warns and holds nothing). Advisory, never the exit code. Costs GraphQL quota through its `reviewThreads` read. |
 | `fno do pr merge <n>` | Gates on the `review_coverage` event read from local `events.jsonl`. Never reads threads. |
 | `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`, `/commits/<sha>/status`, and `actions/runs?head_sha=<sha>` | CI state over REST: check runs plus legacy commit statuses, which `check-runs` alone cannot see, plus the Actions runs listing: a run that failed before minting a job (a workflow file GitHub cannot parse) owns no check run and reads red by its workflow path. Free of the GraphQL budget. |
 | `fno-agents review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |
