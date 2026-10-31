@@ -1080,24 +1080,21 @@ fn mail_presiding(holder: &str, ids: &[String], key: &str, reason: &str, verdict
     crate::lead_mail::send_to_name(ESCALATE_SENDER, holder, &message).is_ok()
 }
 
-/// One `--stalled` value is one id, whatever it holds: a row named by its JSON
-/// carries commas.
-fn stalled_id(value: &str) -> Option<String> {
-    let id = value.trim();
-    (!id.is_empty()).then(|| id.to_string())
-}
-
-/// `fno agents org escalate [SCOPE] [--stalled ID]... [--reason R]`: record one
-/// operator question for the stalled set, and mail the presiding role when
-/// one holds the territory above.
-pub fn run_escalate(args: &[String]) -> i32 {
+/// The escalate argv as (scope, stalled ids, reason). One `--stalled` value is
+/// one id, whatever it holds: a row named by its JSON carries commas.
+fn parse_escalate_args(args: &[String]) -> Result<(String, Vec<String>, String), String> {
     let mut scope_arg = String::new();
     let mut ids: Vec<String> = Vec::new();
     let mut reason = "NoProgress".to_string();
     let mut i = 0;
     while i < args.len() {
         match (args[i].as_str(), args.get(i + 1)) {
-            ("--stalled", Some(v)) => ids.extend(stalled_id(v)),
+            ("--stalled", Some(v)) => {
+                let id = v.trim();
+                if !id.is_empty() {
+                    ids.push(id.to_string());
+                }
+            }
             ("--reason" | "-R", Some(v)) => reason = v.clone(),
             (word, _) if !word.starts_with('-') && scope_arg.is_empty() => {
                 scope_arg = word.to_string();
@@ -1105,17 +1102,25 @@ pub fn run_escalate(args: &[String]) -> i32 {
                 continue;
             }
             (other, _) => {
-                return refuse(
-                    2,
-                    &format!(
-                        "fno agents org escalate: unknown argument {other}\nUsage: fno agents org \
-                         escalate [SCOPE] [--stalled ID]... [--reason R]"
-                    ),
-                )
+                return Err(format!(
+                    "fno agents org escalate: unknown argument {other}\nUsage: fno agents org \
+                     escalate [SCOPE] [--stalled ID]... [--reason R]"
+                ))
             }
         }
         i += 2;
     }
+    Ok((scope_arg, ids, reason))
+}
+
+/// `fno agents org escalate [SCOPE] [--stalled ID]... [--reason R]`: record one
+/// operator question for the stalled set, and mail the presiding role when
+/// one holds the territory above.
+pub fn run_escalate(args: &[String]) -> i32 {
+    let (scope_arg, mut ids, reason) = match parse_escalate_args(args) {
+        Ok(parsed) => parsed,
+        Err(message) => return refuse(2, &message),
+    };
     let here = cwd();
     let home = crate::paths::AgentsHome::from_env();
     let session = escalating_session(&here);
@@ -1226,11 +1231,17 @@ mod tests {
 
     #[test]
     fn a_stalled_id_with_commas_stays_whole() {
-        assert_eq!(
-            stalled_id(r#"failed_verdict:{"claim":"a","node":"x-1"}"#).as_deref(),
-            Some(r#"failed_verdict:{"claim":"a","node":"x-1"}"#)
-        );
-        assert_eq!(stalled_id("  "), None);
+        let whole = r#"failed_verdict:{"claim":"a","node":"x-1"}"#;
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+
+        let (scope, ids, _) =
+            parse_escalate_args(&argv(&["s", "--stalled", whole, "--stalled", "a:b"])).unwrap();
+        assert_eq!(scope, "s");
+        assert_eq!(ids, vec![whole, "a:b"]);
+
+        // No ids stays empty, so the verdict reading fills the set.
+        let (_, ids, _) = parse_escalate_args(&argv(&["s"])).unwrap();
+        assert!(ids.is_empty());
     }
 
     fn manifest(dir: &Path, body: &str) -> PathBuf {
