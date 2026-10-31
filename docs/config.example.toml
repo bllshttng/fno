@@ -129,8 +129,8 @@ render_default = true
 page_reload_s = 60
 
 [backlog.maintain]
-# Age (days) before an idea is flagged stale.
-staleness_days = 30
+# Age (days) before a p2 or p3 idea is flagged stale.
+staleness_days = 60
 # Consecutive failures before a node auto-defers.
 max_failed_attempts = 3
 # Idle hours before `maintain --apply` and `requeue` settle an open do row with no live claim and no reachable worker on its node.

@@ -100,7 +100,7 @@
      "name": "backlog",
      "default": {
       "maintain": {
-       "staleness_days": 30,
+       "staleness_days": 60,
        "max_failed_attempts": 3,
        "abandoned_do_row_hours": 24,
        "budget_seconds": 300,
@@ -881,7 +881,7 @@
     {
      "name": "maintain",
      "default": {
-      "staleness_days": 30,
+      "staleness_days": 60,
       "max_failed_attempts": 3,
       "abandoned_do_row_hours": 24,
       "budget_seconds": 300,
@@ -2240,7 +2240,7 @@
    "fields": [
     {
      "name": "staleness_days",
-     "default": 30
+     "default": 60
     },
     {
      "name": "max_failed_attempts",

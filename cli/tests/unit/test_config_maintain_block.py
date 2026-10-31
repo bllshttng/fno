@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from fno.config import BacklogBlock, MaintainBlock
 
 _DEFAULTS = {
-    "staleness_days": 30,
+    "staleness_days": 60,
     "max_failed_attempts": 3,
     "abandoned_do_row_hours": 24,
     "budget_seconds": 300,

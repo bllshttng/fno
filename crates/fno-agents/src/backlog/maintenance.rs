@@ -147,7 +147,7 @@ pub(crate) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            staleness_days: 30,
+            staleness_days: 60,
             max_failed_attempts: 3,
             abandoned_do_row_hours: 24,
             budget_seconds: 300,
@@ -649,12 +649,15 @@ struct Stale {
     age_days: i64,
 }
 
-/// Ideas STRICTLY older than `staleness_days` since their last curation
-/// touch (`touched_at`, else `created_at`), with no movement.
+/// Low-priority ideas STRICTLY older than `staleness_days` since their last
+/// curation touch (`touched_at`, else `created_at`), with no movement. A p0 or
+/// p1 idea never drains. Unset priority drains, because the default is p2.
 fn detect_stale_ideas(entries: &[Value], staleness_days: i64, now_ms: i64) -> Vec<Stale> {
     let mut out = Vec::new();
     for e in entries {
-        if get_str(e, "status") != Some("idea") {
+        if get_str(e, "status") != Some("idea")
+            || matches!(get_str(e, "priority"), Some("p0" | "p1"))
+        {
             continue;
         }
         let Some(nid) = entry_id(e) else {

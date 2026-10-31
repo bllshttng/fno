@@ -118,7 +118,7 @@ FIELD_META: dict[str, Meta] = {
     "plan.default_diff_budget": Meta("advanced", "Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off)."),
     # --- config.backlog.* ---
     "backlog.page_reload_s": Meta("advanced", "Seconds an open local board or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off)."),
-    "backlog.maintain.staleness_days": Meta("advanced", "Age (days) before an idea is flagged stale."),
+    "backlog.maintain.staleness_days": Meta("advanced", "Age (days) before a p2 or p3 idea is flagged stale."),
     "backlog.maintain.max_failed_attempts": Meta("advanced", "Consecutive failures before a node auto-defers."),
     "backlog.maintain.validity_days": Meta("advanced", "Age (days) before a stale idea enters the validity sweep."),
     "backlog.maintain.validity_batch_size": Meta("advanced", "Oldest-first validity-sweep batch size (clamped to 100)."),

@@ -1308,7 +1308,7 @@
           "type": "integer"
         },
         "staleness_days": {
-          "default": 30,
+          "default": 60,
           "title": "Staleness Days",
           "type": "integer"
         },

@@ -277,8 +277,6 @@ A	ship count unconfirmed, retryable read failure	py=cli/src/fno/graph/_reconcile
 A	silence_deadline_seconds	py=cli/src/fno/adapters/providers/loader.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/silence_sweep.rs	# CLASSIFY protocol|msg-twin|data
 A	single_flight_join_budget_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs|crates/fno/src/config_cli/model/validators_blocks.rs|crates/fno/src/config_doctor/checks.rs	# CLASSIFY protocol|msg-twin|data
 A	single_flight_ttl_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs|crates/fno/src/config_cli/model/validators_blocks.rs|crates/fno/src/config_doctor/checks.rs	# CLASSIFY protocol|msg-twin|data
-A	stale >30d, drained by maintain	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
-A	stale-quarantine (guard)	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/maintenance.rs|crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-verdict-fresher-event	py=cli/src/fno/agents/row_contradiction.py;rs=crates/fno-agents/src/daemon/list_rows.rs	# CLASSIFY protocol|msg-twin|data
 A	status pattern needs model and effort groups	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	submission refused, {cause}	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/readiness.rs	# CLASSIFY protocol|msg-twin|data

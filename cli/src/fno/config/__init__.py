@@ -253,7 +253,7 @@ class MaintainBlock(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    staleness_days: int = 30
+    staleness_days: int = 60
     max_failed_attempts: int = 3
     abandoned_do_row_hours: int = 24  # transcript-quiet hours before the do-row leg reaps
     # Wall-clock budget for one pass (checked between legs); a short pass exits 4.
@@ -412,7 +412,7 @@ class BacklogBlock(BaseModel):
     # Ready-node quarantine threshold (G1 stale-ready guard). A ready node with
     # no movement signal for this many days is skipped by selection and offered
     # to `maintain --apply` for a reversible defer. Distinct from
-    # maintain.staleness_days (30, for idea-stage rows) - ready work goes stale
+    # maintain.staleness_days (60, for idea-stage rows) - ready work goes stale
     # faster than an untriaged idea, so it defaults tighter (21).
     staleness_days: int = 21
     epic_max_open_children: Optional[int] = Field(default=None, ge=1)
