@@ -316,6 +316,7 @@ pub fn run(tail: &[String]) -> i32 {
         }
     }
     let mut hits: Vec<Hit> = Vec::new();
+    let mut hidden = crate::backlog_model::Hidden::default();
     for e in &inputs.rows {
         let blocked = crate::backlog_view::has_open_dependency(e, &by_ref);
         let Some(mut card) = crate::backlog_model::card_of(&inputs, e, order, blocked) else {
@@ -329,18 +330,33 @@ pub fn run(tail: &[String]) -> i32 {
             .and_then(|r| r.get("title"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        // An empty query keeps everything: skip the per-row field-map build
-        // it would never read.
-        if !query.is_empty() {
+        let off_board = card.column == crate::backlog_view::OFF_BOARD;
+        // The empty query keeps the curated default: off-board rows stay out
+        // of the listing while `hidden` names what it leaves out. A query
+        // that names them (`s:deferred`, `n:<id>`, free text) reaches them
+        // like any other row.
+        let kept = if query.is_empty() {
+            !off_board
+        } else {
             let fields = crate::backlog_model::search_fields(
                 &inputs,
                 &by_ref,
                 &card,
                 by_ref.get(card.id.as_str()).copied(),
             );
-            if !parsed.keeps(&fields) {
-                continue;
+            parsed.keeps(&fields)
+        };
+        if !kept {
+            if off_board {
+                match crate::backlog_model::off_board_bucket(&card) {
+                    Some("deferred") => hidden.deferred += 1,
+                    Some("superseded") => hidden.superseded += 1,
+                    Some("roadmap") => hidden.roadmap += 1,
+                    _ => {}
+                }
+                hidden.total += 1;
             }
+            continue;
         }
         let row = by_ref.get(card.id.as_str()).copied();
         hits.push(Hit {
@@ -389,6 +405,12 @@ pub fn run(tail: &[String]) -> i32 {
             serde_json::to_string_pretty(&json!({
                 "total": total,
                 "showing": rows.len(),
+                "hidden": {
+                    "total": hidden.total,
+                    "deferred": hidden.deferred,
+                    "superseded": hidden.superseded,
+                    "roadmap": hidden.roadmap,
+                },
                 "rows": rows,
             }))
             .unwrap_or_else(|_| "[]".to_string())
@@ -404,6 +426,12 @@ pub fn run(tail: &[String]) -> i32 {
     }
     if shown.len() < total {
         println!("showing {} of {total}", shown.len());
+    }
+    if hidden.total > 0 {
+        println!(
+            "{} hidden off-board (deferred {}, superseded {}, roadmap {}); query s:deferred, s:superseded to list them",
+            hidden.total, hidden.deferred, hidden.superseded, hidden.roadmap
+        );
     }
     0
 }

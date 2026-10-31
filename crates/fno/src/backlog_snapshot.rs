@@ -281,6 +281,11 @@ fn render_one(
             flat.extend(cell.cards.iter());
         }
     }
+    // The off-board cards ride the snapshot too: the page's reveal lists
+    // them by their sentinel column, and their node views embed like any
+    // card's. The board partitions them out of the lanes, so this is the
+    // one place a lanes-only walk would silently drop them.
+    flat.extend(board.offboard.iter());
     // Zero matching rows under a named scope is the typo'd-project
     // signature: leave the operator's last good page byte-unchanged rather
     // than replace it with an empty board.
@@ -342,6 +347,7 @@ fn render_one(
         "flow": board.stats.flow,
         "facets": board.facets,
         "columns": board.stats.totals.iter().map(|t| t.column).collect::<Vec<_>>(),
+        "hidden": &board.hidden,
         "cards": &flat,
         "nodes": nodes,
         "search": search,

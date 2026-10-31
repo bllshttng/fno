@@ -12,7 +12,7 @@ AI coding assistants today are copilots. They suggest code, answer questions, an
 6. Address review feedback
 7. Actually merge and ship
 
-For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool - they need an autonomous software engineer that takes a feature from idea to shipped PR while they focus on product decisions.
+For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool. They need to run their coding agents as one team, with one backlog and one chat. Then they can focus on product decisions.
 
 ### The Core Problem
 
@@ -84,7 +84,7 @@ graph TD
 
 ### 1. The Target Loop
 
-Target is the autonomous delivery pipeline. Named as a persona, target is the agent that refuses to stop until the feature is actually shipped. The key mechanism:
+Target is the autonomous delivery pipeline for one feature or backlog node. The key mechanism:
 
 - A **stop hook** (`target-stop-hook.sh`) is a thin shim over the read-only `fno-agents loop-check` command, which decides whether the session may exit.
 - The agent signals it believes the work is done by emitting a `<promise>` tag; `loop-check` then verifies that claim against external truth before allowing exit.
@@ -160,21 +160,21 @@ Small teams where every developer is stretched across multiple concerns. The plu
 
 ## Key Differentiators
 
-### vs. GitHub Copilot / Cursor / Other AI Editors
+### vs. AI Editors
 
 These tools are code generators. They suggest completions and generate files. The developer still orchestrates the workflow. footnote orchestrates the entire pipeline - from decomposing the feature into waves, through TDD execution, code review with 6 specialized agents, to PR creation and review feedback incorporation.
 
-### vs. Devin / Other AI Agents
+### vs. Hosted AI Agents
 
-Other AI agents run in sandboxed environments and produce code that needs manual integration. footnote runs directly in the developer's environment, commits to real git branches, creates real PRs, and uses real test runners. The stop hook mechanism means the agent literally cannot quit until the work ships.
+Other AI agents run in sandboxed environments and produce code that needs manual integration. footnote runs directly in the developer's environment, commits to real git branches, creates real PRs, and uses real test runners. A stop hook reads the PR, CI, and review before a session ends.
 
 ### vs. Custom Prompting / Workflows
 
 Many developers build their own multi-step prompts. footnote captures these patterns in reusable, tested skills with proper state management, failure handling, and cross-session persistence.
 
-### The Real Differentiator: It Does Not Stop
+### The Real Differentiator: One Backlog and One Chat
 
-Most AI tools complete when they generate output. Target completes when the PR is merged. The stop hook is not a suggestion - it is a shell script that blocks the exit signal. The external loop script re-invokes the CLI if the session dies. This is the fundamental difference: footnote is built around the premise that shipping is the only acceptable outcome.
+A green PR from one agent is table stakes. footnote runs agents as one team across harnesses and machines, from one dependency-graph backlog. Lead agents hand out the work. Agents message each other and the user through durable mail. A ruling is recorded once and reaches later agents as context. Among rulings, only holds and freezes stop a merge.
 
 ## Current Goals
 
