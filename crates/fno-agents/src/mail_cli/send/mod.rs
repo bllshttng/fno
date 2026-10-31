@@ -366,7 +366,7 @@ fn system_arm_inbox_key(name: &str) -> Option<String> {
     Some(format!("{project}.{arm}"))
 }
 
-fn bus_log_path() -> PathBuf {
+pub(crate) fn bus_log_path() -> PathBuf {
     if let Ok(dir) = std::env::var("FNO_BUS_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir).join("messages.jsonl");
