@@ -331,8 +331,9 @@ mod tests {
         let in_window = "11111111-1111-2222-3333-444444444444";
         // The base dir itself: not a worktree under the base.
         mk(&slug("/wt/fleet"), in_window);
-        // A sibling whose name only extends the prefix's last word.
-        mk(&format!("{}-2", slug("/wt/fleet")), in_window);
+        // A sibling whose name only extends the prefix's last word: the
+        // encoded root of a neighboring base, `/wt/fleet2`.
+        mk(&format!("{}2-x-aaaa", slug("/wt/fleet")), in_window);
         // A session off the base entirely.
         mk(&slug("/home/someone/elsewhere"), in_window);
         assert_eq!(count_in(projects, &args_for(base, 7)), 0);
