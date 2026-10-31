@@ -48,6 +48,7 @@ fn a_thread_spawn_request_carries_the_callers_session_and_harness() {
         .args(["--", "say hi"])
         .current_dir(&home)
         .env_clear()
+        .envs(fno_agents::test_run::self_owner_env())
         .env("PATH", std::env::var_os("PATH").unwrap())
         .env("HOME", &home)
         .env("FNO_AGENTS_HOME", &home)
