@@ -13,6 +13,7 @@ crossing	crates/fno-agents/src/backlog/advance_dispatch.rs	let exe = crate::scra
 crossing	crates/fno-agents/src/backlog/advance_dispatch.rs	Path::new(&crate::scrape::fno_bin()),
 crossing	crates/fno-agents/src/backlog/advance_join.rs	Path::new(&crate::scrape::fno_bin()),
 crossing	crates/fno-agents/src/backlog/advance_lanes.rs	Path::new(&crate::scrape::fno_bin()),
+crossing	crates/fno-agents/src/backlog/batch.rs	let mut cmd = vec![crate::scrape::fno_bin().to_string_lossy().into_owned()];
 crossing	crates/fno-agents/src/backlog/decisions_cli.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/backlog/decompose.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/backlog/drift_emit.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
@@ -42,6 +43,7 @@ crossing	crates/fno-agents/src/finalize_run_summary.rs	let mut cmd = Command::ne
 crossing	crates/fno-agents/src/gate_probes.rs	let _ = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/gc.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/gc_native.rs	let mut child = std::process::Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/launch_workdir.rs	let mut cmd = vec![crate::scrape::fno_bin().to_string_lossy().into_owned()];
 crossing	crates/fno-agents/src/lead_checkin.rs	let mut argv = vec![fno_bin()];
 crossing	crates/fno-agents/src/lead_checkin_prompt_parked.rs	let mut value = reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))?;
 crossing	crates/fno-agents/src/lead_wake_triggers.rs	let bin = crate::scrape::fno_bin();
@@ -57,6 +59,7 @@ crossing	crates/fno-agents/src/loopcheck/coverage_gate/waive.rs	let fno_bin = lo
 crossing	crates/fno-agents/src/loopcheck/review_coverage_command.rs	let fno_bin = loopcheck_fno_bin();
 crossing	crates/fno-agents/src/machine_load.rs	let bin = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/machine_mail.rs	let mut command = Command::new(crate::scrape::fno_bin());
+crossing	crates/fno-agents/src/mail_hold.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/mail_inject.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/mail_remote.rs	crate::scrape::fno_bin()
 crossing	crates/fno-agents/src/merge_close.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
