@@ -161,6 +161,22 @@ The body holds the title and the question body. `## Options` carries one `- [ ] 
 
 The `attention` arm beats every 30 s, reads the projection, routes each item to its role, writes pages, settles, records and closes. The settle state lives at `~/.fno/state/attention/questions.json`. The projection cache at `~/.fno/state/attention/items.json` gains `questions_dir`, which the lead check-in reads. `attention.enabled = false` is the kill switch: it stops every page write and answer read, checked on every beat. The arm computes routing once at page-write time and never refreshes it: a role titled later never sees older pages in its check-in. When the graph is unreadable the beat delivers nothing (`skip_reason: routing_unreadable`) and the next beat retries.
 
+## The judge
+
+A verdict closes nothing. The judge runs in shadow: it writes verdicts to `~/.fno/state/judge/verdicts.jsonl`, and it never writes to a question store, a page or the mail.
+
+A one-shot reader with no tools reads a batch of open questions beside the record: the live law rows and the answered pages under `done/`. A chat ruling reaches it only through a law row whose `rationale` quotes the user. It gives each question one of three outcomes.
+
+- `decided`: the record answers it. The verdict names one law or answered page and quotes it. The check finds that quote in the source, or the verdict reads `held` with `citation_failed`.
+- `sent_back`: the question goes back to its filer. A row that is not ready needs no model and names what is missing.
+- `held`: the user answers it. The reason names why: `deny_class:<class>`, `irreversible`, `law_conflict`, `citation_failed`, `unclassified`, `no_answer`, `bad_outcome` or `no_record`.
+
+A deny class never reads `decided`, whatever the reader says. A question with no class goes to the reader, which must name one. Most open questions carry no class, so holding them would leave nothing to measure. A decided verdict on the reader's class counts under `decided_on_read_class`, because that class has no filer behind it.
+
+Turn it on with `fno config set questions.judge.enabled true`. It is off by default because it spends tokens. It runs each hour. `questions.judge.model` (default `sonnet`) and `questions.judge.batch` (default 10) tune it. `fno inbox outstanding judge --once` runs one batch by hand.
+
+Read it with `fno inbox outstanding judge --report --since 24h`. `agreement` compares each decided verdict with the answer the row later got, and each miss goes into the next prompt as a correction. `board_writes` counts closes by a judge run and must read 0.
+
 ## Config keys
 
 The md config row is retired. There are two keys: `attention.enabled` (default true), the kill switch, and the `[[attention.sinks]]` rows above. A `[[attention]]` or `[[reach_me]]` row still in config.toml is ignored. The tick detail names the retired row once per beat.

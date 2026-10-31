@@ -26,6 +26,7 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
         "clear" => Some(run_clear_cmd(rest)),
         "ask" => Some(run_ask(rest)),
         "climb" => Some(crate::question_ladder::run_climb(rest)),
+        "judge" => Some(crate::question_judge::run_cmd(rest)),
         _ => None,
     }
 }
