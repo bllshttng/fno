@@ -225,7 +225,7 @@ fi
 # --- manifests: both harnesses wire the hook on UserPromptSubmit -----------
 
 for manifest in hooks/hooks.json hooks/codex-hooks.json; do
-    if jq -e '[.hooks.UserPromptSubmit[].hooks[].command] | any(rtrimstr("\"") | endswith("/hooks/inject-mail-notify.sh"))' \
+    if jq -e '[.hooks.UserPromptSubmit[].hooks[].command] | any(contains("/hooks/inject-mail-notify.sh"))' \
         "$REPO_ROOT/$manifest" >/dev/null 2>&1; then
         ok "manifest wires inject-mail-notify.sh: $manifest"
     else
