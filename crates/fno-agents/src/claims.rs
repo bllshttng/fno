@@ -1636,7 +1636,7 @@ fn same_family_parent_edge_from(get: &impl Fn(&str) -> Option<String>) -> Option
                 family = Some(harness.to_string());
                 value = Some(v);
             }
-            Some(prev) if prev != harness => return None,
+            Some(prev) if prev != *harness => return None,
             _ => {} // same family: the first-seen (durable) value leads
         }
     }
