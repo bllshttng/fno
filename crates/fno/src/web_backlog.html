@@ -225,6 +225,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   <span id="f-dchips"></span>
   <label><input id="f-all" type="checkbox"> all projects</label>
   <button type="button" id="f-reset" title="every filter back to any">reset filters</button>
+  <button type="button" id="themebtn" title="theme: auto follows the OS setting; click cycles light and dark">theme auto</button>
   <button type="button" id="sheetbtn" title="keyboard shortcuts (?)">?</button>
 </div>
 <div id="note"></div>
@@ -297,6 +298,21 @@ function loadRecent(raw) {
     const v = JSON.parse(raw || "[]");
     return Array.isArray(v) ? v.filter((s) => typeof s === "string").slice(0, 10) : [];
   } catch (e) { return []; }
+}
+// The theme store: auto follows the OS palette, light and dark override it.
+// One localStorage key per origin, so the choice survives reloads. The pure
+// half first, so the node tests drive it without a DOM.
+const THEME_KEY = "fno-backlog-theme";
+function loadTheme(raw) {
+  return raw === "light" || raw === "dark" ? raw : "auto";
+}
+function nextTheme(t) {
+  return t === "light" ? "dark" : t === "dark" ? "auto" : "light";
+}
+// The data-theme value <html> carries for one mode: none in auto, so the
+// stylesheet's media query alone picks the palette.
+function themeAttr(t) {
+  return t === "light" || t === "dark" ? t : null;
 }
 // True when the event target swallows typing: a form field or a content
 // editable. The board shortcuts never fire from inside one.
@@ -2514,6 +2530,23 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     if (ev.target === sheetEl) sheetEl.hidden = true;
   });
   document.getElementById("sheetbtn").addEventListener("click", openSheet);
+  // The theme button: cycle auto -> light -> dark, apply the data-theme
+  // attribute, store the choice. A refused localStorage only loses the
+  // memory; the override still lasts the session.
+  const themeBtn = document.getElementById("themebtn");
+  function applyTheme(t) {
+    const attr = themeAttr(t);
+    if (attr) document.documentElement.dataset.theme = attr;
+    else delete document.documentElement.dataset.theme;
+    themeBtn.textContent = "theme " + t;
+  }
+  let theme = loadTheme(lsGet(THEME_KEY));
+  applyTheme(theme);
+  themeBtn.addEventListener("click", () => {
+    theme = nextTheme(theme);
+    applyTheme(theme);
+    lsSet(THEME_KEY, theme);
+  });
   document.getElementById("searchkey").addEventListener("click", focusSearch);
   searchClear.addEventListener("click", clearSearch);
   function openSheet() {
