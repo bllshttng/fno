@@ -38,7 +38,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `~/.fno/cache/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
 | `session <id> has a live writer` | Another process holds the session's `<fno_id>.lock` | `fno agents session stop <name>`, then ask again |
 | `the footnote host exited before the session opened` | The binary refused the launch spec, often a version skew | Read the host log the refusal names, under `~/.fno/agents/fnh/` |
-| `footnote is retired; use fno` | The release tarball no longer ships the harness; the name on PATH is the updater-compat stub | Run `fno update` so the stub forwards to an installed footnote; install footnote first if it is missing, or build fnh from its checkout and point `FNO_FOOTNOTE_BIN` at it, or spawn another harness |
+| `footnote is retired; use fno` | The release tarball ships no `footnote` name; only an install that last updated during the 2026-10 compat window still carries the stub on PATH | Build fnh from its checkout and point `FNO_FOOTNOTE_BIN` at it, or spawn another harness |
 
 Tools run with your own permissions. There is no sandbox.
 
