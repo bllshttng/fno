@@ -62,6 +62,10 @@ pub struct Account {
     /// Today's `-J` names it `cred-snapshot`; the alias is what fills LOGIN.
     #[serde(default, alias = "cred-snapshot")]
     pub snapshot: Option<String>,
+    /// The record has its own config dir, so `use` refuses it. An older `fno`
+    /// omits the field, and that CLI refusal still blocks the swap.
+    #[serde(default)]
+    pub spawn_only: bool,
     /// The identity cell parsed from plain `list`'s own last column (the
     /// phase-2 read), taken verbatim, problems and all. None until it lands.
     #[serde(skip)]
@@ -305,6 +309,9 @@ pub fn expand_tilde(path: &str, home: Option<&std::ffi::OsStr>) -> String {
     path.to_string()
 }
 
+/// Closes a `use` refusal that only a fresh login repairs. `r` reads it back.
+const LOGIN_HINT: &str = "press r to log in";
+
 /// A pending destructive action awaiting the operator's one-key confirm. `label`
 /// is shown in the footer prompt; `argv` is what Enter runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,6 +375,9 @@ pub struct ConnectionsView {
     cursor_row: std::cell::Cell<Option<usize>>,
     /// The cursor's offset inside the accounts table rows, before they join `out`.
     cursor_rel: std::cell::Cell<Option<usize>>,
+    /// Live workers per harness slot, set while rendering: the key reducer has
+    /// no agent rows, and the `u` prompt names this count.
+    slot_workers: std::cell::RefCell<std::collections::BTreeMap<String, usize>>,
 }
 
 /// The phase-2 identity read's lifecycle.
@@ -406,6 +416,7 @@ impl ConnectionsView {
             last_read: std::time::Instant::now(),
             cursor_row: Default::default(),
             cursor_rel: Default::default(),
+            slot_workers: Default::default(),
         }
     }
 
@@ -838,7 +849,9 @@ impl ConnectionsView {
         }
     }
 
-    /// `u`: set the selected account active. Single-flight guarded.
+    /// `u`: stage the switch to the selected account. Enter runs it. The scope
+    /// is global because the slot is machine-wide: the project default would
+    /// write the pointer into whatever directory launched this client.
     fn act_use(&mut self) -> ConnIntent {
         if self.acting {
             self.notice = Some("busy - one action at a time".to_string());
@@ -851,10 +864,34 @@ impl ConnectionsView {
             self.notice = Some(format!("{} is already active", acct.id));
             return ConnIntent::Redraw;
         }
+        if acct.spawn_only {
+            self.notice = Some(format!(
+                "{} has its own login dir and never takes the shared slot; use s: spawn-acct for new spawns",
+                acct.id
+            ));
+            return ConnIntent::Redraw;
+        }
+        let workers = self
+            .slot_workers
+            .borrow()
+            .get(&acct.harness)
+            .copied()
+            .unwrap_or(0);
+        let label = use_prompt(acct, workers);
         let id = acct.id.clone();
-        self.acting = true;
         self.notice = None;
-        ConnIntent::Run(vec!["config".into(), "accounts".into(), "use".into(), id])
+        self.confirm = Some(PendingConfirm {
+            label,
+            argv: vec![
+                "config".into(),
+                "accounts".into(),
+                "use".into(),
+                id,
+                "--scope".into(),
+                "global".into(),
+            ],
+        });
+        ConnIntent::Redraw
     }
 
     /// `s`: set the selected account as the session-local active account for
@@ -945,7 +982,13 @@ impl ConnectionsView {
         // The stored login is someone else's, or dead: a re-snapshot would
         // save the wrong login again, so open a real login pane first. The
         // next `r` on the row saves whatever that pane signed in.
-        let needs_login = acct.usage.as_ref().is_some_and(|u| u.relogin);
+        let refused = self
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains(LOGIN_HINT) && n.contains(&format!("'{}'", acct.id)));
+        // The usage probe can miss a spent login ("not measured yet"), so a
+        // `use` refusal on this row also counts.
+        let needs_login = refused || acct.usage.as_ref().is_some_and(|u| u.relogin);
         let (id, harness) = (acct.id.clone(), acct.harness.clone());
         if needs_login && !self.relogin.contains(&id) {
             let login: Vec<String> = match harness.as_str() {
@@ -1238,6 +1281,16 @@ impl ConnectionsView {
         agents: &[crate::proto::AgentRow],
         max_cols: usize,
     ) {
+        *self.slot_workers.borrow_mut() = self
+            .accounts
+            .iter()
+            .map(|a| {
+                (
+                    a.harness.clone(),
+                    slot_workers(&a.harness, &self.accounts, agents),
+                )
+            })
+            .collect();
         if self.accounts.is_empty() && self.pending.is_empty() {
             out.push("no accounts registered - press a to add".to_string());
             return;
@@ -1639,6 +1692,36 @@ fn workers_on(a: &Account, agents: &[crate::proto::AgentRow]) -> usize {
         .count()
 }
 
+/// How many live workers share `harness`'s slot. A worker on a spawn-only
+/// account has its own config dir, so a swap does not reach it.
+fn slot_workers(harness: &str, accounts: &[Account], agents: &[crate::proto::AgentRow]) -> usize {
+    let own_dir = |id: &String| accounts.iter().any(|a| a.id == *id && a.spawn_only);
+    agents
+        .iter()
+        .filter(|r| !r.exited && r.harness.as_deref() == Some(harness))
+        .filter(|r| !r.account.as_ref().is_some_and(own_dir))
+        .count()
+}
+
+/// The `u` confirm: what Enter does to this account's login and live workers.
+fn use_prompt(acct: &Account, workers: usize) -> String {
+    let (id, harness) = (&acct.id, &acct.harness);
+    let live = match workers {
+        1 => "1 live worker".to_string(),
+        n => format!("{n} live workers"),
+    };
+    let effect = if acct.auth != "managed" {
+        format!("make {id} active? no login moves, live workers do not change")
+    } else if harness == "codex" && workers > 0 {
+        format!("switch codex to {id}? {live} hold the slot, so the switch will defer")
+    } else if workers == 1 {
+        format!("switch {harness} to {id}? {live} stays running")
+    } else {
+        format!("switch {harness} to {id}? {live} stay running")
+    };
+    format!("{effect} (Enter=yes, any key=no)")
+}
+
 /// The AGE cell: how old the usage reading is, blank before one lands.
 fn usage_age(a: &Account, now: u64) -> String {
     a.usage
@@ -1831,16 +1914,27 @@ pub async fn run_command_env(argv: Vec<String>, env: Vec<(String, String)>) -> A
             }
         }
     };
-    if output.status.success() {
-        return ActionResult {
-            ok: true,
-            msg: format!("{} ok", argv.join(" ")),
+    action_result(&argv, output.status.success(), &output.stderr)
+}
+
+/// The notice for a finished command. A success keeps a closing `warning:`
+/// line, and a refusal that needs a login names the mux's own door.
+fn action_result(argv: &[String], ok: bool, stderr: &[u8]) -> ActionResult {
+    let (cmd, tail) = (argv.join(" "), stderr_tail(stderr));
+    if ok {
+        let msg = match tail.starts_with("warning:") {
+            true => format!("{cmd} ok: {tail}"),
+            false => format!("{cmd} ok"),
         };
+        return ActionResult { ok, msg };
     }
-    let tail = stderr_tail(&output.stderr);
+    let reason = match tail.split_once(" Run in a terminal: ") {
+        Some((why, _)) => format!("{}: {LOGIN_HINT}", why.trim_end_matches('.')),
+        None => tail,
+    };
     ActionResult {
-        ok: false,
-        msg: format!("{} failed: {tail}", argv.join(" ")),
+        ok,
+        msg: format!("{cmd} failed: {reason}"),
     }
 }
 
@@ -2167,19 +2261,24 @@ mod tests {
 
     // AC1-UI: no zero-feedback keypress - an unbound key rings the bell.
 
-    // AC2-HP: `u` on a non-active account runs `providers use <id>`.
+    // `u` on a non-active account stages the switch at global scope, and only
+    // Enter runs it.
     #[test]
     fn use_key_rows() {
         let mut v = ready_view();
         v.acct_sel = 1; // ccr, not active
-        let intent = v.on_key(b'u');
+        assert_eq!(v.on_key(b'u'), ConnIntent::Redraw);
+        assert!(!v.acting);
+        let intent = v.on_key(b'\r');
         assert_eq!(
             intent,
             ConnIntent::Run(vec![
                 "config".into(),
                 "accounts".into(),
                 "use".into(),
-                "ccr".into()
+                "ccr".into(),
+                "--scope".into(),
+                "global".into(),
             ])
         );
         assert!(v.acting); // single-flight guard armed
@@ -2196,11 +2295,100 @@ mod tests {
     fn second_action_while_acting_is_blocked() {
         let mut v = ready_view();
         v.acct_sel = 1;
-        assert!(matches!(v.on_key(b'u'), ConnIntent::Run(_)));
+        v.on_key(b'u');
+        assert!(matches!(v.on_key(b'\r'), ConnIntent::Run(_)));
         assert!(v.acting);
         let intent = v.on_key(b'u');
         assert_eq!(intent, ConnIntent::Redraw);
         assert!(v.notice.as_deref().unwrap().contains("busy"));
+    }
+
+    #[test]
+    fn a_use_notice_keeps_the_warning_only_on_a_warning() {
+        let argv: Vec<String> = vec!["config".into(), "accounts".into(), "use".into()];
+        let warned = "warning: swapped under 2 live claude session(s); they keep auth\n";
+        let msg = action_result(&argv, true, warned.as_bytes()).msg;
+        assert!(
+            msg.contains("swapped under 2 live claude session(s)"),
+            "{msg}"
+        );
+        assert_eq!(
+            action_result(&argv, true, b"").msg,
+            "config accounts use ok"
+        );
+        assert_eq!(
+            action_result(&argv, true, b"a note\n").msg,
+            "config accounts use ok"
+        );
+    }
+
+    #[test]
+    fn the_use_prompt_names_the_live_workers_and_any_key_cancels() {
+        let mut v = ready_view();
+        let row = |harness: &str, account: Option<&str>| crate::proto::AgentRow {
+            harness: Some(harness.into()),
+            account: account.map(str::to_string),
+            ..Default::default()
+        };
+        let rows = [
+            row("claude", None),
+            row("claude", Some("ccm")),
+            row("claude", Some("ccr")),
+            row("codex", None),
+        ];
+        v.render_with(&rows, usize::MAX);
+        v.acct_sel = 1;
+        assert_eq!(v.on_key(b'u'), ConnIntent::Redraw);
+        let prompt = v.render_with(&rows, usize::MAX).join("\n");
+        assert!(
+            prompt.contains("switch claude to ccr? 3 live workers stay running"),
+            "{prompt}"
+        );
+        assert_eq!(v.on_key(b'x'), ConnIntent::Redraw);
+        assert_eq!(v.notice.as_deref(), Some("cancelled"));
+        assert!(!v.acting && v.confirm.is_none());
+
+        let mut codex = sample_accounts()[1].clone();
+        codex.harness = "codex".into();
+        assert!(use_prompt(&codex, 1).contains("will defer"));
+        assert!(use_prompt(&codex, 0).contains("0 live workers stay running"));
+        assert!(use_prompt(&sample_accounts()[2], 3).contains("no login moves"));
+    }
+
+    #[test]
+    fn a_spent_login_refusal_sends_r_to_the_login_pane() {
+        let argv: Vec<String> = vec!["config".into(), "accounts".into(), "use".into()];
+        let stderr = b"stored credential for 'ccr' is spent (invalid_grant); the slot was not \
+            touched Run in a terminal: fno config accounts use ccr\n";
+        let msg = action_result(&argv, false, stderr).msg;
+        assert!(
+            !msg.contains("terminal") && msg.contains(LOGIN_HINT),
+            "{msg}"
+        );
+
+        let mut v = ready_view();
+        v.acct_sel = 1;
+        v.notice = Some(msg);
+        // The usage cell here never set `relogin`, so only the refusal opens it.
+        assert!(matches!(v.on_key(b'r'), ConnIntent::SpawnLogin(_)));
+
+        // A refusal about another row leaves this row's re-snapshot alone.
+        let mut other = ready_view();
+        other.acct_sel = 0;
+        other.notice = Some(format!(
+            "stored credential for 'ccr' is spent: {LOGIN_HINT}"
+        ));
+        assert!(matches!(other.on_key(b'r'), ConnIntent::Run(_)));
+    }
+
+    #[test]
+    fn a_config_dir_row_names_the_spawn_key_and_runs_nothing() {
+        let mut v = ready_view();
+        v.accounts[1].spawn_only = true;
+        v.acct_sel = 1;
+        assert_eq!(v.on_key(b'u'), ConnIntent::Redraw);
+        assert!(v.confirm.is_none() && !v.acting);
+        assert!(v.notice.as_deref().unwrap().contains("s: spawn-acct"));
     }
 
     // AC1-ERR path: remove stages a confirm; Enter runs remove, other key cancels.
