@@ -11,9 +11,8 @@
 //! this suite rebuilds the same fixture tree and drives the Rust ops the
 //! same way, then asserts the frozen goldens under tests/golden/worktree/.
 //! Env pins mirror the driver's base_env exactly: HOME, FNO_STATE_DIR and
-//! FNO_GLOBAL_SETTINGS_PATH are set per case; FNO_AGENTS_HOME and
-//! FNO_AGENTS_RUNTIME are deliberately NOT set, so the ops resolve the same
-//! defaults the captured legs resolved. The overlap ops run under
+//! FNO_GLOBAL_SETTINGS_PATH are set per case; FNO_AGENTS_HOME is deliberately
+//! NOT set, so the ops resolve the same defaults the captured legs resolved. The overlap ops run under
 //! FNO_TEST_NOW and FNO_TEST_JOURNAL, the pins their ports read.
 
 mod common;

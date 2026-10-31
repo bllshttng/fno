@@ -2,7 +2,6 @@
 crates/fno-agents/src/naming.rs). Argv marshalling and result parsing only."""
 
 import json
-import os
 import re
 import subprocess
 from collections import namedtuple
@@ -29,7 +28,7 @@ def _run(command, args, stdin=None):
         raise AgentNameError("no fno-agents binary found; run `fno doctor update`")
     proc = subprocess.run(
         [str(binary), command, *args], input=stdin, capture_output=True, text=True,
-        timeout=30, env={**os.environ, "FNO_AGENTS_RUNTIME": "rust"},
+        timeout=30,
     )
     if proc.returncode:
         msg = (proc.stderr or "binary failed").strip().removeprefix("error: ")

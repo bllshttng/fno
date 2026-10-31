@@ -2,7 +2,7 @@
 //! parity-oracle: fno.agents.reachability.pane_identity_crosscheck
 //!
 //! The pane-identity command, frozen against goldens captured from its Python
-//! leg (tests/golden/pane_identity/capture.py) before that leg was deleted.
+//! leg before that leg was deleted.
 //! Each case replays the pane listing and registry rows the capture recorded
 //! beside its goldens, through the same stub `fno`, and compares exit code,
 //! stdout and stderr byte for byte.

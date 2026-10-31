@@ -236,8 +236,8 @@ worktree-cwd-cache.sh
 # The shared "which of these rooted processes actually holds the tree?" answer.
 # Sourced by scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
 # exposes wt_classify_pids. The bridge is the bash ADAPTER for the classifier
-# beside it (worktree_occupancy.py), which composes the fno Python modules
-# (keeper_lane, session_procs, footprint) from cli/src on PYTHONPATH; the
+# beside it (worktree_occupancy.py), which composes session_procs from
+# cli/src on PYTHONPATH and the fno-agents keeper lane; the
 # wrapped entry points users drive are `fno workspace worktree cleanup/archive`.
 # Pure sourcing library; no CLI of its own.
 worktree-occupancy.sh

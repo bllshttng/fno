@@ -46,8 +46,8 @@ from fno._lazy_group import make_lazy_group_cls
 
 # Tier discipline ("In-N-Out menu"): `fno --help` advertises a small
 # curated menu; everything else is hidden (invocable, just not listed). The
-# advertised set is `help`, `backlog`, `agents`, `whoami`, `doctor`, `config`
-# (6; `setup` moved under `config` in unit 6 of the reorg, and moved
+# advertised set is `help`, `backlog`, `whoami`, `doctor`, `config`
+# (5; `agents` is the rust front door's alone; `setup` moved under `config` in unit 6 of the reorg, and moved
 # spellings are excluded from the count by _HonestMenuGroup). `help` is an
 # eager inline command above; the `review` root claim moved to the rust
 # front door and carries no python registration;
@@ -83,10 +83,9 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
-    # the entries between this comment and `agents` below whose names
+    # the entries below whose names
     # are retired at the front door (crates/fno/command-names.tsv) and answer
     # only through fno-py.
-    "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
     "bundle": (
@@ -164,7 +163,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
 # slack; the checked-in allocation and its reference costs live in
 # scripts/ci/command-collapse-map.tsv.
 COLLAPSE_KEEP: dict[str, set[str]] = {
-    "agents": {"ask", "list", "logs", "loop", "loop-check", "needs", "resume", "rm", "spawn"},
     "annotate": {"list"},
     "approvals": set(),
     "backlog": {"advance", "done", "get", "next", "queued"},
@@ -390,7 +388,7 @@ def _render_full_menu() -> str:
         "fno-py full top-level surface - every fno-py command, including hidden.",
         "The curated menu is `fno --help`; hidden commands are invocable, just not advertised.",
         "For a group's own commands (hidden included) run `fno-py help <group> --all` "
-        "(e.g. `fno-py help agents --all`), or `fno <group> --help` for its menu.",
+        "(e.g. `fno-py help backlog --all`), or `fno <group> --help` for its menu.",
         "",
         "Commands:",
     ]

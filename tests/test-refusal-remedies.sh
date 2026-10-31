@@ -99,10 +99,7 @@ require "$PRE" "rm -rf '\$LOCKDIR'" "preflight: rm -rf remains the last rung"
 # --- 3. resume cwd messages ---------------------------------------------------
 # The Rust arms have no unit seam (they eprintln inside the command flow), so
 # each property is pinned by a marker on ONE physical source line (a phrase
-# split across a Rust string continuation is not pinned by grep). The Python
-# twin is NOT grepped here: cli/tests/agents/test_resume_cli.py asserts the
-# RENDERED ResumeResult.stderr, the stronger instrument - a source grep over
-# the same messages would false-green on a fragment refactor.
+# split across a Rust string continuation is not pinned by grep).
 require "$CV" "the row is the resume handle" "resume(rust): messages name the handle cost"
 require "$CV" "fno agents adopt" "resume(rust): rm-then-adopt rebind pair named"
 require "$CV" "gone for good" "resume(rust): rm framed as the gone-for-good case"

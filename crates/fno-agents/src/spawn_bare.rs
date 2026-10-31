@@ -1,9 +1,8 @@
 //! A bare spawn's duties in the client: the default substrate and its thread
 //! refusals, the fno-owned flags `--wait`, `--print`, `--prompt-file`,
 //! `--sandbox-write-policy` and `--mux-session`, the `--wait` gate retry,
-//! the `--print` line and the native lane. The Python twin is `cmd_spawn`
-//! (`fno.agents.cli`), which answers only `FNO_AGENTS_RUNTIME=python` and is
-//! the golden source until the seam delete removes it.
+//! the `--print` line and the native lane. The goldens came from the deleted
+//! Python `cmd_spawn`.
 
 use crate::harness_capabilities::HarnessContract;
 use crate::spawn_gate::Refusal;

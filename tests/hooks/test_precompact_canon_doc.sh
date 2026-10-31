@@ -708,54 +708,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 15. AC5-HP: a leaked FNO_AGENTS_RUNTIME=python pin must not blind
-# the team read. The fake `fno` refuses `agents registry-json` ONLY when the
-# pin is set (the real Rust client's refusal shape) and answers with the
-# teamed row otherwise; the hook strips the pin before the read, so the
-# teamed scope-keyed doc still lands. Run with the pin exported.
-# ---------------------------------------------------------------------------
-PIN_BIN="$(mktemp -d -t canon-fake-fno-pin-XXXXXX)"
-PIN_DOC_OUT="$TMP/handoffs/pinned-team-rolling.md"
-cat > "$PIN_BIN/fno" <<FAKE
-#!/usr/bin/env bash
-case "\$*" in
-  *"agents internal registry-json"*)
-    if [ -n "\${FNO_AGENTS_RUNTIME:-}" ]; then
-      exit 127
-    fi
-    echo '[{"session_id":"c35abbca-bd2d-4407-8365-cf468baa7eea","role_level":2,"role_scope":"x-9e1e-fixture","name":"lead-fixture"}]'
-    ;;
-  *"backlog epic status x-9e1e-fixture"*)
-    echo '{"children":[{"id":"x-aaaa","status":"ready","slug":"a"}]}'
-    ;;
-  *"config paths handoff"*)
-    echo "$PIN_DOC_OUT"
-    ;;
-  *)
-    exit 1
-    ;;
-esac
-FAKE
-chmod +x "$PIN_BIN/fno"
-trap 'rm -rf "$TMP" "$FAKE_BIN" "$PORTFOLIO_BIN" "$LIVENESS_BIN" "$KILL_BIN" "$GATE_BIN" "$PIN_BIN"' EXIT
-
-PIN_ERR="$TMP/pin-err.txt"
-printf '{"trigger":"manual"}' \
-  | env PATH="$PIN_BIN:$PATH" FNO_AGENTS_RUNTIME=python CLAUDE_CODE_SESSION_ID="$SID" \
-    bash "$HOOK" >"$TMP/pin-out.txt" 2>"$PIN_ERR" || true
-if [[ -f "$PIN_DOC_OUT" ]] && grep -q "level 2 over x-9e1e-fixture" "$PIN_DOC_OUT" \
-  && grep -q "## Lead: nodes under purview (auto)" "$PIN_DOC_OUT"; then
-  pass "pinned env: the team read survives the strip and the scope-keyed doc lands (AC5-HP)"
-else
-  fail "pinned env: team read stayed blind or doc is not the scope-keyed one"
-fi
-if grep -q "registry-json exited" "$PIN_ERR"; then
-  fail "pinned env: a failing-read stderr line fired even though the strip healed the read"
-else
-  pass "pinned env: healed read stays quiet on stderr"
-fi
-
-# ---------------------------------------------------------------------------
 # 16. AC6-ERR: a genuinely failing registry read is reported, never
 # read as "unpromoted". The fake refuses unconditionally; the hook must print
 # one stderr line naming the exit code and the doc's team line must read
@@ -774,7 +726,7 @@ case "$*" in
 esac
 FAKE
 chmod +x "$FAIL_BIN/fno"
-trap 'rm -rf "$TMP" "$FAKE_BIN" "$PORTFOLIO_BIN" "$LIVENESS_BIN" "$KILL_BIN" "$GATE_BIN" "$PIN_BIN" "$FAIL_BIN"' EXIT
+trap 'rm -rf "$TMP" "$FAKE_BIN" "$PORTFOLIO_BIN" "$LIVENESS_BIN" "$KILL_BIN" "$GATE_BIN" "$FAIL_BIN"' EXIT
 
 FAIL_DOC="$TMP/unknown-team-canon.md"
 FAIL_ERR="$TMP/fail-err.txt"

@@ -5,6 +5,10 @@ from types import MappingProxyType
 from typing import Mapping, NamedTuple
 
 
+_ADVISORY_WARNING_PREFIX = "roster advisory: "
+_UNMEASURABLE_ROW_PREFIX = "unmeasurable-row: "
+
+
 class RosterReading(NamedTuple):
     consulted: bool
     rows_scanned: int
@@ -32,13 +36,14 @@ def read_roster(
     still carries attribution).
     """
     try:
-        from fno.agents.watchdog import fleet_rows
+        from fno.rust_binary import call_binary_json
 
-        rows, warnings = fleet_rows(timeout=timeout)
+        err, answer = call_binary_json("census", ["watchdog-fleet"], timeout=timeout)
+        if err is not None or not isinstance(answer, dict):
+            raise RuntimeError(f"fleet read failed: {err}")
+        rows, warnings = answer["rows"], answer["warnings"]
     except Exception as exc:  # noqa: BLE001 - any failure must degrade loudly
         return RosterReading(False, 0, {}, f"{type(exc).__name__}: {exc}")
-
-    from fno.agents.watchdog import ADVISORY_WARNING_PREFIX, UNMEASURABLE_ROW_PREFIX
 
     # The harnesses' degraded-probe wording, as a literal: an import would be a layering edge.
     registry_only_mark = "falling back to registry-only view"
@@ -46,10 +51,10 @@ def read_roster(
     blocking = []
     degraded_reason = ""
     for w in warnings:
-        idx = w.find(UNMEASURABLE_ROW_PREFIX)
+        idx = w.find(_UNMEASURABLE_ROW_PREFIX)
         if idx == -1:
             degraded_probe = (not require_live_probe) and (registry_only_mark in w)
-            if not w.startswith(ADVISORY_WARNING_PREFIX) and not degraded_probe:
+            if not w.startswith(_ADVISORY_WARNING_PREFIX) and not degraded_probe:
                 blocking.append(w)
             elif degraded_probe and not degraded_reason:
                 # Tolerated, not silent: the caller learns the probe degraded,
@@ -58,7 +63,7 @@ def read_roster(
             continue
         fields = dict(
             tok.split("=", 1)
-            for tok in w[idx + len(UNMEASURABLE_ROW_PREFIX):].split()
+            for tok in w[idx + len(_UNMEASURABLE_ROW_PREFIX):].split()
             if "=" in tok
         )
         if fields.get("node"):
@@ -74,28 +79,25 @@ def read_roster(
     unresolved: list[dict] = []
     for r in rows:
         entry = {
-            "name": r.name,
-            "state": r.state,
-            "cwd": r.cwd,
-            "row_id": str(r.row_id or ""),
-            "pid": getattr(r, "pid", None),
-            "pid_start_time": getattr(r, "pid_start_time", None),
-            "mux": getattr(r, "mux", None),
-            "stopped_at": getattr(r, "stopped_at", None),
+            "name": r.get("name"),
+            "state": r.get("state"),
+            "cwd": r.get("cwd"),
+            "row_id": str(r.get("row_id") or ""),
+            "pid": r.get("pid"),
+            "pid_start_time": r.get("pid_start_time"),
+            "mux": r.get("mux"),
+            "stopped_at": r.get("stopped_at"),
         }
-        if r.node:
-            index.setdefault(r.node, []).append(entry)
+        if r.get("node"):
+            index.setdefault(r["node"], []).append(entry)
         else:
             unresolved.append(entry)
-        if r.row_id:
-            by_session[str(r.row_id)] = entry
+        if r.get("row_id"):
+            by_session[str(r["row_id"])] = entry
     return RosterReading(True, len(rows), index, degraded_reason, by_session, len(unresolved), tuple(unresolved), unmeasurable)
 
 
-def _finished_row_states() -> frozenset:
-    from fno.agents.watchdog import _TERMINAL_STATES, _WAKE_STATES
-
-    return _TERMINAL_STATES - _WAKE_STATES
+_FINISHED_ROW_STATES = frozenset({"done", "completed", "exited", "killed"})
 
 
 def classify_workers(workers: list) -> tuple[list, list, dict]:
@@ -129,12 +131,14 @@ def _worker_reachability(worker: dict):
     try:
         import time
 
-        from fno.agents.watchdog import classify_tail, harness_for_session, tail_facts
+        from fno.rust_binary import call_binary_json
 
-        facts = tail_facts(
-            worker.get("row_id") or "", worker.get("cwd") or "",
-            agent=harness_for_session(worker.get("row_id") or ""),
+        err, tail = call_binary_json(
+            "census",
+            ["watchdog-tail", "--session", worker.get("row_id") or "", "--cwd", worker.get("cwd") or ""],
+            timeout=10,
         )
+        facts = tail if err is None and isinstance(tail, dict) and tail.get("has_transcript") else None
     except Exception:  # noqa: BLE001 - an unreadable transcript answers nothing
         facts = None
     # The pid falsifier fires only on an INCARNATION-PROVEN pid (a recorded
@@ -158,23 +162,24 @@ def _worker_reachability(worker: dict):
             return classify_reachability(truth_state=None, age_s=None, falsifier=falsifier)
         if state in ("working", "watching", "your-move"):
             return classify_reachability(truth_state=state, age_s=None, falsifier=None)
-        finished = f"finished-state:{state}" if state in _finished_row_states() else None
+        finished = f"finished-state:{state}" if state in _FINISHED_ROW_STATES else None
         return classify_reachability(truth_state=None, age_s=None, falsifier=finished)
-    if facts.last_event_epoch is None:
+    last_event_epoch = facts.get("last_event_epoch")
+    if last_event_epoch is None:
         # A transcript PRESENT but undatable: the measured wrong answer read
         # this as engaged. It is UNKNOWN - a verdict about the instrument -
         # never engaged-by-default and never positively finished.
         return classify_reachability(truth_state=None, age_s=None, falsifier=falsifier)
-    age = int(max(0.0, time.time() - facts.last_event_epoch))
+    age = int(max(0.0, time.time() - last_event_epoch))
     if falsifier is not None and age <= TRANSCRIPT_EVIDENCE_S:
         falsifier = None
-    if stop_epoch is not None and facts.last_event_epoch <= stop_epoch:
+    if stop_epoch is not None and last_event_epoch <= stop_epoch:
         falsifier = f"stopped:{worker.get('stopped_at')}"
-    if falsifier is None and age > TRANSCRIPT_EVIDENCE_S and state in _finished_row_states():
+    if falsifier is None and age > TRANSCRIPT_EVIDENCE_S and state in _FINISHED_ROW_STATES:
         # A terminal word with a silent tail is positive evidence of the end.
         falsifier = f"finished-state:{state}"
     return classify_reachability(
-        truth_state=classify_tail(facts.last_role, facts.last_text, age),
+        truth_state=facts.get("truth"),
         age_s=age,
         falsifier=falsifier,
     )

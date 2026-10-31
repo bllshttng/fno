@@ -30,7 +30,6 @@ cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.self_stam
 cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.registry import load_registry
 # Retired in the claims list port: the single-line watchdog import merged into
 # the parenthesized import still listed below, so the edge now rides that entry.
-cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.watchdog import (
 cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.truth_status import _session_from_holder
 #
 # Added 2026-09-03. `fno agents claim list --silent-after` reads a
@@ -40,12 +39,8 @@ cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.truth_status 
 # or opencode worker). tail_facts IS the transcript reader; there is no
 # lower-layer copy to call instead, and the same shape as the two entries
 # above it.
-cli/src/fno/claims/roster.py: L1 core -> L5 runtime / from fno.agents.watchdog import fleet_rows
-cli/src/fno/claims/roster.py: L1 core -> L5 runtime / from fno.agents.watchdog import ADVISORY_WARNING_PREFIX, UNMEASURABLE_ROW_PREFIX
-cli/src/fno/claims/roster.py: L1 core -> L5 runtime / from fno.agents.watchdog import _TERMINAL_STATES, _WAKE_STATES
 cli/src/fno/claims/roster.py: L1 core -> L5 runtime / from fno.agents.reachability import REACHABLE, UNKNOWN
 cli/src/fno/claims/roster.py: L1 core -> L5 runtime / from fno.agents.reachability import (
-cli/src/fno/claims/roster.py: L1 core -> L5 runtime / from fno.agents.watchdog import classify_tail, harness_for_session, tail_facts
 #
 # Added 2026-09-11 (the liveness-readers node). Every roster row, the status
 # crosscheck and the graph's worked overlay now classify through the ONE

@@ -1,0 +1,73 @@
+{
+  "since": {
+    "24h": {
+      "ok": 86400.0
+    },
+    " 90M ": {
+      "ok": 5400.0
+    },
+    "1.5d": {
+      "ok": 129600.0
+    },
+    "30d": {
+      "ok": 2592000.0
+    },
+    "31d": {
+      "err": "since duration '31d' is outside the bounded 1s-30d recovery window"
+    },
+    "0s": {
+      "err": "since duration '0s' is outside the bounded 1s-30d recovery window"
+    },
+    "720h": {
+      "ok": 2592000.0
+    },
+    "721h": {
+      "err": "since duration '721h' is outside the bounded 1s-30d recovery window"
+    },
+    "h": {
+      "err": "invalid since duration 'h'; use a positive value with s, m, h, or d"
+    },
+    "1": {
+      "err": "invalid since duration '1'; use a positive value with s, m, h, or d"
+    },
+    "-1h": {
+      "err": "invalid since duration '-1h'; use a positive value with s, m, h, or d"
+    },
+    "1.h": {
+      "err": "invalid since duration '1.h'; use a positive value with s, m, h, or d"
+    },
+    ".5h": {
+      "err": "invalid since duration '.5h'; use a positive value with s, m, h, or d"
+    },
+    "1e3s": {
+      "err": "invalid since duration '1e3s'; use a positive value with s, m, h, or d"
+    },
+    "": {
+      "err": "invalid since duration ''; use a positive value with s, m, h, or d"
+    },
+    "1w": {
+      "err": "invalid since duration '1w'; use a positive value with s, m, h, or d"
+    }
+  },
+  "uuids": {
+    "019a0000-0000-7000-8000-000000000001": true,
+    "019A0000-0000-7000-8000-000000000001": false,
+    "019a0000000070008000000000000001": false,
+    "{019a0000-0000-7000-8000-000000000001}": false,
+    "urn:uuid:019a0000-0000-7000-8000-000000000001": false,
+    "": false,
+    "abc": false,
+    "g19a0000-0000-7000-8000-000000000001": false
+  },
+  "cwds": {
+    "missing": {
+      "err": "cwd '<ROOT>/absent/deeper' could not be resolved: [Errno 2] No such file or directory: '<ROOT>/absent'"
+    },
+    "file": {
+      "err": "cwd '<ROOT>/plain-file' is not a directory"
+    },
+    "under_file": {
+      "err": "cwd '<ROOT>/plain-file/x' could not be resolved: [Errno 20] Not a directory: '<ROOT>/plain-file'"
+    }
+  }
+}

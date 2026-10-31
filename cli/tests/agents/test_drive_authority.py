@@ -10,14 +10,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-from typer.testing import CliRunner
-
 from fno.drive_authority import (
     active_drive_sessions,
     is_drive_authority_active,
 )
-from fno.paths_testing import use_tmpdir
 
 
 def _write_state(agents_dir: Path, short_id: str, pty: dict | None) -> None:
@@ -90,32 +86,3 @@ def test_emit_operator_initiated_envelope_and_data(tmp_path: Path) -> None:
 
 
 # --- CLI command --------------------------------------------------------------
-
-
-@pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
-def test_cli_drive_authority_exit_codes_and_json(
-    runner: CliRunner, monkeypatch, tmp_path: Path
-) -> None:
-    from fno import paths
-    from fno.agents.cli import agents_app
-
-    use_tmpdir(monkeypatch, tmp_path)
-    agents_dir = paths.state_dir() / "agents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-
-    # No windows -> exit 1, "active": false.
-    res = runner.invoke(agents_app, ["drive-authority", "--json"])
-    assert res.exit_code == 1
-    assert json.loads(res.output)["active"] is False
-
-    # Open an interactive window -> exit 0, session reported.
-    _write_state(agents_dir, "wkA", _drive(True, "interactive", "d-a"))
-    res = runner.invoke(agents_app, ["drive-authority", "--json"])
-    assert res.exit_code == 0
-    payload = json.loads(res.output)
-    assert payload["active"] is True
-    assert payload["sessions"][0]["short_id"] == "wkA"

@@ -55,6 +55,7 @@ mod agent_lock;
 pub mod agent_ref;
 pub mod agents_config;
 pub(crate) mod agents_event;
+pub mod agents_seam;
 pub mod agents_top;
 pub mod agy_ask;
 pub mod agy_hooks;
@@ -102,6 +103,7 @@ pub mod cargo_build_dirs;
 pub(crate) mod cargo_builds;
 pub(crate) mod cargo_orphans;
 pub mod census;
+pub mod census_reads;
 pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;
@@ -173,10 +175,12 @@ pub mod decision_trace;
 pub mod delivery_completion;
 pub mod delivery_eval;
 pub mod digest;
+pub mod discovered_sessions;
 pub mod dispatch_credit;
 pub mod dispatch_harness;
 pub mod disposition_gate;
 pub mod distress;
+pub mod docs_gate;
 pub mod drift;
 pub mod duration;
 pub mod effect_gate;
@@ -495,6 +499,7 @@ pub mod reap_render;
 pub mod receipt;
 pub mod receipt_policy;
 pub mod reclaim;
+pub mod recovery_sweep;
 pub mod reentry;
 pub mod refusal_rate;
 pub mod refusal_trend;
@@ -577,6 +582,7 @@ pub(crate) mod session_receipt;
 pub mod session_report;
 pub mod session_start_bytes;
 pub mod session_truth;
+pub mod silence_sweep;
 pub mod single_flight;
 pub mod skill_diff;
 pub mod skill_drift;
@@ -614,6 +620,7 @@ pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;
 pub(crate) mod stacked_base_stamp;
+pub mod stale_lane;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -705,6 +712,7 @@ pub mod wake_name;
 pub mod wake_read;
 pub mod watch;
 pub mod watch_expiry;
+pub mod watchdog;
 pub mod wave;
 pub mod whoami;
 pub mod worked_nodes;
@@ -1916,6 +1924,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "lead_wake_refused",
     "lead_spawned_successor",
     "worker_wake",
+    // The first read that finds a worker past its silence deadline
+    // (silence_sweep.rs).
+    "worker_silent",
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",
     "ci_cadence_check",

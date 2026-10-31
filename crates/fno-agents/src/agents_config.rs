@@ -1423,10 +1423,16 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/theme.rs",
     "crates/fno/src/web_backlog.html",
     "crates/fno/src/web_page.html",
+    "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
     "crates/fno/src/yard_overlay.rs",
 ];
 const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
+
+/// The docs tree: a docs PR there holds for the user's look (real shots on
+/// the Footnote Visual Log) before it merges, the same hold a UI PR takes.
+const BUILTIN_DOCS_TREE_ANCHOR: &str = "fno-sh-docs";
+const BUILTIN_DOCS_TREE_PAINT_PATHS: &[&str] = &["fno-sh-docs/**"];
 
 /// Resolve `merge.visual_paint_paths`, the render-surface paths whose PRs
 /// hold for the user's visual approval until an answered question page names
@@ -1453,6 +1459,11 @@ pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
         let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
         if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
             BUILTIN_VISUAL_PAINT_PATHS
+                .iter()
+                .map(|p| (*p).to_string())
+                .collect()
+        } else if root.join(BUILTIN_DOCS_TREE_ANCHOR).is_dir() {
+            BUILTIN_DOCS_TREE_PAINT_PATHS
                 .iter()
                 .map(|p| (*p).to_string())
                 .collect()

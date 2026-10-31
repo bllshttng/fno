@@ -357,6 +357,12 @@ assert_contains "AC7: next band blocks again" "$OUT" '60% used'
 # + session_context_nudge event. Clear latches + registry first.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_registry no no
+# This rewrite lands on the SAME LENGTH bytes as the 600k write above (only the
+# digits differ), so when it follows that write within one stat second the probe
+# cache's size+mtime fingerprint does NOT change and AC17's fire is served the
+# 600k copy (measured '60% used'; smoke-rest red 2026-10-30). sleep 1 forces a
+# later mtime, as in the AC19/AC20 pair below.
+sleep 1
 write_transcript "$SBX/t.jsonl" 500000   # 50% >= general trigger 50
 run_hook "$(payload "$SBX/t.jsonl")"
 assert_eq     "AC17: unpromoted past trigger exits 0" "$RC" "0"

@@ -11,10 +11,6 @@ and ``fno backlog done -p pr-number (-l link, -m note)`` (that flag surface
 belongs to the deprecated root ``fno done``). A substring of prose passes
 whether or not the flag is real, so the row-level checks at the bottom read
 the live command tree instead.
-
-Those checks force ``FNO_AGENTS_RUNTIME=python``. Under the default ``auto``
-runtime an ``agents`` command can exec the fno-agents Rust front, and an exec
-replaces the pytest worker rather than failing a test.
 """
 from __future__ import annotations
 
@@ -57,16 +53,9 @@ _SHORT_BESIDE_LONG = re.compile(
 )
 
 
-# Under the default `auto` runtime some `agents` commands exec the fno-agents Rust
-# front, which replaces this process: the pytest worker dies mid-run instead of
-# a test failing. Forcing the python runtime keeps the mature Python dispatch
-# in-process, so every legend row can be read the same way.
-_IN_PROCESS = {"FNO_AGENTS_RUNTIME": "python"}
-
-
 def _shorts_on(path: str) -> set[str]:
     """Short options click reports for a command path, read off its own --help."""
-    result = runner.invoke(app, [*path.split(), "--help"], env=_IN_PROCESS)
+    result = runner.invoke(app, [*path.split(), "--help"])
     assert result.exit_code == 0, f"`fno {path} --help` exited {result.exit_code}"
     return {
         short
@@ -96,7 +85,7 @@ def _resolves(path: str) -> None:
     """Assert a legend row resolves somewhere real: the Python tree, or the
     native dispatcher for a command the port moved into the binary (the Python
     leg is deleted, so the in-process app refuses it with "No such command")."""
-    result = runner.invoke(app, [*path.split(), "--help"], env=_IN_PROCESS)
+    result = runner.invoke(app, [*path.split(), "--help"])
     if result.exit_code == 0:
         return
     from tests._native_door import run_native

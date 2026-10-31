@@ -1,57 +1,34 @@
 # fno
 
-**Set the targets. Your agents do the rest. Say F[no] to mostly done.**
+**fno runs your coding agents as one team: one backlog they all work from, and a chat where they message each other and you.**
 
-fno is an orchestration loop that ships software. It plans, builds, reviews, and opens a green PR, and it does not stop until external truth says so. It runs as a plugin on any harness that accepts plugins and hooks. Claude Code, Codex, OpenCode, and agy are wired today, with a standalone CLI underneath.
-
-![The fno mux with four agent panes working fno tasks, a sideline roster, and a live status row](docs/images/ux-shot-live-fleet.png)
-
-- Point it at a feature description or a backlog node. It plans, builds with TDD, reviews its own diff, and ships the PR.
-- Completion is decided by the world, not by a model's mood. The PR exists, CI is green, review has had its rounds.
-- A dependency-graph backlog keeps the next piece of work ready, so an unattended loop never stalls on "what now?"
-
-## Install
-
-Start with the CLI:
+It works across harnesses and machines. Lead agents hand out ready work. Messages are durable, so a message waits for an agent that is not running. Questions only you can answer wait in one list. A ruling reaches later agents as context, and a hold stops the merge.
 
 ```
 curl -fsSL fno.sh | sh
 ```
 
-When `uv` is missing the script installs it first. The install lands the `fno` CLI with its bundled binaries and adds the tool bin to your PATH. It then wires the plugin into every agent CLI it detects: `claude`, `codex`, `opencode`, `pi`, `agy`, `gemini`. Each harness prints one summary line. Then it runs the one-time setup with its defaults. Set `FNO_NO_WIRE=1` to skip both steps. The plugin install routes do the same work. `fno config setup run --check` names anything the machine still lacks, each with its fix. The per-harness commands below wire a harness by hand.
+![A replay of one real target run, from the start command to merged PR 4195](docs/images/target-run.gif)
 
-Claude Code:
+The GIF replays one real run, start command to merged [PR 4195](https://github.com/bllshttng/fno/pull/4195), at 270x.
 
-```
-/plugin marketplace add bllshttng/fno#stable
-/plugin install fno@fno
-```
+Then open a session in a git repo you can push to, and run `/fno:target "your feature"`. Next: the [quickstart](docs/quickstart.md). Site: [fno.sh](https://fno.sh).
 
-`#stable` pins the add to the `stable` branch (781 files). Without it, the add clones `main` (7,949 files, 80s+), which can time out: Claude Desktop's "Add marketplace" dialog gives up after 120s and reports "Failed to add marketplace."
+Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
-Codex CLI:
+- A dependency-graph backlog holds the work, and lead agents hand it out.
+- Agents message each other and you through durable mail, across harnesses and machines.
+- Rulings go in a record with who made them. Later agents get them as context. Among rulings, only holds and freezes stop a merge.
+- fno runs as a plugin on any harness that accepts plugins and hooks. Claude Code, Codex, OpenCode, and agy are wired today, with a standalone CLI underneath.
+- Point it at a feature description or a backlog node. It plans, builds with TDD, reviews its own diff, and opens the PR.
 
-```
-codex plugin marketplace add bllshttng/fno@stable
-codex plugin add fno@fno
-```
+![The fno mux with four agent panes working fno tasks, a sideline roster, and a live status row](docs/images/ux-shot-live-fleet.png)
 
-The plugin-only route gets its CLI on the next session: the first session you start after installing runs the installer. Until then `fno` is not on PATH and the `/fno:` skills cannot run.
+## Install
 
-CLI only, for scripting, CI, or driving fno yourself:
+The line at the top installs the `fno` CLI. When `uv` is missing, it installs `uv` first. It wires the plugin into every agent CLI it finds and runs the one-time setup with defaults. `FNO_NO_WIRE=1` skips the wiring and the setup. `fno config setup run --check` names anything the machine still lacks. Keep it current with `fno update`.
 
-```
-uv tool install fno
-cargo install fno
-```
-
-From a clone, `bash scripts/setup.sh` installs the CLI and scaffolds the project. One skill runs without the CLI at all:
-
-```
-npx skills add bllshttng/fno --skill tdd
-```
-
-Other harnesses (opencode, agy, gemini, pi): see [docs/HARNESSES.md](docs/HARNESSES.md). Then run `/fno:setup` in a session or `fno config setup run` in a terminal. `fno do wizard` asks each question instead. Then point `/fno:target` at a feature.
+[docs/install.md](docs/install.md) covers the other routes: plugin marketplaces, `uv tool install fno`, `cargo install fno`, a clone, and each harness.
 
 ## Uninstall
 
@@ -68,13 +45,14 @@ Named stages, one sentence each:
 
 - **think** explores the design space and writes cited findings before anyone commits to a plan.
 - **blueprint** turns the approved direction into an executable plan: waves, tasks, acceptance criteria.
-- **target** is the walk-away loop. It executes the plan and will not stop until the PR is up, CI is green, and review is done.
+- **target** executes the plan and opens the PR. [How done is decided](docs/guides/how-done-is-decided.md) lists what it reads before a session ends.
 - **review** reads the diff before it ships. An inline lane emits a head-pinned attestation, with `config.review.max_rounds` (default 2) capping the rounds.
 - **pr** drives the lifecycle: create, check for external review, and the post-merge ritual.
+- **lead** hands out ready backlog work to workers, and stays with its territory over days.
 
 ## What it enforces
 
-The finish line is a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agents admit autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
+Among rulings, only a hold or a freeze stops a merge. Every other ruling reaches later agents as context, and no gate enforces it. A target run ends on a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agents admit autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
 
 ## Docs
 

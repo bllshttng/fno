@@ -131,8 +131,8 @@ def test_unusable_env_override_falls_through(tmp_path, monkeypatch):
 
 
 def test_installed_lookup_ignores_the_env_override(tmp_path, monkeypatch):
-    """resolve_installed_binary decides the DEFAULT runtime, so it stays deaf
-    to the override; FNO_AGENTS_RUNTIME=rust is the opt-in."""
+    """resolve_installed_binary answers for the installed door, so it stays deaf
+    to the override."""
     binary = _make_exe(tmp_path / "custom" / rust_binary.BINARY_NAME)
     monkeypatch.setenv(rust_binary.BINARY_ENV, str(binary))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))

@@ -200,7 +200,7 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
                 let remedy = receipt
                     .and_then(|r| r.get("remedy"))
                     .and_then(Value::as_str)
-                    .unwrap_or("check fno agents gate-status");
+                    .unwrap_or("check fno agents admit status");
                 let remedy = crate::capacity::native_remedy(remedy, receipt);
                 let place = crate::spawn_gate_queue::place_note(receipt);
                 return Some(format!(
@@ -380,7 +380,7 @@ mod floor_setter_tests {
         // refuse.
         assert!(refuse_floor_setter("fno agents spawn -- --floor 3").is_none());
         assert!(refuse_floor_setter("fno agents spawn w1 hi").is_none());
-        assert!(refuse_floor_setter("fno agents gate-status").is_none());
+        assert!(refuse_floor_setter("fno agents admit status").is_none());
         assert!(refuse_floor_setter("git status").is_none());
         // A quoted payload string is payload, never the setter.
         assert!(refuse_floor_setter("fno agents spawn w1 \"use --floor N\"").is_none());

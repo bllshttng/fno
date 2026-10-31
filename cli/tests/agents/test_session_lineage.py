@@ -130,7 +130,7 @@ def _hermetic_append_door(monkeypatch) -> None:
 
     monkeypatch.setattr(rb, "command_call", _fake_command_call)
 
-    def _fake_open(root, key):
+    def _fake_open(key):
         needle = f"[{rs._BRANCH_QUESTION_MARKER}:{key}]"
         return any(needle in q["data"].get("question", "") for q in _open_questions())
 

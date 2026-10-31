@@ -19,82 +19,21 @@ fn display_widths<const N: usize>(headers: [&str; N], display: &[[String; N]]) -
     widths
 }
 
-/// Shell out to the Python `fno agents discovered-json` helper for the P1
-/// discovered-live-sessions lane and return the rows.
+/// The P1 discovered-live-sessions lane, filtered for the rendered surface.
 ///
-/// The Rust client owns the `list` rendered surface, but discovery lives in
-/// Python (it needs psutil's cross-platform process create-time for the
-/// reuse-safe liveness the design requires; the Rust-native liveness degrades
-/// to existence-only on macOS). Fail-open by contract: a missing `fno`, a
-/// non-zero exit, or unparseable output yields an empty lane so `list` is
-/// never broken by discovery (US5). `FNO_AGENTS_RUNTIME=python` pins the child
-/// to the Python dispatch so it cannot recurse back into this binary.
+/// Fail-open by contract: any discovery failure yields an empty lane so `list`
+/// is never broken by discovery (US5).
 pub fn fetch_discovered_sessions(
     cwd_filter: Option<&str>,
     provider_filter: Option<&str>,
     status_filter: Option<&str>,
     progress_filter: Option<&str>,
 ) -> Vec<Value> {
-    use std::process::Command;
-
     // No live-only early return. It encoded "a discovered session is live by
     // definition", which the shared reachability verdict retired: a discovered
-    // row whose process is provably gone now comes back `orphaned`, so the
-    // early return made `--status orphaned` drop through Rust a row that Python
-    // prints -- one runtime-dependent answer to one question. The row-level
-    // filter at the bottom is the single place status is applied.
-    let mut argv = vec!["agents".to_string(), "discovered-json".to_string()];
-    if let Some(c) = cwd_filter {
-        argv.push("--cwd".into());
-        argv.push(c.into());
-    }
-    // Without this the rendered surface disagrees with the Python one:
-    // `--harness claude` would list every discovered codex/opencode session.
-    // An empty value is "no filter" on the Python side, so forwarding it would
-    // make the two runtimes disagree again in the other direction.
-    if let Some(p) = provider_filter.filter(|p| !p.is_empty()) {
-        argv.push("--harness".into());
-        argv.push(p.into());
-    }
-
-    // Every `fno agents list` on the box runs this, so several terminals asking
-    // at once each paid their own Python cold start for one answer. The latch
-    // is keyed on the argv above, so a run with a different `--cwd` or
-    // `--harness` is a different flight and keeps its own answer.
-    let key = crate::single_flight::flight_key(&argv);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let flight = crate::single_flight::run_or_join(
-        &key,
-        crate::agents_config::single_flight_ttl(&cwd),
-        crate::agents_config::single_flight_join_budget(&cwd),
-        // No outer deadline to subtract from: this path has no caller-supplied
-        // budget, so the wait it may have spent changes nothing about the run.
-        |_spent| {
-            let mut cmd = Command::new(crate::scrape::fno_bin());
-            cmd.args(&argv);
-            cmd.env("FNO_AGENTS_RUNTIME", "python");
-            // Fail-open by contract, and the same rule the latch needs: only a
-            // clean run is worth sharing, so a failure spends no cache entry
-            // and the next caller retries for real.
-            match cmd.output() {
-                Ok(o) if o.status.success() => Some(o.stdout),
-                _ => None,
-            }
-        },
-    );
-    let output = match flight.stdout {
-        Some(bytes) => bytes,
-        None => return Vec::new(),
-    };
-    let parsed: Value = match serde_json::from_slice(&output) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let mut rows: Vec<Value> = parsed
-        .get("discovered_sessions")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    // row whose process is provably gone now comes back `orphaned`. The
+    // row-level filter below is the single place status is applied.
+    let mut rows = crate::discovered_sessions::discovered_rows(cwd_filter, provider_filter);
     retain_discovered_by_status(&mut rows, status_filter);
     retain_discovered_by_progress(&mut rows, progress_filter);
     rows

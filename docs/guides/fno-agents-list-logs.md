@@ -38,7 +38,7 @@ Columns:
 | LAST MESSAGE | Flattened text of the worker's last transcript turn (`[tool_use: name]` markers inline), capped for display; `-` when the probe did not answer. |
 | STATUS | The served activity word: `writing`, `quiet`, `parked`, `refused`, `orphaned`, or `unknown`. |
 
-`--json` keeps every field the table drops, such as `cwd`, `pid`, `address` and `last_reconciled_at`. `fno agents session list` needs the `fno-agents` binary. There is no Python list lane, so `FNO_AGENTS_RUNTIME=python` refuses the command with exit 127.
+`--json` keeps every field the table drops, such as `cwd`, `pid`, `address` and `last_reconciled_at`. `fno agents session list` needs the `fno-agents` binary.
 
 The emitter refuses self-contradictory stored fields. If a terminal `status` is behind a fresher transcript event, it becomes `unknown` with `basis: stale-verdict-fresher-event`. If `last_message_at` is newer than `last_event_at`, it becomes `null` with `last_message_at_basis: refused-newer-than-transcript`. When process-start evidence is unavailable, `liveness_origin` is `null` and `liveness_origin_basis` names which of five causes produced it: `pid-absent`, `created-at-absent`, `created-at-unreadable`, `pid-start-absent`, or `pid-start-unreadable`. Otherwise the origin is `resumed` or `survivor` and the basis is `null`, because the value is its own evidence.
 

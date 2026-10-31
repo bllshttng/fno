@@ -1,0 +1,1708 @@
+{
+ "classify": [
+  {
+   "name": "empty clean scan",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [],
+    "complete": true
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=0 measured",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": []
+  },
+  {
+   "name": "every store unreadable",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": false,
+    "claims_ok": false,
+    "registry_ok": false,
+    "github_ok": false,
+    "unscanned_roots": [
+     "/gone/root"
+    ],
+    "prs_unscanned": true,
+    "warnings": [
+     "graph unreadable: boom"
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "graph unreadable"
+     },
+     "done_ahead_of_main": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "graph unreadable"
+     },
+     "dirty_ownerless_worktree": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "registry unreadable"
+     },
+     "open_pr_ownerless": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "graph unreadable"
+     }
+    },
+    "counts": {
+     "started_free_claim": null,
+     "done_ahead_of_main": null,
+     "dirty_ownerless_worktree": null,
+     "open_pr_ownerless": null
+    },
+    "warnings": [
+     "graph unreadable: boom",
+     "started_free_claim: graph unreadable",
+     "done_ahead_of_main: graph unreadable",
+     "dirty_ownerless_worktree: registry unreadable",
+     "open_pr_ownerless: graph unreadable"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=unknown (graph unreadable)\ndone_ahead_of_main=unknown (graph unreadable)\ndirty_ownerless_worktree=unknown (registry unreadable)\nopen_pr_ownerless=unknown (graph unreadable)",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "started_free_claim",
+    "done_ahead_of_main",
+    "dirty_ownerless_worktree",
+    "open_pr_ownerless"
+   ]
+  },
+  {
+   "name": "started dimension",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "nodes": [
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-free",
+      "owner_probes": [
+       {
+        "handle": "gone",
+        "pid_alive": false
+       }
+      ],
+      "ahead_count": 2
+     },
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799910000.0,
+      "node_id": "x-older"
+     },
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": null,
+      "node_id": "x-noage",
+      "cwd": "/cwd/n"
+     },
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-wt",
+      "worktree_path": "/wt/other",
+      "cwd": "/cwd/w"
+     },
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-live",
+      "owner_probes": [
+       {
+        "handle": "gone",
+        "pid_alive": false
+       },
+       {
+        "handle": "live",
+        "pid_alive": true
+       }
+      ]
+     },
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-epic",
+      "is_container": true
+     },
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "suspect",
+       "holder": "h"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-held"
+     },
+     {
+      "status": "ready",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-open"
+     }
+    ],
+    "worktrees": [
+     {
+      "path": "/wt/x-free",
+      "repo_root": "/repo",
+      "node_id": "x-free",
+      "dirty_count": 0,
+      "ahead_count": 9
+     },
+     {
+      "path": "/wt/x-older",
+      "repo_root": "/repo",
+      "node_id": "x-older",
+      "dirty_count": 0,
+      "ahead_count": 3
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [
+     {
+      "kind": "started_free_claim",
+      "subject": "x-older",
+      "basis": "in_progress, claim free, idle 25h, 3 commits ahead of origin/main",
+      "clear_command": "/fno:target x-older",
+      "node_id": "x-older",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/x-older",
+      "age_s": 90000,
+      "ahead_count": 3,
+      "dirty_count": null
+     },
+     {
+      "kind": "started_free_claim",
+      "subject": "x-free",
+      "basis": "in_progress, claim free, idle 2h, 2 commits ahead of origin/main",
+      "clear_command": "/fno:target x-free",
+      "node_id": "x-free",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/x-free",
+      "age_s": 7300,
+      "ahead_count": 2,
+      "dirty_count": null
+     },
+     {
+      "kind": "started_free_claim",
+      "subject": "x-wt",
+      "basis": "in_progress, claim free, idle 2h",
+      "clear_command": "/fno:target x-wt",
+      "node_id": "x-wt",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/other",
+      "age_s": 7300,
+      "ahead_count": null,
+      "dirty_count": null
+     },
+     {
+      "kind": "started_free_claim",
+      "subject": "x-noage",
+      "basis": "in_progress, claim free, idle unknown age",
+      "clear_command": "/fno:target x-noage",
+      "node_id": "x-noage",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/cwd/n",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": null
+     }
+    ],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 4,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 4,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [],
+    "complete": true
+   },
+   "digest": "unfinished work: 4 finding(s)\n- started_free_claim x-older: in_progress, claim free, idle 25h, 3 commits ahead of origin/main -> clear: /fno:target x-older\n- started_free_claim x-free: in_progress, claim free, idle 2h, 2 commits ahead of origin/main -> clear: /fno:target x-free\n- started_free_claim x-wt: in_progress, claim free, idle 2h -> clear: /fno:target x-wt\n- started_free_claim x-noage: in_progress, claim free, idle unknown age -> clear: /fno:target x-noage\n\nstarted_free_claim=4 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=0 measured",
+   "signature": "started_free_claim:x-free;started_free_claim:x-noage;started_free_claim:x-older;started_free_claim:x-wt",
+   "key": "6d63dd3ab6be",
+   "unknown_dimensions": [],
+   "question": "[watchdog-unfinished-work:6d63dd3ab6be] The fleet watchdog found 4 unfinished-work finding(s). Each names the one command that clears it. Findings: started_free_claim x-free: in_progress, claim free, idle 2h, 2 commits ahead of origin/main -> clear: /fno:target x-free; started_free_claim x-noage: in_progress, claim free, idle unknown age -> clear: /fno:target x-noage; started_free_claim x-older: in_progress, claim free, idle 25h, 3 commits ahead of origin/main -> clear: /fno:target x-older; started_free_claim x-wt: in_progress, claim free, idle 2h -> clear: /fno:target x-wt",
+   "ask": "/fno:target x-free"
+  },
+  {
+   "name": "started unknown names the node",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "nodes": [
+     {
+      "status": "in_progress",
+      "claim": null,
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-noclaim"
+     },
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-quiet",
+      "owner_probes": [
+       {
+        "handle": "quiet",
+        "transcript_age_s": 5000.0
+       }
+      ]
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "claim state unreadable for x-noclaim"
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": null,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [
+     "started_free_claim: claim state unreadable for x-noclaim"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=unknown (claim state unreadable for x-noclaim)\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=0 measured",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "started_free_claim"
+   ]
+  },
+  {
+   "name": "done ahead dimension",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "nodes": [
+     {
+      "node_id": "x-a",
+      "status": "done"
+     },
+     {
+      "node_id": "x-b",
+      "status": "done",
+      "worktree_path": "/wt/by-path"
+     },
+     {
+      "node_id": "x-c",
+      "status": "done"
+     },
+     {
+      "node_id": "x-d",
+      "status": "done"
+     }
+    ],
+    "worktrees": [
+     {
+      "path": "/wt/x-a",
+      "repo_root": "/repo",
+      "node_id": "x-a",
+      "dirty_count": 0,
+      "ahead_count": 4
+     },
+     {
+      "path": "/wt/by-path",
+      "repo_root": "/repo",
+      "dirty_count": 0,
+      "ahead_count": 1
+     },
+     {
+      "path": "/wt/x-c",
+      "repo_root": "/repo",
+      "node_id": "x-c",
+      "dirty_count": 0,
+      "ahead_count": 0
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [
+     {
+      "kind": "done_ahead_of_main",
+      "subject": "x-a",
+      "basis": "done, worktree /wt/x-a is 4 commits ahead of fresh origin/main; a squash merge explains it innocently, nothing else does",
+      "clear_command": "cd /repo && fno agents workspace worktree stranded --apply",
+      "node_id": "x-a",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/x-a",
+      "age_s": null,
+      "ahead_count": 4,
+      "dirty_count": null
+     },
+     {
+      "kind": "done_ahead_of_main",
+      "subject": "x-b",
+      "basis": "done, worktree /wt/by-path is 1 commits ahead of fresh origin/main; a squash merge explains it innocently, nothing else does",
+      "clear_command": "cd /repo && fno agents workspace worktree stranded --apply",
+      "node_id": "x-b",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/by-path",
+      "age_s": null,
+      "ahead_count": 1,
+      "dirty_count": null
+     }
+    ],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 2,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 2,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [],
+    "complete": true
+   },
+   "digest": "unfinished work: 2 finding(s)\n- done_ahead_of_main x-a: done, worktree /wt/x-a is 4 commits ahead of fresh origin/main; a squash merge explains it innocently, nothing else does -> clear: cd /repo && fno agents workspace worktree stranded --apply\n- done_ahead_of_main x-b: done, worktree /wt/by-path is 1 commits ahead of fresh origin/main; a squash merge explains it innocently, nothing else does -> clear: cd /repo && fno agents workspace worktree stranded --apply\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=2 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=0 measured",
+   "signature": "done_ahead_of_main:x-a;done_ahead_of_main:x-b",
+   "key": "95be0de731d2",
+   "unknown_dimensions": [],
+   "question": "[watchdog-unfinished-work:95be0de731d2] The fleet watchdog found 2 unfinished-work finding(s). Each names the one command that clears it. Findings: done_ahead_of_main x-a: done, worktree /wt/x-a is 4 commits ahead of fresh origin/main; a squash merge explains it innocently, nothing else does -> clear: cd /repo && fno agents workspace worktree stranded --apply; done_ahead_of_main x-b: done, worktree /wt/by-path is 1 commits ahead of fresh origin/main; a squash merge explains it innocently, nothing else does -> clear: cd /repo && fno agents workspace worktree stranded --apply",
+   "ask": "cd /repo && fno agents workspace worktree stranded --apply"
+  },
+  {
+   "name": "done ahead unreadable",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "nodes": [
+     {
+      "node_id": "x-a",
+      "status": "done"
+     }
+    ],
+    "worktrees": [
+     {
+      "path": "/wt/x-a",
+      "repo_root": "/repo",
+      "node_id": "x-a",
+      "dirty_count": 0
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "ahead count unreadable for /wt/x-a"
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": null,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [
+     "done_ahead_of_main: ahead count unreadable for /wt/x-a"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=unknown (ahead count unreadable for /wt/x-a)\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=0 measured",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "done_ahead_of_main"
+   ]
+  },
+  {
+   "name": "dirty dimension",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "worktrees": [
+     {
+      "path": "/wt/orphan",
+      "repo_root": "/repo",
+      "dirty_count": 3,
+      "ahead_count": 0
+     },
+     {
+      "path": "/wt/bound",
+      "repo_root": "/repo",
+      "node_id": "x-b",
+      "dirty_count": 1,
+      "owner_probes": [
+       {
+        "handle": "gone",
+        "pid_alive": false
+       }
+      ]
+     },
+     {
+      "path": "/wt/live",
+      "repo_root": "/repo",
+      "dirty_count": 1,
+      "owner_probes": [
+       {
+        "handle": "live",
+        "pid_alive": true
+       }
+      ]
+     },
+     {
+      "path": "/wt/clean",
+      "repo_root": "/repo",
+      "dirty_count": 0
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/bound",
+      "basis": "1 dirty path(s), no live owner, node x-b",
+      "clear_command": "/fno:target x-b",
+      "node_id": "x-b",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/bound",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/orphan",
+      "basis": "3 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/orphan\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/orphan",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 3
+     }
+    ],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 2,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 2,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [],
+    "complete": true
+   },
+   "digest": "unfinished work: 2 finding(s)\n- dirty_ownerless_worktree /wt/bound: 1 dirty path(s), no live owner, node x-b -> clear: /fno:target x-b\n- dirty_ownerless_worktree /wt/orphan: 3 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/orphan\" \"adopt this worktree: finish or hand off the uncommitted work\"\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=2 measured\nopen_pr_ownerless=0 measured",
+   "signature": "dirty_ownerless_worktree:/wt/bound;dirty_ownerless_worktree:/wt/orphan",
+   "key": "3b37e8f17466",
+   "unknown_dimensions": [],
+   "question": "[watchdog-unfinished-work:3b37e8f17466] The fleet watchdog found 2 unfinished-work finding(s). Each names the one command that clears it. Findings: dirty_ownerless_worktree /wt/bound: 1 dirty path(s), no live owner, node x-b -> clear: /fno:target x-b; dirty_ownerless_worktree /wt/orphan: 3 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/orphan\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+   "ask": "/fno:target x-b"
+  },
+  {
+   "name": "dirty unknown owner",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "worktrees": [
+     {
+      "path": "/wt/q",
+      "repo_root": "/repo",
+      "dirty_count": 1,
+      "owner_probes": [
+       {
+        "handle": "quiet",
+        "transcript_age_s": 5000.0
+       }
+      ]
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "owner liveness unreadable for /wt/q"
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": null,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [
+     "dirty_ownerless_worktree: owner liveness unreadable for /wt/q"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=unknown (owner liveness unreadable for /wt/q)\nopen_pr_ownerless=0 measured",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "dirty_ownerless_worktree"
+   ]
+  },
+  {
+   "name": "dirty read failed",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "worktrees": [
+     {
+      "path": "/wt/f",
+      "repo_root": "/repo"
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "git status failed for /wt/f"
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": null,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [
+     "dirty_ownerless_worktree: git status failed for /wt/f"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=unknown (git status failed for /wt/f)\nopen_pr_ownerless=0 measured",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "dirty_ownerless_worktree"
+   ]
+  },
+  {
+   "name": "pr dimension",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "prs": [
+     {
+      "pr_number": 7,
+      "pr_url": "https://github.com/o/r/pull/7",
+      "node_id": "x-p",
+      "state": "OPEN",
+      "opened_at_epoch": 1799800000.0
+     },
+     {
+      "pr_number": 8,
+      "pr_url": null,
+      "node_id": null,
+      "state": "OPEN",
+      "opened_at_epoch": 1799999900.0
+     },
+     {
+      "pr_number": 9,
+      "pr_url": null,
+      "node_id": null,
+      "state": "MERGED",
+      "opened_at_epoch": 1799999900.0
+     },
+     {
+      "pr_number": 10,
+      "pr_url": null,
+      "node_id": null,
+      "state": "OPEN",
+      "opened_at_epoch": 1799999900.0,
+      "owner_probes": [
+       {
+        "handle": "live",
+        "pid_alive": true
+       }
+      ]
+     },
+     {
+      "pr_number": 11,
+      "pr_url": null,
+      "node_id": null,
+      "state": "OPEN",
+      "opened_at_epoch": 1799999900.0,
+      "owner_probes": [
+       {
+        "handle": "quiet",
+        "transcript_age_s": 5000.0
+       }
+      ]
+     },
+     {
+      "pr_number": 12,
+      "pr_url": null,
+      "node_id": null,
+      "state": "OPEN",
+      "opened_at_epoch": 1800007200.0
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [
+     {
+      "kind": "open_pr_ownerless",
+      "subject": "pr-7",
+      "basis": "open 55h with no live owner, node x-p, https://github.com/o/r/pull/7",
+      "clear_command": "/fno:ship pr check 7",
+      "node_id": "x-p",
+      "pr_number": 7,
+      "pr_url": "https://github.com/o/r/pull/7",
+      "cwd": null,
+      "age_s": 200000,
+      "ahead_count": null,
+      "dirty_count": null
+     },
+     {
+      "kind": "open_pr_ownerless",
+      "subject": "pr-8",
+      "basis": "open 0h with no live owner",
+      "clear_command": "/fno:ship pr check 8",
+      "node_id": null,
+      "pr_number": 8,
+      "pr_url": null,
+      "cwd": null,
+      "age_s": 100,
+      "ahead_count": null,
+      "dirty_count": null
+     },
+     {
+      "kind": "open_pr_ownerless",
+      "subject": "pr-12",
+      "basis": "open -2h with no live owner",
+      "clear_command": "/fno:ship pr check 12",
+      "node_id": null,
+      "pr_number": 12,
+      "pr_url": null,
+      "cwd": null,
+      "age_s": -7200,
+      "ahead_count": null,
+      "dirty_count": null
+     }
+    ],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 3,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": 3
+    },
+    "warnings": [],
+    "complete": true
+   },
+   "digest": "unfinished work: 3 finding(s)\n- open_pr_ownerless pr-7: open 55h with no live owner, node x-p, https://github.com/o/r/pull/7 -> clear: /fno:ship pr check 7\n- open_pr_ownerless pr-8: open 0h with no live owner -> clear: /fno:ship pr check 8\n- open_pr_ownerless pr-12: open -2h with no live owner -> clear: /fno:ship pr check 12\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=3 measured",
+   "signature": "open_pr_ownerless:pr-12;open_pr_ownerless:pr-7;open_pr_ownerless:pr-8",
+   "key": "6f7cbcb172df",
+   "unknown_dimensions": [],
+   "question": "[watchdog-unfinished-work:6f7cbcb172df] The fleet watchdog found 3 unfinished-work finding(s). Each names the one command that clears it. Findings: open_pr_ownerless pr-12: open -2h with no live owner -> clear: /fno:ship pr check 12; open_pr_ownerless pr-7: open 55h with no live owner, node x-p, https://github.com/o/r/pull/7 -> clear: /fno:ship pr check 7; open_pr_ownerless pr-8: open 0h with no live owner -> clear: /fno:ship pr check 8",
+   "ask": "/fno:ship pr check 12"
+  },
+  {
+   "name": "pr unknown owner past a day",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "prs": [
+     {
+      "pr_number": 3,
+      "pr_url": null,
+      "node_id": null,
+      "state": "OPEN",
+      "opened_at_epoch": 1799800000.0,
+      "owner_probes": [
+       {
+        "handle": "quiet",
+        "transcript_age_s": 5000.0
+       }
+      ]
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "owner liveness unreadable for pr 3"
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": null
+    },
+    "warnings": [
+     "open_pr_ownerless: owner liveness unreadable for pr 3"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=unknown (owner liveness unreadable for pr 3)",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "open_pr_ownerless"
+   ]
+  },
+  {
+   "name": "pr state unread",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "prs": [
+     {
+      "pr_number": 4,
+      "pr_url": null,
+      "node_id": null,
+      "state": null
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "github read failed for pr 4"
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": null
+    },
+    "warnings": [
+     "open_pr_ownerless: github read failed for pr 4"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=unknown (github read failed for pr 4)",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "open_pr_ownerless"
+   ]
+  },
+  {
+   "name": "pr opened unread",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "prs": [
+     {
+      "pr_number": 5,
+      "pr_url": null,
+      "node_id": null,
+      "state": "OPEN"
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "opened_at unreadable for pr 5"
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": null
+    },
+    "warnings": [
+     "open_pr_ownerless: opened_at unreadable for pr 5"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=unknown (opened_at unreadable for pr 5)",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": [
+    "open_pr_ownerless"
+   ]
+  },
+  {
+   "name": "partial scan still reports what it reached",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "unscanned_roots": [
+     "/late/root",
+     "/later/root"
+    ],
+    "worktrees": [
+     {
+      "path": "/wt/o",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     }
+    ],
+    "nodes": [
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": "x-s"
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [
+     {
+      "kind": "started_free_claim",
+      "subject": "x-s",
+      "basis": "in_progress, claim free, idle 2h",
+      "clear_command": "/fno:target x-s",
+      "node_id": "x-s",
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": null,
+      "age_s": 7300,
+      "ahead_count": null,
+      "dirty_count": null
+     }
+    ],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 1,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "budget spent before scanning /late/root"
+     },
+     "dirty_ownerless_worktree": {
+      "state": "unknown",
+      "count": 0,
+      "warning": "budget spent before scanning /late/root"
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 1,
+     "done_ahead_of_main": null,
+     "dirty_ownerless_worktree": null,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [
+     "done_ahead_of_main: budget spent before scanning /late/root",
+     "dirty_ownerless_worktree: budget spent before scanning /late/root"
+    ],
+    "complete": false
+   },
+   "digest": "unfinished work: 1 finding(s)\n- started_free_claim x-s: in_progress, claim free, idle 2h -> clear: /fno:target x-s\n\nstarted_free_claim=1 measured\ndone_ahead_of_main=unknown (budget spent before scanning /late/root)\ndirty_ownerless_worktree=unknown (budget spent before scanning /late/root)\nopen_pr_ownerless=0 measured",
+   "signature": "started_free_claim:x-s",
+   "key": "8f3425b482b8",
+   "unknown_dimensions": [
+    "done_ahead_of_main",
+    "dirty_ownerless_worktree"
+   ],
+   "question": "[watchdog-unfinished-work:8f3425b482b8] The fleet watchdog found 1 unfinished-work finding(s). Each names the one command that clears it. The scan was INCOMPLETE - dirty_ownerless_worktree, done_ahead_of_main went unread, so more findings may exist. Findings: started_free_claim x-s: in_progress, claim free, idle 2h -> clear: /fno:target x-s",
+   "ask": "/fno:target x-s"
+  },
+  {
+   "name": "more findings than the digest lists",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "worktrees": [
+     {
+      "path": "/wt/00",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/01",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/02",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/03",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/04",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/05",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/06",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/07",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/08",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/09",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/10",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     },
+     {
+      "path": "/wt/11",
+      "repo_root": "/repo",
+      "dirty_count": 1
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/00",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/00\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/00",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/01",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/01\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/01",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/02",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/02\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/02",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/03",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/03\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/03",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/04",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/04\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/04",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/05",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/05\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/05",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/06",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/06\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/06",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/07",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/07\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/07",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/08",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/08\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/08",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/09",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/09\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/09",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/10",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/10\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/10",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     },
+     {
+      "kind": "dirty_ownerless_worktree",
+      "subject": "/wt/11",
+      "basis": "1 dirty path(s), no live owner, no resolved node",
+      "clear_command": "fno agents spawn --cwd \"/wt/11\" \"adopt this worktree: finish or hand off the uncommitted work\"",
+      "node_id": null,
+      "pr_number": null,
+      "pr_url": null,
+      "cwd": "/wt/11",
+      "age_s": null,
+      "ahead_count": null,
+      "dirty_count": 1
+     }
+    ],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 12,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 12,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [],
+    "complete": true
+   },
+   "digest": "unfinished work: 12 finding(s)\n- dirty_ownerless_worktree /wt/00: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/00\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- dirty_ownerless_worktree /wt/01: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/01\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- dirty_ownerless_worktree /wt/02: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/02\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- dirty_ownerless_worktree /wt/03: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/03\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- dirty_ownerless_worktree /wt/04: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/04\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- dirty_ownerless_worktree /wt/05: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/05\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- dirty_ownerless_worktree /wt/06: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/06\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- dirty_ownerless_worktree /wt/07: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/07\" \"adopt this worktree: finish or hand off the uncommitted work\"\n- 4 more finding(s) not shown\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=12 measured\nopen_pr_ownerless=0 measured",
+   "signature": "dirty_ownerless_worktree:/wt/00;dirty_ownerless_worktree:/wt/01;dirty_ownerless_worktree:/wt/02;dirty_ownerless_worktree:/wt/03;dirty_ownerless_worktree:/wt/04;dirty_ownerless_worktree:/wt/05;dirty_ownerless_worktree:/wt/06;dirty_ownerless_worktree:/wt/07;dirty_ownerless_worktree:/wt/08;dirty_ownerless_worktree:/wt/09;dirty_ownerless_worktree:/wt/10;dirty_ownerless_worktree:/wt/11",
+   "key": "ca73228f39c8",
+   "unknown_dimensions": [],
+   "question": "[watchdog-unfinished-work:ca73228f39c8] The fleet watchdog found 12 unfinished-work finding(s). Each names the one command that clears it. Findings: dirty_ownerless_worktree /wt/00: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/00\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/01: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/01\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/02: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/02\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/03: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/03\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/04: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/04\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/05: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/05\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/06: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/06\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/07: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/07\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/08: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/08\" \"adopt this worktree: finish or hand off the uncommitted work\"; dirty_ownerless_worktree /wt/09: 1 dirty path(s), no live owner, no resolved node -> clear: fno agents spawn --cwd \"/wt/09\" \"adopt this worktree: finish or hand off the uncommitted work\"; and 2 more",
+   "ask": "fno agents spawn --cwd \"/wt/00\" \"adopt this worktree: finish or hand off the uncommitted work\""
+  },
+  {
+   "name": "empty clear command withheld",
+   "observations": {
+    "now_epoch": 1800000000.0,
+    "graph_ok": true,
+    "claims_ok": true,
+    "registry_ok": true,
+    "github_ok": true,
+    "nodes": [
+     {
+      "status": "in_progress",
+      "claim": {
+       "state": "free"
+      },
+      "touched_at_epoch": 1799992700.0,
+      "node_id": ""
+     }
+    ]
+   },
+   "payload": {
+    "generated_at": "2027-01-15T08:00:00Z",
+    "findings": [],
+    "dimensions": {
+     "started_free_claim": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "done_ahead_of_main": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "dirty_ownerless_worktree": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     },
+     "open_pr_ownerless": {
+      "state": "measured",
+      "count": 0,
+      "warning": null
+     }
+    },
+    "counts": {
+     "started_free_claim": 0,
+     "done_ahead_of_main": 0,
+     "dirty_ownerless_worktree": 0,
+     "open_pr_ownerless": 0
+    },
+    "warnings": [
+     "finding without a clearing command withheld: started_free_claim:"
+    ],
+    "complete": true
+   },
+   "digest": "unfinished work: 0 finding(s)\n\nstarted_free_claim=0 measured\ndone_ahead_of_main=0 measured\ndirty_ownerless_worktree=0 measured\nopen_pr_ownerless=0 measured",
+   "signature": "",
+   "key": "e3b0c44298fc",
+   "unknown_dimensions": []
+  }
+ ],
+ "owner_verdict": [
+  {
+   "probe": {
+    "handle": "a"
+   },
+   "verdict": "unknown"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "pid_alive": true
+   },
+   "verdict": "live"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "pid_alive": false
+   },
+   "verdict": "gone"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "pid_alive": false,
+    "transcript_age_s": 10.0
+   },
+   "verdict": "live"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "pid_alive": false,
+    "transcript_age_s": 900.0
+   },
+   "verdict": "live"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "pid_alive": false,
+    "transcript_age_s": 901.0
+   },
+   "verdict": "gone"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "stored_exited": true
+   },
+   "verdict": "gone"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "stored_exited": true,
+    "transcript_age_s": 10.0
+   },
+   "verdict": "live"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "stored_exited": true,
+    "pid_alive": true
+   },
+   "verdict": "gone"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "transcript_age_s": 10.0
+   },
+   "verdict": "live"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "transcript_age_s": 900.9
+   },
+   "verdict": "live"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "transcript_age_s": 901.0
+   },
+   "verdict": "unknown"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "transcript_age_s": 10.0,
+    "last_activity_basis": "mtime"
+   },
+   "verdict": "unknown"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "transcript_age_s": 10.0,
+    "last_activity_basis": "last-entry"
+   },
+   "verdict": "live"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "claim_state": "stale"
+   },
+   "verdict": "gone"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "claim_state": "suspect"
+   },
+   "verdict": "unknown"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "claim_state": "stale",
+    "transcript_age_s": 5000.0
+   },
+   "verdict": "gone"
+  },
+  {
+   "probe": {
+    "handle": "a",
+    "claim_state": "stale",
+    "pid_alive": true
+   },
+   "verdict": "live"
+  }
+ ]
+}

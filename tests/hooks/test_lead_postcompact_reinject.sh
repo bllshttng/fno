@@ -38,13 +38,6 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry-json" ]; then
-  # Mirror the real Rust client: the command refuses while the anti-recursion
-  # pin is set (a leaked FNO_AGENTS_RUNTIME=python). The hook must
-  # strip the pin before the read.
-  if [ -n "${FNO_AGENTS_RUNTIME:-}" ]; then
-    echo "no Python implementation -- this command runs only on the 'fno-agents' Rust runtime" >&2
-    exit 127
-  fi
   cat "$LEAD_REG_FIXTURE"
 elif [ "$1" = "agents" ] && [ "$2" = "lead" ] && [ "$3" = "faq" ] && [ "$4" = "list" ]; then
   cat "$LEAD_FAQ_FIXTURE" 2>/dev/null || true
@@ -140,21 +133,6 @@ OUT="$(printf '%s' "{\"source\":\"compact\",\"session_id\":\"$SID\"}" \
   | env PATH="/usr/bin:/bin" FNO_PLATFORM=claude bash "$LEAD" 2>/dev/null)"; RC=$?
 [[ $RC -eq 0 && -z "$OUT" ]] && pass "no fno on PATH: empty stdout, exit 0" \
   || fail "no-fno rc=$RC out=$OUT"
-
-# 6b. AC5-HP: a leaked FNO_AGENTS_RUNTIME=python pin must not blind
-#     the team read. The stub refuses registry-json under the pin (mirroring
-#     the real Rust client); the hook strips the pin before the read, so the
-#     teamed reinjection still arrives and no failing-read line fires.
-registry_fixture "$TEAMED_ROW"
-FNO_PLATFORM=claude
-PIN_ERR="$TMP/pin-err.txt"
-OUT="$(printf '%s' "{\"source\":\"compact\",\"session_id\":\"$SID\"}" \
-  | env FNO_PLATFORM=claude FNO_AGENTS_RUNTIME=python bash "$LEAD" 2>"$PIN_ERR")"; RC=$?
-[[ $RC -eq 0 ]] && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-    | contains("level 1 over fno")' >/dev/null 2>&1 \
-  && ! grep -q "registry-json exited" "$PIN_ERR" \
-  && pass "pinned env: team read survives the strip, reinjection arrives (AC5-HP)" \
-  || fail "pinned env rc=$RC payload=$OUT err=$(cat "$PIN_ERR" 2>/dev/null)"
 
 # 7b. Each FAQ entry file for the scope rides as one pointer line; a listed
 #     path that is not a file adds nothing. The stub answers --paths with the

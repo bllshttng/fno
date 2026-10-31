@@ -67,9 +67,7 @@ Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--creden
 
 ### Cross-language parity (the load-bearing detail)
 
-`agents ask`/`resume`/`list` auto-route to the compiled Rust client (`crates/fno-agents/src/bin/client.rs`) when an installed `fno-agents` binary is present; the Python `typer.Option` path is the fallback under `FNO_AGENTS_RUNTIME=python` or when no binary is installed. A short flag added only to the Python declaration would silently no-op on the exact command (phone `agents ask`) that motivated the feature.
-
-So the same aliases live in both parsers. The Rust `build_request` hand-parser gains `-p`/`-c`/`-t` plus the globals it already recognizes (`-J`/`-A`/`-F`/`-Y`). Short value flags take a space-separated value (`-p claude`), matching Click's short-option convention; the `-p=value` form is intentionally not normalized on the Rust path.
+`agents ask`/`resume`/`list` run in the compiled Rust client (`crates/fno-agents/src/bin/client.rs`). The Rust `build_request` hand-parser carries `-p`/`-c`/`-t` plus the globals it already recognizes (`-J`/`-A`/`-F`/`-Y`). Short value flags take a space-separated value (`-p claude`), matching Click's short-option convention; the `-p=value` form is intentionally not normalized on the Rust path.
 
 Because the Rust parser is command-agnostic, its aliases apply to every command that uses those long flags, so `agents list -c /repo` works on the Rust runtime even though the Python `agents list` has no `-c`. This is additive and benign. Phase 2 deliberately did not touch the `agents` family (its delivery group covers the Python-only command surface, where no Rust parity question exists); reconciling Python `agents list`/`resume` is tracked as a separate carveout.
 

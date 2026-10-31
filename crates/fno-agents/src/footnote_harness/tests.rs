@@ -269,6 +269,172 @@ fn an_ask_resumes_the_session_the_harness_id_names() {
     }
 }
 
+/// A launched footnote learns its graph store from FNO_GRAPH_JSON, resolved
+/// through the porcelain state-root resolver anchored at the child's cwd, so
+/// a sandboxed launch names the sandbox store and never the machine's
+/// `$HOME/.fno`.
+#[test]
+fn the_launched_child_is_named_its_graph_store_in_the_env() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let seen = tmp.path().join("graph-env.txt");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!(
+            "#!/bin/sh\nprintenv FNO_GRAPH_JSON > '{}'\n",
+            seen.display()
+        ),
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("FNO_STATE_DIR", tmp.path().join("state").to_str().unwrap()),
+    ]);
+    let saved_graph = std::env::var_os("FNO_GRAPH_JSON");
+    std::env::remove_var("FNO_GRAPH_JSON");
+    let status = spawn(tmp.path()).unwrap().wait().unwrap();
+    // Read while the sandbox env still holds: the exact value the child got.
+    let want = crate::backlog::settings::graph_path_at(Some(tmp.path()));
+    restore_env(saved);
+    match saved_graph {
+        Some(v) => std::env::set_var("FNO_GRAPH_JSON", v),
+        None => std::env::remove_var("FNO_GRAPH_JSON"),
+    }
+    assert!(status.success(), "the stub exited {status}");
+    let got = std::fs::read_to_string(&seen).unwrap();
+    assert_eq!(got.trim(), want.to_string_lossy().as_ref());
+    assert!(
+        want.starts_with(tmp.path()),
+        "the sandbox store, never $HOME/.fno: {}",
+        want.display()
+    );
+}
+
+/// A configured `state_dir` (a settings candidate, no env pin) reaches the
+/// launched child: the porcelain resolver walks the settings files, where the
+/// launch value never came from before.
+#[test]
+fn the_launch_serves_a_configured_state_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let state = tmp.path().join("cfg-state");
+    let settings = tmp.path().join("settings.toml");
+    std::fs::write(&settings, format!("state_dir = \"{}\"\n", state.display())).unwrap();
+    let seen = tmp.path().join("graph-env.txt");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!(
+            "#!/bin/sh\nprintenv FNO_GRAPH_JSON > '{}'\n",
+            seen.display()
+        ),
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("FNO_GLOBAL_SETTINGS_PATH", settings.to_str().unwrap()),
+    ]);
+    let saved_state_dir = std::env::var_os("FNO_STATE_DIR");
+    let saved_config = std::env::var_os("FNO_CONFIG");
+    std::env::remove_var("FNO_STATE_DIR");
+    std::env::remove_var("FNO_CONFIG");
+    let saved_graph = std::env::var_os("FNO_GRAPH_JSON");
+    std::env::remove_var("FNO_GRAPH_JSON");
+    let status = spawn(tmp.path()).unwrap().wait().unwrap();
+    let want = crate::backlog::settings::graph_path_at(Some(tmp.path()));
+    restore_env(saved);
+    for (k, v) in [
+        ("FNO_STATE_DIR", saved_state_dir),
+        ("FNO_CONFIG", saved_config),
+        ("FNO_GRAPH_JSON", saved_graph),
+    ] {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+    assert!(status.success(), "the stub exited {status}");
+    let got = std::fs::read_to_string(&seen).unwrap();
+    assert_eq!(got.trim(), want.to_string_lossy().as_ref());
+    assert!(
+        got.trim().starts_with(state.to_str().unwrap()),
+        "the configured store, never the agents home or $HOME/.fno: {got:?}"
+    );
+}
+
+/// A declared sandbox beats an inherited FNO_GRAPH_JSON: with the var set and
+/// `FNO_STATE_DIR` naming a root, the child gets the sandbox store.
+#[test]
+fn a_declared_sandbox_beats_an_inherited_graph_env() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let inherited = tmp.path().join("elsewhere").join("store.json");
+    let seen = tmp.path().join("graph-env.txt");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!(
+            "#!/bin/sh\nprintenv FNO_GRAPH_JSON > '{}'\n",
+            seen.display()
+        ),
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("FNO_STATE_DIR", tmp.path().join("state").to_str().unwrap()),
+        ("FNO_GRAPH_JSON", inherited.to_str().unwrap()),
+    ]);
+    let status = spawn(tmp.path()).unwrap().wait().unwrap();
+    let want = crate::backlog::settings::graph_path_at(Some(tmp.path()));
+    restore_env(saved);
+    assert!(status.success(), "the stub exited {status}");
+    let got = std::fs::read_to_string(&seen).unwrap();
+    assert_eq!(got.trim(), want.to_string_lossy().as_ref());
+    assert!(
+        got.trim()
+            .starts_with(tmp.path().join("state").to_str().unwrap()),
+        "the sandbox store, never the inherited {}: {got:?}",
+        inherited.display()
+    );
+}
+
+/// With only the pin set (no declared sandbox), the launch keeps the
+/// inherited FNO_GRAPH_JSON instead of resolving past it.
+#[test]
+fn the_launch_keeps_an_inherited_graph_env_without_a_sandbox() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let inherited = tmp.path().join("kept").join("store.json");
+    let seen = tmp.path().join("graph-env.txt");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!(
+            "#!/bin/sh\nprintenv FNO_GRAPH_JSON > '{}'\n",
+            seen.display()
+        ),
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("FNO_GRAPH_JSON", inherited.to_str().unwrap()),
+    ]);
+    let saved_state_dir = std::env::var_os("FNO_STATE_DIR");
+    let saved_config = std::env::var_os("FNO_CONFIG");
+    std::env::remove_var("FNO_STATE_DIR");
+    std::env::remove_var("FNO_CONFIG");
+    let status = spawn(tmp.path()).unwrap().wait().unwrap();
+    restore_env(saved);
+    match saved_state_dir {
+        Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+        None => std::env::remove_var("FNO_STATE_DIR"),
+    }
+    match saved_config {
+        Some(v) => std::env::set_var("FNO_CONFIG", v),
+        None => std::env::remove_var("FNO_CONFIG"),
+    }
+    assert!(status.success(), "the stub exited {status}");
+    let got = std::fs::read_to_string(&seen).unwrap();
+    assert_eq!(got.trim(), inherited.to_string_lossy().as_ref());
+}
+
 fn set_env(vars: &[(&'static str, &str)]) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
     let saved = vars
         .iter()

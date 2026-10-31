@@ -1,0 +1,846 @@
+{
+ "cases": [
+  {
+   "label": "stop then release then spawn",
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "respawned",
+    "order": [
+     "stop",
+     "release",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": [
+     [
+      "rec-t-1-aaaa1111",
+      "t-x-1-slug"
+     ]
+    ]
+   }
+  },
+  {
+   "label": "a failed stop spawns nothing",
+   "codes": {
+    "stop": 1
+   },
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "failed:stop-failed",
+    "order": [
+     "stop"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     }
+    ],
+    "aliases": []
+   }
+  },
+  {
+   "label": "a stop that times out spawns nothing",
+   "raises": [
+    "stop"
+   ],
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "not-started",
+    "order": [
+     "stop"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     }
+    ],
+    "aliases": []
+   }
+  },
+  {
+   "label": "a pane refusal takes the named kill",
+   "codes": {
+    "stop": 1
+   },
+   "stop_stderr": "refused: fno mux pane kill fnomux:42 reaches this row",
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "respawned",
+    "order": [
+     "stop",
+     "kill",
+     "release",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "mux",
+       "pane",
+       "kill",
+       "--server",
+       "fnomux",
+       "42"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": [
+     [
+      "rec-t-1-aaaa1111",
+      "t-x-1-slug"
+     ]
+    ]
+   }
+  },
+  {
+   "label": "a pane kill failure spawns nothing",
+   "codes": {
+    "stop": 1,
+    "kill": 1
+   },
+   "stop_stderr": "refused: fno mux pane kill fnomux:42 reaches this row",
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "failed:stop-failed",
+    "order": [
+     "stop",
+     "kill"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "mux",
+       "pane",
+       "kill",
+       "--server",
+       "fnomux",
+       "42"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     }
+    ],
+    "aliases": []
+   }
+  },
+  {
+   "label": "a held claim spawns nothing",
+   "codes": {
+    "release": 1
+   },
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "failed:claim-held",
+    "order": [
+     "stop",
+     "release"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     }
+    ],
+    "aliases": []
+   }
+  },
+  {
+   "label": "a failed spawn frees the lane",
+   "codes": {
+    "spawn": 1
+   },
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "not-started",
+    "order": [
+     "stop",
+     "release",
+     "spawn",
+     "lane"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     },
+     {
+      "argv": [
+       "fno-agents",
+       "claim",
+       "lane-release",
+       "--lane",
+       "x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     }
+    ],
+    "aliases": []
+   }
+  },
+  {
+   "label": "a spawn that times out frees nothing",
+   "raises": [
+    "spawn"
+   ],
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "not-started",
+    "order": [
+     "stop",
+     "release",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": []
+   }
+  },
+  {
+   "label": "pre-spawn runs after release and can refuse",
+   "pre_spawn": false,
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "not-started",
+    "order": [
+     "stop",
+     "release",
+     "pre_spawn",
+     "lane"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno-agents",
+       "claim",
+       "lane-release",
+       "--lane",
+       "x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     }
+    ],
+    "aliases": []
+   }
+  },
+  {
+   "label": "pre-spawn true continues",
+   "pre_spawn": true,
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "respawned",
+    "order": [
+     "stop",
+     "release",
+     "pre_spawn",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": [
+     [
+      "rec-t-1-aaaa1111",
+      "t-x-1-slug"
+     ]
+    ]
+   }
+  },
+  {
+   "label": "a chain link's axis replaces the default",
+   "flags": [
+    "--harness",
+    "codex",
+    "--substrate",
+    "pane",
+    "--model",
+    "gpt-6"
+   ],
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "respawned",
+    "order": [
+     "stop",
+     "release",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "t-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "codex",
+       "--substrate",
+       "pane",
+       "--model",
+       "gpt-6",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": [
+     [
+      "rec-t-1-aaaa1111",
+      "t-x-1-slug"
+     ]
+    ]
+   }
+  },
+  {
+   "label": "a nameless candidate has nothing to stop",
+   "name": null,
+   "expect": {
+    "outcome": "respawned",
+    "order": [
+     "release",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": [
+     [
+      "rec-t-1-aaaa1111",
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "label": "a done node is not redispatched",
+   "node_done": true,
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "failed:node-done",
+    "order": [],
+    "calls": [],
+    "aliases": []
+   }
+  },
+  {
+   "label": "no cwd",
+   "cwd": "none",
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "failed:cwd-missing",
+    "order": [],
+    "calls": [],
+    "aliases": []
+   }
+  },
+  {
+   "label": "no node in the manifest",
+   "cwd": "node-less",
+   "name": "t-x-1-slug",
+   "expect": {
+    "outcome": "failed:node-missing",
+    "order": [],
+    "calls": [],
+    "aliases": []
+   }
+  },
+  {
+   "label": "a recovery name keeps the predecessor's command",
+   "name": "bp-x-1-slug",
+   "expect": {
+    "outcome": "respawned",
+    "order": [
+     "stop",
+     "release",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "bp-x-1-slug"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-bp-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": [
+     [
+      "rec-bp-1-aaaa1111",
+      "bp-x-1-slug"
+     ]
+    ]
+   }
+  },
+  {
+   "label": "an unparsed predecessor falls to t",
+   "name": "scratch",
+   "expect": {
+    "outcome": "respawned",
+    "order": [
+     "stop",
+     "release",
+     "spawn"
+    ],
+    "calls": [
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "stop",
+       "scratch"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "claim",
+       "release",
+       "node:x-1",
+       "--force",
+       "-R",
+       "failover respawn aaaa1111"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 30,
+      "target_no_merge": null
+     },
+     {
+      "argv": [
+       "fno",
+       "agents",
+       "spawn",
+       "--harness",
+       "claude",
+       "--substrate",
+       "bg",
+       "--cwd",
+       "<cwd>",
+       "--name",
+       "rec-t-1-aaaa1111",
+       "/target --no-merge x-1"
+      ],
+      "cwd_is_worktree": true,
+      "timeout": 60,
+      "target_no_merge": "1"
+     }
+    ],
+    "aliases": [
+     [
+      "rec-t-1-aaaa1111",
+      "scratch"
+     ]
+    ]
+   }
+  }
+ ]
+}

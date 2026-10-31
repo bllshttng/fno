@@ -12,9 +12,7 @@
 //! accept.
 //!
 //! Leg boundary: the preflight runs in the fno-agents client, which every
-//! `fno agents spawn` passes through - including an `--account` run, whose
-//! Python re-exec happens after this check. Only a manually pinned
-//! `FNO_AGENTS_RUNTIME=python` invocation skips it.
+//! `fno agents spawn` passes through, an `--account` run included.
 
 use std::path::{Path, PathBuf};
 

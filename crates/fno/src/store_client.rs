@@ -314,6 +314,7 @@ pub fn call(graph: &Path, method: &str, params: Value) -> Result<Value, String> 
 /// A finite, non-huge rank value (render._rank_band's rule): a poisoned
 /// non-finite or giant-int peer rank is unranked, so it can never corrupt
 /// the --top arithmetic or persist a NaN/inf rank.
+#[cfg(feature = "full")]
 fn ranked_rank(e: &Value) -> Option<f64> {
     let r = e.get("rank")?;
     if let Value::Number(n) = r {
@@ -336,6 +337,7 @@ fn ranked_rank(e: &Value) -> Option<f64> {
 /// when a concurrent reorder moved the file in between, and this retries the
 /// read-compute-write as one provably fresh step instead of floating a card
 /// below a rank it never saw.
+#[cfg(feature = "full")]
 pub fn rank_top(graph: &Path, node_id: &str) -> Result<String, String> {
     const ATTEMPTS: usize = 3;
     for attempt in 0..ATTEMPTS {
@@ -397,6 +399,7 @@ pub fn rank_top(graph: &Path, node_id: &str) -> Result<String, String> {
     unreachable!("the retry loop returns on every branch")
 }
 
+#[cfg(feature = "full")]
 fn format_rank(v: f64) -> String {
     if v == v.trunc() {
         format!("{}", v as i64)
@@ -406,6 +409,7 @@ fn format_rank(v: f64) -> String {
 }
 
 /// The kanban column for an entry, claim-blind (see [`rank_top`]).
+#[cfg(feature = "full")]
 fn backlog_column(e: &Value) -> Option<&'static str> {
     // `kanban_column` needs claim/underway facts the command deliberately does
     // not fetch; false for both is the unclaimed view the float targets.
@@ -567,7 +571,7 @@ pub fn board_facts(
     let ids = reply
         .get("ids")
         .and_then(Value::as_array)
-        .ok_or_else(|| "the store keeper predates the board mode; run fno doctor update")?;
+        .ok_or("the store keeper predates the board mode; run fno doctor update")?;
     Ok(BoardFacts {
         ids: ids
             .iter()

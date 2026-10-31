@@ -232,6 +232,8 @@ fn run_hold_check_operand(args: &[String]) -> i32 {
     if flow.exit_code == 0 {
         if let Some(why) = visual_hold(pr, &cwd) {
             hold_refusal(&mut flow, pr, &cwd, &why);
+        } else if let Some(why) = docs_hold(pr, &cwd) {
+            hold_refusal(&mut flow, pr, &cwd, &why);
         }
     }
     for (err, line) in std::mem::take(&mut flow.lines) {
@@ -262,6 +264,27 @@ fn visual_hold(pr: i64, cwd: &Path) -> Option<String> {
         }
     };
     crate::merge_gates::visual_approval_blocker(&probes, cwd, pr, &facts.head_sha)
+        .map(|b| format!("{}: {}", b.code, b.detail))
+}
+
+/// The docs gate for a raw merge: `Some(detail)` when the PR touched a user
+/// surface with no `Docs:` line, or when the gate cannot answer. The surface
+/// list is read first, so a disarmed project spends no GitHub call.
+fn docs_hold(pr: i64, cwd: &Path) -> Option<String> {
+    if crate::docs_gate::user_surface_paths(cwd).is_empty() {
+        return None;
+    }
+    let probes = crate::authorized_merge::RealProbes;
+    let pr = u64::try_from(pr).ok()?;
+    let facts = match crate::authorized_merge::Probes::pr_facts(&probes, cwd, Some(pr)) {
+        Ok(facts) => facts,
+        Err(e) => {
+            return Some(format!(
+            "docs_surface_unknown: PR {pr} facts unreadable ({e}), so the docs gate cannot answer"
+        ))
+        }
+    };
+    crate::docs_gate::docs_gate_blocker(&probes, cwd, &facts)
         .map(|b| format!("{}: {}", b.code, b.detail))
 }
 

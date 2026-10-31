@@ -5383,27 +5383,6 @@ pub(crate) fn apply_session_transition(
     Ok(classification)
 }
 
-/// Shell `fno agents codex-session-for-pid <pid>` -- the pane-tree rollout
-/// walk (`_codex_session_id_for_pid`), reused rather than reimplemented in
-/// Rust (Codex's rollout discovery needs a process-tree + open-fd walk this
-/// crate has no dependency for; see `worktree_clean_probe` for the same
-/// shell-and-parse-a-marker pattern). Fails closed to `None` on anything but
-/// a clean exit with a non-empty `session_id=` line.
-fn codex_session_for_pid_shellout(pid: u32) -> Option<String> {
-    let out = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["agents", "codex-session-for-pid", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("session_id="))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
 // ---------------------------------------------------------------------------
 // Registry-side keeper sweep.
 // ---------------------------------------------------------------------------
@@ -5791,7 +5770,11 @@ pub(crate) fn run_reconcile_sweep(
     // tick is already visible to the probe pass that follows; serve-only
     // skips it (the tick re-measures, it does not re-bind identities).
     if matches!(mode, SweepMode::Full) {
-        late_bind_codex_sessions(home, emitter, &codex_session_for_pid_shellout)?;
+        late_bind_codex_sessions(
+            home,
+            emitter,
+            &crate::pane_spawn::codex::rollout_session_id_for_tree,
+        )?;
     }
 
     // a broken registry is a failed sweep, never a successful zero-row

@@ -151,7 +151,7 @@ fn has_unmerged_open_pr(entry: &Value) -> bool {
     truthy(entry.get("pr_number"))
 }
 
-fn container_ids(entries: &[Value]) -> BTreeSet<String> {
+pub(crate) fn container_ids(entries: &[Value]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for e in entries {
         if let (Some(p), Some(parent)) = (

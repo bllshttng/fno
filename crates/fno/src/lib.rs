@@ -11,6 +11,8 @@
 #[cfg(feature = "full")]
 pub mod accounts_route;
 #[cfg(feature = "full")]
+pub mod agents_client_route;
+#[cfg(feature = "full")]
 pub mod agents_history;
 #[cfg(feature = "full")]
 pub mod agents_mcp_route;
@@ -104,7 +106,6 @@ pub mod gh_proxy;
 mod gh_proxy_tests;
 #[cfg(feature = "full")]
 pub mod git_paths;
-#[cfg(feature = "full")]
 pub mod glob;
 #[cfg(feature = "full")]
 pub mod inbox_user;
@@ -182,7 +183,6 @@ pub mod paths_route;
 pub mod popup;
 #[cfg(feature = "full")]
 pub mod process_admission;
-#[cfg(feature = "full")]
 pub mod product_boundary;
 #[cfg(feature = "full")]
 pub mod proto;
@@ -211,7 +211,6 @@ pub mod restore_liveness;
 pub mod review_invocation;
 #[cfg(feature = "full")]
 pub mod role_migration;
-#[cfg(feature = "full")]
 pub mod rules;
 #[cfg(feature = "full")]
 pub mod search_query;
@@ -262,7 +261,6 @@ pub mod squad_cascade;
 pub mod squad_store;
 #[cfg(feature = "full")]
 pub mod state_layout;
-#[cfg(feature = "full")]
 pub mod store_client;
 #[cfg(feature = "full")]
 pub mod store_conn;
@@ -299,6 +297,8 @@ pub mod vt;
 pub mod web;
 #[cfg(feature = "full")]
 pub(crate) mod web_command;
+#[cfg(feature = "full")]
+pub(crate) mod web_trace;
 #[cfg(feature = "full")]
 pub mod wizard;
 #[cfg(feature = "full")]

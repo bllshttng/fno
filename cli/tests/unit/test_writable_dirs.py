@@ -11,7 +11,6 @@ paths is decorative.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -176,11 +175,11 @@ def test_computed_set_is_skipped_on_a_provider_with_no_additive_grant(
 def test_seam_export_publishes_the_set_for_the_rust_route(
     fake_state: Path, tmp_path: Path
 ) -> None:
-    """`rust_runtime` keeps only the PANE substrate in Python; every other spawn
-    execs the Rust binary, which builds the harness argv itself and forwards only
-    the operator's --add-dir. So the three token builders cover one reachable
-    lane, and `--substrate bg` - what the shipped stage table uses for its own
-    delivery lane - launched a worker that could not write the claim store.
+    """Only the PANE substrate keeps Python; every other spawn runs in the Rust
+    binary, which builds the harness argv itself and forwards only the operator's
+    --add-dir. So the three token builders cover one reachable lane, and
+    `--substrate bg` - what the shipped stage table uses for its own delivery
+    lane - launched a worker that could not write the claim store.
     """
     from fno.agents.writable_dirs import (
         WORKER_ADD_DIRS_ENV,
@@ -245,42 +244,3 @@ def test_resume_lane_reads_the_published_value_rather_than_recomputing(
     assert published_worker_writable_dirs() == [str(fake_state)]
     published = git_writable_config_args(tmp_path)
     assert str(fake_state) in "".join(published)
-
-
-def test_thread_spawn_seam_publishes_the_plan_dir(
-    fake_state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The codex thread lane inherits the plan grant; it must never re-resolve it.
-
-    The thread lane builds no argv, so its only carrier is the ``state_dirs``
-    RPC param, which the Rust client fills from this seam's env var. That made
-    a daemon-side resolver look necessary, and the tempting shape was to call
-    ``provider::plan_content_dir`` inside ``spawn_codex_thread_lane``. It would
-    have been a SECOND resolver for a value this seam already computes, and it
-    shells out to ``fno`` once per spawn from async code on a daemon shared by
-    every codex worker on the machine.
-
-    Nothing was missing. The seam runs for every spawn regardless of substrate,
-    so the plan directory is already in the published set before the client
-    forwards it. This pins that, so the absence of a daemon-side resolver reads
-    as covered rather than as an oversight to fix.
-    """
-    import fno.agents.rust_runtime as rr
-    from fno.agents.writable_dirs import WORKER_ADD_DIRS_ENV
-
-    plans = tmp_path / "vault" / "fno" / "plans"
-    plans.mkdir(parents=True)
-    monkeypatch.setattr(
-        "fno.paths.plans_content_dir", lambda project_root=None: plans
-    )
-    monkeypatch.delenv(WORKER_ADD_DIRS_ENV, raising=False)
-
-    rr._export_worker_dirs_at_seam(
-        ["spawn", "w", "--harness", "codex", "--substrate", "thread", "--cwd", str(tmp_path)]
-    )
-
-    published = os.environ[WORKER_ADD_DIRS_ENV].split(os.pathsep)
-    assert str(plans) in published, (
-        "the thread lane reads its roots from this env var; without the plan "
-        f"directory here a daemon-side resolver looks required. got: {published}"
-    )

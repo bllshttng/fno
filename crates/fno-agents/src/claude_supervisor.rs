@@ -3,11 +3,9 @@
 //! The supervisor is ONE long-lived process per `CLAUDE_CONFIG_DIR`; it takes
 //! its whole env from the first client that births it and forks every hosted
 //! session from that env. A value naming one session, route or delegation is
-//! therefore never right there. One measured birth carried
-//! `FNO_AGENTS_RUNTIME`, `FNO_WAKE_MSG`, `FNO_ROUTE_PROVIDER=zai` and the z.ai
-//! endpoint/token; it disabled every Rust-only `fno agents` command in every
-//! hosted session for the supervisor's whole life and left the birth
-//! session's identity readable in `ps eww` output.
+//! therefore never right there. One measured birth carried `FNO_WAKE_MSG`,
+//! `FNO_ROUTE_PROVIDER=zai` and the z.ai endpoint/token; it left the birth
+//! session's identity readable in `ps eww` output for the supervisor's life.
 //!
 //! Enters through `run_birth_exec`, which applies this
 //! guard before the client command. The guard is birth-scoped: it cleans a
@@ -543,7 +541,6 @@ mod tests {
         }
         assert!(!is_poison("FNO_TEST_HERMETIC"));
         for key in [
-            "FNO_AGENTS_RUNTIME",
             "FNO_SESSION",
             "FNO_NODE",
             "FNO_AGENT_SELF",
@@ -562,7 +559,6 @@ mod tests {
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let poison = [
-            "FNO_AGENTS_RUNTIME",
             "FNO_WAKE_MSG",
             "FNO_ROUTE_PROVIDER",
             "ANTHROPIC_BASE_URL",
@@ -714,10 +710,10 @@ mod tests {
                     ));
                 }
             }
-            for name in ["FNO_AGENTS_RUNTIME", "FNO_ROUTE_PROVIDER"] {
-                if !held.contains(name) {
-                    return Err(format!("{name} must remain in the supervisor held list"));
-                }
+            if !held.contains("FNO_ROUTE_PROVIDER") {
+                return Err(
+                    "FNO_ROUTE_PROVIDER must remain in the supervisor held list".to_string()
+                );
             }
             if !is_poison("FNO_WAKE_MSG") {
                 return Err("FNO_WAKE_MSG must remain poison by the FNO_ default".to_string());
