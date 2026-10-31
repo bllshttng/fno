@@ -1,6 +1,8 @@
 # fno
 
-**fno takes a feature description to a green, reviewed pull request, and it does not stop until GitHub says the work is done.**
+**fno runs your coding agents as one team: one backlog they all work from, and a chat where they message each other and you.**
+
+It works across harnesses and machines. Lead agents hand out ready work. Messages are durable, so a message waits for an agent that is not running. Questions only you can answer wait in one list. A ruling reaches later agents as context, and a hold stops the merge.
 
 ```
 curl -fsSL fno.sh | sh
@@ -8,16 +10,17 @@ curl -fsSL fno.sh | sh
 
 ![A replay of one real target run, from the start command to merged PR 4195](docs/images/target-run.gif)
 
-The GIF replays [PR #4195](https://github.com/bllshttng/fno/pull/4195) at 270x. The run took 1 hour 53 minutes, and CI failed three times before the merge. Each failure got a fix and a new push, and the loop kept going.
+The GIF replays one real run, start command to merged [PR 4195](https://github.com/bllshttng/fno/pull/4195), at 270x.
 
 Then open a session in a git repo you can push to, and run `/fno:target "your feature"`. Next: the [quickstart](docs/quickstart.md). Site: [fno.sh](https://fno.sh).
 
 Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
+- A dependency-graph backlog holds the work, and lead agents hand it out.
+- Agents message each other and you through durable mail, across harnesses and machines.
+- Rulings go in a record with who made them. Later agents get them as context. Among rulings, only holds and freezes stop a merge.
 - fno runs as a plugin on any harness that accepts plugins and hooks. Claude Code, Codex, OpenCode, and agy are wired today, with a standalone CLI underneath.
-- Point it at a feature description or a backlog node. It plans, builds with TDD, reviews its own diff, and ships the PR.
-- Completion is decided by the world, not by a model's mood. The PR exists, CI is green, review has had its rounds.
-- A dependency-graph backlog keeps the next piece of work ready, so an unattended loop never stalls on "what now?"
+- Point it at a feature description or a backlog node. It plans, builds with TDD, reviews its own diff, and opens the PR.
 
 ![The fno mux with four agent panes working fno tasks, a sideline roster, and a live status row](docs/images/ux-shot-live-fleet.png)
 
@@ -42,13 +45,14 @@ Named stages, one sentence each:
 
 - **think** explores the design space and writes cited findings before anyone commits to a plan.
 - **blueprint** turns the approved direction into an executable plan: waves, tasks, acceptance criteria.
-- **target** is the walk-away loop. It executes the plan and will not stop until the PR is up, CI is green, and review is done.
+- **target** executes the plan and opens the PR. [How done is decided](docs/guides/how-done-is-decided.md) lists what it reads before a session ends.
 - **review** reads the diff before it ships. An inline lane emits a head-pinned attestation, with `config.review.max_rounds` (default 2) capping the rounds.
 - **pr** drives the lifecycle: create, check for external review, and the post-merge ritual.
+- **lead** hands out ready backlog work to workers, and stays with its territory over days.
 
 ## What it enforces
 
-The finish line is a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agents admit autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
+Among rulings, only a hold or a freeze stops a merge. Every other ruling reaches later agents as context, and no gate enforces it. A target run ends on a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agents admit autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
 
 ## Docs
 
