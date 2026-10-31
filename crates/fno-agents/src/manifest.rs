@@ -776,7 +776,7 @@ pub fn bundled_manifest(agent: &str) -> Option<&'static str> {
         "claude" => Some(include_str!("manifests/claude.toml")),
         "codex" => Some(include_str!("manifests/codex.toml")),
         "gemini" => Some(include_str!("manifests/gemini.toml")),
-        // agy (hosted, US1) + opencode (staged/inert until, US2).
+        // agy + opencode, both hosted.
         "agy" => Some(include_str!("manifests/agy.toml")),
         "opencode" => Some(include_str!("manifests/opencode.toml")),
         // full-roster roster. All staged/inert - none has a provider

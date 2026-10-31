@@ -2246,6 +2246,34 @@ impl crate::claude_attach::ControlTransport for PaneTransport {
     }
 }
 
+/// The screen gate for a pane no turn record can confirm. A harness that pins a
+/// ready marker takes typed bytes only at a painted composer, idle or busy: a
+/// busy opencode queues the line as its next turn. A prompt would consume the
+/// submit, and bytes typed before first paint are lost. A harness with no pinned
+/// marker (a shell, agy) has nothing to read, so it stays typed and left.
+fn unconfirmable_pane_refusal(
+    harness: &str,
+    state: Result<String, String>,
+) -> Option<&'static str> {
+    let pinned = crate::harness_capabilities::HarnessContract::packaged()
+        .ok()
+        .and_then(|contract| {
+            contract
+                .capabilities(harness)
+                .ok()
+                .map(|c| c.ready_marker.clone())
+        })
+        .is_some_and(|marker| marker != "unsupported");
+    if !pinned {
+        return None;
+    }
+    match state.as_deref() {
+        Ok("idle" | "working") => None,
+        Ok("blocked") => Some("pane-blocked"),
+        _ => Some("pane-not-ready"),
+    }
+}
+
 /// Deliver `text` to a mux pane (C11, C12, C15, C17): the quiet gate, the
 /// one-line flattening and the confirm-or-withdraw cadence of the typed
 /// lanes, with the pane transport underneath and the HOSTED harness's own
@@ -2285,6 +2313,18 @@ pub(crate) fn deliver_via_pane_state(
     // An unconfirmable pane is typed and left: no record could ever clear
     // a withdraw, so a withdraw would delete every message it is sent.
     let withdraw_on_silence = !matches!(confirm_target, LaneConfirm::Unconfirmable);
+    if !withdraw_on_silence {
+        // With no record to catch a lost line, the screen is the only check.
+        let state = pane_id
+            .parse::<u64>()
+            .map_err(|e| e.to_string())
+            .and_then(|pane| {
+                crate::mail_cli::pane_prepare::screen_state(server, pane, &row_hosted)
+            });
+        if let Some(reason) = unconfirmable_pane_refusal(&row_hosted, state) {
+            return Err(reason);
+        }
+    }
     let mut transport = PaneTransport {
         server: server.to_string(),
         address: pane_id.to_string(),
@@ -2726,6 +2766,43 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// Frames captured from a live opencode 1.18.33 TUI. The verdicts and the
+    /// gate must agree: type at a painted composer, refuse a prompt and a blank.
+    #[test]
+    fn unconfirmable_opencode_pane_types_only_at_a_painted_composer() {
+        let state = |frame: &str| {
+            let verdict = crate::manifest::evaluate_screen_json("opencode", frame).unwrap();
+            match verdict.get("matched").and_then(serde_json::Value::as_bool) {
+                Some(true) => verdict["state"].as_str().unwrap().to_string(),
+                _ => "unknown".to_string(),
+            }
+        };
+        let home = "  ┃  Ask anything…\n  ┃  Build · GLM-5.3-Flash\n  ╹▀▀▀▀\n                 tab agents  ctrl+p commands\n  ● Tip Set \"tools\" to disable specific tools\n     Show keyboard shortcuts with ctrl+alt+k\n  ~/repo:main   1.18.33\n";
+        let session = "     PONG\n  ┃\n  ┃  Build · GLM-5.3-Flash\n  ╹▀▀▀▀\n   ~/repo      160.4K (16%)  ctrl+p commands\n";
+        let busy = "  ┃  Build · GLM-5.3-Flash\n  ╹▀▀▀▀\n   ⬝⬝⬝⬝⬝⬝⬝■  esc interrupt     160.4K (16%)  ctrl+p commands\n";
+        let permission = "  △ Permission required\n  Allow once  Allow always  Reject\n   ~/repo      160.4K (16%)  ctrl+p commands\n";
+        assert_eq!(state(home), "idle");
+        assert_eq!(state(session), "idle");
+        assert_eq!(state(busy), "working");
+        assert_eq!(state(permission), "blocked");
+        assert_eq!(state("\n\n\n"), "unknown");
+
+        let gate = |word: &str| super::unconfirmable_pane_refusal("opencode", Ok(word.to_string()));
+        assert_eq!(gate("idle"), None);
+        assert_eq!(gate("working"), None);
+        assert_eq!(gate("blocked"), Some("pane-blocked"));
+        assert_eq!(gate("unknown"), Some("pane-not-ready"));
+        assert_eq!(
+            super::unconfirmable_pane_refusal("opencode", Err("unreadable".to_string())),
+            Some("pane-not-ready")
+        );
+        // No pinned marker: nothing to read, so the old typed-and-left stands.
+        assert_eq!(
+            super::unconfirmable_pane_refusal("agy", Err("unreadable".to_string())),
+            None
+        );
+    }
+
     use super::*;
     use crate::claude_attach::ControlTransport;
     use crate::claude_drive::DETACH_SENTINELS;
