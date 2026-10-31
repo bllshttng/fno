@@ -26,9 +26,10 @@ const CORRECTIONS_IN_PROMPT: usize = 20;
 const LAWS_PER_ROW: usize = 8;
 const PAGES_PER_ROW: usize = 5;
 /// Prompt text per record source and per question. The quote check always
-/// reads the full source, so this cap only bounds the argv.
-const SOURCE_CHARS_IN_PROMPT: usize = 800;
-const QUESTION_CHARS_IN_PROMPT: usize = 3000;
+/// reads the full source. These caps keep a full batch under the 128 KB that
+/// Linux allows one argument.
+const SOURCE_CHARS_IN_PROMPT: usize = 600;
+const QUESTION_CHARS_IN_PROMPT: usize = 2500;
 /// A `closed_by` with this prefix would be a judge run writing to the board.
 const RUN_PREFIX: &str = "judge-run-";
 
@@ -489,7 +490,11 @@ pub fn run_core(input: &RunInput, spawn: Spawn) -> Result<RunSummary, String> {
                     summary.read += 1;
                     verdicts.push(Verdict {
                         option: checked.option,
-                        answer: checked.answer,
+                        answer: if checked.answer.trim().is_empty() {
+                            option_text(row, checked.option)
+                        } else {
+                            checked.answer
+                        },
                         citation: checked.citation,
                         reason: checked.reason,
                         held_reason,
@@ -529,26 +534,49 @@ fn closes_answer(close: &Value) -> Option<&str> {
         return None;
     }
     let answer = data.get("answer").and_then(Value::as_str)?.trim();
-    (!answer.is_empty() && !answer.starts_with("moot")).then_some(answer)
+    let ruled = !answer.is_empty()
+        && !answer.starts_with("moot")
+        && answer != crate::attention_file::DELEGATE_TEXT;
+    ruled.then_some(answer)
 }
 
-/// Does the answer the row later got pick what the verdict picked? An answer
-/// names an option by number or letter, or it carries the verdict's words.
+/// Does the answer the row later got pick what the verdict picked? A bare
+/// number or letter names an option. Any other answer compares by whole words,
+/// since a ticked page closes with the option's own text.
 fn agrees(verdict: &Verdict, answer: &str) -> bool {
     let answer = answer.trim().to_lowercase();
-    if let Some(option) = verdict.option {
-        let named = answer.trim_start_matches("option").trim();
-        let head = named
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .next()
-            .unwrap_or_default();
-        if head == option.to_string() || head == crate::attention_file::option_letter(option as u32)
-        {
-            return true;
-        }
+    let named = answer.strip_prefix("option").unwrap_or(&answer).trim();
+    let names_option = !named.is_empty()
+        && (named.chars().all(|c| c.is_ascii_digit())
+            || (named.len() == 1 && named.chars().all(|c| c.is_ascii_alphabetic())));
+    if names_option {
+        return verdict.option.is_some_and(|option| {
+            named == option.to_string()
+                || named == crate::attention_file::option_letter(option as u32)
+        });
     }
-    let said = verdict.answer.trim().to_lowercase();
-    !said.is_empty() && (answer.contains(&said) || said.contains(&answer))
+    let tokens = |text: &str| -> BTreeSet<String> {
+        text.to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let (said, got) = (tokens(&verdict.answer), tokens(&answer));
+    !said.is_empty() && !got.is_empty() && (said.is_subset(&got) || got.is_subset(&said))
+}
+
+/// The words of option `n` on a row, so a verdict that picks by number can
+/// compare with a close that carries the text.
+fn option_text(row: &Value, option: Option<u64>) -> String {
+    row.get("options")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|entry| entry.get("n").and_then(Value::as_u64) == option)
+        .and_then(|entry| entry.get("text")?.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Every decided verdict the row's later answer overruled, oldest first. These
@@ -563,10 +591,15 @@ pub fn disagreements(ledger: &[Verdict], closes: &[Value]) -> Vec<Value> {
                 "verdict_option": verdict.option,
                 "verdict_answer": verdict.answer,
                 "cited": verdict.citation.as_ref().map(|c| c.id.clone()),
-                "user_answer": answer,
+                "later_answer": answer,
             })
         })
         .collect()
+}
+
+/// A peer's row reads `q-1@host`; its close may name the bare id.
+fn bare_id(qid: &str) -> &str {
+    qid.split('@').next().unwrap_or(qid)
 }
 
 fn decided_with_answer<'a>(
@@ -577,13 +610,13 @@ fn decided_with_answer<'a>(
         .iter()
         .filter_map(|close| {
             let qid = close.get("data")?.get("question_id")?.as_str()?;
-            Some((qid, closes_answer(close)?))
+            Some((bare_id(qid), closes_answer(close)?))
         })
         .collect();
     ledger
         .iter()
         .filter(|verdict| verdict.outcome == DECIDED)
-        .filter_map(|verdict| Some((verdict, *answers.get(verdict.qid.as_str())?)))
+        .filter_map(|verdict| Some((verdict, *answers.get(bare_id(&verdict.qid))?)))
         .collect()
 }
 
@@ -672,20 +705,20 @@ pub fn enabled(cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn self_exec_json(args: &[&str]) -> Result<Value, String> {
+fn self_exec_json(cwd: &Path, args: &[&str]) -> Result<Value, String> {
     // The arm runs in the daemon binary, which has none of these commands, so
     // current_exe is the wrong door here.
     let mut argv = vec![crate::scrape::fno_bin().to_string_lossy().into_owned()];
     argv.extend(args.iter().map(|arg| arg.to_string()));
-    let (code, stdout) = crate::outstanding_cmds::captured_stdout(&argv, 60.0)?;
+    let (code, stdout) = crate::outstanding_cmds::captured_stdout_in(&argv, 60.0, Some(cwd))?;
     if code != 0 {
         return Err(format!("{} exit {code}", args.join(" ")));
     }
     serde_json::from_str(stdout.trim()).map_err(|e| format!("{}: {e}", args.join(" ")))
 }
 
-fn read_board() -> Result<Vec<Value>, String> {
-    let board = self_exec_json(&["agents", "needs", "--items", "--json"])?;
+fn read_board(cwd: &Path) -> Result<Vec<Value>, String> {
+    let board = self_exec_json(cwd, &["agents", "needs", "--items", "--json"])?;
     let items = board.get("items").and_then(Value::as_array);
     Ok(items
         .into_iter()
@@ -732,18 +765,21 @@ fn page_source(text: &str) -> Option<(String, Source)> {
     ))
 }
 
-fn read_record() -> Result<Record, String> {
-    let laws = self_exec_json(&[
-        "backlog",
-        "decisions",
-        "--lane",
-        "law",
-        "--state",
-        "live",
-        "--limit",
-        "0",
-        "--json",
-    ])?;
+fn read_record(cwd: &Path) -> Result<Record, String> {
+    let laws = self_exec_json(
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            "--lane",
+            "law",
+            "--state",
+            "live",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    )?;
     let rows = laws
         .get("decisions")
         .and_then(Value::as_array)
@@ -757,14 +793,17 @@ fn read_record() -> Result<Record, String> {
         sources: rows.iter().filter_map(law_source).collect(),
         ..Record::default()
     };
-    let review = self_exec_json(&[
-        "backlog",
-        "decisions",
-        "--review-list",
-        "--lane",
-        "law",
-        "--json",
-    ])?;
+    let review = self_exec_json(
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            "--review-list",
+            "--lane",
+            "law",
+            "--json",
+        ],
+    )?;
     record.conflicts = review
         .get("groups")
         .and_then(Value::as_array)
@@ -772,8 +811,9 @@ fn read_record() -> Result<Record, String> {
         .flatten()
         .filter_map(|group| group.get("subject")?.as_str().map(str::to_string))
         .collect();
-    if let Some(dir) = crate::attention_arm::published_questions_dir() {
-        let pages = crate::lead_answers::read_question_pages(&dir.join("done"))?;
+    let done = crate::attention_arm::published_questions_dir().map(|dir| dir.join("done"));
+    if let Some(done) = done.filter(|done| done.is_dir()) {
+        let pages = crate::lead_answers::read_question_pages(&done)?;
         record
             .sources
             .extend(pages.iter().filter_map(|(_, text)| page_source(text)));
@@ -800,8 +840,8 @@ fn read_closes(cwd: &Path) -> Vec<Value> {
 
 pub fn run_once(cwd: &Path, spawn: Spawn) -> Result<RunSummary, String> {
     let rules = crate::question_ladder::rules_for(cwd)?;
-    let rows = read_board()?;
-    let record = read_record()?;
+    let rows = read_board(cwd)?;
+    let record = read_record(cwd)?;
     let closes = read_closes(cwd);
     let home = crate::paths::AgentsHome::from_env();
     let ledger = ledger_path(home.root());
@@ -1254,6 +1294,23 @@ mod tests {
         assert_eq!(out["agreement"]["compared"], 2);
         assert_eq!(out["agreement"]["missed"], 1);
         assert_eq!(out["board_writes"], 0);
+        let by_text = Verdict {
+            answer: "Lift it.".to_string(),
+            ..verdict("q-7@peer")
+        };
+        let joined = report(
+            &[by_text],
+            &[close("q-7", "lift", "user")],
+            "2026-10-31T00:00:00Z",
+            true,
+        );
+        assert_eq!(joined["agreement"]["compared"], 1);
+        assert_eq!(joined["agreement"]["missed"], 0);
+        let fragment = Verdict {
+            answer: "be careful".to_string(),
+            ..verdict("q-6")
+        };
+        assert!(!agrees(&fragment, "b"));
 
         let captured = Mutex::new(String::new());
         let spawn = |_: &str, prompt: &str, _: &Path, _: u64, _: &str| {
@@ -1262,7 +1319,7 @@ mod tests {
         };
         run_with(dir.path(), &[row("q-1", None)], &closes, &spawn).unwrap();
         let prompt = captured.lock().unwrap();
-        assert!(prompt.contains(r#""user_answer":"b""#), "{prompt}");
+        assert!(prompt.contains(r#""later_answer":"b""#), "{prompt}");
         assert!(!prompt.contains(r#""qid":"q-8""#));
     }
 }

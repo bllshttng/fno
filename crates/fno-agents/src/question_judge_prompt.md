@@ -13,7 +13,7 @@ Rules:
 - You have no tools and no shell. You only read and answer. Your verdict closes nothing, and nobody receives it.
 - A nearby subject is not an answer. Choose decided only when the cited words settle this exact choice.
 - The quote is 12 or more characters, copied word for word from the cited block under SOURCE. Never quote the question.
-- The corrections block lists verdicts the user later overruled. Do not repeat those readings.
+- The corrections block lists verdicts that a later answer overruled. Do not repeat those readings.
 - class: when a question shows no class, name the one class that fits it. The classes are: none, public-surface, gate-override, irreversible, money-security, outside-reach, taste, law-change.
 
 Put ONE JSON object as the last line of your reply, on one line, with one row for each question:
