@@ -251,6 +251,51 @@ fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
 }
 
 #[test]
+fn same_family_env_resolves_a_parent_edge() {
+    // The measured amber-vale shape: a fleet-managed codex session's stamp
+    // plus its own thread id. The stamp is fno's own record of this session
+    // (written in one act with the registry row), so it outranks the thread.
+    let stamped_codex = |k: &str| match k {
+        "FNO_HARNESS_NAME" => Some("codex".to_string()),
+        "FNO_HARNESS_SESSION_ID" => Some("a-stamp".to_string()),
+        "CODEX_THREAD_ID" => Some("t-9".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        ambient_parent_edge_from(stamped_codex),
+        (
+            Some("a-stamp".to_string()),
+            Some("codex".to_string()),
+            ambient_parent_edge_from(|_| None).2
+        )
+    );
+    // A name-only stamp names the family but no id: the durable vendor
+    // marker (the thread id, first in precedence order) leads.
+    let name_only_codex = |k: &str| match k {
+        "FNO_HARNESS_NAME" => Some("codex".to_string()),
+        "CODEX_THREAD_ID" => Some("t-9".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        ambient_parent_edge_from(name_only_codex),
+        (
+            Some("t-9".to_string()),
+            Some("codex".to_string()),
+            ambient_parent_edge_from(|_| None).2
+        )
+    );
+    // An invalid stamp (session pin without a name pin) keeps the refusal:
+    // a contradicting stamp is never resolved into an edge.
+    let invalid_stamp = |k: &str| match k {
+        "FNO_HARNESS_SESSION_ID" => Some("orphan-pin".to_string()),
+        "CODEX_THREAD_ID" => Some("t-9".to_string()),
+        _ => None,
+    };
+    let (s, h, _) = ambient_parent_edge_from(invalid_stamp);
+    assert_eq!((s, h), (None, None));
+}
+
+#[test]
 fn ambient_edge_reason_names_disposition_and_marker_set() {
     // The native-lane downgrade must be diagnosable: the reason names the
     // identity disposition and every present marker, never their values.

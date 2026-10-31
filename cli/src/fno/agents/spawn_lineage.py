@@ -10,6 +10,30 @@ import sys
 from typing import Optional
 
 
+def _same_family_parent_edge() -> Optional[tuple[str, str]]:
+    """A parent edge from a ONE-family env; the Python twin of
+    ``same_family_parent_edge_from`` in ``claims.rs`` (full rationale there).
+    Stamp wins when it names the family; invalid stamp, two families, or no
+    markers keep the refusal."""
+    from fno.harness_identity import parse_canonical_identity, present_harness_markers
+
+    markers = present_harness_markers(os.environ)
+    canonical = parse_canonical_identity(os.environ)
+    if canonical.disposition == "invalid":
+        return None
+    families = {harness for _m, harness, _v in markers}
+    if canonical.harness:
+        families.add(canonical.harness)
+    if len(families) != 1:
+        return None
+    family = next(iter(families))
+    if canonical.session_id and canonical.harness == family:
+        return canonical.session_id, family
+    if not markers:
+        return None
+    return markers[0][2], family
+
+
 def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]:
     """Capture the spawning session's ambient identity from environment variables.
 
@@ -54,6 +78,12 @@ def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]
 
     if identity.session_id:
         return identity.session_id, harness, parent_cwd
+
+    # One-family fallback before the registry voucher (no I/O); stamp wins.
+    if identity.disposition != "invalid":
+        edge = _same_family_parent_edge()
+        if edge is not None:
+            return edge[0], edge[1], parent_cwd
 
     # Hosted-session tier. A daemon-hosted session's shells have no harness
     # ancestor for the prover to walk (zsh under a keeper under the daemon),
