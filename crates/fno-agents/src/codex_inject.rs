@@ -781,7 +781,7 @@ fn review_start_audit_fields_with_origin_and_self(
         .get("payload")
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    let command = crate::mail_inject::raw_inject_verb(payload);
+    let command = crate::mail_inject::raw_inject_command(payload);
     fields.insert("verb".into(), command.map(str::to_string).into());
     fields.insert("self_send".into(), self_send.into());
     if let Some(sender) = audit_sender {
