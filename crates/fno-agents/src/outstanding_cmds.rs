@@ -894,22 +894,10 @@ fn live_law_rows() -> Vec<crate::law_match::LawRow> {
 /// One bounded self-exec reading stdout: `(code, stdout)` on a completed
 /// child, `Err` naming the failure on spawn error or timeout.
 fn captured_stdout(argv: &[String], timeout_secs: f64) -> Result<(i32, String), String> {
-    captured_stdout_in(argv, timeout_secs, None)
-}
-
-/// `captured_stdout` with the child's working directory named.
-pub(crate) fn captured_stdout_in(
-    argv: &[String],
-    timeout_secs: f64,
-    cwd: Option<&std::path::Path>,
-) -> Result<(i32, String), String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -706,11 +706,8 @@ pub fn enabled(cwd: &Path) -> bool {
 }
 
 fn self_exec_json(cwd: &Path, args: &[&str]) -> Result<Value, String> {
-    // The arm runs in the daemon binary, which has none of these commands, so
-    // current_exe is the wrong door here.
-    let mut argv = vec![crate::scrape::fno_bin().to_string_lossy().into_owned()];
-    argv.extend(args.iter().map(|arg| arg.to_string()));
-    let (code, stdout) = crate::outstanding_cmds::captured_stdout_in(&argv, 60.0, Some(cwd))?;
+    let argv: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    let (code, stdout, _) = crate::blueprint_judge::bounded_fno(&argv, 60, cwd)?;
     if code != 0 {
         return Err(format!("{} exit {code}", args.join(" ")));
     }

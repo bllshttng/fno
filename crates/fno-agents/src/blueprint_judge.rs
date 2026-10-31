@@ -300,8 +300,18 @@ pub(crate) fn headless_spawn(
     argv: &[String],
     kill_after_secs: u64,
 ) -> Result<(i32, String, String), String> {
+    bounded_fno(argv, kill_after_secs, Path::new("."))
+}
+
+/// One bounded `fno` call in `cwd`, whatever its output size.
+pub(crate) fn bounded_fno(
+    argv: &[String],
+    kill_after_secs: u64,
+    cwd: &Path,
+) -> Result<(i32, String, String), String> {
     let child = Command::new(crate::scrape::fno_bin())
         .args(argv)
+        .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
@@ -313,23 +323,32 @@ pub(crate) fn headless_spawn(
 /// The one bounded-wait implementation both the judge's headless spawn and
 /// the skill-diff proposer's one-shots share: poll-then-kill (the
 /// sandbox_probe shape), `--timeout` only rides argv to the child harness,
-/// which a hung lane ignores, so the enforcement lives here. The reply is
-/// small, so the unread pipes cannot deadlock it. A timeout returns code 124
-/// with a named stderr line when the child wrote none.
+/// which a hung lane ignores, so the enforcement lives here. Threads drain the
+/// pipes, so a large reply cannot fill one and stall the child. A timeout
+/// returns code 124 with a named stderr line when the child wrote none.
 pub(crate) fn bounded_wait(
     mut child: std::process::Child,
     timeout_secs: u64,
 ) -> Result<(i32, String, String), String> {
+    fn drain<R: std::io::Read + Send + 'static>(
+        pipe: Option<R>,
+    ) -> std::thread::JoinHandle<String> {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+    }
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let collect = |handle: std::thread::JoinHandle<String>| handle.join().unwrap_or_default();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => {
-                let out = child.wait_with_output().map_err(|e| e.to_string())?;
-                return Ok((
-                    status.code().unwrap_or(1),
-                    String::from_utf8_lossy(&out.stdout).into_owned(),
-                    String::from_utf8_lossy(&out.stderr).into_owned(),
-                ));
+                return Ok((status.code().unwrap_or(1), collect(stdout), collect(stderr)));
             }
             None => {
                 if std::time::Instant::now() >= deadline {
@@ -340,14 +359,14 @@ pub(crate) fn bounded_wait(
                     // process group cannot be ours, so the signal cannot
                     // reach this process.
                     let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-                    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-                    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+                    let _ = child.wait();
+                    let err = collect(stderr);
                     let named = format!(
                         "timed out after {timeout_secs}s: model lane slow or provider wait"
                     );
                     return Ok((
                         124,
-                        String::from_utf8_lossy(&out.stdout).into_owned(),
+                        collect(stdout),
                         if err.trim().is_empty() { named } else { err },
                     ));
                 }
