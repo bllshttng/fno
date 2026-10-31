@@ -4072,9 +4072,9 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
 
     let method = match command {
         "spawn" => {
-            // The client runs as a child of the spawning session, so its env
-            // still carries the harness markers the daemon's scrubbed env
-            // lost. Stamp the ambient parent edge onto the request so a
+            // The client runs as a child of the spawning session, so the seam
+            // holds the harness markers the daemon's scrubbed env lost. Stamp
+            // the ambient parent edge onto the request so a
             // daemon mint reads the parent from HERE, never from its own
             // environment (node-provenance.md: capture is ambient).
             let (session, harness, cwd) = fno_agents::claims::ambient_parent_edge();
