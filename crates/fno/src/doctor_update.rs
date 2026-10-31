@@ -33,6 +33,10 @@ const GUARD_MSG: &str = "[fno doctor update] refused: target-state.md shows stat
 /// legacy classifier must NOT reopen the unsafe cache path.
 const SOURCE_PIN_UNAVAILABLE: &str = "the deployed fno-agents could not answer source-pin (missing, pre-source-pin, or malformed); re-run the update with an explicit --source pointing at the canonical checkout, or rebuild the rust bins from it, so a stale helper cannot reopen the unsafe cache path";
 
+const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]]
+
+A release install runs `uv tool upgrade fno`. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `fno doctor update` is the same command.";
+
 const UPDATE_CLAIM_KEY: &str = "update:fno";
 const UV_INSTALL_ATTEMPTS: u32 = 3;
 const UPDATE_BUDGET_SECS: u64 = 60;
@@ -2264,10 +2268,49 @@ fn release_update_claim() {
     }
 }
 
+/// A release install has no source to rebuild from: the pin resolved nothing
+/// and no source update ever wrote the installed-rev marker. A mistyped
+/// `--source` answers `invalid_override` and stays a refusal.
+pub(crate) fn is_release_install(pin: &Value, installed_rev: Option<&str>) -> bool {
+    pin.get("eligibility").and_then(Value::as_str) == Some("no_source") && installed_rev.is_none()
+}
+
+fn upgrade_release(dry_run: bool) -> i32 {
+    let Some(uv) = which_uv() else {
+        eprintln!("fno update: FAILED: release install, and `uv` is not on PATH. Install uv, then run `uv tool upgrade fno`.");
+        return 1;
+    };
+    if dry_run {
+        println!("Would run: uv tool upgrade fno");
+        return 0;
+    }
+    println!("Release install: running uv tool upgrade fno");
+    match run_captured(&uv, &["tool".into(), "upgrade".into(), "fno".into()], None) {
+        Ok((0, out, err)) => {
+            print!("{out}{err}");
+            println!("fno update: done. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.");
+            0
+        }
+        Ok((code, out, err)) => {
+            eprint!("{out}{err}");
+            eprintln!("fno update: FAILED: uv tool upgrade fno exited {code}.");
+            1
+        }
+        Err(why) => {
+            eprintln!("fno update: FAILED: uv tool upgrade fno: {why}");
+            1
+        }
+    }
+}
+
 /// Run the command for one argv tail (`doctor update ...` minus the leading
 /// words, or the root `update` spelling). Returns the process exit code.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let started = Instant::now();
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{UPDATE_USAGE}");
+        return 0;
+    }
     let flags = match parse_args(rest) {
         Ok(f) => f,
         Err(e) => {
@@ -2302,6 +2345,9 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             return 1;
         }
     };
+    if is_release_install(&pin, read_marker(&installed_rev_file()).as_deref()) {
+        return upgrade_release(flags.dry_run);
+    }
     if pin.get("decision").and_then(Value::as_str) == Some("refuse") {
         eprintln!(
             "{}",

@@ -26,6 +26,15 @@ fn classify_claims_doctor_update_and_root_update() {
 }
 
 #[test]
+fn only_no_source_without_a_marker_is_a_release_install() {
+    let pin =
+        |eligibility: &str| serde_json::json!({"decision": "refuse", "eligibility": eligibility});
+    assert!(is_release_install(&pin("no_source"), None));
+    assert!(!is_release_install(&pin("no_source"), Some("abc123")));
+    assert!(!is_release_install(&pin("invalid_override"), None));
+}
+
+#[test]
 fn parse_args_reads_every_flag() {
     let f = parse_args(&os(&[
         "--source",
