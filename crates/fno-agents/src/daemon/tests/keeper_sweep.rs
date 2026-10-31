@@ -16,7 +16,16 @@ pub(in crate::daemon) fn keeper_sweep_home(tag: &str) -> AgentsHome {
     use std::sync::atomic::{AtomicU32, Ordering};
     static C: AtomicU32 = AtomicU32::new(0);
     let n = C.fetch_add(1, Ordering::Relaxed);
-    let base = PathBuf::from(format!("/tmp/fnokswp{tag}{}_{n}", std::process::id()));
+    // A nanosecond tail: a pid alone repeats across runs, and the 2026-10-31
+    // CI loss wiped this base mid-test the way a recycled path invites.
+    let tail = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let base = PathBuf::from(format!(
+        "/tmp/fnokswp{tag}{}_{n}_{tail}",
+        std::process::id()
+    ));
     // Pids recycle, so a prior run may own this path; a stale socket file
     // in it fails fixture binds with EADDRINUSE. Start from an empty base.
     let _ = std::fs::remove_dir_all(&base);
