@@ -3278,17 +3278,9 @@ mod tests {
         let base = std::env::temp_dir().join(format!("pi-restage-ptr-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
-        // The prime requires the plugin marker and restage's source check
-        // requires it to name fno, so the source carries the real name and
-        // the restaged stage keeps it.
-        fs::create_dir_all(source.join(".claude-plugin")).unwrap();
-        fs::write(
-            source.join(".claude-plugin").join("plugin.json"),
-            br#"{"name":"fno"}"#,
-        )
-        .unwrap();
-        git_in(&source, &["add", "-A"]);
-        git_in(&source, &["commit", "-q", "-m", "marker"]);
+        // new_repo already commits .claude-plugin/plugin.json naming fno,
+        // which both the prime's marker check and restage's source check
+        // require; the restaged stage keeps it.
         let stage_parent = stage.parent().unwrap().to_path_buf();
         let home = base.join("home");
         fs::create_dir_all(home.join("install")).unwrap();
