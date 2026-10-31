@@ -10,6 +10,41 @@ import sys
 from typing import Optional
 
 
+def _same_family_parent_edge() -> Optional[tuple[str, str]]:
+    """A parent edge from a ONE-family env, the Python twin of
+    ``same_family_parent_edge_from`` in ``claims.rs``.
+
+    Provenance is lower-stakes than a claim: when every present marker
+    (vendor markers plus the fno stamp) belongs to one harness family, no
+    foreign marker can be laundered through the set, so the family's own ids
+    resolve the edge. The stamp's session id wins when it names that family
+    and carries one; otherwise the first marker in precedence order (the
+    durable one) wins. An invalid stamp, a two-family union, or no markers
+    keep the refusal. Measured 2026-10-30: the strict prover's refusal on
+    this shape minted amber-vale with no parent edge.
+    """
+    from fno.harness_identity import (
+        _resolve_canonical_identity,
+        parse_canonical_identity,
+    )
+
+    _identity, disposition, markers = _resolve_canonical_identity(os.environ)
+    if disposition == "invalid":
+        return None
+    families = {harness for _m, harness, _v in markers}
+    canonical = parse_canonical_identity(os.environ)
+    if canonical.harness:
+        families.add(canonical.harness)
+    if len(families) != 1:
+        return None
+    family = next(iter(families))
+    if canonical.session_id and canonical.harness == family:
+        return canonical.session_id, family
+    if not markers:
+        return None
+    return markers[0][2], family
+
+
 def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]:
     """Capture the spawning session's ambient identity from environment variables.
 
@@ -54,6 +89,13 @@ def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]
 
     if identity.session_id:
         return identity.session_id, harness, parent_cwd
+
+    # The one-family fallback before the registry voucher: it needs no I/O
+    # and the two agree wherever both apply.
+    if identity.disposition != "invalid":
+        edge = _same_family_parent_edge()
+        if edge is not None:
+            return edge[0], edge[1], parent_cwd
 
     # Hosted-session tier. A daemon-hosted session's shells have no harness
     # ancestor for the prover to walk (zsh under a keeper under the daemon),
