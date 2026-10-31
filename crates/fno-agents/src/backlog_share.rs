@@ -2837,13 +2837,14 @@ mod tests {
                                "title": "first", "type": "feature",
                                "status": "idea", "priority": "p2", "domain": "code"})];
         crate::graph_store::seed_rows(&a.graph, &rows).unwrap();
-        crate::backlog::open(&a.graph)
-            .unwrap()
-            .execute(
-                "INSERT INTO agent_sessions (id, display_name) VALUES ('scan-session', 'before')",
-                [],
-            )
-            .unwrap();
+        crate::backlog::entities::upsert_identity(
+            &crate::backlog::open(&a.graph).unwrap(),
+            "scan-session",
+            None,
+            None,
+            Some("before"),
+        )
+        .unwrap();
         seed(&a.graph).unwrap();
         crate::graph_store::mutate_rows(
             &a.graph,
@@ -2892,13 +2893,14 @@ mod tests {
             !columns.contains(&"priority") && !columns.contains(&"domain"),
             "untouched columns stay home: {columns:?}"
         );
-        crate::backlog::open(&a.graph)
-            .unwrap()
-            .execute(
-                "UPDATE agent_sessions SET display_name='after' WHERE id='scan-session'",
-                [],
-            )
-            .unwrap();
+        crate::backlog::entities::upsert_identity(
+            &crate::backlog::open(&a.graph).unwrap(),
+            "scan-session",
+            None,
+            None,
+            Some("after"),
+        )
+        .unwrap();
         flush(&a.graph).unwrap();
         let connection = primary.db.lock().unwrap();
         let ops: String = connection
