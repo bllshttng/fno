@@ -170,6 +170,14 @@ impl SpawnAxes {
     /// The live lane vocabulary both `--as` and `--substrate` select from.
     pub const LANE_VALUES: &'static [&'static str] = &["pane", "thread", "headless", "cloud"];
 
+    /// Harness flags the passthrough forwards loose (space form) that take
+    /// the NEXT TOKEN as their value. The six shorthand axes arm already
+    /// consumes its own set; this table covers the forwarded spellings
+    /// outside it. An `=`-joined form never consults this table: the value
+    /// rides the one token. A flag here that a harness spells valueless
+    /// still forwards the pair verbatim - the harness names what it lacks.
+    pub const PASSTHROUGH_VALUE_FLAGS: &'static [&'static str] = &["--resume"];
+
     /// Parse the axis flags out of a spawn argv, stopping at the provider
     /// argv fence (`--argv` or bare `--`). Non-axis tokens belong to the rest
     /// of the spawn grammar or the passthrough law and are ignored here, but

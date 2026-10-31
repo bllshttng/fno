@@ -3991,16 +3991,23 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             }
             other if other.starts_with("--") && command == "spawn" => {
                 // The passthrough law: a flag spawn does not own
-                // rides the harness argv verbatim, one token per token. A
-                // lane that cannot carry it refuses by name. The token is
-                // forwarded alone: an `=`-joined form carries its own value,
-                // and a loose value needs --harness-arg (no arity table at
-                // this door, so a bare next token stays the seed).
+                // rides the harness argv verbatim. A lane that cannot carry
+                // it refuses by name. A table member consumes the next
+                // token as its value (`--resume <id>` forwards the pair);
+                // every other flag forwards alone, and a value on those
+                // rides the `=`-joined form or --harness-arg.
                 let items = params
                     .entry(String::from("harness_args"))
                     .or_insert_with(|| Value::Array(Vec::new()));
                 if let Value::Array(list) = items {
                     list.push(Value::String(other.to_string()));
+                    if fno_agents::cli_args::SpawnAxes::PASSTHROUGH_VALUE_FLAGS
+                        .contains(&other)
+                    {
+                        if let Some(v) = it.next() {
+                            list.push(Value::String(v));
+                        }
+                    }
                 }
             }
             other if other.starts_with("--") => {
