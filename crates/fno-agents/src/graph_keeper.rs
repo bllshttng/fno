@@ -3992,7 +3992,15 @@ mod tests {
         let td = tempfile::TempDir::new().unwrap();
         let prev = std::env::var_os("FNO_HOME");
         std::env::set_var("FNO_HOME", td.path().join("fno-home"));
-        let jsonl = td.path().join("fno-home").join("decisions.jsonl");
+        // The journal derives from the served graph, so it sits beside it.
+        let (_dir, state) = sqlite_state(json!({
+            "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
+        }));
+        let jsonl = state
+            .graph
+            .parent()
+            .map(|p| p.join("decisions.jsonl"))
+            .expect("the served graph has a parent");
         std::fs::create_dir_all(jsonl.parent().unwrap()).unwrap();
         let mut text = rules_envelope(
             "2026-10-24T00:00:00Z",
@@ -4020,9 +4028,6 @@ mod tests {
         );
         text.push('\n');
         std::fs::write(&jsonl, text).unwrap();
-        let (_dir, state) = sqlite_state(json!({
-            "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
-        }));
         let payload = serde_json::to_vec(&json!({
             "id": 10, "method": "rules", "params": {"cwd": "/"}
         }))

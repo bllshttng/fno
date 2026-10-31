@@ -41,9 +41,11 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
 }
 
 /// The set for one named graph, so a keeper serving a non-default graph
-/// assembles against the store it owns, not the layout default.
+/// assembles against the store it owns, not the layout default. The journal
+/// derives from the graph path: the home journal would name another store's
+/// laws, and a bad graph path would answer ok with them missing.
 pub fn rule_set_in(graph: &Path, cwd: &Path) -> Result<RuleSet, String> {
-    let jsonl = decision_index::default_state_path("decisions.jsonl");
+    let jsonl = decision_index::graph_journal(graph);
     let (rows, damaged) = decision_index::read_store_rows(graph, &jsonl)?;
     let laws = decision_index::laws_of(decision_index::derive_rows(rows, damaged));
     let (triggers, unread) = match decision_index::read_law_triggers(&jsonl) {
@@ -862,6 +864,81 @@ mod tests {
         );
         assert_eq!(implicit.scope.as_deref(), None, "global scope rides open");
         assert_eq!(set.laws.rows.len(), 2);
+        match prev {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+    }
+
+    /// A named graph serves its own store: the journal derives from the
+    /// graph path, so its own laws build rules, the home law never leaks
+    /// in, a read never materializes a store under the home, and a graph
+    /// with no store at all refuses instead of answering ok.
+    #[test]
+    fn a_named_graph_serves_its_own_store_never_the_home() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("FNO_HOME");
+        let home = td.path().join("fno-home");
+        std::env::set_var("FNO_HOME", &home);
+        std::fs::create_dir_all(&home).unwrap();
+        let law = |id: &str, subject: &str, ts: &str| {
+            envelope(
+                ts,
+                json!({
+                    "decision_id": id,
+                    "subject": subject,
+                    "decision": "serves its own store",
+                    "authority_source": "operator",
+                    "scope": "global",
+                }),
+            )
+        };
+        std::fs::write(
+            home.join("decisions.jsonl"),
+            law("d-deadbeef", "home store", "2026-10-30T00:00:00Z"),
+        )
+        .unwrap();
+        let graph = td.path().join("iso").join("graph.json");
+        std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        std::fs::write(
+            graph.parent().unwrap().join("decisions.jsonl"),
+            law("d-feedface", "iso store", "2026-10-30T01:00:00Z"),
+        )
+        .unwrap();
+        let set = rule_set_in(&graph, Path::new("/"))
+            .unwrap_or_else(|e| panic!("the named store reads: {e}"));
+        assert!(
+            set.rules.iter().any(|r| r.id == "law-d-feedface"),
+            "the named store's law, never the home one; unread: {:?}",
+            set.unread
+        );
+        // A migrated root: the db twin's spelling reads the same journal at
+        // the state root, never one inside db/.
+        let db = graph.parent().unwrap().join("db");
+        std::fs::create_dir_all(&db).unwrap();
+        std::fs::write(db.join("graph.db"), b"").unwrap();
+        let migrated = rule_set_in(&db.join("graph.db"), Path::new("/"))
+            .unwrap_or_else(|e| panic!("the migrated store reads: {e}"));
+        assert!(
+            migrated.rules.iter().any(|r| r.id == "law-d-feedface"),
+            "the migrated root's journal sits at the state root; unread: {:?}",
+            migrated.unread
+        );
+        assert!(
+            !set.rules.iter().any(|r| r.id == "law-d-deadbeef"),
+            "the home law leaks into a named store's set"
+        );
+        assert!(
+            !home.join("decisions.db").exists(),
+            "a read never materializes a store under the home"
+        );
+        let Err(reason) = rule_set_in(&td.path().join("empty").join("graph.json"), Path::new("/"))
+        else {
+            panic!("a graph with no store must refuse");
+        };
+        assert!(reason.contains("no decision store"), "{reason}");
         match prev {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),

@@ -10,6 +10,9 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// Every test here mutates the process env the spawns inherit; one at a time.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The stand-in reads the spec's id, opens that session, takes one prompt,
 /// asks once, and holds the turn until a cancel arrives. Each frame it reads
 /// lands in a capture file.
@@ -51,6 +54,7 @@ fn captured(dir: &Path, name: &str) -> Value {
 /// closes the socket and marks the row Exited.
 #[test]
 fn footnote_thread_takes_mail_an_answer_and_a_stop_over_acp_stdio() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let cap = tmp.path().join("cap");
     std::fs::create_dir_all(&cap).unwrap();
@@ -191,4 +195,72 @@ fn footnote_thread_takes_mail_an_answer_and_a_stop_over_acp_stdio() {
     let mut code = 0;
     // SAFETY: reaps the host this process started.
     unsafe { libc::waitpid(pid as libc::pid_t, &mut code, 0) };
+}
+
+/// A probe that quits before the handshake; its one job is printing the
+/// `FNO_GRAPH_JSON` it was handed.
+const GRAPH_PROBE: &str = "#!/bin/sh\nprintenv FNO_GRAPH_JSON > \"$CAP/graph-env.txt\"\n";
+
+/// A thread spawn names fnh its graph store: like the headless lane, the
+/// host command carries the spawner's resolved `FNO_GRAPH_JSON`, so a
+/// sandboxed spawn reaches the sandbox store and never `$HOME/.fno`.
+#[test]
+fn the_thread_spawn_names_fnh_the_graph_store() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let cap = tmp.path().join("cap");
+    std::fs::create_dir_all(&cap).unwrap();
+    let fake = tmp.path().join("footnote");
+    std::fs::write(&fake, GRAPH_PROBE).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let state = tmp.path().join("state");
+    for (k, v) in [
+        (
+            "FNO_AGENTS_HOME",
+            tmp.path().join("agents").to_str().unwrap(),
+        ),
+        (
+            "FNO_AGENTS_WORKER_BIN",
+            env!("CARGO_BIN_EXE_fno-agents-worker"),
+        ),
+        ("FNO_FOOTNOTE_BIN", fake.to_str().unwrap()),
+        ("FNO_STATE_DIR", state.to_str().unwrap()),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+        ("CAP", cap.to_str().unwrap()),
+    ] {
+        std::env::set_var(k, v);
+    }
+    let saved_graph = std::env::var_os("FNO_GRAPH_JSON");
+    std::env::remove_var("FNO_GRAPH_JSON");
+    let home = AgentsHome::from_env();
+    let refused = dispatch_thread(
+        &home,
+        "fx-graph",
+        "",
+        "tester",
+        tmp.path(),
+        Some("glm-test"),
+        &json!({}),
+    );
+    // The probe quits before the ACP handshake, so the host exits before the
+    // session opens; the probe's capture is already on disk, and no row
+    // registered.
+    assert_eq!(refused.exit_code, 2, "{}", refused.stderr);
+    match saved_graph {
+        Some(v) => std::env::set_var("FNO_GRAPH_JSON", v),
+        None => std::env::remove_var("FNO_GRAPH_JSON"),
+    }
+    let got = std::fs::read_to_string(cap.join("graph-env.txt")).unwrap();
+    assert!(
+        got.trim().starts_with(state.to_str().unwrap()),
+        "the sandbox store, never empty or $HOME/.fno: {got:?}"
+    );
+    assert!(
+        got.trim().ends_with("graph.json"),
+        "the graph anchor: {got:?}"
+    );
 }
