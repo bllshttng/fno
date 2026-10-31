@@ -46,6 +46,7 @@ pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// `/backlog/node.json` and computes nothing the model already answered.
 pub(crate) const BACKLOG_PAGE: &str = include_str!("web_backlog.html");
 pub(crate) const COMMAND_PAGE: &str = include_str!("web_command.html");
+const TRACE_PAGE: &str = include_str!("web_trace.html");
 /// The house stylesheet the backlog and command pages share. The CSP allows
 /// inline style only, so [`house`] writes it into each page's `<style>`.
 pub(crate) const HOUSE_CSS: &str = include_str!("web_house.css");
@@ -820,6 +821,8 @@ fn router(state: AppState) -> Router {
         .route("/command", get(command))
         .route("/command/model.json", get(command_model))
         .route("/command/answer/{id}", post(command_answer))
+        .route("/trace", get(trace))
+        .route("/trace/model.json", get(trace_model))
         .route("/ws", get(ws_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -1106,6 +1109,43 @@ async fn command(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respon
         return unauthorized();
     }
     html_response(with_nav(&house(COMMAND_PAGE), NavPage::Command))
+}
+
+#[derive(serde::Deserialize)]
+struct TraceQuery {
+    t: Option<String>,
+    node: Option<String>,
+}
+
+/// `GET /trace`: the trace page for one node; it reads `/trace/model.json`.
+async fn trace(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    html_response(with_nav(&house(TRACE_PAGE), NavPage::Command))
+}
+
+/// `GET /trace/model.json`: the fold for `node`, read per request.
+async fn trace_model(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    let node = q.node.as_deref().unwrap_or("");
+    if !crate::web_trace::valid_node(node) {
+        return plain_status(StatusCode::BAD_REQUEST, "node must be a node id");
+    }
+    match crate::web_trace::read_trace(node).await {
+        Ok(body) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            body,
+        )
+            .into_response(),
+        Err(reason) => plain_status(StatusCode::SERVICE_UNAVAILABLE, &reason),
+    }
 }
 
 fn html_response(body: String) -> Response {
@@ -2760,9 +2800,10 @@ console.log("backlog page helpers: 9 cases ok");
     /// the recent-search store hold their contracts when run for real:
     /// lift cardKeeps / laneKeyOf, the date-filter and sort helpers,
     /// statusLabel / clampPanelWidth / fuzzyHit, nestChildren,
-    /// shortcutAction / isTypingTarget / copiedToast and pushRecent /
-    /// loadRecent from the shipped page and run every case under node, the
-    /// same rule as the board helpers.
+    /// shortcutAction / isTypingTarget / copiedToast, pushRecent /
+    /// loadRecent, and the theme store's loadTheme / nextTheme / themeAttr
+    /// from the shipped page and run every case under node, the same rule
+    /// as the board helpers.
     #[test]
     fn snapshot_page_helpers_hold_under_node() {
         let asserts = r#"
@@ -2931,6 +2972,17 @@ eq(mixed[0], "a", "strings keep order");
 eq(loadRecent('{\"a\":1}'), [], "a non-array payload loads empty");
 eq(loadRecent('[\"s1\",\"s2\",\"s3\",\"s4\",\"s5\",\"s6\",\"s7\",\"s8\",\"s9\",\"s10\",\"s11\"]').length, 10, "a long stored list caps at ten");
 console.log("recent searches: 12 cases ok");
+// The theme store: one of three modes, cycling, and the attribute it sets.
+eq(loadTheme(null), "auto", "no stored value loads auto");
+eq(loadTheme("junk"), "auto", "a corrupt stored value loads auto");
+eq(loadTheme("light"), "light", "a stored light loads light");
+eq(loadTheme("dark"), "dark", "a stored dark loads dark");
+eq(nextTheme("auto"), "light", "auto cycles to light");
+eq(nextTheme("light"), "dark", "light cycles to dark");
+eq(nextTheme("dark"), "auto", "dark cycles back to auto");
+eq(themeAttr("auto"), null, "auto sets no attribute");
+eq(themeAttr("light"), "light", "light sets the light attribute");
+console.log("theme store: 9 cases ok");
 "#;
         let src = format!(
             "{}\n{}\n{}\n{}",
@@ -2973,6 +3025,9 @@ console.log("recent searches: 12 cases ok");
                 "copiedToast",
                 "pushRecent",
                 "loadRecent",
+                "loadTheme",
+                "nextTheme",
+                "themeAttr",
                 "requestIssueUrl",
                 "upvoteIssueUrl",
             ]
@@ -3018,6 +3073,10 @@ console.log("recent searches: 12 cases ok");
                 assert!(
                     stdout.contains("recent searches: 12 cases ok"),
                     "the shipped recent-search store did not clear every case:\n{stdout}{stderr}"
+                );
+                assert!(
+                    stdout.contains("theme store: 9 cases ok"),
+                    "the shipped theme store did not clear every case:\n{stdout}{stderr}"
                 );
             }
         }
@@ -3267,6 +3326,49 @@ console.log("recent searches: 12 cases ok");
         assert!(reply.contains("data-current=\"command\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn router_gates_trace_on_the_token_and_the_node_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (tx, _) = broadcast::channel(4);
+        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let state = AppState {
+            tx,
+            snap: Arc::new(Mutex::new(Snapshot::default())),
+            token: Arc::<str>::from("right"),
+            rundown_html: std::env::temp_dir().join("fno-web-trace-lead.html"),
+            rundown_republish: false,
+            command: Arc::new(crate::web_command::CommandCache::default()),
+            writable: false,
+            invites: None,
+            model: Default::default(),
+            shutdown,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        let ask = |path: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+        let reply = ask("/trace/model.json?node=n-1&t=wrong").await;
+        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+        let reply = ask("/trace/model.json?node=--help&t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+        assert!(ask("/trace?node=n-1").await.starts_with("HTTP/1.1 401"));
+        let reply = ask("/trace?node=n-1&t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.contains("data-current=\"command\""), "{reply}");
         server.abort();
     }
 

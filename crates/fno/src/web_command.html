@@ -291,6 +291,7 @@ function openQuestion(q) {
   else row("Watch the session", "session not on this bridge");
   const asker = o.name || o.handle;
   if (asker) row("Attach" + (q.host == null ? "" : " on " + q.host), "fno agents session attach " + asker);
+  if (q.node) row("Trace", "trace · " + q.node, (nav ? nav.dataset.base : "./") + "trace?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(q.node));
   const open_sec = el("div", "sec");
   open_sec.append(el("h3", null, "Open"), links);
   document.getElementById("dbody").replaceChildren(...[
@@ -500,6 +501,7 @@ function openSeat(r) {
   row("Attach in the mux" + (r.local ? "" : " on " + r.machine), seat + " · mux link comes later");
   row("Peek without attaching", seat + " · mux link comes later");
   if (w.id) row("Node in the backlog", "backlog · " + w.id, (nav ? nav.dataset.base : "./") + "backlog?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(w.id));
+  if (w.id) row("Trace", "trace · " + w.id, (nav ? nav.dataset.base : "./") + "trace?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(w.id));
   const sec = (title, body) => { const d = el("div", "sec"); d.append(el("h3", null, title), body); return d; };
   const msgAge = s.last_message_at ? " · " + ago(since(s.last_message_at)) + " ago" : "";
   document.getElementById("dbody").replaceChildren(...[
@@ -758,7 +760,15 @@ async function load() {
   canAnswer = model.writable === true;
   lastModel = model;
   header(model); banners(model); waiting(model); machines(model); seats(model);
+  // A /command?question=<id> link opens that card once, after the first read.
+  if (wantQuestion) {
+    const id = wantQuestion;
+    wantQuestion = null;
+    const hit = ((model.waiting || {}).questions || []).find((x) => x.id === id);
+    if (hit) openQuestion(hit); else toast("No open question " + id, 4000);
+  }
 }
+let wantQuestion = new URLSearchParams(location.search).get("question");
 load();
 setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
 })();

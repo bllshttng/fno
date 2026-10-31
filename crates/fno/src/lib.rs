@@ -300,6 +300,8 @@ pub(crate) mod web_command;
 #[cfg(feature = "full")]
 pub(crate) mod web_invites;
 #[cfg(feature = "full")]
+pub(crate) mod web_trace;
+#[cfg(feature = "full")]
 pub mod wizard;
 #[cfg(feature = "full")]
 pub mod wizard_term;
