@@ -692,7 +692,7 @@ pub fn render_report(report: &Value) -> String {
     lines.push(if armed {
         "  arm: on (questions.judge.enabled = true).".to_string()
     } else {
-        "  arm: off. Turn it on with: fno config set questions.judge.enabled true".to_string()
+        "  arm: off. Turn it on in config.toml: [questions.judge] enabled = true".to_string()
     });
     lines.join("\n")
 }
@@ -1260,7 +1260,7 @@ mod tests {
     fn the_report_counts_misses_feeds_them_back_and_names_the_arm() {
         let empty = report(&[], &[], "2026-10-31T00:00:00Z", false);
         assert_eq!(empty["verdicts"], 0);
-        assert!(render_report(&empty).contains("fno config set questions.judge.enabled true"));
+        assert!(render_report(&empty).contains("[questions.judge] enabled = true"));
         let wrote = report(
             &[],
             &[close("q-1", "x", "judge-run-abc")],
