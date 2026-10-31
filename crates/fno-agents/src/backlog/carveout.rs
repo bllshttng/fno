@@ -20,6 +20,8 @@ use crate::retro::py_str;
 
 const VALID_SEVERITIES: [&str; 4] = ["critical", "high", "medium", "low"];
 const DESCRIPTION_CAP: usize = 8000;
+/// A backlog-source event; KNOWN_EVENT_KINDS lists only the daemon's kinds.
+const RESOLVED_EVENT: &str = "carveout_resolved";
 const DIFFICULTY_LADDER: [&str; 3] = ["low", "medium", "high"];
 
 const USAGE: &str = "Usage: fno backlog carveout <add|list|update|resolve> [OPTIONS]
@@ -621,7 +623,7 @@ fn cmd_resolve(args: &[String]) -> i32 {
         // does not survive a linked worktree's archival. The rows are already
         // gone, so a failed emit is named, never a failed resolve.
         let emitter = crate::events::EventEmitter::new(crate::paths::events_path(&root), "backlog");
-        if let Err(e) = emitter.emit_fields("carveout_resolved", data) {
+        if let Err(e) = emitter.emit_fields(RESOLVED_EVENT, data) {
             eprintln!(
                 "carveout: resolved, but the reason was NOT recorded ({e:?}); re-record it by hand"
             );
