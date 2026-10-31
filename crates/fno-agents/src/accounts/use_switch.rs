@@ -653,6 +653,17 @@ pub fn use_account(
     run.out(&format!(
         "Active account set to '{id}' (scope={scope_word})."
     ));
+    // A managed row answers from its slot stamp. Only a pointer row can land
+    // under a project layer that still names another account.
+    let hidden = !managed
+        && scope == Scope::Global
+        && records::load(repo_root, cwd).is_ok_and(|now| now.active.as_deref() != Some(id));
+    if hidden {
+        run.err(&format!(
+            "warning: the project config here still names another active account, so '{id}' is \
+             not active in this directory"
+        ));
+    }
     run
 }
 
