@@ -26,6 +26,7 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
         "clear" => Some(run_clear_cmd(rest)),
         "ask" => Some(run_ask(rest)),
         "climb" => Some(crate::question_ladder::run_climb(rest)),
+        "judge" => Some(crate::question_judge::run_cmd(rest)),
         _ => None,
     }
 }
@@ -892,7 +893,7 @@ fn live_law_rows() -> Vec<crate::law_match::LawRow> {
 
 /// One bounded self-exec reading stdout: `(code, stdout)` on a completed
 /// child, `Err` naming the failure on spawn error or timeout.
-fn captured_stdout(argv: &[String], timeout_secs: f64) -> Result<(i32, String), String> {
+pub(crate) fn captured_stdout(argv: &[String], timeout_secs: f64) -> Result<(i32, String), String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut command = Command::new(&argv[0]);

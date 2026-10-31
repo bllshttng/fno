@@ -488,6 +488,7 @@ pub mod quarantine;
 pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
+pub mod question_judge;
 pub mod question_ladder;
 pub mod question_sweep;
 pub mod quiet_retire;

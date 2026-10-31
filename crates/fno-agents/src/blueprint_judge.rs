@@ -286,6 +286,12 @@ fn verify_evidence(reply: &str, bundle: &str) -> bool {
         .any(|quote| quote.chars().count() >= 12 && squashed.contains(&squash(quote)))
 }
 
+/// True when `quote`, at `min_chars` or longer, is in `source`. Whitespace
+/// runs compare as one space, so a rewrapped quote still matches.
+pub(crate) fn quote_in(quote: &str, source: &str, min_chars: usize) -> bool {
+    quote.chars().count() >= min_chars && squash(source).contains(&squash(quote))
+}
+
 /// One `fno agents spawn --once` (headless) round-trip for a caller-built
 /// argv: the poll/kill enforcement that `--timeout` cannot guarantee on a
 /// hung lane. Matches the retired Python `_default_spawn`: never a bare

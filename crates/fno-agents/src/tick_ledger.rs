@@ -65,6 +65,7 @@ fn arm_key_value(cwd: &Path, key: &str) -> String {
         "active_backlog.enabled" => crate::agents_config::active_backlog_enabled(cwd),
         "slot_cutover.enabled" => crate::agents_config::slot_cutover_enabled(cwd),
         "telemetry.otlp.enabled" => crate::agents_config::otlp_export_enabled(cwd),
+        "questions.judge.enabled" => crate::question_judge::enabled(cwd),
         _ => return "unreadable".to_string(),
     };
     if answered { "true" } else { "false" }.to_string()
@@ -287,6 +288,14 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         upstream: None,
         arm_key: None,
         reader: None,
+    },
+    ArmSpec {
+        arm: "question_judge",
+        default_interval_s: crate::question_judge::JUDGE_INTERVAL_S,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: Some("questions.judge.enabled"),
+        reader: Some("fno inbox outstanding judge --report"),
     },
     ArmSpec {
         arm: "attention",
