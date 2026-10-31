@@ -562,6 +562,29 @@ pub fn worker_template(cwd: &std::path::Path) -> String {
         .unwrap_or_else(|| DEFAULT_WORKER_TEMPLATE.to_string())
 }
 
+/// A seed whose first word is node-shaped binds that node: a bare node id as
+/// the whole prompt names the worker for it, the way a `/target` seed would.
+fn bare_seed_node(seed: &str) -> Option<String> {
+    let word = seed
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
+    crate::law_match::matches_node_id_shape(&word).then_some(word)
+}
+
+/// The first words of a prompt (`fix the login bug` -> `fix-the-login-bug`),
+/// the naming fallback when no node slug exists: up to four words, cut at a
+/// hyphen boundary like every other worker slug.
+fn prompt_slug_head(seed: &str) -> Option<String> {
+    let words: Vec<&str> = seed.split_whitespace().take(4).collect();
+    if words.is_empty() {
+        return None;
+    }
+    let head = cut_slug(Some(&words.join("-")), WORKER_SLUG_CAP);
+    (!head.is_empty()).then_some(head)
+}
+
 /// The first words of a node slug (`visual-approval-gate-two-paint` ->
 /// `visual-approval-gate`).
 fn slug_head(slug: &str) -> Option<String> {
@@ -702,11 +725,13 @@ pub(crate) fn worker_mint(
     let node = node
         .filter(nonblank)
         .map(str::to_string)
-        .or_else(|| seed.and_then(target_seed_node));
+        .or_else(|| seed.and_then(target_seed_node))
+        .or_else(|| seed.and_then(bare_seed_node));
     let slug = slug
         .filter(nonblank)
         .map(str::to_string)
-        .or_else(|| node.as_deref().and_then(|n| node_slug(n, cwd)));
+        .or_else(|| node.as_deref().and_then(|n| node_slug(n, cwd)))
+        .or_else(|| seed.and_then(prompt_slug_head));
     let skill = seed.and_then(seed_skill);
     let template = worker_template(cwd);
     let facts = WorkerFacts {
@@ -1104,6 +1129,56 @@ mod tests {
         );
         assert_eq!(target_seed_node("/fno:blueprint x-aaaa"), None);
         assert_eq!(target_seed_node("go"), None);
+    }
+
+    #[test]
+    fn a_bare_node_seed_binds_its_slug() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let saved = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", tmp.path());
+        let graph = crate::state_layout::graph_anchor(tmp.path());
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({
+                "id": "fb-2604",
+                "slug": "spawn-flags-ride-verbatim",
+                "title": "Spawn flags ride verbatim",
+                "status": "idea",
+                "project": "fno"
+            })],
+        )
+        .unwrap();
+        let (_, name) = worker_mint(None, Some("fb-2604"), None, tmp.path());
+        match saved {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        assert_eq!(name.as_deref(), Some("t-spawn-flags-ride"));
+    }
+
+    #[test]
+    fn a_prompt_seed_names_the_worker_from_its_words() {
+        let (_, name) = worker_mint(
+            None,
+            Some("fix the login bug today"),
+            None,
+            std::path::Path::new("."),
+        );
+        // The {slug} token keeps three words, the naming convention's own cut.
+        assert_eq!(name.as_deref(), Some("t-fix-the-login"));
+        // Four words fit the cap; a long word run cuts at a boundary.
+        let (_, long) = worker_mint(
+            None,
+            Some("refactor the entire ingestion pipeline end to end"),
+            None,
+            std::path::Path::new("."),
+        );
+        let named = long.expect("a prompt names the worker");
+        let words = named.trim_start_matches("t-").split('-').count();
+        assert!((2..=4).contains(&words), "{named}");
     }
 
     #[test]
