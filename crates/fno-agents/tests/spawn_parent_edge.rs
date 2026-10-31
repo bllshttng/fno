@@ -44,7 +44,7 @@ fn a_thread_spawn_request_carries_the_callers_session_and_harness() {
     let spawns = stub_daemon(home.join("supervisor.sock"));
 
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
-        .args(["spawn", "edge-probe", "-H", "opencode", "--as", "thread"])
+        .args(["spawn", "edge-probe", "-H", "codex", "--as", "thread"])
         .args(["--", "say hi"])
         .current_dir(&home)
         .env_clear()
