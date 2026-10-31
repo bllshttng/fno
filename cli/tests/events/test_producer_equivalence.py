@@ -104,7 +104,9 @@ def _events(repo: Path) -> list[dict]:
 
 
 def _base_env() -> dict:
-    return {**os.environ, "FNO": os.environ.get("FNO_BIN", "fno")}
+    from fno.events.store_client import resolve_native_bin
+
+    return {**os.environ, "FNO": resolve_native_bin()}
 
 
 def _fno_agents_bin() -> Path | None:
