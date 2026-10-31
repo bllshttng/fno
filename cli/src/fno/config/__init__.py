@@ -629,7 +629,7 @@ class PostMergeBlock(BaseModel):
     @field_validator("model", mode="before")
     @classmethod
     def _coerce_model(cls, v: object) -> str:
-        """Fail-safe to the sonnet default on empty/whitespace/non-str.
+        """Fail-safe to the field's tier default on empty/whitespace/non-str.
 
         A blank ``model = ""`` must never reach ``--model ""`` (an empty flag
         value), so coerce it back to the tier default rather than passing it
@@ -637,7 +637,7 @@ class PostMergeBlock(BaseModel):
         """
         if isinstance(v, str) and v.strip():
             return v.strip()
-        return "claude-opus-5"
+        return str(cls.model_fields["model"].default)
 
 
 class ResearchBlock(BaseModel):
