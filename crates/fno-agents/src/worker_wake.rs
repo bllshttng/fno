@@ -367,7 +367,7 @@ fn run_pass_with(
         }
         if dry_run {
             println!(
-                "worker-wake {}: recover node={node} quiet={}s via={} execution={} (dry-run)",
+                "worker-wake {}: recover node={node} quiet={}s via={} execution={} (dry-run){}",
                 row.name,
                 (now - last) / 1000,
                 drive.lane(),
@@ -375,6 +375,11 @@ fn run_pass_with(
                     "ready".to_string()
                 } else {
                     format!("held:{}=false", disabled.join(","))
+                },
+                if lead.is_none() {
+                    " notice=lead_unresolved"
+                } else {
+                    ""
                 }
             );
             acted += 1;
@@ -406,7 +411,6 @@ fn run_pass_with(
                     eprintln!("worker-wake: lead notice failed for {lead}");
                 }
             }
-            None if dry_run => println!("worker-wake {}: notice lead_unresolved", row.name),
             None => {}
         }
     }

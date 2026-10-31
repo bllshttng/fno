@@ -207,7 +207,7 @@ def test_a_present_marker_that_resolves_to_nothing_stays_nothing(monkeypatch):
     """A contradiction across TWO families attributes nothing, and the walk's
     verdict is not overturned. A marker that IS present and resolved to
     nothing is the x-b57a / x-0992 rule for mixed families; the one-family
-    fallback resolves only single-family refusals (x-f8c3), never this one."""
+    fallback resolves only single-family refusals, never this one."""
     import fno.claims.self_identity as self_identity
     import fno.claims.session_pid as session_pid
     from fno.agents.spawn_lineage import _capture_parent_edge

@@ -284,7 +284,6 @@ fn same_family_env_resolves_a_parent_edge() {
             ambient_parent_edge_from(|_| None).2
         )
     );
-    // An invalid stamp (session pin without a name pin) keeps the refusal.
     // An invalid stamp (session pin without a name pin) keeps the refusal:
     // a contradicting stamp is never resolved into an edge.
     let invalid_stamp = |k: &str| match k {

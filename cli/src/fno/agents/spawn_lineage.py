@@ -23,16 +23,13 @@ def _same_family_parent_edge() -> Optional[tuple[str, str]]:
     keep the refusal. Measured 2026-10-30: the strict prover's refusal on
     this shape minted amber-vale with no parent edge.
     """
-    from fno.harness_identity import (
-        _resolve_canonical_identity,
-        parse_canonical_identity,
-    )
+    from fno.harness_identity import parse_canonical_identity, present_harness_markers
 
-    _identity, disposition, markers = _resolve_canonical_identity(os.environ)
-    if disposition == "invalid":
+    markers = present_harness_markers(os.environ)
+    canonical = parse_canonical_identity(os.environ)
+    if canonical.disposition == "invalid":
         return None
     families = {harness for _m, harness, _v in markers}
-    canonical = parse_canonical_identity(os.environ)
     if canonical.harness:
         families.add(canonical.harness)
     if len(families) != 1:
@@ -90,8 +87,9 @@ def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]
     if identity.session_id:
         return identity.session_id, harness, parent_cwd
 
-    # The one-family fallback before the registry voucher: it needs no I/O
-    # and the two agree wherever both apply.
+    # The one-family fallback before the registry voucher: it needs no I/O,
+    # and where a stamp disagrees with a registry-vouchable marker the stamp
+    # wins, matching the Rust writer.
     if identity.disposition != "invalid":
         edge = _same_family_parent_edge()
         if edge is not None:
