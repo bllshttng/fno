@@ -4001,9 +4001,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
                     .or_insert_with(|| Value::Array(Vec::new()));
                 if let Value::Array(list) = items {
                     list.push(Value::String(other.to_string()));
-                    if fno_agents::cli_args::SpawnAxes::PASSTHROUGH_VALUE_FLAGS
-                        .contains(&other)
-                    {
+                    if fno_agents::cli_args::SpawnAxes::PASSTHROUGH_VALUE_FLAGS.contains(&other) {
                         if let Some(v) = it.next() {
                             list.push(Value::String(v));
                         }
