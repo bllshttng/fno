@@ -2766,7 +2766,7 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    /// Frames captured from a live opencode 1.18.33 TUI. The verdicts and the
+    /// Frames trimmed from a live opencode 1.18.33 TUI. The verdicts and the
     /// gate must agree: type at a painted composer, refuse a prompt and a blank.
     #[test]
     fn unconfirmable_opencode_pane_types_only_at_a_painted_composer() {
