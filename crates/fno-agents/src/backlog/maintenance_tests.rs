@@ -320,6 +320,36 @@ fn judgment_legs_only_propose_even_under_apply() {
 }
 
 #[test]
+fn stale_ideas_obey_the_drain_law() {
+    let idea = |id: &str, priority: Option<&str>, days: i64| {
+        let mut extra = json!({"status": "idea", "created_at": iso_days_ago(days)});
+        if let Some(priority) = priority {
+            extra["priority"] = json!(priority);
+        }
+        node(id, extra)
+    };
+    let fx = Fixture::new(&[
+        idea("ab-p0old", Some("p0"), 99),
+        idea("ab-p1old", Some("p1"), 99),
+        idea("ab-p2edge", Some("p2"), 60),
+        idea("ab-p2past", Some("p2"), 61),
+        idea("ab-p3old", Some("p3"), 99),
+        idea("ab-unset", None, 99),
+    ]);
+    let (code, out) = Run::default().go(&fx, &["--json", "--no-validity"]);
+    assert_eq!(code, 0, "{}", out.stderr);
+    let payload: Value = serde_json::from_str(&out.stdout).unwrap();
+    let mut stale: Vec<&str> = payload["stale_ideas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["node_id"].as_str().unwrap())
+        .collect();
+    stale.sort_unstable();
+    assert_eq!(stale, ["ab-p2past", "ab-p3old", "ab-unset"]);
+}
+
+#[test]
 fn a_budget_overrun_exits_4_with_a_partial_receipt_and_row() {
     let fx = Fixture::new(&[node("ab-keep03", json!({"cwd": "/home/u/code/fno"}))]);
     let mut run = Run::default();
