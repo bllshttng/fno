@@ -131,7 +131,20 @@ Settings are read from two locations. Project-local wins over global:
 
 `fno config accounts add --scope project` writes to the project file.
 `fno config accounts add --scope global` writes to the global file.
-`fno config accounts use` defaults to `--scope project`.
+`fno config accounts use` defaults to `--scope project`. The `u` key in the mux Connections view always passes `--scope global`.
+
+### What the `u` key does to live workers
+
+Press `u` on a row in the Connections view, then press Enter. The prompt names the live workers on that harness. A claude process started outside the mux is not in that count, but the result line carries the real count.
+
+| Record | Shared slot | Live workers | New spawns |
+|---|---|---|---|
+| claude `managed` | Refreshes the target, saves the outgoing account, writes the slot, and verifies it. | They keep running, and the result line warns about them. What they bill next is unmeasured. | Run on the new account. |
+| codex `managed` | Writes only when no codex runs. | Any live codex defers the switch with exit 2, and the slot does not change. | Run on the new account. |
+| claude with a `config_dir` | None. `u` names the `s` key and runs nothing. | No change. | Only through `s` or `--account`. |
+| `api_key`, `oauth_dir` | None. Only the pointer moves. | No change. | No change. No spawn path reads the pointer, so name the account with `--account`. The credential rides the env overlay at launch. |
+
+The pointer is one value across all harnesses, so `u` on a codex row also moves it off a claude row. A project `active` key wins over the global pointer, and the result line warns when that hides the move. A stored login that is spent refuses the switch, and the result line sends you to `r`, which opens a login pane.
 
 ---
 
@@ -403,7 +416,7 @@ One lane fact, observed on Claude Code 2.1.266. The Keychain item is chosen by w
 
 ### Switching claude accounts is manual, by design
 
-Two claude accounts on one machine are two separate session stores, and that separation is the point. The operator signs in as the other account twice, and never runs `/logout` first. A logout can revoke the refresh token of the account you leave, and every stored copy of that account then stops working. A plain `claude /login` moves interactive sessions. `CLAUDE_CONFIG_DIR=$HOME/.claude claude /login` moves the background fleet. Blocked sessions recover on their next request, so no daemon bounce and no respawn is needed. The second login also makes the two items agree, which clears the ambiguous-slot finding. `fno config accounts use` is not the switch yet, because it writes a stored copy whose refresh token the live session has already spent.
+Two claude accounts on one machine are two separate session stores, and that separation is the point. The operator signs in as the other account twice, and never runs `/logout` first. A logout can revoke the refresh token of the account you leave, and every stored copy of that account then stops working. A plain `claude /login` moves interactive sessions. `CLAUDE_CONFIG_DIR=$HOME/.claude claude /login` moves the background fleet. Blocked sessions recover on their next request, so no daemon bounce and no respawn is needed. The second login also makes the two items agree, which clears the ambiguous-slot finding. `fno config accounts use` refreshes the stored copy first, and it refuses the switch when the live session has already spent that copy's refresh token.
 
 A second account can instead keep its own credential directory (`--config-dir ~/.claude-alt`). Its transcript folders are often symlinks back into canonical. Sharing transcripts never merges credential identity. The binding reads the Keychain item scoped to that directory, plus that directory's own `.credentials.json`. Neither source is a transcript.
 
