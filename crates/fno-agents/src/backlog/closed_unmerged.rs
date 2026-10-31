@@ -25,12 +25,19 @@ pub(crate) fn demote_closed_primary(node: &mut Value, number: i64) -> bool {
     };
     let url = obj.get("pr_url").cloned().unwrap_or(Value::Null);
     let mut additional = vec![json!({"number": number, "url": url, "merge_status": "closed"})];
-    additional.extend(
-        obj.get("additional_prs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-    );
+    // The scan read every ref closed. The stamp lets a replacement PR rebind.
+    for row in obj
+        .get("additional_prs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let mut row = row.clone();
+        if let Some(fields) = row.as_object_mut() {
+            fields.insert("merge_status".into(), json!("closed"));
+        }
+        additional.push(row);
+    }
     obj.insert("additional_prs".into(), Value::Array(additional));
     obj.insert("pr_number".into(), Value::Null);
     obj.insert("pr_url".into(), Value::Null);
@@ -148,6 +155,7 @@ mod tests {
         assert_eq!(node["additional_prs"][0]["url"], url);
         assert_eq!(node["additional_prs"][0]["merge_status"], "closed");
         assert_eq!(node["additional_prs"][1]["number"], 5);
+        assert_eq!(node["additional_prs"][1]["merge_status"], "closed");
         // The second sweep finds the move already made.
         assert!(!demote_closed_primary(&mut node, 7));
     }
