@@ -93,7 +93,7 @@ Three classes of silent failure are pinned by tests:
 
 ## Test surface
 
-Lifecycle coverage lives in `cli/tests/agents/`: `test_dispatch_lifecycle.py` (stop / rm / reconcile / attach across happy-path, error, and edge cases, with event-stream assertions), `test_cli_lifecycle.py` (Typer CliRunner tests for the four commands, `--force`, `--json`, exit-code propagation), `test_cli_yolo_e2e.py` (`--yolo` passthrough end-to-end), `test_codex_flock_parallel.py` (parallel codex asks serialize via the per-agent flock), and `test_codex_fatal_error_dispatch.py` (`CodexInvocationError` / `NoSessionIdError` → `DispatchAskError` with the right exit code; events.jsonl + registry-empty atomicity).
+Lifecycle coverage lives in `cli/tests/agents/`: `test_dispatch_lifecycle.py` (stop / rm / reconcile / attach across happy-path, error, and edge cases, with event-stream assertions), `test_cli_yolo_e2e.py` (`--yolo` passthrough end-to-end), `test_codex_flock_parallel.py` (parallel codex asks serialize via the per-agent flock), and `test_codex_fatal_error_dispatch.py` (`CodexInvocationError` / `NoSessionIdError` → `DispatchAskError` with the right exit code; events.jsonl + registry-empty atomicity).
 
 ## Not covered by these commands
 

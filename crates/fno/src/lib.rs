@@ -11,6 +11,8 @@
 #[cfg(feature = "full")]
 pub mod accounts_route;
 #[cfg(feature = "full")]
+pub mod agents_client_route;
+#[cfg(feature = "full")]
 pub mod agents_history;
 #[cfg(feature = "full")]
 pub mod agents_mcp_route;

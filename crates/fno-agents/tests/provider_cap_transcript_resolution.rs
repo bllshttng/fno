@@ -43,7 +43,6 @@ fn thread_row_resolves_its_transcript_where_peek_finds_it() {
         .envs(fno_agents::test_run::self_owner_env())
         .env("FNO_AGENTS_HOME", &home)
         .env("FNO_CLAUDE_PROJECTS_DIR", &projects)
-        .env("FNO_AGENTS_RUNTIME", "rust")
         .output()
         .expect("fno-agents status runs");
     assert!(

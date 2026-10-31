@@ -30,20 +30,16 @@ def _stop_row(stopped_at=None, state="working") -> dict:
 
 
 def _fresh_tail(monkeypatch, last_event_epoch: float) -> None:
-    from fno.agents.watchdog import TailFacts
-
     monkeypatch.setattr(
-        "fno.agents.watchdog.tail_facts",
-        lambda *_a, **_kw: TailFacts(
-            records=None,
-            last_event_epoch=last_event_epoch,
-            tail_text="progress update",
-            last_role="assistant",
-            last_text="progress update",
+        "fno.rust_binary.call_binary_json",
+        lambda *_a, **_kw: (
+            None,
+            {
+                "has_transcript": True,
+                "last_event_epoch": last_event_epoch,
+                "truth": "working",
+            },
         ),
-    )
-    monkeypatch.setattr(
-        "fno.agents.watchdog.harness_for_session", lambda *_a, **_kw: "claude"
     )
 
 

@@ -23,7 +23,7 @@
 //! blocks on request work.
 //!
 //! Reapability is a release condition (the 2026-09-01 seven-unreaped-keepers
-//! measurement): this lane declares itself the way keeper_lane.py discovers
+//! measurement): this lane declares itself the way watchdog/keeper.rs discovers
 //! keepers, through `--sock`/`--session` on its own argv plus the
 //! `--store-keeper` lane flag, and its socket lives beside the graph file it
 //! owns, so both the process-table walk and the socket-dir walk find it.

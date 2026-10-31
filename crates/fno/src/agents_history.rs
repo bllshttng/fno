@@ -20,21 +20,78 @@ use transcript::{find_many, TranscriptFacts};
 const LEDGER_SESSION_UNRESOLVED: &str = "unresolved:no-harness-session";
 
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
-    if args.len() < 3
-        || args[0].to_str()? != "agents"
-        || args[1].to_str()? != "history"
-        || !args[2..].iter().any(|arg| arg == "--graph")
-    {
+    if args.len() < 3 || args[0].to_str()? != "agents" || args[1].to_str()? != "history" {
         return None;
     }
     Some(args[2..].to_vec())
 }
 
+/// `owner/repo` from an origin URL; None when it is no GitHub-shaped remote.
+fn slug_from_remote(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    let tail = trimmed.rsplit_once("github.com").map(|(_, tail)| tail)?;
+    let slug = tail.trim_start_matches([':', '/']);
+    (slug.split('/').count() == 2).then(|| slug.to_string())
+}
+
+/// Each store the caller did not name, resolved as `fno.paths` does.
+fn with_default_stores(args: &[OsString]) -> Vec<OsString> {
+    let mut out = args.to_vec();
+    let settings = crate::config_doctor::Settings::load();
+    let agents_home = std::env::var_os("FNO_AGENTS_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".fno")
+                .join("agents")
+        });
+    for (flag, path) in [
+        ("--graph", crate::backlog_view::graph_path()),
+        ("--ledger", crate::config_doctor::ledger_json(&settings)),
+        (
+            "--events",
+            crate::config_doctor::state_dir(&settings).join("events.jsonl"),
+        ),
+        ("--agents-home", agents_home),
+    ] {
+        if !args.iter().any(|arg| arg == flag) {
+            out.push(OsString::from(flag));
+            out.push(path.into_os_string());
+        }
+    }
+    if !args.iter().any(|arg| arg == "--repo-slug") {
+        let origin = std::process::Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .ok()
+            .filter(|done| done.status.success());
+        let slug = origin.and_then(|done| slug_from_remote(&String::from_utf8_lossy(&done.stdout)));
+        if let Some(slug) = slug {
+            out.push(OsString::from("--repo-slug"));
+            out.push(OsString::from(slug));
+        }
+    }
+    out
+}
+
 /// Run the native reader and return its process exit code.
 pub fn run(args: &[OsString]) -> i32 {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("usage: fno agents history <session|node|pr> [-- store path flags]");
+        println!(
+            "Each matching session's whole story: node, stages, models, switch, events and resume."
+        );
+        return 0;
+    }
     let stdout = io::stdout();
     let stderr = io::stderr();
-    run_to(args, &mut stdout.lock(), &mut stderr.lock())
+    run_to(
+        &with_default_stores(args),
+        &mut stdout.lock(),
+        &mut stderr.lock(),
+    )
 }
 
 fn run_to(args: &[OsString], stdout: &mut impl Write, stderr: &mut impl Write) -> i32 {

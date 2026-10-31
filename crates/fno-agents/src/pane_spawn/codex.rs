@@ -766,7 +766,7 @@ fn seed_refusal(detail: &str, pane: &PaneFacts) -> PaneRefusal {
 /// every distinct codex session id open as a rollout in the child's tree.
 /// Exactly one distinct id binds; zero or two return None (a same-cwd
 /// sibling is never mis-identified).
-fn rollout_session_id_for_tree(child_pid: u32) -> Option<String> {
+pub(crate) fn rollout_session_id_for_tree(child_pid: u32) -> Option<String> {
     let table = crate::census::process_table().0;
     let mut pids = vec![child_pid];
     pids.extend(crate::census::descendants(&table, child_pid));

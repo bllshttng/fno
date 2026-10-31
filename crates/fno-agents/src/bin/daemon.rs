@@ -38,16 +38,8 @@ fn main() {
         libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
     }
 
-    // Shed a leaked anti-recursion pin before the runtime starts any other
-    // thread: env mutation is only sound while the process is still
-    // single-threaded, and both the tokio runtime below and the test-owner
-    // watchdog spawn threads that may read this same var concurrently.
-    if leaked_dispatch_pin(std::env::var_os("FNO_AGENTS_RUNTIME").as_deref()) {
-        std::env::remove_var("FNO_AGENTS_RUNTIME");
-    }
-
-    // Same single-threaded rule: fill the build-dir env before the runtime
-    // below spawns threads, so the heal lane's `fno doctor update` and every
+    // Env mutation is only sound while the process is single-threaded: fill
+    // the build-dir env before the runtime below spawns threads, so the heal lane's `fno doctor update` and every
     // other child inherits it even when the daemon's parent passed no value.
     // The server start is best-effort and detached; the watch tick re-ensures
     // it every 300s, so a boot-time failure costs nothing.
@@ -217,13 +209,6 @@ fn parse_home_arg(args: &[String]) -> Option<String> {
     None
 }
 
-/// `FNO_AGENTS_RUNTIME=python` is a per-child anti-recursion pin. A daemon
-/// lazy-started by a pinned child would keep it for life, and every arm child
-/// would then refuse the commands that have no Python leg (`rm` exits 127).
-fn leaked_dispatch_pin(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|v| v.to_string_lossy().trim().eq_ignore_ascii_case("python"))
-}
-
 /// The dir the daemon runs in for life. A worktree gets reaped under a live
 /// daemon; its canonical checkout does not. Outside a repo, or when the
 /// launch dir cannot be read, the agents home is the anchor.
@@ -252,17 +237,6 @@ fn absolutize_home(launch: Option<&std::path::Path>, home: &std::path::Path) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn leaked_dispatch_pin_matches_python_case_and_whitespace_insensitively() {
-        let some = |v: &str| Some(std::ffi::OsString::from(v));
-        assert!(leaked_dispatch_pin(some("python").as_deref()));
-        assert!(leaked_dispatch_pin(some(" Python ").as_deref()));
-        assert!(!leaked_dispatch_pin(some("rust").as_deref()));
-        assert!(!leaked_dispatch_pin(some("auto").as_deref()));
-        assert!(!leaked_dispatch_pin(some("").as_deref()));
-        assert!(!leaked_dispatch_pin(None));
-    }
 
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();

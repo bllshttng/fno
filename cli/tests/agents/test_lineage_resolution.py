@@ -110,57 +110,6 @@ class _CodexSuccessorRow(_Row):
     harness_session_id fallback beside claude's short_id exception)."""
 
 
-def test_resume_by_predecessor_full_uuid_keeps_that_exact_id() -> None:
-    from fno.agents.resume_cli import resume_logic
-
-    entry = _CodexSuccessorRow(
-        name="alpha",
-        harness="codex",
-        cwd="/path/to/workdir",
-        harness_session_id=B,
-        predecessor_session_ids=[A],
-    )
-    res = resume_logic(
-        name=A,  # the operator resumed the HISTORICAL session by full uuid
-        registry_loader=lambda: [entry],
-        path_checker=lambda _bin: True,
-        cwd_checker=lambda _c: True,
-        emit_event=lambda kind, **kw: None,
-        execvp=lambda *_a, **_k: None,
-    )
-    assert res.exit_code == 0
-    assert res.exec_argv[-4:] == ["resume", A, "--remote", "unix://"], (
-        "exact-id resume reopens A, not the row's current B"
-    )
-
-
-def test_claude_exact_predecessor_resume_refuses_and_names_the_row() -> None:
-    """This runtime cannot pin a claude resume's model or route, so an exact
-    predecessor id refuses with exit 13, launches nothing, and names the
-    spawn door instead of reopening the session on the account default."""
-    from fno.agents.resume_cli import resume_logic
-
-    entry = _Row(
-        name="alpha",
-        harness="claude",
-        cwd="/path/to/workdir",
-        short_id="08054b1d",
-        harness_session_id=B,
-        predecessor_session_ids=[A],
-    )
-    res = resume_logic(
-        name=A,
-        registry_loader=lambda: [entry],
-        path_checker=lambda _bin: True,
-        cwd_checker=lambda _c: True,
-        emit_event=lambda kind, **kw: None,
-        execvp=lambda *_a, **_k: None,
-    )
-    assert res.exit_code == 13
-    assert res.exec_argv is None, "a refusal launches nothing"
-    assert "fno agents resume alpha" in (res.stderr or "")
-
-
 # ---------------------------------------------------------------------------
 # AC7: the list row states both identity axes
 # ---------------------------------------------------------------------------

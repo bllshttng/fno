@@ -373,10 +373,6 @@ out="$(STUB_VERDICT="$DISP" STUB_CAPABILITIES_FAIL=1 \
   run --name thread-capabilities-fail --provider codex --message 'Implement x' --substrate thread)"
 ok 'capability read failure -> failed' "$(field "$out")" 'failed'
 no 'capability read failure did not spawn' "$(calllog)" 'agents spawn'
-out="$(FNO_AGENTS_RUNTIME=rust STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 \
-  run --name thread-rust-runtime --provider codex --message 'Implement x' --substrate thread)"
-ok 'rust runtime capability read -> launched' "$(field "$out")" 'launched'
-has 'rust runtime capability read spawned' "$(calllog)" 'agents spawn'
 
 # --- pane worker observability hint (PR #341 delta) --------------------------
 # A matched mux-pane receipt launches (main's verified-identity path), but a pane

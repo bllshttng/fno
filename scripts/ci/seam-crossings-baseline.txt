@@ -27,9 +27,7 @@ crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bi
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/daemon.rs	let mut child = match std::process::Command::new(crate::scrape::fno_bin())
-crossing	crates/fno-agents/src/daemon.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/daemon/fleet_arms.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
-crossing	crates/fno-agents/src/daemon/fleet_arms.rs	std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/daemon/fleet_arms.rs	std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/delivery_completion.rs	let fno_bin = crate::loopcheck::loopcheck_fno_bin();
 crossing	crates/fno-agents/src/distress.rs	std::ffi::OsStr::new(&loopcheck_fno_bin()),
@@ -47,7 +45,6 @@ crossing	crates/fno-agents/src/gc_native.rs	let mut child = std::process::Comman
 crossing	crates/fno-agents/src/lead_checkin.rs	let mut argv = vec![fno_bin()];
 crossing	crates/fno-agents/src/lead_checkin_prompt_parked.rs	let mut value = reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))?;
 crossing	crates/fno-agents/src/lead_wake_triggers.rs	let bin = crate::scrape::fno_bin();
-crossing	crates/fno-agents/src/list_render.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/loop_dispatch.rs	return Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/loop_target.rs	let fno_bin = crate::loopcheck::loopcheck_fno_bin();
 crossing	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() -> String {
@@ -81,6 +78,7 @@ crossing	crates/fno-agents/src/prove_it_verdicts.rs	let mut cmd = Command::new(c
 crossing	crates/fno-agents/src/provider.rs	let out = match std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/provider_cap_commands.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/provider_cap_commands.rs	let fno = crate::scrape::fno_bin();
+crossing	crates/fno-agents/src/recovery_sweep/live.rs	crate::scrape::fno_bin()
 crossing	crates/fno-agents/src/restart_run.rs	let mut kill = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/resume_wake.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/resume_wake.rs	std::process::Command::new(crate::scrape::fno_bin())
@@ -99,8 +97,13 @@ crossing	crates/fno-agents/src/skill_diff.rs	Command::new(crate::scrape::fno_bin
 crossing	crates/fno-agents/src/spawn_gate.rs	let _ = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
+crossing	crates/fno-agents/src/stale_lane.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/target_start.rs	let mut ensure_cmd = Command::new("fno");
 crossing	crates/fno-agents/src/team_alarm.rs	let fno = crate::scrape::fno_bin();
+crossing	crates/fno-agents/src/watchdog/apply.rs	let mut command = Command::new(crate::scrape::fno_bin());
+crossing	crates/fno-agents/src/watchdog/outage.rs	let mut command = std::process::Command::new(crate::scrape::fno_bin());
+crossing	crates/fno-agents/src/watchdog/sweep.rs	let mut command = std::process::Command::new(crate::scrape::fno_bin());
+crossing	crates/fno-agents/src/watchdog/sweep.rs	let mut command = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno/src/attention_api.rs	crate::server::fno_bin(),
 crossing	crates/fno/src/backlog_write.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
 crossing	crates/fno/src/client.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());

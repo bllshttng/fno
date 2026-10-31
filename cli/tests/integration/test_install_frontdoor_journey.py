@@ -281,7 +281,7 @@ def test_authorized_target_init_journey(clean_machine):
     # 5. The claim readback: the claims store answers for this exact key. When
     #    the run carries a provable harness session, the claim is still live;
     #    from a bare shell it correctly died with the init that made it.
-    claim = _run_fno(repo, home, "agents", "claim", "status", f"node:{node}")
+    claim = _run_fno(repo, home, "claim", "status", f"node:{node}")
     assert claim.returncode == 0, claim.stderr
     if _HARNESS_SESSION_ID:
         assert '"state": "live"' in claim.stdout, claim.stdout

@@ -670,7 +670,6 @@ def test_a_raising_refusal_classifier_never_breaks_the_liveness_read(tmp_path, m
     surface reads it. So the refusal classification is a reporting field that
     must fail to None rather than take the whole read down with it - the same
     rule `observed_model` states for itself."""
-    import fno.recovery as recovery
     from fno.agents.session_truth import resolve_session_truth
 
     cwd = "/Users/bb16/code/footnote/footnote"
@@ -681,7 +680,7 @@ def test_a_raising_refusal_classifier_never_breaks_the_liveness_read(tmp_path, m
     def boom(*_a, **_k):
         raise RuntimeError("taxonomy blew up")
 
-    monkeypatch.setattr(recovery, "classify_worker_refusal", boom)
+    monkeypatch.setattr("fno.adapters.providers.error_taxonomy.normalize", boom)
 
     result = resolve_session_truth(
         "w1", resolve=_resolver(session), projects_root=tmp_path

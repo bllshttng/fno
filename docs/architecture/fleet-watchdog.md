@@ -63,7 +63,7 @@ Reset stamps ride the provider error text in Singapore time, UTC+8. `02:48:21 SG
 
 ## The two traps
 
-These were measured by hand on 2026-08-15. Both are pinned by tests in `cli/tests/test_agents_watchdog.py`.
+These were measured by hand on 2026-08-15. Both are pinned by `crates/fno-agents/src/watchdog/tests.rs`.
 
 1. Node identity joins on recorded identity only, never a name regex. The worktree manifest comes first. The execution ledger is the fallback. Its rows are machine-written and map each claude session to its node. That covers a worker that ran in the canonical checkout and has no manifest of its own. Eight auto-named workers read as nobody-on-this-node under a name join and were nearly double-dispatched. The operator fleet's `t-` shorthand strips the node's dash, so no regex can find the slug boundary. Worker names are a convention, not a guarantee.
 2. A wake is confirmed by content in the recipient transcript, never by a state field. The scratch `wake.sh` printed `working -> working` for both a message that landed and one that did not. The watchdog calls `fno agents session resume`, which verifies the state move and holds a single-writer claim. It then separately requires the wake message to appear in the transcript after the pre-wake marker. This mirrors `confirm_content_after` in `crates/fno-agents/src/mail_inject.rs`.
@@ -158,7 +158,7 @@ Manual inspection remains `fno agents fleet watchdog --json`. The base command i
 
 A `--pane` or `--keeper` process of `fno-agents-worker` whose server died belongs to no shipped sweep. The orphan sweep declines it (`crates/fno-agents/src/orphans.rs` `OWN_DAEMONS`) because ppid 1 is a keeper's normal state. The registry-side sweep walks only the thread socket dir (`daemon.rs` `keeper_registry_sweep`). The pane sweep `KeeperAdopt` runs inside the mux server, which is exactly the thing that died. Measured 2026-09-01: seven live keepers at ppid 1, ages to 22.5h, every one a test fixture, zero socket directories, zero claiming rows. A socket walk reported a clean machine over seven live processes.
 
-The keeper lane discovers by PROCESS and joins through argv. Every keeper carries `--sock` and `--session` on its own command line. A `psutil` read yields pid, socket, session, cwd and age with no directory walk. The lane lives in `cli/src/fno/agents/keeper_lane.py`. It shares the orphan sweep's enumeration (`iter_processes` - one `psutil.process_iter` call site, or the sweeps drift) and adds a `--only keeper` filter to this command.
+The keeper lane discovers by PROCESS and joins through argv. Every keeper carries `--sock` and `--session` on its own command line. A process-table read yields pid, socket, session, cwd and age with no directory walk. The lane lives in `crates/fno-agents/src/watchdog/keeper.rs`. It adds a `--only keeper` filter to this command.
 
 A keeper reap verdict needs all three arms, each a positive reading:
 
@@ -172,7 +172,7 @@ Silence never reaps. A keeper that accepts the probe and stays quiet past the 75
 
 The kill rides `--apply-all`, never `--apply`. Killing a keeper destroys work, the line that flag's help text draws. The keeper calls `setsid`, so it is its own process-group leader. One group signal ends it and everything it hosts. The receipt counts keepers and hosted children separately. A broken lane (unreadable registry, failed enumeration) reaps nothing.
 
-The positive controls plant a real `fno-agents-worker` over a `bash while-read` child and assert the planted pid by number (`cli/tests/unit/test_keeper_lane.py`). One orphan is collected in dry run and under `--apply-all`. One live listener survives both. One registry-claimed keeper survives both. A count is not a marker - this machine has carried live orphans during development.
+The positive controls plant a real `fno-agents-worker` over a `bash while-read` child and assert the planted pid by number (`crates/fno-agents/tests/watchdog_keeper_parity.rs`). One orphan is collected in dry run and under `--apply-all`. One live listener survives both. One registry-claimed keeper survives both. A count is not a marker - this machine has carried live orphans during development.
 
 ## Enumeration honesty
 
@@ -190,7 +190,7 @@ The sweep enumerates from `claude agents --json --all` and joins registry identi
 
 ## What this does not replace
 
-`fno.recovery` keeps its own job: provider failover on swap-class deaths and close-surfacing for finished-but-lingering sessions. The watchdog adds the transcript-truth decisions recovery never had: wake on a passed 429 window and the ghost flag. `claude_agents_rows` (`--all`) is the one enumeration both read, so stopped rows are never invisible to either. Row retirement lives in the Rust daemon's sweep (`crates/fno-agents/src/gc.rs`, `gc_sweep.rs`), keyed by the reverse join through `node.sessions[]`.
+The recovery sweep (`crates/fno-agents/src/recovery_sweep.rs`) keeps its own job: provider failover on swap-class deaths and close-surfacing for finished-but-lingering sessions. The watchdog adds the transcript-truth decisions recovery never had: wake on a passed 429 window and the ghost flag. `claude_agents_rows` (`--all`) is the one enumeration both read, so stopped rows are never invisible to either. Row retirement lives in the Rust daemon's sweep (`crates/fno-agents/src/gc.rs`, `gc_sweep.rs`), keyed by the reverse join through `node.sessions[]`.
 
 A fleet-watching agent was proposed and refused. The proposal's load-bearing argument was that "a command answers when someone runs it". That fails here. This sweep already runs on a cadence: `config.recovery.watchdog` rides the pr_watch tick, so nobody has to remember to run it. Its findings already push: mail digest, events, reconciled operator questions. A second watcher restates the decision table and both its traps in a new component. That is the duplication the port law exists to refuse. The two lanes added for that proposal are the shape any future friction detector takes: `contended` and `polling_settled`, with their one reconciled question. Extend the table. Never propose a new watcher.
 

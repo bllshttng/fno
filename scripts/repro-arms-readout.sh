@@ -40,7 +40,6 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 FNO_AGENTS_HOME="$T/ah" \
-FNO_AGENTS_RUNTIME=rust \
 FNO_AGENTS_BIN="$BIN" \
 fno agents session status --json | python3 -c '
 import json, sys

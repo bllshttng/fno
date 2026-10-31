@@ -327,6 +327,12 @@ fn main() {
         Ok(args) => args,
         Err(code) => std::process::exit(code),
     };
+    // Every other client command passes its own seam (agents_seam).
+    let command = args.first().cloned().unwrap_or_default();
+    let args = match fno_agents::agents_seam::prepare(&command, args) {
+        Ok(args) => args,
+        Err(code) => std::process::exit(code),
+    };
     let code = rt.block_on(run(args));
     std::process::exit(code);
 }
@@ -1809,10 +1815,8 @@ async fn run(args: Vec<String>) -> i32 {
                     discover_flag,
                 ) {
                     // ask FOLLOW-UP prints the reply verbatim with no added
-                    // newline, matching Python `sys.stdout.write(result.reply or "")`
-                    // (Codex P2 on PR #361 - relevant under FNO_AGENTS_RUNTIME=rust,
-                    // the only path that routes ask to this client). Every other
-                    // formatted output (ask create short_id, stop/rm/list/reconcile)
+                    // newline, matching Python `sys.stdout.write(result.reply or "")`.
+                    // Every other formatted output (ask create short_id, stop/rm/list/reconcile)
                     // keeps the trailing newline.
                     let ask_followup = command_owned == "ask"
                         && !result
@@ -4171,7 +4175,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "reconcile" => "agent.reconcile",
         other => {
             return Err(format!(
-                "unknown command: {other} (expected {})",
+                "unknown command: {other} (expected {}); see `fno agents --help`",
                 ALL_CLIENT_ACTIONS.join("|")
             ))
         }

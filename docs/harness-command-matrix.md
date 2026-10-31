@@ -4,7 +4,7 @@
 
 Before calling a newly declared lane supported, run `fno doctor harness <name> --live`. The probe reads eight behaviors on the real lane: SPAWN, IDENTITY, CLAIM, MAIL BOTH WAYS, VIEW, SURVIVE, ROW MATCHES, and MANIFEST PINNED. The capability table is input only to ROW MATCHES. It is evidence for no other line. Without `--live`, the probe prints all eight markers and its no-spawn argv.
 
-Two runtimes serve the surface. The **Rust client** (`fno-agents`, the shipped default) intercepts most commands; **Python** owns a handful (`whoami`, `top`, `peek`, `watch`, plus internal helpers) and is the fallback when no binary is installed (`FNO_AGENTS_RUNTIME=python`). Routing is automatic - you type `fno agents <command>` either way. Notably, **pane spawns are Python-owned by design**: the mux-hosted back half lives in the Python `cmd_spawn` path, and the router keeps every pane spawn there even when Rust mode is requested - so the default substrate works identically under both runtimes.
+The **Rust client** (`fno-agents`) serves the surface: you type `fno agents <command>` and the front execs the client.
 
 Messaging note: `send` / `inbox` / `ack` are not direct lifecycle actions. They live under the `fno agents mail` subgroup.
 

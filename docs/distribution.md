@@ -64,62 +64,14 @@ a Rust toolchain to build.** On Linux the CI sets
 
 ## Rust runtime for `fno agents` (default)
 
-The Rust daemon is the **default** runtime for the daemon-native commands and four of the five
-shared commands (which closed the flag +
-stdout parity gap for `list`/`stop`/`rm`/`reconcile`). By default `fno agents <command>` execs
-the installed `fno-agents` binary for every command the Rust client implements at parity, and
-uses the mature Python dispatch for `ask` and the Python-only commands. `FNO_AGENTS_RUNTIME`
-selects the runtime explicitly:
-
-| `FNO_AGENTS_RUNTIME` | Behavior |
-|---|---|
-| unset / anything else | **`auto`** (default): exec the installed binary for the daemon-native + the four cut-over shared commands; Python for `ask` and the Python-only commands |
-| `rust` | force the binary for every command, `ask` included (missing binary → exit 127) |
-| `python` | force the Python dispatch; never touch the binary |
+`fno agents <word>` execs the installed `fno-agents` binary. The route lives in `crates/fno/src/agents_client_route.rs`. No Python process starts, except that `agents claim` hands over to the claims CLI.
 
 ```bash
-fno agents spawn --name worker-A --harness codex             # Rust by default when installed
-fno agents session list --json                                 # Rust: render_json shape; table on a TTY
-fno agents session stop worker-A                               # Rust: prints "stopped: worker-A (<short_id>)"
-fno agents mail ask worker-A "hello" --harness codex        # Python (ask stays on Python — see below)
-FNO_AGENTS_RUNTIME=rust fno agents mail ask worker-A "..."  # force the binary for every command, ask included
+fno agents spawn --name worker-A --harness codex
+fno agents session list --json
+fno agents session stop worker-A
+fno agents mail ask worker-A "hello" --harness codex
 ```
-
-Why the default routes most commands, and is install-aware:
-
-- **Daemon-native + four shared commands auto-route; `ask` stays on Python.** The Rust client
-  implements `spawn`, `ask`, `list`, `status`, `stop`, `rm`, `reconcile`, `drive`, and the
-  `*-channel` commands. Four shared commands reached flag + stdout parity:
-  `stop` prints `stopped: <name> (<short_id>)`, `rm` prints `removed: <name>`, and
-  `list`/`reconcile` emit the `render_json` shape under `--json`/non-TTY (a functional
-  table on a TTY) and accept `--cwd/--harness/--status`. **`ask` is NOT auto-routed**: the
-  daemon only PTY-manages codex/gemini (`ClaudeProvider.as_pty()` is `None` — claude is a
-  `claude --bg` shellout), so routing a claude `ask` hits "worker not reachable" and the
-  no-signal detector spins to the timeout; and even for codex/gemini the daemon's reply is
-  the whole settled TUI screen, not Python's extracted model reply. The daemon's
-  create-on-first-contact `handle_ask` groundwork (auto-spawn via
-  `ProviderWithPty::create_argv`, readiness-poll reply) is in place for
-  `FNO_AGENTS_RUNTIME=rust` force-mode and a future reply-extraction follow-up, but `auto`
-  keeps `ask` on Python. Only `ask` and the Python-only commands (`logs`, `ping`,
-  `drive-authority`, `attach`, `resume`, `trace`) stay on Python. (One decided behavior,
-  not a gap: `list` reports the daemon's PTY-worker status and deliberately does not
-  replicate Python's per-row `claude agents --json` `live_status` augmentation. Under the
-  replace architecture the daemon is the sole backend, so PTY-worker/registry status is
-  the canonical liveness signal; `live_status` stays present-but-null for shape parity.) Forcing
-  `FNO_AGENTS_RUNTIME=python` pins everything to the Python dispatch. Tests parse
-  `client.rs` and introspect the Typer
-  commands so this split can't drift silently.
-- **Install-aware resolution.** `auto` resolves *installed* binaries only — bundled wheel
-  dir → launcher sibling → `PATH` — and deliberately ignores the cargo dev target. So a
-  development checkout (where only `crates/fno-agents/target/release/` exists) stays on
-  Python by default; opt the local build in with `FNO_AGENTS_RUNTIME=rust`. The forced
-  `rust` path uses the full resolution order (bundled → sibling → `PATH` → cargo dev) and
-  exits 127 with an actionable message when no binary is found.
-
-`fno agents --help` always stays on the Python group help so the wrapper stays
-discoverable; because the shared commands stay on Python, `fno agents <command> --help` renders
-the Python help for them. (Per-command help for the daemon-native commands is pending Rust-client
-support.)
 
 ## Release channels (the runbook)
 

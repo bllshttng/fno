@@ -3,7 +3,7 @@
 Every case spawns a REAL process tree - never a fabricated table - because
 the unit under test is a live-process reaper, and a fake table proves the
 fake. Each orphan's real ppid is passed as ``reaper`` so the census's
-orphan-only cwd read (keeper_lane.iter_processes reads cwd for
+orphan-only cwd read (_leak_census.iter_processes reads cwd for
 ``ppid in reaper_set(reaper)`` only) sees exactly the trees this test made,
 under any subreaper arrangement Linux provides.
 """

@@ -2,7 +2,7 @@
 
 ``fno whoami`` itself is native (the agent family's port deleted the Python
 render), but its hidden leaves still register here: ``ledger`` serves
-``fno.agents.history`` and ``cost`` forwards to the native session-cost
+the native ``agents history`` reader and ``cost`` forwards to the native session-cost
 leg. Each is the same one-line re-registration the deleted group mounted,
 so the retired roots (``fno cost`` -> ``whoami cost``) keep a registered
 destination and every spelling stays invocable one release out. The
@@ -51,6 +51,14 @@ whoami_app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(cost_command)
 
-from fno.agents.history import history_command  # noqa: E402
 
-whoami_app.command("ledger", hidden=True)(history_command)
+def ledger_command(arg: str) -> None:
+    """Print each matching session's whole story."""
+    import os
+
+    from fno.events.store_client import resolve_native_bin
+
+    os.execv(resolve_native_bin(), ["fno", "agents", "history", arg])
+
+
+whoami_app.command("ledger", hidden=True)(ledger_command)

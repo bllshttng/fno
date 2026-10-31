@@ -32,7 +32,7 @@ Seven of the original nine prohibited imports were misplaced leaf utilities, and
 | `fno.agents.events.emit` called by `fno backlog undefer` / `unsupersede` | `fno.graph.failure.emit_undefer_boundary` | the log is graph-owned and `fno.graph.failure` already reads it; the agents emitter was serving as a bare append-a-JSON-line helper |
 | `fno.agents.provider_resolve` | `fno.dispatch_flags` (since retired whole: the fold lives native behind route-slot's dispatch modes) | seven callers spanning every layer; the only remaining dependency was the harness-marker table, and see the caveat below |
 | `fno.agents.drive_authority` | `fno.drive_authority` | a read-only `state.json` reader whose only dependency is `fno.paths` |
-| `fno.agents.rust_runtime.resolve_binary` | `fno.rust_binary` | a stdlib-only filesystem lookup; `rust_runtime` keeps the dispatch half and depends downward on it |
+| the agents dispatch's `resolve_binary` | `fno.rust_binary` | a stdlib-only filesystem lookup |
 
 Applying this document's own test to the third row: `fno.dispatch_flags` was the one move that did not remove the dependency, only the direct spelling of it, and the module has since retired whole - the marker fold now rides the native dispatch modes of route-slot, whose identity twin lives beside `fno.harness_identity`.
 It imported `fno.harness_identity`, which built `LEGACY_HANDLE_RE` at import time from `fno.agents.harness_map.known_harnesses()`, so `import fno.dispatch_flags` pulled in `fno.agents`.

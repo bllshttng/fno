@@ -1,0 +1,160 @@
+{
+ "rows": {
+  "x-1": {
+   "id": "x-1",
+   "status": "in_progress"
+  },
+  "x-2": {
+   "id": "x-2",
+   "status": "done"
+  },
+  "x-3": {
+   "id": "x-3",
+   "status": "ready",
+   "pr_number": 12
+  },
+  "x-4": {
+   "id": "x-4",
+   "status": "ready",
+   "pr_url": "https://example.test/4"
+  },
+  "x-5": {
+   "id": "x-5",
+   "status": "done",
+   "archived_at": "2026-01-01"
+  },
+  "x-6": {
+   "id": "x-6",
+   "status": "ready",
+   "plan_path": "plans/a.md"
+  },
+  "x-7": {
+   "id": "x-7",
+   "status": "ready",
+   "plan_path": "  "
+  },
+  "x-abc": {
+   "id": "x-abc",
+   "status": "done"
+  }
+ },
+ "hex": {
+  "abc": "x-abc"
+ },
+ "cases": [
+  {
+   "label": "no name no manifest",
+   "name": null,
+   "cwd": "node-less",
+   "expect": null
+  },
+  {
+   "label": "manifest open node",
+   "name": "scratch",
+   "cwd": "manifest:graph_node_id: x-1\n",
+   "expect": false
+  },
+  {
+   "label": "manifest beats a name that does not parse",
+   "name": "tgt-x-1-liveness",
+   "cwd": "manifest:graph_node_id: x-1\n",
+   "expect": false
+  },
+  {
+   "label": "manifest absent, name target done",
+   "name": "t-x-2-slug",
+   "cwd": "node-less",
+   "expect": true
+  },
+  {
+   "label": "unknown node",
+   "name": "t-x-99-slug",
+   "cwd": "node-less",
+   "expect": null
+  },
+  {
+   "label": "pr number",
+   "name": "t-x-3-slug",
+   "cwd": "node-less",
+   "expect": true
+  },
+  {
+   "label": "pr url",
+   "name": "f-x-4-slug",
+   "cwd": "node-less",
+   "expect": true
+  },
+  {
+   "label": "archived reads unverifiable",
+   "name": "t-x-5-slug",
+   "cwd": "node-less",
+   "expect": null
+  },
+  {
+   "label": "think plan linked",
+   "name": "th-x-6-slug",
+   "cwd": "node-less",
+   "expect": true
+  },
+  {
+   "label": "think blank plan",
+   "name": "th-x-7-slug",
+   "cwd": "node-less",
+   "expect": false
+  },
+  {
+   "label": "think name ignores a foreign manifest",
+   "name": "th-x-6-slug",
+   "cwd": "manifest:graph_node_id: x-1\n",
+   "expect": true
+  },
+  {
+   "label": "legacy think birth",
+   "name": "think-x-6-birth",
+   "cwd": "node-less",
+   "expect": true
+  },
+  {
+   "label": "legacy think retro",
+   "name": "think-x-2-retro",
+   "cwd": "node-less",
+   "expect": null
+  },
+  {
+   "label": "canonical think work-start",
+   "name": "th-x-6-work-start-1",
+   "cwd": "node-less",
+   "expect": null
+  },
+  {
+   "label": "canonical think conversational exact",
+   "name": "bp-x-6-conversational",
+   "cwd": "node-less",
+   "expect": null
+  },
+  {
+   "label": "review command is a think kind",
+   "name": "r-x-6-slug",
+   "cwd": "node-less",
+   "expect": true
+  },
+  {
+   "label": "other command has no mission",
+   "name": "ask-x-2-slug",
+   "cwd": "node-less",
+   "expect": null
+  },
+  {
+   "label": "bare hex enriches through the graph",
+   "name": "t-abc-slug",
+   "cwd": "node-less",
+   "expect": true
+  },
+  {
+   "label": "bare hex unknown stays bare",
+   "name": "t-def-slug",
+   "cwd": "node-less",
+   "expect": null
+  }
+ ]
+}

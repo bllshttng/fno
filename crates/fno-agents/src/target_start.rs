@@ -16,7 +16,7 @@
 //! successor re-acquire path.
 //!
 //! Known port degradations, each fail-closed (documented for the review):
-//! - `_classify_worktree_occupancy`'s transcript leg (`fno.agents.watchdog`
+//! - `_classify_worktree_occupancy`'s transcript leg (`crate::watchdog`
 //!   tail facts) has no native twin, so a linked worktree whose dirt is
 //!   stale-but-unreapable answers `unknown` and refuses takeover instead of
 //!   reading transcript engagement.
