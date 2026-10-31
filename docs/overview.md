@@ -6,7 +6,7 @@ You use Claude Code or another agent harness and heard of fno. This page says wh
 
 ## The problem
 
-One agent can already get a PR to green. Running several is harder. The next agent does not know what you decided yesterday, the work is spread across sessions, and each harness keeps its own view. fno runs your coding agents as one team: one backlog, any harness, and decisions you make once.
+One agent can already get a PR to green. Running several is harder. The next agent does not know what you decided yesterday, and the work is spread across sessions. fno runs your coding agents as one team: one backlog, any harness, and decisions you make once.
 
 ## What it does
 

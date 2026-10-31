@@ -12,7 +12,7 @@ AI coding assistants today are copilots. They suggest code, answer questions, an
 6. Address review feedback
 7. Actually merge and ship
 
-For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool - they need to run their coding agents as one team, from one backlog, while they focus on product decisions.
+For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool. They need to run their coding agents as one team, from one backlog. Then they can focus on product decisions.
 
 ### The Core Problem
 
