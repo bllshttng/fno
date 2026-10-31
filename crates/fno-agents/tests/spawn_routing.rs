@@ -1078,9 +1078,7 @@ fn client_spawn_substrate_off_vocabulary_names_lanes() {
     let home_dir = tmpdir("cli-spawn-bg-agy-home");
     let bin = find_client_bin();
     if !bin.exists() {
-        eprintln!(
-            "skipping client_spawn_substrate_off_vocabulary_names_lanes: binary not found"
-        );
+        eprintln!("skipping client_spawn_substrate_off_vocabulary_names_lanes: binary not found");
         return;
     }
 
