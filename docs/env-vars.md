@@ -122,7 +122,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_GH_PROXY_DEPTH` | rs | unclear: crates/fno-agents/src/pr_status/proxy.rs:146 |
 | `FNO_GH_PROXY_DIR` | rs | Names the directory holding the `gh` proxy shim. The Python front sets it for its subprocesses (prepend the shim to PATH), and the Rust transport consult reads it to stand down when a spawned `gh` resolves into it (unknown always means charge). |
 | `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:48 |
-| `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. Every footnote launch names it: the headless, thread and both pane lanes set it to the store the porcelain readers serve (`backlog::settings`, anchored at the child's cwd), where a declared `FNO_STATE_DIR`/`FNO_CONFIG` sandbox beats an inherited value. |
+| `FNO_GRAPH_JSON` | py+rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. Every footnote launch names it: the headless, thread and both pane lanes set it to the launch resolution (a declared `FNO_STATE_DIR`/`FNO_CONFIG` sandbox anchored at the child's cwd wins, an inherited value survives when no sandbox is declared, and the porcelain answer is the fallback). |
 | `FNO_GUARD_TRACE` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:25 |
 | `FNO_HARNESS` | rs | The arming session's harness, the fallback a new lead manifest names when the holder row carries none. |
 | `FNO_HARNESS_NAME` | py+rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |
