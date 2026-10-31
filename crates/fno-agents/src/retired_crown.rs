@@ -125,8 +125,11 @@ pub(crate) fn unretired(rows: &[RegistryEntry], home: &AgentsHome) -> Vec<Regist
 /// and its row is terminal or gone. A vacated session that still runs keeps its
 /// ordinary wakes, because the marker retires the crown and not the session.
 pub(crate) fn refuses_wake(session: &str) -> bool {
-    let home = AgentsHome::from_env();
-    let Some(path) = marker_path(&home, session) else {
+    refuses_wake_in(&AgentsHome::from_env(), session)
+}
+
+fn refuses_wake_in(home: &AgentsHome, session: &str) -> bool {
+    let Some(path) = marker_path(home, session) else {
         return false;
     };
     if !path.is_file() {
@@ -169,6 +172,35 @@ mod tests {
         assert_eq!(named, vec!["fno: retired crown old (by stop)".to_string()]);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].name, "new");
+    }
+
+    #[test]
+    fn a_wake_is_refused_only_for_a_marked_session_with_no_live_row() {
+        let td = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(td.path());
+        crate::registry_store::seed_raw(
+            home.registry_json(),
+            json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": [
+                    {"name": "gone", "cwd": "/tmp", "created_at": "2026-10-01T00:00:00Z",
+                     "status": "exited", "harness": "claude", "harness_session_id": "s-gone"},
+                    {"name": "live", "cwd": "/tmp", "created_at": "2026-10-01T00:00:00Z",
+                     "status": "live", "harness": "claude", "harness_session_id": "s-live"},
+                ],
+            })
+            .to_string(),
+        );
+        assert!(!refuses_wake_in(&home, "s-gone"), "no marker, no refusal");
+        write(&home, "s-gone", "fno", "stop");
+        write(&home, "s-live", "fno", "org-done");
+        write(&home, "s-no-row", "fno", "stop");
+        assert!(refuses_wake_in(&home, "s-gone"));
+        assert!(refuses_wake_in(&home, "s-no-row"));
+        assert!(
+            !refuses_wake_in(&home, "s-live"),
+            "a running session keeps its wakes"
+        );
     }
 
     #[test]

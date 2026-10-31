@@ -374,10 +374,17 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
             .is_none_or(|session| !retired.contains_key(session))
     });
     if teams.is_empty() {
+        let mut detail = "no live lead teams".to_string();
+        if let Ok(loaded) = crate::state::load_registry(&registry) {
+            for line in crate::retired_crown::split_rows(loaded.entries, &retired).1 {
+                detail.push_str("; ");
+                detail.push_str(&line);
+            }
+        }
         return Ok(Outcome {
             acted: 0,
             skip_reason: Some("no_teams".to_string()),
-            detail: "no live lead teams".to_string(),
+            detail: short(&detail),
         });
     }
     let beat_secs = crate::lead_verdict_inputs::checkin_interval_secs(config_cwd);
