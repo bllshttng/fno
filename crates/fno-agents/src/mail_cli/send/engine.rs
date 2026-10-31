@@ -1404,7 +1404,10 @@ pub(super) fn dispatch_send_locked(
     // A dead process keeps its transcript state, so the owner also needs the
     // verdict. The live attempt stays on: a `silent` row may still be alive.
     let owner_live = family1_live
-        && family1_probe.as_ref().and_then(|p| p.reachability.as_deref()) != Some("unreachable");
+        && family1_probe
+            .as_ref()
+            .and_then(|p| p.reachability.as_deref())
+            != Some("unreachable");
     let durable_owner = classify_durable_owner(false, owner_live, !owner_live);
     let family1_attemptable = family1_live
         || family1_state == "unknown"
