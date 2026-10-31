@@ -95,8 +95,9 @@ fn decide(payload: &Value) -> (Value, Option<String>) {
         );
     }
 
-    let mut cmd = crate::org_board::budget::fno_py_cmd();
+    let mut cmd = vec![crate::scrape::fno_bin().to_string_lossy().into_owned()];
     cmd.extend([
+        "agents".to_string(),
         "workspace".to_string(),
         "worktree".to_string(),
         "ensure".to_string(),
@@ -257,8 +258,8 @@ mod tests {
 
     fn decide_with(repo_exit: i32, non_git: bool, ensure_stdout: &str) -> (Value, Option<String>) {
         // Drives `decide` under the crate's env lock (set_var races across
-        // parallel tests) over a temp git repo with a fake `fno-py` honored
-        // through FNO_PY (the fno_py_cmd resolution).
+        // parallel tests) over a temp git repo with a fake `fno` honored
+        // through FNO_BIN (the fno_bin resolution).
         let _env = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -270,10 +271,10 @@ mod tests {
             .unwrap();
         let bin = crate::write_exec_stub(
             dir.path(),
-            "fno-py",
+            "fno",
             &format!("#!/bin/sh\ncat >/dev/null\necho '{ensure_stdout}'\necho 'worktree ensure: reusing ... created=false' >&2\nexit {}\n", repo_exit),
         );
-        std::env::set_var("FNO_PY", &bin);
+        std::env::set_var("FNO_BIN", &bin);
         let plain = tempfile::tempdir().unwrap();
         let cwd = if non_git {
             plain.path().to_path_buf()
@@ -362,8 +363,8 @@ mod tests {
             "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\necho /wt/branch-target\n",
             args.display()
         );
-        let bin = crate::write_exec_stub(dir.path(), "fno-py", &script);
-        std::env::set_var("FNO_PY", &bin);
+        let bin = crate::write_exec_stub(dir.path(), "fno", &script);
+        std::env::set_var("FNO_BIN", &bin);
         let payload = json!({
             "recorded_cwd": dir.path().to_string_lossy(),
             "node": "x-eeee",
@@ -374,6 +375,9 @@ mod tests {
         assert_eq!(answer, json!({ "workdir": "/wt/branch-target" }));
         let recorded = std::fs::read_to_string(&args).unwrap();
         let recorded: Vec<String> = recorded.lines().map(str::to_string).collect();
+        // The Rust front owns this door: the Python CLI has no `agents` or
+        // `workspace` group, so any other head exits 2 on every node seat.
+        assert_eq!(recorded[..4], ["agents", "workspace", "worktree", "ensure"]);
         let branch_pos = recorded
             .iter()
             .position(|a| a == "--branch")
