@@ -78,6 +78,12 @@ pub fn configured_staleness_days(config_dir: &std::path::Path) -> Option<i64> {
     (days > 0).then_some(days)
 }
 
+/// [`configured_staleness_days`] for this machine's graph store.
+pub fn store_staleness_days() -> Option<i64> {
+    let graph = crate::backlog::settings::graph_path();
+    configured_staleness_days(graph.parent()?)
+}
+
 // ---------------------------------------------------------------------------
 // Options + reply
 // ---------------------------------------------------------------------------
