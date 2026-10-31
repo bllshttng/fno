@@ -17,6 +17,18 @@ mod recovery;
 #[path = "event_store_recovery.rs"]
 mod copy_recovery;
 
+#[path = "event_gc.rs"]
+mod gc;
+
+#[path = "event_hermetic.rs"]
+mod hermetic;
+
+#[path = "event_gate.rs"]
+mod gate;
+
+#[path = "event_audit.rs"]
+mod audit;
+
 /// The commands the native surface serves. `find` joins natively only when the
 /// caller names stores explicitly (`--events`); a bare `find` keeps
 /// forwarding to Python, whose front door resolves the journals and calls
@@ -28,6 +40,10 @@ pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
     "import",
     "rows",
     "prune",
+    "gc",
+    "find",
+    "gate-escape",
+    "audit",
     "recover",
     "signals",
     "fanout",
@@ -45,12 +61,31 @@ pub fn classify_doctor_event(args: &[OsString]) -> Option<Vec<OsString>> {
     if a0 != "doctor" || a1 != "event" {
         return None;
     }
-    if NATIVE_EVENT_SUBCOMMANDS.contains(&a2) {
-        return Some(args[2..].to_vec());
+    if matches!(a2, "-J" | "--json") {
+        match args.get(3).and_then(|a| a.to_str()) {
+            Some("gc") => {
+                let mut rest = vec![OsString::from("gc-json")];
+                rest.extend_from_slice(&args[4..]);
+                return Some(rest);
+            }
+            Some("find") => {
+                let mut rest = vec![OsString::from("find")];
+                rest.extend_from_slice(&args[4..]);
+                rest.push(OsString::from("--json"));
+                return Some(rest);
+            }
+            Some("gate-escape") => {
+                let mut rest = vec![OsString::from("gate-json")];
+                rest.extend_from_slice(&args[4..]);
+                return Some(rest);
+            }
+            Some("audit") => {
+                return Some(args[3..].to_vec());
+            }
+            _ => {}
+        }
     }
-    // `find` is dual-homed: explicit stores run native, a bare find stays
-    // with the Python journal resolver.
-    if a2 == "find" && args[3..].iter().any(|a| a.to_str() == Some("--events")) {
+    if NATIVE_EVENT_SUBCOMMANDS.contains(&a2) {
         return Some(args[2..].to_vec());
     }
     None
@@ -66,6 +101,11 @@ pub fn run(args: &[OsString]) -> i32 {
         "import" => run_import(rest),
         "rows" => run_rows(rest),
         "prune" => run_prune(rest),
+        "gc" => gc::run(rest, false),
+        "gc-json" => gc::run(rest, true),
+        "gate-escape" => gate::run(rest, false),
+        "gate-json" => gate::run(rest, true),
+        "audit" => audit::run(rest),
         "find" => run_find(rest),
         "recover" if rest.first().and_then(|arg| arg.to_str()) == Some("--copy-store") => {
             copy_recovery::run(&rest[1..])
@@ -165,6 +205,17 @@ fn run_emit_envelope(args: &[OsString]) -> i32 {
         eprintln!("error: --events <events.jsonl> is required (it names the sibling store)");
         return 2;
     };
+    if let Err(error) = hermetic::check(&journal) {
+        eprintln!("error: {error}");
+        return 1;
+    }
+    if journal.is_dir() {
+        eprintln!(
+            "error: events path is a directory, not a journal: {}",
+            journal.display()
+        );
+        return 1;
+    }
     // The envelope arrives on stdin or from --file; exact bytes are stored
     // byte-for-byte, never re-serialized.
     let mut envelope = String::new();
@@ -924,9 +975,18 @@ fn run_find(args: &[OsString]) -> i32 {
                 }
             }
             "--field" => {
-                if let Some(v) = it.next() {
-                    if let Some((k, val)) = v.to_string_lossy().split_once('=') {
-                        fields.push((k.to_string(), val.to_string()));
+                let Some(v) = it.next() else {
+                    eprintln!("error: --field requires FIELD=VALUE");
+                    return 2;
+                };
+                let raw = v.to_string_lossy();
+                match raw.split_once('=') {
+                    Some((k, val)) if !k.is_empty() => {
+                        fields.push((k.to_string(), val.to_string()))
+                    }
+                    _ => {
+                        eprintln!("error: --field must use FIELD=VALUE: '{raw}'");
+                        return 2;
                     }
                 }
             }
@@ -978,8 +1038,13 @@ fn run_find(args: &[OsString]) -> i32 {
         }
     };
     if journals.is_empty() {
-        eprintln!("error: --events <events.jsonl> is required (repeatable)");
-        return 2;
+        journals = crate::config_cli::history::event_journals();
+        for journal in &journals {
+            if let Err(error) = hermetic::check(journal) {
+                eprintln!("error: could not resolve event journals: {error}");
+                return 3;
+            }
+        }
     }
     // Rotations and mirrors of one store collapse to their live journal
     // before the fold; each distinct live journal answers once.
@@ -1418,6 +1483,18 @@ mod tests {
     }
 
     #[test]
+    fn find_claims_default_journals_and_group_json() {
+        assert!(
+            classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_some()
+        );
+        assert!(
+            classify_doctor_event(&mk(&["doctor", "event", "-J", "find", "--kinds"])).is_some()
+        );
+        assert_eq!(run_find(&mk(&["--field", "missing-equals"])), 2);
+        assert_eq!(run_find(&mk(&["--field", "=empty-name"])), 2);
+    }
+
+    #[test]
     fn classify_admits_only_native_subcommands() {
         assert!(classify_doctor_event(&mk(&["doctor", "event", "recover", "--dry-run"])).is_some());
         assert!(classify_doctor_event(&mk(&[
@@ -1435,13 +1512,19 @@ mod tests {
         assert!(
             classify_doctor_event(&mk(&["doctor", "event", "emit", "-t", "blocked"])).is_none()
         );
-        assert!(classify_doctor_event(&mk(&["doctor", "event", "gc", "--dry-run"])).is_none());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "gc", "--dry-run"])).is_some());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "-J", "gc"])).is_some());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "gate-escape", "flake"])).is_some());
+        assert!(
+            classify_doctor_event(&mk(&["doctor", "event", "-J", "gate-escape", "flake"]))
+                .is_some()
+        );
         assert!(classify_doctor_event(&mk(&["doctor", "event"])).is_none());
         assert!(classify_doctor_event(&mk(&["doctor"])).is_none());
     }
 
     #[test]
-    fn find_routes_native_only_with_explicit_stores() {
+    fn find_routes_native_with_or_without_explicit_stores() {
         recovery_and_reader_contracts();
         // Explicit stores run natively.
         assert!(classify_doctor_event(&mk(&[
@@ -1453,11 +1536,10 @@ mod tests {
             "/tmp/x/events.jsonl"
         ]))
         .is_some());
-        // A bare find stays with the Python journal resolver.
         assert!(
-            classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_none()
+            classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_some()
         );
-        assert!(classify_doctor_event(&mk(&["doctor", "event", "find", "--kinds"])).is_none());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "find", "--kinds"])).is_some());
     }
 
     fn recovery_and_reader_contracts() {
