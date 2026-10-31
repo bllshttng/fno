@@ -400,15 +400,38 @@ fn a_declared_sandbox_beats_an_inherited_graph_env() {
 /// inherited FNO_GRAPH_JSON instead of resolving past it.
 #[test]
 fn the_launch_keeps_an_inherited_graph_env_without_a_sandbox() {
-    let probe = GraphProbe::hold(&[]);
-    let inherited = probe.root().join("kept").join("store.json");
-    let seen = probe.root().join("graph-env.txt");
-    std::env::set_var("FNO_GRAPH_JSON", &inherited);
-    let status = spawn(probe.root()).unwrap().wait().unwrap();
-    let got = std::fs::read_to_string(&seen).unwrap();
-    drop(probe);
-    std::env::remove_var("FNO_GRAPH_JSON");
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let inherited = tmp.path().join("kept").join("store.json");
+    let seen = tmp.path().join("graph-env.txt");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!(
+            "#!/bin/sh\nprintenv FNO_GRAPH_JSON > '{}'\n",
+            seen.display()
+        ),
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("FNO_GRAPH_JSON", inherited.to_str().unwrap()),
+    ]);
+    let saved_state_dir = std::env::var_os("FNO_STATE_DIR");
+    let saved_config = std::env::var_os("FNO_CONFIG");
+    std::env::remove_var("FNO_STATE_DIR");
+    std::env::remove_var("FNO_CONFIG");
+    let status = spawn(tmp.path()).unwrap().wait().unwrap();
+    restore_env(saved);
+    match saved_state_dir {
+        Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+        None => std::env::remove_var("FNO_STATE_DIR"),
+    }
+    match saved_config {
+        Some(v) => std::env::set_var("FNO_CONFIG", v),
+        None => std::env::remove_var("FNO_CONFIG"),
+    }
     assert!(status.success(), "the stub exited {status}");
+    let got = std::fs::read_to_string(&seen).unwrap();
     assert_eq!(got.trim(), inherited.to_string_lossy().as_ref());
 }
 
