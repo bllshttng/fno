@@ -49,6 +49,8 @@ pub mod build_drift;
 #[cfg(feature = "full")]
 pub mod chrome;
 #[cfg(feature = "full")]
+pub mod claude_fallback;
+#[cfg(feature = "full")]
 pub mod cli_args;
 #[cfg(feature = "full")]
 pub mod cli_hooks;
