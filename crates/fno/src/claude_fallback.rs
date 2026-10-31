@@ -339,8 +339,12 @@ mod tests {
         assert_eq!(count_in(projects, &args_for(base, 7)), 0);
         // A real worktree one level under the base counts.
         mk(&format!("{}-x-cccc", slug("/wt/fleet")), in_window);
-        // And so does a session whose cwd was deeper inside that worktree.
-        mk(&format!("{}-x-cccc-sub", slug("/wt/fleet")), in_window);
+        // And so does a distinct session whose cwd was deeper inside that
+        // worktree: dedupe is by session id, so the same id twice stays one.
+        mk(
+            &format!("{}-x-cccc-sub", slug("/wt/fleet")),
+            "22222222-1111-2222-3333-444444444444",
+        );
         assert_eq!(count_in(projects, &args_for(base, 7)), 2);
         // A trailing separator on the base still counts the same sessions.
         assert_eq!(count_in(projects, &args_for(Path::new("/wt/fleet/"), 7)), 2);
