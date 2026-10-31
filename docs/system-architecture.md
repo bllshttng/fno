@@ -1,6 +1,6 @@
 # System Architecture
 
-This document describes the internal architecture of the **footnote** Claude Code plugin. The plugin runs coding agents as one team: one backlog, any harness, and decisions you make once.
+This document describes the internal architecture of the **footnote** Claude Code plugin. The plugin runs coding agents as one team: one backlog they all work from, and a chat where they message each other and you. It works across harnesses and machines.
 
 ---
 

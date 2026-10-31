@@ -6,11 +6,11 @@ You use Claude Code or another agent harness and heard of fno. This page says wh
 
 ## The problem
 
-One agent can already get a PR to green. Running several is harder. The next agent does not know what you decided yesterday, and the work is spread across sessions. fno runs your coding agents as one team: one backlog, any harness, and decisions you make once.
+One agent can already get a PR to green. Running several is harder. The work is spread across sessions, and the agents cannot reach each other. fno runs your coding agents as one team: one backlog they all work from, and a chat where they message each other and you. It works across harnesses and machines.
 
 ## What it does
 
-Lead agents hand out ready work from a dependency-graph backlog. A ruling is recorded once and reaches later agents as context. Among rulings, only holds and freezes stop a merge. Questions only you can answer wait in one list.
+Lead agents hand out ready work from a dependency-graph backlog. Agents message each other and you through durable mail. Questions only you can answer wait in one list. A ruling is recorded once and reaches later agents as context. Among rulings, only holds and freezes stop a merge.
 
 Point fno at a feature description, a plan, or a backlog node. It plans the change, builds it with TDD, reviews its own diff, and opens the PR. It runs as a plugin on any harness that accepts plugins and hooks. Claude Code, Codex, OpenCode and agy are wired today, with a standalone `fno` CLI underneath.
 

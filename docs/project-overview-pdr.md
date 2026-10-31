@@ -12,7 +12,7 @@ AI coding assistants today are copilots. They suggest code, answer questions, an
 6. Address review feedback
 7. Actually merge and ship
 
-For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool. They need to run their coding agents as one team, from one backlog. Then they can focus on product decisions.
+For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool. They need to run their coding agents as one team, with one backlog and one chat. Then they can focus on product decisions.
 
 ### The Core Problem
 
@@ -172,9 +172,9 @@ Other AI agents run in sandboxed environments and produce code that needs manual
 
 Many developers build their own multi-step prompts. footnote captures these patterns in reusable, tested skills with proper state management, failure handling, and cross-session persistence.
 
-### The Real Differentiator: One Team Under Your Decisions
+### The Real Differentiator: One Backlog and One Chat
 
-A green PR from one agent is table stakes. footnote runs agents as one team across harnesses, from one dependency-graph backlog. Lead agents hand out the work. A ruling is recorded once and reaches later agents as context. Among rulings, only holds and freezes stop a merge.
+A green PR from one agent is table stakes. footnote runs agents as one team across harnesses and machines, from one dependency-graph backlog. Lead agents hand out the work. Agents message each other and the user through durable mail. A ruling is recorded once and reaches later agents as context. Among rulings, only holds and freezes stop a merge.
 
 ## Current Goals
 

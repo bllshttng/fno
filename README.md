@@ -1,8 +1,8 @@
 # fno
 
-**fno runs your coding agents as one team: one backlog, any harness, and decisions you make once.**
+**fno runs your coding agents as one team: one backlog they all work from, and a chat where they message each other and you.**
 
-Lead agents hand out ready work. A ruling is recorded once and reaches later agents as context. A hold stops the merge. Questions only you can answer wait in one list.
+It works across harnesses and machines. Lead agents hand out ready work. Messages are durable, so a message waits for an agent that is not running. Questions only you can answer wait in one list. A ruling reaches later agents as context, and a hold stops the merge.
 
 ```
 curl -fsSL fno.sh | sh
@@ -16,7 +16,8 @@ Then open a session in a git repo you can push to, and run `/fno:target "your fe
 
 Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
-- A dependency-graph backlog holds the work. Lead agents hand it out, and workers message each other.
+- A dependency-graph backlog holds the work, and lead agents hand it out.
+- Agents message each other and you through durable mail, across harnesses and machines.
 - Rulings go in a record with who made them. Later agents get them as context. Among rulings, only holds and freezes stop a merge.
 - fno runs as a plugin on any harness that accepts plugins and hooks. Claude Code, Codex, OpenCode, and agy are wired today, with a standalone CLI underneath.
 - Point it at a feature description or a backlog node. It plans, builds with TDD, reviews its own diff, and opens the PR.
