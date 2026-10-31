@@ -1221,6 +1221,27 @@ pub(crate) fn collect_open_binding_heals(
                         rebind: !refs.is_empty(),
                     });
                 }
+                // A closed PR reopened after the closed-PR leg moved it aside.
+                "bound" => {
+                    let Some(heal_nid) = &verdict.node_id else {
+                        continue;
+                    };
+                    let moved_aside = nodes.iter().any(|i| {
+                        entries[*i].get("id").and_then(Value::as_str) == Some(heal_nid.as_str())
+                            && entries[*i]
+                                .get("pr_number")
+                                .and_then(Value::as_i64)
+                                .is_none()
+                    });
+                    if moved_aside {
+                        heals.push(OpenBindingHeal {
+                            node_id: heal_nid.clone(),
+                            pr_number: verdict.number,
+                            pr_url: verdict.pr_url().map(str::to_string),
+                            rebind: true,
+                        });
+                    }
+                }
                 _ => {}
             }
         }
