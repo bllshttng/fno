@@ -111,11 +111,14 @@ fn main_ci_token_from_pages<'a>(
         on_main.iter().filter(|run| at_head(run) && is_push(run)),
     );
     // A later same-sha completed run of an ALREADY-seeded workflow supersedes
-    // an earlier push run's conclusion, from any trigger: a
+    // an earlier push run's CANCELLED conclusion, from any trigger: a
     // concurrency group shared across triggers can cancel the push run in
     // favor of, say, a schedule run of the identical workflow and sha, and
     // the cancelled run must not outlive a newer completion of that same
-    // workflow. Only `newest_completed` moves here, never the `newest`
+    // workflow. Only a cancel is superseded: a schedule or dispatch run also
+    // runs the trigger-gated jobs push skips, so its verdict is about a
+    // different job set and never replaces a push run that reached its own.
+    // Only `newest_completed` moves here, never the `newest`
     // pointer the in-flight check below reads - so an in-flight nightly of a
     // workflow that already finished its push run never holds the verdict
     // pending, and a workflow with no push row at the head (a pure-schedule
@@ -142,7 +145,19 @@ fn main_ci_token_from_pages<'a>(
             Some(c) => created > c.get("created_at").and_then(Value::as_str).unwrap_or(""),
             None => true,
         };
-        if is_newer {
+        // A non-push completion answers only a CANCELLED push run: the
+        // concurrency hand-off this pass exists for. A schedule or dispatch
+        // run of an already-seeded workflow at the same sha also runs the
+        // trigger-gated jobs push skips (cli-ci's slow-e2e), so its red must
+        // never overwrite the push run's own green - a schedule-only job
+        // failing would hold every merge while head push CI is green - and
+        // its green must never clear the push run's red. With no completed
+        // push run yet, the workflow stays pending until the push run itself
+        // lands a verdict.
+        let incumbent_cancelled = newest_completed
+            .as_ref()
+            .is_some_and(|c| crate::pr_push::rest_bucket(c) == "cancel");
+        if is_newer && incumbent_cancelled {
             *newest_completed = Some(run);
         }
     }
@@ -802,6 +817,129 @@ mod tests {
         assert_eq!(
             token_at("head", &at_sha, &on_main),
             serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
+        );
+    }
+
+    /// The filed slow-e2e bug: cli-ci's push run at the head was
+    /// green, then its schedule run at the same sha went red on a job the
+    /// push event skips (`slow-e2e` runs only on schedule or dispatch). The
+    /// schedule completion superseded the green and main read red, holding
+    /// every merge while head push CI was green. A non-push completion
+    /// replaces only a cancelled push run, so the verdict stays green here.
+    #[test]
+    fn a_schedule_failure_of_a_seeded_workflow_never_overwrites_a_push_green() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "success",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-31T09:21:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
+        );
+    }
+
+    /// The same guard, other direction: a schedule pass must not clear a
+    /// genuinely red push run either - the schedule run's job set differs
+    /// from the push run's, so neither can answer for the other.
+    #[test]
+    fn a_schedule_pass_never_clears_a_push_red() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "failure",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T09:21:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
+        );
+    }
+
+    /// The motivating hand-off still works: the push run was cancelled by
+    /// the concurrency group and the schedule run of the same workflow and
+    /// sha completed green, so the cancel must not outlive the completion.
+    #[test]
+    fn a_cancelled_push_run_still_yields_to_a_newer_schedule_pass() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T09:21:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
         );
     }
 
