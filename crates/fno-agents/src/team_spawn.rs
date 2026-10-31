@@ -273,7 +273,7 @@ fn record(payload: &Value, events: &Path) -> Vec<String> {
             vacated[1].as_str().unwrap_or(""),
             vacated[0]["harness_session_id"].as_str(),
         ) {
-            crate::retired_crown::write(
+            crate::retired_lead::write(
                 &AgentsHome::from_env(),
                 session,
                 payload["scope"].as_str().unwrap_or(""),

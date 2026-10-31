@@ -2026,10 +2026,10 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         return code;
     }
 
-    // Scheduler wakes refuse a retired crown before they get here, so this
+    // Scheduler wakes refuse a retired lead before they get here, so this
     // resume is a request to bring the session back.
     if !print_command {
-        crate::retired_crown::clear(home, session_id);
+        crate::retired_lead::clear(home, session_id);
     }
 
     // Parked Claude rows use harness state for live and dead arms. That

@@ -367,7 +367,10 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
     let registry = home.registry_json();
     let mut teams =
         crate::territory::live_teams(&registry).map_err(|e| format!("lead_wake: {}", e.0))?;
-    let retired = crate::retired_crown::read_all(home);
+    let rows = crate::state::load_registry(&registry)
+        .map(|loaded| loaded.entries)
+        .unwrap_or_default();
+    let retired = crate::retired_lead::wake_refusals(home, &rows);
     teams.retain(|team| {
         team.holder_session
             .as_deref()
@@ -375,11 +378,9 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
     });
     if teams.is_empty() {
         let mut detail = "no live lead teams".to_string();
-        if let Ok(loaded) = crate::state::load_registry(&registry) {
-            for line in crate::retired_crown::split_rows(loaded.entries, &retired).1 {
-                detail.push_str("; ");
-                detail.push_str(&line);
-            }
+        for line in crate::retired_lead::split_rows(rows, &retired).1 {
+            detail.push_str("; ");
+            detail.push_str(&line);
         }
         return Ok(Outcome {
             acted: 0,

@@ -121,13 +121,13 @@ pub(crate) fn retired_receipt_session_ids() -> Option<std::collections::HashSet<
 }
 
 /// The refusal for each session whose lead role was given up on purpose, by
-/// session id. `fno-agents` writes these markers (`retired_crown.rs`). A missing
+/// session id. `fno-agents` writes these markers (`retired_lead.rs`). A missing
 /// store is empty, and an unreadable marker is skipped: restore keeps the member.
-pub(crate) fn retired_crown_refusals() -> std::collections::HashMap<String, String> {
-    retired_crown_refusals_in(&agents_view::runtime_home().join("retired-crowns"))
+pub(crate) fn retired_lead_refusals() -> std::collections::HashMap<String, String> {
+    retired_lead_refusals_in(&agents_view::runtime_home().join("retired-leads"))
 }
 
-fn retired_crown_refusals_in(root: &std::path::Path) -> std::collections::HashMap<String, String> {
+fn retired_lead_refusals_in(root: &std::path::Path) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     let Ok(entries) = std::fs::read_dir(root) else {
         return out;
@@ -147,7 +147,7 @@ fn retired_crown_refusals_in(root: &std::path::Path) -> std::collections::HashMa
             out.insert(
                 session.to_string(),
                 format!(
-                    "retired crown: {} gave up {}; fno agents resume brings it back",
+                    "retired lead: {} gave up {}; fno agents resume brings it back",
                     value["by"].as_str().unwrap_or("unknown"),
                     value["scope"].as_str().unwrap_or("its role"),
                 ),
@@ -158,7 +158,7 @@ fn retired_crown_refusals_in(root: &std::path::Path) -> std::collections::HashMa
 }
 
 #[cfg(test)]
-mod retired_crown_tests {
+mod retired_lead_tests {
     #[test]
     fn a_marker_refuses_its_session_and_names_who_and_what() {
         let dir = tempfile::tempdir().unwrap();
@@ -168,13 +168,13 @@ mod retired_crown_tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("bad.json"), "not json").unwrap();
-        let refusals = super::retired_crown_refusals_in(dir.path());
+        let refusals = super::retired_lead_refusals_in(dir.path());
         assert_eq!(refusals.len(), 1);
         assert_eq!(
             refusals["s-1"],
-            "retired crown: stop gave up fno; fno agents resume brings it back"
+            "retired lead: stop gave up fno; fno agents resume brings it back"
         );
-        assert!(super::retired_crown_refusals_in(&dir.path().join("absent")).is_empty());
+        assert!(super::retired_lead_refusals_in(&dir.path().join("absent")).is_empty());
     }
 }
 

@@ -636,11 +636,9 @@ pub fn run(home: &AgentsHome, config_cwd: &Path, config: &TriggerConfig) -> Trig
                     eprintln!("lead-wake-triggers: emit failed: {error}");
                 }
             };
-            // A retired crown never reaches the pass, whatever its row reads.
-            let (rows, retired) = crate::retired_crown::split_rows(
-                loaded.entries,
-                &crate::retired_crown::read_all(home),
-            );
+            // A retired lead never reaches the pass, whatever its row reads.
+            let refusals = crate::retired_lead::wake_refusals(home, &loaded.entries);
+            let (rows, retired) = crate::retired_lead::split_rows(loaded.entries, &refusals);
             let mut outcome = run_with(config, build_seams(home, config_cwd, rows, Box::new(emit)));
             for line in retired {
                 append_note(&mut outcome, &line);

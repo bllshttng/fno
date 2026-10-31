@@ -37,14 +37,14 @@ use super::*;
 
 pub(super) async fn handle_stop(ctx: &Ctx, req: &Request) -> Response {
     let mut response = stop_body(ctx, req).await;
-    retire_stopped_crown(ctx, req, &response).await;
+    retire_stopped_lead(ctx, req, &response).await;
     attach_stopped_claims_release(ctx, req, "stop", &mut response).await;
     response
 }
 
-/// A confirmed stop of a row that holds a role retires the crown, so no wake
+/// A confirmed stop of a row that holds a role retires the lead role, so no wake
 /// and no restore brings the lead back until someone asks for it.
-async fn retire_stopped_crown(ctx: &Ctx, req: &Request, response: &Response) {
+async fn retire_stopped_lead(ctx: &Ctx, req: &Request, response: &Response) {
     let stopped = response.result().is_some_and(|result| {
         !matches!(result.get("no_op"), Some(Value::Bool(true)))
             && (matches!(result.get("stopped"), Some(Value::Bool(true)))
@@ -66,7 +66,7 @@ async fn retire_stopped_crown(ctx: &Ctx, req: &Request, response: &Response) {
         row.role_scope.as_deref().filter(|s| !s.trim().is_empty()),
         row.harness_session_id.as_deref(),
     ) {
-        crate::retired_crown::write(&ctx.home, session, scope, "stop");
+        crate::retired_lead::write(&ctx.home, session, scope, "stop");
     }
 }
 

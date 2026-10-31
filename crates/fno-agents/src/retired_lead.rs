@@ -1,4 +1,4 @@
-//! The retired-crown marker: one file per session that gave up a lead role on
+//! The retired-lead marker: one file per session that gave up a lead role on
 //! purpose. A stop, `org done` and the old holder's side of a succession each
 //! write it. The lead wake, the team-revival sweep, scheduler wakes and
 //! workspace restore read it, because a stopped lead otherwise looks the same
@@ -14,7 +14,7 @@ use crate::paths::AgentsHome;
 use crate::state::RegistryEntry;
 
 /// The store's directory name under the agents home.
-pub(crate) const DIR: &str = "retired-crowns";
+pub(crate) const DIR: &str = "retired-leads";
 
 fn marker_path(home: &AgentsHome, session: &str) -> Option<PathBuf> {
     // The id becomes a file name, so a separator can never escape the store.
@@ -44,7 +44,7 @@ pub(crate) fn write(home: &AgentsHome, session: &str, scope: &str, by: &str) {
             std::fs::rename(&tmp, &path)
         });
     if let Err(error) = written {
-        eprintln!("retired crown: marker for {session} not written: {error}");
+        eprintln!("retired lead: marker for {session} not written: {error}");
     }
 }
 
@@ -53,13 +53,13 @@ pub(crate) fn clear(home: &AgentsHome, session: &str) {
     if let Some(path) = marker_path(home, session) {
         if let Err(error) = std::fs::remove_file(&path) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("retired crown: marker for {session} not cleared: {error}");
+                eprintln!("retired lead: marker for {session} not cleared: {error}");
             }
         }
     }
 }
 
-/// Every marker, by session id, with who retired the crown. A missing store is
+/// Every marker, by session id, with who retired the lead role. A missing store is
 /// empty. An unreadable marker is skipped, so a lead keeps its wakes.
 pub(crate) fn read_all(home: &AgentsHome) -> HashMap<String, String> {
     let mut out = HashMap::new();
@@ -85,14 +85,44 @@ pub(crate) fn read_all(home: &AgentsHome) -> HashMap<String, String> {
     out
 }
 
+/// Every session a lead wake must skip this pass, with who stopped it: the
+/// markers, plus each role-holding claude row whose job reads `stopped`. An idle lead
+/// reads `done`. A reboot also reads `stopped`, so this reading is never written
+/// as a marker: boot revival brings that lead back, and its next pass wakes it.
+pub(crate) fn wake_refusals(home: &AgentsHome, rows: &[RegistryEntry]) -> HashMap<String, String> {
+    let listing = crate::claude_roster::read_all_agents_union();
+    let state_of = |short_id: &str| listing.find(short_id).and_then(|row| row.state.clone());
+    let mut out = read_all(home);
+    out.extend(harness_stopped(rows, &state_of));
+    out
+}
+
+fn harness_stopped(
+    rows: &[RegistryEntry],
+    state_of: &dyn Fn(&str) -> Option<String>,
+) -> HashMap<String, String> {
+    rows.iter()
+        .filter(|row| {
+            row.harness_name() == "claude"
+                && row
+                    .role_scope
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty())
+                && state_of(&row.short_id).is_some_and(|s| s.eq_ignore_ascii_case("stopped"))
+        })
+        .filter_map(|row| row.harness_session_id.clone())
+        .map(|session| (session, "claude stop".to_string()))
+        .collect()
+}
+
 fn marked(row: &RegistryEntry, retired: &HashMap<String, String>) -> bool {
     row.harness_session_id
         .as_deref()
         .is_some_and(|sid| retired.contains_key(sid))
 }
 
-/// The rows a wake or revival may consider: every row but a marked crown,
-/// plus one named line per crown it left out.
+/// The rows a wake or revival may consider: every row but a marked lead,
+/// plus one named line per lead it left out.
 pub(crate) fn split_rows(
     rows: Vec<RegistryEntry>,
     retired: &HashMap<String, String>,
@@ -107,7 +137,7 @@ pub(crate) fn split_rows(
                 .as_deref()
                 .and_then(|sid| retired.get(sid))
                 .map_or("unknown", String::as_str);
-            named.push(format!("{scope}: retired crown {} (by {by})", row.name));
+            named.push(format!("{scope}: retired lead {} (by {by})", row.name));
         } else {
             kept.push(row);
         }
@@ -123,7 +153,7 @@ pub(crate) fn unretired(rows: &[RegistryEntry], home: &AgentsHome) -> Vec<Regist
 
 /// True when a scheduler wake must not reach this session: it carries a marker
 /// and its row is terminal or gone. A vacated session that still runs keeps its
-/// ordinary wakes, because the marker retires the crown and not the session.
+/// ordinary wakes, because the marker retires the lead role and not the session.
 pub(crate) fn refuses_wake(session: &str) -> bool {
     refuses_wake_in(&AgentsHome::from_env(), session)
 }
@@ -149,7 +179,7 @@ mod tests {
     use super::*;
     use crate::AgentStatus;
 
-    fn crowned(name: &str, session: &str, scope: Option<&str>) -> RegistryEntry {
+    fn held(name: &str, session: &str, scope: Option<&str>) -> RegistryEntry {
         RegistryEntry {
             name: name.to_string(),
             harness_session_id: Some(session.to_string()),
@@ -160,16 +190,16 @@ mod tests {
     }
 
     #[test]
-    fn a_marked_crown_is_left_out_by_name_and_a_successor_keeps_the_scope() {
+    fn a_marked_lead_is_left_out_by_name_and_a_successor_keeps_the_scope() {
         let retired = HashMap::from([("s-old".to_string(), "stop".to_string())]);
         let (kept, named) = split_rows(
             vec![
-                crowned("old", "s-old", Some("fno")),
-                crowned("new", "s-new", Some("fno")),
+                held("old", "s-old", Some("fno")),
+                held("new", "s-new", Some("fno")),
             ],
             &retired,
         );
-        assert_eq!(named, vec!["fno: retired crown old (by stop)".to_string()]);
+        assert_eq!(named, vec!["fno: retired lead old (by stop)".to_string()]);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].name, "new");
     }
@@ -204,9 +234,29 @@ mod tests {
     }
 
     #[test]
+    fn only_a_role_holding_claude_job_that_reads_stopped_is_skipped() {
+        let mut stopped = held("stopped", "s-1", Some("fno"));
+        stopped.short_id = "stop".into();
+        let mut idle = held("idle", "s-2", Some("fno-books"));
+        idle.short_id = "idle".into();
+        let mut unlisted = held("unlisted", "s-3", Some("fnh"));
+        unlisted.short_id = "none".into();
+        let mut worker = held("worker", "s-4", None);
+        worker.short_id = "stop".into();
+        let state_of = |short: &str| match short {
+            "stop" => Some("Stopped".to_string()),
+            "idle" => Some("done".to_string()),
+            _ => None,
+        };
+        let skipped = harness_stopped(&[stopped, idle, unlisted, worker], &state_of);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped["s-1"], "claude stop");
+    }
+
+    #[test]
     fn a_marker_on_a_row_with_no_role_names_nothing() {
         let retired = HashMap::from([("s-old".to_string(), "org-done".to_string())]);
-        let (kept, named) = split_rows(vec![crowned("old", "s-old", None)], &retired);
+        let (kept, named) = split_rows(vec![held("old", "s-old", None)], &retired);
         assert!(named.is_empty());
         assert_eq!(kept.len(), 1);
     }

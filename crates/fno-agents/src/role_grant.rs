@@ -449,7 +449,7 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
     })
     .map_err(|e| format!("the registry write failed: {e}"))??;
     if let Some(session) = resolved_target.harness_session_id.as_deref() {
-        crate::retired_crown::clear(home, session);
+        crate::retired_lead::clear(home, session);
     }
 
     // Clear the vacated manifest BEFORE arming missions: a role killed between
@@ -750,7 +750,7 @@ pub fn reclaim_role(home: &AgentsHome, handle: Option<&str>) -> Result<Value, St
     })
     .map_err(|e| format!("the registry write failed: {e}"))??;
     if let Some(session) = reclaimed_session.as_deref() {
-        crate::retired_crown::clear(home, session);
+        crate::retired_lead::clear(home, session);
     }
     remove_manifest(&scope, &holder.cwd, &holder_key);
     Ok(receipt)

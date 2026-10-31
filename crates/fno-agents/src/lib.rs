@@ -527,7 +527,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
-pub(crate) mod retired_crown;
+pub(crate) mod retired_lead;
 pub mod retro;
 pub mod review_capability;
 pub mod review_doors;

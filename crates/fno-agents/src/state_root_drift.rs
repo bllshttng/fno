@@ -190,7 +190,7 @@ mod tests {
 | `graph.db`, `graph.db-wal` | store | durable |
 | `config.toml`, `.lock` | loader | permanent |
 | `agents/reap-receipts/<harness>-<session>.json` | receipt writer | 7 days |
-| `agents/retired-crowns/<session>.json` | retired-crown marker | until resume or a new role grant |
+| `agents/retired-leads/<session>.json` | retired-lead marker | until resume or a new role grant |
 | `latches/.context-nudge-*` | hook | 2 days |
 | `backups/` | rotation | prunes itself |
 | `board.py` | operator | permanent |
