@@ -5858,8 +5858,7 @@ pub(crate) fn run_reconcile_sweep(
     );
     // The sweep budget starts HERE, after the truth batch and roster load:
     // charging them to the probe loop's 5s window is why 79 rows went
-    // unprobed every sweep. The probe loop and the roster-progress loop
-    // below share this one clock.
+    // unprobed every sweep.
     let start = Instant::now();
     // The reboot arm plans FIRST, before `prober` moves into plan_reconcile:
     // its changes append after the main plan's, so a revived row's Live is
