@@ -176,7 +176,30 @@ through the fno front door"
             return code;
         }
     }
+    if matches!(sub.as_str(), "status" | "wait" | "logs") {
+        let cwd = PathBuf::from(current_cwd_string());
+        let local = crate::pr_status::cache::git_slug(&cwd);
+        if let Some(refusal) = repo_refusal(sub, tail, local.as_deref()) {
+            eprintln!("{refusal}");
+            return 2;
+        }
+    }
     dispatch(sub, tail)
+}
+
+/// These reads resolve the repo from the cwd's origin and cannot read another
+/// one. A `--repo` naming a different repo would answer for the wrong PR, so
+/// it is refused instead of ignored.
+fn repo_refusal(sub: &str, tail: &[String], local: Option<&str>) -> Option<String> {
+    let repo = option_value(tail, "--repo")?;
+    if local.is_some_and(|slug| slug.eq_ignore_ascii_case(&repo)) {
+        return None;
+    }
+    let here = local.unwrap_or("no repo");
+    Some(format!(
+        "fno do pr {sub}: --repo {repo} does not match the repo of the current directory ({here}); \
+this read cannot target another repo. Run it from a checkout of {repo}, or use `fno do pr info --repo {repo}`."
+    ))
 }
 
 /// Current directory as a string (the op payloads' cwd field).
@@ -398,6 +421,30 @@ fn sync_canonical(tail: &[String]) -> i32 {
         eprintln!("{line}");
     }
     exit
+}
+
+#[cfg(test)]
+mod repo_refusal_tests {
+    use super::repo_refusal;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn a_repo_that_differs_from_the_cwd_repo_is_refused() {
+        let tail = argv(&["52", "--repo", "footnote-sh/fno-web"]);
+        let refusal = repo_refusal("status", &tail, Some("bllshttng/fno")).unwrap();
+        assert!(refusal.contains("footnote-sh/fno-web"));
+        assert!(refusal.contains("bllshttng/fno"));
+    }
+
+    #[test]
+    fn a_matching_or_absent_repo_passes() {
+        let same = argv(&["52", "--repo=BLLSHTTNG/fno"]);
+        assert!(repo_refusal("status", &same, Some("bllshttng/fno")).is_none());
+        assert!(repo_refusal("status", &argv(&["52"]), None).is_none());
+    }
 }
 
 #[cfg(test)]
