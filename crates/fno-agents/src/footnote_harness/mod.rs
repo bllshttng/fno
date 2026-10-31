@@ -50,7 +50,7 @@ pub(crate) fn launch_graph_env(cwd: &Path) -> PathBuf {
     if sandboxed {
         return crate::backlog::settings::graph_path_at(Some(cwd));
     }
-    if let Some(v) = std::env::var_os("FNO_GRAPH_JSON") {
+    if let Some(v) = std::env::var_os("FNO_GRAPH_JSON").filter(|v| !v.is_empty()) {
         return PathBuf::from(v);
     }
     match crate::backlog::settings::state_dir_configured(Some(cwd)) {
