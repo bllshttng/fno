@@ -42,27 +42,31 @@ if [[ "$1" == "agents" && "$2" == "claim" && "$3" == "acquire" ]]; then
   # A canned success fakes the lock: under the claim projection the graph row
   # answers from the store, so the success path must write a REAL claim. The
   # human flags (--ttl 2h, handover, harness) are front-surface, so delegate
-  # verbatim to this checkout's fno front - exactly what production runs.
+  # to this checkout's fno front - exactly what production runs. Production's
+  # `agents_client_route.rs` strips the leading `agents` word before handing
+  # `claim acquire ...` to the Python front (fno's own `claim` group is flat,
+  # not nested under `agents`), so the mock must drop it too ("${@:2}", not
+  # "$@") or the front sees an `agents` command it no longer has.
   # Only the refusal codes stay canned - those tests assert the refusal
   # wiring, not the store.
   if [[ "${MOCK_ABI_ACQUIRE_RC:-0}" == "0" ]]; then
     # The init script discards the front's stdout and sends stderr to
     # .claim-err; a silent rc=1 keeps its real refusal on stdout, so this
     # delegation records both streams for the failing assertion to print.
-    "${MOCK_ABI_FRONT:?no fno front}" "$@" > "$MOCK_ABI_LOG.front-out" 2> "$MOCK_ABI_LOG.front-err"
+    "${MOCK_ABI_FRONT:?no fno front}" "${@:2}" > "$MOCK_ABI_LOG.front-out" 2> "$MOCK_ABI_LOG.front-err"
     rc=$?
     echo "FRONT_RC:$rc" >> "$MOCK_ABI_LOG"
     # A silent front refusal is not decidable from its streams alone: record
     # WHICH binaries answered, the FNO env they saw, and run the native
-    # directly on the same argv so a front-side death separates from a
-    # native-side one.
+    # directly on the same argv (again without the routed-away `agents` word)
+    # so a front-side death separates from a native-side one.
     if [[ "$rc" != "0" ]]; then
       echo "FRONT_BIN: $MOCK_ABI_FRONT" >> "$MOCK_ABI_LOG"
       ls -la "$MOCK_ABI_FRONT" >> "$MOCK_ABI_LOG" 2>&1
       echo "NATIVE_BIN: $MOCK_ABI_NATIVE" >> "$MOCK_ABI_LOG"
       ls -la "$MOCK_ABI_NATIVE" >> "$MOCK_ABI_LOG" 2>&1
       env | grep -E "^(FNO_|HOME=|TARGET_|PYTHON)" | sort >> "$MOCK_ABI_LOG"
-      "${MOCK_ABI_NATIVE:?no native}" "$@" > "$MOCK_ABI_LOG.native-out" 2> "$MOCK_ABI_LOG.native-err"
+      "${MOCK_ABI_NATIVE:?no native}" "${@:2}" > "$MOCK_ABI_LOG.native-out" 2> "$MOCK_ABI_LOG.native-err"
       echo "NATIVE_RC:$?" >> "$MOCK_ABI_LOG"
     fi
     exit "$rc"
