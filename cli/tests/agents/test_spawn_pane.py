@@ -939,6 +939,38 @@ def test_mesh_env_wrapper_footnote_names_the_graph_store(tmp_path, monkeypatch):
     assert value.endswith("graph.json")
 
 
+def test_mesh_env_wrapper_footnote_anchors_a_relative_carrier_at_the_pane(
+    tmp_path, monkeypatch
+):
+    """A relative FNO_STATE_DIR anchors where the pane reads, not where the
+    spawner runs."""
+    from fno.agents import mux_spawn
+
+    pane = tmp_path / "pane"
+    pane.mkdir()
+    monkeypatch.setenv("FNO_STATE_DIR", "state")
+    monkeypatch.delenv("FNO_GRAPH_JSON", raising=False)
+    monkeypatch.chdir(tmp_path)
+    wrapped = mux_spawn._mesh_env_wrapper(
+        "w", "footnote", None, ["footnote"], cwd=str(pane)
+    )
+    pair = next(t for t in wrapped if t.startswith("FNO_GRAPH_JSON="))
+    assert pair.split("=", 1)[1].startswith(str(pane))
+
+
+def test_mesh_env_wrapper_footnote_keeps_the_inherited_graph_env(tmp_path, monkeypatch):
+    """With only the pin set (no declared sandbox), the pane keeps the
+    inherited FNO_GRAPH_JSON instead of resolving past it."""
+    from fno.agents import mux_spawn
+
+    monkeypatch.delenv("FNO_STATE_DIR", raising=False)
+    monkeypatch.delenv("FNO_CONFIG", raising=False)
+    monkeypatch.setenv("FNO_GRAPH_JSON", "/kept/store.json")
+    wrapped = mux_spawn._mesh_env_wrapper("w", "footnote", None, ["footnote"])
+    pair = next(t for t in wrapped if t.startswith("FNO_GRAPH_JSON="))
+    assert pair == "FNO_GRAPH_JSON=/kept/store.json"
+
+
 def test_mesh_env_wrapper_clears_inherited_provenance(monkeypatch):
     """A pane must not inherit its spawner's node.
 

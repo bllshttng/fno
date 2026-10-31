@@ -914,6 +914,18 @@ mod tests {
             "the named store's law, never the home one; unread: {:?}",
             set.unread
         );
+        // A migrated root: the db twin's spelling reads the same journal at
+        // the state root, never one inside db/.
+        let db = graph.parent().unwrap().join("db");
+        std::fs::create_dir_all(&db).unwrap();
+        std::fs::write(db.join("graph.db"), b"").unwrap();
+        let migrated = rule_set_in(&db.join("graph.db"), Path::new("/"))
+            .unwrap_or_else(|e| panic!("the migrated store reads: {e}"));
+        assert!(
+            migrated.rules.iter().any(|r| r.id == "law-d-feedface"),
+            "the migrated root's journal sits at the state root; unread: {:?}",
+            migrated.unread
+        );
         assert!(
             !set.rules.iter().any(|r| r.id == "law-d-deadbeef"),
             "the home law leaks into a named store's set"

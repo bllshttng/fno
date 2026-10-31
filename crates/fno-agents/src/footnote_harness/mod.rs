@@ -37,6 +37,28 @@ pub fn resolve_footnote_bin() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("footnote"))
 }
 
+/// The `FNO_GRAPH_JSON` a footnote launch names. A declared sandbox
+/// (`FNO_STATE_DIR` or `FNO_CONFIG`) wins and anchors at the child's cwd;
+/// an inherited value is kept when no sandbox is declared; a configured
+/// `state_dir` (settings candidates) still names the store; a custom
+/// agents home moves the fallback. The porcelain readers keep their own
+/// resolution.
+pub(crate) fn launch_graph_env(cwd: &Path) -> PathBuf {
+    let sandboxed = ["FNO_STATE_DIR", "FNO_CONFIG"]
+        .iter()
+        .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
+    if sandboxed {
+        return crate::backlog::settings::graph_path_at(Some(cwd));
+    }
+    if let Some(v) = std::env::var_os("FNO_GRAPH_JSON") {
+        return PathBuf::from(v);
+    }
+    match crate::backlog::settings::state_dir_configured(Some(cwd)) {
+        Some(d) => crate::state_layout::graph_anchor(&d),
+        None => crate::feed::graph_path(&AgentsHome::from_env()),
+    }
+}
+
 /// Budget caps and the claimed plan from the target manifest, when one exists.
 fn manifest_fields(
     manifest: Option<&Path>,
@@ -121,12 +143,8 @@ fn spawn(cwd: &Path) -> Result<Child, AskOutcome> {
         cmd.env_remove(name);
     }
     // fnh resolves its rules store from FNO_GRAPH_JSON; naming it here keeps
-    // the child off the $HOME/.fno fallback its own resolver would take, and
-    // a declared sandbox beats an inherited value.
-    cmd.env(
-        "FNO_GRAPH_JSON",
-        crate::backlog::settings::graph_path_at(Some(cwd)),
-    );
+    // the child off the $HOME/.fno fallback its own resolver would take.
+    cmd.env("FNO_GRAPH_JSON", launch_graph_env(cwd));
     // SAFETY: setpgid is async-signal-safe; it runs between fork and exec.
     unsafe {
         cmd.pre_exec(|| {

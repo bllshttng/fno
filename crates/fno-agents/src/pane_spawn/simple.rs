@@ -257,13 +257,13 @@ const FOOTNOTE_NO_MODEL: &str =
     "-H footnote needs a model: pass it after the fence, `-- -m <provider>/<model>`";
 
 /// fnh resolves its rules store from `FNO_GRAPH_JSON`; the footnote pane TUI
-/// carries the store the porcelain readers serve, anchored at the pane's cwd,
-/// so a sandboxed pane never falls back to the machine's `$HOME/.fno`.
+/// carries the launch resolution anchored at the pane's cwd, so a sandboxed
+/// pane never falls back to the machine's `$HOME/.fno`.
 fn footnote_graph_env(harness: &str, cwd: &std::path::Path) -> Vec<(String, String)> {
     match harness {
         "footnote" => vec![(
             "FNO_GRAPH_JSON".to_string(),
-            crate::backlog::settings::graph_path_at(Some(cwd))
+            crate::footnote_harness::launch_graph_env(cwd)
                 .to_string_lossy()
                 .into_owned(),
         )],

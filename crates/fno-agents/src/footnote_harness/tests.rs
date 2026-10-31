@@ -396,6 +396,22 @@ fn a_declared_sandbox_beats_an_inherited_graph_env() {
     );
 }
 
+/// With only the pin set (no declared sandbox), the launch keeps the
+/// inherited FNO_GRAPH_JSON instead of resolving past it.
+#[test]
+fn the_launch_keeps_an_inherited_graph_env_without_a_sandbox() {
+    let probe = GraphProbe::hold(&[]);
+    let inherited = probe.root().join("kept").join("store.json");
+    let seen = probe.root().join("graph-env.txt");
+    std::env::set_var("FNO_GRAPH_JSON", &inherited);
+    let status = spawn(probe.root()).unwrap().wait().unwrap();
+    let got = std::fs::read_to_string(&seen).unwrap();
+    drop(probe);
+    std::env::remove_var("FNO_GRAPH_JSON");
+    assert!(status.success(), "the stub exited {status}");
+    assert_eq!(got.trim(), inherited.to_string_lossy().as_ref());
+}
+
 fn set_env(vars: &[(&'static str, &str)]) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
     let saved = vars
         .iter()

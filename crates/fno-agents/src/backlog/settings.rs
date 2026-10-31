@@ -284,6 +284,18 @@ pub fn state_dir() -> Option<PathBuf> {
 /// The state directory walk anchored at an explicit cwd: the cwd a launch
 /// runs the child under, so a relative value anchors where the child reads.
 pub fn state_dir_at(cwd: Option<&std::path::Path>) -> Option<PathBuf> {
+    state_dir_configured(cwd).or_else(|| {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|h| h.join(".fno"))
+    })
+}
+
+/// The configured state root only: the env pins and the settings candidates,
+/// anchored at the cwd. `None` when nothing is configured, so a caller can
+/// fall back its own way (the `$HOME/.fno` default stays with
+/// [`state_dir_at`]).
+pub fn state_dir_configured(cwd: Option<&std::path::Path>) -> Option<PathBuf> {
     if let Some(v) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
         return Some(anchored(expand_home(&v.to_string_lossy()), cwd));
     }
@@ -297,9 +309,7 @@ pub fn state_dir_at(cwd: Option<&std::path::Path>) -> Option<PathBuf> {
             return Some(anchored(expand_home(sd), cwd));
         }
     }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|h| h.join(".fno"))
+    None
 }
 
 /// Anchor at `cwd` through the shared lexical walk; with no cwd (it cannot

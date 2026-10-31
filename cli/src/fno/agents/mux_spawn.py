@@ -1132,6 +1132,30 @@ def build_pane_argv(
     raise DispatchAskError(f"provider {provider!r} has no interactive pane form{hint}", exit_code=2)
 
 
+def _footnote_graph_json(cwd=None) -> str:
+    """The store a footnote pane reads. A declared sandbox (FNO_STATE_DIR or
+    FNO_CONFIG) wins, anchored at the pane cwd; an inherited FNO_GRAPH_JSON
+    is kept when no sandbox is declared; the porcelain answer is last. The
+    state-dir value anchors raw: template expansion stays with the Python
+    readers, which answer the same store."""
+    carrier = os.environ.get("FNO_STATE_DIR")
+    pin = os.environ.get("FNO_CONFIG")
+    inherited = os.environ.get("FNO_GRAPH_JSON")
+    if not carrier and not pin and inherited:
+        return inherited
+    base = Path(cwd) if cwd else Path.cwd()
+    if carrier:
+        raw = Path(os.path.expanduser(carrier))
+    else:
+        from fno.config import load_settings_for_repo
+
+        raw = Path(os.path.expanduser(str(load_settings_for_repo(base).state_dir)))
+    root = raw if raw.is_absolute() else base / raw
+    from fno.paths import place_anchor
+
+    return str(place_anchor(root.resolve()))
+
+
 def _mesh_env_pairs(
     name: str,
     harness: str,
@@ -1141,6 +1165,7 @@ def _mesh_env_pairs(
     route_env: Optional[dict[str, str]] = None,
     seed_provenance: Optional[dict[str, str]] = None,
     session_id: Optional[str] = None,
+    cwd=None,
 ) -> tuple[list[str], list[str]]:
     """The ``env(1)`` unset args and ``K=V`` pairs :func:`_mesh_env_wrapper`
     formats, split out so the codex pane splice renders the same pairs as
@@ -1217,11 +1242,10 @@ def _mesh_env_pairs(
         pairs.append(f"CLAUDE_CODE_STOP_HOOK_BLOCK_CAP={claude_stop_hook_block_cap()}")
     if harness == "footnote":
         # fnh resolves its rules store from FNO_GRAPH_JSON (env-vars.md): the
-        # pane TUI gets the store the porcelain readers serve, so a sandboxed
-        # pane never falls back to the machine's ~/.fno.
-        from fno.paths import graph_json
-
-        pairs.append(f"FNO_GRAPH_JSON={graph_json()}")
+        # pane TUI gets the store the porcelain readers serve, anchored at the
+        # pane cwd, so a sandboxed pane never falls back to the machine's
+        # ~/.fno.
+        pairs.append(f"FNO_GRAPH_JSON={_footnote_graph_json(cwd)}")
     # Per-spawn account overlay and any route compose through ONE
     # function, same as bg/headless: scrub inherited auth vars
     # (env -u), layer the account (profile + its own login), layer the route
@@ -1319,6 +1343,7 @@ def _mesh_env_wrapper(
     seed_provenance: Optional[dict[str, str]] = None,
     session_id: Optional[str] = None,
     precomputed: Optional[tuple[list[str], list[str]]] = None,
+    cwd=None,
 ) -> list[str]:
     """Format :func:`_mesh_env_pairs` as one ``env(1)`` prefix on ``argv``.
 
@@ -1327,6 +1352,7 @@ def _mesh_env_wrapper(
         precomputed = _mesh_env_pairs(
             name, harness, role,
             provenance, account_env, route_env, seed_provenance, session_id,
+            cwd=cwd,
         )
     unset, pairs = precomputed
     return ["env", *unset, *pairs, *argv]
@@ -3470,6 +3496,7 @@ def dispatch_spawn_pane(
     mesh_unset, mesh_pairs = _mesh_env_pairs(
         name, provider, launch_role,
         provenance, account_env, route_env, seed_prov, session_uuid,
+        cwd=cwd,
     )
     if provider == "cursor-agent":
         # cursor-agent's create-chat mints the full UUID. It is a distinct
