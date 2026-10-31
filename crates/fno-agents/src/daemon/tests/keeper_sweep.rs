@@ -50,7 +50,7 @@ pub(in crate::daemon) async fn load_registry_tolerating_wipe(
     let after = base_identity(&base);
     // The read itself re-grounds a wholly deleted base: open_write recreates
     // the parents and retire_registry imports an EMPTY roster from the
-    // missing file, publishing a legal-looking fence (x-55f3). A post-read
+    // missing file, publishing a legal-looking fence. A post-read
     // existence check always passes on that shape, so the base's identity
     // across the read is the wipe witness.
     if before != after {
@@ -470,8 +470,8 @@ async fn keeper_thread_stop_refuses_when_the_keeper_never_confirms() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_base_deleted_mid_test_skips_the_registry_leg_the_read_regrounded() {
-    // The 2026-10-31 CI shape (x-55f3): the fixture base vanished mid-test
-    // and the post-stop read re-grounded it — open_write recreated the
+    // The 2026-10-31 CI shape: the fixture base vanished mid-test
+    // and the post-stop read re-grounded it: open_write recreated the
     // parents and retire_registry imported an EMPTY roster from the missing
     // file, publishing a legal-looking fence. The guard must name the
     // re-grind instead of answering that empty roster to the row assert.
