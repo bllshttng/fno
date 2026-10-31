@@ -1073,7 +1073,7 @@ def _unharvested_deferred_carveouts(cwd: Optional[str]) -> list[dict]:
     """
     root = _carveout_ledger_root(cwd)
     try:
-        from fno.carveout.core import read_carveouts
+        from fno.rust_binary import read_carveouts
 
         return read_carveouts(root, kind="deferred")
     except Exception:
@@ -1097,9 +1097,9 @@ def _carveout_ledger_root(cwd: Optional[str]) -> Path:
         except Exception:
             pass
     try:
-        from fno.carveout.core import resolve_carveout_root
+        from fno.paths import resolve_canonical_repo_root
 
-        return resolve_carveout_root()
+        return resolve_canonical_repo_root()
     except Exception:
         return Path(cwd) if cwd else Path.cwd()
 

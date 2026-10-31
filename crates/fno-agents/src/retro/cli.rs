@@ -109,7 +109,7 @@ fn project_for(node_root: &Path) -> Option<String> {
     crate::backlog::create_cli::detect_project(node_root)
 }
 
-fn current_repo_slug(gh: &GhRunner) -> Option<String> {
+pub(crate) fn current_repo_slug(gh: &GhRunner) -> Option<String> {
     let args: Vec<String> = [
         "repo",
         "view",

@@ -517,6 +517,26 @@ def command_call(
             print(json.dumps({"payload": payload}), flush=True)
 
 
+def read_carveouts(
+    root: "Path | str",
+    *,
+    kind: Optional[str] = None,
+    session_ids: "Optional[list[str]]" = None,
+) -> "list[dict]":
+    """The carve-out ledger under ``root``, read by the native owner. Raises
+    ``CommandUnavailable`` on a failed read: a failure is never an empty list."""
+    answer = command_call(
+        ["backlog", "carveout", "_read"],
+        {"root": str(root), "kind": kind, "session_ids": session_ids},
+    )
+    return list(answer.get("carveouts") or [])
+
+
+def carveout_session_id() -> Optional[str]:
+    """The session a durable ask binds to, resolved by the native owner."""
+    return command_call(["backlog", "carveout", "_session"], {}).get("session_id")
+
+
 def chats_command(args: "list[str]", payload: dict) -> dict:
     return command_call(["chats", *args], payload, timeout=30)
 

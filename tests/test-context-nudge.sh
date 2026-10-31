@@ -80,7 +80,7 @@ BINDIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
 # The paths commands emit-shell, shell-stub, verify and handoff answer natively
 # (crates/fno-agents/src/paths_cli.rs behind crates/fno/src/paths_route.rs):
-# `agents mail` has no Python leg either, so it takes the same route.
+# `agents mail` and `backlog carveout` have no Python leg either, so they take the same route.
 # the shim routes exactly those to the built Rust front + worker, the way
 # production resolves them, while every other command keeps the worktree Python
 # front this suite pins. Without the routing, the retired Python legs die and
@@ -98,7 +98,7 @@ if [ ! -x "$FRONT_BIN" ] || [ ! -x "$WORKER_BIN" ]; then
   echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agents && cargo build --bins)" >&2
   exit 1
 fi
-printf '#!/usr/bin/env bash\nif { [ "$1" = agents ] && [ "$2" = mail ]; } || { [ "$1" = config ] && [ "$2" = paths ] && { [ "$3" = emit-shell ] || [ "$3" = shell-stub ] || [ "$3" = verify ] || [ "$3" = handoff ]; }; }; then\n  export FNO_AGENTS_WORKER="%s"\n  exec "%s" "$@"\nfi\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$WORKER_BIN" "$FRONT_BIN" "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
+printf '#!/usr/bin/env bash\nif { [ "$1" = agents ] && [ "$2" = mail ]; } || { [ "$1" = backlog ] && [ "$2" = carveout ]; } || { [ "$1" = config ] && [ "$2" = paths ] && { [ "$3" = emit-shell ] || [ "$3" = shell-stub ] || [ "$3" = verify ] || [ "$3" = handoff ]; }; }; then\n  export FNO_AGENTS_WORKER="%s"\n  exec "%s" "$@"\nfi\n. "%s"\nexport PYTHONPATH="%s"\nexec "%s" -m fno.cli "$@"\n' "$WORKER_BIN" "$FRONT_BIN" "$REPO_ROOT/tests/helpers/agents-flat-argv.sh" "$FNO_SRC" "$FNO_PYTHON" > "$BINDIR/fno"
 # fno-py is the console script name; provide it too in case anything resolves it.
 cp "$BINDIR/fno" "$BINDIR/fno-py"
 chmod +x "$BINDIR/fno" "$BINDIR/fno-py"
@@ -167,7 +167,7 @@ cd "$SBX"   # isolate: hook latches (.fno/), git root (carveouts), and events al
 # is inert now that write and read both resolve project_log().
 clear_carveouts() {
   PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
-    'from fno.carveout.core import CARVEOUTS_NAME; from fno.paths import project_log; p = project_log(CARVEOUTS_NAME); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("")'
+    'from fno.paths import project_log; p = project_log("carveouts.jsonl"); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("")'
 }
 
 # registry.json on disk at state_dir/agents/registry.json: {"schema_version":<current>,"agents":[...]}.

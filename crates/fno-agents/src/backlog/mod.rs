@@ -21,6 +21,7 @@ pub mod birth;
 pub mod calibration;
 pub mod calibration_cli;
 pub mod capture;
+pub mod carveout;
 pub mod cli;
 pub(crate) mod closures;
 pub mod collision;

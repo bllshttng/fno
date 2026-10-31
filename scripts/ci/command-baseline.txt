@@ -45,7 +45,6 @@ backlog get
 backlog next
 backlog queued
 bundle
-carveout
 claim
 claim release
 config

@@ -1795,7 +1795,7 @@ pub fn collect_needs_items(
     // so they are read directly here (IO layer) rather than folded from
     // `events_raw`, and never windowed by `since` (see the doc comments on
     // `carveout_age_item` / `stale_claim_item`). The ledger lives under the
-    // canonical checkout's `.fno/` (`resolve_carveout_root` on the write
+    // canonical checkout's `.fno/` (`ledger_root` in `backlog/carveout.rs` on the write
     // side); a worktree only sees it through a skip-if-missing symlink, so
     // read the canonical path directly and fall back to cwd outside a repo.
     let carveouts_path = crate::paths::canonical_repo_root(cwd)

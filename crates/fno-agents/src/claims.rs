@@ -1389,6 +1389,38 @@ fn vendor_identity_from(get: &impl Fn(&str) -> Option<String>) -> (Option<(Strin
     )
 }
 
+/// Every nonblank ambient session id a claim holder may be anchored on. An
+/// invalid or contradicting canonical identity proves nothing, so it yields
+/// none, apart from the id init stamps for the run itself.
+pub(crate) fn ambient_session_candidates() -> Vec<String> {
+    let get = |name: &str| std::env::var(name).ok();
+    let (_, _, disposition) = canonical_identity_from(&get);
+    let refused = !matches!(disposition, CanonicalDisposition::Absent)
+        && resolve_identity_from(&get) == (None, None);
+    let markers: &[&str] = if refused {
+        &["TARGET_SESSION_ID"]
+    } else {
+        &[
+            FNO_HARNESS_SESSION_ID,
+            "CODEX_THREAD_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "GEMINI_SESSION_ID",
+            "OPENCODE_SESSION_ID",
+            "CLAUDE_SESSION_ID",
+            "CLAUDECODE_SESSION_ID",
+            "HERMES_SESSION_ID",
+            "TARGET_SESSION_ID",
+        ]
+    };
+    markers
+        .iter()
+        .filter_map(|m| get(m))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
 fn resolve_identity_from(get: impl Fn(&str) -> Option<String>) -> (Option<String>, Option<String>) {
     let (canonical_session, canonical_harness, disposition) = canonical_identity_from(&get);
     let (vendor, vendor_ambiguous) = vendor_identity_from(&get);

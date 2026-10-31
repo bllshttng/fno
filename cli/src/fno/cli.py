@@ -99,11 +99,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Durable typed resume receipts (evidence, never write authority)",
         {"hidden": True},
     ),
-    "carveout": (
-        "fno.carveout:carveout_app",
-        "Capture left-out work (deferred decisions, out-of-scope bugs) for retro-triage.",
-        {"hidden": True},
-    ),
     "annotate": (
         "fno.annotate:annotate_app",
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
@@ -171,7 +166,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "annotate": {"list"},
     "approvals": set(),
     "backlog": {"advance", "done", "get", "next", "queued"},
-    "carveout": set(),
     "claim": {"release"},
     "config": {"accounts", "get", "set"},
     "do": set(),
