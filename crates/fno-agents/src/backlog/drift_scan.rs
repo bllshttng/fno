@@ -714,6 +714,7 @@ pub(crate) fn scan_merge_drift(
         let mut first_error: Option<String> = None;
         let mut first_error_kind: Option<String> = None;
         let mut first_remedy: Option<String> = None;
+        let mut closed_refs = 0usize;
 
         for (number, url) in &refs {
             // Prefer an explicit repo parsed from the PR URL so we never
@@ -762,6 +763,9 @@ pub(crate) fn scan_merge_drift(
                     continue;
                 }
                 Ok(state) => {
+                    if state.state == "CLOSED" {
+                        closed_refs += 1;
+                    }
                     let body = state.body.as_deref().unwrap_or_default();
                     if state.state == "MERGED" && closure_names(body, nid) {
                         merged = Some(state);
@@ -808,6 +812,28 @@ pub(crate) fn scan_merge_drift(
                 files_truncated: false,
                 error_kind: first_error_kind,
                 remedy: first_remedy,
+            });
+        } else if closed_refs == refs.len()
+            && node.get("status").and_then(Value::as_str) == Some("in_review")
+            && node.get("pr_number").and_then(Value::as_i64) == Some(refs[0].0)
+        {
+            // Every ref closed unmerged: nothing can land this node's work.
+            let (number, url) = &refs[0];
+            records.push(MergeDriftRecord {
+                node_id: nid.to_string(),
+                plan_path: str_field(node.get("plan_path")),
+                pr_number: *number,
+                pr_url: url.clone(),
+                pr_state: "CLOSED".into(),
+                merged_at: None,
+                error: None,
+                session_id: str_field(node.get("session_id")),
+                cwd,
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                error_kind: None,
+                remedy: None,
             });
         }
     }
@@ -916,6 +942,42 @@ mod tests {
             panic!("an open listing row means no drift")
         });
         assert!(records.is_empty(), "{records:?}");
+    }
+
+    #[test]
+    fn a_node_surfaces_as_closed_only_when_every_ref_closed_unmerged() {
+        let state_of = |pr: i64| PrMergeState {
+            number: pr,
+            state: if pr == 7 { "CLOSED" } else { "OPEN" }.into(),
+            url: None,
+            merged_at: None,
+            merge_sha: None,
+            changed_files: Vec::new(),
+            files_truncated: false,
+            body: None,
+        };
+        let node = |extra: Value| {
+            let mut row = json!({
+                "status": "in_review", "pr_number": 7,
+                "pr_url": "https://github.com/o/r/pull/7", "cwd": ".",
+            });
+            if let (Some(r), Some(e)) = (row.as_object_mut(), extra.as_object()) {
+                r.extend(e.clone());
+            }
+            vec![open_node(row)]
+        };
+        let scan = |entries: &[Value]| {
+            scan_merge_drift(entries, None, None, |pr, _, _, _| Ok(state_of(pr)))
+        };
+        let records = scan(&node(json!({})));
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].pr_state, "CLOSED");
+        assert!(!records[0].closeable());
+        // A replacement PR still open keeps the node in_review.
+        let open_extra = json!({"additional_prs": [{"number": 8, "url": null}]});
+        assert!(scan(&node(open_extra)).is_empty());
+        // A deferred node is already off the board's in-flight read.
+        assert!(scan(&node(json!({"status": "deferred"}))).is_empty());
     }
 
     #[test]
@@ -1176,7 +1238,14 @@ fn primary_closed(
     advisories: &mut Vec<String>,
 ) -> bool {
     let Some(number) = node.get("pr_number").and_then(Value::as_i64) else {
-        return false;
+        // The closed-PR leg already moved the primary: a replacement may bind.
+        return node
+            .get("additional_prs")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter()
+                    .all(|r| r.get("merge_status").and_then(Value::as_str) == Some("closed"))
+            });
     };
     match query(number, None, Some(cwd), false) {
         Ok(state) => state.state == "CLOSED",

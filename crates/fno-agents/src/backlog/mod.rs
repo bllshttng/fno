@@ -23,6 +23,7 @@ pub mod calibration_cli;
 pub mod capture;
 pub mod carveout;
 pub mod cli;
+pub(crate) mod closed_unmerged;
 pub(crate) mod closures;
 pub mod collision;
 pub mod commands;

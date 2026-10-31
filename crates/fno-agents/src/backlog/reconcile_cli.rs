@@ -469,6 +469,21 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
     // reconcile. --dry-run propagates as a would-archive count.
     let claim_reap = claim_reap_leg(args.dry_run, args.json_out);
 
+    let closed_unmerged = super::closed_unmerged::closed_unmerged_leg(
+        graph_path,
+        &sweep.closed_unmerged,
+        args.dry_run,
+    );
+    if !args.json_out {
+        for row in &closed_unmerged {
+            eprintln!(
+                "closed_unmerged: {} left in_review (PR #{} closed without a merge)",
+                row["node_id"].as_str().unwrap_or("?"),
+                row["pr_number"].as_i64().unwrap_or(0),
+            );
+        }
+    }
+
     // Parent epics of this run's closure claims that are still open, each
     // naming its still-open sibling children. Read-only, never mutates.
     let epics_waiting = epics_waiting_leg(
@@ -525,6 +540,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
             ledger_harvest,
             epics_waiting,
             reclaimed,
+            closed_unmerged,
         },
         full_sweep,
     );
@@ -965,6 +981,7 @@ fn auto_discover_leg(
 /// fail-open.
 struct Sweep {
     closeable: Vec<MergeDriftRecord>,
+    closed_unmerged: Vec<MergeDriftRecord>,
     failures: Vec<MergeDriftRecord>,
     strandable_epics: Vec<String>,
     strandable_contained: Vec<String>,
@@ -982,17 +999,21 @@ fn partition_and_probe(
 ) -> Sweep {
     let mut closeable: Vec<MergeDriftRecord> = Vec::new();
     let mut failures: Vec<MergeDriftRecord> = Vec::new();
+    let mut closed_unmerged: Vec<MergeDriftRecord> = Vec::new();
     for record in records {
         if record.closeable() {
             closeable.push(record);
         } else if record.error.is_some() {
             failures.push(record);
+        } else if record.pr_state == "CLOSED" {
+            closed_unmerged.push(record);
         }
     }
     let empty = Value::Object(Default::default());
     if !full_sweep {
         return Sweep {
             closeable,
+            closed_unmerged,
             failures,
             strandable_epics: Vec::new(),
             strandable_contained: Vec::new(),
@@ -1060,6 +1081,7 @@ fn partition_and_probe(
     };
     Sweep {
         closeable,
+        closed_unmerged,
         failures,
         strandable_epics,
         strandable_contained,
@@ -1830,6 +1852,7 @@ struct LegOutcomes {
     ledger_harvest: Value,
     epics_waiting: Vec<Value>,
     reclaimed: Vec<(String, String, String)>,
+    closed_unmerged: Vec<Value>,
 }
 
 /// W4 causal links: a merged "Revert ..." PR referencing a PR carried by a
@@ -2329,6 +2352,7 @@ fn report_leg(
                 "merge_sha": r.merge_sha,
             })).collect::<Vec<_>>(),
             "closed": closed_rows,
+            "closed_unmerged": outcomes.closed_unmerged,
             "healed_epics": healed_epics,
             "reparented": reparented.iter().map(|(nid, p)| json!({
                 "node_id": nid, "parent": p,
