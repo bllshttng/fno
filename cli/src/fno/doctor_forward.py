@@ -40,20 +40,23 @@ def _signpost(spelling: str) -> None:
 # Sub-apps (foreign families) ----------------------------------------------
 
 from fno.evals_cli import evals_app  # noqa: E402
-from fno.events.cli import cli as event_app  # noqa: E402
 from fno.lint_cli import lint  # noqa: E402
 
 doctor_app.add_typer(evals_app, name="evals")
-doctor_event_app = typer.Typer(name="event", no_args_is_help=True, add_completion=False)
-doctor_event_app.registered_callback = event_app.registered_callback
-doctor_event_app.registered_commands.extend(event_app.registered_commands)
-doctor_event_app.registered_groups.extend(event_app.registered_groups)
-doctor_app.add_typer(doctor_event_app, name="event")
 doctor_app.command("lint")(lint)
 
 
 # The family's own leaves: registered so the teaching, not a generic
 # unknown-command error, answers them on a Python-only install.
+
+
+@doctor_app.command(
+    "event",
+    hidden=True,
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+def event_signpost(ctx: typer.Context) -> None:
+    _signpost("fno doctor event")
 
 
 @doctor_app.command(

@@ -300,6 +300,9 @@ def test_apply_removal_emits_event_row(repo: Path, tmp_path: Path, monkeypatch):
     if not (venv_bin / "fno-py").exists():
         pytest.skip("cli venv absent (run fno doctor test once); emit falls back to deployed fno")
     monkeypatch.setenv("PATH", f"{venv_bin}{os.pathsep}{os.environ['PATH']}")
+    from fno.events.store_client import resolve_native_bin
+
+    monkeypatch.setenv("FNO_BIN", resolve_native_bin())
     # Sandbox the machine-global mirror through a point-config: the global
     # journal follows config state_dir, and FNO_CONFIG redirects config
     # loading for the emit subprocess.
@@ -816,6 +819,9 @@ def test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch(
     sandbox_cfg = tmp_path / "fno-config.toml"
     sandbox_cfg.write_text(f'state_dir = "{sandbox_state}"\n')
     env["FNO_CONFIG"] = str(sandbox_cfg)
+    from fno.events.store_client import resolve_native_bin
+
+    env["FNO_BIN"] = resolve_native_bin()
     wt = _add_done_node_wt(repo, "wt-done", "x-d0ne1")
     _commit(wt, "u.txt")  # unmerged commit: today's sweep keeps this tree
     sha = _git(wt, "rev-parse", "HEAD").stdout.strip()

@@ -386,7 +386,7 @@ class TestTickOrchestrator:
 
     def test_oversized_tick_receipt_emits_bounded_exact_chunks(self):
         """The positive receipt survives the 64KB event validation ceiling."""
-        from fno.events import validate
+        from fno.events.store_client import validate
         from fno.pr_watch._dispatch import _emit_tick_receipt
 
         numbers = list(range(1, 10_001))

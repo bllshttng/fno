@@ -62,7 +62,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
         "What is waiting on a human: approvals, notify, outstanding, lead board, decisions, law.",
@@ -171,7 +170,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "do": set(),
     "doctor": set(),
     "evals": set(),
-    "event": {"emit"},
     "paths": set(),
     "plan": set(),
     "pr-watch": set(),

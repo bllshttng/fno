@@ -100,7 +100,7 @@ class TestFailoverNamesItsGiveUp:
     """AC21-ERR. Twenty recorded rotations, twenty abandonments, nineteen mute."""
 
     def test_an_abandonment_without_a_reason_is_refused_at_the_writer(self) -> None:
-        from fno.events import ValidationError, _build
+        from fno.events.store_client import ValidationError, build_event as _build
 
         with pytest.raises(ValidationError):
             _build(

@@ -2384,3 +2384,9 @@ fn boot_ms_from(sec: i64, usec: i64) -> Option<i64> {
     }
     Some(sec * 1000 + usec / 1000)
 }
+
+#[cfg(test)]
+#[path = "../codegen/event_retention.rs"]
+mod event_retention_tests;
+
+mod repo_identity;

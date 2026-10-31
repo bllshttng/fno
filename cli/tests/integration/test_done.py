@@ -52,14 +52,14 @@ def tmp_ledger(tmp_path) -> Path:
 def tmp_events(tmp_path, monkeypatch) -> Path:
     """Route append_event to a temp events.jsonl."""
     events_file = tmp_path / "events.jsonl"
-    import fno.events as ev_mod
+    import fno.events.store_client as ev_mod
     monkeypatch.setattr(ev_mod, "append_event", _make_append_event_to(events_file))
     return events_file
 
 
 def _make_append_event_to(events_file: Path):
     """Return a patched append_event that writes to a specific events_file."""
-    import fno.events as ev_mod
+    import fno.events.store_client as ev_mod
 
     def _append(event, path=None, *, lock_timeout_seconds=30):
         # Always write to our temp file regardless of the path argument.

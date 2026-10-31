@@ -26,8 +26,6 @@
 # look its session up, and duplicating that parser in core is how two
 # spellings of one vocabulary start drifting.
 # See docs/architecture/company-boundaries.md.
-cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.self_stamp import resolve_self_model
-cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.registry import load_registry
 # Retired in the claims list port: the single-line watchdog import merged into
 # the parenthesized import still listed below, so the edge now rides that entry.
 cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.truth_status import _session_from_holder
@@ -60,4 +58,4 @@ cli/src/fno/graph/statuses.py: L1 core -> L5 runtime / from fno.agents.reachabil
 # the same shape as the roster.py entries above. The detector takes the
 # prover as an injected parameter, so tests drive it hermetically; the
 # edge lives only where the sweep composes its instrument.
-layer cycle: L0 platform -> L5 runtime -> L0 platform
+layer cycle: L1 core -> L5 runtime -> L1 core

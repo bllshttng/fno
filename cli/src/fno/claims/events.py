@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Optional
 
-from fno.events import (
+from fno.events.store_client import (
     SchemaUnavailableError,
     ValidationError,
     append_event,

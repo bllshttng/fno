@@ -388,7 +388,7 @@ class TestControlPlaneArmRows:
         assert "phase" not in detail, (
             f"a clean skip must not name a phase. Got: {detail}"
         )
-        from fno.events import validate
+        from fno.events.store_client import validate
         for data in by_arm.values():
             validate(
                 {

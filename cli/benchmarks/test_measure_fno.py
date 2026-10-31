@@ -175,31 +175,3 @@ def test_phase_scaled_call_count_rows():
         "phases_completed": ["think", "plan"],
     }
     assert build_session_measurement(ghost, median_fno_ms=200.0) is None
-
-
-def test_phase_0_decision_event_builder_rows():
-    from fno.events import ValidationError, phase_0_decision, validate
-
-    event = phase_0_decision(
-        ratio=0.10,
-        decision="abort_daemon",
-        evidence_path=".fno/measurements/x.md",
-    )
-    validate(event)
-    assert event["type"] == "phase_0_decision"
-    assert event["source"] == "target"
-    assert event["data"]["ratio"] == pytest.approx(0.10)
-    assert event["data"]["decision"] == "abort_daemon"
-
-    with pytest.raises(ValidationError):
-        phase_0_decision(
-            ratio=0.10,
-            decision="not_a_real_bucket",
-            evidence_path=".fno/measurements/x.md",
-        )
-
-    event = phase_0_decision(
-        ratio=0.30, decision="full_v1", evidence_path="x.md", source="subagent"
-    )
-    validate(event)
-    assert event["source"] == "subagent"

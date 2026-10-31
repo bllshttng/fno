@@ -15,6 +15,9 @@
 //! carrier writes through its own commands, so an older build cannot corrupt
 //! rows and needs no guard trigger.
 
+#[path = "event_context.rs"]
+mod event_context;
+
 use crate::finalize::repo_identity_from_git_remote;
 use crate::store_remote::{configured, Remote, SqlValue};
 use serde_json::{json, Value};
@@ -132,6 +135,7 @@ pub fn dispatch(rest: &[String]) -> i32 {
         Some("pull") => run_pull(&rest[1..], &cwd),
         Some("retract") => run_retract(&rest[1..], &cwd),
         Some("identity") => run_identity(),
+        Some("event-context" | "observed-model") => event_context::run(rest),
         _ => {
             eprintln!(
                 "usage: fno-agents attest push|pull|retract|identity [--repo <slug>]  (push reads one envelope line on stdin)"

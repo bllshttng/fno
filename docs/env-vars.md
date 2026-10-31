@@ -100,7 +100,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CONFIG_LOCK_TIMEOUT` | rs | Seconds `fno config set` waits for the config file lock before it refuses; unset waits without bound. The a2a first-use persist sets it. |
 | `FNO_CONFIG_SEARCH_ROOT` | py | Test-only bound on config discovery, read by the Rust readers (`within_search_ceiling`). Python only widens it to the pytest basetemp (conftest). |
 | `FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS` | rs | unclear: crates/fno-agents/src/context_run.rs |
-| `FNO_CONTROL_PLANE_SCHEDULER` | py+rs | unclear: cli/src/fno/control_plane.py:22; native twin crates/fno-agents/src/backlog/reconcile_cli.rs |
+| `FNO_CONTROL_PLANE_SCHEDULER` | rs | unclear: crates/fno-agents/src/backlog/reconcile_cli.rs |
 | `FNO_CURSOR_AGENT_MODEL` | rs | unclear: crates/fno-agents/src/cursor_agent.rs:304 |
 | `FNO_DISPATCH_ACCOUNT_ENV` | rs | The proven-credential carrier of a cutover spawn: a flat JSON map `accounts::launch` stages verbatim for `--dispatch-account`. The spawn door claims it, and a spawn without the flag refuses. |
 | `FNO_DRIVER_LIB` | rs | unclear: crates/fno-agents/src/finalize.rs:849 |

@@ -93,6 +93,88 @@ class UndeclaredStateRootError(RuntimeError):
     """A state path resolved under a test runner with no root declared."""
 
 
+
+class HermeticEscapeError(RuntimeError):
+    """A test process tried to append to a journal outside its sandbox."""
+
+
+def _hermetic_allowed_roots() -> list[Path]:
+    """Roots a hermetic test process may legitimately write a journal into.
+
+    ``fno.hermetic.neutralise`` pins ``FNO_EVENTS_PATH`` to a journal inside a
+    throwaway sandbox, and every test that names its own file names one under
+    ``tmp_path``. Both live under ``TMPDIR``. Both raw and resolved forms of
+    each root are kept because macOS reports ``TMPDIR`` as ``/var/folders/...``
+    while ``Path.resolve()`` yields ``/private/var/...``.
+
+    ``HOME`` is deliberately NOT a root, even though neutralise points it at the
+    sandbox. It is read at call time, so a test that restores the real ``HOME``
+    (``test_provider_usage_live.py`` and ``test_retask_live_smoke.py``
+    each do) would widen the allowed root to the whole
+    home directory - which contains both the checkout and ``~/.fno``, the two
+    files this guard exists to protect. Nothing is lost by dropping it: the
+    sandbox HOME is created by ``tempfile.mkdtemp`` and so already sits under
+    ``TMPDIR``.
+    """
+    roots: list[Path] = []
+    candidates = [
+        os.environ.get("TMPDIR") or "/tmp",
+    ]
+    pin = os.environ.get("FNO_EVENTS_PATH")
+    # ABSOLUTE pins only. `Path("events.jsonl").parent` is `.`, and its realpath
+    # is the process cwd - which under a bare `pytest` IS the checkout, so a
+    # relative pin promoted the whole repository to an allowed root and turned
+    # the guard off. `scripts/lib/events.sh` and `hooks/review-hold.sh` both
+    # pass the pin through unvalidated, so this cannot assume a good value.
+    # A relative pin is simply not a root; the write is judged on TMPDIR alone.
+    if pin and Path(pin).is_absolute():
+        candidates.append(str(Path(pin).parent))
+    for raw in candidates:
+        if not raw:
+            continue
+        base = Path(raw)
+        for form in (base, Path(os.path.realpath(raw))):
+            if form not in roots:
+                roots.append(form)
+    return roots
+
+
+def _refuse_hermetic_escape(path: Path) -> None:
+    """Refuse a journal write that would leave a test's sandbox.
+
+    ``FNO_TEST_HERMETIC`` was a receipt nothing read. This is its first
+    consumer, and it closes the class rather than one caller: a module that
+    builds its own ``<root>/.fno/events.jsonl`` by hand consults neither
+    ``FNO_EVENTS_PATH`` nor ``FNO_REPO_ROOT``, so no pin can reach it. Almost
+    every event write in the tree funnels through :func:`append_event`, so the
+    check belongs here - one guard, not one per path builder.
+
+    ``spawn_think`` was the specimen: it wrote ``think_offered`` rows for the
+    fixture node ``x-2222aaaa`` into the developer's live journal, and from
+    there into the operator's needs panel. A worktree's ``.fno/events.jsonl``
+    is a symlink to the canonical journal, so a worker's test run reached the
+    operator's file from a directory nobody thought of as production.
+
+    Scope, stated so the next reader does not overclaim it: this guards
+    :func:`append_event` only. ``events/log.py`` and ``agents/events.py`` write
+    journals through their own file handles and do not pass here. The rule
+    itself lives in :func:`fno.hermetic.declared_root`, so this fence and the
+    accessor fence in ``fno.paths`` cannot disagree.
+    """
+    try:
+        declared_root(path)
+    except (HermeticEscapeError, UndeclaredStateRootError) as exc:
+        # Both refusals get the journal's remedy: the undeclared one is a
+        # SIBLING class, so catching only the escape sends the wrong advice.
+        raise type(exc)(
+            f"append_event refused a journal write with no declared root: "
+            f"{path}. Pass an explicit events_path= under tmp_path, or resolve "
+            "the journal with fno.paths.project_events_json() so "
+            f"FNO_EVENTS_PATH applies. ({exc})"
+        ) from exc
+
+
+
 def declared_root(path: Path) -> Path:
     """Judge one resolved state path against the process root declaration.
 
@@ -107,8 +189,6 @@ def declared_root(path: Path) -> Path:
         return path
     if pin != "1" and "pytest" not in sys.modules:
         return path
-
-    from fno.events import HermeticEscapeError, _hermetic_allowed_roots
 
     # Realpath only: a symlink inside the sandbox can resolve to live state.
     resolved = Path(os.path.realpath(path))

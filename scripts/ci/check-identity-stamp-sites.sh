@@ -86,12 +86,21 @@ for path in sorted((root / "cli" / "src").rglob("*.py")):
 print("\n".join(out))
 PY
 
-awk '{print $1}' "$FOUND" | sort -u > "$KEYS"
+awk 'NF{print $1}' "$FOUND" | sort -u > "$KEYS"
 
 # Baseline keys: the first token of each non-comment, non-blank line.
-grep -vE '^[[:space:]]*(#|$)' "$BASELINE" | awk '{print $1}' | sort -u > "$BASE"
+{ grep -vE '^[[:space:]]*(#|$)' "$BASELINE" || true; } | awk 'NF{print $1}' | sort -u > "$BASE"
 
 CLASSIFIED="$(wc -l < "$KEYS" | tr -d ' ')"
+
+# A drained ratchet is a legal end state: no caller outside the definer, an
+# empty baseline. The positive marker is the definition itself, so a broken
+# enumerator still cannot pass as an empty tree.
+if [[ "$CLASSIFIED" -eq 0 && ! -s "$BASE" ]] \
+  && grep -q '^def resolve_harness_identity' "$REPO_ROOT/cli/src/fno/harness_identity.py"; then
+  echo "check-identity-stamp-sites: ok (drained: no caller of the precedence primitive, empty baseline)"
+  exit 0
+fi
 
 # Positive marker, not an absence (AC5-HP). A regex that matched nothing would
 # otherwise report a clean caller set and pass forever - the failure mode where

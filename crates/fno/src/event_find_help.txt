@@ -1,0 +1,19 @@
+Usage: fno-py doctor event find [OPTIONS] [kind]
+
+  Query every event journal and retained rotation with a denominator.
+
+  The reader accepts the three envelopes in the store. It names every file it
+  covered and reports unreadable segments separately from a measured zero.
+
+Arguments:
+  kind  Event kind to match.
+
+Options:
+  --field <str>        Field filter FIELD=VALUE; may be repeated.
+  --since <str>        Lower timestamp bound as ISO-8601 or a duration such as
+                       7d.
+  --session-id <str>   Session id to match.
+  --limit <int range>  Maximum matching rows to print.  [default: 50; x>=1]
+  --kinds              Summarize every event kind.
+  -J, --json           Emit one structured result.
+  --help               Show this message and exit.

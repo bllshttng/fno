@@ -287,7 +287,7 @@ def build_selection_divergence_event(
     selector_entries_scanned: int,
     observer_entries_scanned: int,
 ) -> dict:
-    from fno.events import _build
+    from fno.events.store_client import build_event as _build
 
     return _build(
         "dispatch_selection_diverged",

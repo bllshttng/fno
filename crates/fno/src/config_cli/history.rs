@@ -321,7 +321,7 @@ fn absolutize(path: &Path) -> PathBuf {
 
 /// `global_events_json`: the `FNO_STATE_DIR` pin, else the configured
 /// `state_dir` when absolute, else `~/.fno`; plus `events.jsonl`.
-pub(super) fn global_journal() -> PathBuf {
+pub(crate) fn global_journal() -> PathBuf {
     if let Some(pin) = std::env::var_os("FNO_STATE_DIR") {
         if !pin.is_empty() {
             return super::leaves::state_dir_value().join("events.jsonl");
@@ -353,24 +353,13 @@ fn agents_home_dir() -> PathBuf {
 /// `project_events_json`: the `FNO_EVENTS_PATH` pin, else the space's
 /// journal. The checkout-migration write the Python resolver ran is a
 /// read-only fold here: a legacy checkout journal waits for the next writer.
-pub(super) fn project_journal() -> PathBuf {
+pub(crate) fn project_journal() -> PathBuf {
     match std::env::var_os("FNO_EVENTS_PATH") {
         Some(pin) if !pin.is_empty() => PathBuf::from(pin),
-        _ => spaces_root().join(space_slug()).join("events.jsonl"),
+        _ => crate::config_doctor::project_space_dir(&crate::config_doctor::Settings::load())
+            // events-discipline:allow: a path resolver; the writes in reach are in-file test fixtures
+            .join("events.jsonl"),
     }
-}
-
-fn spaces_root() -> PathBuf {
-    match std::env::var_os("FNO_SPACES_DIR") {
-        Some(pin) if !pin.is_empty() => super::resolve_path(&PathBuf::from(pin)),
-        _ => super::leaves::state_dir_value().join("spaces"),
-    }
-}
-
-fn space_slug() -> String {
-    super::canonical_repo_root(&super::repo_root())
-        .to_string_lossy()
-        .replace('/', "-")
 }
 
 fn option_requires_argument(option: &str) -> i32 {

@@ -587,7 +587,6 @@ def _pinned_native_fno():
     resolve as before.
     """
     from fno.events import store_client
-    import fno.events as events_pkg
 
     try:
         pinned = store_client.resolve_native_bin()
@@ -598,9 +597,6 @@ def _pinned_native_fno():
         def _pinned():
             return os.environ.get("FNO_BIN") or pinned
         mp.setattr(store_client, "resolve_native_bin", _pinned)
-        # events/__init__ re-exports the name at import; emit paths call that
-        # copy, so patching store_client alone leaves them on the real resolver.
-        mp.setattr(events_pkg, "resolve_native_bin", _pinned)
         yield
 
 

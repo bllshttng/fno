@@ -57,8 +57,6 @@ do
 doctor
 done
 evals
-event
-event emit
 fno-agents
 help
 inbox approvals decide

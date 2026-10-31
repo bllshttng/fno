@@ -271,13 +271,7 @@ doctor evals qualify	T1	doctor evals qualify	0
 doctor evals report	T1	doctor evals report	1
 doctor evals run	T1	doctor evals run	3
 doctor evals trend	T1	doctor evals trend	0
-doctor event audit	T1	doctor event audit	5
-doctor event emit	T1	doctor event emit	37
-doctor event find	T1	doctor event find	0
-event find	T1	event find	0
-doctor event gate-escape	T1	doctor event gate-escape	2
-doctor event gc	T1	doctor event gc	4
-doctor event push-parent	T1	doctor event push-parent	2
+doctor event	T1	doctor event	50
 doctor harness	T1	doctor harness	0
 doctor harness-matrix	T1	doctor harness-matrix	3
 doctor lint	T1	doctor lint	39
@@ -298,11 +292,6 @@ evals graduate	T1	evals graduate	2
 evals qualify	T1	evals qualify	0
 evals report	T1	evals report	1
 evals run	T1	evals run	3
-event audit	T1	event audit	5
-event emit	KEEP	event emit	40	deliberate readability slack for a high-traffic distinct operation
-event gate-escape	T1	event gate-escape	3
-event gc	T1	event gc	5
-event push-parent	T1	event push-parent	3
 help	KEEP	help	37	single-leaf group
 lint	KEEP	lint	29	single-leaf group
 paths handoff	T1	paths handoff	9

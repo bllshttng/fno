@@ -1,11 +1,8 @@
-//! Native storage-level commands under `fno doctor event`.
+//! Native commands under `fno doctor event`.
 //!
-//! The Python `fno doctor event emit` keeps its rich surface (validation,
-//! attestation stamping, mirrors, parent push) and delegates storage to
-//! `emit-envelope` here. `find`/`audit`/`gc` routing follows in the reader
-//! cutover wave, intercepted by the same predicate; until then the Python
-//! implementations stay authoritative for those names. No top-level command
-//! exists (law d-fe66560a); the group stays nested under `doctor`.
+//! Event validation, journal access, retention and the command surfaces are
+//! handled here. Runtime-owned identity and notification operations use the
+//! existing `fno-agents` transport.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -17,17 +14,40 @@ mod recovery;
 #[path = "event_store_recovery.rs"]
 mod copy_recovery;
 
-/// The commands the native surface serves. `find` joins natively only when the
-/// caller names stores explicitly (`--events`); a bare `find` keeps
-/// forwarding to Python, whose front door resolves the journals and calls
-/// back in with one `--events` per store. `audit`/`gc` join when their
-/// Python output contracts are ported (reader cutover wave).
+#[path = "event_gc.rs"]
+mod gc;
+
+#[path = "event_hermetic.rs"]
+mod hermetic;
+
+#[path = "event_gate.rs"]
+mod gate;
+
+#[path = "event_audit.rs"]
+mod audit;
+
+#[path = "event_emit.rs"]
+mod emit;
+
+#[path = "event_schema.rs"]
+mod schema;
+
+/// Event subcommands served by the native front door.
 pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
     "emit-envelope",
+    "build-envelope",
+    "schema",
+    "schema-projection",
+    "emit",
+    "push-parent",
     "export",
     "import",
     "rows",
     "prune",
+    "gc",
+    "find",
+    "gate-escape",
+    "audit",
     "recover",
     "signals",
     "fanout",
@@ -36,24 +56,77 @@ pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
 /// Classify `fno doctor event <sub> ...` for the front door: `Some(rest)`
 /// runs natively, `None` forwards to the Python CLI.
 pub fn classify_doctor_event(args: &[OsString]) -> Option<Vec<OsString>> {
-    if args.len() < 3 {
+    if args.len() < 2 || args[0] != "doctor" || args[1] != "event" {
         return None;
     }
-    let a0 = args[0].to_str()?;
-    let a1 = args[1].to_str()?;
-    let a2 = args[2].to_str()?;
-    if a0 != "doctor" || a1 != "event" {
-        return None;
+    let Some(a2) = args.get(2).and_then(|v| v.to_str()) else {
+        return Some(vec![OsString::from("group-help-error")]);
+    };
+    if a2 == "--help" {
+        return Some(vec![OsString::from("group-help")]);
+    }
+    if matches!(a2, "-J" | "--json") {
+        match args.get(3).and_then(|a| a.to_str()) {
+            Some("emit") => {
+                let mut rest = vec![OsString::from("emit-json")];
+                rest.extend_from_slice(&args[4..]);
+                return Some(rest);
+            }
+            Some("push-parent") => return Some(args[3..].to_vec()),
+            Some("gc") => {
+                let mut rest = vec![OsString::from("gc-json")];
+                rest.extend_from_slice(&args[4..]);
+                return Some(rest);
+            }
+            Some("find") => {
+                let mut rest = vec![OsString::from("find")];
+                rest.extend_from_slice(&args[4..]);
+                rest.push(OsString::from("--json"));
+                return Some(rest);
+            }
+            Some("gate-escape") => {
+                let mut rest = vec![OsString::from("gate-json")];
+                rest.extend_from_slice(&args[4..]);
+                return Some(rest);
+            }
+            Some("audit") => {
+                return Some(args[3..].to_vec());
+            }
+            Some("--help") => return Some(vec![OsString::from("group-help")]),
+            None => return Some(vec![OsString::from("group-help-error")]),
+            Some(other) => {
+                return Some(vec![OsString::from("group-unknown"), OsString::from(other)])
+            }
+        }
     }
     if NATIVE_EVENT_SUBCOMMANDS.contains(&a2) {
         return Some(args[2..].to_vec());
     }
-    // `find` is dual-homed: explicit stores run native, a bare find stays
-    // with the Python journal resolver.
-    if a2 == "find" && args[3..].iter().any(|a| a.to_str() == Some("--events")) {
-        return Some(args[2..].to_vec());
+    Some(vec![OsString::from("group-unknown"), OsString::from(a2)])
+}
+
+fn split_options(args: &[OsString], value_options: &[&str]) -> Vec<OsString> {
+    let mut result = Vec::with_capacity(args.len());
+    let mut value_pending = false;
+    for arg in args {
+        if value_pending {
+            result.push(arg.clone());
+            value_pending = false;
+            continue;
+        }
+        if let Some(text) = arg.to_str() {
+            if let Some((key, value)) = text.split_once('=') {
+                if value_options.contains(&key) {
+                    result.push(key.into());
+                    result.push(value.into());
+                    continue;
+                }
+            }
+            value_pending = value_options.contains(&text);
+        }
+        result.push(arg.clone());
     }
-    None
+    result
 }
 
 /// Parse and run one native event subcommand; returns the exit code.
@@ -61,11 +134,50 @@ pub fn run(args: &[OsString]) -> i32 {
     let sub = args.first().and_then(|a| a.to_str()).unwrap_or("");
     let rest: &[OsString] = if args.is_empty() { &[] } else { &args[1..] };
     match sub {
+        "group-help" => {
+            print!("{}", include_str!("event_group_help.txt"));
+            0
+        }
+        "group-help-error" => {
+            eprint!("{}", include_str!("event_group_help.txt"));
+            2
+        }
+        "group-unknown" => {
+            let name = rest
+                .first()
+                .map(|v| v.to_string_lossy())
+                .unwrap_or_default();
+            eprintln!("Usage: fno-py doctor event [OPTIONS] COMMAND [ARGS]...\nTry 'fno-py doctor event --help' for help.\n\nError: No such command '{name}'.");
+            2
+        }
         "emit-envelope" => run_emit_envelope(rest),
+        "build-envelope" => emit::build(),
+        "schema-projection" => match schema::legacy_projection() {
+            Ok(projection) => {
+                println!("{projection}");
+                0
+            }
+            Err(error) => {
+                eprintln!("error: {error}");
+                1
+            }
+        },
+        "schema" => {
+            println!("{}", include_str!("event_store/events_schema.json"));
+            0
+        }
+        "emit" => emit::run(rest, false),
+        "emit-json" => emit::run(rest, true),
+        "push-parent" => emit::run_push(rest),
         "export" => run_export(rest),
         "import" => run_import(rest),
         "rows" => run_rows(rest),
         "prune" => run_prune(rest),
+        "gc" => gc::run(rest, false),
+        "gc-json" => gc::run(rest, true),
+        "gate-escape" => gate::run(rest, false),
+        "gate-json" => gate::run(rest, true),
+        "audit" => audit::run(rest),
         "find" => run_find(rest),
         "recover" if rest.first().and_then(|arg| arg.to_str()) == Some("--copy-store") => {
             copy_recovery::run(&rest[1..])
@@ -165,6 +277,17 @@ fn run_emit_envelope(args: &[OsString]) -> i32 {
         eprintln!("error: --events <events.jsonl> is required (it names the sibling store)");
         return 2;
     };
+    if let Err(error) = hermetic::check(&journal) {
+        eprintln!("error: {error}");
+        return 1;
+    }
+    if journal.is_dir() {
+        eprintln!(
+            "error: events path is a directory, not a journal: {}",
+            journal.display()
+        );
+        return 1;
+    }
     // The envelope arrives on stdin or from --file; exact bytes are stored
     // byte-for-byte, never re-serialized.
     let mut envelope = String::new();
@@ -906,6 +1029,10 @@ fn rfc3339(ms: i64) -> String {
 /// Exit 3 refuses a zero that coverage cannot back: a missing row before the
 /// proven start never reads as a confident zero.
 fn run_find(args: &[OsString]) -> i32 {
+    if args.iter().any(|arg| arg == "--help") {
+        print!("{}", include_str!("event_find_help.txt"));
+        return 0;
+    }
     let mut journals: Vec<PathBuf> = Vec::new();
     let mut kind: Option<String> = None;
     let mut fields: Vec<(String, String)> = Vec::new();
@@ -914,7 +1041,18 @@ fn run_find(args: &[OsString]) -> i32 {
     let mut limit: usize = 50;
     let mut kinds_mode = false;
     let mut json_mode = false;
-    let mut it = args.iter();
+    let normalized = split_options(
+        args,
+        &[
+            "--events",
+            "--field",
+            "--since",
+            "--session-id",
+            "--session",
+            "--limit",
+        ],
+    );
+    let mut it = normalized.iter();
     while let Some(tok) = it.next() {
         let Some(tok) = tok.to_str() else { continue };
         match tok {
@@ -924,9 +1062,18 @@ fn run_find(args: &[OsString]) -> i32 {
                 }
             }
             "--field" => {
-                if let Some(v) = it.next() {
-                    if let Some((k, val)) = v.to_string_lossy().split_once('=') {
-                        fields.push((k.to_string(), val.to_string()));
+                let Some(v) = it.next() else {
+                    eprintln!("error: --field requires FIELD=VALUE");
+                    return 2;
+                };
+                let raw = v.to_string_lossy();
+                match raw.split_once('=') {
+                    Some((k, val)) if !k.is_empty() => {
+                        fields.push((k.to_string(), val.to_string()))
+                    }
+                    _ => {
+                        eprintln!("error: --field must use FIELD=VALUE: '{raw}'");
+                        return 2;
                     }
                 }
             }
@@ -978,8 +1125,13 @@ fn run_find(args: &[OsString]) -> i32 {
         }
     };
     if journals.is_empty() {
-        eprintln!("error: --events <events.jsonl> is required (repeatable)");
-        return 2;
+        journals = crate::config_cli::history::event_journals();
+        for journal in &journals {
+            if let Err(error) = hermetic::check(journal) {
+                eprintln!("error: could not resolve event journals: {error}");
+                return 3;
+            }
+        }
     }
     // Rotations and mirrors of one store collapse to their live journal
     // before the fold; each distinct live journal answers once.
@@ -1418,6 +1570,25 @@ mod tests {
     }
 
     #[test]
+    fn find_claims_default_journals_and_group_json() {
+        assert_eq!(
+            split_options(
+                &mk(&["--field=a=b", "--session-id", "--events=literal"]),
+                &["--field", "--session-id", "--events"]
+            ),
+            mk(&["--field", "a=b", "--session-id", "--events=literal"])
+        );
+        assert!(
+            classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_some()
+        );
+        assert!(
+            classify_doctor_event(&mk(&["doctor", "event", "-J", "find", "--kinds"])).is_some()
+        );
+        assert_eq!(run_find(&mk(&["--field", "missing-equals"])), 2);
+        assert_eq!(run_find(&mk(&["--field", "=empty-name"])), 2);
+    }
+
+    #[test]
     fn classify_admits_only_native_subcommands() {
         assert!(classify_doctor_event(&mk(&["doctor", "event", "recover", "--dry-run"])).is_some());
         assert!(classify_doctor_event(&mk(&[
@@ -1431,17 +1602,22 @@ mod tests {
         assert!(
             classify_doctor_event(&mk(&["doctor", "event", "export", "--out", "/tmp/x"])).is_some()
         );
-        // Python-owned names keep forwarding to the Python CLI.
         assert!(
-            classify_doctor_event(&mk(&["doctor", "event", "emit", "-t", "blocked"])).is_none()
+            classify_doctor_event(&mk(&["doctor", "event", "emit", "-t", "blocked"])).is_some()
         );
-        assert!(classify_doctor_event(&mk(&["doctor", "event", "gc", "--dry-run"])).is_none());
-        assert!(classify_doctor_event(&mk(&["doctor", "event"])).is_none());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "gc", "--dry-run"])).is_some());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "-J", "gc"])).is_some());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "gate-escape", "flake"])).is_some());
+        assert!(
+            classify_doctor_event(&mk(&["doctor", "event", "-J", "gate-escape", "flake"]))
+                .is_some()
+        );
+        assert!(classify_doctor_event(&mk(&["doctor", "event"])).is_some());
         assert!(classify_doctor_event(&mk(&["doctor"])).is_none());
     }
 
     #[test]
-    fn find_routes_native_only_with_explicit_stores() {
+    fn find_routes_native_with_or_without_explicit_stores() {
         recovery_and_reader_contracts();
         // Explicit stores run natively.
         assert!(classify_doctor_event(&mk(&[
@@ -1453,11 +1629,10 @@ mod tests {
             "/tmp/x/events.jsonl"
         ]))
         .is_some());
-        // A bare find stays with the Python journal resolver.
         assert!(
-            classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_none()
+            classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_some()
         );
-        assert!(classify_doctor_event(&mk(&["doctor", "event", "find", "--kinds"])).is_none());
+        assert!(classify_doctor_event(&mk(&["doctor", "event", "find", "--kinds"])).is_some());
     }
 
     fn recovery_and_reader_contracts() {

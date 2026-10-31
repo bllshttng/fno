@@ -320,3 +320,7 @@ pub mod doctor_cost;
 pub mod otel_read;
 #[cfg(feature = "full")]
 pub mod whoami_seam;
+
+mod json_compat;
+
+mod repo_identity;

@@ -7,12 +7,19 @@ from __future__ import annotations
 
 import pytest
 
-from fno.events import (
-    ValidationError,
-    auto_complete_triggered,
-    session_satisfied,
-    validate,
-)
+from fno.events.store_client import ValidationError, build_event, validate
+
+
+def session_satisfied(*, trigger, reason, session_id, gate_state_hash, evidence_url=None, source="target"):
+    return build_event("session_satisfied", source, {
+        "source": trigger, "reason": reason, "session_id": session_id,
+        "gate_state_hash": gate_state_hash, "evidence_url": evidence_url,
+    }, builder="session_satisfied")
+
+
+def auto_complete_triggered(*, trigger, session_id, source="hook"):
+    return build_event("auto_complete_triggered", source, {"source": trigger, "session_id": session_id})
+
 
 
 def test_session_satisfied_happy_path() -> None:

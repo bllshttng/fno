@@ -117,7 +117,7 @@ def emit_operator_initiated(
     """
     target = events_path if events_path is not None else _project_events_path()
     try:
-        from fno.events import _build, append_event
+        from fno.events.store_client import build_event as _build, append_event
 
         event = _build(
             "operator_initiated",

@@ -43,7 +43,7 @@ from typing import Optional
 
 import typer
 
-from fno.events import (
+from fno.events.store_client import (
     SchemaUnavailableError as _SchemaUnavailableError,
     ValidationError as _ValidationError,
 )
@@ -857,15 +857,13 @@ def done_command(
         first_completed_at = collision_state["first_completed_at"] or ""
         emit_outcome = "emitted"
         try:
-            import fno.events as _ev
+            from fno.events.store_client import append_event, build_event
 
-            _ev.append_event(
-                _ev.done_race_collision(
-                    node_id=node_id,
-                    first_completed_at=first_completed_at,
-                    second_attempt_at=now,
-                )
-            )
+            append_event(build_event("done_race_collision", "fno-loop", {
+                "node_id": node_id,
+                "first_completed_at": first_completed_at,
+                "second_attempt_at": now,
+            }))
         except (
             _ValidationError,
             _SchemaUnavailableError,

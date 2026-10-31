@@ -13,10 +13,7 @@
 //! producer receipt cannot say whether a producer exists, and only an
 //! observed receipt is a measurement.
 //!
-//! The row shape is owned here; the Python arms mirror it through
-//! `cli/src/fno/control_plane.py` and `cli/src/fno/events/schema.yaml`, and a
-//! fixture row in `cli/tests/events/parity_corpus.jsonl` keeps both
-//! validators agreeing on it.
+//! The row shape is owned here and declared in `cli/src/fno/events/schema.yaml`.
 
 use serde::Serialize;
 use serde_json::{json, Value};

@@ -239,7 +239,7 @@ fn resolve_self_harness() -> Option<String> {
 /// The sender's own model from its transcript
 /// (claude: the last `message.model`; codex: the last `turn_context`
 /// payload), or "unknown" on any miss so a send never blocks on it.
-fn resolve_self_model() -> String {
+pub(crate) fn resolve_self_model() -> String {
     let model = match own_identity() {
         Some((sid, harness)) if harness == "claude" => crate::claude_adopt::transcript_model(&sid),
         Some((sid, harness)) if harness == "codex" => codex_turn_context_model(&sid),

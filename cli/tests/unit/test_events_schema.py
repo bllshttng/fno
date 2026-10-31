@@ -7,21 +7,10 @@ from __future__ import annotations
 
 import pytest
 
-from fno.events import (
-    EVENT_TYPES,
-    ValidationError,
-    decision_retracted,
-    validate,
-)
-
-
-def _require_schema_loaded() -> None:
-    if EVENT_TYPES is None:
-        pytest.skip("event schema unavailable in this environment")
+from fno.events.store_client import ValidationError, build_event, validate
 
 
 def test_validate_rejects_missing_required_field() -> None:
-    _require_schema_loaded()
     event = {
         "ts": "2026-08-14T00:00:00Z",
         "type": "operator_decision",
@@ -72,14 +61,11 @@ def test_validate_rejects_missing_required_field() -> None:
 
 
 def test_decision_retracted_is_registered_and_carries_target() -> None:
-    _require_schema_loaded()
-    event = decision_retracted(
-        target_decision_id="d-ab12cd34",
-        subject="x-7d94",
-        reason="the coordination window ended",
-        retracted_by="worker-1",
-        authority_source="agent",
-    )
+    event = build_event("decision_retracted", "target", {
+        "retraction_id": "r-test", "target_decision_id": "d-ab12cd34",
+        "subject": "x-7d94", "reason": "the coordination window ended",
+        "retracted_by": "worker-1", "authority_source": "agent",
+    })
     validate(event)
     assert event["type"] == "decision_retracted"
     assert event["data"]["target_decision_id"] == "d-ab12cd34"
@@ -143,13 +129,10 @@ class TestReviewAttestationFindingRecord:
 
 
 def _advance_skipped(reason: str, **extra) -> dict:
-    from fno.events import _build
-
-    return _build("advance_skipped", "backlog", {"reason": reason, **extra})
+    return build_event("advance_skipped", "backlog", {"reason": reason, **extra})
 
 
 def test_advance_skipped_accepts_machine_scoped_reasons() -> None:
-    _require_schema_loaded()
     validate(_advance_skipped("capacity-refused", exit_code=79, detail="spawn-gate: load"))
     validate(_advance_skipped("gate-unavailable", exit_code=81, detail="spawn-gate: registry"))
     validate(_advance_skipped("sandbox-unreachable", exit_code=82, detail="sandbox-probe: gh is unreachable"))
