@@ -271,13 +271,8 @@ doctor evals qualify	T1	doctor evals qualify	0
 doctor evals report	T1	doctor evals report	1
 doctor evals run	T1	doctor evals run	3
 doctor evals trend	T1	doctor evals trend	0
-doctor event audit	T1	doctor event audit	5
-doctor event emit	T1	doctor event emit	37
-doctor event find	T1	doctor event find	0
+doctor event	T1	doctor event	50
 event find	T1	event find	0
-doctor event gate-escape	T1	doctor event gate-escape	2
-doctor event gc	T1	doctor event gc	4
-doctor event push-parent	T1	doctor event push-parent	2
 doctor harness	T1	doctor harness	0
 doctor harness-matrix	T1	doctor harness-matrix	3
 doctor lint	T1	doctor lint	39
