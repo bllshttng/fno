@@ -1222,3 +1222,5 @@
 {"exit": 0, "loc": ["accounts", "failover"], "name": "type.accounts.failover.1221", "stderr": "", "validator": "", "value": null, "yaml": "accounts:\n  failover: abc\n"}
 {"exit": 0, "loc": ["accounts", "failover"], "name": "type.accounts.failover.1222", "stderr": "", "validator": "", "value": {"max_swaps_per_phase": 5}, "yaml": "accounts:\n  failover: {}\n"}
 {"exit": 0, "loc": ["accounts", "failover"], "name": "type.accounts.failover.1223", "stderr": "", "validator": "", "value": null, "yaml": "accounts:\n  failover: null\n"}
+{"exit": 0, "loc": ["agents", "provider_limits"], "name": "closed_lane.scalar", "stderr": "", "validator": "", "value": {"zai": {"lanes": 0, "subagents": 1}}, "yaml": "agents:\n  provider_limits:\n    zai: 0\n"}
+{"exit": 0, "loc": ["agents", "provider_limits"], "name": "closed_lane.table", "stderr": "", "validator": "", "value": {"anthropic": {"lanes": 0, "subagents": null}, "zai": {"lanes": 0, "subagents": 1}}, "yaml": "agents:\n  provider_limits:\n    zai:\n      lanes: 0\n    anthropic:\n      lanes: 0\n"}
