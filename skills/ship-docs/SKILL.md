@@ -43,11 +43,15 @@ Target invokes this skill as the docs phase. It passes:
 - Changed files list
 - Affected user roles (from config.toml)
 
+## fno-sh-docs pages (user-facing features)
+
+A user-facing feature also updates `fno-web/fno-sh-docs` (guide or reference, listed in `docs.json`). Dispatch the page as a subagent (`fno:archer` or a similar agent) on a non-GLM model. Give the subagent three things: the changed surface, the doc path, and the two skills it writes and checks with (`fno-doc-writing`, `asd-ste100`). The page is a user journey with FAQ, troubleshooting and SEO fields, proven by a reader test. The doc change does not merge until the user has a review page. The review page carries real masked screenshots on the Footnote Visual Log. The footnote-side gate: a user-facing PR names its doc PR or page in a `Docs:` body line, or carries `Docs: none, <reason>`. File the fno-web doc node at ship time per `skills/target/references/ship-phase.md`.
+
 ## Key Principles
 
 - **Location matters** - Follow configured paths from config.toml
 - **Audience-appropriate** - Developers get architecture, users get how-to
-- **Keep current** - Update existing docs, don't duplicate
+- **Keep current** - Update existing docs, do not duplicate
 - **Roles from config** - Only generate for configured roles
 
 ## Known Limitations and Deferred Work
