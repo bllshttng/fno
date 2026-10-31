@@ -3815,12 +3815,17 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             // The one dangling retired short: -p is tombstoned above and -P
             // rides the vendor tombstone, so -r would otherwise fall to the
             // positionals and launch under a nonsense seed. The LONG form
-            // forwards; the short names no spawn flag here.
+            // forwards; the short names no spawn flag here. -Y is the same
+            // shape off spawn (its long --yolo is refused by the catch-all
+            // there); the shorts never read as prompt words.
             "-r" if command == "spawn" => {
                 return Err(
                     "-r is not a spawn flag here; pass --resume <id> to forward it to the harness argv"
                         .to_string(),
                 );
+            }
+            "-Y" if command != "spawn" => {
+                return Err(format!("unknown flag: {a}"));
             }
             "--yolo" | "-Y" if command == "spawn" => {
                 // The never-prompt flag is the harness's own vocabulary: it
