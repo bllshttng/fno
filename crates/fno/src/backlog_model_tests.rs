@@ -920,3 +920,97 @@ fn backlog_view_column_rule_follows_the_authority() {
         "effective priority promotes the column"
     );
 }
+
+#[test]
+fn a_deferred_row_keeps_its_card_under_the_off_board_sentinel() {
+    let rows = vec![
+        json!({"id": "x-def", "slug": "def", "status": "deferred", "priority": "p2"}),
+        json!({"id": "x-sup", "slug": "sup", "status": "superseded", "priority": "p2"}),
+        json!({"id": "x-road", "slug": "road", "type": "roadmap", "status": "ready", "priority": "p2"}),
+    ];
+    let inp = fixture(rows);
+    let order = order_of(&inp);
+    for (id, status) in [
+        ("x-def", "deferred"),
+        ("x-sup", "superseded"),
+        ("x-road", "ready"),
+    ] {
+        let e = inp
+            .rows
+            .iter()
+            .find(|r| r.get("id").and_then(Value::as_str) == Some(id))
+            .expect("the row is in the fixture");
+        let card = card_of(&inp, e, order, false).expect("the off-board card still builds");
+        assert_eq!(
+            card.column,
+            crate::backlog_view::OFF_BOARD,
+            "{id} rides the sentinel"
+        );
+        assert_eq!(
+            card.status.as_deref(),
+            Some(status),
+            "{id} keeps its status"
+        );
+    }
+}
+
+#[test]
+fn the_default_board_leaves_off_board_rows_out_and_names_them() {
+    let rows = vec![
+        json!({"id": "x-live", "slug": "live", "status": "ready", "priority": "p2"}),
+        json!({"id": "x-def", "slug": "def", "status": "deferred", "priority": "p2"}),
+        json!({"id": "x-sup", "slug": "sup", "status": "superseded", "priority": "p2"}),
+        json!({"id": "x-road", "slug": "road", "type": "roadmap", "status": "ready", "priority": "p2"}),
+    ];
+    let inp = fixture(rows);
+    let b = board(&inp, &Query::default());
+    let lane_cards: Vec<&str> = b
+        .lanes
+        .iter()
+        .flat_map(|l| l.cells.iter())
+        .flat_map(|c| c.cards.iter().map(|card| card.id.as_str()))
+        .collect();
+    assert!(
+        !lane_cards.contains(&"x-def"),
+        "deferred stays off the lanes"
+    );
+    assert!(
+        !lane_cards.contains(&"x-sup"),
+        "superseded stays off the lanes"
+    );
+    assert!(
+        !lane_cards.contains(&"x-road"),
+        "roadmap stays off the lanes"
+    );
+    assert!(lane_cards.contains(&"x-live"), "the live row stays");
+    assert_eq!(b.hidden.deferred, 1);
+    assert_eq!(b.hidden.superseded, 1);
+    assert_eq!(b.hidden.roadmap, 1);
+    assert_eq!(b.hidden.total, 3);
+    let off: Vec<&str> = b.offboard.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(
+        off,
+        ["x-def", "x-sup", "x-road"],
+        "the reveal carries the off-board cards"
+    );
+    assert!(
+        b.stats.statuses.iter().all(|s| s.status != "deferred"),
+        "status tiles stay curated"
+    );
+}
+
+#[test]
+fn an_explicit_status_query_reaches_the_off_board_payload() {
+    let rows = vec![
+        json!({"id": "x-def", "slug": "def", "status": "deferred", "priority": "p2"}),
+        json!({"id": "x-sup", "slug": "sup", "status": "superseded", "priority": "p2"}),
+    ];
+    let inp = fixture(rows);
+    let q = Query {
+        q: Some("s:deferred".into()),
+        ..Default::default()
+    };
+    let b = board(&inp, &q);
+    let off: Vec<&str> = b.offboard.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(off, ["x-def"], "the query filters the reveal");
+}

@@ -22,7 +22,7 @@
 # LAUNCH GATE: satisfied for 0.2.1 on both macOS arches. `fno` 0.2.1 is
 # published to PyPI (the shared gate with cargo + fno.sh), and the arm64 +
 # x86_64 `url` + `sha256` below are the real published wheels (kept in lockstep
-# on every release bump). The x86_64 macOS wheel is cross-built on the macos-14
+# on every release bump). The x86_64 macOS wheel is cross-built on the macos-15
 # runner (the native Intel macos-13 image is retired); see release-wheels.yml.
 #
 # Deps: an own-tap formula installs with network, so `pip install` resolves the

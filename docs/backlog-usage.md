@@ -430,6 +430,8 @@ The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setu
 
 When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
 
+The page follows your OS light or dark setting by default. The theme button at the right end of the filter bar forces light or dark instead. The choice stays in that browser until you click back to auto. The served web board (`fno mux serve --web`) is the same page, so the switch works there too.
+
 `fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same command. Set `FNO_NO_OPEN=1` to print the path only.
 
 To keep more boards current, add rows to `backlog.render_targets` (see [configuration-guide.md](configuration-guide.md)). Each row is a `path`, a `scope`, and a `projection`. The `scope` is one project slug, or `all` for every project. The `projection` is `local`, which is the default. The `backlog` and `roadmap` projections are retired and skip with a warning.

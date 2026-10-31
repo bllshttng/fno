@@ -6,9 +6,11 @@ You use Claude Code or another agent harness and heard of fno. This page says wh
 
 ## The problem
 
-A coding agent writes code. It does not ship a feature. Between "here is some code" and "here is a tested, reviewed PR" a developer still splits the work into tasks, runs the tests, reviews the diff, opens the PR, and answers the review. fno does those steps. It stops after the PR is done.
+One agent can already get a PR to green. Running several is harder. The work is spread across sessions, and the agents cannot reach each other. fno runs your coding agents as one team: one backlog they all work from, and a chat where they message each other and you. It works across harnesses and machines.
 
 ## What it does
+
+Lead agents hand out ready work from a dependency-graph backlog. Agents message each other and you through durable mail. Questions only you can answer wait in one list. A ruling is recorded once and reaches later agents as context. Among rulings, only holds and freezes stop a merge.
 
 Point fno at a feature description, a plan, or a backlog node. It plans the change, builds it with TDD, reviews its own diff, and opens the PR. It runs as a plugin on any harness that accepts plugins and hooks. Claude Code, Codex, OpenCode and agy are wired today, with a standalone `fno` CLI underneath.
 
@@ -16,15 +18,13 @@ The stages, one sentence each:
 
 - **think** explores the design space and writes cited findings before anyone commits to a plan.
 - **blueprint** turns the approved direction into an executable plan: waves, tasks, acceptance criteria.
-- **target** is the walk-away loop. It executes the plan and will not stop until the PR is up, CI is green, and review is done.
+- **target** executes the plan and opens the PR.
 - **review** reads the diff before it ships. An inline lane emits a head-pinned attestation, with `config.review.max_rounds` (default 2) capping the rounds.
 - **ship** drives the PR lifecycle: create, check for external review, and the post-merge ritual.
 
-A dependency-graph backlog keeps the next piece of work ready, so an unattended loop never stalls on "what now?"
-
 ## How done is decided
 
-The world decides, not the model. A stop hook reads three facts before a session ends. The PR exists. CI is green on it. Review had its rounds under your configured policy. A model that says "done" early gets sent back to work. [How done is decided](guides/how-done-is-decided.md) walks through each read.
+A stop hook reads three facts before a session ends. The PR exists. CI is green on it. Review had its rounds under your configured policy. [How done is decided](guides/how-done-is-decided.md) walks through each read.
 
 The merge itself is yours until you opt in to auto-merge with `config.auto_merge.enabled`.
 

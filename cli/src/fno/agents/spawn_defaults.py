@@ -9,7 +9,6 @@ never the ambient one; an explicit `-m/--model` always wins; a resolved
 """
 from __future__ import annotations
 
-import random
 import re
 import sys
 from typing import IO, Callable, List, Mapping, Optional, Sequence, Set, Tuple
@@ -123,24 +122,6 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
 _EXPLICIT_SUBSTRATE_BOOLS = ("-o", "--once")
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-# Two-word slug lists for a nameless spawn (docker/heroku pattern). Curated
-# lowercase-ascii, unambiguous read aloud; no external dependency, no config.
-_SLUG_ADJ = (
-    "amber", "brave", "calm", "clever", "coral", "cosmic", "crisp", "dapper",
-    "eager", "fabled", "gentle", "glossy", "golden", "hardy", "jolly", "keen",
-    "lively", "lucid", "mellow", "merry", "nimble", "noble", "plucky", "quiet",
-    "rapid", "ruddy", "sage", "sleek", "snug", "spry", "stout", "sunny",
-    "swift", "tidy", "vivid", "warm", "witty", "zesty", "bold", "bright",
-)
-_SLUG_NOUN = (
-    "otter", "falcon", "willow", "cedar", "comet", "ember", "harbor", "meadow",
-    "pebble", "quartz", "river", "summit", "thicket", "vale", "walrus", "yak",
-    "badger", "bison", "cobra", "crane", "dingo", "eagle", "ferret", "gecko",
-    "heron", "ibis", "jaguar", "koala", "lemur", "marten", "newt", "osprey",
-    "puffin", "raven", "shrew", "tapir", "urchin", "viper", "wombat", "finch",
-)
-
-
 def _has_explicit_substrate(toks: Sequence[str]) -> Optional[str]:
     """Return the substrate value if pinned by an explicit flag, else None.
 
@@ -235,24 +216,6 @@ def _fence_model_shorthand(toks: List[str], err: IO[str]) -> List[str]:
     return [*kept, "--", *moved, *toks[cut + 1 :]]
 
 
-def _mint_slug(existing: Set[str], rng: random.Random, err: IO[str]) -> str:
-    """Best-effort collision-avoided ``adjective-noun`` slug.
-
-    Regenerates up to 5 times on a registry hit; the flocked downstream check
-    remains authoritative. Raises SystemExit(2) only if all 5 attempts collide.
-    """
-    for _ in range(5):
-        slug = f"{rng.choice(_SLUG_ADJ)}-{rng.choice(_SLUG_NOUN)}"
-        if slug not in existing:
-            return slug
-    print(
-        "fno agents spawn: could not find a free auto-name after 5 tries; "
-        "pass one explicitly",
-        file=err,
-    )
-    raise SystemExit(2)
-
-
 def _head_flag_value(head: Sequence[str], flags: Tuple[str, ...]) -> Optional[str]:
     """Read one flag's value from a pre-fence head (``--flag v``, ``--flag=v``,
     ``-f v``, ``-f v`` attached). Skips every other value flag's value so it
@@ -284,8 +247,9 @@ def _mint_node_name(
 
     The binary renders it (naming.rs ``render_worker_name``). A name a live worker
     holds gets a ``-2``..``-5`` suffix, so a re-spawn on one node is never a
-    refusal. Any failure returns ``None`` and the adjective-noun mint runs: a
-    spawn must never die on a naming lookup.
+    refusal. Any failure returns ``None`` and the caller refuses with a named
+    line: a spawn with no node slug and no prompt has nothing to name a worker
+    from, and it never launches under an invented one.
     """
     from fno.agents.naming import AgentNameError, BridgeUsageError, worker_name
 
@@ -317,13 +281,13 @@ def normalize_spawn_args(
     *,
     resolver: Optional[Callable[[str], Optional[str]]] = None,
     existing_names: Optional[Set[str]] = None,
-    rng: Optional[random.Random] = None,
     stderr: Optional[IO[str]] = None,
 ) -> List[str]:
     """Canonicalize a ``spawn`` argv (command at index 0); pure argv -> argv.
 
     The single positional is the MESSAGE; the name rides ``--name`` and is
-    minted (``adjective-noun``) when omitted. A second positional -> exit 2.
+    minted (``t-`` plus words from the node slug or the prompt) when
+    omitted. A second positional -> exit 2.
 
     Non-``spawn`` commands and ``spawn --help`` pass through unchanged. Read-only
     (registry names, session resolver); writes no state.
@@ -380,8 +344,14 @@ def normalize_spawn_args(
             _head_flag_value(head, ("--slug",)),
             names,
         )
-        name = minted or _mint_slug(names, rng if rng is not None else random.Random(), err)
-        toks = ["--name", name, *toks]
+        if minted is None:
+            print(
+                "fno agents spawn: no node slug or prompt to name the worker "
+                "from; pass --name",
+                file=err,
+            )
+            raise SystemExit(2)
+        toks = ["--name", minted, *toks]
     extra = _positional_indices(toks)
     if len(extra) > 1:
         print(
