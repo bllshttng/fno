@@ -1077,6 +1077,12 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       errors: [],
       lanes: lanes,
       stats: stats,
+      // The off-board facts ride the rebuilt board so the disclosure reads
+      // one shape on the served page and the snapshot alike.
+      hidden: snap.hidden || null,
+      offboard: (snap.cards || [])
+        .filter((c) => c.column === "Off-board")
+        .slice(0, 200),
       facets: snap.facets || {},
       leads_at: snap.leads_at,
       query: { sort: (state.parsed && state.parsed.sort) || "" },
