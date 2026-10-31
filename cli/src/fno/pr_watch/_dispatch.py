@@ -399,7 +399,7 @@ def fire_skill(
         cmd = [seam_cmd]
     else:
         cmd = [
-            *_subprocess_util.fno_py_cmd(),
+            *_subprocess_util.fno_cmd(),
             "agents",
             "spawn",
             "--once",

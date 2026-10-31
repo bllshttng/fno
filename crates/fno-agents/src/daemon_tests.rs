@@ -1709,7 +1709,13 @@ pub(super) fn short_home(tag: &str) -> AgentsHome {
     use std::sync::atomic::{AtomicU32, Ordering};
     static C: AtomicU32 = AtomicU32::new(0);
     let n = C.fetch_add(1, Ordering::Relaxed);
-    let p = PathBuf::from(format!("/tmp/fnosb{tag}{}_{n}", std::process::id()));
+    // Nanosecond tail: a pid alone repeats across runs (the 2026-10-31
+    // keeper-sweep base wipe), so no recycled path is ever re-derived.
+    let tail = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let p = PathBuf::from(format!("/tmp/fnosb{tag}{}_{n}_{tail}", std::process::id()));
     let home = AgentsHome::at(&p);
     home.ensure_root().unwrap();
     crate::paths::pin_test_claims_root(&p.join("claims-root"));

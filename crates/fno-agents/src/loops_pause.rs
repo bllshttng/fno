@@ -1181,6 +1181,11 @@ fn markdown_doc(launchd: &Option<crate::tick_ledger::LaunchdFold>) -> String {
                 Some("slot_cutover.enabled") => {
                     "If the row reads `unarmed`, add `[slot_cutover] enabled = true` to the daemon's `config.toml`".to_string()
                 }
+                // The [questions] table sits outside the config model, so
+                // the set command refuses its keys.
+                Some(k) if k.starts_with("questions.") => {
+                    format!("If the row reads `unarmed`, set `{k} = true` in config.toml")
+                }
                 Some(k) => format!("If the row reads `unarmed`, arm it with `fno config set {k} true`"),
                 None => "If the row reads red, its `cause=` suffix names the next read".to_string(),
             }

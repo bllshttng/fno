@@ -577,23 +577,6 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     monkeypatch.setattr(_cursor, "_subprocess_popen", _GuardedPopen)
 
 
-@pytest.fixture(autouse=True)
-def _stable_fno_py_cmd(monkeypatch):
-    """Pin source self-shellouts to a bare ``["fno-py"]`` prefix (x-69b3).
-
-    Source modules resolve the Python CLI via
-    ``_subprocess_util.fno_py_cmd()``, which returns an ABSOLUTE path in most
-    runner envs (the console script on PATH / beside the interpreter). Command
-    assertions across the suite assert the bare ``["fno-py", <command>, ...]``, so
-    stub the resolver here to keep them stable regardless of how it resolves
-    locally. The resolver's own unit tests bind the real function at import time
-    and are unaffected by this module-attribute patch.
-    """
-    from fno import _subprocess_util
-
-    monkeypatch.setattr(_subprocess_util, "fno_py_cmd", lambda: ["fno-py"])
-
-
 @pytest.fixture(autouse=True, scope="session")
 def _pinned_native_fno():
     """Resolve the native fno binary once, before any test narrows PATH.
