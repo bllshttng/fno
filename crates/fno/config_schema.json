@@ -1294,7 +1294,7 @@
     "description": "`fno backlog maintain` settings (nested under 'config.backlog.maintain').",
     "properties": {
      "staleness_days": {
-      "default": 30,
+      "default": 60,
       "title": "Staleness Days",
       "type": "integer"
      },
@@ -4004,11 +4004,11 @@
   {
    "path": "backlog.maintain.staleness_days",
    "type": "int",
-   "default": 30,
+   "default": 60,
    "wizard": "advanced",
    "question": "",
    "default_source": "",
-   "doc": "Age (days) before an idea is flagged stale."
+   "doc": "Age (days) before a p2 or p3 idea is flagged stale."
   },
   {
    "path": "backlog.maintain.max_failed_attempts",
