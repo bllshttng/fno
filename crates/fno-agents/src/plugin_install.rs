@@ -3300,6 +3300,11 @@ mod tests {
         let _ = fs::remove_dir_all(&pack_base);
         let pack_source = pack_base.join("source");
         new_repo(&pack_source);
+        fs::write(
+            pack_source.join(crate::pack_profile::MANIFEST),
+            r#"{"mux":[]}"#,
+        )
+        .unwrap();
         let pack_parent = pack_base.join("stage-parent");
         fs::create_dir_all(&pack_parent).unwrap();
         let (pack_stage, _) = build_stage_as(&pack_source, &pack_parent, Profile::Pack).unwrap();
