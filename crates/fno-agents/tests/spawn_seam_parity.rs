@@ -9,7 +9,7 @@
 //! The inputs below mirror that driver's case table.
 //!
 //! A minted name is a wall-clock draw, not parity: a mint case asserts the
-//! name sits in the `--name` slot and reads `adjective-noun`, then compares
+//! name sits in the `--name` slot and reads `t-<words>`, then compares
 //! the rest of the argv. `cannot_fire` replays `plugin_status: None`, the
 //! verdict the capture machine's codex read produced.
 
