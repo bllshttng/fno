@@ -54,19 +54,33 @@ const MAX_ANCESTOR_WALK: usize = 64;
 /// key, or a non-integer value.
 ///
 /// The store lives in `<state>/db/`, so the file beside it is not the global
-/// config `fno config get` reports. For that layout `<state>/config.toml`
-/// answers first, and the file beside the store fills only a key it leaves
-/// unset.
+/// config `fno config get` reports. For that layout the global config answers
+/// first: a `FNO_CONFIG` pin, else `<state>/config.toml`. The file beside the
+/// store fills only a key the global config leaves unset.
 pub fn backlog_config_int(config_dir: &std::path::Path, key: &str) -> Option<i64> {
-    let read = |dir: &std::path::Path| -> Option<toml::Value> {
-        let raw = std::fs::read_to_string(dir.join("config.toml")).ok()?;
+    let pin = std::env::var_os("FNO_CONFIG").filter(|value| !value.is_empty());
+    backlog_config_int_pinned(config_dir, key, pin.as_deref().map(std::path::Path::new))
+}
+
+fn backlog_config_int_pinned(
+    config_dir: &std::path::Path,
+    key: &str,
+    pin: Option<&std::path::Path>,
+) -> Option<i64> {
+    let read = |file: &std::path::Path| -> Option<toml::Value> {
+        let raw = std::fs::read_to_string(file).ok()?;
         let table = raw.parse::<toml::Table>().ok()?;
         table.get("backlog")?.as_table()?.get(key).cloned()
     };
-    let global = (config_dir.file_name() == Some(std::ffi::OsStr::new("db")))
-        .then(|| config_dir.parent().and_then(read))
-        .flatten();
-    global.or_else(|| read(config_dir))?.as_integer()
+    let beside = config_dir.join("config.toml");
+    let global = if config_dir.file_name() == Some(std::ffi::OsStr::new("db")) {
+        pin.map(std::path::Path::to_path_buf)
+            .or_else(|| config_dir.parent().map(|root| root.join("config.toml")))
+            .and_then(|file| read(&file))
+    } else {
+        None
+    };
+    global.or_else(|| read(&beside))?.as_integer()
 }
 
 /// `config.backlog.staleness_days`, read from the `config.toml` in
@@ -2148,6 +2162,27 @@ mod tests {
 
     /// The ranking-and-drain rule for outside votes: one voter set, one
     /// movement read, with and without the external records.
+    #[test]
+    fn the_global_config_answers_first_for_a_store_in_db() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("db");
+        std::fs::create_dir_all(&db).unwrap();
+        let global = root.path().join("config.toml");
+        let read = |pin| backlog_config_int_pinned(&db, "max_open_ideas", pin);
+        std::fs::write(&global, "[backlog]\nmax_open_ideas = 400\n").unwrap();
+        assert_eq!(read(None), Some(400));
+
+        std::fs::write(db.join("config.toml"), "[backlog]\nmax_open_ideas = 50\n").unwrap();
+        assert_eq!(read(None), Some(400));
+
+        let pin = root.path().join("pinned.toml");
+        std::fs::write(&pin, "[backlog]\nmax_open_ideas = 7\n").unwrap();
+        assert_eq!(read(Some(pin.as_path())), Some(7));
+
+        std::fs::write(&global, "[backlog]\n").unwrap();
+        assert_eq!(read(None), Some(50));
+    }
+
     #[test]
     fn an_outside_vote_counts_nowhere_in_ranking_or_the_stale_drain() {
         let row = |encs: serde_json::Value| {
