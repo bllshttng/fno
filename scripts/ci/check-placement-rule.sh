@@ -141,6 +141,10 @@
 #      crates/fno/src/transcript_tail.rs reads Claude Code's own
 #      ~/.claude/projects transcript tree (the sideline's last-msg column) -
 #      read-only, same category as agents_view.rs above.
+#      crates/fno/src/claude_fallback.rs joins the same
+#      ~/.claude/projects transcript tree to count sessions on node
+#      worktrees within a window (FNO_CLAUDE_PROJECTS_DIR overrides,
+#      CLAUDE_CONFIG_DIR first). Read-only; footnote stores nothing there.
 #      crates/fno-agents/src/whoami.rs reads the same transcript stores its
 #      deleted singular-whoami Python twin read: the own-transcript globs
 #      under ~/.claude/projects (FNO_CLAUDE_PROJECTS_DIR overrides) and the
@@ -437,6 +441,7 @@ crates/fno-agents/src/mail_cli/reply.rs
 crates/fno/src/agents_view.rs
 crates/fno/src/connections_view.rs
 crates/fno/src/transcript_tail.rs
+crates/fno/src/claude_fallback.rs
 hooks/attest-model.sh
 hooks/cache-keepalive-inject.sh
 hooks/write-gate.sh
