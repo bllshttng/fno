@@ -45,7 +45,22 @@ pub(in crate::daemon) async fn load_registry_tolerating_wipe(
     home: &AgentsHome,
 ) -> Option<crate::state::Registry> {
     let base = home.root().parent().unwrap_or(home.root()).to_path_buf();
+    let before = base_identity(&base);
     let registry = load_registry_offloaded(home.registry_json()).await;
+    let after = base_identity(&base);
+    // The read itself re-grounds a wholly deleted base: open_write recreates
+    // the parents and retire_registry imports an EMPTY roster from the
+    // missing file, publishing a legal-looking fence (x-55f3). A post-read
+    // existence check always passes on that shape, so the base's identity
+    // across the read is the wipe witness.
+    if before != after {
+        eprintln!(
+            "skip: fixture base {} changed identity across the registry read ({before:?} -> {after:?}); \
+             the base was deleted and re-grounded mid-test, so the registry leg is skipped",
+            base.display()
+        );
+        return None;
+    }
     if !base.exists() {
         eprintln!(
             "skip: fixture base {} wiped mid-test (registry read: {:?}); the registry leg is skipped on a wiped base",
@@ -55,6 +70,15 @@ pub(in crate::daemon) async fn load_registry_tolerating_wipe(
         return None;
     }
     Some(registry.expect("registry read failed on an intact base"))
+}
+
+/// The base's filesystem identity: device + inode, so a directory deleted and
+/// recreated at the same path reads as a different base.
+fn base_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path)
+        .ok()
+        .map(|meta| (meta.dev(), meta.ino()))
 }
 
 /// The store state a failed registry read needs in the panic text. The CI
@@ -442,6 +466,36 @@ async fn keeper_thread_stop_refuses_when_the_keeper_never_confirms() {
         .any(|event| { event.get("type").and_then(Value::as_str) == Some("agent_stop_refused") }));
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     std::fs::remove_dir_all(home.root()).ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_base_deleted_mid_test_skips_the_registry_leg_the_read_regrounded() {
+    // The 2026-10-31 CI shape (x-55f3): the fixture base vanished mid-test
+    // and the post-stop read re-grounded it — open_write recreated the
+    // parents and retire_registry imported an EMPTY roster from the missing
+    // file, publishing a legal-looking fence. The guard must name the
+    // re-grind instead of answering that empty roster to the row assert.
+    let home = keeper_sweep_home("kprg");
+    let sock = lane_b_keeper_dir(&home).join("wk-reground.sock");
+    state::update_registry(&home.registry_json(), |r| {
+        r.entries.push(lane_b_thread_row(
+            "wk-reground",
+            "sess-rg",
+            "/repo",
+            None,
+            &sock,
+        ));
+    })
+    .unwrap();
+    let base = home.root().parent().unwrap().to_path_buf();
+    std::fs::remove_dir_all(&base).unwrap();
+    let loaded = load_registry_tolerating_wipe(&home).await;
+    assert!(
+        loaded.is_none(),
+        "a re-grounded base must skip, never answer the fresh-import roster"
+    );
+    assert!(base.exists(), "the read itself re-grounded the base");
+    std::fs::remove_dir_all(&base).ok();
 }
 
 #[test]
