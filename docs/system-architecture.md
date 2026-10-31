@@ -1,6 +1,6 @@
 # System Architecture
 
-This document describes the internal architecture of the **footnote** Claude Code plugin - an autonomous development workflow that takes features from idea to shipped PR.
+This document describes the internal architecture of the **footnote** Claude Code plugin, which runs coding agents as one team: one backlog, any harness, and decisions you make once.
 
 ---
 

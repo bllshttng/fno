@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fno"
 dynamic = ["version"]
-description = "Autonomous delivery pipeline for AI coding agents: think, plan, do, review, ship - from idea to merged PR."
+description = "Run your coding agents as one team: one backlog, any harness, and decisions you make once."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}

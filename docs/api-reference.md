@@ -1,7 +1,7 @@
 <!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # footnote Plugin - API Reference
 
-The **footnote** plugin is an autonomous development workflow for Claude Code that takes features from idea to shipped PR. It provides 24 skills, 17 agents, and a hook system that work together as a pipeline: think, plan, execute, review, ship.
+The **footnote** plugin runs your coding agents as one team: one backlog, any harness, and decisions you make once. It provides 24 skills, 17 agents, and a hook system that work together as a pipeline: think, plan, execute, review, ship.
 
 - **Repository**: `footnote/`
 - **Plugin manifest**: `.claude-plugin/plugin.json`

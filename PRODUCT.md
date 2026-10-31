@@ -13,7 +13,7 @@ AI coding assistants today are copilots. They suggest code, answer questions, an
 6. Address review feedback
 7. Actually merge and ship
 
-For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool - they need an autonomous software engineer that takes a feature from idea to shipped PR while they focus on product decisions.
+For solo founders and small teams, this gap is the bottleneck. They do not need another autocomplete tool - they need to run their coding agents as one team, from one backlog, while they focus on product decisions.
 
 Source: docs/project-overview-pdr.md:13-21
 
@@ -29,7 +29,7 @@ Small teams where every developer is stretched across multiple concerns. The plu
 
 ## Alternatives
 
-A solo founder without footnote drives a coding agent by hand: every session is re-briefed, no backlog joins one session's work to the next, and nothing carries a task to a green, reviewed PR unattended. A tracker plus a coding agent keeps the plan somewhere, but nothing joins the ticket to the session that executes it or the gate that ships it. A hosted autonomous agent runs unattended, but it owns neither the plan document nor the merge gate, so the review that decides what ships happens outside the operator's repo.
+A solo founder without footnote drives a coding agent by hand: every session is re-briefed, no backlog joins one session's work to the next, and yesterday's decision does not reach today's agent. A tracker plus a coding agent keeps the plan somewhere, but nothing joins the ticket to the session that executes it or the gate that ships it. A hosted autonomous agent runs unattended, but it owns neither the plan document nor the merge gate, so the review that decides what ships happens outside the operator's repo.
 
 ### Anti-Targets
 
