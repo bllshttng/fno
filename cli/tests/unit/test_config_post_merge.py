@@ -105,13 +105,19 @@ def test_post_merge_self_reap_typo_coerces_false(
 def test_post_merge_model_empty_coerces_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A blank model must never reach `--model ""` - it coerces to the default."""
+    """A blank model must never reach `--model ""` - it coerces to the field default."""
+    from fno.config import PostMergeBlock
+
     settings = _load(
         tmp_path,
         monkeypatch,
         'schema_version: 1\nconfig:\n  post_merge:\n    model: ""\n',
     )
     assert settings.post_merge.model == "claude-opus-5"
+    # The coercer has no literal of its own: changing the field default moves it.
+    assert PostMergeBlock.model_fields["model"].default == settings.post_merge.model
+    assert PostMergeBlock(model="   ").model == settings.post_merge.model
+    assert PostMergeBlock.model_validate({"model": None}).model == settings.post_merge.model
 
 
 def test_maintainer_marker_default_empty_and_validated() -> None:
@@ -125,7 +131,7 @@ def test_maintainer_marker_default_empty_and_validated() -> None:
     # whitespace-only / empty / non-str coerce to None (safe direction = no marker)
     assert PostMergeBlock(maintainer_marker="   ").maintainer_marker is None
     assert PostMergeBlock(maintainer_marker="").maintainer_marker is None
-    assert PostMergeBlock(maintainer_marker=123).maintainer_marker is None
+    assert PostMergeBlock.model_validate({"maintainer_marker": 123}).maintainer_marker is None
     # leading/trailing whitespace is stripped, not rejected
     assert PostMergeBlock(maintainer_marker="  #maintainer  ").maintainer_marker == "#maintainer"
     # an internal space is a real config error: a tag is one token
