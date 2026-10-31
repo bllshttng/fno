@@ -10,7 +10,7 @@ You are bringing worker panes back after a reboot or a killed mux server, or cho
 
 Not for: the tab count. Tabs rebuild from each workspace's stored tab trees under every policy value. No value restores zero tabs. Only `hold` skips tabs whose every slot binds a done worker. Held-pane and idle-row mechanics: [pane-worker-relaunch](pane-worker-relaunch.md). What a client reconnect preserves versus a server restart: [mux-restart-recovery](mux-restart-recovery.md).
 
-The destructive edge: `resume`, as the startup policy or the on-demand command, relaunches every worker member that is not tombstoned, gone, reap-retired, or a retired crown. Finished-and-merged work relaunches too. Run `fno mux workspace restore --dry-run --json` first. It classifies and spawns nothing.
+The destructive edge: `resume` relaunches every worker member that is not tombstoned, gone, reap-retired, or a retired crown. This holds as the startup policy and as the on-demand command. Finished-and-merged work relaunches too. Run `fno mux workspace restore --dry-run --json` first. It classifies and spawns nothing.
 
 ## The command
 
