@@ -2605,13 +2605,35 @@ const good = mergeBoard(last, {errors: [], lanes: [{key: "q"}]}, 333);
 eq(good.lanes.length, 1, "a good answer lanes carry");
 eq(good.errors.length, 0, "a good answer clears the errors");
 eq(good.fetched_at, 333, "a good answer is stamped at its fetch time");
-console.log("backlog page helpers: 9 cases ok");
+// hiddenLine: the off-board disclosure line, empty when nothing is hidden.
+eq(hiddenLine(null), "", "no hidden field reads empty");
+eq(hiddenLine({total: 0}), "", "a zero total reads empty");
+eq(hiddenLine({total: 3, deferred: 1, superseded: 1, roadmap: 1}),
+   "off-board 3 (deferred 1, superseded 1, roadmap 1)", "the buckets carry");
+// offBoardFacts: the served model's fields pass through; the snapshot's
+// flat cards compute the same facts, capped at 200 cards.
+const served = offBoardFacts({hidden: {total: 2, deferred: 2, superseded: 0, roadmap: 0}, offboard: [{id: "a"}]});
+eq(served.hidden.total, 2, "served hidden passes through");
+eq(served.cards.length, 1, "served offboard passes through");
+const snap = offBoardFacts({cards: [
+  {id: "a", column: "Off-board", status: "deferred"},
+  {id: "b", column: "Off-board", status: "superseded"},
+  {id: "c", column: "Off-board", kind: "roadmap", status: "ready"},
+  {id: "d", column: "Next", status: "ready"},
+]});
+eq(snap.hidden.total, 3, "snapshot cards compute the total");
+eq(snap.hidden.deferred, 1, "snapshot deferred bucket");
+eq(snap.hidden.roadmap, 1, "the roadmap kind buckets first");
+eq(snap.cards.length, 3, "the snapshot reveal lists the off-board cards");
+console.log("backlog page helpers: 18 cases ok");
 "#;
         let src = format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}",
             lift_js_fn(BACKLOG_PAGE, "cellHead"),
             lift_js_fn(BACKLOG_PAGE, "laneTotal"),
             lift_js_fn(BACKLOG_PAGE, "mergeBoard"),
+            lift_js_fn(BACKLOG_PAGE, "hiddenLine"),
+            lift_js_fn(BACKLOG_PAGE, "offBoardFacts"),
             asserts
         );
         let path =
@@ -2636,7 +2658,7 @@ console.log("backlog page helpers: 9 cases ok");
                 // The end-of-harness marker is the whole verdict.
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 assert!(
-                    stdout.contains("backlog page helpers: 9 cases ok"),
+                    stdout.contains("backlog page helpers: 18 cases ok"),
                     "the shipped backlog helpers did not clear every case:\n{}{}",
                     stdout,
                     String::from_utf8_lossy(&o.stderr)

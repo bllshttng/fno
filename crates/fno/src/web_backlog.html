@@ -102,6 +102,9 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .controls select[multiple] { height: 44px; }
 #tiles { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px 0; }
 #tiles[hidden] { display: none; }
+#offboard { padding: 10px 14px; }
+#offboard .obhead { margin: 0 0 6px; }
+#offboard .obcards { display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; }
 .tile { font-size: 12px; cursor: pointer; background: var(--base); color: var(--subtext0); border: 1px solid var(--surface1); border-radius: 0; padding: 3px 10px; min-height: 26px; }
 .tile:hover { border-color: var(--text); }
 .tile.active { background: var(--text); color: var(--base); border-color: var(--text); }
@@ -207,6 +210,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   <button type="button" data-lanes="project">project</button>
   <button type="button" data-lanes="epic">epic</button>
   <button type="button" data-lanes="none">none</button>
+  <button type="button" id="f-offboard" hidden title="show the rows the default view leaves out (deferred, superseded, roadmap)">off-board</button>
   <span class="lbl">filters <kbd title="jump to the filters">f</kbd></span>
   <label>project <select id="f-project" multiple size="1"><option value="">any</option></select></label>
   <label>epic <select id="f-epic" multiple size="1"><option value="">any</option></select></label>
@@ -232,7 +236,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 <div id="hdr"></div>
 <div id="stats"></div>
 <div id="tiles" hidden></div>
-<div id="main"><div id="board"></div></div>
+<div id="main"><div id="board"></div><div id="offboard" hidden></div></div>
 <aside id="panel" hidden>
   <div id="panelgrip" title="drag to resize"></div>
   <div id="panelhead"><button id="panelclose" type="button">close</button></div>
@@ -278,6 +282,36 @@ function mergeBoard(last, next, now) {
     return Object.assign({}, last, { errors: next.errors, stale_since: last.fetched_at });
   }
   return Object.assign({}, next, { fetched_at: now });
+}
+// One line naming what the default board view leaves out, or "" when it
+// hides nothing. `hidden` is the model's per-bucket counts over the
+// in-scope off-board cards (deferred, superseded, roadmap-typed).
+function hiddenLine(hidden) {
+  if (!hidden || !hidden.total) return "";
+  return "off-board " + hidden.total + " (deferred " + (hidden.deferred || 0) +
+    ", superseded " + (hidden.superseded || 0) + ", roadmap " + (hidden.roadmap || 0) + ")";
+}
+// The off-board facts: the served model names them directly (`hidden` +
+// `offboard`); the snapshot payload predates those fields and hands the
+// page flat cards (`snap.cards`; the rebuilt board drops them), so the
+// same disclosure computes from what the page holds.
+function offBoardFacts(board) {
+  const b = board || {};
+  if (b.hidden) return { hidden: b.hidden, cards: b.offboard || [] };
+  const cards = b.cards ||
+    (typeof snap !== "undefined" && snap && snap.cards) || [];
+  const off = cards.filter((c) => c.column === "Off-board");
+  const count = (s) =>
+    off.filter((c) => (s === "roadmap" ? c.kind === "roadmap" : c.status === s)).length;
+  return {
+    hidden: {
+      deferred: count("deferred"),
+      superseded: count("superseded"),
+      roadmap: count("roadmap"),
+      total: off.length,
+    },
+    cards: off.slice(0, 200),
+  };
 }
 // What a session row can do from this page: the attach or resume command to
 // copy, or null when the row renders dim with the reason the model sent.
@@ -879,6 +913,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     searchError: "",
     parsed: null,
     all: initial.get("all") === "1",
+    showOffboard: false,
   };
   // Collapse state survives the 10 s poll's rebuild: the lane keys whose
   // list section is closed.
@@ -1058,6 +1093,12 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       errors: [],
       lanes: lanes,
       stats: stats,
+      // The off-board facts ride the rebuilt board so the disclosure reads
+      // one shape on the served page and the snapshot alike.
+      hidden: snap.hidden || null,
+      offboard: (snap.cards || [])
+        .filter((c) => c.column === "Off-board")
+        .slice(0, 200),
       facets: snap.facets || {},
       leads_at: snap.leads_at,
       query: { sort: (state.parsed && state.parsed.sort) || "" },
@@ -1160,8 +1201,36 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     visibleIds = [];
     if (state.view === "list") drawList();
     else drawGrid();
+    drawOffboard();
     if (selId && !visibleIds.includes(selId)) selId = "";
     syncControls();
+  }
+  // The off-board disclosure: the toolbar button carries the hidden line,
+  // the section lists the cards the model sent for the current filters.
+  // Default collapsed, so the curated board loads exactly as before.
+  function drawOffboard() {
+    const el = document.getElementById("offboard");
+    const btn = document.getElementById("f-offboard");
+    const facts = offBoardFacts(board);
+    const line = hiddenLine(facts.hidden);
+    if (btn) {
+      btn.hidden = !line;
+      btn.textContent = line || "off-board";
+      btn.classList.toggle("active", !!state.showOffboard);
+    }
+    if (!el) return;
+    el.hidden = !state.showOffboard || !line;
+    el.textContent = "";
+    if (el.hidden) return;
+    const cards = facts.cards;
+    const head = document.createElement("div");
+    head.className = "dim obhead";
+    head.textContent = line + " - showing the first " + cards.length + " matching the current filters; narrow the search for the rest";
+    el.appendChild(head);
+    const wrap = document.createElement("div");
+    wrap.className = "obcards";
+    for (const card of cards) wrap.appendChild(cardButton(card));
+    el.appendChild(wrap);
   }
   function drawNote() {
     noteEl.textContent = "";
@@ -2267,6 +2336,13 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       state.view = b.dataset.view;
       syncUrl();
       fetchBoard();
+    });
+  }
+  const offboardBtn = document.getElementById("f-offboard");
+  if (offboardBtn) {
+    offboardBtn.addEventListener("click", () => {
+      state.showOffboard = !state.showOffboard;
+      draw();
     });
   }
   for (const k of FILTER_KEYS) {
