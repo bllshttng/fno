@@ -143,7 +143,7 @@ Press `u` on a row in the Connections view, then press Enter. The prompt names t
 | claude `managed` | Refreshes the target, saves the outgoing account, writes the slot, and verifies it. | They keep running, and the result line warns about them. What they bill next is unmeasured. | Run on the new account. |
 | codex `managed` | Writes only when no codex runs. | Any live codex defers the switch with exit 2, and the slot does not change. | Run on the new account. |
 | claude with a `config_dir` | None. `u` names the `s` key and runs nothing. | No change. | Only through `s` or `--account`. |
-| `api_key`, `oauth_dir` | None. Only the pointer moves. | No change. | No change. No spawn path reads the pointer, so name the account with `--account`. The credential rides the env overlay at launch. |
+| `api_key`, `oauth_dir` | None. Only the pointer moves. | No change. | No change. No spawn path reads the pointer, so name the account with `--account`. |
 
 The pointer is one value across all harnesses, so `u` on a codex row also moves it off a claude row. A project `active` key wins over the global pointer. If that hides the move, the result line warns. A stored login that is spent refuses the switch, and the result line sends you to `r`, which opens a login pane.
 
