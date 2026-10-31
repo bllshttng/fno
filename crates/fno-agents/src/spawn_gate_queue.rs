@@ -195,7 +195,7 @@ pub(crate) fn slot_refusal_line(
     format!(
         "{slots} live worker slots >= {cap_clause} ({rows} registry rows, {n} headless \
          reservations{waiting_note}); leads take no slot; every counted row: fno agents \
-         gate-status, field slot_rows{remedy}; {tail}",
+         admit status, field slot_rows{remedy}; {tail}",
         cap_clause = learned.clause(),
         n = claims.len()
     )

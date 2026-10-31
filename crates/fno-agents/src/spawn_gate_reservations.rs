@@ -18,7 +18,7 @@ use crate::spawn_gate::NOTE;
 /// The reservation rule, in the same words everywhere it appears: the
 /// reserve mode's usage text and docs/architecture/coordination.md. The
 /// provider-cap refusal names the cap, the count and `fno agents
-/// gate-status` in one line; the full rule lives here and in the doc.
+/// admit status` in one line; the full rule lives here and in the doc.
 pub(crate) const RESERVATION_RULE: &str = "A reservation is held for a NAME: spawn with \
      --name <that name> to redeem it. A reservation expires within 15 minutes, whatever \
      happened to the session that made it. Slot order is otherwise first-come; read \

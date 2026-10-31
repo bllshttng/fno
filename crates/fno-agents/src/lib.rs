@@ -1924,6 +1924,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "lead_wake_refused",
     "lead_spawned_successor",
     "worker_wake",
+    // The first read that finds a worker past its silence deadline
+    // (silence_sweep.rs).
+    "worker_silent",
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",
     "ci_cadence_check",
