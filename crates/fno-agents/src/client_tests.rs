@@ -726,9 +726,15 @@ fn spawn_flag_rows() {
     )
     .unwrap_err();
     assert!(err.contains("-r is not a spawn flag here"), "{err}");
+    // One token per flag: a loose value is not consumed here (it stays the
+    // seed), so a value rides the equals form.
     assert_eq!(
-        harness_args(&["wk", "--resume", "6501096a"]),
-        serde_json::json!(["--resume", "6501096a"])
+        harness_args(&["wk", "--resume"]),
+        serde_json::json!(["--resume"])
+    );
+    assert_eq!(
+        harness_args(&["wk", "--resume=6501096a"]),
+        serde_json::json!(["--resume=6501096a"])
     );
     assert_eq!(harness_args(&["wk", "-Y"]), serde_json::json!(["--yolo"]));
     assert_eq!(
