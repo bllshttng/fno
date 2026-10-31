@@ -1512,10 +1512,13 @@ fn row_cwd(data: &Value) -> &str {
     data.get("cwd").and_then(Value::as_str).unwrap_or("").trim()
 }
 
-/// The PRs a question names. A subject can be absent, so the text counts too.
+/// The PRs a question names. A subject can be absent, so the text counts too,
+/// but only as `PR P`: a bare `#2` in prose can mean an option or an issue.
 fn question_prs(data: &Value) -> Vec<u64> {
     let field = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or("");
-    named_prs(&format!("{}\n{}", field("subject"), field("question")))
+    let mut prs = named_prs(field("subject"), true);
+    prs.extend(named_prs(field("question"), false));
+    prs
 }
 
 /// A named PR no longer needs an answer only on a positive read: merged on
@@ -1532,13 +1535,14 @@ fn pr_settled(
     merged || facts.pr_open.get(&(row_cwd(data).to_string(), pr)) == Some(&false)
 }
 
-/// Every PR number `text` names: `PR P` with any page separator, or `#P`.
-fn named_prs(text: &str) -> Vec<u64> {
+/// Every PR number `text` names: `PR P` with any page separator, and `#P`
+/// when `bare_hash` allows it.
+fn named_prs(text: &str, bare_hash: bool) -> Vec<u64> {
     let bytes = text.as_bytes();
     let mut prs = Vec::new();
     for i in 0..bytes.len() {
         let word_start = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
-        let mut digits = if bytes[i] == b'#' {
+        let mut digits = if bare_hash && bytes[i] == b'#' {
             i + 1
         } else if word_start && bytes[i..].len() >= 2 && bytes[i..i + 2].eq_ignore_ascii_case(b"pr")
         {
@@ -1566,7 +1570,7 @@ fn named_prs(text: &str) -> Vec<u64> {
 
 /// The subject names PR P.
 fn subject_names_pr(subject: &str, pr: u64) -> bool {
-    named_prs(subject).contains(&pr)
+    named_prs(subject, true).contains(&pr)
 }
 
 /// The open (asked, never closed) question rows: the journal fold the
@@ -2452,6 +2456,11 @@ mod tests {
                 vec![("q-pr".to_string(), "node-closed: x-gone done".to_string())]
             );
         }
+        // A bare `#99` in prose names no PR, so it reads nothing and holds nothing.
+        let raw = r#"{"ts":"t","type":"operator_question","source":"target","data":{"question_id":"q-opt","question":"Take option #99?","cwd":"/repo","node":"x-gone"}}"#;
+        let facts = fold_facts(&[("x-gone", "done")], &[]);
+        assert!(prs_to_read(raw, &facts).is_empty());
+        assert_eq!(settled_questions(raw, &facts).len(), 1);
     }
 
     #[test]
