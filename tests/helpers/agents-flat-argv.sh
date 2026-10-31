@@ -42,6 +42,9 @@ case "${1:-}" in
         exec fno-agents status "--$2" "${@:3}" ;;
       watchdog|sweep|stale-escalate|friction-escalate|distress-verdicts|gate-status|codex-session-for-pid|spawn-guard|discovered-json)
         exec fno-agents census "${@:2}" ;;
+      admit)
+        [ "${3:-}" = status ] && exec fno-agents census gate-status "${@:4}"
+        exec fno-agents "${@:2}" ;;
       top) exec fno-agents census --workers "${@:3}" ;;
       orphans) exec fno-agents census --orphans "${@:3}" ;;
       incident) exec fno-agents fleet-incident "${@:3}" ;;
