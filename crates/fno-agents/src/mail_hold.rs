@@ -1119,7 +1119,7 @@ fn drain_parked_once(session_id: &str) -> DrainPoll {
             );
             return DrainPoll::Stalled;
         };
-        let mut cmd = Command::new(crate::scrape::fno_py());
+        let mut cmd = Command::new(crate::scrape::fno_bin());
         cmd.args(["agents", "mail", "send", session_id, &payload, "--raw"]);
         match cmd.status() {
             Ok(status) if status.success() => {
@@ -1670,7 +1670,7 @@ pub(crate) mod tests {
 
     /// Pin FNO_AGENTS_HOME (registry + journal), FNO_HOME (hold sidecars)
     /// and FNO_STATE_DIR (chats store) to one tempdir for `f`, under the
-    /// crate-wide env lock (claim_commands idiom). FNO_PY points at `true` so
+    /// crate-wide env lock (claim_commands idiom). FNO_BIN points at `true` so
     /// a parked-payload drain spawn is a no-op the test never waits on.
     /// The global config read is pinned away too: FNO_GLOBAL_SETTINGS_PATH
     /// names a file that does not exist, so `mail.hold.answer_minutes` on
@@ -1684,7 +1684,7 @@ pub(crate) mod tests {
         let prior: Vec<(String, Option<std::ffi::OsString>)> = [
             "FNO_AGENTS_HOME",
             "FNO_HOME",
-            "FNO_PY",
+            "FNO_BIN",
             "FNO_STATE_DIR",
             "FNO_GLOBAL_SETTINGS_PATH",
             "FNO_AGENTS_ANSWER_MINUTES",
@@ -1695,7 +1695,7 @@ pub(crate) mod tests {
         let td = tempfile::TempDir::new().unwrap();
         std::env::set_var("FNO_AGENTS_HOME", td.path());
         std::env::set_var("FNO_HOME", td.path());
-        std::env::set_var("FNO_PY", "true");
+        std::env::set_var("FNO_BIN", "true");
         std::env::set_var("FNO_STATE_DIR", td.path());
         std::env::set_var(
             "FNO_GLOBAL_SETTINGS_PATH",
@@ -1954,7 +1954,7 @@ pub(crate) mod tests {
     #[test]
     fn release_lifts_the_hold_and_arms_the_standard_release_leg() {
         with_hold_env(|dir| {
-            let _g = env_guard(&["FNO_PY", "PARK_LOG", "FNO_AGENTS_TIMER_EXE"]);
+            let _g = env_guard(&["FNO_BIN", "PARK_LOG", "FNO_AGENTS_TIMER_EXE"]);
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
@@ -2257,7 +2257,7 @@ pub(crate) mod tests {
 
     /// The argv-logging stub: appends its argv to `$PARK_LOG` and exits 1
     /// when `$PARK_FAIL` is set, else 0. Backs the parked-payload drain
-    /// (as the `FNO_PY` runner) and the release-timer seam (as
+    /// (as the `FNO_BIN` runner) and the release-timer seam (as
     /// `FNO_AGENTS_TIMER_EXE`).
     fn write_stub_py(dir: &std::path::Path) -> std::path::PathBuf {
         crate::write_exec_stub(
@@ -2338,7 +2338,7 @@ pub(crate) mod tests {
     #[test]
     fn the_runner_sends_nothing_while_held_then_drains_once_and_deletes() {
         with_hold_env(|dir| {
-            let _g = env_guard(&["FNO_PY", "PARK_LOG"]);
+            let _g = env_guard(&["FNO_BIN", "PARK_LOG"]);
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
@@ -2351,7 +2351,7 @@ pub(crate) mod tests {
             .unwrap();
             let stub = write_stub_py(dir);
             let log = dir.join("drain.log");
-            std::env::set_var("FNO_PY", stub.to_string_lossy().to_string());
+            std::env::set_var("FNO_BIN", stub.to_string_lossy().to_string());
             std::env::set_var("PARK_LOG", log.to_string_lossy().to_string());
             let pdir = parked_dir_for(dir);
             std::fs::create_dir_all(&pdir).unwrap();
