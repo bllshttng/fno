@@ -245,15 +245,15 @@ fn run_pass_with(
         let Some(node) = node_row["id"].as_str() else {
             continue;
         };
-        let Some(lead) = row
+        // The notice lead comes from the recorded spawn edges only; the node
+        // filer (source_session_id) is not a lead. Measured 2026-10-30: the
+        // old filer fallback routed four amber-vale recovery notices to the
+        // ended filer session of the node. A row with no edge still recovers -
+        // the delivery below runs - and only the notice is skipped.
+        let lead = row
             .spawned_by_session
             .as_deref()
-            .or_else(|| node_row["spawned_by_session"].as_str())
-            .or_else(|| node_row["source_session_id"].as_str())
-        else {
-            report_skip(dry_run, row, "lead_unresolved");
-            continue;
-        };
+            .or_else(|| node_row["spawned_by_session"].as_str());
         match claim_for(node, sid) {
             Claim::Own => {}
             Claim::Free if latest_worker(node_row) == Some(sid) => {}
@@ -394,16 +394,20 @@ fn run_pass_with(
             )
             .map_err(|e| e.to_string())?;
         acted += 1;
-        {
-            let notice = format!(
-                "Worker recovery: {} sent to {} on {node} after {}s idle.",
-                drive.lane(),
-                row.name,
-                (now - last) / 1000
-            );
-            if !notify(lead, &notice) {
-                eprintln!("worker-wake: lead notice failed for {lead}");
+        match lead {
+            Some(lead) => {
+                let notice = format!(
+                    "Worker recovery: {} sent to {} on {node} after {}s idle.",
+                    drive.lane(),
+                    row.name,
+                    (now - last) / 1000
+                );
+                if !notify(lead, &notice) {
+                    eprintln!("worker-wake: lead notice failed for {lead}");
+                }
             }
+            None if dry_run => println!("worker-wake {}: notice lead_unresolved", row.name),
+            None => {}
         }
     }
     Ok(acted)
@@ -421,7 +425,6 @@ fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
                     "sessions",
                     "pr_number",
                     "spawned_by_session",
-                    "source_session_id",
                 ]
                 .map(str::to_string)
                 .to_vec(),
@@ -696,8 +699,6 @@ mod tests {
         f.claims.clear();
         f.nodes[0]["sessions"] = json!([{"phase":"execute", "harness":"codex", "session_id":"thread-a", "started_at":"2026-10-06T09:00:00Z"}]);
         f.row.node = None;
-        f.row.spawned_by_session = None;
-        f.nodes[0]["source_session_id"] = json!("lead-a");
         f.write(&[
             json!({"type": "task_started"}),
             json!({"type": "task_complete"}),
@@ -776,6 +777,55 @@ mod tests {
     }
 
     #[test]
+    fn unparented_worker_wakes_without_a_lead_notice() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // No row edge and no node edge: the worker still recovers (one
+        // delivery) and no notice is mailed anywhere - the filer is not a
+        // lead (measured 2026-10-30).
+        let mut f = Fixture::new();
+        f.row.spawned_by_session = None;
+        f.write(&[json!({"type": "task_complete"})]);
+        let sent = RefCell::new(Vec::new());
+        let told = RefCell::new(Vec::new());
+        assert_eq!(
+            f.pass(
+                &|sid, drive, text| {
+                    sent.borrow_mut().push((
+                        sid.to_string(),
+                        drive.lane().to_string(),
+                        text.to_string(),
+                    ));
+                    Ok(())
+                },
+                &|sid, text| {
+                    told.borrow_mut().push((sid.to_string(), text.to_string()));
+                    true
+                }
+            ),
+            1
+        );
+        assert_eq!(sent.borrow().len(), 1);
+        assert_eq!(sent.borrow()[0].0, "thread-a");
+        assert!(told.borrow().is_empty());
+        // The node-level spawn edge is the one fallback: a node that records
+        // its own spawner gets the notice even when the row edge is missing.
+        let mut g = Fixture::new();
+        g.row.spawned_by_session = None;
+        g.nodes[0]["spawned_by_session"] = json!("node-lead");
+        g.write(&[json!({"type": "task_complete"})]);
+        assert_eq!(
+            g.pass(&|_, _, _| Ok(()), &|sid, _| {
+                told.borrow_mut().push((sid.to_string(), String::new()));
+                true
+            }),
+            1
+        );
+        assert_eq!(told.borrow().last().unwrap().0, "node-lead");
+    }
+
+    #[test]
     fn active_parked_unowned_terminal_and_unreadable_workers_stay_quiet() {
         let _env = crate::claims::test_env_lock()
             .lock()
@@ -800,7 +850,6 @@ mod tests {
             "terminal_pr",
             "unmeasured_pr",
             "complete",
-            "missing_lead",
             "unknown_liveness",
             "quota",
             "quota_code_only",
@@ -814,7 +863,6 @@ mod tests {
                 "recent" => f.now -= 1,
                 "parked" => std::fs::write(&f.path, json!({"timestamp":"2026-10-06T10:00:00Z", "type":"response_item", "payload":{"type":"message", "role":"assistant", "phase":"final_answer", "content":[{"text":"<watching reason=\"ci\">"}]}}).to_string()).unwrap(),
                 "unowned" => f.claims.clear(),
-                "missing_lead" => f.row.spawned_by_session = None,
                 "unknown_liveness" => f.life = Life::Unknown,
                 "quota" => f.write(&[json!({"type":"task_complete", "error":{"codex_error_info":"usage_limit_exceeded", "message":"You've hit your usage limit"}})]),
                 "quota_code_only" => f.write(&[json!({"type":"task_complete", "error":{"codex_error_info":"usage_limit_exceeded"}})]),
