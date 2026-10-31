@@ -192,7 +192,8 @@ fn append_run_event(journal: &Path, kind: &str, data: Value) -> bool {
 
 /// The earliest run start the import covers: `started` where a row carries
 /// one, else `completed` (the reconcile-backstop rows carry only that). Both
-/// are UTC, so the first 19 characters order them.
+/// are UTC, so the first 19 characters order them; the marker carries the
+/// winning timestamp whole, not the comparison prefix.
 fn earliest_started(rows: &[Value], fallback: &str) -> String {
     rows.iter()
         .filter_map(|row| {
@@ -200,9 +201,8 @@ fn earliest_started(rows: &[Value], fallback: &str) -> String {
                 .iter()
                 .find_map(|field| row.get(*field).and_then(Value::as_str))
         })
-        .map(|ts| ts.get(..19).unwrap_or(ts).to_string())
-        .min()
-        .unwrap_or_else(|| fallback.to_string())
+        .min_by_key(|ts| ts.get(..19).unwrap_or(ts))
+        .map_or_else(|| fallback.to_string(), str::to_string)
 }
 
 #[cfg(test)]
