@@ -546,7 +546,6 @@ pub mod role_cwd;
 pub mod role_grant;
 pub mod role_migration;
 pub mod roles;
-pub mod roster_progress;
 pub mod roster_reap;
 pub mod route_capacity;
 pub mod route_gather;
