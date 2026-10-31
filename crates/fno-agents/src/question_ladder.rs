@@ -248,6 +248,16 @@ pub fn climbed(row: &Value, next: Option<Value>, evidence: &str, ts: &str) -> Va
     row
 }
 
+/// The row the sweep writes when a closed node leaves a question with a live
+/// PR: a [`climbed`] row whose hop says why, and which stops the next sweep.
+pub fn moved_for_open_pr(row: &Value, next: Option<Value>, evidence: &str, ts: &str) -> Value {
+    let mut row = climbed(row, next, evidence, ts);
+    if let Some(hop) = row["data"]["via"].as_array_mut().and_then(|v| v.last_mut()) {
+        hop["action"] = json!(crate::needs::OPEN_PR_HOP);
+    }
+    row
+}
+
 /// `fno inbox outstanding climb <qid> --evidence "<what this rung checked>"`:
 /// the rung holder moves the question up one rung, or onto the user's board.
 pub fn run_climb(args: &[String]) -> i32 {
