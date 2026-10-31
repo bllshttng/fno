@@ -2830,7 +2830,10 @@ mod tests {
         assert_eq!(v["data"]["sender"], "0ab49ebc");
         assert_eq!(v["data"]["confirmed"], true);
         assert_eq!(v["data"]["verb"], "/code-review");
-        assert_eq!(raw_inject_command("$fno:review medium"), Some("$fno:review"));
+        assert_eq!(
+            raw_inject_command("$fno:review medium"),
+            Some("$fno:review")
+        );
         assert_eq!(raw_inject_command("fix the login bug"), None);
         assert_eq!(v["data"]["self_send"], false);
 
