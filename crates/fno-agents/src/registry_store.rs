@@ -193,34 +193,7 @@ fn drop_removed(path: &Path, mut raw: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Value};
-
-    #[test]
-    fn a_read_over_a_wholly_absent_base_answers_empty_and_mints_nothing() {
-        let temp = tempfile::tempdir().unwrap();
-        let agents = temp.path().join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let path = agents.join("registry.json");
-        let doc = super::read(&path).unwrap();
-        assert_eq!(
-            doc.get("agents").and_then(Value::as_array).map(Vec::len),
-            Some(0),
-            "an absent base is a fresh install, not a roster"
-        );
-        let (doc, revision) = super::read_versioned(&path).unwrap();
-        assert_eq!(revision, 0, "no store means no revision");
-        assert_eq!(
-            doc.get("agents").and_then(Value::as_array).map(Vec::len),
-            Some(0)
-        );
-        let database = crate::registry_read::database_path(&path).unwrap();
-        assert!(!database.exists(), "the read minted a store");
-        assert!(!path.exists(), "the read minted a fence");
-        assert!(
-            !agents.join("registry-snapshots").exists(),
-            "the read minted snapshots"
-        );
-    }
+    use serde_json::json;
 
     #[test]
     fn import_drops_removed_rows_and_a_stale_file_is_fenced_off() {
@@ -448,31 +421,7 @@ fn load_document(connection: &Connection, path: &Path) -> Result<Value, StateErr
     Ok(document)
 }
 
-/// True when neither the store, the published fence, a pending fence, nor a
-/// stray registry file exists: a fresh install. `read` and `read_versioned`
-/// answer the empty roster WITHOUT minting the store: only a writer mints, so
-/// a wiped base cannot be re-ground to a legal-looking empty import by the
-/// very read that discovers the loss. The wholly-missing-base shape is the
-/// one case the 2026-10-30 fence guard cannot refuse (there is no fence to
-/// refuse under), and it is how the 2026-10-31 keeper-stop CI loss read as a
-/// fresh import.
-fn base_is_absent(path: &Path) -> bool {
-    let Some(database) = crate::registry_read::database_path(path) else {
-        return false;
-    };
-    !database.exists() && !path.exists() && !pending_fence_path(path).is_dir()
-}
-
-/// The empty roster as a raw document, the one answer a read may serve when
-/// the base is wholly absent.
-fn empty_document() -> Value {
-    serde_json::to_value(Registry::default()).unwrap_or(json!({}))
-}
-
 pub fn read(path: &Path) -> Result<Value, StateError> {
-    if base_is_absent(path) {
-        return Ok(empty_document());
-    }
     let connection = open(path)?;
     let transaction = connection
         .unchecked_transaction()
@@ -648,9 +597,6 @@ fn revision(connection: &Connection, path: &Path) -> Result<i64, StateError> {
 }
 
 pub(crate) fn read_versioned(path: &Path) -> Result<(Value, i64), StateError> {
-    if base_is_absent(path) {
-        return Ok((empty_document(), 0));
-    }
     let connection = open(path)?;
     let transaction = connection
         .unchecked_transaction()
