@@ -256,7 +256,7 @@ A child is open: not done, not superseded, not deferred. Children are direct. A 
 
 Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
 
-The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents org promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs an attended shell or a role that contains both.
+The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents org promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox law set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
 
 The same count reads before any write, on the `epics:` line of `fno agents org checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agents org --nodes --json` carries the list per role as `epics` and `epic_cap`.
 
@@ -430,6 +430,8 @@ The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setu
 
 When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
 
+The page follows your OS light or dark setting by default. The theme button at the right end of the filter bar forces light or dark instead. The choice stays in that browser until you click back to auto. The served web board (`fno mux serve --web`) is the same page, so the switch works there too.
+
 `fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same command. Set `FNO_NO_OPEN=1` to print the path only.
 
 To keep more boards current, add rows to `backlog.render_targets` (see [configuration-guide.md](configuration-guide.md)). Each row is a `path`, a `scope`, and a `projection`. The `scope` is one project slug, or `all` for every project. The `projection` is `local`, which is the default. The `backlog` and `roadmap` projections are retired and skip with a warning.
@@ -439,6 +441,14 @@ fno config set backlog.render_targets '[{"path": "~/notes/fno/backlog.html", "sc
 ```
 
 `fno config set` writes the global config by default. Keep these rows there. The renderer reads the global config only and warns about a project-local list.
+
+Set `backlog.render_default` to `false` in the global config to stop the automatic page render. The daemon then re-renders only your `backlog.render_targets` rows, and `fno backlog view` rebuilds the page on demand before it opens. This suits machines where the ~28 MB page rewrite after every graph burst costs more than the page is worth.
+
+```bash
+fno config set backlog.render_default false
+```
+
+Like `render_targets`, the renderer reads `backlog.render_default` from the global config only.
 
 The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
 

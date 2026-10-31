@@ -77,12 +77,12 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | Claude control.sock inject | `agents/dispatch.py:4340` | KEEP | — |
+| 1 | Claude control.sock inject | `mail_cli/send/engine.rs` | KEEP | — |
 | 2 | Owned-PTY worker.sock submit | `roundtrip.submit_via_worker` | KEEP | — |
-| 3 | Mux pane send | `agents/dispatch.py:4175`, `mail/cli.py:1125-1145` | KEEP | — |
-| 4 | Codex app-server inject | `agents/dispatch.py:4496` | KEEP | — |
-| 5 | Wake-and-deliver revival | `agents/dispatch.py:4371`, `mail/cli.py:945` | FIX with incarnation lease | OPEN |
-| 6 | Durable bus write | `inbox/store.py:745` | KEEP, fallback | — |
+| 3 | Mux pane send | `mail_cli/send/lanes.rs` | KEEP | — |
+| 4 | Codex app-server inject | `mail_cli/send/engine.rs` | KEEP | — |
+| 5 | Wake-and-deliver revival | `mail_cli/send/engine.rs` | FIX with incarnation lease | OPEN |
+| 6 | Durable bus write | `mail_cli/send/mod.rs` | KEEP, fallback | — |
 
 ## Census 7: graph reads + backlog mutation
 
