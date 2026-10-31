@@ -85,7 +85,6 @@ A bundled manifest only *fires* once its harness clears three rungs:
    impl) so `scrape_targets` selects it;
 3. only then does its bundled manifest match.
 
-opencode has a bundled manifest (this dir) but none of rungs 1-2, so it sits
-inert until node hosts it - staged, not live. agy cleared rungs 1-2 in
+agy cleared rungs 1-2 in
  (READABLE + `AgyProvider` + a `build_pane_argv` agy arm), so its manifest
 can fire.
