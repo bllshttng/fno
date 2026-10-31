@@ -123,7 +123,10 @@ fn normalize_matches_the_python_leg() {
         assert_eq!(got.argv[1], "--name", "{name}");
         let minted = &got.argv[2];
         let words: Vec<&str> = minted.split('-').collect();
-        assert_eq!(words.len(), 2, "{name}: {minted}");
+        // The worker-name law: t- plus words from the node slug or the
+        // prompt, so the token count reads 2 to 4, never a bare draw.
+        assert_eq!(words[0], "t", "{name}: {minted}");
+        assert!((2..=4).contains(&words.len()), "{name}: {minted}");
         assert!(!existing.contains(minted), "{name}: {minted}");
         let mut rest = got.argv.clone();
         rest.remove(2);
