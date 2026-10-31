@@ -379,6 +379,7 @@ DEFERRED_KINDS: tuple[str, ...] = (
     "junk",  # empty/corrupt placeholder parked in a status
 )
 
+
 def normalize_difficulty(value: str | None) -> str | None:
     """Normalize and validate a filing-time work-difficulty estimate."""
     if value is None:
