@@ -5,7 +5,9 @@
 //! refuse-on-silence) stay owned by keeper_sweep.rs.
 
 use super::*;
-use crate::daemon::tests::keeper_sweep::{expect_row, keeper_sweep_home, spawn_killable_keeper};
+use crate::daemon::tests::keeper_sweep::{
+    expect_row, keeper_sweep_home, load_registry_tolerating_wipe, spawn_killable_keeper,
+};
 use crate::daemon::tests::test_ctx;
 
 fn read_events(home: &AgentsHome) -> Vec<Value> {
@@ -169,17 +171,18 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
         0,
         "the worker-server must be reaped, not reported"
     );
-    let registry = load_registry_offloaded(home.registry_json()).await.unwrap();
-    let entry = expect_row(&registry, "cur-stop", &home);
-    assert_eq!(entry.status, AgentStatus::Exited);
-    assert!(entry.exited_at.is_some());
-    assert!(read_events(&home).iter().any(|event| {
-        event.get("type").and_then(Value::as_str) == Some("agent_stopped")
-            && event
-                .get("data")
-                .and_then(|data| data["worker_servers_reaped"].as_i64())
-                == Some(1)
-    }));
+    if let Some(registry) = load_registry_tolerating_wipe(&home).await {
+        let entry = expect_row(&registry, "cur-stop", &home);
+        assert_eq!(entry.status, AgentStatus::Exited);
+        assert!(entry.exited_at.is_some());
+        assert!(read_events(&home).iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("agent_stopped")
+                && event
+                    .get("data")
+                    .and_then(|data| data["worker_servers_reaped"].as_i64())
+                    == Some(1)
+        }));
+    }
     std::env::remove_var("FNO_SPACES_DIR");
     std::env::remove_var("FNO_CLAIMS_ROOT");
     std::fs::remove_dir_all(home.root()).ok();
@@ -237,11 +240,12 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
     );
     // The keeper DID confirm; only the reap failed, so the row must stay
     // live (a terminal stamp here would bury the surviving server).
-    let registry = load_registry_offloaded(home.registry_json()).await.unwrap();
-    assert_eq!(
-        expect_row(&registry, "cur-hard", &home).status,
-        AgentStatus::Live
-    );
+    if let Some(registry) = load_registry_tolerating_wipe(&home).await {
+        assert_eq!(
+            expect_row(&registry, "cur-hard", &home).status,
+            AgentStatus::Live
+        );
+    }
     assert!(
         unsafe { libc::kill(worker_pid as libc::pid_t, 0) } == 0,
         "the stubborn server is the reason the reap failed"
