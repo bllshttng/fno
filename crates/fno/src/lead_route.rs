@@ -93,7 +93,7 @@ const ROUTES: &[Route] = &[
     Route {
         name: "escalate",
         native: &["lead-state", "--escalate"],
-        help: "Usage: fno agents org escalate [SCOPE] [--stalled IDS] [--reason R]\n\n\
+        help: "Usage: fno agents org escalate [SCOPE] [--stalled ID]... [--reason R]\n\n\
                Escalate to the presiding role or operator with work pending.\n",
     },
     Route {

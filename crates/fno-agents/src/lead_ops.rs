@@ -1080,17 +1080,24 @@ fn mail_presiding(holder: &str, ids: &[String], key: &str, reason: &str, verdict
     crate::lead_mail::send_to_name(ESCALATE_SENDER, holder, &message).is_ok()
 }
 
-/// `fno agents org escalate [SCOPE] [--stalled IDS] [--reason R]`: record one
+/// One `--stalled` value is one id, whatever it holds: a row named by its JSON
+/// carries commas.
+fn stalled_id(value: &str) -> Option<String> {
+    let id = value.trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// `fno agents org escalate [SCOPE] [--stalled ID]... [--reason R]`: record one
 /// operator question for the stalled set, and mail the presiding role when
 /// one holds the territory above.
 pub fn run_escalate(args: &[String]) -> i32 {
     let mut scope_arg = String::new();
-    let mut stalled = String::new();
+    let mut ids: Vec<String> = Vec::new();
     let mut reason = "NoProgress".to_string();
     let mut i = 0;
     while i < args.len() {
         match (args[i].as_str(), args.get(i + 1)) {
-            ("--stalled", Some(v)) => stalled = v.clone(),
+            ("--stalled", Some(v)) => ids.extend(stalled_id(v)),
             ("--reason" | "-R", Some(v)) => reason = v.clone(),
             (word, _) if !word.starts_with('-') && scope_arg.is_empty() => {
                 scope_arg = word.to_string();
@@ -1102,19 +1109,13 @@ pub fn run_escalate(args: &[String]) -> i32 {
                     2,
                     &format!(
                         "fno agents org escalate: unknown argument {other}\nUsage: fno agents org \
-                         escalate [SCOPE] [--stalled IDS] [--reason R]"
+                         escalate [SCOPE] [--stalled ID]... [--reason R]"
                     ),
                 )
             }
         }
         i += 2;
     }
-    let mut ids: Vec<String> = stalled
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect();
     let here = cwd();
     let home = crate::paths::AgentsHome::from_env();
     let session = escalating_session(&here);
@@ -1222,6 +1223,15 @@ mod tests {
     use super::*;
 
     const T0: i64 = 1_788_000_000;
+
+    #[test]
+    fn a_stalled_id_with_commas_stays_whole() {
+        assert_eq!(
+            stalled_id(r#"failed_verdict:{"claim":"a","node":"x-1"}"#).as_deref(),
+            Some(r#"failed_verdict:{"claim":"a","node":"x-1"}"#)
+        );
+        assert_eq!(stalled_id("  "), None);
+    }
 
     fn manifest(dir: &Path, body: &str) -> PathBuf {
         let path = dir.join("leads").join("epic-x.md");
