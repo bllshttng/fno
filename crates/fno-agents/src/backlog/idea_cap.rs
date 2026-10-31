@@ -218,6 +218,26 @@ mod tests {
     }
 
     #[test]
+    fn the_global_config_sets_the_cap_for_a_store_in_db() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("db");
+        std::fs::create_dir_all(&db).unwrap();
+        let graph = db.join("graph.db");
+        std::fs::write(
+            root.path().join("config.toml"),
+            "[backlog]\nmax_open_ideas = 400\n",
+        )
+        .unwrap();
+        assert_eq!(configured_cap(&graph), (Some(400), "config"));
+
+        std::fs::write(db.join("config.toml"), "[backlog]\nmax_open_ideas = 50\n").unwrap();
+        assert_eq!(configured_cap(&graph), (Some(400), "config"));
+
+        std::fs::write(root.path().join("config.toml"), "[backlog]\n").unwrap();
+        assert_eq!(configured_cap(&graph), (Some(50), "config"));
+    }
+
+    #[test]
     fn nested_ideas_use_the_nearest_epic_and_cycles_are_bounded() {
         let mut rows = vec![
             json!({"id": "e-1", "type": "epic"}),

@@ -52,10 +52,21 @@ const MAX_ANCESTOR_WALK: usize = 64;
 /// One `[backlog]` integer read from the `config.toml` in `config_dir`
 /// (the graph's own `.fno` directory). `None` on a missing file, a missing
 /// key, or a non-integer value.
+///
+/// The store lives in `<state>/db/`, so the file beside it is not the global
+/// config `fno config get` reports. For that layout `<state>/config.toml`
+/// answers first, and the file beside the store fills only a key it leaves
+/// unset.
 pub fn backlog_config_int(config_dir: &std::path::Path, key: &str) -> Option<i64> {
-    let raw = std::fs::read_to_string(config_dir.join("config.toml")).ok()?;
-    let table = raw.parse::<toml::Table>().ok()?;
-    table.get("backlog")?.as_table()?.get(key)?.as_integer()
+    let read = |dir: &std::path::Path| -> Option<toml::Value> {
+        let raw = std::fs::read_to_string(dir.join("config.toml")).ok()?;
+        let table = raw.parse::<toml::Table>().ok()?;
+        table.get("backlog")?.as_table()?.get(key).cloned()
+    };
+    let global = (config_dir.file_name() == Some(std::ffi::OsStr::new("db")))
+        .then(|| config_dir.parent().and_then(read))
+        .flatten();
+    global.or_else(|| read(config_dir))?.as_integer()
 }
 
 /// `config.backlog.staleness_days`, read from the `config.toml` in

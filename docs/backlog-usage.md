@@ -250,7 +250,7 @@ Two hidden commands serve the migration and the operator:
 
 ### Epic child cap
 
-`backlog.epic_max_open_children` bounds how many open direct children one epic can hold. The graph store reads it from the config.toml beside graph.json, which is the global config on a default install. Unset means no cap.
+`backlog.epic_max_open_children` bounds how many open direct children one epic can hold. The graph store reads the global config first, then a config.toml beside the store. Unset means no cap.
 
 A child is open: not done, not superseded, not deferred. Children are direct. A sub-epic counts as one child of its parent and carries its own cap.
 

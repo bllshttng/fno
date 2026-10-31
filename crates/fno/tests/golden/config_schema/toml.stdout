@@ -117,9 +117,9 @@ default_diff_budget = 300
 id_hex_width = 8
 # Age (days) before an unmoved ready node is quarantined from selection.
 staleness_days = 21
-# Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic command. Unset means no cap. The graph store reads it from the config.toml beside graph.json, the global config on a default install.
+# Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic command. Unset means no cap. The graph store reads the global config first, then a config.toml beside the store.
 # epic_max_open_children = <unset>   # optional; no default
-# Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads it from the config.toml beside graph.json.
+# Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads the global config first, then a config.toml beside the store.
 max_open_ideas = 25
 # Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local|backlog|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file).
 render_targets = []
