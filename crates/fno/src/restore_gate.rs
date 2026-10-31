@@ -120,6 +120,64 @@ pub(crate) fn retired_receipt_session_ids() -> Option<std::collections::HashSet<
     Some(out)
 }
 
+/// The refusal for each session whose lead role was given up on purpose, by
+/// session id. `fno-agents` writes these markers (`retired_lead.rs`). A missing
+/// store is empty, and an unreadable marker is skipped: restore keeps the member.
+pub(crate) fn retired_lead_refusals() -> std::collections::HashMap<String, String> {
+    retired_lead_refusals_in(&agents_view::runtime_home().join("retired-leads"))
+}
+
+fn retired_lead_refusals_in(root: &std::path::Path) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(value) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        else {
+            continue;
+        };
+        if let Some(session) = value["harness_session_id"].as_str() {
+            out.insert(
+                session.to_string(),
+                format!(
+                    "retired lead: {} gave up {}; fno agents resume brings it back",
+                    value["by"].as_str().unwrap_or("unknown"),
+                    value["scope"].as_str().unwrap_or("its role"),
+                ),
+            );
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod retired_lead_tests {
+    #[test]
+    fn a_marker_refuses_its_session_and_names_who_and_what() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("s-1.json"),
+            r#"{"harness_session_id":"s-1","scope":"fno","by":"stop"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("bad.json"), "not json").unwrap();
+        let refusals = super::retired_lead_refusals_in(dir.path());
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(
+            refusals["s-1"],
+            "retired lead: stop gave up fno; fno agents resume brings it back"
+        );
+        assert!(super::retired_lead_refusals_in(&dir.path().join("absent")).is_empty());
+    }
+}
+
 /// The restore refusal for one member's native session id, when a reap
 /// receipt preserves it. The death record outranks every liveness guess: a
 /// session the fleet retired is never a restore candidate, whatever the

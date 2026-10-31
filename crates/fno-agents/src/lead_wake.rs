@@ -365,13 +365,27 @@ fn emit_receipt(
 pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, String> {
     let now = now_epoch();
     let registry = home.registry_json();
-    let teams =
+    let mut teams =
         crate::territory::live_teams(&registry).map_err(|e| format!("lead_wake: {}", e.0))?;
+    let rows = crate::state::load_registry(&registry)
+        .map(|loaded| loaded.entries)
+        .unwrap_or_default();
+    let retired = crate::retired_lead::wake_refusals(home, &rows);
+    teams.retain(|team| {
+        team.holder_session
+            .as_deref()
+            .is_none_or(|session| !retired.contains_key(session))
+    });
     if teams.is_empty() {
+        let mut detail = "no live lead teams".to_string();
+        for line in crate::retired_lead::split_rows(rows, &retired).1 {
+            detail.push_str("; ");
+            detail.push_str(&line);
+        }
         return Ok(Outcome {
             acted: 0,
             skip_reason: Some("no_teams".to_string()),
-            detail: "no live lead teams".to_string(),
+            detail: short(&detail),
         });
     }
     let beat_secs = crate::lead_verdict_inputs::checkin_interval_secs(config_cwd);

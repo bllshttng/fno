@@ -37,8 +37,37 @@ use super::*;
 
 pub(super) async fn handle_stop(ctx: &Ctx, req: &Request) -> Response {
     let mut response = stop_body(ctx, req).await;
+    retire_stopped_lead(ctx, req, &response).await;
     attach_stopped_claims_release(ctx, req, "stop", &mut response).await;
     response
+}
+
+/// A confirmed stop of a row that holds a role retires the lead role, so no wake
+/// and no restore brings the lead back until someone asks for it.
+async fn retire_stopped_lead(ctx: &Ctx, req: &Request, response: &Response) {
+    let stopped = response.result().is_some_and(|result| {
+        !matches!(result.get("no_op"), Some(Value::Bool(true)))
+            && (matches!(result.get("stopped"), Some(Value::Bool(true)))
+                || matches!(result.get("already_exited"), Some(Value::Bool(true))))
+    });
+    let Some(name) = req.params.get("name").and_then(Value::as_str) else {
+        return;
+    };
+    if !stopped {
+        return;
+    }
+    let Ok(registry) = load_registry_offloaded(ctx.home.registry_json()).await else {
+        return;
+    };
+    let Some(row) = registry.find_name_or_full_session_id(name) else {
+        return;
+    };
+    if let (Some(scope), Some(session)) = (
+        row.role_scope.as_deref().filter(|s| !s.trim().is_empty()),
+        row.harness_session_id.as_deref(),
+    ) {
+        crate::retired_lead::write(&ctx.home, session, scope, "stop");
+    }
 }
 
 async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
