@@ -548,6 +548,17 @@ jobs:
       - name: Provision the slow-test runner
         uses: ./.github/actions/smoke-setup
 
+      - name: Sync the cli venv
+        # The pane lane drives pytest through the native front, which resolves
+        # bare python3 when no cli venv exists. The old `uv run --project cli
+        # fno-py` form auto-synced that venv; the port to the native runner
+        # dropped it and the schedule lane died on "No module named pytest"
+        # (2026-10-30, reproduced on rerun). The smoke shards get the same
+        # sync from the registry's Sync + build step; this lane bypasses the
+        # registry, so it syncs here.
+        working-directory: cli
+        run: uv sync
+
       - name: Run the slow pane lane
         env:
           FNO_PYTEST_SHARD: "1/1"

@@ -79,6 +79,7 @@ codex	Stop	target-stop-hook.sh	block	open
 codex	Stop	context-nudge.sh	block	open
 codex	PostToolUse	format-on-edit.sh	wait	-
 codex	PostToolUse	edit-integrity.sh	wait	-
+codex	PostToolUse	merge-capture.sh	wait	-
 codex	PostToolUse	diff-budget-commit.sh	wait	-
 codex	PostToolUse	refusal-streak-record.sh	wait	-
 codex	PostToolUse	spend-drift-monitor.sh	wait	-
