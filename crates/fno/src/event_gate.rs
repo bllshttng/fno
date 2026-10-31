@@ -21,6 +21,7 @@ fn default_key(reason: &str) -> String {
     )
 }
 
+// events-discipline:allow: a path resolver; the writer below targets the failure sidecar, not the journal
 fn default_journal() -> PathBuf {
     match std::env::var_os("FNO_EVENTS_PATH") {
         Some(pin) if !pin.is_empty() => PathBuf::from(pin),

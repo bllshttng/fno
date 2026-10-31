@@ -193,7 +193,7 @@ from pathlib import Path
 
 import yaml
 
-from fno import events as events_mod
+from fno.events import store_client as events_mod
 from fno.paths import project_log
 
 root = Path(os.environ["PROJECT_DIR"])

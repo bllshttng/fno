@@ -357,6 +357,7 @@ pub(crate) fn project_journal() -> PathBuf {
     match std::env::var_os("FNO_EVENTS_PATH") {
         Some(pin) if !pin.is_empty() => PathBuf::from(pin),
         _ => crate::config_doctor::project_space_dir(&crate::config_doctor::Settings::load())
+            // events-discipline:allow: a path resolver; the writes in reach are in-file test fixtures
             .join("events.jsonl"),
     }
 }
