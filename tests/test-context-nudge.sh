@@ -357,8 +357,10 @@ assert_contains "AC7: next band blocks again" "$OUT" '60% used'
 # + session_context_nudge event. Clear latches + registry first.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_registry no no
-write_transcript "$SBX/t.jsonl" 500000   # 50% >= general trigger 50
-run_hook "$(payload "$SBX/t.jsonl")"
+# A fresh basename: the probe cache keys on name, size and whole-second mtime,
+# and 500000 rewrites AC7's 600000 transcript at the same size.
+write_transcript "$SBX/ac17.jsonl" 500000   # 50% >= general trigger 50
+run_hook "$(payload "$SBX/ac17.jsonl")"
 assert_eq     "AC17: unpromoted past trigger exits 0" "$RC" "0"
 assert_contains "AC17: unpromoted decision block" "$OUT" '"decision":"block"'
 assert_contains "AC17: reason carries measured 50%" "$OUT" '50% used'
