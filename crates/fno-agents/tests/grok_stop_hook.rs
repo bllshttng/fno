@@ -157,9 +157,12 @@ fn seed_store(fx: &GrokFixture, text: &str) {
     fs::write(&file, serde_json::to_string(&line).unwrap() + "\n").unwrap();
 }
 
+fn journal_text(events: &Path) -> String {
+    fno_agents::event_store::journal_text(events, &[])
+}
+
 fn last_loop_check(events: &Path) -> Option<serde_json::Value> {
-    let content = fs::read_to_string(events).ok()?;
-    content
+    journal_text(events)
         .lines()
         .rev()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -200,7 +203,6 @@ const OWNED_MANIFEST: &str =
 /// AC2-HP: the promise rides ONLY grok's lastAssistantMessage; the store
 /// file lacks it, so an advisory allow proves the payload intent channel.
 #[test]
-#[ignore = "quarantined: on CI the hook writes gh_probe and advisory rows but no loop_check row"]
 fn grok_fire_with_a_promise_terminates_advisory_through_the_payload() {
     let fx = fixture("adv", ADV_MANIFEST);
     seed_store(&fx, "wrapping up the run");
@@ -213,7 +215,7 @@ fn grok_fire_with_a_promise_terminates_advisory_through_the_payload() {
     assert_eq!(code, 0, "{stdout} {stderr}");
     // The allow path prints nothing; the block path is the one that speaks.
     assert!(stdout.trim().is_empty(), "allow must be silent: {stdout}");
-    let journal = fs::read_to_string(&fx.events).unwrap_or_default();
+    let journal = journal_text(&fx.events);
     let row = last_loop_check(&fx.events)
         .unwrap_or_else(|| panic!("a loop_check row: journal={journal:?} stderr={stderr}"));
     assert_eq!(
@@ -230,7 +232,6 @@ fn grok_fire_with_a_promise_terminates_advisory_through_the_payload() {
 
 /// AC2-HP: with no PR in the world, the gate blocks through grok's shape.
 #[test]
-#[ignore = "quarantined: on CI the hook writes gh_probe and advisory rows but no loop_check row"]
 fn grok_fire_without_a_pr_blocks_like_any_session() {
     let fx = fixture("nopr", OWNED_MANIFEST);
     seed_store(&fx, "still working, nothing to report");
@@ -240,7 +241,7 @@ fn grok_fire_without_a_pr_blocks_like_any_session() {
     let d: serde_json::Value =
         serde_json::from_str(stdout.trim()).unwrap_or(serde_json::Value::Null);
     assert_eq!(d["decision"], "block", "{d}");
-    let journal = fs::read_to_string(&fx.events).unwrap_or_default();
+    let journal = journal_text(&fx.events);
     assert!(
         last_loop_check(&fx.events).is_some(),
         "decide ran: journal={journal:?} stderr={stderr}"
