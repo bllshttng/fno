@@ -1630,7 +1630,7 @@ async fn codex_target_launch_cwd_binds_a_canonical_node_target_to_its_worktree()
             ),
         )
         .unwrap();
-        std::env::set_var("FNO_BIN", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
 
         let req = Request::new(
             1,
@@ -1686,7 +1686,7 @@ async fn codex_target_launch_cwd_refusal_starts_nothing() {
         let home = tmp_home("codex-target-cwd-refusal");
         let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
         let (repo, bin) = codex_target_launch_cwd_fixture("", 1);
-        std::env::set_var("FNO_BIN", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
 
         let req = Request::new(
             1,
@@ -1747,7 +1747,7 @@ async fn codex_target_launch_cwd_refuses_a_worktree_removed_after_ensure() {
             format!("#!/bin/sh\ncat >/dev/null\necho '{worktree}'\nrmdir '{worktree}'\nexit 0\n"),
         )
         .unwrap();
-        std::env::set_var("FNO_BIN", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
 
         let req = Request::new(
             1,

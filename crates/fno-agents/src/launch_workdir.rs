@@ -274,7 +274,7 @@ mod tests {
             "fno",
             &format!("#!/bin/sh\ncat >/dev/null\necho '{ensure_stdout}'\necho 'worktree ensure: reusing ... created=false' >&2\nexit {}\n", repo_exit),
         );
-        std::env::set_var("FNO_BIN", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
         let plain = tempfile::tempdir().unwrap();
         let cwd = if non_git {
             plain.path().to_path_buf()
@@ -364,7 +364,7 @@ mod tests {
             args.display()
         );
         let bin = crate::write_exec_stub(dir.path(), "fno", &script);
-        std::env::set_var("FNO_BIN", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
         let payload = json!({
             "recorded_cwd": dir.path().to_string_lossy(),
             "node": "x-eeee",
