@@ -379,37 +379,6 @@ DEFERRED_KINDS: tuple[str, ...] = (
     "junk",  # empty/corrupt placeholder parked in a status
 )
 
-# Exact-string table: reason -> kind. Footnote-stamped strings ONLY (the
-# maintain drain at its default threshold, and the stale-quarantine guard
-# from maintain.STALE_QUARANTINE_REASON). Operator-specific prose rides the
-# backfill command's --map file instead, never this table. Matching is exact,
-# byte for byte: no strip, no lowercase, no substring, no regex.
-DEFERRED_KIND_BY_REASON: dict[str, str] = {
-    "stale >30d, drained by maintain": "expired",
-    "stale-quarantine (guard)": "expired",
-}
-
-
-def classify_deferred_reason(
-    reason: object, extra_map: dict[str, str] | None = None
-) -> str | None:
-    """Classify a deferred_reason by EXACT string match. None = unclassified.
-
-    Pure lookup: the reason is never normalized, so a near-miss (a different
-    staleness threshold, a trailing space) stays honestly unknown rather than
-    silently classifying as expired. ``extra_map`` (the backfill command's --map)
-    merges over the code defaults and is validated for kind membership at
-    load time by the command, not here.
-    """
-    if not isinstance(reason, str):
-        return None
-    if extra_map:
-        kind = extra_map.get(reason)
-        if kind is not None:
-            return kind
-    return DEFERRED_KIND_BY_REASON.get(reason)
-
-
 def normalize_difficulty(value: str | None) -> str | None:
     """Normalize and validate a filing-time work-difficulty estimate."""
     if value is None:
