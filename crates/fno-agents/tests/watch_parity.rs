@@ -2,7 +2,7 @@
 //! parity-oracle: fno.agents.cli._watch_loop
 //!
 //! The watch command, frozen against goldens captured from its Python leg
-//! (tests/golden/watch/capture.py) before that leg was deleted. Each case
+//! before that leg was deleted. Each case
 //! seeds the registry rows the capture recorded, serves the recorded worker
 //! replies from a fake worker socket (one reply per connection, in order), and
 //! compares exit code, stdout and stderr byte for byte.

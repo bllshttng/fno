@@ -155,7 +155,7 @@ SELF_SET_HARNESS_MARKERS: tuple[tuple[str, str], ...] = (
 # resolve_harness_identity() consults, in precedence order, while this defines
 # what has to be absent for a test or a preflight leg to behave like a fresh
 # checkout. Several modules read a session marker directly rather than through
-# the resolver - carveout/core.py and done/cli.py read CLAUDECODE_SESSION_ID -
+# the resolver - done/cli.py reads CLAUDECODE_SESSION_ID -
 # so scrubbing only the resolver's tuples leaves those paths resolving the live
 # session.
 #
@@ -166,7 +166,7 @@ SELF_SET_HARNESS_MARKERS: tuple[tuple[str, str], ...] = (
 #
 # TARGET_SESSION_ID is fno plumbing, not a harness marker: the run id a driver
 # pre-assigns and init adopts verbatim as session id and claim owner. It belongs
-# in the scrub anyway, for the same reason as the markers: carveout/core.py
+# in the scrub anyway, for the same reason as the markers: backlog/carveout.rs
 # matches live claims through it, so a suite or spawned child that inherits it
 # resolves (or stamps) the live run's identity instead of its own.
 #

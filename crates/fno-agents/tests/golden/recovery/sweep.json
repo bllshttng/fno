@@ -1,0 +1,997 @@
+{
+ "now": 1789400000.0,
+ "scenarios": [
+  {
+   "name": "only a located claude row is a candidate",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    },
+    {
+     "name": "t-bbbb2222",
+     "short_id": "bbbb2222",
+     "harness": "codex",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    },
+    {
+     "name": "no-short",
+     "short_id": "",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    },
+    {
+     "name": "t-cccc3333",
+     "short_id": "cccc3333",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111",
+    "bbbb2222"
+   ],
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 10
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {}
+    }
+   ]
+  },
+  {
+   "name": "needs-input spares the session",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    },
+    {
+     "name": "t-bbbb2222",
+     "short_id": "bbbb2222",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111",
+    "bbbb2222"
+   ],
+   "ticks": [
+    {
+     "state": {
+      "aaaa1111": {
+       "state": "needs-input"
+      }
+     },
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 9999
+      },
+      "bbbb2222": {
+       "state": "your-move"
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 2,
+     "events": [
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "aaaa1111",
+        "reason": "needs-input"
+       }
+      },
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "bbbb2222",
+        "reason": "needs-input"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {}
+    }
+   ]
+  },
+  {
+   "name": "a finished worker surfaces to close once",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": true
+     }
+    },
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": true
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "recovery_close_notify",
+       "data": {
+        "short_id": "aaaa1111"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "close:aaaa1111": true
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {
+      "close:aaaa1111": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "a notify miss reads no channel, once",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": true
+     },
+     "notify": {
+      "aaaa1111": false
+     }
+    },
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": true
+     },
+     "notify": {
+      "aaaa1111": false
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "aaaa1111",
+        "reason": "no-notify-channel"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "close:aaaa1111": true
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {
+      "close:aaaa1111": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "unverifiable mission stays terminal",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": null
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {}
+    }
+   ]
+  },
+  {
+   "name": "held by design until capped, cap announced once",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "max_nudges": 2,
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": false
+     }
+    },
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": false
+     }
+    },
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": false
+     }
+    },
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "done",
+       "last_activity_age_s": 9999
+      }
+     },
+     "mission": {
+      "aaaa1111": false
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "aaaa1111",
+        "reason": "held-by-design"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "aaaa1111": 1
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "aaaa1111",
+        "reason": "held-by-design"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "aaaa1111": 2
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "recovery_capped",
+       "data": {
+        "short_id": "aaaa1111",
+        "nudges": 2
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "aaaa1111": 2,
+      "capped:aaaa1111": true
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {
+      "aaaa1111": 2,
+      "capped:aaaa1111": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "stalled with a dead socket is unreachable",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "stalled"
+      }
+     },
+     "liveness": {
+      "aaaa1111": false
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "aaaa1111",
+        "reason": "socket-unreachable"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {}
+    }
+   ]
+  },
+  {
+   "name": "a node-less thread and a cwd-less row stay silent",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "node-less"
+    },
+    {
+     "name": "t-bbbb2222",
+     "short_id": "bbbb2222",
+     "harness": "claude",
+     "cwd": "none"
+    },
+    {
+     "name": "t-cccc3333",
+     "short_id": "cccc3333",
+     "harness": "claude",
+     "cwd": "missing-fno"
+    }
+   ],
+   "located": [
+    "aaaa1111",
+    "bbbb2222",
+    "cccc3333"
+   ],
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 9999
+      },
+      "bbbb2222": {
+       "state": "working",
+       "last_activity_age_s": 9999
+      },
+      "cccc3333": {
+       "state": "working",
+       "last_activity_age_s": 9999
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 3,
+     "events": [
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "cccc3333",
+        "reason": "held-by-design"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "cccc3333": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "a dead session's refusal locks at once, once",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n",
+     "launch_account": "zai-main"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "ticks": [
+    {
+     "state": {
+      "aaaa1111": {
+       "output_result": "Claude usage limit reached for 5 hour"
+      }
+     },
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 9999,
+       "observed_model": {
+        "model": "glm-5"
+       }
+      }
+     }
+    },
+    {
+     "state": {
+      "aaaa1111": {
+       "output_result": "Claude usage limit reached for 5 hour"
+      }
+     },
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 9999,
+       "observed_model": {
+        "model": "glm-5"
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "worker_refused",
+       "data": {
+        "short_id": "aaaa1111",
+        "node": "x-1",
+        "error_class": "provider_4xx_quota",
+        "source": "output_result",
+        "model": "glm-5",
+        "resets_at": 1789418000.0,
+        "reset_is_derived": true,
+        "reset_stamp_unparsed": null,
+        "excerpt": "Claude usage limit reached for 5 hour"
+       }
+      },
+      {
+       "type": "provider_quota_locked",
+       "data": {
+        "short_id": "aaaa1111",
+        "account": "zai-main",
+        "attributed": true,
+        "source": "output_result",
+        "resets_at": 1789418000.0,
+        "reset_is_derived": true
+       }
+      },
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "aaaa1111",
+        "reason": "held-by-design"
+       }
+      }
+     ],
+     "quota_calls": [
+      {
+       "account": "zai-main",
+       "text": "Claude usage limit reached for 5 hour",
+       "resets_at": 1789418000.0
+      }
+     ],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true,
+      "quota-locked:aaaa1111": true,
+      "aaaa1111": 1
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "recovery_skipped",
+       "data": {
+        "short_id": "aaaa1111",
+        "reason": "held-by-design"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true,
+      "quota-locked:aaaa1111": true,
+      "aaaa1111": 2
+     }
+    }
+   ]
+  },
+  {
+   "name": "an unattributed refusal records nothing",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    },
+    {
+     "name": "t-bbbb2222",
+     "short_id": "bbbb2222",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n",
+     "launch_account": "default"
+    }
+   ],
+   "located": [
+    "aaaa1111",
+    "bbbb2222"
+   ],
+   "ticks": [
+    {
+     "state": {
+      "aaaa1111": {
+       "output_result": "Claude usage limit reached for 5 hour"
+      },
+      "bbbb2222": {
+       "output_result": "Claude usage limit reached for 5 hour"
+      }
+     },
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 10
+      },
+      "bbbb2222": {
+       "state": "working",
+       "last_activity_age_s": 10,
+       "observed_model": "not-a-dict"
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 2,
+     "events": [
+      {
+       "type": "worker_refused",
+       "data": {
+        "short_id": "aaaa1111",
+        "node": "x-1",
+        "error_class": "provider_4xx_quota",
+        "source": "output_result",
+        "model": null,
+        "resets_at": 1789418000.0,
+        "reset_is_derived": true,
+        "reset_stamp_unparsed": null,
+        "excerpt": "Claude usage limit reached for 5 hour"
+       }
+      },
+      {
+       "type": "provider_quota_locked",
+       "data": {
+        "short_id": "aaaa1111",
+        "account": null,
+        "attributed": false,
+        "source": "output_result",
+        "resets_at": 1789418000.0,
+        "reset_is_derived": true
+       }
+      },
+      {
+       "type": "worker_refused",
+       "data": {
+        "short_id": "bbbb2222",
+        "node": "x-1",
+        "error_class": "provider_4xx_quota",
+        "source": "output_result",
+        "model": null,
+        "resets_at": 1789418000.0,
+        "reset_is_derived": true,
+        "reset_stamp_unparsed": null,
+        "excerpt": "Claude usage limit reached for 5 hour"
+       }
+      },
+      {
+       "type": "provider_quota_locked",
+       "data": {
+        "short_id": "bbbb2222",
+        "account": null,
+        "attributed": false,
+        "source": "output_result",
+        "resets_at": 1789418000.0,
+        "reset_is_derived": true
+       }
+      }
+     ],
+     "quota_calls": [
+      {
+       "account": null,
+       "text": "Claude usage limit reached for 5 hour",
+       "resets_at": 1789418000.0
+      },
+      {
+       "account": "default",
+       "text": "Claude usage limit reached for 5 hour",
+       "resets_at": 1789418000.0
+      }
+     ],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true,
+      "quota-locked:aaaa1111": true,
+      "refused:bbbb2222:provider_4xx_quota": true,
+      "quota-locked:bbbb2222": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "a live refusal acts only on the second tick",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n",
+     "launch_account": "zai-main"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 10,
+       "last_message": "Claude usage limit reached"
+      }
+     }
+    },
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 10,
+       "last_message": "Claude usage limit reached"
+      }
+     }
+    },
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 10,
+       "last_message": "Claude usage limit reached"
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "worker_refused",
+       "data": {
+        "short_id": "aaaa1111",
+        "node": "x-1",
+        "error_class": "provider_4xx_quota",
+        "source": "transcript",
+        "model": null,
+        "resets_at": null,
+        "reset_is_derived": false,
+        "reset_stamp_unparsed": null,
+        "excerpt": "Claude usage limit reached"
+       }
+      }
+     ],
+     "quota_calls": [],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "provider_quota_locked",
+       "data": {
+        "short_id": "aaaa1111",
+        "account": "zai-main",
+        "attributed": true,
+        "source": "transcript",
+        "resets_at": null,
+        "reset_is_derived": false
+       }
+      }
+     ],
+     "quota_calls": [
+      {
+       "account": "zai-main",
+       "text": "Claude usage limit reached",
+       "resets_at": null
+      }
+     ],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true,
+      "quota-locked:aaaa1111": true
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true,
+      "quota-locked:aaaa1111": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "a stamp resolves through the active account's zone",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "node-less",
+     "launch_account": "zai-main"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "ticks": [
+    {
+     "tz": "Asia/Shanghai",
+     "state": {
+      "aaaa1111": {
+       "output_result": "usage limit reached, reset 2026-09-14 15:00"
+      }
+     },
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 9999
+      }
+     }
+    },
+    {
+     "tz": null,
+     "state": {
+      "aaaa1111": {
+       "output_result": "usage limit reached, reset 2026-09-14 15:00"
+      }
+     },
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 9999
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [
+      {
+       "type": "worker_refused",
+       "data": {
+        "short_id": "aaaa1111",
+        "node": null,
+        "error_class": "provider_4xx_quota",
+        "source": "output_result",
+        "model": null,
+        "resets_at": 1789369200.0,
+        "reset_is_derived": false,
+        "reset_stamp_unparsed": null,
+        "excerpt": "usage limit reached, reset 2026-09-14 15:00"
+       }
+      },
+      {
+       "type": "provider_quota_locked",
+       "data": {
+        "short_id": "aaaa1111",
+        "account": "zai-main",
+        "attributed": true,
+        "source": "output_result",
+        "resets_at": 1789369200.0,
+        "reset_is_derived": false
+       }
+      }
+     ],
+     "quota_calls": [
+      {
+       "account": "zai-main",
+       "text": "usage limit reached, reset 2026-09-14 15:00",
+       "resets_at": 1789369200.0
+      }
+     ],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true,
+      "quota-locked:aaaa1111": true
+     }
+    },
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {
+      "refused:aaaa1111:provider_4xx_quota": true,
+      "quota-locked:aaaa1111": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "a gone session's counts are pruned",
+   "entries": [
+    {
+     "name": "t-aaaa1111",
+     "short_id": "aaaa1111",
+     "harness": "claude",
+     "cwd": "manifest:graph_node_id: x-1\n"
+    }
+   ],
+   "located": [
+    "aaaa1111"
+   ],
+   "initial_counts": {
+    "aaaa1111": 1,
+    "bbbb2222": 2,
+    "capped:bbbb2222": true,
+    "close:bbbb2222": true,
+    "quota-locked:bbbb2222": true,
+    "refused:bbbb2222:provider_4xx_quota": true,
+    "refused:aaaa1111:provider_4xx_quota": true
+   },
+   "ticks": [
+    {
+     "truth": {
+      "aaaa1111": {
+       "state": "working",
+       "last_activity_age_s": 10
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "candidates": 1,
+     "events": [],
+     "quota_calls": [],
+     "counts": {
+      "aaaa1111": 1,
+      "refused:aaaa1111:provider_4xx_quota": true
+     }
+    }
+   ]
+  }
+ ]
+}

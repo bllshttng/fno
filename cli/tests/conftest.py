@@ -65,7 +65,7 @@ def _hermetic_worked_authority(monkeypatch):
     read fails, and CI has no harness binaries, so dispatch tests passed on a
     developer machine (real fleet answers) and failed in CI (read raises).
     Patching the authority itself keeps the layers beneath it real: roster
-    join tests bind the function directly, fleet fakes at ``fleet_rows`` and
+    join tests bind the function directly, fleet fakes at the census door and
     identity pins between the claims modules all stay untouched. A test that
     installs its own map, or raises to exercise the degrade, patches after
     this one and wins.
@@ -858,7 +858,6 @@ def _hermetic_worker_add_dirs(monkeypatch):
 # on the test-file side; keep the two lists in step.
 _PLAN_JOURNAL_PINNED_MODULES = frozenset(
     {
-        "test_rust_runtime",
         "test_epic_status",
     }
 )

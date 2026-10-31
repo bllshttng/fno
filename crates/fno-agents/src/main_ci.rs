@@ -76,7 +76,11 @@ const STALE_REPORT_WINDOW_DAYS: i64 = 14;
 /// NEWEST stale failure promotes onto the verdict line (`pending (cli-ci at
 /// <sha>)`) instead of riding the stale list - the previous head's red is
 /// the live signal while the head is unverified; with no head rows at all
-/// nothing promotes. Per workflow with head rows the
+/// nothing promotes. When nothing promotes either, the pending verdict
+/// names the newest settled run on main (`pending (last settled: green
+/// cli-ci at <sha>, <1h old)`) so a coalescing burst reads as a queue with
+/// a known floor rather than an open wedge; a cancel is no verdict and
+/// never answers. Per workflow with head rows the
 /// newest COMPLETED run decides - red on fail or cancel, naming the
 /// workflow and the sha it ran on - except that a cancelled run whose
 /// workflow already has a newer in-flight run on the same sha reduces to
@@ -107,11 +111,14 @@ fn main_ci_token_from_pages<'a>(
         on_main.iter().filter(|run| at_head(run) && is_push(run)),
     );
     // A later same-sha completed run of an ALREADY-seeded workflow supersedes
-    // an earlier push run's conclusion, from any trigger: a
+    // an earlier push run's CANCELLED conclusion, from any trigger: a
     // concurrency group shared across triggers can cancel the push run in
     // favor of, say, a schedule run of the identical workflow and sha, and
     // the cancelled run must not outlive a newer completion of that same
-    // workflow. Only `newest_completed` moves here, never the `newest`
+    // workflow. Only a cancel is superseded: a schedule or dispatch run also
+    // runs the trigger-gated jobs push skips, so its verdict is about a
+    // different job set and never replaces a push run that reached its own.
+    // Only `newest_completed` moves here, never the `newest`
     // pointer the in-flight check below reads - so an in-flight nightly of a
     // workflow that already finished its push run never holds the verdict
     // pending, and a workflow with no push row at the head (a pure-schedule
@@ -138,7 +145,22 @@ fn main_ci_token_from_pages<'a>(
             Some(c) => created > c.get("created_at").and_then(Value::as_str).unwrap_or(""),
             None => true,
         };
-        if is_newer {
+        // A non-push completion replaces the incumbent only when the
+        // incumbent cannot answer for its own job set: a CANCELLED run (the
+        // concurrency hand-off this pass exists for) or another non-push run
+        // (non-push completions settle newest-wins among themselves). A
+        // schedule or dispatch run of an already-seeded workflow at the same
+        // sha also runs the trigger-gated jobs push skips (cli-ci's
+        // slow-e2e), so its verdict is about a different job set and must
+        // never overwrite the push run's own green - a schedule-only job
+        // failing would hold every merge while head push CI is green - nor
+        // clear the push run's red. With no completed push run yet, the
+        // workflow stays pending until the push run itself lands a verdict.
+        let incumbent_replaceable = newest_completed.as_ref().is_some_and(|c| {
+            crate::pr_push::rest_bucket(c) == "cancel"
+                || c.get("event").and_then(Value::as_str) != Some("push")
+        });
+        if is_newer && incumbent_replaceable {
             *newest_completed = Some(run);
         }
     }
@@ -270,6 +292,41 @@ fn main_ci_token_from_pages<'a>(
             fields.insert("sha".into(), sha.clone());
         }
     }
+    // A pending verdict with nothing promoted names the newest settled run:
+    // once a red is resolved by a newer pass the line would read bare
+    // `pending` for the length of the next coalescing burst, with nothing
+    // saying main was green an hour ago. A cancel is no verdict and never
+    // answers, and the promotion above owns the line when a live red rides
+    // it, so this only fires on the bare word.
+    if token.get("verdict").and_then(Value::as_str) == Some("pending")
+        && token.get("workflow").is_none()
+    {
+        let settled = at_sha
+            .iter()
+            .chain(on_main.iter())
+            .filter(|run| matches!(crate::pr_push::rest_bucket(run), "pass" | "fail"))
+            .max_by_key(|run| run.get("created_at").and_then(Value::as_str).unwrap_or(""));
+        if let Some(run) = settled {
+            let created = run.get("created_at").and_then(Value::as_str).unwrap_or("");
+            token
+                .as_object_mut()
+                .expect("token is built as an object")
+                .insert(
+                    "last_settled".into(),
+                    json!({
+                        "workflow": run.get("name").and_then(Value::as_str).unwrap_or("unknown"),
+                        "sha": run.get("head_sha").and_then(Value::as_str).unwrap_or("unknown"),
+                        "verdict": if crate::pr_push::rest_bucket(run) == "pass" {
+                            "green"
+                        } else {
+                            "red"
+                        },
+                        "created_at": created,
+                        "age": age_word(created, now),
+                    }),
+                );
+        }
+    }
     if !stale.is_empty() {
         token
             .as_object_mut()
@@ -321,20 +378,34 @@ fn attach_incident(cwd: &Path, token: &mut Value, red: Option<&Value>) {
 
 /// The `main ci:` line body: a red verdict names the workflow and sha, a
 /// pending verdict names them too when the previous head's red promotes
-/// onto it, a plain verdict is the word alone, and legacy cached string
-/// tokens pass through untouched.
+/// onto it, a pending verdict with nothing promoted names the newest
+/// settled run with its verdict, workflow, sha and age, a plain verdict is
+/// the word alone, and legacy cached string tokens pass through untouched.
 pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
     match v {
         Some(Value::Object(o)) => {
             let field = |k: &str| o.get(k).and_then(Value::as_str).unwrap_or("unknown");
-            let base = match o.get("workflow") {
-                Some(_) => format!(
-                    "{} ({} at {})",
-                    field("verdict"),
-                    field("workflow"),
-                    field("sha")
-                ),
-                None => field("verdict").to_string(),
+            let base = match o.get("last_settled") {
+                Some(s) => {
+                    let sf = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("unknown");
+                    format!(
+                        "{} (last settled: {} {} at {}, {})",
+                        field("verdict"),
+                        sf("verdict"),
+                        sf("workflow"),
+                        sf("sha"),
+                        sf("age")
+                    )
+                }
+                None => match o.get("workflow") {
+                    Some(_) => format!(
+                        "{} ({} at {})",
+                        field("verdict"),
+                        field("workflow"),
+                        field("sha")
+                    ),
+                    None => field("verdict").to_string(),
+                },
             };
             match o.get("platform_incident") {
                 Some(incidents) => {
@@ -345,6 +416,24 @@ pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
         }
         other => crate::lead_checkin::dash(other),
     }
+}
+
+/// The age word shared by the stale lines and the last-settled field: hours
+/// under two days, days at and past it, and a named shape when the row
+/// carries no readable stamp.
+fn age_word(created_at: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    chrono::DateTime::parse_from_rfc3339(created_at)
+        .map(|ts| {
+            let hours = (now - ts.with_timezone(&chrono::Utc)).num_hours();
+            if hours >= 48 {
+                format!("{}d old", hours / 24)
+            } else if hours >= 1 {
+                format!("{}h old", hours)
+            } else {
+                "<1h old".to_string()
+            }
+        })
+        .unwrap_or_else(|_| "age unknown".to_string())
 }
 
 /// The check-in's stale-failure lines: one per old-commit failure the token
@@ -361,21 +450,7 @@ pub(crate) fn main_ci_stale_lines(
         .iter()
         .map(|run| {
             let field = |k: &str| run.get(k).and_then(Value::as_str).unwrap_or("unknown");
-            let age = run
-                .get("created_at")
-                .and_then(Value::as_str)
-                .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
-                .map(|ts| {
-                    let hours = (now - ts.with_timezone(&chrono::Utc)).num_hours();
-                    if hours >= 48 {
-                        format!("{}d old", hours / 24)
-                    } else if hours >= 1 {
-                        format!("{}h old", hours)
-                    } else {
-                        "<1h old".to_string()
-                    }
-                })
-                .unwrap_or_else(|| "age unknown".to_string());
+            let age = age_word(field("created_at"), now);
             format!(
                 "main ci stale: {} at {} ({})",
                 field("workflow"),
@@ -748,6 +823,180 @@ mod tests {
         );
     }
 
+    /// The filed slow-e2e bug: cli-ci's push run at the head was
+    /// green, then its schedule run at the same sha went red on a job the
+    /// push event skips (`slow-e2e` runs only on schedule or dispatch). The
+    /// schedule completion superseded the green and main read red, holding
+    /// every merge while head push CI was green. A non-push completion
+    /// replaces only a cancelled push run, so the verdict stays green here.
+    #[test]
+    fn a_schedule_failure_of_a_seeded_workflow_never_overwrites_a_push_green() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "success",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-31T09:21:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
+        );
+    }
+
+    /// The same guard, other direction: a schedule pass must not clear a
+    /// genuinely red push run either - the schedule run's job set differs
+    /// from the push run's, so neither can answer for the other.
+    #[test]
+    fn a_schedule_pass_never_clears_a_push_red() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "failure",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T09:21:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
+        );
+    }
+
+    /// The motivating hand-off still works: the push run was cancelled by
+    /// the concurrency group and the schedule run of the same workflow and
+    /// sha completed green, so the cancel must not outlive the completion.
+    #[test]
+    fn a_cancelled_push_run_still_yields_to_a_newer_schedule_pass() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T09:21:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
+        );
+    }
+
+    /// Non-push completions settle newest-wins among themselves: a push run
+    /// cancelled by the concurrency group, then a schedule run that failed,
+    /// then a manual re-dispatch that passed. The re-dispatch is the newest
+    /// non-push completion, so the verdict follows it to green instead of
+    /// freezing at the first supersede.
+    #[test]
+    fn non_push_completions_settle_newest_wins() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-31T09:21:00Z",
+                "schedule",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T10:00:00Z",
+                "workflow_dispatch",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
+        );
+    }
+
     /// The pending-rerun case the completed-supersede pass never covered:
     /// cli-ci's newest completed run at the head is a cancel and its newer
     /// rerun on the same sha is still queued. The verdict rides the rerun -
@@ -940,6 +1189,10 @@ mod tests {
                     "workflow": "release", "sha": "old",
                     "created_at": "2026-09-28T11:00:00Z",
                 }],
+                "last_settled": {
+                    "workflow": "release", "sha": "old", "verdict": "red",
+                    "created_at": "2026-09-28T11:00:00Z", "age": "2d old",
+                },
             })
         );
     }
@@ -1064,6 +1317,155 @@ mod tests {
             })
         );
         assert_eq!(main_ci_red_run(&token), None);
+    }
+
+    /// The bare-pending specimen this fix closes: the previous head's red
+    /// was resolved by a newer pass, the head's own run is still queued, and
+    /// the stale list is empty. The line names the newest settled run
+    /// instead of reading bare `pending` for the length of a coalescing
+    /// burst, and the merge gate keeps reading no red.
+    #[test]
+    fn a_pending_head_with_a_resolved_red_names_the_newest_settled_run() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "queued",
+            "",
+            "2026-09-30T10:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "prev",
+                "completed",
+                "failure",
+                "2026-09-30T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "mid",
+                "completed",
+                "success",
+                "2026-09-30T11:00:00Z",
+                "push",
+                42,
+            ),
+        ];
+        let token = token_at("head", &at_sha, &on_main);
+        assert_eq!(
+            token,
+            serde_json::json!({
+                "verdict": "pending",
+                "last_settled": {
+                    "workflow": "cli-ci", "sha": "mid", "verdict": "green",
+                    "created_at": "2026-09-30T11:00:00Z", "age": "1h old",
+                },
+            })
+        );
+        assert_eq!(main_ci_red_run(&token), None);
+    }
+
+    /// A cancelled run is no verdict: under a burst of cancels the newest
+    /// settled run beneath them is the last pass or failure, never the
+    /// cancel. This is 2026-10-30's shape: seven queued main runs cancelled
+    /// around a settled pass.
+    #[test]
+    fn a_cancelled_run_never_answers_the_last_settled_field() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "queued",
+            "",
+            "2026-09-30T10:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "c1",
+                "completed",
+                "cancelled",
+                "2026-09-30T09:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "mid",
+                "completed",
+                "success",
+                "2026-09-30T08:00:00Z",
+                "push",
+                42,
+            ),
+        ];
+        let token = token_at("head", &at_sha, &on_main);
+        assert_eq!(
+            token,
+            serde_json::json!({
+                "verdict": "pending",
+                "last_settled": {
+                    "workflow": "cli-ci", "sha": "mid", "verdict": "green",
+                    "created_at": "2026-09-30T08:00:00Z", "age": "4h old",
+                },
+            })
+        );
+    }
+
+    /// The promotion owns the line when a live red rides it: the stale red
+    /// is named at the top level and no last-settled field is attached.
+    #[test]
+    fn a_promoted_red_owns_the_line_and_no_last_settled_is_attached() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "queued",
+            "",
+            "2026-09-30T10:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![wf_run_with_id(
+            "cli-ci",
+            "prev",
+            "completed",
+            "failure",
+            "2026-09-30T08:00:00Z",
+            "push",
+            42,
+        )];
+        let token = token_at("head", &at_sha, &on_main);
+        assert_eq!(
+            token,
+            serde_json::json!({"verdict": "pending", "workflow": "cli-ci", "sha": "prev"})
+        );
+        assert!(token.get("last_settled").is_none());
+    }
+
+    /// The render names the last settled run with its verdict, workflow, sha
+    /// and age; a bare pending word renders untouched; and a settled-red
+    /// verdict carries no last-settled field to render.
+    #[test]
+    fn the_render_names_the_last_settled_run_on_a_pending_line() {
+        let pending = serde_json::json!({
+            "verdict": "pending",
+            "last_settled": {"workflow": "cli-ci", "sha": "mid",
+                "verdict": "green", "created_at": "2026-09-30T11:00:00Z", "age": "<1h old"},
+        });
+        assert_eq!(
+            main_ci_render(Some(&pending)),
+            "pending (last settled: green cli-ci at mid, <1h old)".to_string()
+        );
+        assert_eq!(
+            main_ci_render(Some(&serde_json::json!({"verdict": "pending"}))),
+            "pending".to_string()
+        );
+        assert!(token_at("h", &[], &[]).get("last_settled").is_none());
     }
 
     /// Promotion moves the NEWEST failure onto the line and leaves the rest

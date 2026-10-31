@@ -24,7 +24,6 @@ fno agents session list
 | `cli/src/fno/agents/events.py` | Best-effort JSONL telemetry to `~/.fno/events.jsonl` |
 | `cli/src/fno/agents/harnesses/__init__.py` | Single source of truth for `KNOWN_PROVIDERS` |
 | `cli/src/fno/agents/harnesses/base.py` | `ProviderResult` dataclass |
-| `cli/src/fno/agents/cli.py` | Typer subapp wiring |
 | `cli/src/fno/agents/lock.py` | `hold_agent_lock(name, registry_path, timeout, on_wait)` context manager wrapping the per-agent flock |
 | `cli/src/fno/agents/harnesses/claude.py` | `--bg` create + messaging-socket follow-up |
 | `cli/src/fno/agents/harnesses/codex.py` | `exec` create + `exec resume` follow-up |
@@ -165,13 +164,7 @@ Concurrent `emit()` calls from sibling processes interleave at JSONL line bounda
 
 ## Wiring into the CLI
 
-`agents` is registered in `LAZY_SUBCOMMANDS` in `cli/src/fno/cli.py`:
-
-```python
-"agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
-```
-
-The lazy loader defers the import until the user actually runs `fno agents ...`, keeping `fno --help` cold-start under the 160ms budget the lazy-imports refactor established.
+`fno agents <word>` is answered by the Rust front: `crates/fno/src/agents_menu.rs` rewrites the nested spelling, and `crates/fno/src/agents_client_route.rs` execs the client.
 
 ## Create dispatch (claude)
 

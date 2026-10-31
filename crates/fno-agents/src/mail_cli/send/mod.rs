@@ -366,7 +366,7 @@ fn system_arm_inbox_key(name: &str) -> Option<String> {
     Some(format!("{project}.{arm}"))
 }
 
-fn bus_log_path() -> PathBuf {
+pub(crate) fn bus_log_path() -> PathBuf {
     if let Ok(dir) = std::env::var("FNO_BUS_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir).join("messages.jsonl");
@@ -2049,7 +2049,7 @@ mod style_gate_tests {
     }
 }
 
-// Ported from cli/tests/agents/test_rust_runtime.py when the anycast ask
+// Ported from the Python tests when the anycast ask
 // moved off the Python seam: the no-live-peer refusal is ask's contract, not
 // the durable queue mail send falls back to.
 #[cfg(test)]

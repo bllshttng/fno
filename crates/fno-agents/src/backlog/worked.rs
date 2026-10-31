@@ -61,9 +61,10 @@ pub(crate) struct FleetRow {
     pub(crate) pid: Option<u32>,
     pub(crate) pid_start_time: Option<u64>,
     pub(crate) mux: Option<crate::state::MuxRef>,
+    pub(crate) substrate: Option<String>,
 }
 
-fn status_word(status: crate::AgentStatus) -> &'static str {
+pub(crate) fn status_word(status: crate::AgentStatus) -> &'static str {
     match status {
         crate::AgentStatus::Spawning => "spawning",
         crate::AgentStatus::Ready => "ready",
@@ -121,11 +122,11 @@ fn row_state(row: &Value) -> (String, Option<String>) {
     )
 }
 
-fn is_linked_worktree(cwd: &str) -> bool {
+pub(crate) fn is_linked_worktree(cwd: &str) -> bool {
     !cwd.is_empty() && Path::new(cwd).join(".git").is_file()
 }
 
-fn node_id_from_worktree(cwd: &str) -> Option<String> {
+pub(crate) fn node_id_from_worktree(cwd: &str) -> Option<String> {
     let text = std::fs::read_to_string(Path::new(cwd).join(".fno").join("target-state.md")).ok()?;
     for line in text.lines() {
         let s = line.trim();
@@ -150,7 +151,7 @@ fn normalize_node_id(value: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Every live registry status (`spawn_gate.LIVE_STATUSES`).
-fn is_live_status(status: crate::AgentStatus) -> bool {
+pub(crate) fn is_live_status(status: crate::AgentStatus) -> bool {
     matches!(
         status,
         crate::AgentStatus::Spawning
@@ -162,13 +163,13 @@ fn is_live_status(status: crate::AgentStatus) -> bool {
     )
 }
 
-fn fleet_rows() -> (Vec<FleetRow>, Vec<String>) {
+pub(crate) fn fleet_rows() -> (Vec<FleetRow>, Vec<String>) {
     let raw = crate::claude_roster::read_all_agents_raw();
     let registry =
         crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
             .ok()
             .map(|r| r.entries);
-    fleet_rows_from(raw, registry.as_deref())
+    fleet_rows_from(raw, registry.as_deref(), false)
 }
 
 /// The fleet fold, fno-first (the provenance ruling): the spine is fno's
@@ -176,10 +177,12 @@ fn fleet_rows() -> (Vec<FleetRow>, Vec<String>) {
 /// session id as a state column - and a vendor row with no spine row is
 /// named vendor-only, never dropped and never silent. An unread registry
 /// falls back to the vendor view; an unread VENDOR list only warns, and the
-/// fno rows stand.
-fn fleet_rows_from(
+/// fno rows stand. `with_promoted` keeps a promoted lead's rows: the worked
+/// overlay wants workers only, and the watchdog classifies every live row.
+pub(crate) fn fleet_rows_from(
     raw: RawAgents,
     entries: Option<&[RegistryEntry]>,
+    with_promoted: bool,
 ) -> (Vec<FleetRow>, Vec<String>) {
     let mut warnings = raw.warnings;
     let mut ledger_nodes: Option<BTreeMap<String, String>> = None;
@@ -227,7 +230,7 @@ fn fleet_rows_from(
     for (sid, e) in spine.iter() {
         // A promoted lead stays in the spine so its vendor row is not
         // vendor-only, and lists as no worker.
-        if e.role_level.is_some() {
+        if e.role_level.is_some() && !with_promoted {
             continue;
         }
         let vendor = vendor_by_sid.get(*sid).copied();
@@ -273,6 +276,7 @@ fn fleet_rows_from(
             pid: None,
             pid_start_time: None,
             mux: None,
+            substrate: e.substrate.clone(),
         });
     }
 
@@ -283,7 +287,7 @@ fn fleet_rows_from(
         let Some(sid) = raw_row_sid(r) else {
             let cwd = r.get("cwd").and_then(Value::as_str).unwrap_or("");
             let name = r.get("name").and_then(Value::as_str).unwrap_or("unknown");
-            if promoted.contains(name) {
+            if promoted.contains(name) && !with_promoted {
                 continue;
             }
             let node = if is_linked_worktree(cwd) {
@@ -345,10 +349,13 @@ fn fleet_rows_from(
             pid: None,
             pid_start_time: None,
             mux: None,
+            substrate: None,
         });
     }
     for entry in entries.into_iter().flatten() {
-        if entry.harness.as_deref() == Some("claude") || entry.role_level.is_some() {
+        if entry.harness.as_deref() == Some("claude")
+            || (entry.role_level.is_some() && !with_promoted)
+        {
             continue;
         }
         if !is_live_status(entry.status) {
@@ -405,6 +412,7 @@ fn fleet_rows_from(
             pid: entry.pid,
             pid_start_time: entry.pid_start_time,
             mux: entry.mux.clone(),
+            substrate: entry.substrate.clone(),
         });
     }
 
@@ -591,14 +599,14 @@ fn now_epoch_s() -> f64 {
         .unwrap_or(0.0)
 }
 
-fn claude_projects_root() -> PathBuf {
+pub(crate) fn claude_projects_root() -> PathBuf {
     crate::claude_roster::config_dir().join("projects")
 }
 
 /// Resolve one harness session's transcript file. claude walks the projects
 /// store with the shared listing; codex finds its rollout; every other
 /// harness keeps no per-session file.
-fn resolve_transcript(
+pub(crate) fn resolve_transcript(
     agent: &str,
     session_id: &str,
     cwd: &str,
@@ -618,7 +626,7 @@ fn resolve_transcript(
     }
 }
 
-fn record_epoch(record: &Value) -> Option<f64> {
+pub(crate) fn record_epoch(record: &Value) -> Option<f64> {
     let ts = record.get("timestamp")?.as_str()?;
     chrono::DateTime::parse_from_rfc3339(ts)
         .ok()
@@ -690,7 +698,7 @@ fn tail_facts(session_id: &str, cwd: &str, agent: &str, listing: &[Hit]) -> Opti
 }
 
 /// Codex response items fold onto the message shape the reader speaks.
-fn normalize_record(record: Value) -> Value {
+pub(crate) fn normalize_record(record: Value) -> Value {
     if record.get("type").and_then(Value::as_str) != Some("response_item") {
         return record;
     }
@@ -709,7 +717,7 @@ fn normalize_record(record: Value) -> Value {
 }
 
 /// Flattened text of one record: message bodies and top-level system text.
-fn record_text(record: &Value) -> String {
+pub(crate) fn record_text(record: &Value) -> String {
     let mut parts: Vec<String> = Vec::new();
     let msg = record.get("message");
     let content = msg.and_then(|m| m.get("content"));
@@ -1256,7 +1264,7 @@ mod tests {
             rows: Vec::new(),
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(empty_vendor, Some(&[live.clone()]));
+        let (rows, warnings) = fleet_rows_from(empty_vendor, Some(&[live.clone()]), false);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].row_id, "9a1b2c3d-0000-0000-0000-000000000000");
         assert_eq!(rows[0].name, "quill");
@@ -1273,7 +1281,7 @@ mod tests {
             })],
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(stray_vendor, Some(&[live]));
+        let (rows, warnings) = fleet_rows_from(stray_vendor, Some(&[live]), false);
         assert_eq!(rows.len(), 2);
         let stray = rows
             .iter()
@@ -1298,7 +1306,7 @@ mod tests {
             })],
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(again, None);
+        let (rows, warnings) = fleet_rows_from(again, None, false);
         assert_eq!(rows.len(), 1);
         assert!(!warnings.iter().any(|w| w.contains("vendor-only")));
 
@@ -1343,7 +1351,8 @@ mod tests {
             ],
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(vendor_lead, Some(&[lead, codex_lead, window_lead]));
+        let (rows, warnings) =
+            fleet_rows_from(vendor_lead, Some(&[lead, codex_lead, window_lead]), false);
         let _ = std::fs::remove_dir_all(&tree);
         assert!(
             !warnings.iter().any(|w| w.contains("node=n-dispatched")),
@@ -1378,7 +1387,7 @@ mod tests {
             rows: Vec::new(),
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(empty_vendor, Some(&[ghost]));
+        let (rows, warnings) = fleet_rows_from(empty_vendor, Some(&[ghost]), false);
         assert!(rows.is_empty());
         let summary = warnings
             .iter()
@@ -1396,7 +1405,7 @@ mod tests {
             })],
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(headless, None);
+        let (rows, warnings) = fleet_rows_from(headless, None, false);
         assert!(rows.is_empty());
         let summary = warnings
             .iter()

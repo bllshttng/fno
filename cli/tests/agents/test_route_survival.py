@@ -135,39 +135,7 @@ def test_ac4_a_routed_codex_pane_records_identity_but_never_a_route_file(
 # exactly the defect the row exists to catch.
 
 
-def test_python_resume_refuses_a_routed_claude_row_without_waking(tmp_path) -> None:
-    """The Python fallback cannot own Claude's account-pinned resume route."""
-    from types import SimpleNamespace
-
-    from fno.agents.resume_cli import resume_logic
-
-    entry = SimpleNamespace(
-        name="router",
-        harness="claude",
-        cwd=str(tmp_path),
-        short_id="deadbeef",
-        harness_session_id="sess-1",
-        route_settings_path="/route/settings.json",
-        launch_account="makers",
-        provider="zai",
-    )
-    launches: list[tuple] = []
-
-    res = resume_logic(
-        name="router",
-        registry_loader=lambda: [entry],
-        path_checker=lambda b: True,
-        cwd_checker=lambda c: True,
-        execvp=lambda *args, **kwargs: launches.append(args),
-    )
-    assert res.exit_code == 13
-    assert "resumes through the fno-agents runtime" in res.stderr
-    assert launches == []
-
-
 # --- v23 (x-2019): the requested axis, verbatim beside the effect ------------
 
 
 # --- a foreign endpoint is never offered the Artifact tool -------------------
-
-

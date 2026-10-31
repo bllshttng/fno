@@ -31,7 +31,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
 else
   uv run fno-py state init --type target --output "$REPO_ROOT/.fno/e2e-state.md" >&2
   uv run fno-py runtime worktree --action create --name "$slug" >&2
-  uv run fno-py agents claim acquire "node:$node_id" --holder "target-session:$slug" --ttl 2h >&2
+  uv run fno-py claim acquire "node:$node_id" --holder "target-session:$slug" --ttl 2h >&2
 fi
 
 echo "Session initialized: $slug" >&2

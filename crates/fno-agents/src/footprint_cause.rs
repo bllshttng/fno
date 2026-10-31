@@ -715,7 +715,7 @@ fn pid_map_from_lsof(text: &str) -> BTreeMap<String, u32> {
 /// 8-hex claude jobId -> pid of the process that IS that bg session. Best
 /// effort: a missing farm, a dead lsof, or a timeout all mean an empty map,
 /// which undercounts; readers that gate on cost treat empty as unknown.
-fn bg_socket_pid_map(deadline: Option<Instant>) -> BTreeMap<String, u32> {
+pub(crate) fn bg_socket_pid_map(deadline: Option<Instant>) -> BTreeMap<String, u32> {
     let base = rv_socket_root();
     let mut socks: Vec<PathBuf> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&base) {

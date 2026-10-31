@@ -326,6 +326,18 @@ jobs:
         # emission tests that degrade to unrecorded without it.
         run: cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
 
+      - name: Install fno Python package
+        # The bash suites' FNO_PYTHON discovery refuses ("no python can import
+        # fno.cli") without an interpreter holding the CLI deps. The full
+        # smoke-rest shards never hit this: their graduation-probe step's
+        # `uv run --project cli` creates cli/.venv as a side effect before the
+        # shard runs. This lane had no such step, so any packet selecting one
+        # of those suites red at discovery (changed-smoke 3 on the sleep-1
+        # PR, 2026-10-30). Same provisioning the pytest shards get, named for
+        # the reason.
+        working-directory: cli
+        run: uv sync
+
       - name: Changed packet (CHANGED SUBSET)
         env:
           CHANGED_BASE: ${{ github.event.pull_request.base.sha }}
@@ -535,6 +547,17 @@ jobs:
 
       - name: Provision the slow-test runner
         uses: ./.github/actions/smoke-setup
+
+      - name: Sync the cli venv
+        # The pane lane drives pytest through the native front, which resolves
+        # bare python3 when no cli venv exists. The old `uv run --project cli
+        # fno-py` form auto-synced that venv; the port to the native runner
+        # dropped it and the schedule lane died on "No module named pytest"
+        # (2026-10-30, reproduced on rerun). The smoke shards get the same
+        # sync from the registry's Sync + build step; this lane bypasses the
+        # registry, so it syncs here.
+        working-directory: cli
+        run: uv sync
 
       - name: Run the slow pane lane
         env:

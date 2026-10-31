@@ -7,7 +7,7 @@
 //! stderr passthrough, so `spawn queued: ...` still streams during a queue,
 //! and a payload with `hold: false` releases the mutex before the answer so
 //! a long-lived caller holds nothing.
-//! `probe` is the read-only capacity reading `fno agents gate-status`, the
+//! `probe` is the read-only capacity reading `fno agents admit status`, the
 //! lane readouts and the advance width all consume: no mutex, no claims, no
 //! events. The command exits 0 whenever it produced an ANSWER, including a
 //! refusal: a refusal is data now, not a process exit.

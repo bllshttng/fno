@@ -1,0 +1,252 @@
+{
+ "now_s": 1790000000.5,
+ "identities": [
+  {
+   "row_id": "r1",
+   "harness": "claude",
+   "provider": "anthropic",
+   "account": "a1",
+   "session_id": "s1",
+   "cwd": "/w"
+  },
+  {
+   "row_id": "r2",
+   "harness": "codex",
+   "provider": "openai",
+   "account": "a2",
+   "session_id": "s2",
+   "cwd": "/w"
+  },
+  {
+   "row_id": "r3",
+   "harness": "claude",
+   "provider": null,
+   "account": "a3",
+   "session_id": "s3",
+   "cwd": "/w"
+  },
+  {
+   "row_id": "r4",
+   "harness": "claude",
+   "provider": "anthropic",
+   "account": "a4",
+   "session_id": "s4",
+   "cwd": "/w"
+  }
+ ],
+ "entries": {
+  "r1": [
+   {
+    "type": "user",
+    "timestamp": "2026-09-21T11:33:20.500000Z",
+    "message": {
+     "role": "user",
+     "content": "hi"
+    }
+   },
+   {
+    "type": "assistant",
+    "timestamp": "2026-09-21T11:33:20.500000Z",
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": " hello "
+      },
+      {
+       "type": "tool_use"
+      },
+      {
+       "type": "text",
+       "text": "wörld"
+      }
+     ]
+    }
+   },
+   {
+    "type": "assistant",
+    "timestamp": 1789999995.5,
+    "message": {
+     "role": "assistant",
+     "content": "API Error: 429 Fair Usage Policy"
+    },
+    "isApiErrorMessage": true,
+    "apiErrorStatus": 429
+   },
+   {
+    "type": "assistant",
+    "timestamp": 1789999996.5,
+    "message": {
+     "role": "assistant",
+     "content": "API Error (529) overloaded"
+    },
+    "isApiErrorMessage": true
+   },
+   {
+    "type": "assistant",
+    "timestamp": 1789999997.5,
+    "message": {
+     "role": "assistant",
+     "content": "some other error"
+    },
+    "isApiErrorMessage": true
+   },
+   {
+    "type": "assistant",
+    "timestamp": 1789995000.5,
+    "message": {
+     "role": "assistant",
+     "content": "old"
+    }
+   },
+   {
+    "type": "assistant",
+    "timestamp": 1789995000.5,
+    "message": {
+     "role": "assistant",
+     "content": "capped, reset at 2026-09-21T14:00:00Z"
+    },
+    "isApiErrorMessage": true,
+    "apiErrorStatus": 429
+   },
+   {
+    "type": "assistant",
+    "timestamp": 1790000090.5,
+    "message": {
+     "role": "assistant",
+     "content": "future"
+    }
+   },
+   {
+    "type": "assistant",
+    "timestamp": "not a time",
+    "message": {
+     "role": "assistant",
+     "content": "skipped"
+    }
+   },
+   {
+    "type": "assistant",
+    "timestamp": 1789999998.5,
+    "message": {
+     "role": "assistant",
+     "content": "naive reset at 2026-09-21 20:00:00"
+    },
+    "isApiErrorMessage": true,
+    "apiErrorStatus": 429
+   }
+  ]
+ },
+ "records": [
+  {
+   "source": "transcript",
+   "observed_at": 1789999995.5,
+   "row_id": "r1",
+   "harness": "claude",
+   "provider": "anthropic",
+   "account": "a1",
+   "role": "assistant",
+   "raw_status": 429,
+   "raw_kind": "api_error",
+   "content": "API Error: 429 Fair Usage Policy",
+   "content_fingerprint": "96c0a47cdff085c0730bfe3a16013df65094aa1e12bb960201f8ec32441e2b90",
+   "pane_id": null,
+   "persisted": true,
+   "snapshot_at": null,
+   "reset_at": null
+  },
+  {
+   "source": "transcript",
+   "observed_at": 1789999996.5,
+   "row_id": "r1",
+   "harness": "claude",
+   "provider": "anthropic",
+   "account": "a1",
+   "role": "assistant",
+   "raw_status": 529,
+   "raw_kind": "api_error",
+   "content": "API Error (529) overloaded",
+   "content_fingerprint": "5ed6e5bff654e74299f96dce5528f781c11c3023714c4372a02e12c8877284e1",
+   "pane_id": null,
+   "persisted": true,
+   "snapshot_at": null,
+   "reset_at": null
+  },
+  {
+   "source": "transcript",
+   "observed_at": 1789999998.5,
+   "row_id": "r1",
+   "harness": "claude",
+   "provider": "anthropic",
+   "account": "a1",
+   "role": "assistant",
+   "raw_status": 429,
+   "raw_kind": "api_error",
+   "content": "naive reset at 2026-09-21 20:00:00",
+   "content_fingerprint": "8fd885a754d7fd93e8b1f0a7f92ad04a9eb54efffc20f19e22dd9fe0a134b401",
+   "pane_id": null,
+   "persisted": true,
+   "snapshot_at": null,
+   "reset_at": 1789992000.0
+  }
+ ],
+ "refusals": [
+  {
+   "row_id": "r1",
+   "reason": "evidence_stale",
+   "age_s": 9600,
+   "reset_at": null,
+   "count": 1
+  },
+  {
+   "row_id": "r1",
+   "reason": "evidence_stale",
+   "age_s": 5000,
+   "reset_at": null,
+   "count": 1
+  },
+  {
+   "row_id": "r1",
+   "reason": "evidence_stale",
+   "age_s": 5000,
+   "reset_at": 1789999200.0,
+   "count": 1
+  },
+  {
+   "row_id": "r1",
+   "reason": "evidence_stale",
+   "age_s": -90,
+   "reset_at": null,
+   "count": 1
+  },
+  {
+   "row_id": "r2",
+   "reason": "transcript_shape_unsupported",
+   "harness": "codex",
+   "path": "/t/s2.jsonl",
+   "count": 1
+  },
+  {
+   "row_id": "r3",
+   "reason": "unknown_route_identity",
+   "harness": "claude",
+   "count": 1
+  },
+  {
+   "row_id": "r4",
+   "reason": "transcript_unreadable",
+   "harness": "claude",
+   "path": "/t/s4.jsonl",
+   "count": 1
+  }
+ ],
+ "pane_status": {
+  "API Error: 529": 529,
+  "api error (429) slow": 429,
+  "API Error: 500": null,
+  "API Error 1529": null,
+  "no error 429": null,
+  "API Error: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 429": null
+ }
+}

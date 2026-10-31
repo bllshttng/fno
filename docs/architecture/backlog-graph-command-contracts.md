@@ -414,7 +414,7 @@ Decide whether a node's plan promised work that has not all shipped.
          is why a deferred item can merge away unnoticed. Checked first and independent of the plan so a close is held
          even when the plan is absent or unreadable. Scoped to the closing
          node's OWN rows via the ``node`` field stamped at capture time
-         (``find_held_node`` proven ownership): a row filed by another node's
+         (``find_held_node_at`` proven ownership): a row filed by another node's
          session must not hold this close open (one unrelated
          carve-out was blocking every close in the repo). Unattributed rows
          (legacy, ambient shell, harness without a session id) block nothing

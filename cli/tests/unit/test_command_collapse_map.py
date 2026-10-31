@@ -27,6 +27,12 @@ def _rows() -> list[dict[str, str]]:
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
+def _python_rows() -> list[dict[str, str]]:
+    """The rows a Python group owns. The agents rows stay as the native menu's
+    old-spelling contract, and no Python group or baseline line backs them."""
+    return [row for row in _rows() if row["current-leaf"].split()[0] != "agents"]
+
+
 def _mapped_leaves() -> set[str]:
     return {row["current-leaf"] for row in _rows()}
 
@@ -54,7 +60,7 @@ def test_map_matches_the_uncollapsed_click_action_inventory():
 
 def test_live_baseline_matches_the_projected_allocation():
     leaves = _leaves()
-    rows = _rows()
+    rows = _python_rows()
     mapped_groups = {row["current-leaf"].split()[0] for row in rows}
     projected = {
         row["current-leaf"] if row["tier"] == "KEEP" else row["current-leaf"].split()[0]
@@ -69,8 +75,8 @@ def test_runtime_keep_registry_matches_the_checked_in_allocation():
     from fno.cli import COLLAPSE_KEEP
 
     expected: dict[str, set[str]] = {group: set() for group in COLLAPSE_KEEP}
-    group_sizes = Counter(row["current-leaf"].split()[0] for row in _rows())
-    for row in _rows():
+    group_sizes = Counter(row["current-leaf"].split()[0] for row in _python_rows())
+    for row in _python_rows():
         tokens = row["current-leaf"].split()
         if row["tier"] == "KEEP" and group_sizes[tokens[0]] > 1:
             expected[tokens[0]].add(tokens[1])

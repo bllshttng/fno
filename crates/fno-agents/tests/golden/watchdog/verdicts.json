@@ -1,0 +1,471 @@
+{
+ "cases": [
+  {
+   "name": "ghost_claude",
+   "row": {
+    "state": "working"
+   },
+   "facts": null,
+   "env": {},
+   "verdict": {
+    "row_id": "s-ghost_claude",
+    "name": "n-ghost_claude",
+    "state": "working",
+    "verdict": "ghost",
+    "basis": "no transcript for s-ghost_claude",
+    "action": "report",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "ghost_other_harness",
+   "row": {
+    "state": "working",
+    "agent": "opencode"
+   },
+   "facts": null,
+   "env": {},
+   "verdict": {
+    "row_id": "s-ghost_other_harness",
+    "name": "n-ghost_other_harness",
+    "state": "working",
+    "verdict": "ghost",
+    "basis": "harness opencode keeps no per-session transcript, unmeasurable",
+    "action": "report",
+    "agent": "opencode"
+   }
+  },
+  {
+   "name": "ghost_cloud_leaves",
+   "row": {
+    "state": "working",
+    "substrate": "cloud"
+   },
+   "facts": null,
+   "env": {},
+   "verdict": {
+    "row_id": "s-ghost_cloud_leaves",
+    "name": "n-ghost_cloud_leaves",
+    "state": "working",
+    "verdict": "leave",
+    "basis": "transcript lives on claude.ai, not locally",
+    "action": "report",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "stopped_no_transcript",
+   "row": {
+    "state": "stopped"
+   },
+   "facts": null,
+   "env": {},
+   "verdict": {
+    "row_id": "s-stopped_no_transcript",
+    "name": "n-stopped_no_transcript",
+    "state": "stopped",
+    "verdict": "leave",
+    "basis": "no transcript, state stopped",
+    "action": "none",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "contended",
+   "row": {
+    "state": "working",
+    "cwd": "/wt"
+   },
+   "facts": {
+    "age": 60,
+    "text": "working"
+   },
+   "env": {
+    "peer": true
+   },
+   "verdict": {
+    "row_id": "s-contended",
+    "name": "n-contended",
+    "state": "working",
+    "verdict": "contended",
+    "basis": "worktree /wt holds 2 live sessions, peers peer",
+    "action": "report",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "stale",
+   "row": {
+    "state": "working"
+   },
+   "facts": {
+    "age": 46800,
+    "text": "still going"
+   },
+   "env": {},
+   "verdict": {
+    "row_id": "s-stale",
+    "name": "n-stale",
+    "state": "working",
+    "verdict": "stale",
+    "basis": "working 13h old, past the 12h wake ceiling, needs a human",
+    "action": "report",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "spent_node_done",
+   "row": {
+    "state": "working",
+    "node": "x-1"
+   },
+   "facts": {
+    "age": 46800,
+    "text": "going"
+   },
+   "env": {
+    "node": {
+     "status": "done"
+    },
+    "claim": {
+     "state": "free"
+    }
+   },
+   "verdict": {
+    "row_id": "s-spent_node_done",
+    "name": "n-spent_node_done",
+    "state": "working",
+    "verdict": "spent",
+    "basis": "node x-1 done; quiet 13h past the wake ceiling; finished row, nothing to triage",
+    "action": "none",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "spent_tail_done",
+   "row": {
+    "state": "idle"
+   },
+   "facts": {
+    "age": 46800,
+    "text": "<promise>MISSION COMPLETE: y</promise>"
+   },
+   "env": {},
+   "verdict": {
+    "row_id": "s-spent_tail_done",
+    "name": "n-spent_tail_done",
+    "state": "idle",
+    "verdict": "spent",
+    "basis": "tail reads done; quiet 13h past the wake ceiling; finished row, nothing to triage",
+    "action": "none",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "wake",
+   "row": {
+    "state": "idle"
+   },
+   "facts": {
+    "age": 10800,
+    "text": "I will continue"
+   },
+   "env": {},
+   "verdict": {
+    "row_id": "s-wake",
+    "name": "n-wake",
+    "state": "idle",
+    "verdict": "wake",
+    "basis": "idle 180m silent, no 429 in tail",
+    "action": "resume",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "leave_working_tail",
+   "row": {
+    "state": "working"
+   },
+   "facts": {
+    "age": 60,
+    "text": "busy"
+   },
+   "env": {},
+   "verdict": {
+    "row_id": "s-leave_working_tail",
+    "name": "n-leave_working_tail",
+    "state": "working",
+    "verdict": "leave",
+    "basis": "tail reads working, session does not owe a move",
+    "action": "none",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "leave_healthy_unmapped",
+   "row": {
+    "state": "weird"
+   },
+   "facts": {
+    "age": 60,
+    "text": "busy"
+   },
+   "env": {},
+   "verdict": {
+    "row_id": "s-leave_healthy_unmapped",
+    "name": "n-leave_healthy_unmapped",
+    "state": "weird",
+    "verdict": "leave",
+    "basis": "state weird, last turn 1m ago, no lane applies",
+    "action": "none",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "unclaimed",
+   "row": {
+    "state": "weird",
+    "node": "x-2"
+   },
+   "facts": {
+    "age": 60,
+    "text": "busy"
+   },
+   "env": {
+    "claim": {
+     "state": "free"
+    },
+    "node": {
+     "status": "in_progress"
+    }
+   },
+   "verdict": {
+    "row_id": "s-unclaimed",
+    "name": "n-unclaimed",
+    "state": "weird",
+    "verdict": "unclaimed",
+    "basis": "state weird, last turn 1m ago, no lane applies; node x-2 carries NO claim while this row is live",
+    "action": "none",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "claimed_stays_leave",
+   "row": {
+    "state": "weird",
+    "node": "x-2"
+   },
+   "facts": {
+    "age": 60,
+    "text": "busy"
+   },
+   "env": {
+    "claim": {
+     "state": "live",
+     "holder": "h"
+    },
+    "node": {
+     "status": "in_progress"
+    }
+   },
+   "verdict": {
+    "row_id": "s-claimed_stays_leave",
+    "name": "n-claimed_stays_leave",
+    "state": "weird",
+    "verdict": "leave",
+    "basis": "state weird, last turn 1m ago, no lane applies",
+    "action": "none",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "sandbox_blocked",
+   "row": {
+    "state": "weird",
+    "agent": "codex",
+    "node": "x-3",
+    "cwd": "/wt3"
+   },
+   "facts": {
+    "age": 60,
+    "text": "<help reason=\"x\" evidence=\"fatal: Unable to create .git/index.lock: Operation not permitted\">"
+   },
+   "env": {
+    "claim": {
+     "state": "free"
+    },
+    "commits": 0
+   },
+   "verdict": {
+    "row_id": "s-sandbox_blocked",
+    "name": "n-sandbox_blocked",
+    "state": "weird",
+    "verdict": "sandbox-blocked",
+    "basis": "Codex sandbox blocked Git writes: <help reason=\"x\" evidence=\"fatal: Unable to create .git/index.lock: Operation not permitted\">; node claim free; branch commits=0",
+    "action": "reap",
+    "agent": "codex"
+   }
+  },
+  {
+   "name": "sandbox_held_commits",
+   "row": {
+    "state": "weird",
+    "agent": "codex",
+    "node": "x-3",
+    "cwd": "/wt3"
+   },
+   "facts": {
+    "age": 60,
+    "text": "<help reason=\"x\" evidence=\"fatal: Unable to create .git/index.lock: Operation not permitted\">"
+   },
+   "env": {
+    "claim": {
+     "state": "free"
+    },
+    "commits": 2
+   },
+   "verdict": {
+    "row_id": "s-sandbox_held_commits",
+    "name": "n-sandbox_held_commits",
+    "state": "weird",
+    "verdict": "unclaimed",
+    "basis": "sandbox denial held: branch carries 2 commit(s); no reap; node x-3 carries NO claim while this row is live",
+    "action": "none",
+    "agent": "codex"
+   }
+  },
+  {
+   "name": "sandbox_held_claim",
+   "row": {
+    "state": "weird",
+    "agent": "codex",
+    "node": "x-3",
+    "cwd": "/wt3"
+   },
+   "facts": {
+    "age": 60,
+    "text": "<help reason=\"x\" evidence=\"fatal: Unable to create .git/index.lock: Operation not permitted\">"
+   },
+   "env": {
+    "claim": {
+     "state": "live",
+     "holder": "h"
+    },
+    "commits": 0
+   },
+   "verdict": {
+    "row_id": "s-sandbox_held_claim",
+    "name": "n-sandbox_held_claim",
+    "state": "weird",
+    "verdict": "leave",
+    "basis": "sandbox denial held: node claim live (h); no reap",
+    "action": "none",
+    "agent": "codex"
+   }
+  },
+  {
+   "name": "sandbox_held_no_node",
+   "row": {
+    "state": "weird",
+    "agent": "codex",
+    "cwd": "/wt3"
+   },
+   "facts": {
+    "age": 60,
+    "text": "<help reason=\"x\" evidence=\"fatal: Unable to create .git/index.lock: Operation not permitted\">"
+   },
+   "env": {},
+   "verdict": {
+    "row_id": "s-sandbox_held_no_node",
+    "name": "n-sandbox_held_no_node",
+    "state": "weird",
+    "verdict": "leave",
+    "basis": "sandbox denial held: node identity unreadable; no reap",
+    "action": "none",
+    "agent": "codex"
+   }
+  },
+  {
+   "name": "silence",
+   "row": {
+    "state": "idle",
+    "node": "x-4"
+   },
+   "facts": {
+    "age": 2000,
+    "text": "ok"
+   },
+   "env": {
+    "node": {
+     "status": "in_progress"
+    },
+    "silence": 900.0
+   },
+   "verdict": {
+    "row_id": "s-silence",
+    "name": "n-silence",
+    "state": "idle",
+    "verdict": "silence",
+    "basis": "open node x-4, transcript quiet 33m",
+    "action": "drive",
+    "agent": "claude"
+   }
+  },
+  {
+   "name": "no_stamp_not_wakeable",
+   "row": {
+    "state": "idle"
+   },
+   "facts": {
+    "age": null,
+    "text": "ok"
+   },
+   "env": {},
+   "verdict": {
+    "row_id": "s-no_stamp_not_wakeable",
+    "name": "n-no_stamp_not_wakeable",
+    "state": "idle",
+    "verdict": "leave",
+    "basis": "no parseable transcript evidence, not wakeable",
+    "action": "none",
+    "agent": "claude"
+   }
+  }
+ ],
+ "extra": {
+  "now": 1800000000.0,
+  "sgt": [
+   [
+    2,
+    48,
+    21,
+    1800038901.0
+   ],
+   [
+    23,
+    59,
+    59,
+    1800028799.0
+   ],
+   [
+    25,
+    0,
+    0,
+    null
+   ],
+   [
+    0,
+    0,
+    0,
+    1800028800.0
+   ]
+  ],
+  "signature": "a:stale;b:wake;terminal-harness-rows:2;provider-breaker:p:None:5",
+  "union": "a;b;c",
+  "digest": "fleet watchdog swept 2 rows. leave=1 wake=1 terminal harness rows: 1\n\n- wake w: b1",
+  "outage_lines": [
+   "provider outage open: p/a kind=k reset_at=None",
+   "provider-outage refusals (q=1 r=2)"
+  ]
+ }
+}

@@ -12,8 +12,6 @@ cli/tests/agents/test_pi_journey.py::test_AC10_HP_live_a_stopped_pi_session_resu
 cli/tests/agents/test_retask_live_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_retask_live_smoke.py::test_real_spawned_idle_pane_retasks_with_live_readiness::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_retask_live_smoke.py::test_real_spawned_idle_pane_retasks_with_live_readiness::pytest.skip  # on main before this ratchet
-cli/tests/agents/test_rust_runtime.py::test_harness_markers_match_rust_consumers::pytest.skip  # on main before this ratchet
-cli/tests/agents/test_rust_runtime.py::test_rust_client_commands_match_client_rs::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_rust_command_parity.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_rust_command_parity.py::test_attach_codex_thread_headless_names_the_terminal_not_one_shot::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_command_parity.py::test_attach_missing_agent_exit2::marker.requires_rust  # on main before this ratchet
@@ -59,15 +57,7 @@ cli/tests/test_import_time_env_reads.py::test_opt_in_live_flags_survive_the_sand
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_live_session_never_reads_stale::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_dispatch_undeclared_repo.py::<module>::mark.skipif  # the module's requires_rust detector: the seam test drives the compiled fno-agents binary, which the smoke-pytest shard deletes by design
-cli/tests/unit/test_dispatch_undeclared_repo.py::test_rust_seam_returns_pin_for_foreign_cwd::marker.requires_rust  # the dispatch-pin decision itself is characterized in Rust by the dispatch_pin goldens; the Python test covers the real binary end-to-end where a build exists
 cli/tests/unit/test_events_schema.py::_require_schema_loaded::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::_build_worker_bin::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::test_apply_all_kills_through_the_real_command::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::test_control_live_listener_survives_both::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::test_control_live_listener_survives_both::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::test_control_registry_claimed_keeper_survives_both::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::test_control_registry_claimed_keeper_survives_both::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::test_keyless_dispatch_to_terminal_reports_effect_sequence::marker.requires_rust  # on main before this ratchet
 cli/tests/unit/test_mutex_steal.py::test_threshold_matches_the_rust_constant::pytest.skip  # on main before this ratchet
@@ -79,8 +69,6 @@ cli/tests/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::mar
 cli/tests/unit/test_skill_bundles.py::test_rewrite_rejects_missing_required_fields::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_skill_bundles.py::test_strip_fails_loudly_on_unterminated_frontmatter::marker.requires_shelled_yaml  # on main before this ratchet
 cli/tests/unit/test_spawn_account_provenance.py::TestVocabulary.test_the_carrier_word_is_spelled_identically_across_runtimes::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_worktree_reap_equivalence.py::_gate_binary::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_worktree_reap_equivalence.py::_gate_env::pytest.skip  # on main before this ratchet
 cli/tests/graph/test_batched_member_selection.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary

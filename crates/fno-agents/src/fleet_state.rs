@@ -391,6 +391,26 @@ fn op_set_silent_seen(params: &Params) -> Result<Value, String> {
     Ok(json!({"ok": true}))
 }
 
+/// The silence sweep's memo: which handles were already reported silent.
+pub(crate) fn silent_seen() -> std::collections::BTreeSet<String> {
+    read_fleet_state(&fleet_state_path())
+        .get("silent_seen")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+/// Replace the silence memo; a lost memo costs one repeat report.
+pub(crate) fn set_silent_seen(handles: &std::collections::BTreeSet<String>) {
+    let params = Params {
+        flags: serde_json::Map::from_iter([("handles".to_string(), json!(handles))]),
+        path_override: None,
+    };
+    let _ = op_set_silent_seen(&params);
+}
+
 fn op_read(params: &Params) -> Result<Value, String> {
     let path = params.path()?;
     Ok(read_fleet_state(&path))

@@ -1508,7 +1508,7 @@ pub(crate) fn evidence_repo_root() -> std::path::PathBuf {
 }
 
 /// The project journal beside the carveout ledger under the CANONICAL (main)
-/// worktree: `resolve_carveout_root` + `events_path`. The canonical root
+/// worktree: `canonical_repo_root` + `events_path`. The canonical root
 /// honors the FNO_REPO_ROOT test hook first, then the first `git worktree
 /// list` row.
 pub(crate) fn project_events_journal() -> std::path::PathBuf {

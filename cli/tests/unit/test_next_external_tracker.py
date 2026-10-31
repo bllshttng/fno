@@ -243,8 +243,8 @@ def test_the_external_claim_still_blocks_after_its_selector_exits(
 
     Under CliRunner the acquiring process is pytest, which stays alive, so the
     claim reads `live` and the bug is invisible. This test forces the recorded
-    pid to a dead one, which is what the real selector's exit produces, and then
-    asks the guard the question a dispatcher asks.
+    pid to a dead one, which is what the real selector's exit produces, and reads
+    the state the dispatch guard keys on.
     """
     import json
 
@@ -272,12 +272,6 @@ def test_the_external_claim_still_blocks_after_its_selector_exits(
 
     # Dead pid INSIDE the TTL is `suspect`, and suspect blocks. Without the TTL
     # the same reading is `stale`, which does not.
-    assert claim_status(key)["state"] == "suspect"
-
-    from fno.agents.cli import _spawn_guard_decision
-
-    verdict, _code = _spawn_guard_decision(
-        "EXT-hi", "spawn-cli:probe", no_reserve=True
-    )
-    assert verdict["verdict"] == "already-running", verdict
-    assert verdict["holder"] == "sess-ext-gone"
+    status = claim_status(key)
+    assert status["state"] == "suspect"
+    assert status["holder"] == "sess-ext-gone"

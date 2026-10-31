@@ -5,14 +5,6 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_once_per_process_notice(monkeypatch):
-    """Keep one-shot rm notices isolated when xdist changes test grouping."""
-    from fno.agents import rm_notice
-
-    monkeypatch.delenv(rm_notice.NOTICE_SHOWN_ENV, raising=False)
-
-
-@pytest.fixture(autouse=True)
 def _collapse_pane_binding_window(monkeypatch):
     """Collapse the pane binding window so no test pays its wall-clock.
 
@@ -53,33 +45,6 @@ def _isolate_session_discovery(monkeypatch, tmp_path_factory):
     # a refactor away from expanduser.
     empty_opencode = tmp_path_factory.mktemp("empty-opencode-storage")
     monkeypatch.setenv(discover.OPENCODE_STORAGE_DIR_ENV, str(empty_opencode))
-
-
-@pytest.fixture(autouse=True)
-def _force_python_runtime(monkeypatch):
-    """Default the agents tests to ``FNO_AGENTS_RUNTIME=python`` so in-process
-    ``CliRunner`` invocations of routable commands stay on the Python dispatch
-    instead of ``os.execv``-replacing the pytest process with a real binary that
-    happens to be on the developer's PATH (e.g. ``~/.cargo/bin/fno-agents``).
-
-    This matters since the ab-73da4ac2 unconditional flip: ``ask`` now auto-routes
-    for every provider, so ``runner.invoke(agents_app, ["ask", ...])`` would exec
-    the installed binary and replace the test process whenever one is on PATH. CI
-    has no installed binary, so the suite was green there; this fixture makes the
-    local run match CI and removes the exec hazard. Setting the env var (rather
-    than stubbing ``resolve_installed_binary``) keeps the binary-resolution unit
-    tests intact and propagates to any ``python -m fno.cli`` subprocess a
-    test spawns (project_rust_runtime_installed_local).
-
-    Routing tests (``test_rust_runtime.py``) override this per-test via their own
-    ``monkeypatch.delenv``/``setenv`` of ``FNO_AGENTS_RUNTIME`` (monkeypatch
-    applies in order, so the test-local override wins). Parity tests
-    (``test_rust_command_parity.py``) invoke the compiled binary directly via
-    ``subprocess``; the binary ignores the env var, so they are unaffected.
-    """
-    from fno.agents import rust_runtime
-
-    monkeypatch.setenv(rust_runtime.RUNTIME_ENV, "python")
 
 
 @pytest.fixture(autouse=True)
@@ -130,5 +95,5 @@ def _pin_fake_child_pid_probe(monkeypatch):
 # The provider-exec guard lives in the ROOT cli/tests/conftest.py
 # (_block_live_provider_exec) so every cli test is covered, not just this
 # directory. x-ec81: the agents-only copy left 36 test files outside
-# cli/tests/agents/ reaching a spawn seam unguarded, and test_spawn_guard.py
-# leaked three live claude daemons. Do not re-add a copy here.
+# cli/tests/agents/ reaching a spawn seam unguarded, and one leaked three live
+# claude daemons. Do not re-add a copy here.

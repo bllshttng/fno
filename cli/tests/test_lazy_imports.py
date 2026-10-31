@@ -98,7 +98,6 @@ def test_fno_paths_does_not_import_heavy_subapps():
 _ADVERTISED_SUBCOMMANDS = [
     "help",
     "backlog",
-    "agents",
     "config",
     "whoami",
     "doctor",

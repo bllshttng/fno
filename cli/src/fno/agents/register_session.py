@@ -404,10 +404,19 @@ def _emit_transition_events(
 _BRANCH_QUESTION_MARKER = "session-transition-branch"
 
 
-def _branch_question_open(root, key: str) -> bool:
-    from fno.agents.stale_escalate import already_asked
+def _branch_question_open(key: str) -> bool:
+    """Is the marker key already asked? A listing that cannot run reads as un-asked,
+    and the ask door's own dedup refusal catches the duplicate."""
+    from fno.rust_binary import call_binary_json
 
-    return already_asked(root, key, marker=_BRANCH_QUESTION_MARKER) is not None
+    err, payload = call_binary_json("compaction", ["outstanding", "--json"], timeout=30)
+    if err is not None or not isinstance(payload, dict):
+        return False
+    needle = f"[{_BRANCH_QUESTION_MARKER}:{key}]"
+    return any(
+        question.get("id") and needle in (question.get("question") or "")
+        for question in payload.get("questions") or ()
+    )
 
 
 def _record_branch_question(
@@ -430,7 +439,7 @@ def _record_branch_question(
     # index gets the same event and is what the dedupe read folds.
     root = Path(os.getcwd())
     key = f"{name}:{predecessor}:{successor}"
-    if _branch_question_open(root, key):
+    if _branch_question_open(key):
         return
     answer = command_call(
         "question-intake",

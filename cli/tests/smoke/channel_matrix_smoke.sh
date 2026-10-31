@@ -445,6 +445,24 @@ row_fno_sh_served() {
   shared_smoke "$HOME/.local/bin"
 }
 
+# The released front door must refresh itself: the first thing a returning user
+# types. Expected to fail until a release carries the upgrade path.
+row_fno_update_released() {
+  assert_clean_machine
+  run_capture sh -c 'curl -fsSL https://fno.sh | sh'
+  if [ "$RC" -ne 0 ]; then
+    miss "install" "curl | sh rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+    return 0
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+  run_capture fno update
+  if [ "$RC" -eq 0 ]; then
+    pass "update" "fno update refreshed a release install"
+  else
+    miss "update" "fno update rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+  fi
+}
+
 row_fno_sh_head() {
   assert_clean_machine
   local version
@@ -819,6 +837,7 @@ run_row() {
     codex-plugin-session)  row_codex_plugin_session ;;
     fno-sh-served)         row_fno_sh_served ;;
     fno-sh-head)           row_fno_sh_head ;;
+    fno-update-released)   row_fno_update_released ;;
     fno-sh-nightly)        row_fno_sh_nightly ;;
     fno-sh-fresh)          row_fno_sh_fresh ;;
     install-sh-alias)      row_install_sh_alias ;;

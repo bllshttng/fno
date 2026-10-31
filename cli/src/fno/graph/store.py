@@ -93,7 +93,7 @@ _TAG_IDENTIFY_REPLY = 5
 _MAX_FRAME_BYTES = 64 * 1024 * 1024
 
 # Socket states reported by StoreUnavailable, named after the vocabulary in
-# fno.agents.keeper_lane (the UNKNOWN discipline: dead is not unknown).
+# crates/fno-agents/src/watchdog/keeper.rs (the UNKNOWN discipline: dead is not unknown).
 # Sockets are bound under this byte budget: macOS's sockaddr_un sun_path is
 # 104 bytes and connect() fails with AF_UNIX path errors past it.
 _SOCK_PATH_LIMIT = 96

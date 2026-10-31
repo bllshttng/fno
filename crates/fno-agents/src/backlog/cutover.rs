@@ -7,7 +7,7 @@
 //! `backfill-deferred-kind`, `unclaim`, `defer`, `undefer`, `retract`,
 //! `unsupersede`, `relatedness`, and the completed one-shot
 //! `archive-dedupe-ids`. Heavier bodies (decompose, intake, capture, batch,
-//! task, provenance reads, the rich done surface, requeue, retro, carveout,
+//! task, provenance reads, the rich done surface, requeue, retro,
 //! pick, discover, ready, lanes, stuck-epics, reprioritize, remove, project-
 //! root, epic status) keep their documented dispositions
 //! in the dispatcher until their own arms land.

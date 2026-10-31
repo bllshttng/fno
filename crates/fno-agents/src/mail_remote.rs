@@ -2,7 +2,9 @@
 //!
 //! The front door claims an `@host` target on `agents mail send` and
 //! `agents peek` and execs this command on the sibling `fno-agents` binary. The
-//! store path writes one bus row (see [`crate::mail_bus`]); each host's
+//! store path writes one bus row (see [`crate::mail_bus`]) plus a local
+//! history row (the envelope the local send writes) so the sender's Messages
+//! tab shows cross-host mail; each host's
 //! daemon pull arm hands the payload to the receiver's own local send, so
 //! lane selection, holds, and receipts stay the local command's. When no
 //! `store.remote_url` is configured, send and peek relay over ssh: the
@@ -411,7 +413,32 @@ fn cmd_send(args: &[String]) -> i32 {
             );
             // The original message arg: everything after the target that is
             // not a flag was kept in rest in order, so the message is there.
-            relay(&host, &relay_words)
+            // The remote's own local send delivers and records there; this
+            // machine records its sent copy only on the remote's success.
+            let code = relay(&host, &relay_words);
+            if code == 0 {
+                if let Some(payload) = payload_of(&tail) {
+                    let name_part = match &from_name {
+                        FromName::Given(v) | FromName::SelfName(v) | FromName::Person(v) => {
+                            v.clone()
+                        }
+                    };
+                    let subject = tail
+                        .rest
+                        .iter()
+                        .position(|w| w == "--subject")
+                        .and_then(|i| tail.rest.get(i + 1));
+                    mirror_sent_row(
+                        &mail_bus::mint_msg_id(),
+                        &name_part,
+                        &name,
+                        &host,
+                        &payload,
+                        subject.map(String::as_str),
+                    );
+                }
+            }
+            code
         }
         StorePath::Primary(remote) => {
             let from_name = match resolve_from_name(&tail) {
@@ -460,8 +487,10 @@ body; nothing was sent"
                 );
                 return 1;
             }
+            let msg_id = mail_bus::mint_msg_id();
             send_via_store(
                 &remote,
+                &msg_id,
                 &from_id,
                 &local_host,
                 &name,
@@ -487,6 +516,7 @@ fn payload_of(tail: &SendTail) -> Option<String> {
 
 fn send_via_store(
     remote: &Remote,
+    msg_id: &str,
     from_id: &str,
     from_host: &str,
     name: &str,
@@ -497,14 +527,13 @@ fn send_via_store(
 ) -> i32 {
     if let Err(e) = mail_bus::ensure_schema(&remote) {
         if store_remote::is_unreachable(&e) {
-            return queue_and_report(from_id, from_host, name, host, payload, raw, &e);
+            return queue_and_report(msg_id, from_id, from_host, name, host, payload, raw, &e);
         }
         eprintln!("fno agents mail send: bus schema: {e}");
         return 1;
     }
-    let msg_id = mail_bus::mint_msg_id();
     match mail_bus::insert(
-        &remote, &msg_id, from_id, from_host, name, host, payload, raw, subject,
+        &remote, msg_id, from_id, from_host, name, host, payload, raw, subject,
     ) {
         Ok(outcome) => {
             let dup = if outcome.duplicated {
@@ -513,11 +542,14 @@ fn send_via_store(
                 "queued"
             };
             println!("{msg_id} {dup} (store seq={}, host {host})", outcome.seq);
+            if !outcome.duplicated {
+                mirror_sent_row(msg_id, sender_name(from_id), name, host, payload, subject);
+            }
             0
         }
         Err(e) => {
             if store_remote::is_unreachable(&e) {
-                return queue_and_report(from_id, from_host, name, host, payload, raw, &e);
+                return queue_and_report(msg_id, from_id, from_host, name, host, payload, raw, &e);
             }
             eprintln!("fno agents mail send: {e}");
             1
@@ -525,10 +557,54 @@ fn send_via_store(
     }
 }
 
+/// The name part of a `<user>:<host>/<name>` sender identity, or the whole
+/// string when it carries no slash (a plain name the caller passed).
+fn sender_name(from_id: &str) -> &str {
+    from_id.rsplit_once('/').map(|(_, n)| n).unwrap_or(from_id)
+}
+
+/// The sender-side mirror of a cross-host send: the envelope a local send
+/// writes, recorded in this machine's bus log and chats store so the
+/// Messages tab shows the mail this machine sent to another host. The bus
+/// row on the primary is the system of record; this is history, so a failed
+/// mirror warns and leaves the send's receipt alone.
+pub(crate) fn mirror_sent_row(
+    msg_id: &str,
+    from_name: &str,
+    name: &str,
+    host: &str,
+    payload: &str,
+    subject: Option<&str>,
+) {
+    let mut row = serde_json::json!({
+        "v": 1,
+        "id": msg_id,
+        "ts": crate::announce::now_iso(),
+        "thread": msg_id,
+        "from": from_name,
+        "to": format!("{name}@{host}"),
+        "kind": "send",
+        "word_count": crate::backlog::style_check::word_count(payload),
+        "body": payload,
+    });
+    if let Some(s) = subject.filter(|s| !s.is_empty()) {
+        row["subject"] = serde_json::json!(s);
+    }
+    let live = crate::mail_cli::send::bus_log_path();
+    let chats_dir = crate::chats::chats_dir();
+    if let Err(e) = crate::announce::append_line_open(&live, &row, &chats_dir) {
+        eprintln!(
+            "fno agents mail send: {msg_id} was queued to the store but the \
+local history row was not recorded: {e}"
+        );
+    }
+}
+
 /// Edge 7: the primary is unreachable. Queue the row locally as one JSON
 /// line; the daemon's flush arm drains it. Exit 0: queued is not failed.
 #[allow(clippy::too_many_arguments)]
 fn queue_and_report(
+    msg_id: &str,
     from_id: &str,
     from_host: &str,
     name: &str,
@@ -537,7 +613,6 @@ fn queue_and_report(
     raw: bool,
     error: &str,
 ) -> i32 {
-    let msg_id = mail_bus::mint_msg_id();
     let line = serde_json::json!({
         "msg_id": msg_id,
         "from_id": from_id,
@@ -557,6 +632,7 @@ fn queue_and_report(
         .and_then(|mut f| writeln!(f, "{line}"));
     match write {
         Ok(()) => {
+            mirror_sent_row(msg_id, sender_name(from_id), name, host, payload, None);
             println!("{msg_id} queued (local, store unreachable)");
             0
         }
@@ -1482,5 +1558,161 @@ mod tests {
             Ok(FromName::Given("Quinlan".to_string())),
             "a role name still passes verbatim"
         );
+    }
+
+    // The sender-side history mirror: a cross-host send leaves the same
+    // local record a local send leaves, so the Messages tab shows the mail
+    // this machine sent to another host. One body, four contracts: the
+    // store lane mirrors, a duplicated insert mirrors nothing, the
+    // unreachable-store queue mirrors, and the row lands in both stores the
+    // tab reads.
+    #[test]
+    fn cross_host_send_mirrors_the_sent_row_locally() {
+        use crate::store_remote::test_primary;
+        use serde_json::Value;
+        use std::io::Read as _;
+
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let root = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_STATE_DIR", root.path());
+        std::env::set_var(crate::paths::HOME_ENV, root.path().join("agents"));
+        let bus_live = root.path().join("bus").join("messages.jsonl");
+        let read_chats = |payload: &str| -> Vec<Value> {
+            let mut rows = Vec::new();
+            let dir = root.path().join("chats");
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                return rows;
+            };
+            for chat in rd.flatten() {
+                let file = chat.path().join("messages.jsonl");
+                let Ok(text) = std::fs::read_to_string(&file) else {
+                    continue;
+                };
+                for line in text.lines() {
+                    if let Ok(row) = serde_json::from_str::<Value>(line) {
+                        if row.get("body").and_then(Value::as_str) == Some(payload) {
+                            rows.push(row);
+                        }
+                    }
+                }
+            }
+            rows
+        };
+        let bus_lines = |payload: &str| -> Vec<Value> {
+            let mut text = String::new();
+            std::fs::File::open(&bus_live)
+                .unwrap()
+                .read_to_string(&mut text)
+                .unwrap();
+            text.lines()
+                .map(|l| serde_json::from_str::<Value>(l).unwrap())
+                .filter(|row| row.get("body").and_then(Value::as_str) == Some(payload))
+                .collect()
+        };
+
+        // The store lane: the send prints its receipt and the mirror lands
+        // in both local stores, addressed to the wire target.
+        let primary = test_primary::start();
+        let code = send_via_store(
+            &primary.remote,
+            "fmail-mirrorstore01",
+            "bb16:mbp3/lenore",
+            "mbp3",
+            "marisol",
+            "imac2d2",
+            "hello across the wire",
+            false,
+            None,
+        );
+        assert_eq!(code, 0, "the store send answers 0");
+        let bus_rows = bus_lines("hello across the wire");
+        assert_eq!(bus_rows.len(), 1, "one local bus row");
+        assert_eq!(
+            bus_rows[0].get("to").and_then(Value::as_str),
+            Some("marisol@imac2d2"),
+            "the row addresses the wire target"
+        );
+        assert_eq!(
+            bus_rows[0].get("from").and_then(Value::as_str),
+            Some("lenore"),
+            "the row signs the sender name"
+        );
+        assert_eq!(
+            bus_rows[0].get("kind").and_then(Value::as_str),
+            Some("send"),
+            "the row is a message kind the chats store records"
+        );
+        let chat_rows = read_chats("hello across the wire");
+        assert_eq!(chat_rows.len(), 1, "one chat line");
+        assert_eq!(
+            chat_rows[0].get("type").and_then(Value::as_str),
+            Some("message"),
+            "the chat store recorded a message, not a delivery"
+        );
+
+        // The duplicated insert mirrors nothing: a retry that finds its row
+        // already queued adds no second local history line.
+        let dup_id = "fmail-dupmirror00";
+        mail_bus::insert(
+            &primary.remote,
+            dup_id,
+            "bb16:mbp3/lenore",
+            "mbp3",
+            "rare-name-no-mirror",
+            "imac2d2",
+            "the duplicated body",
+            false,
+            None,
+        )
+        .unwrap();
+        let code = send_via_store(
+            &primary.remote,
+            dup_id,
+            "bb16:mbp3/lenore",
+            "mbp3",
+            "rare-name-no-mirror",
+            "imac2d2",
+            "the duplicated body",
+            false,
+            None,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            bus_lines("the duplicated body").len(),
+            0,
+            "a duplicated insert leaves no local row"
+        );
+
+        // The unreachable-store queue mirrors too: the message left this
+        // machine the moment the caller saw `queued`, local or store.
+        let code = queue_and_report(
+            "fmail-mirrorqueue01",
+            "bb16:mbp3/lenore",
+            "mbp3",
+            "marisol",
+            "imac2d2",
+            "queued while the store was down",
+            false,
+            "store unreachable",
+        );
+        assert_eq!(code, 0);
+        let outbox =
+            std::fs::read_to_string(crate::mail_remote::outbox_path(&root.path().join("agents")))
+                .expect("the outbox line was written");
+        assert!(
+            outbox.contains("queued while the store was down"),
+            "{outbox}"
+        );
+        assert_eq!(
+            bus_lines("queued while the store was down").len(),
+            1,
+            "the queued send has its local row"
+        );
+        assert_eq!(read_chats("queued while the store was down").len(), 1);
+
+        std::env::remove_var("FNO_STATE_DIR");
+        std::env::remove_var(crate::paths::HOME_ENV);
     }
 }

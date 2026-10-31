@@ -4,8 +4,7 @@
 //! flat spelling still answers for one release: it prints one stderr line
 //! naming the nested form, then runs as before (stderr, because callers
 //! parse stdout). `fno doctor lint menu-caps` counts this table as the
-//! `agents` group; the flat Python registrations it forwards to are the
-//! compat leg, held in scripts/ci/menu-caps-debt.tsv until the window ends.
+//! `agents` group.
 
 use std::ffi::OsString;
 
@@ -213,6 +212,11 @@ const AUDIT: &[Node] = &[
     moved("incident", &["incident"], &[&["fleet-incident"]], "The durable fleet incident breaker."),
     command("test-run", &["test-run"], "The native test-suite process-group owner."),
     command("harness", &["harness"], "Instruments over the harness capability table."),
+    command(
+        "claude-fallback",
+        &["claude-fallback"],
+        "Count claude sessions on node worktrees in a window, for the daily gate's no-fallback part.",
+    ),
 ];
 
 #[rustfmt::skip]

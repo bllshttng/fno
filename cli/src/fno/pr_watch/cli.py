@@ -85,11 +85,6 @@ def _emit_event(
         return False
 
 
-def _emit_for_sweep(event_type: str, data: dict[str, Any]) -> None:
-    """run_sweep's emit contract drops the write receipt _emit_event returns."""
-    _emit_event(event_type, data)
-
-
 def _bounce_sender(window_s: float = 15.0) -> str:
     """The bounce that just sent this SIGTERM, from its receipt; else unrecorded.
 
@@ -335,15 +330,12 @@ def _run_evals_arm_phase(settings: Any, *, seconds_left_fn) -> None:
         row("arm_failed", f"{type(exc).__name__}: {exc}")
 
 
-def _watchdog_recovery_roots() -> list[Path]:
-    """Resolve every distinct project scope for the launchd watchdog scan.
+def _watchdog_arming() -> dict:
+    """The lane's arming read; an unread answer arms nothing."""
+    from fno.rust_binary import call_binary_json
 
-    One shared resolver with the manual report command
-    (unfinished_work.report_roots): the tick and a hand-run must name the
-    same fleet, or the two report surfaces disagree on scope."""
-    from fno.agents import unfinished_work as _uw
-
-    return _uw.report_roots()
+    err, answer = call_binary_json("census", ["watchdog-arming"], timeout=15)
+    return answer if err is None and isinstance(answer, dict) else {}
 
 
 class ClaimAdapter:
@@ -413,45 +405,11 @@ _TICK_TIMEOUT_EXIT = 75
 
 _ENV_TICK_TIMEOUT = "FNO_PR_WATCH_TICK_TIMEOUT"
 
-#: A roster probe needs at least this much budget to be worth starting. The
-#: probe measured 3.4s on a 43-row fleet, so anything under this buys a
-#: certain timeout rather than a smaller answer.
-_ROSTER_FLOOR_S = 8.0
-
-
-class _WatchdogBudgetSpent(Exception):
-    """The tick has too little left to sweep. Not a failure of the sweep."""
-
-
-#: A wake apply needs this much tick left before it may start: `fno
-#: agents resume` waits up to 180s and the landing confirmation polls
-#: after it. Starting one with less is how the watchdog leg eats the
-#: legs behind it.
-_WAKE_APPLY_FLOOR_S = 200
-
-
-def _wd_apply_and_emit(wd, verdict, *, cwd: str, agent: str, label: str) -> str:
-    try:
-        outcome, detail = wd.apply_verdict(verdict, lanes="wake", cwd=cwd, agent=agent)
-    except Exception as exc:  # noqa: BLE001 - one row never aborts the rest
-        outcome, detail = "refused", f"{label} crashed: {exc!r}"
-    wd.emit_event(
-        wd.outcome_event(outcome),
-        {"row_id": verdict.row_id, "verdict": verdict.verdict, "detail": detail,
-         "outcome": outcome},
-    )
-    return outcome
-
 #: A stranded sweep is one batched git fetch plus a rev-list and a
 #: last-commit-age call per worktree - cheap, but not free at 60+
 #: worktrees. Skipping under this floor costs nothing: the next tick
 #: sweeps from scratch, there is no partial state to lose.
 _STRANDED_FLOOR_S = 10.0
-
-#: 0.8s per root measured 2026-09-02 over 18 roots and 3113 rollouts (14.9s
-#: for the leg); the floor carries headroom for a fatter-than-mean root.
-#: Skipping under it costs nothing - the next tick starts the scan over.
-_RECOVERY_ROOT_FLOOR_S = 3.0
 
 #: Merge's 245s cap reserves the 150s sweep after the worst settings + wake
 #: caps on a 480s tick, while leaving room for the 90s queue read + merge floor.
@@ -474,6 +432,10 @@ _PHASE_CAP_S: dict[str, float] = {**_EVERY_TICK_CAP_S, **_FLEET_CAP_S, "merge": 
 
 _GRANT_QUEUE_READ_TIMEOUT_S = 90.0
 _MERGE_WINDOW_S = _PHASE_CAP_S["merge"] + _EVERY_TICK_CAP_S["sweep"]
+
+
+class _StrandedBudgetSpent(Exception):
+    """The tick has too little left to sweep. Not a failure of the sweep."""
 
 
 def _merge_budget_for_load(load_per_core: float, drain_floor_s: float) -> tuple[float, float]:
@@ -775,49 +737,42 @@ def tick() -> None:
             _fleet_swept = False
             if settings.recovery.enabled and settings.autonomy.enabled:
                 try:
-                    from fno.recovery import run_recovery_sweep
+                    from fno.rust_binary import call_binary_json
 
-                    def emit_recovery(event_type: str, data: dict) -> None:
-                        nonlocal _fleet_refused
-                        if event_type == "worker_refused":
-                            _fleet_refused += 1
-                        _emit_event(event_type, data)
-
-                    _fleet_candidates = run_recovery_sweep(
-                        settings.recovery,
-                        emit=emit_recovery,
+                    err, answer = call_binary_json(
+                        "census", ["recovery-sweep"], timeout=max(5.0, phase_seconds_left() or 5.0)
                     )
-                    _fleet_swept = True
+                    if err is not None or not isinstance(answer, dict):
+                        raise RuntimeError(f"recovery sweep door failed: {err}")
+                    _fleet_candidates = int(answer.get("candidates") or 0)
+                    events = answer.get("events") or []
+                    _fleet_refused = sum(1 for event in events if event.get("type") == "worker_refused")
+                    for event in events:
+                        _emit_event(str(event.get("type")), event.get("data") or {})
+                    # A disarmed sweep measured nothing, so it stamps no heartbeat.
+                    _fleet_swept = answer.get("swept") is True
                     typer.echo(f"recovery sweep: candidates={_fleet_candidates}")
                 except Exception as exc:  # noqa: BLE001 - never let recovery break pr-watch
                     log.warning("pr-watch: recovery sweep failed: %s", exc)
 
                 # The cadence-deadline backstop, for a refusal the taxonomy does
-                # not recognise. It reads the FULL registry, which the recovery
-                # sweep's candidate set does not: that set drops every non-claude
-                # row, so a codex successor is invisible to it. Report only - this
-                # leg stops, spawns and unclaims nothing. Wrapped separately from
-                # the recovery sweep so neither takes the other down.
+                # not recognise. Report only, and wrapped separately from the
+                # recovery sweep so neither takes the other down.
                 try:
-                    from fno.agents.sweep import run_sweep as _run_silence_sweep
+                    from fno.rust_binary import call_binary_json
 
-                    _rows, _fleet_silent = _run_silence_sweep(emit=_emit_for_sweep)
+                    err, answer = call_binary_json("census", ["sweep", "--tick"], timeout=60)
+                    if err is not None or not isinstance(answer, dict):
+                        raise RuntimeError(f"silence sweep door failed: {err}")
+                    _fleet_silent = int(answer.get("silent") or 0)
                     if _fleet_silent:
                         typer.echo(f"silence sweep: silent={_fleet_silent}")
                 except Exception as exc:  # noqa: BLE001 - a backstop never breaks the tick
                     log.warning("pr-watch: silence sweep failed: %s", exc)
 
-                # The fleet leg's own watermark and its liveness proof. `fno do pr watch
-                # status` reported the agent loaded through a six-hour outage, so a
-                # status line is not evidence that anything ticked; a file with a
-                # timestamp is.
-                #
-                # Written only when the sweep COMPLETED. A failed sweep that still
-                # stamped a watermark would render as a healthy quiet fleet -
-                # candidates=0, refused=0, fresh timestamp - which is the exact
-                # absence-as-evidence shape this whole node exists to kill. The
-                # missing write turns a broken sweep into loud staleness inside two
-                # ticks instead.
+                # The fleet leg's own watermark and its liveness proof. Written
+                # only when the sweep COMPLETED: a failed sweep that still stamped
+                # a watermark would render as a healthy quiet fleet.
                 if _fleet_swept:
                     try:
                         from fno.rust_binary import command_call
@@ -837,343 +792,48 @@ def tick() -> None:
         def _phase_watchdog(_slice_s: float) -> None:
             assert settings is not None and cfg is not None
             set_tick_phase("watchdog")
-            # Imported here, not at module scope: the watchdog package pulls the
-            # harness layer and this module is on the launchd hot path.
-            from fno.agents.watchdog import lane_armed as _wd_lane_armed
-            from fno.agents.watchdog import lane_off_detail as _wd_lane_off_detail
-            from fno.agents.watchdog import wake_armed as _wd_wake_armed
-
-            # Fleet watchdog, same cadence, same non-fatal wrap. The REPORT is
-            # the unfinished-work snapshot (the operator's outcome question);
-            # the internal session classifier runs only in wake mode, where it
-            # may resume a positively stalled session. No tick value reaps or
-            # reroutes - those stop a session and stay behind a manual
-            # `fno agents watchdog --apply-all`.
-            # getattr with the modeled default: a settings stub or a partially-loaded
-            # config must never crash the tick - "off" is the no-op that fails safe.
+            # The whole leg is native. The answer is one JSON object; this wrap
+            # keeps the tick's own arm row and its non-fatal contract.
             wd_i = settings.pr_watch.interval_seconds
             arm_interval["watchdog"] = wd_i
-            if _wd_lane_armed(settings):
-                acted = 0
-                try:
-                    import time as _time
+            try:
+                from fno.rust_binary import call_binary_json
 
-                    from fno.agents import unfinished_work as _uw
-                    from fno.agents import watchdog as _wd
-
-                    now = _time.time()
-                    # The tick's deadline is fatal and the report honors it by
-                    # leaving late roots unscanned: their dimensions read
-                    # unknown, never clean, and no partial snapshot is stamped
-                    # or mailed as complete.
-                    left = phase_seconds_left() or 0.0
-                    budget = left / 2
-                    roots = _watchdog_recovery_roots()
-                    if not roots:
-                        from fno.paths import resolve_repo_root
-
-                        roots = [Path(resolve_repo_root())]
-                    snapshot = _uw.build_report(
-                        roots,
-                        now_s=now,
-                        deadline_monotonic=time.monotonic() + max(0.0, budget),
-                    )
-                    mail_to = str(settings.recovery.watchdog.mail_to or "")
-                    _uw.publish_report(
-                        snapshot,
-                        source="tick",
-                        now_s=now,
-                        mail_to=mail_to,
-                        log=lambda line: log.warning("pr-watch: %s", line),
-                    )
-
-                    # Provider-outage supervision, both modes, measured ONCE per
-                    # tick: a breaker must be visible from a plain report tick -
-                    # waiting for someone to arm wake mode is how the fleet stays
-                    # blind through an outage. The wake sweep below reuses this
-                    # measurement through run_sweep's provider_outage_fn seam, so
-                    # no transcript is read twice on one tick. Refused the same
-                    # way the wake lane is: a budget under the probe's measured
-                    # cost buys a guaranteed timeout, not a smaller answer.
-                    left = phase_seconds_left() or 0.0
-                    if left < _ROSTER_FLOOR_S:
-                        raise _WatchdogBudgetSpent(
-                            f"{left:.1f}s left, under the {_ROSTER_FLOOR_S:.0f}s "
-                            f"a roster probe costs"
-                        )
-                    provider_rows, _provider_warnings = _wd.fleet_rows(timeout=left)
-                    provider_outages = _wd.measure_provider_outages(
-                        provider_rows, now_s=now
-                    )
-                    # Read BEFORE any write, defaulted here: the sweep file is the
-                    # only memory of what the event lane already said, so a first
-                    # tick after a wipe re-announces the open breaker - correct.
-                    prev_events_sig = _wd._last_events_signature()
-                    previous_parts = set(filter(None, prev_events_sig.split(";")))
-                    emitted_breaker_parts = []
-                    for breaker in provider_outages.get("breakers") or []:
-                        breaker_part = (
-                            "provider-breaker:"
-                            f"{breaker.get('provider')}:{breaker.get('account')}:"
-                            f"{breaker.get('outage_epoch')}"
-                        )
-                        if breaker_part not in previous_parts:
-                            _wd.emit_event("provider_breaker_transition", {
-                                "outage_epoch": str(breaker.get("outage_epoch") or ""),
-                                "provider": str(breaker.get("provider") or ""),
-                                "account": str(breaker.get("account") or ""),
-                                "phase": "open",
-                                "count": len(breaker.get("row_ids") or []),
-                            })
-                        emitted_breaker_parts.append(breaker_part)
-                    _wd.write_sweep_file(
-                        "tick", None, now, None,
-                        events_signature=";".join(
-                            sorted(previous_parts | set(emitted_breaker_parts))
-                        ),
-                        provider_outages=provider_outages,
-                    )
-                    # Provider-outage handoff supervision moved to the
-                    # provider-cap actor; measure_provider_outages
-                    # stays as report lines only.
-
-                    # Internal recovery, wake mode only. Session verdicts drive
-                    # nothing here in report mode, and their receipts stay
-                    # separate from the report's event stream.
-                    recoverable_results = []
-                    if _wd_wake_armed(settings):
-                        # Recompute the budget AFTER the report: budgeting both
-                        # halves off the same pre-report clock lets the wake lane
-                        # spend the whole remaining deadline and SIGALRM every
-                        # later tick leg.
-                        wake_budget = (phase_seconds_left() or 0.0) / 2
-                        if wake_budget < _ROSTER_FLOOR_S:
-                            # A budget under the probe's measured cost buys a
-                            # guaranteed timeout, not a smaller answer. Skip the
-                            # lane; the next tick re-classifies.
-                            log.warning(
-                                "pr-watch: watchdog wake budget spent (%.1fs left "
-                                "for the next tick)", wake_budget,
-                            )
-                        else:
-                            payload, rows = _wd.run_sweep(
-                                now_s=now, roster_timeout=wake_budget,
-                                provider_outage_fn=lambda: provider_outages,
-                            )
-                            if payload.get("refused"):
-                                # zero rows read is an instrument failure.
-                                # No events, no gates - the refusal reads loud.
-                                log.warning(
-                                    "pr-watch: watchdog sweep refused: %s (%s)",
-                                    payload["refused"],
-                                    "; ".join(payload.get("warnings") or [])
-                                    or "no cause given",
-                                )
-                                payload = {"verdicts": [], "counts": {}, "warnings": []}
-                                rows = []
-                            prev_recovery_sig = _wd._last_recovery_events_signature()
-                            fresh_recovery_ids = _wd.fresh_non_leave(
-                                payload, prev_recovery_sig
-                            )
-                            for d, row in zip(payload["verdicts"], rows):
-                                verdict = _wd.Verdict(**d)
-                                if verdict.verdict == _wd.LEAVE:
-                                    continue
-                                # fresh_non_leave answers ROW IDS; the gate is on the
-                                # row, not the verdict word.
-                                if verdict.row_id in fresh_recovery_ids:
-                                    _wd.emit_event(
-                                        "watchdog_verdict",
-                                        {
-                                            "row_id": verdict.row_id,
-                                            "name": verdict.name,
-                                            "verdict": verdict.verdict,
-                                            "basis": verdict.basis,
-                                        },
-                                    )
-                                if verdict.verdict == _wd.WAKE:
-                                    # Budgeting only the PROBE left the expensive half
-                                    # unbounded: one resume waits up to 180s and the
-                                    # confirmation polls after it, so a few stuck rows
-                                    # walk past the tick deadline and SIGALRM kills every
-                                    # leg behind this one. A row skipped here is not
-                                    # lost - the next tick re-classifies it.
-                                    if (phase_seconds_left() or 0.0) < _WAKE_APPLY_FLOOR_S:
-                                        log.warning(
-                                            "pr-watch: watchdog wake budget spent, "
-                                            "%s left for the next tick", verdict.row_id,
-                                        )
-                                        continue
-                                    _wd_apply_and_emit(_wd, verdict, cwd=row.cwd, agent=row.agent, label="wake")
-                                    acted += 1
-                            # SILENCE lane: registry-scoped rows fleet_rows misses.
-                            if (phase_seconds_left() or 0.0) < _WAKE_APPLY_FLOOR_S:
-                                log.warning("pr-watch: watchdog silence budget spent")
-                            else:
-                                try:
-                                    silence_vs, silence_rows_out = _wd.silence_verdicts(roots, now_s=now)
-                                except Exception as exc:  # noqa: BLE001 - a broken lane never aborts the tick
-                                    log.warning("pr-watch: silence sweep failed: %s", exc)
-                                    silence_vs, silence_rows_out = [], []
-                                for silence_v, silence_row in zip(silence_vs, silence_rows_out):
-                                    if silence_v.verdict != _wd.SILENCE:
-                                        continue
-                                    if (phase_seconds_left() or 0.0) < _WAKE_APPLY_FLOOR_S:
-                                        log.warning("pr-watch: watchdog silence budget spent")
-                                        break
-                                    _wd_apply_and_emit(_wd, silence_v, cwd=silence_row.cwd,
-                                                        agent=silence_row.agent, label="silence drive")
-                                    acted += 1
-                            recovery_scans = []
-                            recovery_roots_done = 0
-                            for recovery_root in roots:
-                                # Per root, not once before the loop: the stranded
-                                # sweep learned this from a review finding and this
-                                # leg never got the same check.
-                                recovery_left = phase_seconds_left() or 0.0
-                                if recovery_left < _RECOVERY_ROOT_FLOOR_S:
-                                    log.info(
-                                        "pr-watch: Codex recovery scan stopped after %d "
-                                        "root(s), %.1fs left, under the %.0fs a scan "
-                                        "costs - remaining roots retry next tick",
-                                        recovery_roots_done,
-                                        recovery_left,
-                                        _RECOVERY_ROOT_FLOOR_S,
-                                    )
-                                    break
-                                try:
-                                    (
-                                        recovery_payload,
-                                        _recovery_rows,
-                                        recovery_scan,
-                                    ) = _wd.run_recoverable_sweep(
-                                        cwd=recovery_root,
-                                        recency_seconds=24 * 3600,
-                                        now_s=now,
-                                    )
-                                except Exception as exc:  # noqa: BLE001 - never fatal
-                                    log.warning(
-                                        "pr-watch: Codex recovery scan failed: %s", exc
-                                    )
-                                    continue
-                                if not recovery_scan.complete:
-                                    log.warning(
-                                        "pr-watch: Codex recovery scan refused for %s",
-                                        recovery_root,
-                                    )
-                                    continue
-                                recovery_scans.append((recovery_root, recovery_scan))
-                                # After the work, like the stranded sweep's own
-                                # counter: a root that raised or refused was
-                                # attempted, never done.
-                                recovery_roots_done += 1
-                            for recovery_root, recovery_scan in recovery_scans:
-                                results = _wd.apply_recoverable(
-                                    recovery_scan,
-                                    should_apply=lambda: (
-                                        phase_seconds_left() or 0.0
-                                    ) >= _WAKE_APPLY_FLOOR_S,
-                                )
-                                recoverable_results.extend(results)
-                                for result_item in results:
-                                    # A non-applied recovery candidate is refound and
-                                    # re-decided by every tick until it ages out of
-                                    # the recency window; publish it once per recovery
-                                    # signature, not once per 600s forever. An applied
-                                    # row registered and never recurs. A deferred row
-                                    # was never attempted, so there is nothing to say.
-                                    if result_item["outcome"] == "applied" or (
-                                        result_item["outcome"] != "deferred"
-                                        and result_item["session_id"] in fresh_recovery_ids
-                                    ):
-                                        _wd.emit_event(
-                                            _wd.outcome_event(result_item["outcome"]),
-                                            {
-                                                "row_id": result_item["session_id"],
-                                                "verdict": _wd.RECOVERABLE,
-                                                "detail": result_item["detail"],
-                                                "outcome": result_item["outcome"],
-                                            },
-                                        )
-                            # Stamp the recovery receipt gate: what was published
-                            # plus what was already published, minus deferred sids a
-                            # published-before-apply never actually said.
-                            deferred_sids = {
-                                item["session_id"]
-                                for item in recoverable_results
-                                if item["outcome"] == "deferred"
-                            }
-                            published_sids = {
-                                item["session_id"]
-                                for item in recoverable_results
-                                if item["outcome"] != "deferred"
-                            }
-                            parts = [
-                                part
-                                for part in _wd.union_signature(
-                                    prev_recovery_sig,
-                                    _wd.verdict_signature(
-                                        {
-                                            **payload,
-                                            "verdicts": [
-                                                d for d in payload["verdicts"]
-                                                if _wd.Verdict(**d).verdict != _wd.LEAVE
-                                            ],
-                                        }
-                                    ),
-                                ).split(";")
-                                if part
-                            ]
-                            parts.extend(
-                                f"{sid}:{_wd.RECOVERABLE}"
-                                for sid in sorted(published_sids)
-                            )
-                            recovery_sig = ";".join(
-                                part
-                                for part in parts
-                                if ":" not in part
-                                or part.split(":", 1)[0] not in deferred_sids
-                            )
-                            _wd.write_sweep_file(
-                                "tick",
-                                None,
-                                now,
-                                None,
-                                recovery_events_signature=recovery_sig,
-                                provider_outages=provider_outages,
-                            )
-                    counts = " ".join(
-                        f"{k}={v}"
-                        for k, v in _uw.snapshot_payload(snapshot)["counts"].items()
-                        if v is not None
-                    )
-                    recoverable_applied = sum(
-                        item["outcome"] == "applied" for item in recoverable_results
-                    )
-                    recoverable_remaining = sum(
-                        item["outcome"] == "deferred" for item in recoverable_results
-                    )
-                    typer.echo(
-                        f"watchdog report: {counts} acted={acted} "
-                        f"recoverable_applied={recoverable_applied} "
-                        f"recoverable_remaining={recoverable_remaining}"
-                    )
-                    _emit_tick_row("watchdog", interval_s=wd_i, acted=acted,
-                                   detail=f"{counts} recoverable_applied={recoverable_applied} "
-                                          f"recoverable_remaining={recoverable_remaining}")
-                except _WatchdogBudgetSpent as exc:
-                    log.info("pr-watch: watchdog leg skipped: %s", exc)
-                    _emit_tick_row("watchdog", interval_s=wd_i, skip_reason="budget_spent",
-                                   detail=str(exc)[:200])
-                except Exception as exc:  # noqa: BLE001 - never let the watchdog break pr-watch
-                    log.warning("pr-watch: watchdog sweep failed: %s", exc)
-                    _emit_tick_row("watchdog", interval_s=wd_i, skip_reason="sweep_failed",
-                                   detail=str(exc)[:200])
-            else:
+                left = phase_seconds_left() or 0.0
+                err, answer = call_binary_json(
+                    "census",
+                    ["watchdog-tick", "--budget-s", f"{left:.1f}"],
+                    timeout=max(5.0, left),
+                )
+                if err is not None or not isinstance(answer, dict):
+                    raise RuntimeError(f"watchdog door failed: {err}")
+            except Exception as exc:  # noqa: BLE001 - never let the watchdog break pr-watch
+                log.warning("pr-watch: watchdog sweep failed: %s", exc)
+                _emit_tick_row("watchdog", interval_s=wd_i, skip_reason="sweep_failed",
+                               detail=str(exc)[:200])
+                return
+            if not answer.get("armed"):
                 # An unarmed lane still ticks: "why it did nothing" is the readout's job.
-                # The detail names the key that read false, not just the lane.
                 _emit_tick_row("watchdog", interval_s=wd_i, skip_reason="watchdog_off",
-                               detail=_wd_lane_off_detail(settings))
+                               detail=str(answer.get("off_detail") or ""))
+                return
+            if answer.get("skip_reason"):
+                log.info("pr-watch: watchdog leg skipped: %s", answer.get("detail"))
+                _emit_tick_row("watchdog", interval_s=wd_i,
+                               skip_reason=str(answer["skip_reason"]),
+                               detail=str(answer.get("detail") or "")[:200])
+                return
+            acted = int(answer.get("acted") or 0)
+            counts = str(answer.get("counts") or "")
+            applied = int(answer.get("recoverable_applied") or 0)
+            remaining = int(answer.get("recoverable_remaining") or 0)
+            typer.echo(
+                f"watchdog report: {counts} acted={acted} "
+                f"recoverable_applied={applied} recoverable_remaining={remaining}"
+            )
+            _emit_tick_row("watchdog", interval_s=wd_i, acted=acted,
+                           detail=f"{counts} recoverable_applied={applied} "
+                                  f"recoverable_remaining={remaining}")
 
         def _phase_sweep(slice_s: float) -> None:
             nonlocal result, tick_failed
@@ -1347,24 +1007,21 @@ def tick() -> None:
 
         def _phase_stranded(slice_s: float) -> None:
             assert settings is not None and cfg is not None
-            # The watchdog def imports these for its own lanes; the stranded
-            # sweep reads the same arming decisions, so it imports its own.
-            from fno.agents.watchdog import lane_armed as _wd_lane_armed
-            from fno.agents.watchdog import wake_armed as _wd_wake_armed
             set_tick_phase("stranded")
             # The sweep feeds the board's provenance cache; the lane only arms acting.
-            lane_armed = _wd_lane_armed(settings)
+            arming = _watchdog_arming()
+            lane_armed = bool(arming.get("armed"))
             try:
                 left = phase_seconds_left() or 0.0
                 if left < _STRANDED_FLOOR_S:
-                    raise _WatchdogBudgetSpent(
+                    raise _StrandedBudgetSpent(
                         f"{left:.1f}s left, under the {_STRANDED_FLOOR_S:.0f}s "
                         "a stranded sweep costs"
                     )
                 from fno.branch_provenance_cache import write_cache
                 from fno.rust_binary import call_binary_json
 
-                wake = lane_armed and _wd_wake_armed(settings)
+                wake = lane_armed and bool(arming.get("wake_armed"))
                 changed, stranded_n, unknown_n, acted_n, failed_n, roots_done = False, 0, 0, 0, 0, 0
                 # Rotate the starting root by run: one stranded run every
                 # three interval buckets (the fleet-tail cadence), so
@@ -1421,7 +1078,7 @@ def tick() -> None:
                 )
                 if changed:
                     _replay_views()
-            except _WatchdogBudgetSpent as exc:
+            except _StrandedBudgetSpent as exc:
                 log.info("pr-watch: stranded leg skipped: %s", exc)
             except Exception as exc:  # noqa: BLE001 - never let the stranded sweep break pr-watch
                 log.warning("pr-watch: stranded sweep failed: %s", exc)

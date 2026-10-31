@@ -94,7 +94,7 @@ pub(crate) const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];
 const MODEL_FLAGS: &[&str] = &["--model", "-m"];
 const EFFORT_FLAGS: &[&str] = &["--effort"];
 
-fn is_value_flag(tok: &str) -> bool {
+pub(crate) fn is_value_flag(tok: &str) -> bool {
     VALUE_FLAGS.contains(&tok) || SPAWN_VALUE_FLAGS_EXTRA.contains(&tok)
 }
 
@@ -389,47 +389,11 @@ pub fn scan_projection(tail: &[String]) -> Value {
     })
 }
 
-/// Two-word slug lists for a nameless spawn (docker/heroku pattern). The
-/// deleted Python lists, verbatim; the goldens pin membership, not a draw.
-const SLUG_ADJ: &[&str] = &[
-    "amber", "brave", "calm", "clever", "coral", "cosmic", "crisp", "dapper", "eager", "fabled",
-    "gentle", "glossy", "golden", "hardy", "jolly", "keen", "lively", "lucid", "mellow", "merry",
-    "nimble", "noble", "plucky", "quiet", "rapid", "ruddy", "sage", "sleek", "snug", "spry",
-    "stout", "sunny", "swift", "tidy", "vivid", "warm", "witty", "zesty", "bold", "bright",
-];
-
-const SLUG_NOUN: &[&str] = &[
-    "otter", "falcon", "willow", "cedar", "comet", "ember", "harbor", "meadow", "pebble", "quartz",
-    "river", "summit", "thicket", "vale", "walrus", "yak", "badger", "bison", "cobra", "crane",
-    "dingo", "eagle", "ferret", "gecko", "heron", "ibis", "jaguar", "koala", "lemur", "marten",
-    "newt", "osprey", "puffin", "raven", "shrew", "tapir", "urchin", "viper", "wombat", "finch",
-];
-
-/// Best-effort collision-avoided `adjective-noun` slug. Regenerates up to 5
-/// times on a registry hit; the flocked downstream check remains
-/// authoritative. The draw is a wall-clock/pid LCG: no rand dependency, and
-/// the goldens pin membership in the word lists, never a draw.
-fn mint_slug(existing: &HashSet<String>) -> Result<String, ()> {
-    let mut state =
-        crate::accounts::state::wall_now().to_bits() ^ ((std::process::id() as u64) << 32);
-    let mut next = move || {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (state >> 33) as usize
-    };
-    for _ in 0..5 {
-        if let Ok(slug) = adj_noun(&mut next, existing) {
-            return Ok(slug);
-        }
-    }
-    Err(())
-}
-
 /// The `agents.naming.worker` name of a node-driven or `/target` spawn, with
 /// the `-2`..`-5` suffix loop the deleted leg ran. Any failure returns None
-/// and the adjective-noun mint runs: a spawn must never die on a naming
-/// lookup.
+/// and the caller refuses with a named line: a spawn with no node slug and no
+/// prompt has nothing to name a worker from, and it never launches under an
+/// invented one.
 fn mint_node_name(
     cwd: &Path,
     node: Option<&str>,
@@ -675,17 +639,17 @@ pub fn normalize(
         };
         let name = match minted.filter(|_| !promoted).or(person) {
             Some(n) => n,
-            None => match mint_slug(&names) {
-                Ok(n) => n,
-                Err(()) => {
-                    notes.push("fno agents spawn: could not find a free auto-name after 5 tries; pass one explicitly".to_string());
-                    return Normalized {
-                        argv: args.to_vec(),
-                        stderr: notes,
-                        exit: Some(2),
-                    };
-                }
-            },
+            None => {
+                notes.push(
+                    "fno agents spawn: no node slug or prompt to name the worker from; pass --name"
+                        .to_string(),
+                );
+                return Normalized {
+                    argv: args.to_vec(),
+                    stderr: notes,
+                    exit: Some(2),
+                };
+            }
         };
         let mut with_name = vec!["--name".to_string(), name];
         with_name.extend(toks);
@@ -714,20 +678,6 @@ pub fn normalize(
         argv: out,
         stderr: notes,
         exit: None,
-    }
-}
-
-/// One draw attempt: a slug from the two lists that is not already taken.
-fn adj_noun(next: &mut impl FnMut() -> usize, existing: &HashSet<String>) -> Result<String, ()> {
-    let slug = format!(
-        "{}-{}",
-        SLUG_ADJ[next() % SLUG_ADJ.len()],
-        SLUG_NOUN[next() % SLUG_NOUN.len()]
-    );
-    if existing.contains(&slug) {
-        Err(())
-    } else {
-        Ok(slug)
     }
 }
 
@@ -1221,7 +1171,7 @@ fn pass_through(args: &[String]) -> Admission {
 /// `--role` or `--route`/`--provider`, one carrying `--dispatch-account`, one
 /// carrying `--resume`, and one pinned to a non-claude harness. Advisory in
 /// every direction: a failure never blocks the spawn.
-fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
+pub(crate) fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     // The provenance carrier: drop any previous spawn's decision first, so a
     // stale "config" never outlives its pick.
     std::env::remove_var(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY);
@@ -1245,11 +1195,22 @@ fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     }
     let verdict = match crate::accounts::pick::pick_live(cwd, None, &[], true) {
         Ok(v) => v,
-        Err(_) => return args.to_vec(),
+        Err(exc) => {
+            eprintln!("account: default (pick unavailable: {exc})");
+            return args.to_vec();
+        }
     };
+    if verdict.exit_code == crate::accounts::pick::EXIT_NOT_ARMED {
+        return args.to_vec();
+    }
     let Some(account) = verdict.account else {
+        eprintln!("account: default (pick unavailable: {})", verdict.reason);
         return args.to_vec();
     };
+    eprintln!(
+        "account: {account} (picked by accounts.quota.pick_on_launch, {})",
+        picked_headroom_note(&account, cwd)
+    );
     // The mint tells an injected pick from a flag the operator typed.
     std::env::set_var(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY, "config");
     let boundary = args
@@ -1262,6 +1223,28 @@ fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     out.push(account);
     out.extend_from_slice(&args[boundary..]);
     out
+}
+
+/// The picked account's worst window, for the receipt.
+fn picked_headroom_note(account: &str, cwd: &Path) -> String {
+    use crate::accounts::state;
+    let path = crate::provider_cap::runtime_state_path(cwd);
+    let snapshot = state::read_usage(
+        &path,
+        account,
+        state::DEFAULT_USAGE_TTL_SECONDS,
+        state::wall_now(),
+    );
+    let mut worst: Option<state::Window> = None;
+    for window in snapshot.map(|s| s.windows).unwrap_or_default() {
+        if worst.as_ref().is_none_or(|w| window.used_pct > w.used_pct) {
+            worst = Some(window);
+        }
+    }
+    match worst {
+        Some(w) => format!("{} {:.0}%", w.label, w.used_pct),
+        None => "headroom unknown".to_string(),
+    }
 }
 
 #[cfg(test)]

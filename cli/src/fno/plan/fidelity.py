@@ -241,7 +241,7 @@ def _read_covering_carveouts(repo_root: Optional[str], session_ids: set) -> list
         return []
     try:
         from fno import paths as _paths
-        from fno.carveout.core import read_carveouts
+        from fno.rust_binary import read_carveouts
 
         root = Path(repo_root) if repo_root else _paths.resolve_repo_root()
         return read_carveouts(root, session_ids=list(session_ids))

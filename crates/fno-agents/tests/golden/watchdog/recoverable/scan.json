@@ -1,0 +1,420 @@
+{
+  "now": 1800000000.0,
+  "recency": 3600.0,
+  "target": "/repo/target",
+  "registry": "{\"schema_version\": 1, \"agents\": [{\"name\": \"registered\", \"harness\": \"codex\", \"harness_session_id\": \"019a0000-0000-7000-8000-000000000003\", \"cwd\": \"/repo/target\", \"log_path\": \"\"}]}",
+  "complete_files": [
+    [
+      "a/rollout-usable.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000001\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03.500Z\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"first\"}]}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03.500Z\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"word  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\tword  \\n\\t\"}]}}\n",
+      100
+    ],
+    [
+      "a/rollout-usable-older-copy.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000001\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03.500Z\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"older\"}]}}\n",
+      110
+    ],
+    [
+      "a/rollout-wrong-cwd.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000002\", \"cwd\": \"/repo/other\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03.500Z\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n",
+      120
+    ],
+    [
+      "b/rollout-registered.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000003\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03.500Z\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n",
+      130
+    ],
+    [
+      "b/rollout-no-turn.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000004\", \"cwd\": \"/repo/target\"}}\n",
+      140
+    ],
+    [
+      "b/rollout-bad-ts.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000005\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"not-a-date\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n",
+      150
+    ],
+    [
+      "b/rollout-naive-ts.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000006\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n",
+      160
+    ],
+    [
+      "b/rollout-offset-ts.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000007\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T09:02:03+08:00\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n",
+      170
+    ],
+    [
+      "b/rollout-too-old.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000008\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03.500Z\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n",
+      7200
+    ],
+    [
+      "b/not-a-rollout.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-000000000009\", \"cwd\": \"/repo/target\"}}\n{\"type\": \"response_item\", \"timestamp\": \"2026-10-30T01:02:03.500Z\", \"payload\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n",
+      180
+    ]
+  ],
+  "damaged_files": [
+    [
+      "c/rollout-empty.jsonl",
+      "",
+      200
+    ],
+    [
+      "c/rollout-schema.jsonl",
+      "{\"type\": \"other\"}\n",
+      210
+    ],
+    [
+      "c/rollout-payload.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": 3}\n",
+      220
+    ],
+    [
+      "c/rollout-id-int.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": 3, \"cwd\": \"/x\"}}\n",
+      230
+    ],
+    [
+      "c/rollout-short-id.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"abc12345\", \"cwd\": \"/repo/target\"}}\n",
+      240
+    ],
+    [
+      "c/rollout-upper-id.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019A0000-0000-7000-8000-00000000000A\", \"cwd\": \"/repo/target\"}}\n",
+      250
+    ],
+    [
+      "c/rollout-cwd-int.jsonl",
+      "{\"type\": \"session_meta\", \"payload\": {\"id\": \"019a0000-0000-7000-8000-00000000000b\", \"cwd\": 3}}\n",
+      260
+    ]
+  ],
+  "selected": "019a0000-0000-7000-8000-000000000001",
+  "cases": {
+    "complete": {
+      "payload": {
+        "generated_at": "2027-01-15T08:00:00Z",
+        "verdicts": [
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000001",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/a/rollout-usable.jsonl is absent from the registry",
+            "action": "adopt",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000004",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-no-turn.jsonl is unusable: no_readable_transcript_turn",
+            "action": "refuse",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000005",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-bad-ts.jsonl is unusable: transcript_timestamp_unreadable",
+            "action": "refuse",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000006",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-naive-ts.jsonl is unusable: transcript_timestamp_unreadable",
+            "action": "refuse",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000007",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-offset-ts.jsonl is absent from the registry",
+            "action": "adopt",
+            "agent": "codex"
+          }
+        ],
+        "counts": {
+          "recoverable": 5
+        },
+        "warnings": [],
+        "complete": true,
+        "scanned_count": 9,
+        "malformed_count": 0,
+        "unreadable_count": 0,
+        "cwd": "/repo/target",
+        "recoverable_count": 5,
+        "usable_recoverable_count": 2,
+        "unusable_recoverable_count": 3
+      },
+      "rows": [
+        [
+          "019a0000-0000-7000-8000-000000000001",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000004",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000005",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000006",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000007",
+          "/repo/target"
+        ]
+      ]
+    },
+    "selected": {
+      "payload": {
+        "generated_at": "2027-01-15T08:00:00Z",
+        "verdicts": [
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000001",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/a/rollout-usable.jsonl is absent from the registry",
+            "action": "adopt",
+            "agent": "codex"
+          }
+        ],
+        "counts": {
+          "recoverable": 1
+        },
+        "warnings": [],
+        "complete": true,
+        "scanned_count": 9,
+        "malformed_count": 0,
+        "unreadable_count": 0,
+        "cwd": "/repo/target",
+        "selected_session_id": "019a0000-0000-7000-8000-000000000001",
+        "recoverable_count": 1,
+        "usable_recoverable_count": 1,
+        "unusable_recoverable_count": 0
+      },
+      "rows": [
+        [
+          "019a0000-0000-7000-8000-000000000001",
+          "/repo/target"
+        ]
+      ]
+    },
+    "damaged": {
+      "payload": {
+        "generated_at": "2027-01-15T08:00:00Z",
+        "verdicts": [
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000001",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/a/rollout-usable.jsonl is absent from the registry",
+            "action": "adopt",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000004",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-no-turn.jsonl is unusable: no_readable_transcript_turn",
+            "action": "refuse",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000005",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-bad-ts.jsonl is unusable: transcript_timestamp_unreadable",
+            "action": "refuse",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000006",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-naive-ts.jsonl is unusable: transcript_timestamp_unreadable",
+            "action": "refuse",
+            "agent": "codex"
+          },
+          {
+            "row_id": "019a0000-0000-7000-8000-000000000007",
+            "name": "019a0000",
+            "state": "orphaned",
+            "verdict": "recoverable",
+            "basis": "Codex rollout <ROOT>/sessions/b/rollout-offset-ts.jsonl is absent from the registry",
+            "action": "adopt",
+            "agent": "codex"
+          }
+        ],
+        "counts": {},
+        "warnings": [
+          "rollout JSON failed: <ROOT>/sessions/c/rollout-empty.jsonl: Expecting value: line 1 column 1 (char 0)",
+          "rollout schema failed: <ROOT>/sessions/c/rollout-schema.jsonl: missing session_meta",
+          "rollout schema failed: <ROOT>/sessions/c/rollout-payload.jsonl: payload is not an object",
+          "rollout schema failed: <ROOT>/sessions/c/rollout-id-int.jsonl: id is not a string",
+          "rollout schema failed: <ROOT>/sessions/c/rollout-short-id.jsonl: id is not a canonical full UUID",
+          "rollout schema failed: <ROOT>/sessions/c/rollout-upper-id.jsonl: id is not a canonical full UUID",
+          "rollout schema failed: <ROOT>/sessions/c/rollout-cwd-int.jsonl: cwd is not a string"
+        ],
+        "complete": false,
+        "scanned_count": 16,
+        "malformed_count": 7,
+        "unreadable_count": 0,
+        "cwd": "/repo/target"
+      },
+      "rows": [
+        [
+          "019a0000-0000-7000-8000-000000000001",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000004",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000005",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000006",
+          "/repo/target"
+        ],
+        [
+          "019a0000-0000-7000-8000-000000000007",
+          "/repo/target"
+        ]
+      ]
+    },
+    "damaged_apply": [
+      {
+        "session_id": null,
+        "outcome": "refused",
+        "detail": "recovery coverage incomplete: rollout JSON failed: <ROOT>/sessions/c/rollout-empty.jsonl: Expecting value: line 1 column 1 (char 0); rollout schema failed: <ROOT>/sessions/c/rollout-schema.jsonl: missing session_meta; rollout schema failed: <ROOT>/sessions/c/rollout-payload.jsonl: payload is not an object; rollout schema failed: <ROOT>/sessions/c/rollout-id-int.jsonl: id is not a string; rollout schema failed: <ROOT>/sessions/c/rollout-short-id.jsonl: id is not a canonical full UUID; rollout schema failed: <ROOT>/sessions/c/rollout-upper-id.jsonl: id is not a canonical full UUID; rollout schema failed: <ROOT>/sessions/c/rollout-cwd-int.jsonl: cwd is not a string"
+      }
+    ],
+    "absent_root": {
+      "generated_at": "2027-01-15T08:00:00Z",
+      "verdicts": [],
+      "counts": {},
+      "warnings": [
+        "sessions root unreadable: <ROOT>/absent-root"
+      ],
+      "complete": false,
+      "scanned_count": 0,
+      "malformed_count": 0,
+      "unreadable_count": 1,
+      "cwd": "/repo/target"
+    },
+    "moved_apply": [
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000001",
+        "outcome": "refused",
+        "reason": "transcript_changed",
+        "transcript_usable": false,
+        "detail": "transcript_changed: last event evidence no longer matches the scan"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000004",
+        "outcome": "refused",
+        "reason": "transcript_unusable",
+        "transcript_usable": false,
+        "detail": "transcript_unusable: no_readable_transcript_turn"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000005",
+        "outcome": "refused",
+        "reason": "transcript_unusable",
+        "transcript_usable": false,
+        "detail": "transcript_unusable: transcript_timestamp_unreadable"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000006",
+        "outcome": "refused",
+        "reason": "transcript_unusable",
+        "transcript_usable": false,
+        "detail": "transcript_unusable: transcript_timestamp_unreadable"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000007",
+        "outcome": "refused",
+        "reason": "transcript_unavailable",
+        "transcript_usable": false,
+        "detail": "rollout vanished before adoption: <ROOT>/sessions/b/rollout-offset-ts.jsonl"
+      }
+    ],
+    "moved_counts": {
+      "applied": 0,
+      "refused": 5,
+      "deferred": 0
+    },
+    "deferred_apply": [
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000001",
+        "outcome": "deferred",
+        "detail": "tick budget spent; retry on the next tick"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000004",
+        "outcome": "deferred",
+        "detail": "tick budget spent; retry on the next tick"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000005",
+        "outcome": "deferred",
+        "detail": "tick budget spent; retry on the next tick"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000006",
+        "outcome": "deferred",
+        "detail": "tick budget spent; retry on the next tick"
+      },
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000007",
+        "outcome": "deferred",
+        "detail": "tick budget spent; retry on the next tick"
+      }
+    ],
+    "deferred_counts": {
+      "applied": 0,
+      "refused": 0,
+      "deferred": 5
+    },
+    "applied": [
+      {
+        "session_id": "019a0000-0000-7000-8000-000000000001",
+        "outcome": "applied",
+        "transcript_usable": true,
+        "last_event_at": "2026-10-30T01:02:03Z",
+        "last_turn_marker": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+        "registry_row_count": 1,
+        "detail": "adopted 019a0000-0000-7000-8000-000000000001 handle=019a0000-2"
+      }
+    ],
+    "applied_row": {
+      "harness": "codex",
+      "cwd": "/repo/target",
+      "status": "orphaned",
+      "origin": "adopted",
+      "short_id": ""
+    }
+  }
+}

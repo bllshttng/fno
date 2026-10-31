@@ -92,7 +92,6 @@ Reasons covered: `paths import failed`, `agents_registry_path() raised`, `regist
 
 | Surface | What it pins |
 |---|---|
-| `cli/tests/agents/test_rust_runtime.py` (contract + parametric) | `_resolve_ask_provider` correctness, routing-decision branches, `RUST_CLIENT_ASK_PROVIDERS` set, value-carrying flag handling, `FNO_AGENTS_DEBUG_ROUTING` observability |
 | `cli/tests/agents/test_ask_e2e_dispatch.py` | CLI-level ask contract: unknown-agent exit propagation and the registry-seeded follow-up path (the Python `dispatch_ask` differential it once ran was retired with that leg) |
 | `crates/fno-agents/tests/codex_ask_unit.rs` (B1) | Pure-function core: argv build, JSONL parse, error enum, exit-code map |
 | `crates/fno-agents/tests/codex_ask_dispatch.rs` (B2) | Subprocess driver + dispatch orchestrator against the fake codex |

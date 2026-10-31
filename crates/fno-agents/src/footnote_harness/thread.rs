@@ -514,6 +514,10 @@ pub fn dispatch_thread(
     for var in crate::claims::AMBIENT_IDENTITY_NAMES {
         cmd.env_remove(var);
     }
+    // fnh resolves its rules store from FNO_GRAPH_JSON; naming it here keeps
+    // the host, and fnh under it, off the $HOME/.fno fallback its own
+    // resolver would take.
+    cmd.env("FNO_GRAPH_JSON", super::launch_graph_env(cwd));
     // SAFETY: setsid is async-signal-safe; it runs between fork and exec. The
     // host leads its own group, which the stop command signals.
     unsafe {

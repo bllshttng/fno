@@ -2,8 +2,9 @@
 
 ``fno agents spawn`` carries 44 flags in one namespace, and nothing recorded which of them
 fno actually branches on. This table is that classification. The parser it classified
-was the Python spawn command, now deleted: the Rust client parses spawn, and nothing yet
-checks its flags against these rows. The Rust front-door cap test still counts them.
+was the Python spawn command, now deleted: the Rust client parses spawn. A flag this
+table does not own rides the passthrough law to the harness argv verbatim; a lane that
+cannot carry it refuses by name. The Rust front-door cap test still counts them.
 
 Three owners. The distinction is the ``--`` passthrough migration's own precondition: a
 flag fno only forwards is safe to move across the separator, a flag fno branches on is
@@ -58,18 +59,6 @@ class FlagOwner(NamedTuple):
     why: str
     site: str = ""
     sources: tuple[str, ...] = (CALLER, DEFAULT)
-
-
-#: The retired spawn axes. Each stays DECLARED on the parser as a hidden
-#: refusal stub (the callback names the native form and exits 2); the lint
-#: pins that the stub survives and that no other row comes back.
-RETIRED_SPAWN_FLAGS: tuple[str, ...] = (
-    "--provider",
-    "--recorded-provider",
-    "--yolo",
-    "--resume",
-    "--deny-tools",
-)
 
 
 FLAG_OWNERS: dict[str, FlagOwner] = {

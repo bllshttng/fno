@@ -9,7 +9,7 @@
 //! The inputs below mirror that driver's case table.
 //!
 //! A minted name is a wall-clock draw, not parity: a mint case asserts the
-//! name sits in the `--name` slot and reads `adjective-noun`, then compares
+//! name sits in the `--name` slot and reads `t-<words>`, then compares
 //! the rest of the argv. `cannot_fire` replays `plugin_status: None`, the
 //! verdict the capture machine's codex read produced.
 
@@ -123,7 +123,10 @@ fn normalize_matches_the_python_leg() {
         assert_eq!(got.argv[1], "--name", "{name}");
         let minted = &got.argv[2];
         let words: Vec<&str> = minted.split('-').collect();
-        assert_eq!(words.len(), 2, "{name}: {minted}");
+        // The worker-name law: t- plus words from the node slug or the
+        // prompt, so the token count reads 2 to 4, never a bare draw.
+        assert_eq!(words[0], "t", "{name}: {minted}");
+        assert!((2..=4).contains(&words.len()), "{name}: {minted}");
         assert!(!existing.contains(minted), "{name}: {minted}");
         let mut rest = got.argv.clone();
         rest.remove(2);

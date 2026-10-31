@@ -60,10 +60,7 @@ Real-subprocess tests (`tests/daemon_e2e.rs`) prove the load-bearing claims: an 
 
 The crate is publishable (`publish = true`) and ships three ways — platform wheels with
 the binary bundled, standalone GitHub Release tarballs, and `cargo install fno-agents`.
-Once installed, this binary is the **default** `fno agents` runtime for the daemon-native
-commands (`spawn`, `status`, `drive`, `*-channel`); the commands that share an established Python
-contract stay on Python until the client reaches parity (`FNO_AGENTS_RUNTIME=python` pins
-everything to Python; `=rust` forces the binary for every command). Build matrix and the
+Once installed, this binary answers every `fno agents` command. Build matrix and the
 gated live-publish runbook:
 [`docs/distribution.md`](../../docs/distribution.md). Nothing is published yet (machinery
 only); the publish workflows are gated behind manual dispatch + secrets.

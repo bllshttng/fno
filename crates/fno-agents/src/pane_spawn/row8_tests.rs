@@ -476,3 +476,63 @@ fn claude_refusals_row8_golden() {
     );
     assert_eq!(r.exit_code, EXIT_REFUSAL);
 }
+
+/// The footnote pane TUI learns its graph store from FNO_GRAPH_JSON: the
+/// wrapper names the porcelain store, anchored at the pane's cwd, so a
+/// sandboxed pane never reads the machine's `$HOME/.fno`.
+#[test]
+fn the_footnote_pane_plan_names_the_graph_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let keys = [
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "FNO_STATE_DIR",
+    ];
+    let prior: Vec<(&str, Option<std::ffi::OsString>)> =
+        keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+    std::env::set_var("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic");
+    std::env::set_var("ANTHROPIC_AUTH_TOKEN", "k");
+    std::env::set_var("FNO_STATE_DIR", tmp.path().join("state"));
+    let saved_graph = std::env::var_os("FNO_GRAPH_JSON");
+    std::env::remove_var("FNO_GRAPH_JSON");
+    let state = tmp.path().join("state");
+    let mut ctx = PaneContext::simple("footnote", tmp.path().to_str().unwrap());
+    ctx.passthrough = vec!["-m".to_string(), "glm-5.3".to_string()];
+    let plan = match make_plan(&FOOTNOTE_ARM, &ctx) {
+        Ok(p) => p,
+        Err(r) => {
+            for (k, v) in &prior {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+            if let Some(v) = saved_graph {
+                std::env::set_var("FNO_GRAPH_JSON", v);
+            }
+            panic!("footnote plan refused: {}", r.line)
+        }
+    };
+    for (k, v) in &prior {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+    match saved_graph {
+        Some(v) => std::env::set_var("FNO_GRAPH_JSON", v),
+        None => std::env::remove_var("FNO_GRAPH_JSON"),
+    }
+    let pair = plan
+        .wrapped
+        .iter()
+        .find(|t| t.starts_with("FNO_GRAPH_JSON="))
+        .unwrap_or_else(|| panic!("the wrapper carries no FNO_GRAPH_JSON: {:?}", plan.wrapped));
+    let value = pair.split_once('=').unwrap().1;
+    assert!(
+        value.starts_with(state.to_str().unwrap()),
+        "the sandbox store, never empty or $HOME/.fno: {value:?}"
+    );
+    assert!(value.ends_with("graph.json"), "the graph anchor: {value:?}");
+}

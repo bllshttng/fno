@@ -883,10 +883,37 @@ fn classify_reachability(
     last_activity_basis: Option<&str>,
     observed: &Value,
 ) -> (&'static str, &'static str) {
+    classify_reachability_at(
+        truth_state,
+        age_s,
+        falsifier,
+        TRANSCRIPT_EVIDENCE_S as f64,
+        None,
+        last_activity_basis,
+        observed,
+    )
+}
+
+/// The verdict with its two caller-set inputs: the freshness window and the
+/// positive process evidence (`pid_alive == Some(true)`, basis `process`: a
+/// parked worker between turns holds its tree while its transcript is quiet).
+/// A dead pid never rides `pid_alive`; it arrives as a falsifier.
+pub(crate) fn classify_reachability_at(
+    truth_state: Option<&str>,
+    age_s: Option<i64>,
+    falsifier: Option<&'static str>,
+    fresh_s: f64,
+    pid_alive: Option<bool>,
+    last_activity_basis: Option<&str>,
+    observed: &Value,
+) -> (&'static str, &'static str) {
     if let Some(word) = falsifier {
         // The falsifier word IS the basis: process-gone / pane-gone /
         // exit-recorded, the evidence the verdict was reached from.
         return ("unreachable", word);
+    }
+    if pid_alive == Some(true) {
+        return ("reachable", "process");
     }
     if truth_state == Some("working")
         || truth_state == Some("watching")
@@ -898,7 +925,7 @@ fn classify_reachability(
         if inference_samples(observed) == Some(0) {
             return ("unknown", "no-inference");
         }
-        if age_s.is_some_and(|a| a > TRANSCRIPT_EVIDENCE_S) {
+        if age_s.is_some_and(|a| a as f64 > fresh_s) {
             return ("unknown", "stale-transcript");
         }
         return ("reachable", "transcript");
@@ -911,7 +938,7 @@ fn classify_reachability(
 
 /// The reachability window (20 minutes), `reachability.py`'s
 /// TRANSCRIPT_EVIDENCE_S: an active tail older than this is stale evidence.
-const TRANSCRIPT_EVIDENCE_S: i64 = 20 * 60;
+pub(crate) const TRANSCRIPT_EVIDENCE_S: i64 = 20 * 60;
 
 /// Model-bearing records the transcript tail carried, or None for absence.
 /// `no-model-yet` is a real zero; every other variant is an absence and
@@ -953,7 +980,7 @@ fn row_falsifier<C: CursorAccess>(row: &RegistryEntry, cursors: &mut C) -> Optio
 /// a mux-pane row is falsified by its PANE, never by its recorded pid; a
 /// non-pane row by its pid or its exit tombstone; a claude row's negative
 /// yields to claude's own session records (a proven live holder cancels).
-fn registry_falsifier(row: &RegistryEntry) -> Option<&'static str> {
+pub(crate) fn registry_falsifier(row: &RegistryEntry) -> Option<&'static str> {
     if let Some(mux) = row.mux.as_ref() {
         if mux_ref_names_a_pane(mux) {
             return pane_falsifier(mux);
@@ -981,7 +1008,7 @@ fn pane_falsifier(mux: &crate::state::MuxRef) -> Option<&'static str> {
     }
 }
 
-fn pid_falsifier(pid: Option<u32>, pid_start_time: Option<u64>) -> Option<&'static str> {
+pub(crate) fn pid_falsifier(pid: Option<u32>, pid_start_time: Option<u64>) -> Option<&'static str> {
     let pid = pid?;
     if pid <= 1 || pid as i64 > MAX_PID {
         return Some("process-gone");
@@ -1152,7 +1179,36 @@ pub fn resolve_payload_with<C: CursorAccess>(
     let Some(session) = resolve_handle(rows, handle, stores, &mut cursors) else {
         return unknown_payload(handle, "not-found", None, None, None);
     };
-    let path = transcript_for(&session, stores, &mut cursors);
+    payload_for_session(&session, handle, now_s, stores, cursors, mode)
+}
+
+/// The truth answer for a session the caller already enumerated: the discovered
+/// lane holds the identity, and a handle lookup could land on a sibling row.
+pub(crate) fn known_session_payload(
+    session: &TruthSession,
+    handle: &str,
+    now_s: f64,
+    stores: &Stores,
+) -> Value {
+    payload_for_session(
+        session,
+        handle,
+        now_s,
+        stores,
+        cursor::global(),
+        ReadMode::Build,
+    )
+}
+
+fn payload_for_session<C: CursorAccess>(
+    session: &TruthSession,
+    handle: &str,
+    now_s: f64,
+    stores: &Stores,
+    mut cursors: C,
+    mode: ReadMode,
+) -> Value {
+    let path = transcript_for(session, stores, &mut cursors);
     let store_key = format!("opencode:{}", session.session_id);
     let summary = match (session.agent.as_str(), path.as_deref()) {
         ("claude" | "codex", Some(p)) => {
@@ -1323,7 +1379,7 @@ pub(crate) fn session_records(
 
 /// The newest `n` records of a JSONL transcript, read from EOF in windows
 /// that grow until they hold `n` records, reach the file start, or hit 8 MB.
-fn tail_records(
+pub(crate) fn tail_records(
     path: &Path,
     n: usize,
     parse: fn(&Value) -> Option<TruthRecord>,

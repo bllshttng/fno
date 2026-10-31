@@ -567,9 +567,12 @@ fn conditional(change: &Change) -> (String, Vec<SqlValue>) {
             change.old.clone(),
         ),
         Op::Update => {
+            // Unchanged keys still guard the pre-image; assigning them
+            // would make SQLite scan their foreign-key children.
             let set = columns
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| change.old[*i] != change.new[*i])
                 .map(|(i, c)| format!("\"{c}\" = ?{}", i + 1))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -2834,6 +2837,14 @@ mod tests {
                                "title": "first", "type": "feature",
                                "status": "idea", "priority": "p2", "domain": "code"})];
         crate::graph_store::seed_rows(&a.graph, &rows).unwrap();
+        crate::backlog::entities::upsert_identity(
+            &crate::backlog::open(&a.graph).unwrap(),
+            "scan-session",
+            None,
+            None,
+            Some("before"),
+        )
+        .unwrap();
         seed(&a.graph).unwrap();
         crate::graph_store::mutate_rows(
             &a.graph,
@@ -2882,7 +2893,113 @@ mod tests {
             !columns.contains(&"priority") && !columns.contains(&"domain"),
             "untouched columns stay home: {columns:?}"
         );
+        crate::backlog::entities::upsert_identity(
+            &crate::backlog::open(&a.graph).unwrap(),
+            "scan-session",
+            None,
+            None,
+            Some("after"),
+        )
+        .unwrap();
+        flush(&a.graph).unwrap();
+        let connection = primary.db.lock().unwrap();
+        let ops: String = connection
+            .query_row(
+                "SELECT ops FROM backlog_changes ORDER BY seq DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let changes: Vec<Value> = serde_json::from_str(&ops).unwrap();
+        let update = changes
+            .iter()
+            .find(|change| change["t"] == "agent_sessions")
+            .unwrap();
+        let (sql, args) = conditional(&Change::from_json(update).unwrap());
+        let plan: Vec<String> = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(&args), |row| row.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN ")),
+            "a session rename must not scan foreign-key children: {plan:?}"
+        );
+        assert_eq!(
+            connection
+                .execute(&sql, rusqlite::params_from_iter(&args))
+                .unwrap(),
+            0,
+            "the already-applied pre-image must still refuse"
+        );
         route_to_primary(None);
+    }
+
+    #[test]
+    fn guarded_updates_keep_key_moves_and_null_preimages() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys=ON;
+                 CREATE TABLE parents (id TEXT, part INTEGER, note TEXT, PRIMARY KEY(id, part));
+                 CREATE TABLE children (id TEXT, part INTEGER,
+                   FOREIGN KEY(id, part) REFERENCES parents(id, part) ON UPDATE CASCADE);
+                 INSERT INTO parents VALUES ('first', 1, NULL), ('peer', 2, 'untouched');
+                 INSERT INTO children VALUES ('first', 1);",
+            )
+            .unwrap();
+        let change = Change {
+            op: Op::Update,
+            table: "parents".into(),
+            columns: vec!["id".into(), "part".into(), "note".into()],
+            old: vec![
+                SqlValue::Text("first".into()),
+                SqlValue::Integer(1),
+                SqlValue::Null,
+            ],
+            new: vec![
+                SqlValue::Text("moved".into()),
+                SqlValue::Integer(3),
+                SqlValue::Text("ready".into()),
+            ],
+        };
+        let (sql, args) = conditional(&change);
+        assert_eq!(
+            connection
+                .execute(&sql, rusqlite::params_from_iter(&args))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT id, part FROM children", [], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .unwrap(),
+            ("moved".into(), 3)
+        );
+        assert_eq!(
+            connection
+                .execute(&sql, rusqlite::params_from_iter(&args))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT note FROM parents WHERE id='peer'", [], |row| row
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            "untouched"
+        );
+        let noop = Change {
+            old: change.new.clone(),
+            ..change
+        };
+        assert!(net(vec![noop]).is_empty());
     }
 
     #[test]

@@ -222,6 +222,10 @@ enum Role {
     /// carried tail is empty by contract; the door resolves the plugin root
     /// itself and refuses naming every source it tried.
     AgentsLeadRefreshCanon(Vec<OsString>),
+    /// `fno agents <word>` no earlier door claims: the mapped client argv.
+    AgentsClient(Vec<OsString>),
+    /// `fno agents claim ...` past its native leaves: the claims CLI in the wheel.
+    AgentsPython(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
     /// `fno whoami scoreboard ...`: the telemetry views, native via the
@@ -293,6 +297,9 @@ enum Role {
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
+    /// `fno agents audit claude-fallback ...` (flat `agents claude-fallback`):
+    /// the projects-store count the daily gate's no-fallback part reads.
+    AgentsClaudeFallback(Vec<OsString>),
     /// `fno agents restart ...` and root `fno restart ...`: exec'd as
     /// `fno-agents restart`, the one implementation.
     AgentsRestart(Vec<OsString>),
@@ -635,14 +642,8 @@ fn classify_agents_restart(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "restart")
 }
 
-/// `fno agents status ...`: claimed natively like agents_top. The one
-/// documented escape keeps working: `FNO_AGENTS_RUNTIME=python` forces the
-/// Python path, whose status command refuses with its "no Python implementation"
-/// message, so the front door does not claim the argv out from under it.
+/// `fno agents status ...`: claimed natively like agents_top.
 fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
-    if std::env::var_os("FNO_AGENTS_RUNTIME").is_some_and(|v| v.to_str() == Some("python")) {
-        return None;
-    }
     classify_agents_command(args, "status")
 }
 
@@ -1404,6 +1405,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_command(args, "top") {
         return Role::AgentsTop(rest);
     }
+    if let Some(rest) = classify_agents_command(args, "claude-fallback") {
+        return Role::AgentsClaudeFallback(rest);
+    }
     if let Some(rest) = classify_agents_restart(args) {
         return Role::AgentsRestart(rest);
     }
@@ -1542,6 +1546,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(door) = fno::config_cli::classify(args) {
         return Role::ConfigCli(door);
+    }
+    match fno::agents_client_route::classify(args) {
+        Some(fno::agents_client_route::Route::Client(argv)) => return Role::AgentsClient(argv),
+        Some(fno::agents_client_route::Route::Python(argv)) => return Role::AgentsPython(argv),
+        None => {}
     }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
@@ -1782,6 +1791,8 @@ fn main() {
     }
     match role {
         Role::Forward => bootstrap::forward(&args),
+        Role::AgentsClient(argv) => std::process::exit(fno_agents_exec("fno agents", &[], &argv)),
+        Role::AgentsPython(argv) => bootstrap::forward(&argv),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
@@ -1968,6 +1979,7 @@ fn main() {
             fno::agents_menu::native_leaf("top"),
             &rest,
         )),
+        Role::AgentsClaudeFallback(rest) => std::process::exit(fno::claude_fallback::run(&rest)),
         Role::AgentsRestart(rest) => {
             std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
         }
@@ -2447,11 +2459,11 @@ mod tests {
         );
         assert_eq!(
             decide_role(&os(&["agents", "history", "d23c3d68"]), false),
-            Role::Forward
+            Role::AgentsHistory(os(&["d23c3d68"]))
         );
         assert_eq!(
             decide_role(&os(&["agents", "history", "--help"]), false),
-            Role::Forward
+            Role::AgentsHistory(os(&["--help"]))
         );
         // The canon-refresh door claims the front's rewrite exactly; the
         // sibling lead commands answer through the lead route.
@@ -2795,7 +2807,7 @@ mod tests {
     fn agents_flat_spellings_reach_their_native_doors() {
         assert_eq!(
             decide_role(&os(&["agents", "whoami"]), false),
-            Role::Forward
+            Role::AgentsClient(os(&["status", "--whoami"]))
         );
         // `top` skips the Python front: the lead check-in reads it every beat.
         assert_eq!(
@@ -2835,7 +2847,7 @@ mod tests {
         );
         assert_eq!(
             decide_role(&os(&["agents", "roles", "promote"]), false),
-            Role::Forward
+            Role::AgentsClient(os(&["roles", "promote"]))
         );
         // The function-pack group is native whole, under both spellings.
         assert_eq!(
@@ -2866,25 +2878,13 @@ mod tests {
     }
 
     #[test]
-    fn agents_status_claims_natively_python_runtime_keeps_its_refusal_path() {
+    fn agents_status_claims_natively() {
         // The read command every hook and wait loop spends skips the Python
         // front, whose status command only execs the same binary.
         assert_eq!(
             decide_role(&os(&["agents", "status", "--json"]), false),
             Role::AgentsStatus(os(&["--json"]))
         );
-        // The documented escape: FNO_AGENTS_RUNTIME=python keeps the Python
-        // path, whose status command refuses with its own message.
-        let prev = std::env::var_os("FNO_AGENTS_RUNTIME");
-        std::env::set_var("FNO_AGENTS_RUNTIME", "python");
-        assert_eq!(
-            decide_role(&os(&["agents", "status", "--json"]), false),
-            Role::Forward
-        );
-        match prev {
-            Some(v) => std::env::set_var("FNO_AGENTS_RUNTIME", v),
-            None => std::env::remove_var("FNO_AGENTS_RUNTIME"),
-        }
     }
 
     #[test]

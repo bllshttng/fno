@@ -256,6 +256,21 @@ fn build_footnote(ctx: &PaneContext, uuid: Option<&str>) -> Result<Vec<String>, 
 const FOOTNOTE_NO_MODEL: &str =
     "-H footnote needs a model: pass it after the fence, `-- -m <provider>/<model>`";
 
+/// fnh resolves its rules store from `FNO_GRAPH_JSON`; the footnote pane TUI
+/// carries the launch resolution anchored at the pane's cwd, so a sandboxed
+/// pane never falls back to the machine's `$HOME/.fno`.
+fn footnote_graph_env(harness: &str, cwd: &std::path::Path) -> Vec<(String, String)> {
+    match harness {
+        "footnote" => vec![(
+            "FNO_GRAPH_JSON".to_string(),
+            crate::footnote_harness::launch_graph_env(cwd)
+                .to_string_lossy()
+                .into_owned(),
+        )],
+        _ => Vec::new(),
+    }
+}
+
 /// The plan for one spawn: the wrapped argv, the pinned session id and the
 /// post-readiness seed policy. `pub(crate)` for the row-8 golden-parity
 /// tests, which replay the committed captures through the same entry the
@@ -300,6 +315,7 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
             .iter()
             .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
             .chain(crate::accounts::launch::pane_stamp())
+            .chain(footnote_graph_env(arm.harness, &ctx.cwd))
             .collect();
         mesh_env_wrapper(
             &ctx.worker_name,

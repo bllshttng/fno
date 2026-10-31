@@ -1070,6 +1070,10 @@ pub async fn run_command(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("yard") {
         return crate::yard::run(&args[1..]);
     }
+    // The sweep reads nest here for the same reason as the yard fold.
+    if let Some(code) = crate::census_reads::dispatch(args) {
+        return code;
+    }
     // `fno agents orphans`: the sweep rides the census action as an argument
     // (law d-fe66560a allows no new client action); the sweep body lives in
     // orphans.rs.

@@ -17,6 +17,8 @@ In any Claude Code session:
 /plugin install fno@fno
 ```
 
+The stable branch of release 0.4.4 still names its marketplace `footnote`, so the second command fails there. Until the next stable release, run `/plugin install fno@footnote` instead. `curl -fsSL fno.sh | sh` handles both names.
+
 `#stable` matters. Without it, the add clones `main` (7,949 files, 80s+) instead of `stable` (781 files, 4s). A slow connection can then hit Claude Desktop's 120s "Add marketplace" timeout.
 
 If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
@@ -177,6 +179,8 @@ When a person runs the wizard, a preset sets the pace. The preset screen opens w
 | user-reviewed | nothing without you | none ticked | each harness keeps its current model | none | off |
 
 ## Keeping fno up to date
+
+On a release install, run `fno update`. It runs `uv tool upgrade fno`. On fno 0.4.4 and older, that command stops with "Could not locate the fno CLI source", so run `uv tool upgrade fno` yourself. Plugin updates are separate: in Claude Code, run `/plugin update`.
 
 From a clone, the full refresh has three steps. `fno doctor update` refreshes the binaries. The long-running mux server and agents daemon keep old code until restarted:
 

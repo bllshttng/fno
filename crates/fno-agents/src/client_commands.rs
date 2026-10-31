@@ -5,9 +5,7 @@
 //! These commands do **not** issue a daemon RPC (with the sole exception of
 //! `logs --follow` for codex/gemini, handled in [`crate::logs_client`]): they
 //! read state/registry/event files directly, exec a provider CLI, or print a
-//! stub. The Python implementations stay registered as the
-//! `FNO_AGENTS_RUNTIME=python` fallback; this module is the Rust surface the
-//! default `auto` runtime routes to.
+//! stub.
 //!
 //! **Byte-for-byte parity is the contract** (the promotion gate). Each command
 //! reproduces the Python implementation's stdout, stderr, and exit codes. Two

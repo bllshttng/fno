@@ -3,10 +3,7 @@
 A test that starts a real provider binary can leave a live daemon behind it:
 the daemon calls setsid, detaches to ppid 1, and outlives the run (x-ec81
 measured three ``claude daemon run`` processes, each rooted in a deleted
-pytest garbage directory, pinned by its own bg-spare tree). Enumeration goes
-through ``fno.agents.keeper_lane.iter_processes``, the one shared
-``psutil.process_iter`` site, so this census and the keeper lane can never
-drift apart.
+pytest garbage directory, pinned by its own bg-spare tree).
 
 # ponytail: only orphans (ppid in reaper_set) get a cwd read, so a leak
 # still parented by a live launcher is invisible here until that launcher
@@ -19,6 +16,24 @@ import signal
 
 _REAP_WAIT_TERM_S = 3
 _REAP_WAIT_KILL_S = 3
+
+
+def iter_processes(reaper: int = 1):
+    """Every process this uid can read, as plain dicts; cwd only for orphans."""
+    import psutil
+
+    reapers = {reaper, 1}
+    attrs = ["pid", "ppid", "name", "cmdline", "uids", "create_time", "cpu_times"]
+    for proc in psutil.process_iter(attrs):
+        info = dict(proc.info)
+        info["cwd"] = None
+        # An unreadable cwd (AccessDenied) must not drop the row.
+        try:
+            if info.get("ppid") in reapers:
+                info["cwd"] = proc.cwd()
+        except Exception:  # noqa: BLE001 -- unreadable cwd is not a verdict
+            pass
+        yield info
 
 
 def _matches(cwd: str | None, roots: list[str], match_component: str | None) -> bool:
@@ -55,8 +70,6 @@ def reap_rooted(
     assumption: a process that ignored both signals reads ``False``.
     """
     import psutil
-
-    from fno.agents.keeper_lane import iter_processes
 
     normalized = [os.path.abspath(str(r)) for r in roots]
     try:
@@ -135,8 +148,6 @@ def census_rooted(roots, *, reaper: int = 1) -> list[dict]:
     minus the signals, so a caller can wait out a self-exit bound and reap
     only what is genuinely stuck.
     """
-    from fno.agents.keeper_lane import iter_processes
-
     normalized = [os.path.abspath(str(r)) for r in roots]
     return [
         row for row in iter_processes(reaper)

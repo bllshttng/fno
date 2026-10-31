@@ -2,7 +2,7 @@
 //! parity-oracle: fno.agents.team.render_team
 //!
 //! The team render, frozen against goldens captured from its Python leg
-//! (tests/golden/team/capture.py) before that leg was deleted. Each case
+//! before that leg was deleted. Each case
 //! freezes the gathered team, the scope fold, the registry's session
 //! statuses and the spawn gate, then compares the table, `--json` and
 //! `--nodes` bytes.

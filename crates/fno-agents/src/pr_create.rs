@@ -23,6 +23,10 @@
 //! * `7` the sibling gate refused: another node of the same epic is on an
 //!   open PR, or on one merged in the last two hours; a body line
 //!   `Separate PR: <reason>` passes it
+//! * `8` the docs gate refused: the changed files touch a user surface
+//!   (`merge.visual_paint_paths`, CLI help text, config keys, skill
+//!   descriptions) and the body carries no `Docs:` line naming the doc PR
+//!   or file, or `Docs: none, <reason>`; the refusal names the two skills
 //! * otherwise gh's own create exit code
 
 use crate::pr_push::{gh_api, run_labeled, READ_TIMEOUT};
@@ -339,6 +343,16 @@ fn run_stdin_check_only(payload: &str) -> i32 {
         }
         _ => refusal,
     };
+    let touched = crate::docs_gate::surface_files(&my_files, &cwd);
+    let refusal =
+        if refusal.is_empty() && !touched.is_empty() && !crate::docs_gate::body_names_doc(body) {
+            format!(
+                "pr-create: REFUSED: {}",
+                crate::docs_gate::refusal_text(&touched)
+            )
+        } else {
+            refusal
+        };
     println!("{}", json!({"refusal": refusal, "title": title}));
     0
 }
@@ -686,6 +700,16 @@ fn run(a: &Args, gh: Gh) -> i32 {
                 eprintln!("{refusal}");
                 return 7;
             }
+            if !a.body_file.is_empty() {
+                let touched = crate::docs_gate::surface_files(&my_files, &a.cwd);
+                if !touched.is_empty() && !crate::docs_gate::body_names_doc(&body) {
+                    eprintln!(
+                        "pr-create: REFUSED: {}",
+                        crate::docs_gate::refusal_text(&touched)
+                    );
+                    return 8;
+                }
+            }
             if a.check_only {
                 return 0;
             }
@@ -939,6 +963,74 @@ mod tests {
             "x\nAudited owners: crates/x/src/lib.rs (no cut: kept, distinct contracts)\n",
         )
         .unwrap();
+        a.check_only = true;
+        assert_eq!(run(&a, &gh), 0);
+    }
+
+    #[test]
+    fn a_user_surface_pr_without_a_docs_line_refuses_and_names_the_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "t"]);
+        git(&["remote", "add", "origin", "git@github.com:o/r.git"]);
+        // The mux client anchor arms the built-in user-surface list.
+        std::fs::create_dir_all(dir.path().join("crates/fno/src/client")).unwrap();
+        std::fs::create_dir_all(dir.path().join("crates/fno-agents/src")).unwrap();
+        std::fs::write(
+            dir.path().join("crates/fno-agents/src/cli_args.rs"),
+            "help = \"base\"\n",
+        )
+        .unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&["checkout", "-q", "-b", "feature/docs-gate"]);
+        std::fs::write(
+            dir.path().join("crates/fno-agents/src/cli_args.rs"),
+            "help = \"changed\"\n",
+        )
+        .unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "change"]);
+        let body = dir.path().join("body.md");
+        let a = Args {
+            title: "feat(cli): rename a flag".into(),
+            body_file: body.to_string_lossy().into_owned(),
+            base: "main".into(),
+            not_duplicates: vec![],
+            check_only: false,
+            cwd: dir.path().to_path_buf(),
+        };
+        // No Docs line (the owners line keeps exit 5 out of the way): the
+        // docs gate refuses the create (exit 8) before it ever reaches gh.
+        std::fs::write(
+            &body,
+            "## Summary\n\nrenames a flag\n\nAudited owners: crates/fno-agents/src/cli_args.rs (no cut: kept, distinct contracts)\n",
+        )
+        .unwrap();
+        let gh = |path: &str| -> Result<String, String> {
+            assert!(path.contains("/pulls?state=open"));
+            Ok("[]".to_string())
+        };
+        assert_eq!(run(&a, &gh), 8);
+        // A reasoned `Docs: none` passes the docs gate, and with the owners
+        // line the --check-only scan exits clean without creating.
+        std::fs::write(
+            &body,
+            "## Summary\n\nrenames a flag\n\nDocs: none, string constants only, no behavior copy\nAudited owners: crates/fno-agents/src/cli_args.rs (no cut: kept, distinct contracts)\n",
+        )
+        .unwrap();
+        let mut a = a;
         a.check_only = true;
         assert_eq!(run(&a, &gh), 0);
     }

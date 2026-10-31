@@ -2,13 +2,10 @@
 
 The command itself is native (crates/fno-agents/src/registry_commands.rs). What
 stays here is read by Python callers: the harness-scoped session matcher the
-role authorization and succession checks use, and the held-node reader the
-carveout stamp uses. Read-only by construction.
+role authorization and succession checks use. Read-only by construction.
 """
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Optional
 
 from fno.agents.registry import AgentEntry
@@ -118,61 +115,3 @@ def is_caller_row(
     if not session_uuid:
         return False
     return _find_by_session([row], session_uuid, harness) is not None
-
-
-def _scan_field(text: str, key: str) -> Optional[str]:
-    """Return the value of the first ``<key>: <value>`` line in ``text``.
-
-    Strips only a MATCHED surrounding quote pair, so a value with a lone
-    leading/trailing quote is preserved rather than mangled. ``None`` if the
-    key is absent.
-    """
-    pattern = re.compile(rf"^{re.escape(key)}:\s*(\S+)")
-    for line in text.splitlines():
-        match = pattern.match(line)
-        if match:
-            value = match.group(1).strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            return value
-    return None
-
-
-def find_held_node(cwd: str = ".", session_uuid: Optional[str] = None) -> Optional[str]:
-    """The backlog node THIS worker holds, as ``node:<id>`` — or ``None``.
-
-    A dispatched ``/target`` worker records its bound node in the local
-    ``.fno/target-state.md`` body as ``graph_node_id: <id>``. But the file
-    belongs to whatever session owns that worktree, NOT necessarily the caller:
-    a stale manifest, a reused cwd, or an env-only mesh worker booted in someone
-    else's worktree would otherwise let us emit a node this worker does not hold.
-
-    So we attribute the node ONLY when ownership is proven: the manifest's
-    ``claude_transcript_id`` must equal this process's ``session_uuid``
-    (``CLAUDE_CODE_SESSION_ID``). The claim holder is keyed on the target
-    *session* id (not the mesh name/session), so there is no registry-side join;
-    the transcript id is the one field that ties the manifest to the live
-    process. Without ``session_uuid`` (e.g. a codex/gemini worker) or on any
-    mismatch we return ``None`` rather than guess. Returns ``None`` too when the
-    file is absent, the field is missing, or it is the ``null`` sentinel.
-    """
-    if not session_uuid:
-        return None
-    state = Path(cwd) / ".fno" / "target-state.md"
-    try:
-        if not state.is_file():
-            return None
-        text = state.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    # Current key is claude_session_id; fall back to the pre-rename
-    # claude_transcript_id for one release so in-flight manifests still match.
-    manifest_claude_sid = _scan_field(text, "claude_session_id") or _scan_field(
-        text, "claude_transcript_id"
-    )
-    if manifest_claude_sid != session_uuid:
-        return None  # manifest is not this worker's session — never guess
-    value = _scan_field(text, "graph_node_id")
-    if value and value.lower() != "null":
-        return f"node:{value}"
-    return None

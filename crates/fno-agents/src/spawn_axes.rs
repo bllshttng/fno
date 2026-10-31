@@ -598,15 +598,10 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         return 0;
     }
     // The fallthrough WAS the axis composition (config --model/--effort/
-    // --substrate/--permission-mode injection); it is retired with the flags.
-    // A stale caller reads the refusal and stops; the field asks above are
-    // the command's live surface.
-    println!(
-        "{}",
-        serde_json::json!({
-            "refused": "the spawn-axis composition is retired; the lane template owns the launch line (docs/HARNESSES.md)"
-        })
-    );
+    // --substrate/--permission-mode injection); that composition is gone. A
+    // stale caller reads an empty decision - no injections, nothing to
+    // apply - and stops; the field asks above are the command's live surface.
+    println!("{}", serde_json::json!({}));
     0
 }
 

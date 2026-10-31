@@ -2,7 +2,7 @@
 //! parity-oracle: fno.agents.peek.peek
 //!
 //! The peek command, frozen against goldens captured from its Python leg
-//! (tests/golden/peek/capture.py) before that leg was deleted. Each case
+//! before that leg was deleted. Each case
 //! copies the fixture world (registry, one claude transcript, the shared
 //! events file) to a temp root and compares exit code, stdout and stderr
 //! byte for byte.

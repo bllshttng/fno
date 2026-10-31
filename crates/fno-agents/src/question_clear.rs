@@ -1470,7 +1470,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .unwrap_or(qid);
             refused += 1;
             answer.lines.push(format!(
-                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer {origin_id} on {host}, and the close reaches this machine within a minute."
+                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer the copy here, or answer {origin_id} on {host}, and the close reaches this machine within a minute."
             ));
             continue;
         }
