@@ -312,7 +312,7 @@ def _record_bounce(*, caller: str, deferred: bool, state_root: Optional[Path] = 
         except Exception:  # noqa: BLE001 - a receipt never blocks a cure
             pass
     try:
-        from fno.events import _build, append_event
+        from fno.events.store_client import build_event as _build, append_event
         from fno.paths import state_dir as _state_dir
 
         append_event(

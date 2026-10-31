@@ -928,7 +928,7 @@ def project_events_json() -> Path:
 
     The pin stands in for a root nobody resolved, so it is deliberately NOT
     consulted by callers that already hold a root of their own: those pass an
-    explicit ``events_path=`` to :func:`fno.events.append_event`, or go through
+    explicit ``events_path=`` to :func:`fno.events.store_client.append_event`, or go through
     :func:`project_log`. One sandbox journal serves a whole pytest process, so
     honoring the pin for a caller that named a root would replace that caller's
     own file with a bucket every test in the process shares.
@@ -946,8 +946,7 @@ def project_events_json() -> Path:
 
 
 # Sibling journal suffix for ephemeral-class rows. Declared here, the
-# dependency-free module, so both `fno.events` (which aliases it as
-# EPHEMERAL_SUFFIX) and `event_journals` share one definition; the Rust
+# dependency-free module, so event-journal readers share one definition; the Rust
 # EventEmitter states the same string and a parity test holds all of them
 # equal.
 EPHEMERAL_EVENTS_SUFFIX = ".ephemeral"
@@ -1046,8 +1045,8 @@ def repo_identity_from_remote_url(url: str) -> Optional[str]:
     Lives HERE, at the platform layer, because both writers of a global-log event
     need it and they sit on opposite sides of the runtime boundary:
     the Rust coverage reader (``crates/fno-agents/src/pr_status.rs``) and
-    ``fno.events.cli`` stamps the mirrored attestation. A copy in each is two
-    parsers to keep in parity with Rust instead of one.
+    the native event command that stamps the mirrored attestation. Both must
+    resolve the same repository identity.
 
     Mirrors ``repo_identity_from_remote_url`` in ``crates/fno-agents/src/finalize.rs``.
     The two MUST agree or the reader stops finding the writer's events; the

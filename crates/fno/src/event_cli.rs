@@ -1,11 +1,8 @@
-//! Native storage-level commands under `fno doctor event`.
+//! Native commands under `fno doctor event`.
 //!
-//! The Python `fno doctor event emit` keeps its rich surface (validation,
-//! attestation stamping, mirrors, parent push) and delegates storage to
-//! `emit-envelope` here. `find`/`audit`/`gc` routing follows in the reader
-//! cutover wave, intercepted by the same predicate; until then the Python
-//! implementations stay authoritative for those names. No top-level command
-//! exists (law d-fe66560a); the group stays nested under `doctor`.
+//! Event validation, journal access, retention and the command surfaces are
+//! handled here. Runtime-owned identity and notification operations use the
+//! existing `fno-agents` transport.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -29,13 +26,20 @@ mod gate;
 #[path = "event_audit.rs"]
 mod audit;
 
-/// The commands the native surface serves. `find` joins natively only when the
-/// caller names stores explicitly (`--events`); a bare `find` keeps
-/// forwarding to Python, whose front door resolves the journals and calls
-/// back in with one `--events` per store. `audit`/`gc` join when their
-/// Python output contracts are ported (reader cutover wave).
+#[path = "event_emit.rs"]
+mod emit;
+
+#[path = "event_schema.rs"]
+mod schema;
+
+/// Event subcommands served by the native front door.
 pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
     "emit-envelope",
+    "build-envelope",
+    "schema",
+    "schema-projection",
+    "emit",
+    "push-parent",
     "export",
     "import",
     "rows",
@@ -52,17 +56,23 @@ pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
 /// Classify `fno doctor event <sub> ...` for the front door: `Some(rest)`
 /// runs natively, `None` forwards to the Python CLI.
 pub fn classify_doctor_event(args: &[OsString]) -> Option<Vec<OsString>> {
-    if args.len() < 3 {
+    if args.len() < 2 || args[0] != "doctor" || args[1] != "event" {
         return None;
     }
-    let a0 = args[0].to_str()?;
-    let a1 = args[1].to_str()?;
-    let a2 = args[2].to_str()?;
-    if a0 != "doctor" || a1 != "event" {
-        return None;
+    let Some(a2) = args.get(2).and_then(|v| v.to_str()) else {
+        return Some(vec![OsString::from("group-help-error")]);
+    };
+    if a2 == "--help" {
+        return Some(vec![OsString::from("group-help")]);
     }
     if matches!(a2, "-J" | "--json") {
         match args.get(3).and_then(|a| a.to_str()) {
+            Some("emit") => {
+                let mut rest = vec![OsString::from("emit-json")];
+                rest.extend_from_slice(&args[4..]);
+                return Some(rest);
+            }
+            Some("push-parent") => return Some(args[3..].to_vec()),
             Some("gc") => {
                 let mut rest = vec![OsString::from("gc-json")];
                 rest.extend_from_slice(&args[4..]);
@@ -82,13 +92,41 @@ pub fn classify_doctor_event(args: &[OsString]) -> Option<Vec<OsString>> {
             Some("audit") => {
                 return Some(args[3..].to_vec());
             }
-            _ => {}
+            Some("--help") => return Some(vec![OsString::from("group-help")]),
+            None => return Some(vec![OsString::from("group-help-error")]),
+            Some(other) => {
+                return Some(vec![OsString::from("group-unknown"), OsString::from(other)])
+            }
         }
     }
     if NATIVE_EVENT_SUBCOMMANDS.contains(&a2) {
         return Some(args[2..].to_vec());
     }
-    None
+    Some(vec![OsString::from("group-unknown"), OsString::from(a2)])
+}
+
+fn split_options(args: &[OsString], value_options: &[&str]) -> Vec<OsString> {
+    let mut result = Vec::with_capacity(args.len());
+    let mut value_pending = false;
+    for arg in args {
+        if value_pending {
+            result.push(arg.clone());
+            value_pending = false;
+            continue;
+        }
+        if let Some(text) = arg.to_str() {
+            if let Some((key, value)) = text.split_once('=') {
+                if value_options.contains(&key) {
+                    result.push(key.into());
+                    result.push(value.into());
+                    continue;
+                }
+            }
+            value_pending = value_options.contains(&text);
+        }
+        result.push(arg.clone());
+    }
+    result
 }
 
 /// Parse and run one native event subcommand; returns the exit code.
@@ -96,7 +134,41 @@ pub fn run(args: &[OsString]) -> i32 {
     let sub = args.first().and_then(|a| a.to_str()).unwrap_or("");
     let rest: &[OsString] = if args.is_empty() { &[] } else { &args[1..] };
     match sub {
+        "group-help" => {
+            print!("{}", include_str!("event_group_help.txt"));
+            0
+        }
+        "group-help-error" => {
+            eprint!("{}", include_str!("event_group_help.txt"));
+            2
+        }
+        "group-unknown" => {
+            let name = rest
+                .first()
+                .map(|v| v.to_string_lossy())
+                .unwrap_or_default();
+            eprintln!("Usage: fno-py doctor event [OPTIONS] COMMAND [ARGS]...\nTry 'fno-py doctor event --help' for help.\n\nError: No such command '{name}'.");
+            2
+        }
         "emit-envelope" => run_emit_envelope(rest),
+        "build-envelope" => emit::build(),
+        "schema-projection" => match schema::legacy_projection() {
+            Ok(projection) => {
+                println!("{projection}");
+                0
+            }
+            Err(error) => {
+                eprintln!("error: {error}");
+                1
+            }
+        },
+        "schema" => {
+            println!("{}", include_str!("event_store/events_schema.json"));
+            0
+        }
+        "emit" => emit::run(rest, false),
+        "emit-json" => emit::run(rest, true),
+        "push-parent" => emit::run_push(rest),
         "export" => run_export(rest),
         "import" => run_import(rest),
         "rows" => run_rows(rest),
@@ -957,6 +1029,10 @@ fn rfc3339(ms: i64) -> String {
 /// Exit 3 refuses a zero that coverage cannot back: a missing row before the
 /// proven start never reads as a confident zero.
 fn run_find(args: &[OsString]) -> i32 {
+    if args.iter().any(|arg| arg == "--help") {
+        print!("{}", include_str!("event_find_help.txt"));
+        return 0;
+    }
     let mut journals: Vec<PathBuf> = Vec::new();
     let mut kind: Option<String> = None;
     let mut fields: Vec<(String, String)> = Vec::new();
@@ -965,7 +1041,18 @@ fn run_find(args: &[OsString]) -> i32 {
     let mut limit: usize = 50;
     let mut kinds_mode = false;
     let mut json_mode = false;
-    let mut it = args.iter();
+    let normalized = split_options(
+        args,
+        &[
+            "--events",
+            "--field",
+            "--since",
+            "--session-id",
+            "--session",
+            "--limit",
+        ],
+    );
+    let mut it = normalized.iter();
     while let Some(tok) = it.next() {
         let Some(tok) = tok.to_str() else { continue };
         match tok {
@@ -1484,6 +1571,13 @@ mod tests {
 
     #[test]
     fn find_claims_default_journals_and_group_json() {
+        assert_eq!(
+            split_options(
+                &mk(&["--field=a=b", "--session-id", "--events=literal"]),
+                &["--field", "--session-id", "--events"]
+            ),
+            mk(&["--field", "a=b", "--session-id", "--events=literal"])
+        );
         assert!(
             classify_doctor_event(&mk(&["doctor", "event", "find", "guard_decision"])).is_some()
         );
@@ -1508,9 +1602,8 @@ mod tests {
         assert!(
             classify_doctor_event(&mk(&["doctor", "event", "export", "--out", "/tmp/x"])).is_some()
         );
-        // Python-owned names keep forwarding to the Python CLI.
         assert!(
-            classify_doctor_event(&mk(&["doctor", "event", "emit", "-t", "blocked"])).is_none()
+            classify_doctor_event(&mk(&["doctor", "event", "emit", "-t", "blocked"])).is_some()
         );
         assert!(classify_doctor_event(&mk(&["doctor", "event", "gc", "--dry-run"])).is_some());
         assert!(classify_doctor_event(&mk(&["doctor", "event", "-J", "gc"])).is_some());
@@ -1519,7 +1612,7 @@ mod tests {
             classify_doctor_event(&mk(&["doctor", "event", "-J", "gate-escape", "flake"]))
                 .is_some()
         );
-        assert!(classify_doctor_event(&mk(&["doctor", "event"])).is_none());
+        assert!(classify_doctor_event(&mk(&["doctor", "event"])).is_some());
         assert!(classify_doctor_event(&mk(&["doctor"])).is_none());
     }
 

@@ -2,11 +2,10 @@
 
 Covers:
   AC11-HP  resolve_mux_session: the FNO_SESSION note prints when FNO_SESSION decided
-  AC17-HP  default_dedup_key with only FNO_SERVER equals the FNO_SESSION key
+The gate-escape deduplication case now runs with the native event tests.
 """
 from __future__ import annotations
 
-from fno.events.gate_escape import default_dedup_key
 
 
 # ---------------------------------------------------------------------------
@@ -23,18 +22,3 @@ def test_ac11_fno_session_alone_warns_once_per_call(monkeypatch, capsys) -> None
     err = capsys.readouterr().err
     assert err.count("FNO_SESSION is deprecated") == 1
     assert "FNO_SERVER instead" in err
-
-
-# ---------------------------------------------------------------------------
-# AC17-HP: the gate-escape dedup key reads both variables identically
-# ---------------------------------------------------------------------------
-
-
-def test_ac17_dedup_key_treats_both_vars_as_one_axis() -> None:
-    via_server = default_dedup_key("bypass", {"FNO_SERVER": "s"})
-    via_session = default_dedup_key("bypass", {"FNO_SESSION": "s"})
-    assert via_server == via_session
-    assert ":s:" in via_server
-    # The pid fallback still works when neither variable is set.
-    via_pid = default_dedup_key("bypass", {"FNO_SESSION_PID": "4242"})
-    assert ":4242:" in via_pid

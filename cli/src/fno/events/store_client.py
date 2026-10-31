@@ -19,6 +19,14 @@ from typing import Any, Optional
 
 
 
+class ValidationError(Exception):
+    """The native event validator refused an envelope."""
+
+
+class SchemaUnavailableError(Exception):
+    """The event schema is unavailable."""
+
+
 class EventStoreUnavailable(RuntimeError):
     """The native store could not commit the event. No fallback exists."""
 
@@ -163,35 +171,49 @@ def read_projection(events_path: Path, mode: str, query: dict[str, Any]) -> Any:
     return result["rows"]
 
 
-def gc_ephemeral(
-    events_path: Path,
-    *,
-    ttl_hours: Optional[int] = None,
-    dry_run: bool = False,
-    now_ms: Optional[int] = None,
-) -> dict[str, Any]:
-    """Delete expired ephemeral rows from the store; every other class stays.
-    With ``dry_run`` nothing is deleted and ``deleted`` reports what the
-    horizon WOULD take. The returned shape keeps the historical gc fold
-    (scanned/deleted/kept/malformed) so the CLI contract does not drift."""
-    from fno.events import RETENTION_MINIMUM_TTL_HOURS
-
-    horizon = max(ttl_hours or 0, 0) or RETENTION_MINIMUM_TTL_HOURS
-    cutoff_ms = (now_ms if now_ms is not None else _now_ms()) - horizon * 3_600_000
-    cmd = ["prune", "--events", str(events_path), "--cutoff-ms", str(cutoff_ms)]
-    receipt = _native_json(cmd + (["--dry-run"] if dry_run else []), "prune")
-    scanned, expired = receipt["scanned"], receipt["expired"]
-    return {
-        "scanned": scanned,
-        "deleted": expired,
-        "kept": scanned - expired,
-        "malformed": receipt["malformed"],
-        "ttl_hours": horizon,
-    }
+def validate(event: dict[str, Any]) -> None:
+    line = json.dumps(event, separators=(",", ":"), ensure_ascii=False)
+    try:
+        proc = subprocess.run(
+            [resolve_native_bin(), "doctor", "event", "emit-envelope", "--validate-only"],
+            input=line, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EventStoreUnavailable(f"event validator substrate failure: {exc}") from exc
+    if proc.returncode == 1:
+        raise ValidationError(proc.stderr.strip())
+    if proc.returncode != 0:
+        raise EventStoreUnavailable(f"event validator substrate failure: {proc.stderr.strip()}")
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
+def build_event(type_name: str, source: str, data: dict[str, Any], *, builder: str | None = None) -> dict[str, Any]:
+    request = {"type": type_name, "source": source, "data": data}
+    if builder is not None:
+        request["builder"] = builder
+    try:
+        proc = subprocess.run(
+            [resolve_native_bin(), "doctor", "event", "build-envelope"],
+            input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EventStoreUnavailable(f"event builder unavailable: {exc}") from exc
+    if proc.returncode == 3:
+        raise ValidationError(proc.stderr.strip().removeprefix("error: "))
+    if proc.returncode != 0:
+        raise EventStoreUnavailable(f"event builder unavailable: {proc.stderr.strip()}")
+    try:
+        return json.loads(proc.stdout)
+    except ValueError as exc:
+        raise EventStoreUnavailable("event builder returned invalid JSON") from exc
+
+
+def append_event(event: dict[str, Any], events_path: Path | None = None, *, lock_timeout_seconds: float = 30) -> dict[str, Any]:
+    if events_path is None:
+        from fno.paths import project_events_json
+        events_path = project_events_json()
+    from fno.hermetic import _refuse_hermetic_escape
+    _refuse_hermetic_escape(Path(events_path))
+    return emit_envelope(event, Path(events_path), timeout=lock_timeout_seconds)
 
 
 def emit_envelope(
@@ -239,10 +261,7 @@ def emit_envelope(
         if proc.returncode == 3:
             # Exit 3 is a judged refusal (the door marks it): the diagnostic
             # is the contract, and it is a validation error, not a store
-            # fault. Deferred import: fno.events imports this module at
-            # package load, so the error type resolves at call time only.
-            from fno.events import ValidationError
-
+            # fault. The native door marks validation separately from storage faults.
             raise ValidationError(detail.removeprefix("error: "))
         raise EventStoreUnavailable(f"event store refused the write: {detail}")
     try:

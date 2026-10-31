@@ -27,7 +27,8 @@ pub(super) fn run(args: &[OsString], json: bool) -> i32 {
     let mut journal: Option<PathBuf> = None;
     let mut ttl = MINIMUM_EPHEMERAL_TTL_HOURS;
     let mut dry_run = false;
-    let mut iter = args.iter();
+    let normalized = super::split_options(args, &["--events", "--ttl-hours"]);
+    let mut iter = normalized.iter();
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--events") => match iter.next() {
@@ -103,6 +104,14 @@ mod tests {
 
     #[test]
     fn gc_respects_retention_dry_run_and_global_journal() {
+        assert_eq!(
+            crate::event_store::retention_class("unknown_future_type"),
+            "durable"
+        );
+        assert_eq!(
+            crate::event_store::retention_class("event_payload_too_large"),
+            "durable"
+        );
         let root = tempfile::tempdir().unwrap();
         let journal = root.path().join("events.jsonl");
         let global = root.path().join("global.jsonl");
@@ -110,13 +119,15 @@ mod tests {
         let durable = r#"{"ts":"2020-01-01T00:00:00Z","type":"operator_decision","source":"test","data":{"decision_id":"test","decision":"approve"}}"#;
         crate::event_store::append_envelope(&journal, ephemeral, None).unwrap();
         crate::event_store::append_envelope(&journal, durable, None).unwrap();
+        let fresh = r#"{"ts":"2027-01-15T00:00:00Z","type":"human_touch","source":"test","data":{"graph_node_id":"test","source":"answer","resolution":"ok"}}"#;
+        crate::event_store::append_envelope(&journal, fresh, None).unwrap();
         let now = 1_800_000_000_000;
         let dry = collect(&journal, &global, 672, true, now).unwrap();
-        assert_eq!((dry.scanned, dry.expired), (2, 1));
+        assert_eq!((dry.scanned, dry.expired), (3, 1));
         let applied = collect(&journal, &global, 672, false, now).unwrap();
-        assert_eq!((applied.scanned, applied.expired), (2, 1));
+        assert_eq!((applied.scanned, applied.expired), (3, 1));
         let after = collect(&journal, &global, 672, true, now).unwrap();
-        assert_eq!((after.scanned, after.expired), (1, 0));
+        assert_eq!((after.scanned, after.expired), (2, 0));
         assert!(collect(&journal, &global, 671, false, now)
             .unwrap_err()
             .contains("shorter than the schema minimum"));

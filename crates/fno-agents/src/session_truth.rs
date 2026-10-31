@@ -688,7 +688,7 @@ fn observed_model(agent: &str, path: Option<&Path>, summary: Option<&TailSummary
     }
 }
 
-fn model_of(agent: &str, rec: &Value) -> Option<String> {
+pub(crate) fn model_of(agent: &str, rec: &Value) -> Option<String> {
     match agent {
         "claude" => {
             if rec.get("type").and_then(Value::as_str) != Some("assistant") {

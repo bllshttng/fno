@@ -1996,7 +1996,7 @@ def emit_event(kind: str, data: dict) -> None:
     """
     try:
         from fno import paths
-        from fno.events import _build, append_event
+        from fno.events.store_client import build_event as _build, append_event
 
         append_event(
             _build(kind, "daemon", data), paths.state_dir() / "events.jsonl"

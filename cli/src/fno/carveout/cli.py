@@ -563,7 +563,7 @@ def resolve_carveouts(
         # as a failed resolve. It must not be silent either - an unrecorded
         # reasoned removal is the untraceable drop the flag exists to prevent.
         try:
-            from fno.events import _build, append_event
+            from fno.events.store_client import build_event as _build, append_event
             from fno.paths import project_log
 
             # Explicit events_path, rooted where the LEDGER lives. Without it

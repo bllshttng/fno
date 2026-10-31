@@ -422,7 +422,7 @@ def _record_branch_question(
     import secrets
 
     from fno import paths
-    from fno.events import operator_question
+    from fno.events.store_client import build_event
     from fno.rust_binary import command_call
 
     # The hook cds to the repo root before invoking this module, so the
@@ -436,23 +436,22 @@ def _record_branch_question(
         "question-intake",
         {
             "op": "append",
-            "event": operator_question(
-                question_id=f"q-{secrets.token_hex(4)}",
-                question=(
+            "event": build_event("operator_question", "hook", {
+                "question_id": f"q-{secrets.token_hex(4)}",
+                "question": (
                     f"[{_BRANCH_QUESTION_MARKER}:{key}] "
                     f"Branch {branch_name} ({harness}) forked live session "
                     f"{predecessor} into {successor}. Should it inherit the node "
                     f"and claim, or start clean?"
                 ),
-                session_id=successor,
-                ask=(
+                "session_id": successor,
+                "ask": (
                     "answer inherit or clean; inherit proceeds only through the "
                     "voluntary claim-handover path and never force-releases the "
                     "live predecessor"
                 ),
-                options=["inherit node and claim", "start clean"],
-                source="hook",
-            ),
+                "options": ["inherit node and claim", "start clean"],
+            }, builder="operator_question"),
             "storage_root": str(root),
             "journal_path": str(paths.project_log("events.jsonl")),
             "index_path": str(paths.questions_jsonl()),

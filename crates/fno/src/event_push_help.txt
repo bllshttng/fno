@@ -1,0 +1,16 @@
+Usage: fno-py doctor event push-parent [OPTIONS]
+
+  Push a status-breakpoint notice to the parent handle (push leg).
+
+  The Rust ``finalize`` shells this for ``run_summary`` (it emits the
+  events.jsonl line natively, so it cannot ride the emit-CLI auto-push). No
+  spawn lineage -> silent skip. Always exits 0: the push is non-fatal and the
+  pull leg (events.jsonl) never depends on it.
+
+Options:
+  -t, --type <str>    blocked | run_summary  [required]
+  --run <str>         target-run id referenced in the notice
+  --node <str>        backlog node id
+  -R, --reason <str>  one-line reason / termination
+  --parent <str>      explicit parent handle (else registry-resolved)
+  --help              Show this message and exit.

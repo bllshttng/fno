@@ -16,6 +16,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "codegen/event_retention.rs"]
+mod event_retention;
+
 #[path = "codegen/check_supersession.rs"]
 mod check_supersession_codegen;
 
@@ -35,6 +38,7 @@ fn main() {
     sync_module_copy("effect_map");
     sync_module_copy("footnote_transcript");
     sync_module_copy("rules");
+    sync_module_copy("repo_identity");
     sync_module_copy("glob");
     sync_merge_posture();
     sync_ambient_vocab();
@@ -542,8 +546,8 @@ fn sync_events_limits() {
 /// `data.properties.<field>.enum` projects as `<field>`, and a list item's
 /// enum as `<field>[].<sub>` (the review_attestation dispositions rule). A
 /// sibling copy lives in crates/fno beside its generated `validate.rs`.
-/// No-op when the schema is absent (tarball case); parse failures warn and
-/// skip; a tracked copy that drifted fails the build (see
+/// No-op when the schema is absent (tarball case); an unreadable or invalid
+/// source schema and a tracked copy that drifted fail the build (see
 /// [`check_generated_copy`]).
 fn sync_events_schema() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -553,16 +557,12 @@ fn sync_events_schema() {
         return;
     }
     println!("cargo:rerun-if-changed={}", schema.display());
-    let Ok(text) = std::fs::read_to_string(&schema) else {
-        return;
-    };
-    let parsed: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&text) {
-        Ok(value) => value,
-        Err(err) => {
-            println!("cargo:warning=fno-agents build: schema.yaml did not parse: {err}");
-            return;
-        }
-    };
+    let text = std::fs::read_to_string(&schema)
+        .unwrap_or_else(|error| panic!("cannot read event schema {}: {error}", schema.display()));
+    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
+        .unwrap_or_else(|error| panic!("cannot parse event schema {}: {error}", schema.display()));
+    event_retention::validate(&parsed)
+        .unwrap_or_else(|error| panic!("invalid event retention schema: {error}"));
     let mut event_types = serde_json::Map::new();
     for entry in parsed["event_types"].as_sequence().into_iter().flatten() {
         let Some(name) = entry["name"].as_str() else {

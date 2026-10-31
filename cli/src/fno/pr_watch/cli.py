@@ -57,7 +57,7 @@ def _emit_event(
 ) -> bool:
     """Append a canonical event envelope to events.jsonl.
 
-    Uses fno.events._build + fno.events.append_event (the same path the
+    Uses the native event builder and fno.events.store_client.append_event (the same path the
     ``fno doctor event emit`` CLI command uses internally).  On failure, logs a warning
     instead of silently passing so the failure is observable.
 
@@ -76,7 +76,7 @@ def _emit_event(
             log.warning("pr-watch: could not resolve state_dir for events path: %s", exc)
             return False
     try:
-        from fno.events import _build, append_event
+        from fno.events.store_client import build_event as _build, append_event
         event = _build(event_type, "daemon", data)
         append_event(event, events_path)
         return True

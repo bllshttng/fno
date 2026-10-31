@@ -7,11 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from typer.testing import CliRunner
+from tests._native_event_cli import EventRunner
 
-from fno.events.cli import cli
-
-runner = CliRunner()
+cli = None
+runner = EventRunner()
 
 
 def _escapes(ev: Path, reason: str | None = None) -> list[dict]:
@@ -76,3 +75,21 @@ def test_pr_and_dedup_key_together_rejected(tmp_path):
 
 # The rebase nudge tests (AC1-UI) moved to
 # crates/fno-agents/tests/pr_rebase_note.rs with the _rebase.py port to Rust.
+
+
+def test_store_failure_records_a_counter_without_failing_host(tmp_path):
+    journal = tmp_path / "events.jsonl"
+    (tmp_path / "events.db").mkdir()
+    result = runner.invoke(cli, ["gate-escape", "spawn-cap", "--dedup-key", "k", "--events", str(journal)])
+    assert result.exit_code == 0
+    assert "failed" in result.stderr
+    import json
+    failure = tmp_path / "gate_escape_emit_failures.jsonl"
+    assert json.loads(failure.read_text().splitlines()[0])["reason"] == "spawn-cap"
+
+
+def test_equals_spelling_preserves_values(tmp_path):
+    ev = tmp_path / "events.jsonl"
+    res = runner.invoke(cli, ["gate-escape", "flake", f"--events={ev}", "--detail=an=value", "--dedup-key=k"])
+    assert res.exit_code == 0, res.output
+    assert _escapes(ev)[0]["data"]["detail"] == "an=value"

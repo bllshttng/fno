@@ -4,17 +4,20 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-fn default_key(reason: &str) -> String {
+fn default_key_with(reason: &str, get: impl Fn(&str) -> Option<String>, day: &str) -> String {
     let session = ["FNO_SERVER", "FNO_SESSION", "FNO_SESSION_PID"]
         .iter()
-        .filter_map(|key| std::env::var(key).ok())
+        .filter_map(|key| get(key))
         .find(|value| !value.is_empty())
         .unwrap_or_default();
-    format!(
-        "{}:{}:{}",
+    format!("{}:{}:{}", reason, session.trim(), day)
+}
+
+fn default_key(reason: &str) -> String {
+    default_key_with(
         reason,
-        session.trim(),
-        chrono::Utc::now().format("%Y-%m-%d")
+        |key| std::env::var(key).ok(),
+        &chrono::Utc::now().format("%Y-%m-%d").to_string(),
     )
 }
 
@@ -84,7 +87,18 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
     let mut detail = None;
     let mut key = None;
     let mut journal = None;
-    let mut iter = args.iter();
+    let normalized = super::split_options(
+        args,
+        &[
+            "--events",
+            "--pr",
+            "--pr-number",
+            "--node",
+            "--detail",
+            "--dedup-key",
+        ],
+    );
+    let mut iter = normalized.iter();
     while let Some(arg) = iter.next() {
         let Some(word) = arg.to_str() else {
             eprintln!("error: invalid argument");
@@ -221,6 +235,19 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dedup_key_uses_server_session_and_pid_fallbacks() {
+        let key = |name: &str, value: &str| {
+            default_key_with(
+                "flake",
+                |key| (key == name).then(|| value.to_string()),
+                "2026-10-30",
+            )
+        };
+        assert_eq!(key("FNO_SERVER", "s"), key("FNO_SESSION", "s"));
+        assert_eq!(key("FNO_SESSION_PID", "4242"), "flake:4242:2026-10-30");
+    }
+
     #[test]
     fn gate_escape_dedup_matches_reason_and_bucket() {
         let root = tempfile::tempdir().unwrap();

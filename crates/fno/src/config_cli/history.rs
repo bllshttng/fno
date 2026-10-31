@@ -356,21 +356,9 @@ fn agents_home_dir() -> PathBuf {
 pub(crate) fn project_journal() -> PathBuf {
     match std::env::var_os("FNO_EVENTS_PATH") {
         Some(pin) if !pin.is_empty() => PathBuf::from(pin),
-        _ => spaces_root().join(space_slug()).join("events.jsonl"),
+        _ => crate::config_doctor::project_space_dir(&crate::config_doctor::Settings::load())
+            .join("events.jsonl"),
     }
-}
-
-fn spaces_root() -> PathBuf {
-    match std::env::var_os("FNO_SPACES_DIR") {
-        Some(pin) if !pin.is_empty() => super::resolve_path(&PathBuf::from(pin)),
-        _ => super::leaves::state_dir_value().join("spaces"),
-    }
-}
-
-fn space_slug() -> String {
-    super::canonical_repo_root(&super::repo_root())
-        .to_string_lossy()
-        .replace('/', "-")
 }
 
 fn option_requires_argument(option: &str) -> i32 {

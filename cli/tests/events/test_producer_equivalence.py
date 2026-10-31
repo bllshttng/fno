@@ -104,7 +104,7 @@ def _events(repo: Path) -> list[dict]:
 
 
 def _base_env() -> dict:
-    return {**os.environ, "FNO": "fno-py"}
+    return {**os.environ, "FNO": os.environ.get("FNO_BIN", "fno")}
 
 
 def _fno_agents_bin() -> Path | None:

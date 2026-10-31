@@ -94,7 +94,8 @@ pub(super) fn run(args: &[OsString]) -> i32 {
     let mut session = None;
     let mut journal: Option<PathBuf> = None;
     let mut strict = false;
-    let mut iter = args.iter();
+    let normalized = super::split_options(args, &["--events", "--session-id"]);
+    let mut iter = normalized.iter();
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--session-id") => match iter.next() {
@@ -165,5 +166,15 @@ mod tests {
         assert_eq!(result["ok"], false);
         assert_eq!(result["events"].as_array().unwrap().len(), 3);
         assert_eq!(result["gaps"], json!(["build: gate_written missing"]));
+        let complete = audit(
+            vec![
+                json!({"type":"phase_init", "payload":{"session_id":"s", "phase":"build"}}),
+                json!({"type":"gate_written", "payload":{"session_id":"s", "phase":"build"}}),
+            ],
+            "s",
+            true,
+        );
+        assert_eq!(complete["ok"], true);
+        assert!(complete.get("gaps").is_none());
     }
 }

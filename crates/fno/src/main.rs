@@ -1272,9 +1272,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     #[cfg(not(test))]
     fno::doctor_cost::default_report(args);
     use cli_args::FrontDoor;
-    // The native `doctor event` storage commands are classified lexically,
-    // before clap: the Python CLI still owns the `doctor` tree for every
-    // other name, so `fno doctor event emit` must keep forwarding.
+    // The event family is classified before the remaining doctor routes.
     if let Some(rest) = fno::doctor_cost::classify(args) {
         return Role::DoctorCost(rest);
     }

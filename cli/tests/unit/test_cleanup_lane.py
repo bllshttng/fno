@@ -64,7 +64,7 @@ def test_cleanup_writes_zero_attestations_with_a_proven_instrument(tmp_path):
     # where the lane left it. Without the control, "zero" could equally mean
     # the instrument never ran (the receipt-can-lie pitfalls shape).
     repo = _scratch_repo(tmp_path)
-    env = {**os.environ, "FNO": "fno-py"}
+    env = {**os.environ, "FNO": os.environ.get("FNO_BIN", "fno")}
     r = subprocess.run(
         ["bash", str(EMIT), "code-review"], cwd=repo, env=env, capture_output=True, text=True
     )

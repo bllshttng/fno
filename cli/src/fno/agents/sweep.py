@@ -256,7 +256,7 @@ def _emitter_for(source: str) -> Callable[[str, dict], None]:
 
     def _emit(event_type: str, data: dict) -> None:
         try:
-            from fno.events import _build, append_event
+            from fno.events.store_client import build_event as _build, append_event
             from fno.paths import state_dir
 
             append_event(

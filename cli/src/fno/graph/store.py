@@ -1268,7 +1268,7 @@ def _emit_graph_tx_event(**data: Any) -> None:
     import the agents runtime journal.
     """
     try:
-        from fno.events import _build, append_event
+        from fno.events.store_client import build_event as _build, append_event
 
         session = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
         if session:

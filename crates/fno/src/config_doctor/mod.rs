@@ -485,6 +485,11 @@ pub(crate) fn space_dir(settings: &Settings) -> PathBuf {
     spaces_root(settings).join(slug(&canonical_root()))
 }
 
+pub(crate) fn project_space_dir(settings: &Settings) -> PathBuf {
+    let root = crate::config_cli::repo_root();
+    spaces_root(settings).join(slug(&canonical_for(&root)))
+}
+
 pub(crate) fn worktree_space_dir(settings: &Settings) -> PathBuf {
     let root = crate::config_cli::repo_root();
     let canonical = canonical_for(&root);

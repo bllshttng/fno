@@ -503,6 +503,11 @@ pub fn emit_raw_inject_audit(
     );
 }
 
+pub(crate) fn raw_inject_verb(text: &str) -> Option<&str> {
+    let token = text.split_whitespace().next()?;
+    crate::provider::parse_command_token(token).map(|_| token)
+}
+
 pub fn emit_raw_inject_audit_with_origin(
     events_path: &Path,
     sender: Option<&str>,
@@ -532,9 +537,7 @@ pub fn emit_raw_inject_audit_with_origin(
     fields.insert("harness".into(), harness.into());
     fields.insert("lane".into(), lane.into());
     fields.insert("confirmed".into(), confirmed.into());
-    let command = text
-        .strip_prefix('/')
-        .and_then(|_| text.split_whitespace().next());
+    let command = raw_inject_verb(text);
     fields.insert("verb".into(), command.map(str::to_string).into());
     fields.insert("self_send".into(), self_send.into());
     if let Some(s) = sender {
@@ -2827,6 +2830,8 @@ mod tests {
         assert_eq!(v["data"]["sender"], "0ab49ebc");
         assert_eq!(v["data"]["confirmed"], true);
         assert_eq!(v["data"]["verb"], "/code-review");
+        assert_eq!(raw_inject_verb("$fno:review medium"), Some("$fno:review"));
+        assert_eq!(raw_inject_verb("fix the login bug"), None);
         assert_eq!(v["data"]["self_send"], false);
 
         // A not-delivered send is still audited (the bytes may have landed past

@@ -15,9 +15,8 @@ SKIPS it (``retro.harvest.harvest_carveouts``) so it SURVIVES untouched for
 :func:`read_carveouts` and removes it via :func:`consume_carveouts` once run or
 filed as a node (Group 3).
 
-Records append one JSON line to ``.fno/carveouts.jsonl`` using the same
-mkdir-mutex + append convention as the events.jsonl writer
-(``fno.events.append_event``), so concurrent writers serialize per line.
+Records append one JSON line to ``.fno/carveouts.jsonl`` under a mkdir mutex,
+so concurrent writers serialize per line.
 """
 from __future__ import annotations
 
@@ -267,7 +266,7 @@ def _rewrite_jsonl(path: Path, lines: "list[str]") -> None:
 
 
 def _append_jsonl(path: Path, line: str, lock_timeout_seconds: int = 30) -> None:
-    """Append one line under a mkdir mutex (mirrors events.append_event).
+    """Append one line under a mkdir mutex.
 
     Raises OSError on an unwritable target so the caller can surface a failed
     capture rather than swallowing it.

@@ -47,7 +47,7 @@ EVENTS_ATOMIC_LINE_MAX_BYTES=4000
 # spool directory, or rotation check. The native binary's SQL transaction
 # serializes every writer, in every language.
 # Roots a hermetic shell process may write a journal into. The Python half is
-# fno.events._hermetic_allowed_roots; keep the two in step. TMPDIR covers both
+# fno.hermetic._hermetic_allowed_roots; keep the two in step. TMPDIR covers both
 # the neutralise sandbox and a test's own mktemp file, and the parent of an
 # ABSOLUTE FNO_EVENTS_PATH covers a caller that declared its own journal. A
 # relative pin is not a root, exactly as on the Python side.

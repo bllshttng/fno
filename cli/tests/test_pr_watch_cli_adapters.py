@@ -42,7 +42,7 @@ def test_emit_event_writes_real_event_to_events_jsonl(tmp_path: Path) -> None:
     silently dropped.
     """
     from fno.pr_watch.cli import _emit_event
-    from fno.events import validate
+    from fno.events.store_client import validate
 
     events_path = tmp_path / "events.jsonl"
     _emit_event(
