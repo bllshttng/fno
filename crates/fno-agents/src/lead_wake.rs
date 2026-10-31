@@ -365,8 +365,14 @@ fn emit_receipt(
 pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, String> {
     let now = now_epoch();
     let registry = home.registry_json();
-    let teams =
+    let mut teams =
         crate::territory::live_teams(&registry).map_err(|e| format!("lead_wake: {}", e.0))?;
+    let retired = crate::retired_crown::read_all(home);
+    teams.retain(|team| {
+        team.holder_session
+            .as_deref()
+            .is_none_or(|session| !retired.contains_key(session))
+    });
     if teams.is_empty() {
         return Ok(Outcome {
             acted: 0,

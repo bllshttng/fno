@@ -902,6 +902,9 @@ pub fn run_done(args: &[String]) -> i32 {
         "stepped_down"
     };
     for row in &vacated_rows {
+        if let Some(session) = row.harness_session_id.as_deref() {
+            crate::retired_crown::write(&home, session, &scope, "org-done");
+        }
         // The row write is the authority: this fires even if the manifest
         // removal below then fails. One event per row, so a split role
         // records every holder.

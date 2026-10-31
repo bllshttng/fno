@@ -1025,6 +1025,9 @@ pub(crate) fn wake_with_text(
     sender: &str,
     runner: Runner,
 ) -> (bool, &'static str) {
+    if crate::retired_crown::refuses_wake(sid) {
+        return (false, "retired-crown");
+    }
     let mail_argv = vec![
         "fno".to_string(),
         "agents".to_string(),

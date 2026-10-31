@@ -5867,7 +5867,7 @@ pub(crate) fn run_reconcile_sweep(
     // tick writes no probe inference, so planning revivals there is waste.
     let (mut revivals, revived) = if matches!(mode, SweepMode::Full) {
         crate::liveness_sweep::plan_team_revivals(
-            &entries,
+            &crate::retired_crown::unretired(&entries, home),
             roster_readable,
             |e| witness.team_running(e),
             &prober,

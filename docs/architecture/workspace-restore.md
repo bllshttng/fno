@@ -10,7 +10,7 @@ You are bringing worker panes back after a reboot or a killed mux server, or cho
 
 Not for: the tab count. Tabs rebuild from each workspace's stored tab trees under every policy value. No value restores zero tabs. Only `hold` skips tabs whose every slot binds a done worker. Held-pane and idle-row mechanics: [pane-worker-relaunch](pane-worker-relaunch.md). What a client reconnect preserves versus a server restart: [mux-restart-recovery](mux-restart-recovery.md).
 
-The destructive edge: `resume`, as the startup policy or the on-demand command, relaunches every worker member that is not tombstoned, gone, or reap-retired. Finished-and-merged work relaunches too. Run `fno mux workspace restore --dry-run --json` first. It classifies and spawns nothing.
+The destructive edge: `resume`, as the startup policy or the on-demand command, relaunches every worker member that is not tombstoned, gone, reap-retired, or a retired crown. Finished-and-merged work relaunches too. Run `fno mux workspace restore --dry-run --json` first. It classifies and spawns nothing.
 
 ## The command
 
@@ -22,7 +22,7 @@ The command enumerates every live, non-tombstoned worker member in the workspace
 
 `--member-session` restores only the member with that exact native session ID and skips unrelated portals. An absent match returns a refusal. The CLI refuses servers below protocol 109 before sending this filter. Servers below protocol 109 ignore it and can restore every member.
 
-Every member that cannot come back is named, with the reason. The reasons include: no registry row, no session id, a harness the table gives no resume form, an ambiguous name, and a failed spawn. A seat already live in this session names the pane. Silence is never an outcome. A run that resumes two and refuses one prints all three.
+Every member that cannot come back is named, with the reason. The reasons include: a retired crown, no registry row, no session id, a harness the table gives no resume form, an ambiguous name, and a failed spawn. A seat already live in this session names the pane. Silence is never an outcome. A run that resumes two and refuses one prints all three.
 
 The command answers for portals too. After the members it walks every stored portal slot and reports one row per seat, classified by the same door the focus fill uses. A held seat whose claude Drive row answers resumes through the same off-loop re-entry plan batch the members use. A seat already showing its row reports `focused`. A seat whose row answers nothing, or answers ambiguously, is refused with the key named. A filled Locate-tier portal carries a notice, because it shows where the thread lives, not the thread. `--json` splits the reply: `members` for workspace members, `portals` for held seats, and the counts sum both. Under `--dry-run` every held portal reads `planned` and nothing spawns. The change answers a 2026-09-13 measurement. The command then reported 7 members and 6 refusals with zero portal rows. The store held 3 portal slots. The portals array is the fix. `tests/mux-portal-restore-server-kill.sh` proves it with a real kill and a real restore.
 
@@ -69,7 +69,7 @@ The store keeps the layout that the last topology write left. A SIGKILL writes n
 
 What does `resume` respawn?
 
-Every worker member that is not tombstoned, not gone, and not retired by a reap receipt (`crates/fno/src/server.rs:6414`, `:6521`). That includes done-and-merged workers. Measured 2026-09-11 with `fno mux workspace restore --dry-run --json`: 10 members classified, 2 planned for relaunch, 2 already live, 6 refused (4 retired, 2 not resumable). Dry-run spawns nothing.
+Every worker member that is not tombstoned, not gone, not retired by a reap receipt, and not a retired crown (`crates/fno/src/server.rs:6414`, `:6521`). That includes done-and-merged workers. Measured 2026-09-11 with `fno mux workspace restore --dry-run --json`: 10 members classified, 2 planned for relaunch, 2 already live, 6 refused (4 retired, 2 not resumable). Dry-run spawns nothing.
 
 Restore printed `never bound`. Is that session gone?
 
