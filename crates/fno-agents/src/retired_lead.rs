@@ -182,6 +182,7 @@ mod tests {
     fn held(name: &str, session: &str, scope: Option<&str>) -> RegistryEntry {
         RegistryEntry {
             name: name.to_string(),
+            harness: Some("claude".to_string()),
             harness_session_id: Some(session.to_string()),
             role_scope: scope.map(str::to_string),
             status: AgentStatus::Live,
