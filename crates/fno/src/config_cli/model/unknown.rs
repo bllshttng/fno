@@ -19,9 +19,12 @@ const UNMODELED_BLOCKS: [&str; 2] = ["kanban", "providers"];
 /// Legacy spellings the loader still lifts, so they never report.
 const HONORED_LEGACY_KEYS: [&str; 1] = ["recovery.retire_grace_s"];
 /// Keys only the Rust leg reads; they work, so they never report.
-const RUST_READ_KEYS: [&str; 3] = [
+const RUST_READ_KEYS: [&str; 6] = [
     "merge.visual_paint_paths",
     "merge.visual_shot_workflows",
+    "questions.judge.batch",
+    "questions.judge.enabled",
+    "questions.judge.model",
     "sandbox.provider",
 ];
 const RETIRED_BLOCKS: [&str; 1] = ["reach_me"];

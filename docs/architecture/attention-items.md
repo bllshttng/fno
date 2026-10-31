@@ -173,7 +173,7 @@ A one-shot reader with no tools reads a batch of open questions beside the recor
 
 A deny class never reads `decided`, whatever the reader says. A question with no class goes to the reader, which must name one. Most open questions carry no class, so holding them would leave nothing to measure. A decided verdict on the reader's class counts under `decided_on_read_class`, because that class has no filer behind it.
 
-Turn it on with `fno config set questions.judge.enabled true`. It is off by default because it spends tokens. It runs each hour. `questions.judge.model` (default `sonnet`) and `questions.judge.batch` (default 10) tune it. `fno inbox outstanding judge --once` runs one batch by hand.
+Turn it on in `config.toml` with `enabled = true` under `[questions.judge]`. `fno config set` refuses this key, because the `[questions]` table sits outside the config model. It is off by default because it spends tokens. It runs each hour. `questions.judge.model` (default `sonnet`) and `questions.judge.batch` (default 10) tune it. `fno inbox outstanding judge --once` runs one batch by hand.
 
 Read it with `fno inbox outstanding judge --report --since 24h`. `agreement` compares each decided verdict with the answer the row later got, and each miss goes into the next prompt as a correction. `board_writes` counts closes by a judge run and must read 0.
 
