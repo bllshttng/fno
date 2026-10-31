@@ -1068,17 +1068,18 @@ fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
     );
 }
 
-/// An explicit `--substrate thread` for agy refuses the retired axis before any
-/// lane resolves. The negative assertion stays load-bearing: the refusal must
-/// never list "claude + codex + opencode", which told a reader every other
-/// harness has no thread lane.
+/// A substrate word outside the live vocabulary refuses at scan, before any
+/// lane resolves (`--substrate thread` itself is a live alias now, so the
+/// deterministic off-vocabulary word is `bg`). The negative assertion stays
+/// load-bearing: the refusal must never list "claude + codex + opencode",
+/// which told a reader every other harness has no thread lane.
 #[test]
-fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
+fn client_spawn_substrate_off_vocabulary_names_lanes() {
     let home_dir = tmpdir("cli-spawn-bg-agy-home");
     let bin = find_client_bin();
     if !bin.exists() {
         eprintln!(
-            "skipping client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless: binary not found"
+            "skipping client_spawn_substrate_off_vocabulary_names_lanes: binary not found"
         );
         return;
     }
@@ -1093,7 +1094,7 @@ fn client_spawn_substrate_bg_agy_hard_errors_pointing_to_headless() {
             "--harness",
             "agy",
             "--substrate",
-            "thread",
+            "bg",
         ])
         .env("FNO_SPAWN_GATE", "0")
         .env("FNO_E2E", "1")
