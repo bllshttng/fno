@@ -164,6 +164,26 @@ pub fn run_target_family(args: &[String]) -> i32 {
     0
 }
 
+/// Whether the routing walk must pass over `harness` for `work_command`: its
+/// capability row can never close the command's loop, so the spawn gate would
+/// refuse the pick. Row facts only: an install probe is the gate's job, and an
+/// unknown harness stays the gate's to name.
+pub fn lane_cannot_loop(harness: &str, work_command: &str) -> bool {
+    if !is_target_family(&format!("/fno:{work_command}")) {
+        return false;
+    }
+    capabilities_json(harness).is_ok_and(|row| {
+        match row["loop_participation"].as_str().unwrap_or_default() {
+            "native" => false,
+            "extension" => row["loop_extension"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty(),
+            _ => true,
+        }
+    })
+}
+
 /// The loop gate on this machine: `Some` refuses a looping `message` at
 /// `harness`. Spawn admission calls it with no `extension_src`, so the pi
 /// probe there checks presence, not byte equality.
