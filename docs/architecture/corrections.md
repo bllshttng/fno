@@ -14,7 +14,7 @@ Each time someone corrects a working agent, the daemon writes one `agent_correct
 
 `correction_fold.rs` is one daemon arm with a 60 s floor, off the core loop. It reads every harness through its `TranscriptSource`, at most 64 MiB and 200 rows a tick, newest files first. Cursors live in `<state>/cache/corrections/cursors.json`, beside the typed-turn tally that is the user rate's denominator. A held lock skips the tick, and a down daemon catches up from its cursor. A row's `ts` is the turn's own time.
 
-The event id is `corr:` plus the corpus `row_id` for the same turn, so a replay is ignored by the store and a reader can join an event to its corpus row.
+The event id is `corr:` plus the corpus `row_id` for the same turn. The store ignores a replay, and a reader can join an event to its corpus row.
 
 A turn older than the arm's first run reads `backfilled: true`, with its detect-time facts unmeasured. The backfill is the same path, spread over ticks.
 
@@ -30,7 +30,7 @@ Each harness fact is `{value, measured_at, basis}` or `{value: null, basis: "unm
 | harness version | row `version` | `cli_version` | session `version` | unmeasured | header `fno_version` | unmeasured |
 | skills, references, subagents | tool calls | shell calls, partly | unmeasured | unmeasured | child sessions only | unmeasured |
 
-**The claude label can lie.** On a routed endpoint, `message.model` echoes the name that was requested. Measured over 150 transcripts on 2026-11-01: every `msg_01` plus `req_` row came from Anthropic, while a GLM route wrote `msg_20` ids with no request id, including 420 rows labelled `claude-opus-5-5`. So a claude label on a foreign shape reads unmeasured, and any other label there reads `basis: label`, a claim the row cannot confirm. A registry `route_provider_id` outranks a derived provider.
+**The claude label can lie.** On a routed endpoint, `message.model` echoes the name that was requested. We measured 150 transcripts on 2026-11-01. A GLM route wrote `msg_20` ids with no request id, including 420 rows labelled `claude-opus-5-5`. Anthropic rows carry `msg_01` and `req_`. So a claude label on a foreign shape reads unmeasured, and any other label there reads `basis: label`, a claim the row cannot confirm. A registry `route_provider_id` outranks a derived provider.
 
 ## Scrub
 
@@ -53,7 +53,7 @@ fno doctor event corrections --precision ~/.fno/evals/corrections/v1/labels.json
 fno agents fleet feed --kind agent_corrected
 ```
 
-The feed shows user rows by default. An explicit `--kind agent_corrected` adds the agent and machine rows, as `agent_corrected_agent` and `agent_corrected_machine`. The feed reads the last 7 days of corrections; the report reads any window.
+The feed shows user rows by default. An explicit `--kind agent_corrected` adds the agent and machine rows, as `agent_corrected_agent` and `agent_corrected_machine`. The feed reads the last 7 days of corrections. The report reads any window.
 
 To draw a precision sample, `fno-agents intel --corrections-sample <dir>` runs one 512 MiB pass over real transcripts into that directory's own store. The live store stays untouched.
 
