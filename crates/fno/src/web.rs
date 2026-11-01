@@ -2383,6 +2383,106 @@ console.log("evictedRowCount: 18 cases ok");
         }
     }
 
+    /// The pacer in the served page: an idle frame paints at once, a burst
+    /// keeps the newest frame per pane, and a non-frame message never overtakes
+    /// a held frame. The head regex reads the bridge's real serialization, so a
+    /// field reorder on the wire fails here and not as a silent loss of pacing.
+    #[test]
+    fn frame_pacer_keeps_newest_per_pane_and_order() {
+        let wire = |pane_id: u64, scroll_offset: u16| {
+            let frame = proto::Frame {
+                scroll_offset,
+                ..proto::Frame::default()
+            };
+            serde_json::to_string(&ServerMsg::Frame { pane_id, frame }).unwrap()
+        };
+        let raws = serde_json::json!({
+            "a1": wire(1, 1), "a2": wire(1, 2), "a3": wire(1, 3),
+            "b1": wire(22, 1), "b2": wire(22, 2),
+        });
+        let asserts = r#"
+const eq = (got, want, what) => {
+  const g = JSON.stringify(got), w = JSON.stringify(want);
+  if (g !== w) { console.error(`FAIL ${what}: got ${g}, want ${w}`); process.exit(1); }
+};
+const rig = (cap = 128) => {
+  const seen = [], ticks = [];
+  const send = framePacer((r) => seen.push(r), (f) => ticks.push(f), cap);
+  return { seen, send, tick: () => ticks.shift()(), ticks };
+};
+let t = rig();
+// Idle: the frame is delivered in the same call, before any animation frame.
+t.send(RAW.a1);
+eq(t.seen, [RAW.a1], "idle paints at once");
+// Burst: the newest frame per pane wins, and neither pane is dropped.
+t.send(RAW.a2); t.send(RAW.b1); t.send(RAW.a3); t.send(RAW.b2);
+eq(t.seen.length, 1, "a burst waits for the animation frame");
+t.tick();
+eq(t.seen.slice(1), [RAW.a3, RAW.b2], "newest per pane, oldest update first");
+// One empty animation frame does not close the window: a saturated page sees
+// one between any two messages, and closing there would paint every frame.
+t.send(RAW.a1);
+eq(t.seen.length, 3, "a frame right after a flush still waits");
+t.tick();
+eq(t.seen.length, 4, "and lands on the next animation frame");
+t.tick();
+t.send(RAW.a2);
+eq(t.seen.length, 4, "one empty animation frame keeps the window open");
+t.tick();
+eq(t.seen.at(-1), RAW.a2, "the held frame lands");
+t.tick(); t.tick(); t.tick();
+eq(t.ticks.length, 0, "three empty animation frames close the window");
+t.send(RAW.b1);
+eq(t.seen.at(-1), RAW.b1, "idle again paints at once");
+// A non-frame message flushes first, so a Layout cannot overtake a frame.
+t = rig();
+t.send(RAW.a1); t.send(RAW.a2); t.send('{"Layout":{}}');
+eq(t.seen, [RAW.a1, RAW.a2, '{"Layout":{}}'], "held frame lands before Layout");
+// A throw while delivering must not stop later animation frames.
+const ticks = []; let boom = true; const seen = [];
+const send = framePacer((r) => { if (r === RAW.a2 && boom) { boom = false; throw new Error("x"); } seen.push(r); }, (f) => ticks.push(f), 128);
+send(RAW.a1); send(RAW.a2);
+try { ticks.shift()(); } catch (_) {}
+send(RAW.a3); ticks.shift()();
+eq(seen, [RAW.a1, RAW.a3], "a throw keeps the pacer running");
+// No animation frames (hidden tab): the cap bounds what is held.
+t = rig(2);
+t.send(RAW.a1); t.send(RAW.a2); t.send(RAW.b1);
+eq(t.seen, [RAW.a1, RAW.a2, RAW.b1], "the cap flushes without an animation frame");
+console.log("framePacer: 12 cases ok");
+"#;
+        let src = format!(
+            "const RAW = {raws};\n{}\n{}\n{asserts}",
+            PAGE.lines()
+                .filter(|l| l.contains("const FRAME_HEAD") || l.contains("const QUIET_TICKS"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            lift_js_fn(PAGE, "framePacer"),
+        );
+        let path = std::env::temp_dir().join(format!("fno-pacer-{}.mjs", std::process::id()));
+        std::fs::write(&path, src).expect("temp dir writable");
+        let out = std::process::Command::new("node").arg(&path).output();
+        let _ = std::fs::remove_file(&path);
+        match out {
+            Err(e) => {
+                assert!(
+                    std::env::var_os("CI").is_none(),
+                    "node is required on CI to exercise the shipped framePacer: {e}"
+                );
+                println!("SKIPPED frame_pacer: node not runnable ({e}); nothing was asserted");
+            }
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                assert!(
+                    stdout.contains("framePacer: 12 cases ok"),
+                    "the shipped framePacer did not clear every case:\n{}{}",
+                    stdout,
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+        }
+    }
+
     /// The page must keep calling retention what it is. A protocol
     /// history request is unreachable while `writer.forget()` stands, so the
     /// visible label must not promise scrollback the wire never carries.
