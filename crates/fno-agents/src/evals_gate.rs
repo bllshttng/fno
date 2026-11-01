@@ -55,6 +55,13 @@ const SKIP: &str = "skip";
 const QUEUED: &str = "queued";
 const DONE: &str = "done";
 const BUDGET_PREFIX: &str = "budget:";
+/// A main run that writes no grade may try again, so one bad launch does not
+/// spend the day. The cap keeps a broken run from looping.
+const MAIN_MAX_TRIES: u32 = 3;
+const MAIN_RETRY_S: i64 = 3600;
+const MAIN_LOG: &str = "main.log";
+const HEAD_LOG: &str = "head.log";
+const CAUSE_MAX: usize = 300;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct HeadRun {
@@ -73,6 +80,16 @@ struct MainRun {
     started: i64,
 }
 
+/// Why the cohort has no grade yet. `last_note` is rewritten every tick, so the
+/// cause lives here.
+#[derive(Serialize, Deserialize, Clone)]
+struct MainFailure {
+    cohort: String,
+    tries: u32,
+    next_try: i64,
+    cause: String,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct State {
     /// Head sha to its disposition. Only open PR heads stay.
@@ -80,8 +97,10 @@ struct State {
     head_run: Option<HeadRun>,
     main_run: Option<MainRun>,
     baseline: Option<String>,
-    /// One launch per cohort, so a run that writes no rows cannot loop.
+    /// The cohort last launched. With no `main_failure` for it, the day is done.
     main_tried: Option<String>,
+    #[serde(default)]
+    main_failure: Option<MainFailure>,
     last_note: String,
 }
 
@@ -92,7 +111,7 @@ struct Pr {
 
 struct Deps<'a> {
     run: RunProbe<'a>,
-    spawn: &'a dyn Fn(&[String], &Path) -> Result<u32, String>,
+    spawn: &'a dyn Fn(&[String], &Path, &Path) -> Result<u32, String>,
     alive: &'a dyn Fn(u32) -> bool,
     kill: &'a dyn Fn(u32),
     now: DateTime<Utc>,
@@ -409,7 +428,7 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
             (d.kill)(run.pid);
         }
         state.main_run = None;
-        return finish_main(p, state, &run.cohort);
+        return finish_main(p, d, state, &run.cohort);
     }
     let cohort = format!(
         "gate-main-{}-{}",
@@ -417,7 +436,16 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
         route_hash(p.repo)
     );
     if state.main_tried.as_deref() == Some(cohort.as_str()) {
-        return format!("main {cohort} tried");
+        match state.main_failure.as_ref().filter(|f| f.cohort == cohort) {
+            None => return format!("main {cohort} tried"),
+            Some(f) if f.tries >= MAIN_MAX_TRIES => {
+                return format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
+            }
+            Some(f) if d.now.timestamp() < f.next_try => {
+                return format!("main {cohort} waits to retry: {}", f.cause);
+            }
+            Some(_) => {}
+        }
     }
     if !can_launch {
         return "main held by the spawn gate".into();
@@ -444,7 +472,7 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
     let lane = config_lane(p.repo);
     let argv = run_argv(p, ("--tag", GOLDEN_TAG), MAIN_WORKERS, &lane, &cohort, &sha);
     state.main_tried = Some(cohort.clone());
-    match (d.spawn)(&argv, p.repo) {
+    match (d.spawn)(&argv, p.repo, &p.state_dir.join(MAIN_LOG)) {
         Ok(pid) => {
             state.main_run = Some(MainRun {
                 cohort: cohort.clone(),
@@ -455,19 +483,47 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
             save_state(&p.state_dir, state);
             format!("main {cohort} launched")
         }
-        Err(e) => format!("main launch failed: {e}"),
+        Err(e) => main_failed(d, state, &cohort, format!("launch failed: {e}")),
     }
+}
+
+fn main_failed(d: &Deps, state: &mut State, cohort: &str, cause: String) -> String {
+    let earlier = state
+        .main_failure
+        .as_ref()
+        .filter(|f| f.cohort == cohort)
+        .map_or(0, |f| f.tries);
+    let note = format!("main {cohort} {cause}");
+    state.main_failure = Some(MainFailure {
+        cohort: cohort.to_string(),
+        tries: earlier + 1,
+        next_try: d.now.timestamp() + MAIN_RETRY_S,
+        cause,
+    });
+    note
+}
+
+/// The last line a run printed, which names why a run that wrote no grade quit.
+fn log_tail(log: &Path) -> String {
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let last = text.lines().rev().find(|l| !l.trim().is_empty());
+    last.unwrap_or("the run printed nothing")
+        .chars()
+        .take(CAUSE_MAX)
+        .collect()
 }
 
 /// A cohort with no grade is no baseline. A real one is compared to the one
 /// before, and that compare is the number the bank exists to print.
-fn finish_main(p: &Paths, state: &mut State, cohort: &str) -> String {
+fn finish_main(p: &Paths, d: &Deps, state: &mut State, cohort: &str) -> String {
     let graded = read_rows(&p.history.to_string_lossy(), None, None)
         .iter()
         .any(|r| r.experiment_id.as_deref() == Some(cohort) && crate::evals_trend::is_scored(r));
     if !graded {
-        return format!("main {cohort} wrote no grade");
+        let tail = log_tail(&p.state_dir.join(MAIN_LOG));
+        return main_failed(d, state, cohort, format!("wrote no grade: {tail}"));
     }
+    state.main_failure = None;
     let previous = state.baseline.replace(cohort.to_string());
     let Some(previous) = previous else {
         return format!("main {cohort} is the first baseline");
@@ -667,7 +723,7 @@ fn launch_head(
         &cohort,
         &pr.sha,
     );
-    match (d.spawn)(&argv, p.repo) {
+    match (d.spawn)(&argv, p.repo, &p.state_dir.join(HEAD_LOG)) {
         Ok(pid) => {
             state.head_run = Some(HeadRun {
                 pr: pr.number,
@@ -707,13 +763,19 @@ fn tick_with(p: &Paths, d: &Deps, can_launch: bool) -> String {
     note
 }
 
-fn spawn_detached(argv: &[String], cwd: &Path) -> Result<u32, String> {
+/// The log is replaced at each launch, so one file per leg bounds its size.
+fn spawn_detached(argv: &[String], cwd: &Path, log: &Path) -> Result<u32, String> {
+    if let Some(dir) = log.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let out = std::fs::File::create(log).map_err(|e| e.to_string())?;
+    let err = out.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..])
         .current_dir(cwd)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(out)
+        .stderr(err);
     crate::evals_arm::setsid_hook(&mut cmd);
     cmd.spawn().map(|c| c.id()).map_err(|e| e.to_string())
 }
@@ -864,7 +926,7 @@ mod tests {
                     _ => ok("mainsha\n"),
                 }
             };
-            let spawn = |argv: &[String], _: &Path| -> Result<u32, String> {
+            let spawn = |argv: &[String], _: &Path, _: &Path| -> Result<u32, String> {
                 self.spawns.borrow_mut().push(argv.to_vec());
                 Ok(4242)
             };
@@ -912,6 +974,80 @@ mod tests {
         assert!(argv.contains("--tag golden --repeat 3"), "{argv}");
         assert!(argv.contains("--ref mainsha"), "{argv}");
         assert!(w.posts.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_main_run_with_no_grade_keeps_its_cause_and_retries_up_to_the_cap() {
+        let w = World::new("crates/x.rs\n");
+        let dir = state_dir(&w.history());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(MAIN_LOG), "Error: unknown lane\n\n").unwrap();
+        let now = Utc::now();
+        let hour = chrono::Duration::seconds(MAIN_RETRY_S + 1);
+        let at = |tries: i32| now + hour * tries;
+
+        w.tick(true, now);
+        w.tick(false, now);
+        w.tick(false, now);
+        let state = load_state(&dir);
+        assert_eq!(w.spawns.borrow().len(), 1, "no retry before the wait ends");
+        let failure = state.main_failure.as_ref().unwrap();
+        assert_eq!(failure.cause, "wrote no grade: Error: unknown lane");
+        assert!(
+            state.last_note.contains("unknown lane"),
+            "{}",
+            state.last_note
+        );
+
+        for tries in 1..=2 {
+            w.tick(true, at(tries));
+            w.tick(false, at(tries));
+        }
+        w.tick(true, at(3));
+        assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize);
+        let state = load_state(&dir);
+        assert!(
+            state.last_note.contains("gave up after 3 tries"),
+            "{}",
+            state.last_note
+        );
+        assert!(state.baseline.is_none());
+    }
+
+    #[test]
+    fn a_main_run_with_a_grade_is_the_baseline_and_ends_the_day() {
+        let w = World::new("crates/x.rs\n");
+        let now = Utc::now();
+        w.tick(true, now);
+        let cohort = load_state(&state_dir(&w.history())).main_tried.unwrap();
+        w.rows(&cohort, "g2", [true, true, true]);
+        w.tick(false, now);
+        w.tick(false, now + chrono::Duration::seconds(MAIN_RETRY_S + 1));
+        let state = load_state(&state_dir(&w.history()));
+        assert_eq!(state.baseline.as_deref(), Some(cohort.as_str()));
+        assert!(state.main_failure.is_none());
+        assert_eq!(w.spawns.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_detached_run_writes_stdout_and_stderr_to_its_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("logs/main.log");
+        let argv: Vec<String> = ["sh", "-c", "echo out; echo err >&2"]
+            .map(String::from)
+            .to_vec();
+        let pid = spawn_detached(&argv, dir.path(), &log).unwrap();
+        for _ in 0..200 {
+            if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("err")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            text.contains("out") && text.contains("err"),
+            "{pid}: {text}"
+        );
     }
 
     #[test]
