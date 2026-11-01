@@ -38,6 +38,8 @@ on:
       - schemas/**
       # The cargo tests read the shipped Claude Code theme files.
       - themes/**
+      # The cargo tests read every grader command in the eval bank.
+      - evals/bank**
       # The cargo job diffs this generated document against its source.
       - docs/harnesses/capability-matrix.md
       # The cargo job diffs this generated page against its renderer.
