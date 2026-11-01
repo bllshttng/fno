@@ -235,6 +235,26 @@ fn report_infra_attempt_never_dilutes_the_pass_rate() {
 }
 
 #[test]
+fn plumbing_only_window_fires_no_alarm_and_no_regressed_verdict() {
+    let now = now_pinned();
+    let tmp = TempDir::new().unwrap();
+    let h = write_history(
+        &tmp,
+        &[
+            modern_row_json("t", "regression", true, &ts_rfc(10.0, now), 0),
+            infra_row_json("t", "regression", &ts_rfc(1.0, now)),
+        ],
+    );
+    let rows = read_rows(&h, Some("baseline"), None);
+    let report = report_fold(&rows, 7, now, None, None);
+    assert!(report["regression_alarm"].as_array().unwrap().is_empty());
+    assert_eq!(report["tiers"]["regression"]["plumbing"], 1);
+    assert_eq!(report["tiers"]["regression"]["grade_den"], 1);
+    let (_, regressed) = trend_fold(&rows, 7, now);
+    assert!(regressed.is_empty(), "an outage is not a regression");
+}
+
+#[test]
 fn report_planned_view_exposes_missing_attempts() {
     let now = now_pinned();
     let tmp = TempDir::new().unwrap();
