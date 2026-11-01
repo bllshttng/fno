@@ -159,22 +159,135 @@ fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, Str
 }
 
 /// Each path holds a golden's answer. Workers told to read the repo did read
-/// them, so a golden's checkout drops them before the worker starts. The
-/// loaded task keeps its grader in memory.
+/// them, so a golden's tree leaves them out. The loaded task keeps its grader
+/// in memory.
 const ANSWER_KEY_PATHS: [&str; 2] = ["evals/bank", "evals/fixtures/metrics"];
 
-/// Commit the answer keys away, and return the new head as the grade base.
-fn hide_answer_keys(dir: &std::path::Path) -> Result<String, String> {
-    let out = std::process::Command::new("git")
-        .args(["rm", "-r", "-q", "--ignore-unmatch", "--"])
-        .args(ANSWER_KEY_PATHS)
-        .current_dir(dir)
+/// Where sealed trees live: the temp dir, so no `$HOME` file sits on the
+/// worker's ancestor path. None of it may sit inside `$HOME`, which the fence
+/// denies as a whole.
+fn sealed_base(
+    temp: &std::path::Path,
+    home: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let base = temp.join("fno-evals");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let base = base.canonicalize().map_err(|e| e.to_string())?;
+    let home = home.canonicalize().map_err(|e| e.to_string())?;
+    if base.starts_with(&home) {
+        return Err(format!(
+            "sealed tree base {} sits inside the home dir {}",
+            base.display(),
+            home.display()
+        ));
+    }
+    Ok(base)
+}
+
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+}
+
+/// Write `ref_name`'s files (or only `paths` of them) into `dest`.
+fn extract_ref(
+    repo_root: &std::path::Path,
+    ref_name: &str,
+    paths: &[&str],
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let mut archive = Command::new("git")
+        .args(["archive", "--format=tar", ref_name])
+        .args(paths)
+        .current_dir(repo_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let stdout = archive.stdout.take().ok_or("git archive gave no stdout")?;
+    let tar = Command::new("tar")
+        .args(["-xf", "-", "-C"])
+        .arg(dest)
+        .stdin(stdout)
         .output()
         .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    let archived = archive.wait_with_output().map_err(|e| e.to_string())?;
+    if !archived.status.success() {
+        return Err(String::from_utf8_lossy(&archived.stderr).trim().to_string());
     }
-    commit_all(dir, "evals: hide golden answer keys")
+    if !tar.status.success() {
+        return Err(String::from_utf8_lossy(&tar.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+/// A golden's tree: `ref_name`'s files as one commit in a new repo. A worktree
+/// names the real repo in its `.git` file, and any parent commit holds the
+/// rules and the answer keys one `git show` away, so this tree has neither.
+/// Returns the path and its head, the base a grader diffs against.
+fn make_sealed_tree(
+    repo_root: &std::path::Path,
+    ref_name: &str,
+    overlay_ref: Option<&str>,
+    tag: &str,
+    base: &std::path::Path,
+) -> Result<(std::path::PathBuf, String), String> {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = base.join(format!("{tag}-{}-{millis}", std::process::id()));
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    let built = fill_sealed_tree(repo_root, ref_name, overlay_ref, &path);
+    if built.is_err() {
+        let _ = std::fs::remove_dir_all(&path);
+    }
+    built.map(|head| (path, head))
+}
+
+fn fill_sealed_tree(
+    repo_root: &std::path::Path,
+    ref_name: &str,
+    overlay_ref: Option<&str>,
+    dir: &std::path::Path,
+) -> Result<String, String> {
+    extract_ref(repo_root, ref_name, &[], dir)?;
+    if let Some(overlay) = overlay_ref {
+        let _ = std::fs::remove_dir_all(dir.join(OVERLAY_PATH));
+        extract_ref(repo_root, overlay, &[OVERLAY_PATH], dir)?;
+    }
+    for key in ANSWER_KEY_PATHS {
+        let _ = std::fs::remove_dir_all(dir.join(key));
+    }
+    let git = |args: &[&str]| -> Result<(), String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    };
+    // An empty template: a user's template can carry hooks that name real paths.
+    git(&["init", "-q", "--template="])?;
+    // The fence denies the user's git config, so the worker's git reads these.
+    for (key, value) in [
+        ("user.name", "fno-evals"),
+        ("user.email", "evals@fno.invalid"),
+        ("core.hooksPath", "/dev/null"),
+        ("core.excludesFile", "/dev/null"),
+        ("core.attributesFile", "/dev/null"),
+        ("commit.gpgsign", "false"),
+    ] {
+        git(&["config", key, value])?;
+    }
+    git(&["add", "-A", "-f"])?;
+    commit_all(dir, "evals: golden tree")
 }
 
 fn commit_all(dir: &std::path::Path, message: &str) -> Result<String, String> {
@@ -263,6 +376,37 @@ pub fn sweep_orphans(repo_root: &std::path::Path) -> usize {
         &crate::claude_ask::claude_cwd_slug(&evals_worktree_base()),
         KEPT_TRANSCRIPT_DAYS,
     );
+    let swept = sealed_base(&std::env::temp_dir(), &home_dir())
+        .map(|base| {
+            prune_kept_transcripts(
+                &crate::claude_drive::claude_projects_dir(),
+                &crate::claude_ask::claude_cwd_slug(&base),
+                KEPT_TRANSCRIPT_DAYS,
+            );
+            sweep_sealed_trees(&base)
+        })
+        .unwrap_or(0);
+    swept + sweep_worktrees(repo_root)
+}
+
+/// A sealed tree is not a registered worktree, so `git worktree list` never
+/// names it. Its name carries the owner, the same as a worktree's.
+fn sweep_sealed_trees(base: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        if !owner_alive(&entry.path().display().to_string())
+            && std::fs::remove_dir_all(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+fn sweep_worktrees(repo_root: &std::path::Path) -> usize {
     let Ok(out) = std::process::Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(repo_root)
@@ -293,8 +437,12 @@ pub fn sweep_orphans(repo_root: &std::path::Path) -> usize {
 /// their MCP servers, so a cohort measures today's machine and not the tree.
 /// The tree's own plugin stays off too: its hooks read the live fleet, and the
 /// worker then acts on that state. Only claude has these flags, so any other
-/// harness runs with today's plugin context.
-fn tree_only_flags(harness: Option<&str>) -> Vec<String> {
+/// harness runs with today's plugin context and no read fence.
+fn tree_only_flags(
+    harness: Option<&str>,
+    tree: &std::path::Path,
+    home: &std::path::Path,
+) -> Vec<String> {
     if harness != Some("claude") {
         return Vec::new();
     }
@@ -302,12 +450,43 @@ fn tree_only_flags(harness: Option<&str>) -> Vec<String> {
         "--setting-sources".into(),
         "project".into(),
         "--strict-mcp-config".into(),
+        format!("--settings={}", read_fence(tree, home)),
     ]
 }
 
-/// Claude keys auto memory on the git root, and a trial worktree shares the
-/// real repo's root, so the worker would read that repo's memory files.
-const NO_AUTO_MEMORY_ENV: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+/// The file tools stop at the block and the deny rules, and Bash stops at the
+/// OS sandbox. The block alone leaves `cat` and `git` free, and it exempts
+/// `~/.claude`. The sealed base is denied because a sibling trial's tree holds
+/// its `decision.md`.
+fn read_fence(tree: &std::path::Path, home: &std::path::Path) -> serde_json::Value {
+    let base = tree.parent().unwrap_or(tree);
+    json!({
+        "permissions": {
+            "blockReadsOutsideWorkingDirectories": true,
+            "deny": ["WebFetch", "WebSearch", "Read(~/.claude/**)"],
+        },
+        "sandbox": {
+            "enabled": true,
+            "allowUnsandboxedCommands": false,
+            "failIfUnavailable": true,
+            "network": {"strictAllowlist": true, "allowedDomains": []},
+            "filesystem": {
+                "denyRead": [home, base],
+                "allowRead": [tree],
+            },
+        },
+    })
+}
+
+/// The env of a fenced worker. Auto memory reads the user's files. The seal
+/// drops the spawn's state grants. Git would fail on the user's config, which
+/// the fence denies, so it reads only the tree's own.
+const SEALED_WORKER_ENV: [(&str, &str); 4] = [
+    ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1"),
+    (crate::spawn_seam::EVALS_SEALED_ENV, "1"),
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+];
 
 /// The spawn argv: the substrate's own --timeout is the first guard; a
 /// lane is a complete coordinate (its harness wins over the provider
@@ -424,7 +603,7 @@ fn default_spawn(
     );
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
     if !harness_flags.is_empty() {
-        cmd.env(NO_AUTO_MEMORY_ENV, "1");
+        cmd.envs(SEALED_WORKER_ENV);
     }
     cmd.args(&argv)
         .stdout(std::process::Stdio::piped())
@@ -603,41 +782,45 @@ pub fn run_task(
         let mut workdir: Option<std::path::PathBuf> = None;
         let mut worker_name: Option<String> = None;
         let mut tree: Option<String> = None;
-        let mut tree_only = false;
+        let mut worker_sealed = false;
         let mut kept_transcript: Option<std::path::PathBuf> = None;
         let mut grade_base = checkout_ref.clone();
-        match make_disposable_worktree(repo_root, &checkout_ref, &task.id) {
-            Err(e) => {
-                reason = format!("fixture checkout failed ({checkout_ref}); fixture drift? {e}");
-            }
-            Ok(dir) => match overlay_rev
-                .as_deref()
-                .or(overlay_ref)
-                .map(|r| apply_overlay(&dir, r))
-            {
-                Some(Err(e)) => {
-                    reason = format!("fixture overlay failed on {checkout_ref}: {e}");
-                    remove_worktree(repo_root, &dir);
+        let golden = task.golden.is_some();
+        if golden {
+            let overlay = overlay_rev.as_deref().or(overlay_ref);
+            match sealed_base(&std::env::temp_dir(), &home_dir()).and_then(|base| {
+                make_sealed_tree(repo_root, &checkout_ref, overlay, &task.id, &base)
+            }) {
+                Err(e) => {
+                    reason =
+                        format!("fixture checkout failed ({checkout_ref}); fixture drift? {e}");
                 }
-                Some(Ok(head)) => {
+                Ok((dir, head)) => {
                     grade_base = head;
                     workdir = Some(dir);
                 }
-                None => workdir = Some(dir),
-            },
-        }
-        if task.golden.is_some() {
-            if let Some(dir) = workdir.take() {
-                match hide_answer_keys(&dir) {
-                    Ok(head) => {
+            }
+        } else {
+            match make_disposable_worktree(repo_root, &checkout_ref, &task.id) {
+                Err(e) => {
+                    reason =
+                        format!("fixture checkout failed ({checkout_ref}); fixture drift? {e}");
+                }
+                Ok(dir) => match overlay_rev
+                    .as_deref()
+                    .or(overlay_ref)
+                    .map(|r| apply_overlay(&dir, r))
+                {
+                    Some(Err(e)) => {
+                        reason = format!("fixture overlay failed on {checkout_ref}: {e}");
+                        remove_worktree(repo_root, &dir);
+                    }
+                    Some(Ok(head)) => {
                         grade_base = head;
                         workdir = Some(dir);
                     }
-                    Err(e) => {
-                        reason = format!("answer keys not hidden on {checkout_ref}: {e}");
-                        remove_worktree(repo_root, &dir);
-                    }
-                }
+                    None => workdir = Some(dir),
+                },
             }
         }
         if let Some(dir) = &workdir {
@@ -653,12 +836,12 @@ pub fn run_task(
                     .or(worker_provider);
                 // Other bank tasks invoke plugin skills, so only a golden drops them.
                 // A leading dash needs the fence, so that prompt also keeps them.
-                let flags = if task.golden.is_some() && !prompt.starts_with('-') {
-                    tree_only_flags(harness)
+                let flags = if golden && !prompt.starts_with('-') {
+                    tree_only_flags(harness, dir, &home_dir().canonicalize().unwrap_or_default())
                 } else {
                     Vec::new()
                 };
-                tree_only = !flags.is_empty();
+                worker_sealed = !flags.is_empty();
                 let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane, &flags);
                 if !res.ok {
                     reason = res.reason.clone();
@@ -679,7 +862,11 @@ pub fn run_task(
                 }
                 outcome = Some(o);
             }
-            remove_worktree(repo_root, dir);
+            if golden {
+                let _ = std::fs::remove_dir_all(dir);
+            } else {
+                remove_worktree(repo_root, dir);
+            }
             if outcome.as_ref().is_some_and(|o| o.passed) {
                 forget_trial_transcript(dir);
             } else {
@@ -699,7 +886,7 @@ pub fn run_task(
             obs.insert("worker_timed_out".into(), json!(true));
         }
         if task.prompt.is_some() {
-            obs.insert("worker_tree_only".into(), json!(tree_only));
+            obs.insert("worker_sealed".into(), json!(worker_sealed));
         }
         if let Some(dir) = kept_transcript.as_ref().filter(|d| d.is_dir()) {
             obs.insert("kept_transcript".into(), json!(dir.display().to_string()));
@@ -910,19 +1097,117 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_worker_loads_only_the_tree() {
-        let bare = tree_only_flags(Some("claude"));
+    fn a_claude_worker_loads_only_the_tree_behind_the_read_fence() {
+        let tree = std::path::Path::new("/t/fno-evals/g-1-2");
+        let home = std::path::Path::new("/h");
+        let flags = tree_only_flags(Some("claude"), tree, home);
         assert_eq!(
-            bare,
+            flags[..3],
             ["--setting-sources", "project", "--strict-mcp-config"]
         );
-        assert!(tree_only_flags(Some("codex")).is_empty());
-        assert!(tree_only_flags(None).is_empty());
+        let settings: serde_json::Value =
+            serde_json::from_str(flags[3].strip_prefix("--settings=").unwrap()).unwrap();
+        assert_eq!(
+            settings["permissions"]["blockReadsOutsideWorkingDirectories"],
+            true
+        );
+        assert_eq!(settings["sandbox"]["allowUnsandboxedCommands"], false);
+        assert_eq!(
+            settings["sandbox"]["filesystem"]["denyRead"],
+            json!(["/h", "/t/fno-evals"])
+        );
+        assert_eq!(
+            settings["sandbox"]["filesystem"]["allowRead"],
+            json!(["/t/fno-evals/g-1-2"])
+        );
+        assert!(tree_only_flags(Some("codex"), tree, home).is_empty());
+        assert!(tree_only_flags(None, tree, home).is_empty());
 
-        let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), None, "go", &bare);
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), None, "go", &flags);
         let fence = argv.iter().position(|a| a == "--").unwrap();
         assert_eq!(argv[fence - 1], "go", "the prompt sits before the fence");
-        assert_eq!(argv[fence + 1..], bare[..]);
+        assert_eq!(argv[fence + 1..], flags[..]);
+    }
+
+    #[test]
+    fn a_sealed_tree_keeps_no_link_to_the_repo_and_no_answer_key() {
+        let d = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let repo = d.path().canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        std::fs::create_dir_all(repo.join(OVERLAY_PATH)).unwrap();
+        std::fs::create_dir_all(repo.join("evals/bank")).unwrap();
+        std::fs::write(repo.join(OVERLAY_PATH).join("f.py"), "old").unwrap();
+        std::fs::write(repo.join("evals/bank/g.yaml"), "expected: x").unwrap();
+        std::fs::write(repo.join("AGENTS.md"), "rules").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "old"]);
+        let old = git(&["rev-parse", "HEAD"]);
+        std::fs::write(repo.join(OVERLAY_PATH).join("f.py"), "new").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "new"]);
+        let new = git(&["rev-parse", "HEAD"]);
+
+        let (tree, head) =
+            make_sealed_tree(&repo, &old, Some(new.as_str()), "golden-x", base.path()).unwrap();
+
+        let in_tree = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&tree)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert!(tree.join(".git").is_dir());
+        assert_eq!(in_tree(&["rev-list", "--count", "HEAD"]), "1");
+        assert_eq!(in_tree(&["rev-parse", "HEAD"]), head);
+        assert_eq!(in_tree(&["remote"]), "");
+        assert_eq!(in_tree(&["status", "--porcelain"]), "");
+        assert!(!tree.join(".git/objects/info/alternates").exists());
+        assert!(!tree.join("evals/bank").exists());
+        assert_eq!(
+            std::fs::read_to_string(tree.join(OVERLAY_PATH).join("f.py")).unwrap(),
+            "new",
+            "the overlay ref wins"
+        );
+        let config = std::fs::read_to_string(tree.join(".git/config")).unwrap();
+        assert!(!config.contains(repo.to_str().unwrap()), "{config}");
+    }
+
+    #[test]
+    fn a_sealed_base_inside_home_refuses() {
+        let home = tempfile::tempdir().unwrap();
+        let err = sealed_base(&home.path().join("tmp"), home.path()).unwrap_err();
+        assert!(err.contains("inside the home dir"), "{err}");
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert!(sealed_base(elsewhere.path(), home.path()).is_ok());
+    }
+
+    #[test]
+    fn the_sweep_clears_only_a_dead_owners_sealed_tree() {
+        let base = tempfile::tempdir().unwrap();
+        let live = base
+            .path()
+            .join(format!("golden-x-{}-1", std::process::id()));
+        let dead = base.path().join(format!("golden-x-{}-1", i32::MAX));
+        std::fs::create_dir(&live).unwrap();
+        std::fs::create_dir(&dead).unwrap();
+
+        assert_eq!(sweep_sealed_trees(base.path()), 1);
+        assert!(live.exists());
+        assert!(!dead.exists());
     }
 
     #[test]
@@ -977,13 +1262,6 @@ mod tests {
             "",
             "the worker sees a clean tree"
         );
-
-        git(&["checkout", "-q", "--detach", &new]);
-        let head = hide_answer_keys(d.path()).unwrap();
-        assert_eq!(head, git(&["rev-parse", "HEAD"]));
-        assert!(d.path().join(OVERLAY_PATH).join("f.py").exists());
-        assert!(!d.path().join("evals/bank/g.yaml").exists());
-        assert_eq!(git(&["status", "--porcelain"]), "", "still a clean tree");
     }
 
     #[test]
