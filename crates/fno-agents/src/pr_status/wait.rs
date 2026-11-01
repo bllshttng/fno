@@ -1204,6 +1204,9 @@ for a in "$@"; do case "$a" in
   *head_sha=*)
     echo '{"total_count":2,"workflow_runs":[{"id":301,"name":"cli-ci","status":"completed","conclusion":"failure","created_at":"2026-11-01T03:00:00Z","run_started_at":"2026-11-01T03:00:00Z"},{"id":302,"name":"rust-ci","status":"in_progress","conclusion":null,"created_at":"2026-11-01T03:06:00Z","run_started_at":"2026-11-01T03:06:00Z"}]}'
     exit 0 ;;
+  *commits/*/status*)
+    echo '{"statuses":[]}'
+    exit 0 ;;
   *cancel*)
     exit 0 ;;
 esac; done

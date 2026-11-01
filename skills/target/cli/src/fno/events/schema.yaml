@@ -8701,7 +8701,7 @@ event_types:
     data: {required: [slug, pr, sha, runs]}
   - name: ci_wait_cancel
     description: "A wait or cadence red-cancel of a head's runs still in flight: the failing checks that caused the red verdict, the head, the PR, and each run's cancel result."
-    sources: [rust]
+    sources: [rust, daemon]
     data: {required: [slug, pr, head, cause, runs]}
   - name: merge_queue_entry
     description: "authorized_merge queued a PR head in place of merging it, because merge_queue.enabled is on. The merge queue arm lands it in a batch tested on main."
