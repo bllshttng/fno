@@ -9208,7 +9208,7 @@ event_types:
         source_file:
           type: string
           description: "Transcript path the fold read (store-qualified for sqlite-backed sources)."
-    consumers: [fno doctor event corrections, fno agents fleet feed, x-4130, x-a943]
+    consumers: [fno doctor event corrections, fno agents fleet feed]
 
   - name: correction_outcome
     retention: durable

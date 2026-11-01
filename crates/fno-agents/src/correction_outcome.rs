@@ -211,21 +211,21 @@ mod tests {
         let journal = dir.path().join("events.jsonl");
         let now = 1_793_000_000;
         let day = 86_400;
-        row(&journal, "merged", "agent", "s1", "x-aaaa", now - 2 * day);
-        row(&journal, "over", "agent", "s2", "x-aaaa", now - 2 * day);
+        row(&journal, "merged", "agent", "s1", "node-a", now - 2 * day);
+        row(&journal, "over", "agent", "s2", "node-a", now - 2 * day);
         row(
             &journal,
             "over-user",
             "user",
             "s2",
-            "x-bbbb",
+            "node-b",
             now - 2 * day + 60,
         );
-        row(&journal, "stale", "agent", "s3", "x-bbbb", now - 15 * day);
-        row(&journal, "open", "agent", "s4", "x-bbbb", now - day);
+        row(&journal, "stale", "agent", "s3", "node-b", now - 15 * day);
+        row(&journal, "open", "agent", "s4", "node-b", now - day);
         let mut merges = BTreeMap::new();
         merges.insert(
-            "x-aaaa".to_string(),
+            "node-a".to_string(),
             NodeMerge {
                 merged_at: Some(now - day),
             },
