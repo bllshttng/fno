@@ -40,6 +40,8 @@ on:
       - themes/**
       # The cargo tests read every grader command in the eval bank.
       - evals/bank**
+      # The cargo tests prove each golden's grader on these labelled cases.
+      - evals/fixtures/**
       # The cargo job diffs this generated document against its source.
       - docs/harnesses/capability-matrix.md
       # The cargo job diffs this generated page against its renderer.
