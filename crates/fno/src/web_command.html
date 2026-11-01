@@ -147,7 +147,7 @@ function waiting(model) {
       r.onclick = () => openQuestion(q);
       r.tabIndex = 0;
       r.onkeydown = (e) => { if (e.key === "Enter") openQuestion(q); };
-      t.append(el("b", null, q.title || q.id));
+      t.append(el("b", null, (q.number ? q.number + " " : "") + (q.title || q.id)));
       t.append(el("code", null, [q.node || "no node", ago(since(q.created_at)) + " old"].join(" · ")));
       r.classList.add("qrow");
       r.append(t);
@@ -188,7 +188,7 @@ function openQuestion(q) {
   if (q.class) facts.push("class " + q.class);
   document.getElementById("dstate").textContent = (q.class || q.kind) + (q.rung && q.rung.level ? " · " + q.rung.level + " rung" : "");
   document.getElementById("dhost").textContent = q.host == null ? "this machine" : "on " + q.host;
-  document.getElementById("dtitle").textContent = q.title || q.id;
+  document.getElementById("dtitle").textContent = (q.number ? q.number + " " : "") + (q.title || q.id);
   document.getElementById("dnode").textContent = facts.join(" · ");
   const none = "not recorded";
   const box = (text) => mdbox(text, none);
