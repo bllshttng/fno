@@ -62,7 +62,7 @@ pub(crate) fn opencode_stores() -> Vec<PathBuf> {
     out
 }
 
-fn open_read_only(path: &Path) -> Result<rusqlite::Connection, String> {
+pub(crate) fn open_read_only(path: &Path) -> Result<rusqlite::Connection, String> {
     // The plain open first so its error stays the reported failure; the
     // immutable retry covers the clean-exit mint (header stays WAL, the
     // -wal/-shm sidecars gone) this opencode.db family is left in.

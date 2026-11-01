@@ -137,7 +137,7 @@ fn s_field<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
 /// The provider lane a session actually sits on, from the model the
 /// transcript named (trap 2). `unknown` never reads as membership; those
 /// rows form their own lane instead of blending into a real one.
-fn provider_from_model(model: &str) -> String {
+pub(crate) fn provider_from_model(model: &str) -> String {
     let m = model.trim().to_lowercase();
     if m.starts_with("glm") {
         "zai".to_string()
