@@ -307,7 +307,7 @@ pub(crate) fn scrub_quote(s: &str) -> String {
 }
 
 /// The Kev question each row kind asks, without its label.
-fn question(kind: &str) -> Value {
+pub(crate) fn question(kind: &str) -> Value {
     match kind {
         "claim_support" => json!({"type": "choice",
         "instructions": "Does the record support the claim?",

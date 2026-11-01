@@ -19,7 +19,7 @@ pub mod runner;
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         eprintln!(
-            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates)"
+            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts)"
         );
         return 2;
     };
@@ -34,11 +34,12 @@ pub fn run(args: &[String]) -> i32 {
         "export" => export_command(rest),
         "qualify" => qualify_command(rest),
         "candidates" => crate::evals_candidates::run(rest),
+        "drafts" => crate::evals_drafts::run(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
             eprintln!(
-                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates)"
+                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts)"
             );
             return 2;
         }
