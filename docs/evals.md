@@ -89,7 +89,7 @@ A past session never answered a golden prompt, so it cannot grade one. Two hones
 
 `fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`. A row without `overlay_rev` ran with no overlay: an older `fno-agents` ignores the flag, and a fixture golden then fails on its missing fixture.
 
-The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. Plugin hooks and any harness-level skill also stay today's. Only the files the worker reads from its checkout go back in time, and project settings tracked in that tree. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
+The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. A claude worker's plugin comes from that tree too (see [Goldens](#goldens)). Only `fno` itself and the binary its hooks call stay today's. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
 
 ## Goldens
 
@@ -114,7 +114,11 @@ A daily daemon pass turns each new typed correction into one draft in `~/.fno/ev
 
 A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: an answer the grader reads from a decision file, or the work product itself.
 
-A golden asks for recall, never a choice among listed options. On a tree with no AGENTS.md, the old bank passed 25 of 25. In 17 of those runs the worker read no answer key, and each one still passed. So the prompt asks for the exact command or action, and the grader rejects the lure from the source case. The same worker still has today's plugin context, so a recall golden can pass on a tree with no rules. Read a cohort's rate with that limit in mind.
+A golden asks for recall, never a choice among listed options. On a tree with no AGENTS.md, the old bank passed 25 of 25. In 17 of those runs the worker read no answer key, and each one still passed. So the prompt asks for the exact command or action, and the grader rejects the lure from the source case.
+
+A claude worker reads its rules from the tree under test. The runner passes `--setting-sources project --strict-mcp-config`, and `--plugin-dir <checkout>` when the tree ships `.claude-plugin/plugin.json`. So a change to a skill or a hook reaches the worker, and a tree with no plugin gives the worker no fno skills. Each row records `obs.worker_tree_only`. Other harnesses have no such flags and run with today's plugin, so their rows read false. Two things still reach the worker: `~/.claude/CLAUDE.md`, because a checkout under `$HOME` has that file on its ancestor path, and the spawn's relay-compression block on the prompt.
+
+A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
 
 The runner removes `evals/bank` and `evals/fixtures/metrics` from a golden's checkout, and commits the removal before the worker starts. Workers did read these answer keys: 20 of 101 kept transcripts touched one. The removal does not cover an absolute path to another checkout, and one worker read the bank that way. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
 
