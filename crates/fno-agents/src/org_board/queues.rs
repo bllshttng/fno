@@ -1317,7 +1317,18 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
     // verdicts key at all is a STALE Python leg, not a clean one -- the key is
     // unconditionally emitted since the leg shipped, so its absence must not
     // read as "zero FAILs".
-    let verdict_rows = verdict_rows_from(&Value::Object(outstanding.clone()));
+    let verdict_rows: Vec<Value> = verdict_rows_from(&Value::Object(outstanding.clone()))
+        .into_iter()
+        .filter(|row| {
+            in_scope(
+                "failed_verdict",
+                false,
+                row.get("node").unwrap_or(&Value::Null),
+                row,
+                &mut out_of_scope,
+            )
+        })
+        .collect();
     if inputs.outstanding.is_ok() && outstanding.get("verdicts").is_none() {
         warnings.push(
             "the outstanding read carries no verdicts leg; the installed fno Python is \
@@ -1869,6 +1880,28 @@ mod tests {
                 .any(|r| r["id"] == "x-out" && r["queue"] == "mergeable_pr"),
             "cross-territory nomination vanished from the board: {out:?}"
         );
+    }
+
+    #[test]
+    fn a_foreign_prove_it_fail_lands_out_of_scope() {
+        let mut inputs = pr_board_inputs(json!([]), json!([]));
+        inputs.outstanding = SourceRead::ok(json!({
+            "verdicts": {"total": 1, "error": null, "items": [
+                {"node": "x-out", "verdict": "FAIL", "report": "r.md", "claim": "c"},
+            ]}
+        }));
+
+        let board = build_board(&inputs);
+        assert!(queue_rows(&board, "failed_verdict").is_empty());
+        let out = queue_rows(&board, "out_of_scope");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0]["queue"], "failed_verdict");
+        assert_eq!(out[0]["id"], "x-out");
+
+        inputs.scope_ids = None;
+        inputs.role_scope = None;
+        let board = build_board(&inputs);
+        assert_eq!(queue_rows(&board, "failed_verdict").len(), 1);
     }
 
     #[test]
