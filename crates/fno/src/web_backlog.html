@@ -2005,6 +2005,43 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       oline.appendChild(ospan);
       dg.appendChild(oline);
     }
+    // The session the node came from. Live web view when this bridge serves
+    // the pane; else the command to copy, or the reason none exists. A
+    // snapshot has no bridge, so it never links a pane.
+    const os = view.origin_session;
+    if (os && !PUBLIC) {
+      const sline = document.createElement("div");
+      sline.className = "planline originsession";
+      const lab = document.createElement("span");
+      lab.textContent = "came from " + (os.harness || "session") + (os.agent ? " " + os.agent : "");
+      sline.appendChild(lab);
+      const sid = document.createElement("code");
+      sid.className = "sid";
+      sid.textContent = os.session_id.slice(0, 8);
+      sid.title = os.session_id;
+      sline.appendChild(sid);
+      if (os.pane != null && !SNAPSHOT) {
+        const live = document.createElement("a");
+        live.href = base + "?t=" + encodeURIComponent(t) + "&pane=" + os.pane;
+        live.target = "_blank";
+        live.rel = "noopener";
+        live.textContent = "Open live";
+        sline.appendChild(live);
+      } else if (os.command) {
+        const cb = document.createElement("button");
+        cb.type = "button";
+        cb.className = "copybtn";
+        cb.textContent = "copy " + os.action + " command";
+        cb.addEventListener("click", () => copyText(os.command, cb));
+        sline.appendChild(cb);
+      } else if (os.reason) {
+        const why = document.createElement("span");
+        why.className = "dim";
+        why.textContent = os.reason;
+        sline.appendChild(why);
+      }
+      dg.appendChild(sline);
+    }
     panelBody.appendChild(dg);
     // The plan row: Copy path always; Open in Obsidian when the writer
     // computed a deep link.

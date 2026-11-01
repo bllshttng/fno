@@ -84,6 +84,10 @@ impl CommandCache {
                                 .find(|a| a.harness_session_id.as_deref() == Some(sid))
                                 .and_then(|a| a.pane_id)
                         });
+                    let node_origin = q
+                        .node
+                        .as_deref()
+                        .and_then(|n| crate::backlog_model::origin_session_for(backlog, n));
                     json!({
                         "id": q.id,
                         "kind": q.kind,
@@ -103,6 +107,7 @@ impl CommandCache {
                         "node_title": q.node_title,
                         "node_stage": q.node_stage,
                         "watch_pane": watch_pane,
+                        "node_origin": node_origin,
                     })
                 })
                 .collect()

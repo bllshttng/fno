@@ -1014,3 +1014,45 @@ fn an_explicit_status_query_reaches_the_off_board_payload() {
     let off: Vec<&str> = b.offboard.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(off, ["x-def"], "the query filters the reveal");
 }
+
+#[test]
+fn origin_session_names_where_the_node_came_from_and_how_to_reach_it() {
+    let mut inp = fixture(vec![
+        json!({"id": "x-none", "status": "ready"}),
+        json!({"id": "x-gone", "status": "ready", "source_session_id": "s-gone",
+               "source_harness": "claude", "cwd": "/repo"}),
+        json!({"id": "x-park", "status": "ready", "source_session_id": "s-park",
+               "source_cwd": "/src", "source_parent_session": "s-top"}),
+        json!({"id": "x-live", "status": "ready", "source_session_id": "s-live"}),
+    ]);
+    let mut park = row(Some("s-park"));
+    park.resumable = true;
+    let mut live = row(Some("s-live"));
+    live.pane_id = Some(7);
+    inp.agents = vec![park, live];
+
+    assert!(
+        origin_session_for(&inp, "x-none").is_none(),
+        "no source, no origin"
+    );
+    let gone = origin_session_for(&inp, "x-gone").unwrap();
+    assert_eq!(gone.action, "none");
+    assert_eq!(
+        gone.command.as_deref(),
+        Some("fno agents adopt s-gone"),
+        "a session the registry lacks reaches by adopt"
+    );
+    let park = origin_session_for(&inp, "x-park").unwrap();
+    assert_eq!(park.action, "resume");
+    assert_eq!(park.parent_session.as_deref(), Some("s-top"));
+    assert!(
+        park.command.as_deref().unwrap().ends_with("--cwd /src"),
+        "resume pins the source cwd: {:?}",
+        park.command
+    );
+    assert!(park.pane.is_none(), "no live view without a pane");
+    let live = origin_session_for(&inp, "x-live").unwrap();
+    assert_eq!((live.pane, live.action.as_str()), (Some(7), "attach"));
+    let view = node(&inp, "x-live").unwrap();
+    assert_eq!(view.origin_session.unwrap().session_id, "s-live");
+}
