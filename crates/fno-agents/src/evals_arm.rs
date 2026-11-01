@@ -960,7 +960,13 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
             let g = read_gate();
             let hold = crate::loops_pause::dispatch_pause();
             let can_launch = !hold.is_paused() && g.ram_gb.map_or(true, |r| r >= g.min_free_gb);
-            crate::evals_gate::tick(&o.history, &o.fno_bin, &repo, o.graph.as_deref(), can_launch);
+            crate::evals_gate::tick(
+                &o.history,
+                &o.fno_bin,
+                &repo,
+                o.graph.as_deref(),
+                can_launch,
+            );
         }
         run_tick_mode(
             &o,
