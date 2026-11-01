@@ -1,0 +1,9 @@
+# Labelled cases for the golden-axis-never-inferred grader. Read by report --check-metrics.
+cases:
+  - {id: spaced, label: good, files: {"decision.md": "decision: C\nreason: the rule says so\n"}}
+  - {id: no-space, label: good, files: {"decision.md": "decision:C\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "decision: C\r\nreason: the rule says so\r\n"}}
+  - {id: wrong-letter, label: bad, files: {"decision.md": "decision: A\nreason: C looked slow\n"}}
+  - {id: two-letters, label: bad, files: {"decision.md": "decision: C or A\nreason: either\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\ndecision: C\n"}}
+  - {id: no-file, label: bad, files: {}}

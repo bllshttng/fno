@@ -18,7 +18,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
@@ -34,6 +34,13 @@ pub(crate) struct Row {
     pub(crate) bank_rev: Option<String>,
     pub(crate) experiment_id: Option<String>,
     raw: Value,
+}
+
+impl Row {
+    /// The content id of the tree this attempt left, when the row recorded it.
+    pub(crate) fn tree_hash(&self) -> Option<&str> {
+        self.raw.get("tree_hash").and_then(Value::as_str)
+    }
 }
 
 pub(crate) fn read_rows(history: &str, variant: Option<&str>, since: Option<usize>) -> Vec<Row> {
@@ -880,6 +887,9 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut planned: Option<BTreeMap<String, usize>> = None;
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
+    let mut by_failure_type = false;
+    let mut check_metrics = false;
+    let mut bank: Option<String> = None;
     let mut prices: Option<Value> = None;
     let mut climb = false;
     let mut climb_baseline: Option<String> = None;
@@ -990,6 +1000,12 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 Err(()) => return EXIT_USAGE,
             },
             "--by-cohort" => by_cohort = true,
+            "--by-failure-type" => by_failure_type = true,
+            "--check-metrics" => check_metrics = true,
+            "--bank" => match value("--bank") {
+                Ok(v) => bank = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
             "--climb" => climb = true,
             "--baseline" => match value("--baseline") {
                 Ok(v) => climb_baseline = Some(v),
@@ -1190,6 +1206,15 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         }
         return 0;
     }
+    let bank_dir = crate::evals::resolve_bank_dir(bank);
+    if check_metrics {
+        return crate::evals_compare::run_check_metrics(&bank_dir, json_out);
+    }
+    if by_failure_type {
+        return crate::evals_compare::run_failure_report(
+            &history, &bank_dir, repeats, since, json_out,
+        );
+    }
     if let Some(a) = &compare {
         let Some(b) = &compare_to else {
             eprintln!("evals-trend: --compare needs --to <cohort or variant>");
@@ -1202,6 +1227,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             repeats,
             since,
             json_out,
+            bank: &bank_dir,
         });
     }
 

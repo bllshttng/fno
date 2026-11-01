@@ -1,0 +1,9 @@
+# Labelled cases for the golden-blocked-tell-lead grader. Read by report --check-metrics.
+cases:
+  - {id: spaced, label: good, files: {"decision.md": "decision: B\nreason: the rule says so\n"}}
+  - {id: no-space, label: good, files: {"decision.md": "decision:B\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "decision: B\r\nreason: the rule says so\r\n"}}
+  - {id: wrong-letter, label: bad, files: {"decision.md": "decision: A\nreason: B looked slow\n"}}
+  - {id: two-letters, label: bad, files: {"decision.md": "decision: B or A\nreason: either\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\ndecision: B\n"}}
+  - {id: no-file, label: bad, files: {}}

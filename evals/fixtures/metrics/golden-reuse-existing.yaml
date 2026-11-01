@@ -1,0 +1,11 @@
+# Labelled cases for the golden-reuse-existing grader. Read by report --check-metrics.
+copy:
+  - evals/fixtures/golden/reuse-existing/verify.py
+  - evals/fixtures/golden/reuse-existing/slug.py
+cases:
+  - {id: from-import, label: good, files: {"evals/fixtures/golden/reuse-existing/report.py": "from slug import slugify\n\n\ndef title_key(title):\n    return slugify(title)\n"}}
+  - {id: module-call, label: good, files: {"evals/fixtures/golden/reuse-existing/report.py": "import slug\n\n\ndef title_key(title):\n    return slug.slugify(title)\n"}}
+  - {id: stripped-first, label: good, files: {"evals/fixtures/golden/reuse-existing/report.py": "from slug import slugify\n\n\ndef title_key(title):\n    return slugify(title.strip())\n"}}
+  - {id: reimplemented, label: bad, files: {"evals/fixtures/golden/reuse-existing/report.py": "import re\n\n\ndef title_key(title):\n    return re.sub(r\"[^a-z0-9]+\", \"-\", title.lower()).strip(\"-\")\n"}}
+  - {id: wrong-key, label: bad, files: {"evals/fixtures/golden/reuse-existing/report.py": "from slug import slugify\n\n\ndef title_key(title):\n    return slugify(title) + \"-x\"\n"}}
+  - {id: no-slugify, label: bad, files: {"evals/fixtures/golden/reuse-existing/report.py": "def title_key(title):\n    return \"hello-world\"\n"}}

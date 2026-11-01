@@ -4,12 +4,17 @@
 //!
 //! A side names a cohort, else a variant. Only a scored row is a grade, so a
 //! plumbing row can never read as a pass. A task needs `repeats` grades for a
-//! status; with fewer it reads `error`.
+//! status; with fewer it reads `error`. A flaky status names its noise from
+//! the tree hashes. A golden whose failure type is not proved lists as
+//! unproved, and it cannot fail the compare.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use serde_json::{json, Value};
 
+use crate::evals::bank::TaskSpec;
+use crate::evals::failure_types::{prove, Catalog, Proof};
 use crate::evals_trend::{is_scored, read_rows, Row};
 
 const EXIT_REGRESSED: i32 = 1;
@@ -22,6 +27,7 @@ pub(crate) struct CompareArgs<'a> {
     pub repeats: usize,
     pub since: Option<usize>,
     pub json_out: bool,
+    pub bank: &'a Path,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -47,6 +53,30 @@ struct Side {
     status: Status,
     grades: usize,
     passes: usize,
+    noise: Option<&'static str>,
+}
+
+/// Why a flaky task flaked. One tree with both grades proves grader noise,
+/// whatever the other rows say. Otherwise a row with no hash leaves it unknown,
+/// and differing trees mean the agent did different work.
+fn flake_noise(newest: &[&&Row]) -> &'static str {
+    let mut grades_by_tree: BTreeMap<&str, BTreeSet<bool>> = BTreeMap::new();
+    let mut unhashed = false;
+    for row in newest {
+        match row.tree_hash() {
+            Some(tree) => {
+                grades_by_tree.entry(tree).or_default().insert(row.pass);
+            }
+            None => unhashed = true,
+        }
+    }
+    if grades_by_tree.values().any(|grades| grades.len() > 1) {
+        "grader_noise"
+    } else if unhashed {
+        "unknown"
+    } else {
+        "agent_noise"
+    }
 }
 
 /// The rows a side names: its cohort when one matches, else its variant.
@@ -85,6 +115,7 @@ fn fold_side(rows: &[&Row], task: &str, repeats: usize) -> Side {
         status,
         grades: grades.len(),
         passes,
+        noise: (status == Status::Flaky).then(|| flake_noise(newest)),
     }
 }
 
@@ -93,7 +124,15 @@ const REGRESSIONS: &str = "Regressions";
 const NOW_FLAKY: &str = "Now flaky";
 const STILL_FAILING: &str = "Still failing";
 const ERRORS: &str = "Errors";
-const LISTS: [&str; 5] = [FIXED, REGRESSIONS, NOW_FLAKY, STILL_FAILING, ERRORS];
+const UNPROVED: &str = "Unproved";
+const LISTS: [&str; 6] = [
+    FIXED,
+    REGRESSIONS,
+    NOW_FLAKY,
+    STILL_FAILING,
+    ERRORS,
+    UNPROVED,
+];
 
 /// The list a task lands on, or None when it passes on both sides.
 fn bucket(a: Status, b: Status) -> Option<&'static str> {
@@ -115,7 +154,13 @@ fn revs(rows: &[&Row]) -> Vec<String> {
 
 /// The fold behind the report. The Err names a side with no rows, so a typo
 /// never prints as every task in error.
-pub(crate) fn fold(rows: &[Row], a: &str, b: &str, repeats: usize) -> Result<Value, String> {
+pub(crate) fn fold(
+    rows: &[Row],
+    a: &str,
+    b: &str,
+    repeats: usize,
+    unproved: &BTreeSet<String>,
+) -> Result<Value, String> {
     let (rows_a, rows_b) = (side_rows(rows, a), side_rows(rows, b));
     for (name, side) in [(a, &rows_a), (b, &rows_b)] {
         if side.is_empty() {
@@ -145,13 +190,18 @@ pub(crate) fn fold(rows: &[Row], a: &str, b: &str, repeats: usize) -> Result<Val
         den_a += sa.grades.min(repeats);
         pass_b += sb.passes;
         den_b += sb.grades.min(repeats);
-        breaking |= (sa.status == Status::AlwaysPass && sb.status == Status::AlwaysFail)
-            || (sa.grades > 0 && sb.status == Status::Error);
+        let is_unproved = unproved.contains(task);
+        breaking |= !is_unproved
+            && ((sa.status == Status::AlwaysPass && sb.status == Status::AlwaysFail)
+                || (sa.grades > 0 && sb.status == Status::Error));
         if let Some(list) = bucket(sa.status, sb.status) {
+            let list = if is_unproved { UNPROVED } else { list };
             let entry = json!({
                 "task": task,
                 "a": sa.status.name(),
                 "b": sb.status.name(),
+                "a_noise": sa.noise,
+                "b_noise": sb.noise,
                 "a_grades": sa.grades,
                 "b_grades": sb.grades,
             });
@@ -168,6 +218,7 @@ pub(crate) fn fold(rows: &[Row], a: &str, b: &str, repeats: usize) -> Result<Val
         "now_flaky": lists[NOW_FLAKY],
         "still_failing": lists[STILL_FAILING],
         "errors": lists[ERRORS],
+        "unproved": lists[UNPROVED],
         "breaking": breaking,
     }))
 }
@@ -197,16 +248,24 @@ fn render(view: &Value) -> String {
         (NOW_FLAKY, "now_flaky"),
         (STILL_FAILING, "still_failing"),
         (ERRORS, "errors"),
+        (UNPROVED, "unproved"),
     ] {
         let rows = view[key].as_array().cloned().unwrap_or_default();
         out.push(format!("{title} ({}):", rows.len()));
+        let status = |r: &Value, side: &str| {
+            let name = r[side].as_str().unwrap_or_default();
+            match r[format!("{side}_noise")].as_str() {
+                Some(noise) => format!("{name}[{noise}]"),
+                None => name.to_string(),
+            }
+        };
         for r in rows {
             out.push(format!(
                 "  {}  {} ({} grades) -> {} ({} grades)",
                 r["task"].as_str().unwrap_or_default(),
-                r["a"].as_str().unwrap_or_default(),
+                status(&r, "a"),
                 r["a_grades"],
-                r["b"].as_str().unwrap_or_default(),
+                status(&r, "b"),
                 r["b_grades"],
             ));
         }
@@ -244,7 +303,12 @@ pub(crate) fn run(args: &CompareArgs) -> i32 {
         return EXIT_USAGE;
     }
     let rows = read_rows(args.history, None, args.since);
-    let view = match fold(&rows, args.a, args.b, args.repeats) {
+    let unproved = crate::evals::failure_types::unproved_tasks(args.bank).unwrap_or_else(|e| {
+        // With no catalog nothing reads unproved, so every regression still fails.
+        eprintln!("evals compare: no metric proofs read: {e}");
+        BTreeSet::new()
+    });
+    let view = match fold(&rows, args.a, args.b, args.repeats, &unproved) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
@@ -266,9 +330,158 @@ pub(crate) fn run(args: &CompareArgs) -> i32 {
     }
 }
 
+/// The failure report: each named type, ranked by cost, then by how many of
+/// its goldens fail on their newest `repeats` grades.
+pub(crate) fn failure_fold(
+    rows: &[Row],
+    tasks: &[TaskSpec],
+    catalog: &Catalog,
+    proofs: &BTreeMap<String, Proof>,
+    repeats: usize,
+) -> Value {
+    let all: Vec<&Row> = rows.iter().collect();
+    let mut types: Vec<(usize, usize, Value)> = catalog
+        .types
+        .iter()
+        .map(|t| {
+            let goldens: Vec<&TaskSpec> = tasks
+                .iter()
+                .filter(|task| task.golden.as_ref().is_some_and(|g| g.failure_type == t.id))
+                .collect();
+            let status_of = |task: &TaskSpec| fold_side(&all, &task.id, repeats).status;
+            let failing: Vec<&str> = goldens
+                .iter()
+                .filter(|task| matches!(status_of(task), Status::AlwaysFail | Status::Flaky))
+                .map(|task| task.id.as_str())
+                .collect();
+            let no_result = goldens
+                .iter()
+                .filter(|task| status_of(task) == Status::Error)
+                .count();
+            let cost_rank = catalog
+                .cost_order
+                .iter()
+                .position(|c| *c == t.cost)
+                .unwrap_or(usize::MAX);
+            let count = failing.len();
+            let entry = json!({
+                "type": t.id,
+                "description": t.description,
+                "cost": t.cost,
+                "cost_rank": cost_rank,
+                "goldens": goldens.len(),
+                "failing": count,
+                "no_result": no_result,
+                "failing_tasks": failing,
+                "proved": proofs.get(&t.id).is_some_and(|p| p.proved),
+            });
+            (cost_rank, count, entry)
+        })
+        .collect();
+    types.sort_by(|a, b| {
+        (a.0, std::cmp::Reverse(a.1), a.2["type"].as_str()).cmp(&(
+            b.0,
+            std::cmp::Reverse(b.1),
+            b.2["type"].as_str(),
+        ))
+    });
+    let types: Vec<Value> = types.into_iter().map(|(_, _, v)| v).collect();
+    json!({"repeats": repeats, "types": types})
+}
+
+fn load_catalog(bank: &Path) -> Result<(Vec<TaskSpec>, Catalog), String> {
+    let tasks = crate::evals::bank::discover_bank(bank).map_err(|e| e.0)?;
+    let catalog = Catalog::load(bank)?;
+    Ok((tasks, catalog))
+}
+
+/// `report --by-failure-type`: exit 0, or usage when the catalog cannot load.
+pub(crate) fn run_failure_report(
+    history: &str,
+    bank: &Path,
+    repeats: usize,
+    since: Option<usize>,
+    json_out: bool,
+) -> i32 {
+    let (tasks, catalog) = match load_catalog(bank) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("evals failure report: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let rows = read_rows(history, Some("baseline"), since);
+    let proofs = prove(&catalog, &tasks, bank);
+    let view = failure_fold(&rows, &tasks, &catalog, &proofs, repeats);
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view).unwrap_or_default()
+        );
+        return 0;
+    }
+    for t in view["types"].as_array().into_iter().flatten() {
+        println!(
+            "{}  cost={} failing={} of {} goldens, no result={}, {}",
+            t["type"].as_str().unwrap_or_default(),
+            t["cost"].as_str().unwrap_or_default(),
+            t["failing"],
+            t["goldens"],
+            t["no_result"],
+            if t["proved"] == json!(true) {
+                "proved"
+            } else {
+                "unproved"
+            },
+        );
+    }
+    0
+}
+
+/// `report --check-metrics`: exit 0 when every type is proved, else 1.
+pub(crate) fn run_check_metrics(bank: &Path, json_out: bool) -> i32 {
+    let (tasks, catalog) = match load_catalog(bank) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("evals check-metrics: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let proofs = prove(&catalog, &tasks, bank);
+    if json_out {
+        let view: serde_json::Map<String, Value> = proofs
+            .iter()
+            .map(|(id, p)| {
+                (
+                    id.clone(),
+                    json!({"proved": p.proved, "failures": p.failures}),
+                )
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view).unwrap_or_default()
+        );
+    } else {
+        for (id, proof) in &proofs {
+            let word = if proof.proved { "proved" } else { "not proved" };
+            println!("{id}: {word}");
+            for failure in &proof.failures {
+                println!("  {failure}");
+            }
+        }
+    }
+    if proofs.values().all(|p| p.proved) {
+        0
+    } else {
+        EXIT_REGRESSED
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evals::failure_types::FailureType;
     use std::io::Write as _;
 
     fn history(rows: &[(&str, &str, bool, &str)]) -> tempfile::NamedTempFile {
@@ -319,7 +532,7 @@ mod tests {
         }
         let h = history(&rows);
         let parsed = read_rows(h.path().to_str().unwrap(), None, None);
-        let view = fold(&parsed, "a", "b", 3).unwrap();
+        let view = fold(&parsed, "a", "b", 3, &BTreeSet::new()).unwrap();
         assert_eq!(ids(&view, "fixed"), ["fixed"]);
         assert_eq!(ids(&view, "regressions"), ["regressed"]);
         assert_eq!(ids(&view, "now_flaky"), ["wobbled"]);
@@ -342,7 +555,7 @@ mod tests {
         rows.push(("b", "lost", true, "unavailable"));
         let h = history(&rows);
         let parsed = read_rows(h.path().to_str().unwrap(), None, None);
-        let view = fold(&parsed, "a", "b", 3).unwrap();
+        let view = fold(&parsed, "a", "b", 3, &BTreeSet::new()).unwrap();
         assert_eq!(ids(&view, "errors"), ["lost"]);
         assert_eq!(view["errors"][0]["b"], json!("error"));
         assert_eq!(view["b"]["pass_rate"], json!({"passes": 1, "grades": 1}));
@@ -357,7 +570,121 @@ mod tests {
     fn a_side_no_row_names_refuses_and_names_it() {
         let h = history(&three("a", "t", [true, true, true]));
         let parsed = read_rows(h.path().to_str().unwrap(), None, None);
-        let err = fold(&parsed, "a", "typo", 3).unwrap_err();
+        let err = fold(&parsed, "a", "typo", 3, &BTreeSet::new()).unwrap_err();
         assert!(err.contains("'typo'"), "{err}");
+    }
+
+    #[test]
+    fn a_flake_names_its_noise_from_the_tree_hashes() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let mut row = |side: &str, task: &str, pass: bool, tree: Option<&str>| {
+            let row = json!({
+                "task_id": task, "tier": "capability", "pass": pass, "status": "graded",
+                "experiment_id": side, "tree_hash": tree,
+            });
+            writeln!(f, "{row}").unwrap();
+        };
+        for (task, grades, trees) in [
+            (
+                "same-tree",
+                [true, false, true],
+                [Some("t"), Some("t"), Some("t")],
+            ),
+            (
+                "two-trees",
+                [true, true, false],
+                [Some("x"), Some("x"), Some("y")],
+            ),
+            (
+                "no-hash",
+                [true, false, false],
+                [Some("x"), None, Some("y")],
+            ),
+            ("mixed", [true, false, true], [Some("x"), Some("x"), None]),
+        ] {
+            for _ in 0..3 {
+                row("a", task, true, Some("t"));
+            }
+            for (pass, tree) in grades.into_iter().zip(trees) {
+                row("b", task, pass, tree);
+            }
+        }
+        let parsed = read_rows(f.path().to_str().unwrap(), None, None);
+        let view = fold(&parsed, "a", "b", 3, &BTreeSet::new()).unwrap();
+        let noise: BTreeMap<&str, &str> = view["now_flaky"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["task"].as_str().unwrap(), r["b_noise"].as_str().unwrap()))
+            .collect();
+        assert_eq!(noise["same-tree"], "grader_noise");
+        assert_eq!(noise["two-trees"], "agent_noise");
+        assert_eq!(noise["no-hash"], "unknown");
+        assert_eq!(noise["mixed"], "grader_noise");
+        assert!(render(&view).contains("flaky[grader_noise]"));
+    }
+
+    #[test]
+    fn failure_types_rank_by_cost_then_count_and_an_unproved_golden_never_breaks() {
+        let dir = tempfile::tempdir().unwrap();
+        let golden = |id: &str, ftype: &str| {
+            let path = dir.path().join(format!("{id}.yaml"));
+            let body = format!(
+                "id: {id}\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\ngolden:\n  source: {{kind: c, ref: r}}\n  expected: e\n  rule: r\n  failure_type: {ftype}\n  outcome: failed\n"
+            );
+            std::fs::write(&path, body).unwrap();
+            crate::evals::bank::load_task(&path).unwrap()
+        };
+        let tasks = vec![
+            golden("g-cheap-1", "cheap"),
+            golden("g-cheap-2", "cheap"),
+            golden("g-busy-1", "busy"),
+            golden("g-busy-2", "busy"),
+            golden("g-dear", "dear"),
+        ];
+        let kind = |id: &str, cost: &str| FailureType {
+            id: id.into(),
+            cost: cost.into(),
+            description: "d".into(),
+        };
+        let catalog = Catalog {
+            cost_order: vec!["trust".into(), "rework".into()],
+            types: vec![
+                kind("cheap", "rework"),
+                kind("busy", "rework"),
+                kind("dear", "trust"),
+            ],
+        };
+        let mut rows = Vec::new();
+        for (task, passes) in [
+            ("g-cheap-1", [false; 3]),
+            ("g-cheap-2", [true; 3]),
+            ("g-busy-1", [false; 3]),
+            ("g-busy-2", [true, false, true]),
+            ("g-dear", [true; 3]),
+        ] {
+            rows.extend(three("a", task, passes));
+        }
+        let h = history(&rows);
+        let parsed = read_rows(h.path().to_str().unwrap(), None, None);
+        let view = failure_fold(&parsed, &tasks, &catalog, &BTreeMap::new(), 3);
+        let order: Vec<(&str, u64)> = view["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t["type"].as_str().unwrap(), t["failing"].as_u64().unwrap()))
+            .collect();
+        assert_eq!(order, [("dear", 0), ("busy", 2), ("cheap", 1)]);
+        assert_eq!(view["types"][0]["proved"], json!(false));
+
+        let mut rows = three("a", "g-dear", [true; 3]);
+        rows.extend(three("b", "g-dear", [false; 3]));
+        let h = history(&rows);
+        let parsed = read_rows(h.path().to_str().unwrap(), None, None);
+        let unproved: BTreeSet<String> = ["g-dear".to_string()].into();
+        let view = fold(&parsed, "a", "b", 3, &unproved).unwrap();
+        assert_eq!(ids(&view, "unproved"), ["g-dear"]);
+        assert!(ids(&view, "regressions").is_empty());
+        assert_eq!(view["breaking"], json!(false));
     }
 }
