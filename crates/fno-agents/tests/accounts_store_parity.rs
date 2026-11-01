@@ -62,14 +62,14 @@ impl Host for FakeHost {
             stdout,
             stderr,
         };
+        if let Some(fail) = self.fail.get(&role) {
+            return Ok(run(
+                fail["code"].as_i64().unwrap() as i32,
+                String::new(),
+                fail["stderr"].as_str().unwrap().to_string(),
+            ));
+        }
         if args[0] == "add-generic-password" {
-            if let Some(fail) = self.fail.get(&role) {
-                return Ok(run(
-                    fail["code"].as_i64().unwrap() as i32,
-                    String::new(),
-                    fail["stderr"].as_str().unwrap().to_string(),
-                ));
-            }
             let at = args.iter().position(|a| a == "-w").unwrap() + 1;
             let new = args[at].clone();
             self.writes.borrow_mut().push(json!([role, new]));
