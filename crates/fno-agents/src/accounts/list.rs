@@ -157,7 +157,7 @@ fn rows(
         .iter()
         .map(|record| {
             let u = usage_age(state_path, &record.id, ttl, now);
-            json!({
+            let mut row = json!({
                 "id": record.id,
                 "name": record.name,
                 "harness": record.harness,
@@ -170,7 +170,11 @@ fn rows(
                 "usage_age_s": u.age,
                 "usage_ttl_seconds": seconds_json(u.ttl),
                 "usage_stale": u.stale,
-            })
+            });
+            if record.config_dir.is_some() {
+                row["spawn_only"] = json!(true);
+            }
+            row
         })
         .collect();
     Value::Array(rows)
