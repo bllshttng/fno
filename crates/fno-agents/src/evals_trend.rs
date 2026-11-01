@@ -137,6 +137,11 @@ impl TaskStat {
         let den = self.grade_denominator();
         den > 0 && self.passes == den
     }
+    /// A real grade below 100%. A window holding only plumbing attempts graded
+    /// nothing, so it says nothing about the task.
+    fn alarms(&self) -> bool {
+        self.grade_denominator() > 0 && self.pass_at_1() < 1.0
+    }
     fn flake(&self) -> bool {
         let den = self.grade_denominator();
         self.passes > 0 && self.passes < den
@@ -247,6 +252,19 @@ fn pair_verdict(a: &[&Row], b: &[&Row]) -> (usize, f64, usize, f64, f64, &'stati
 /// recent-window regression alarm.
 fn trend_fold(rows: &[Row], window_days: i64, now: DateTime<Utc>) -> (Value, Vec<String>) {
     let w = chrono::Duration::days(window_days);
+    // A plumbing attempt carries pass=false with no grade behind it: left in,
+    // an outage reads as a regression against the prior window.
+    let graded: Vec<Row> = rows
+        .iter()
+        .filter(|r| {
+            !matches!(
+                crate::eval_attempt::classify(&r.raw, None).status,
+                "infrastructure" | "unavailable" | "ungraded"
+            )
+        })
+        .cloned()
+        .collect();
+    let rows = graded.as_slice();
     let prior: BTreeMap<String, Vec<&Row>> = group_by_task(window_rows(rows, now - w - w, now - w));
     let recent: BTreeMap<String, Vec<&Row>> = group_by_task(window_rows(rows, now - w, now));
     let mut tasks = Map::new();
@@ -298,7 +316,7 @@ fn trend_fold(rows: &[Row], window_days: i64, now: DateTime<Utc>) -> (Value, Vec
         .collect();
     let recent_alarm: Vec<String> = stats_window(rows, now - w, now)
         .into_iter()
-        .filter(|s| s.tier == "regression" && s.pass_at_1() < 1.0)
+        .filter(|s| s.tier == "regression" && s.alarms())
         .map(|s| s.task_id)
         .collect();
     let view = json!({
@@ -353,9 +371,17 @@ fn report_fold(
         } else {
             *passes as f64 / den as f64
         };
+        let plumbing: usize = all
+            .iter()
+            .filter(|s| s.tier == *tier)
+            .map(|s| s.infrastructure + s.unavailable + s.ungraded)
+            .sum();
         (
             tier.clone(),
-            json!({"runs": runs, "passes": passes, "pass_rate": round4(rate)}),
+            json!({
+                "runs": runs, "passes": passes, "grade_den": den,
+                "plumbing": plumbing, "pass_rate": round4(rate),
+            }),
         )
     }));
     let tasks: Vec<Value> = all
@@ -398,7 +424,7 @@ fn report_fold(
     let w = chrono::Duration::days(window_days);
     let alarm: Vec<String> = stats_window(rows, now - w, now)
         .into_iter()
-        .filter(|s| s.tier == "regression" && s.pass_at_1() < 1.0)
+        .filter(|s| s.tier == "regression" && s.alarms())
         .map(|s| s.task_id)
         .collect();
     let mut report = json!({
@@ -718,7 +744,7 @@ pub(crate) fn summary_payload(history: &str, stale_days: i64, now: DateTime<Utc>
     let w = chrono::Duration::days(stale_days);
     let recent_alarm: Vec<String> = stats_window(&rows, now - w, now)
         .into_iter()
-        .filter(|s| s.tier == "regression" && s.pass_at_1() < 1.0)
+        .filter(|s| s.tier == "regression" && s.alarms())
         .map(|s| s.task_id)
         .collect();
     let fold = report_fold(&rows, stale_days, now, None, None);
@@ -1305,14 +1331,29 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     if let Some(tiers) = report["tiers"].as_object() {
         for (tier, agg) in tiers {
             let passes = agg["passes"].to_string();
-            let runs = agg["runs"].to_string();
+            let den = agg["grade_den"].as_u64().unwrap_or(0);
+            let runs = agg["runs"].as_u64().unwrap_or(0);
+            let plumbing = agg["plumbing"].as_u64().unwrap_or(0);
             let pct = agg["pass_rate"].as_f64().unwrap_or(0.0) * 100.0;
-            println!("  {tier}: {passes}/{runs} pass ({pct:.0}%)");
+            // The rate divides by grades, so the printed fraction does too;
+            // attempts with no grade are named beside it, never folded in.
+            let mut line = format!("  {tier}: {passes}/{den} pass ({pct:.0}%)");
+            if runs > den {
+                let legacy = runs - den - plumbing;
+                line += &format!(
+                    "; {} of {runs} attempts not graded: {plumbing} plumbing, {legacy} legacy",
+                    runs - den
+                );
+            }
+            println!("{line}");
         }
     }
     if let Some(tasks) = report["tasks"].as_array() {
         for t in tasks {
-            let mark = if t["flake"].as_bool().unwrap_or(false) {
+            let no_grade = t["grade_den"].as_u64() == Some(0);
+            let mark = if no_grade {
+                "NO GRADE"
+            } else if t["flake"].as_bool().unwrap_or(false) {
                 "FLAKE"
             } else if t["pass_k"].as_bool().unwrap_or(false) {
                 "PASS"
@@ -1320,10 +1361,14 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 "FAIL"
             };
             println!(
-                "    {:11} {}: pass@1={:.0}% pass^{}={} [{}]",
+                "    {:11} {}: pass@1={} pass^{}={} [{}]",
                 t["tier"].as_str().unwrap_or_default(),
                 t["task_id"].as_str().unwrap_or_default(),
-                t["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
+                if no_grade {
+                    "n/a".to_string()
+                } else {
+                    format!("{:.0}%", t["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0)
+                },
                 t["grade_den"],
                 t["pass_k"],
                 mark,
