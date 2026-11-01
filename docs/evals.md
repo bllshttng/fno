@@ -89,7 +89,7 @@ A past session never answered a golden prompt, so it cannot grade one. Two hones
 
 `fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`. A row without `overlay_rev` ran with no overlay: an older `fno-agents` ignores the flag, and a fixture golden then fails on its missing fixture.
 
-The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. A claude worker's plugin comes from that tree too (see [Goldens](#goldens)). Only `fno` itself and the binary its hooks call stay today's. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
+The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. A claude worker loads no plugin (see [Goldens](#goldens)). The installed `fno` stays today's. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
 
 ## Goldens
 
@@ -116,7 +116,7 @@ A golden's rule must be findable in the repo, because a worker reads only the re
 
 A golden asks for recall, never a choice among listed options. On a tree with no AGENTS.md, the old bank passed 25 of 25. In 17 of those runs the worker read no answer key, and each one still passed. So the prompt asks for the exact command or action, and the grader rejects the lure from the source case.
 
-A claude worker reads its rules from the tree under test. The runner passes `--setting-sources project --strict-mcp-config`, and `--plugin-dir <checkout>` when the tree ships `.claude-plugin/plugin.json`. So a change to a skill or a hook reaches the worker, and a tree with no plugin gives the worker no fno skills. Each row records `obs.worker_tree_only`. Other harnesses have no such flags and run with today's plugin, so their rows read false. Two things still reach the worker: `~/.claude/CLAUDE.md`, because a checkout under `$HOME` has that file on its ancestor path, and the spawn's relay-compression block on the prompt.
+A claude worker reads its rules from the tree under test. The runner passes `--setting-sources project --strict-mcp-config` and sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, because auto memory follows the git root that a trial worktree shares with the real repo. No plugin loads, not even the tree's: its hooks read the live fleet, and one worker then ran a real `fno do target start`. So a skill reaches a worker only when the worker opens the file. Each row records `obs.worker_tree_only`. Other harnesses have no such flags and run with today's plugin, so their rows read false. These still reach the worker: `~/.claude/CLAUDE.md`, because a checkout under `$HOME` has that file on its ancestor path, the installed `fno` and its `--help`, any absolute path to another checkout, and the spawn's relay-compression block on the prompt.
 
 A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
 

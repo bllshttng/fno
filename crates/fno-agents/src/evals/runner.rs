@@ -291,23 +291,23 @@ pub fn sweep_orphans(repo_root: &std::path::Path) -> usize {
 /// A claude worker's flags that make the tree under test its only source of
 /// rules. Without them it loads the installed plugin, the user's settings and
 /// their MCP servers, so a cohort measures today's machine and not the tree.
-/// The tree's own plugin loads when the tree ships one. Only claude has these
-/// flags, so any other harness runs with today's plugin context.
-fn tree_only_flags(harness: Option<&str>, workdir: &std::path::Path) -> Vec<String> {
+/// The tree's own plugin stays off too: its hooks read the live fleet, and the
+/// worker then acts on that state. Only claude has these flags, so any other
+/// harness runs with today's plugin context.
+fn tree_only_flags(harness: Option<&str>) -> Vec<String> {
     if harness != Some("claude") {
         return Vec::new();
     }
-    let mut flags: Vec<String> = vec![
+    vec![
         "--setting-sources".into(),
         "project".into(),
         "--strict-mcp-config".into(),
-    ];
-    if workdir.join(".claude-plugin/plugin.json").is_file() {
-        flags.push("--plugin-dir".into());
-        flags.push(workdir.display().to_string());
-    }
-    flags
+    ]
 }
+
+/// Claude keys auto memory on the git root, and a trial worktree shares the
+/// real repo's root, so the worker would read that repo's memory files.
+const NO_AUTO_MEMORY_ENV: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
 
 /// The spawn argv: the substrate's own --timeout is the first guard; a
 /// lane is a complete coordinate (its harness wins over the provider
@@ -419,10 +419,11 @@ fn default_spawn(
         harness,
         lane,
         prompt,
-        &tree_only_flags(harness, workdir),
+        &tree_only_flags(harness),
     );
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
     cmd.args(&argv)
+        .env(NO_AUTO_MEMORY_ENV, "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let deadline =
@@ -647,7 +648,7 @@ pub fn run_task(
                     .map(|l| l.harness.as_str())
                     .filter(|h| !h.is_empty())
                     .or(worker_provider);
-                tree_only = !tree_only_flags(harness, dir).is_empty();
+                tree_only = !tree_only_flags(harness).is_empty();
                 let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane);
                 if !res.ok {
                     reason = res.reason.clone();
@@ -899,21 +900,14 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_worker_loads_only_the_tree_and_its_plugin_when_it_ships_one() {
-        let d = tempfile::tempdir().unwrap();
-        let bare = tree_only_flags(Some("claude"), d.path());
+    fn a_claude_worker_loads_only_the_tree() {
+        let bare = tree_only_flags(Some("claude"));
         assert_eq!(
             bare,
             ["--setting-sources", "project", "--strict-mcp-config"]
         );
-        assert!(tree_only_flags(Some("codex"), d.path()).is_empty());
-        assert!(tree_only_flags(None, d.path()).is_empty());
-
-        std::fs::create_dir(d.path().join(".claude-plugin")).unwrap();
-        std::fs::write(d.path().join(".claude-plugin/plugin.json"), "{}").unwrap();
-        let with_plugin = tree_only_flags(Some("claude"), d.path());
-        let dir = d.path().display().to_string();
-        assert_eq!(with_plugin[3..], ["--plugin-dir".to_string(), dir]);
+        assert!(tree_only_flags(Some("codex")).is_empty());
+        assert!(tree_only_flags(None).is_empty());
 
         let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), None, "go", &bare);
         let fence = argv.iter().position(|a| a == "--").unwrap();
