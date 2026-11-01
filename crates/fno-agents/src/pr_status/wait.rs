@@ -57,6 +57,35 @@ fn local_head_sha(cwd: &Path) -> Option<String> {
     (out.status.success() && sha.len() >= 40).then_some(sha)
 }
 
+/// The caller's pin: a literal sha, `HEAD` for the local checkout's own
+/// HEAD (read free from git, no GitHub), or nothing. `HEAD` is the recipe
+/// spelling: a command substitution cannot ride in the hinted command,
+/// because a worktree session's Bash guard refuses one.
+#[derive(Debug)]
+pub(crate) enum ExpectHead {
+    None,
+    Sha(String),
+    LocalUnresolved,
+}
+
+pub(crate) fn resolve_expect_head(payload: &Value) -> ExpectHead {
+    let Some(raw) = payload
+        .get("expect_head")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    else {
+        return ExpectHead::None;
+    };
+    if raw == "HEAD" || raw == "@" {
+        let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or(""));
+        return match local_head_sha(cwd) {
+            Some(sha) => ExpectHead::Sha(sha),
+            None => ExpectHead::LocalUnresolved,
+        };
+    }
+    ExpectHead::Sha(raw.to_string())
+}
+
 /// The deterministic resume offset that spreads a fleet's waiters across
 /// one interval instead of stacking them at hold expiry. Hash-derived from
 /// (slug, pr): one PR keeps one phase across runs; different PRs spread.
@@ -361,6 +390,19 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         let calls = || probe.calls.load(Ordering::SeqCst);
         return wait_review(pr, timeout, interval, counter, sleeper, clock, calls);
     }
+    let expect_head = match resolve_expect_head(payload) {
+        ExpectHead::None => None,
+        ExpectHead::Sha(sha) => Some(sha),
+        ExpectHead::LocalUnresolved => {
+            return (
+                2,
+                String::new(),
+                "fno do pr wait: --expect-head HEAD cannot resolve in this checkout; \
+                 run it from the worktree that holds the commit\n"
+                    .into(),
+            )
+        }
+    };
     // The resume spread keys on the repo and PR: resolved once here, and
     // the hold state carried across ticks so the live->clear edge fires
     // the phase sleep exactly once.
@@ -423,11 +465,6 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");
         cancel_in_flight("gh", cwd, head)
     };
-    let expect_head = payload
-        .get("expect_head")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
     wait_status(
         pr,
         until,
@@ -1079,5 +1116,29 @@ mod tests {
         );
         assert_eq!(code, 0, "the pinned read answers at the named head");
         assert!(stdout.contains("\"settled\":true"), "{stdout}");
+    }
+
+    /// The pin's value: a literal sha passes through; `HEAD` names the local
+    /// checkout's own HEAD, read free, so the armed command stays plain (a
+    /// worktree Bash guard refuses a command substitution in the recipe).
+    #[test]
+    fn the_pin_resolves_head_from_the_local_checkout() {
+        let no_pin = json!({"cwd": env!("CARGO_MANIFEST_DIR")});
+        assert!(matches!(resolve_expect_head(&no_pin), ExpectHead::None));
+        let literal = json!({"cwd": env!("CARGO_MANIFEST_DIR"), "expect_head": "aaaaaaaa1234"});
+        match resolve_expect_head(&literal) {
+            ExpectHead::Sha(sha) => assert_eq!(sha, "aaaaaaaa1234", "the literal passes through"),
+            other => panic!("expected a literal sha, got {other:?}"),
+        }
+        let head = json!({"cwd": env!("CARGO_MANIFEST_DIR"), "expect_head": "HEAD"});
+        match resolve_expect_head(&head) {
+            ExpectHead::Sha(sha) => assert!(sha.len() >= 40, "{sha} is a sha"),
+            other => panic!("a git checkout resolves HEAD, got {other:?}"),
+        }
+        let nowhere = json!({"cwd": "/nonexistent-fno-test-dir", "expect_head": "HEAD"});
+        assert!(matches!(
+            resolve_expect_head(&nowhere),
+            ExpectHead::LocalUnresolved
+        ));
     }
 }

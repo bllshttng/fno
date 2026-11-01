@@ -191,19 +191,30 @@ fn status_read(payload: &Value) -> (i32, String, String) {
     // here and never serves a peer's row.
     let (mut code, mut out, mut stderr_lines, calls) =
         cached_status_via(cwd_str, pr, refresh, None, false);
-    // The pinned read: `--expect-head SHA` refuses any answer about another
-    // head (exit 6) instead of settling the question against whatever commit
-    // the PR happens to point at. A failed read answered nothing, so the
-    // error exit and its reason line stand; the pin has nothing to refuse.
+    // The pinned read: `--expect-head SHA` (or `HEAD`, the checkout's own
+    // sha, read free from git) refuses any answer about another head
+    // (exit 6) instead of settling the question against whatever commit the
+    // PR happens to point at. A failed read answered nothing, so the error
+    // exit and its reason line stand; the pin has nothing to refuse.
+    let pin = match super::wait::resolve_expect_head(payload) {
+        super::wait::ExpectHead::None => None,
+        super::wait::ExpectHead::Sha(sha) => Some(sha),
+        super::wait::ExpectHead::LocalUnresolved => {
+            return (
+                2,
+                String::new(),
+                "fno do pr status: --expect-head HEAD cannot resolve in this checkout; \
+                 run it from the worktree that holds the commit\n"
+                    .into(),
+            )
+        }
+    };
     let mut mismatch = None;
-    if let Some(expected) = payload
-        .get("expect_head")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .filter(|_| out.get("verdict").and_then(Value::as_str) != Some("error"))
-    {
-        if let Some(obj) = out.as_object_mut() {
-            mismatch = super::compose::apply_expect_head(obj, expected);
+    if let Some(expected) = pin {
+        if out.get("verdict").and_then(Value::as_str) != Some("error") {
+            if let Some(obj) = out.as_object_mut() {
+                mismatch = super::compose::apply_expect_head(obj, &expected);
+            }
         }
     }
     if let Some(note) = &mismatch {
