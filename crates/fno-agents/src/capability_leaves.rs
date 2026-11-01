@@ -267,6 +267,17 @@ fn loop_gate_refusal(
 mod tests {
     use super::*;
 
+    /// The walk passes over a lane the spawn gate would refuse, and only that
+    /// lane. zcode declares no loop extension, codex closes its own loop.
+    #[test]
+    fn a_lane_that_cannot_close_the_loop_is_named_for_looping_commands_only() {
+        assert!(lane_cannot_loop("zcode", "target"));
+        assert!(!lane_cannot_loop("zcode", "think"));
+        assert!(!lane_cannot_loop("codex", "target"));
+        assert!(!lane_cannot_loop("opencode", "target"));
+        assert!(!lane_cannot_loop("no-such-harness", "target"));
+    }
+
     #[test]
     fn capabilities_json_carries_the_header_and_the_harness_table() {
         let out = capabilities_json("codex").expect("codex is a declared harness");
