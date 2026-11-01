@@ -4,24 +4,20 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  A worker is named `t-x-5f95-glm`. Its transcript reports model `luna`. A report has a model column. What goes in that column?
+  A worker is named `t-x-5f95-glm`. Its transcript reports model `luna`. A report has a model column. What value goes in that column?
 
-  A. glm, because the worker name says so.
-  B. Leave it out, because the two disagree and it cannot be known.
-  C. luna, the model the transcript reported.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the value>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:C\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(luna)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(glm)'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: correction, ref: "49a80492:workflow_friction"}
   quote: "why did you mark sessions like t-x-5f95-glm (as glm when it's luna?)"
-  expected: "C. Record the model the transcript reported."
+  expected: "luna, the model the transcript reported."
   rule: "AGENTS.md Accounts: harness, provider, model, effort and account are five axes. Never infer the axis from a value."
   failure_type: wrong-assumption
   cost: rework

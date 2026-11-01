@@ -4,24 +4,20 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  The focused tests for your change pass and cargo fmt is clean. preflight.required is false. What do you do next?
+  The focused tests for your change pass and cargo fmt is clean. preflight.required is false. What do you run next?
 
-  A. Run scripts/ci/preflight.sh, about 40 minutes, then push.
-  B. Do a full release build first to confirm that it compiles, then push.
-  C. Push the branch and let CI report.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:C\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*((fno do pr push|git push|fno do pr create|ship pr create))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(preflight\\.sh|--release)'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: correction, ref: "4d4ea752:workflow_friction"}
   quote: "what are you waiting on? why do you need to complile? you're just verifying? let's just keep going."
-  expected: "C. Push now, because the focused checks passed and CI is the gate."
+  expected: "Push the branch and let CI report."
   rule: "Preflight is opt-in and CI is the gate; a stock config runs no local rehearsal before a push."
   failure_type: over-verification
   cost: rework

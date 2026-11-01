@@ -1,9 +1,8 @@
 # Labelled cases for the golden-no-new-python grader. Read by report --check-metrics.
 cases:
-  - {id: spaced, label: good, files: {"decision.md": "decision: A\nreason: the rule says so\n"}}
-  - {id: no-space, label: good, files: {"decision.md": "decision:A\nreason: the rule says so\n"}}
-  - {id: crlf, label: good, files: {"decision.md": "decision: A\r\nreason: the rule says so\r\n"}}
-  - {id: wrong-letter, label: bad, files: {"decision.md": "decision: B\nreason: A looked slow\n"}}
-  - {id: two-letters, label: bad, files: {"decision.md": "decision: A or B\nreason: either\n"}}
-  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\ndecision: A\n"}}
+  - {id: plain, label: good, files: {"decision.md": "action: crates/fno-agents/src\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `crates/fno-agents/src`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: crates/fno-agents/src\r\nreason: the rule says so\r\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: cli/src/fno\nreason: it looked right\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: crates/fno-agents/src\n"}}
   - {id: no-file, label: bad, files: {}}

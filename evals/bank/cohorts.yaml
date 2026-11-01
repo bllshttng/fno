@@ -40,7 +40,9 @@
 # files, which refused every `run`, the regression tier included. Goldens sit
 # outside the split. This sha is the branch commit that added them, which stays
 # reachable because this repo merges with merge commits.
-bank_rev: 113c991673a9d559e560ef76d7c43c19a8e41393
+#
+# Re-pinned for the recall rewrite of the goldens.
+bank_rev: 7524346fbe760abf66898f84eb10faf0eab32d1e
 
 train:
   - capability-lane-blueprint

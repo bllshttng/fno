@@ -1,0 +1,8 @@
+# Labelled cases for the golden-pass-backlog-update grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno backlog update x-1234 --priority p2\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno backlog update x-1234 --priority p2`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno backlog update x-1234 --priority p2\r\nreason: the rule says so\r\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: sqlite3 ~/.fno/db/graph.db \"UPDATE nodes\"\nreason: it looked right\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno backlog update x-1234 --priority p2\n"}}
+  - {id: no-file, label: bad, files: {}}

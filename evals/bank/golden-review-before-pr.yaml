@@ -6,22 +6,18 @@ prompt: |
 
   Your code is committed and the focused tests pass. No PR exists yet. What is the next step?
 
-  A. Open the PR, then mail your lead and ask for a reviewer.
-  B. Open the PR and wait for the external bots.
-  C. Run /fno:review on local HEAD in this session, then open the PR.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command or slash command>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:C\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(/fno:review|\\$fno:review)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(pr create|mail)'"
 timeout_minutes: 10
 tags: [golden, gate]
 golden:
   source: {kind: correction, ref: "19887363:workflow_friction"}
   quote: "did you do any /fno:review ?"
-  expected: "C. Run the review lane inline on the final local HEAD, then open the PR."
+  expected: "Run /fno:review on local HEAD in this session, then open the PR."
   rule: "skills/target spine: run /fno:review on the final HEAD in this session before /fno:ship pr create."
   failure_type: skipped-step
   cost: rework

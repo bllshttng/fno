@@ -155,6 +155,41 @@ fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, Str
         }
     };
     git(&["checkout", overlay_ref, "--", OVERLAY_PATH])?;
+    commit_all(dir, "evals: overlay golden fixtures")
+}
+
+/// Each path holds a golden's answer. Workers told to read the repo did read
+/// them, so a golden's checkout drops them before the worker starts. The
+/// loaded task keeps its grader in memory.
+const ANSWER_KEY_PATHS: [&str; 2] = ["evals/bank", "evals/fixtures/metrics"];
+
+/// Commit the answer keys away, and return the new head as the grade base.
+fn hide_answer_keys(dir: &std::path::Path) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(["rm", "-r", "-q", "--ignore-unmatch", "--"])
+        .args(ANSWER_KEY_PATHS)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    commit_all(dir, "evals: hide golden answer keys")
+}
+
+fn commit_all(dir: &std::path::Path, message: &str) -> Result<String, String> {
+    let git = |args: &[&str]| -> Result<String, String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    };
     git(&[
         "-c",
         "user.name=fno-evals",
@@ -168,7 +203,7 @@ fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, Str
         "--quiet",
         "--allow-empty",
         "-m",
-        "evals: overlay golden fixtures",
+        message,
     ])?;
     git(&["rev-parse", "HEAD"])
 }
@@ -524,6 +559,20 @@ pub fn run_task(
                 None => workdir = Some(dir),
             },
         }
+        if task.golden.is_some() {
+            if let Some(dir) = workdir.take() {
+                match hide_answer_keys(&dir) {
+                    Ok(head) => {
+                        grade_base = head;
+                        workdir = Some(dir);
+                    }
+                    Err(e) => {
+                        reason = format!("answer keys not hidden on {checkout_ref}: {e}");
+                        remove_worktree(repo_root, &dir);
+                    }
+                }
+            }
+        }
         if let Some(dir) = &workdir {
             if task.prompt.is_some() && !evals_enabled() {
                 // The gate only bites the REAL default spawn; a caller with
@@ -805,6 +854,13 @@ mod tests {
             "",
             "the worker sees a clean tree"
         );
+
+        git(&["checkout", "-q", "--detach", &new]);
+        let head = hide_answer_keys(d.path()).unwrap();
+        assert_eq!(head, git(&["rev-parse", "HEAD"]));
+        assert!(d.path().join(OVERLAY_PATH).join("f.py").exists());
+        assert!(!d.path().join("evals/bank/g.yaml").exists());
+        assert_eq!(git(&["status", "--porcelain"]), "", "still a clean tree");
     }
 
     #[test]

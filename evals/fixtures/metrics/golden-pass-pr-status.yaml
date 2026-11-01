@@ -1,0 +1,8 @@
+# Labelled cases for the golden-pass-pr-status grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno do pr status 1522\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno do pr status 1522`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno do pr status 1522\r\nreason: the rule says so\r\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: gh pr view 1522 --json statusCheckRollup\nreason: it looked right\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno do pr status 1522\n"}}
+  - {id: no-file, label: bad, files: {}}

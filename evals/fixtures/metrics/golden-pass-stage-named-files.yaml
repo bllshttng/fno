@@ -1,0 +1,8 @@
+# Labelled cases for the golden-pass-stage-named-files grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: git add src/a.rs\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `git add src/a.rs`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: git add src/a.rs\r\nreason: the rule says so\r\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: git add -A\nreason: it looked right\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: git add src/a.rs\n"}}
+  - {id: no-file, label: bad, files: {}}
