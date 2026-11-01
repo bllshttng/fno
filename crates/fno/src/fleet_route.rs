@@ -66,7 +66,7 @@ pub fn run(claim: FleetClaim) -> i32 {
     if claim.root_alias {
         eprintln!("{notice}");
     }
-    let Some(binary) = crate::store_client::worker_binary() else {
+    let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
         eprintln!(
             "fno {door_word}: refused: the fno-agents binary is unavailable \
              (set FNO_AGENTS_BIN, or install fno's Rust runtime)."
