@@ -460,13 +460,15 @@ fn read_fence(tree: &std::path::Path, home: &std::path::Path) -> serde_json::Val
 }
 
 /// The env of a fenced worker. Auto memory reads the user's files. The seal
-/// drops the spawn's state grants. Git would fail on the user's config, which
-/// the fence denies, so it reads only the tree's own.
-const SEALED_WORKER_ENV: [(&str, &str); 4] = [
+/// drops the spawn's state grants. Git and ripgrep would fail on the user's
+/// config files, which the fence denies, so git reads only the tree's own and
+/// ripgrep reads none.
+const SEALED_WORKER_ENV: [(&str, &str); 5] = [
     ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1"),
     (crate::spawn_seam::EVALS_SEALED_ENV, "1"),
     ("GIT_CONFIG_GLOBAL", "/dev/null"),
     ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("RIPGREP_CONFIG_PATH", ""),
 ];
 
 /// The spawn argv: the substrate's own --timeout is the first guard; a
