@@ -653,6 +653,16 @@ qs = [
 with open(f"{root}/.fno/questions.jsonl", "w") as f:
     for q in qs:
         f.write(json.dumps(q) + "\n")
+# Seed the short numbers, so the shots show them on the bell and the card.
+import sqlite3
+numbers = sqlite3.connect(f"{root}/.fno/db/graph.db")
+numbers.execute("CREATE TABLE IF NOT EXISTS fno_numbers (kind TEXT NOT NULL, num INTEGER NOT NULL, "
+                "key TEXT NOT NULL, store TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, "
+                "PRIMARY KEY (store, kind, num), UNIQUE (store, key))")
+for num, key in ((87, "q-demo-a1"), (88, "q-demo-b2")):
+    numbers.execute("INSERT OR IGNORE INTO fno_numbers VALUES ('q', ?, ?, 'local', 'bb16', 0)", (num, key))
+numbers.commit()
+numbers.close()
 PY
 
 # FNO_DEMO_PIN=1 pins the scout row: a keep marker on its session id, the

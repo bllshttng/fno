@@ -197,9 +197,6 @@ fn question_page(
         Some(lead) => format!("{who} via {lead}"),
         None => who,
     };
-    if let Some(number) = item.number.as_deref() {
-        head = format!("{number} ({}) \u{b7} {head}", item.id);
-    }
     if let Some(host) = origin.and_then(|o| o.host.as_deref()) {
         head.push_str(&format!(" on {host}"));
     }
@@ -454,7 +451,10 @@ pub(super) fn draw_detail(
         Some(d.scroll.min(page.len().saturating_sub(1)))
     };
     let chrome = chrome::Chrome::new(
-        format!("question \u{b7} {}", d.item().id),
+        match d.item().number.as_deref() {
+            Some(number) => format!("question \u{b7} {number} ({})", d.item().id),
+            None => format!("question \u{b7} {}", d.item().id),
+        },
         crate::popup::Anchor::Center,
     )
     .flat();
