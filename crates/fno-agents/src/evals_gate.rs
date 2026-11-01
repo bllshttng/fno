@@ -1100,9 +1100,27 @@ mod tests {
                         ok("{}")
                     }
                     ["gh", "api", "--paginate", ..] => ok(&self.files),
-                    ["gh", "api", _] => ok(&json!([{"number": 7,
-                        "head": {"sha": SHA, "repo": {"full_name": "o/r"}}}])
-                    .to_string()),
+                    ["gh", "api", _] => {
+                        // The real-git world heads the PR at main, so the
+                        // worktree add has a revision it can check out.
+                        let head = if self.real_git {
+                            String::from_utf8_lossy(
+                                &std::process::Command::new("git")
+                                    .args(["rev-parse", "main"])
+                                    .current_dir(self.dir.path())
+                                    .output()
+                                    .expect("rev-parse main")
+                                    .stdout,
+                            )
+                            .trim()
+                            .to_string()
+                        } else {
+                            SHA.to_string()
+                        };
+                        ok(&json!([{"number": 7,
+                            "head": {"sha": head, "repo": {"full_name": "o/r"}}}])
+                        .to_string())
+                    }
                     _ => ok("mainsha\n"),
                 }
             };
