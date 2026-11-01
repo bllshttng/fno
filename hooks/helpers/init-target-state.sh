@@ -418,6 +418,12 @@ if declare -F get_auto_merge_enabled >/dev/null 2>&1; then
     AUTO_MERGE_ENABLED="false"
   }
 fi
+# autonomy.mode has one owner in Rust. An older binary answers nothing here and
+# the config read above stands; the merge door rechecks live either way.
+case "$(fno agents admit autonomy status --json 2>/dev/null || true)" in
+  *'"merge_enabled":true'*) AUTO_MERGE_ENABLED="true" ;;
+  *'"merge_enabled":false'*) AUTO_MERGE_ENABLED="false" ;;
+esac
 # The env grant is the OPERATOR's lever (codex P1 on PR 1131):
 # TARGET_AUTO_MERGE reaches a child only by inheritance, and a mesh-spawned
 # worker can export it before init to mint merge authority no config
@@ -1187,6 +1193,45 @@ if [[ ! -f "$STATE_FILE" ]]; then
     echo "[init-target-state] no live row holds the candidate id and no harness session was proven (disposition='ambiguous'): this session cannot see itself, so no identity was attributed" >&2
   fi
 
+  # ── Manifest injection guard ─────────────────────────────────────
+  # The heredoc below is unquoted: every interpolated value lands on its
+  # own YAML line, and most arrive through the inherited environment. A
+  # CR or LF inside one forges an extra manifest key (authority: full is
+  # exactly the grant the beastmode scrub gates), so structural scalars
+  # refuse at the writer and free-text fields flatten. No legit value in
+  # either set contains a line break.
+  _refuse_linebreak() {
+    case "$2" in
+      *$'\n'* | *$'\r'*)
+        echo "init-target-state: refusing $1: a line break would forge a manifest key." >&2
+        return 1
+        ;;
+    esac
+  }
+  _flatten_breaks() {
+    local v="$1"
+    v="${v//$'\r'/ }"
+    printf '%s' "${v//$'\n'/ }"
+  }
+  INITIAL_INPUT="$(_flatten_breaks "${INITIAL_INPUT:-}")"
+  INITIAL_PLAN_PATH="$(_flatten_breaks "${INITIAL_PLAN_PATH:-}")"
+  TARGET_MISSION_ID="$(_flatten_breaks "${TARGET_MISSION_ID:-}")"
+  TARGET_MISSION_SLUG="$(_flatten_breaks "${TARGET_MISSION_SLUG:-}")"
+  TARGET_MISSION_FROM_MSG_ID="$(_flatten_breaks "${TARGET_MISSION_FROM_MSG_ID:-}")"
+  case "${TARGET_MISSION_WAVE:-}" in
+    "") ;;
+    *[!0-9]* | 0 | 0[0-9]*)
+      echo "init-target-state: refusing TARGET_MISSION_WAVE='${TARGET_MISSION_WAVE}': expected a positive integer." >&2
+      exit 1
+      ;;
+  esac
+  _refuse_linebreak _HARNESS_SESSION "$_HARNESS_SESSION" || exit 1
+  _refuse_linebreak harness_model "$_HARNESS_MODEL" || exit 1
+  _refuse_linebreak harness_effort "$_HARNESS_EFFORT" || exit 1
+  _refuse_linebreak TARGET_SIZE "${TARGET_SIZE:-}" || exit 1
+  _refuse_linebreak TARGET_DISPATCH_MODEL "${TARGET_DISPATCH_MODEL:-}" || exit 1
+  _refuse_linebreak TARGET_DISPATCH_PROVIDER "${TARGET_DISPATCH_PROVIDER:-}" || exit 1
+
   # ── Mission context ───────────────────────────────────────────────
   _fmt_mission_str() {
     local v="$1"
@@ -1225,12 +1270,21 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # Scope denominator: a declared deliverable count for a plan-less
   # code run. Omitted unless --deliverables was passed, so absence (not 0) is
   # the unmeasurable state the denominator gate and the deliverables-1 ratio
-  # measurement key on - a stamped 0 would invert the gate, so the Python side
-  # refuses <=0 before this runs and only a positive int reaches the manifest.
+  # measurement key on - a stamped 0 would invert the gate. The caller-side
+  # refusal holds on only the path where the decision layer parsed the flag;
+  # an inherited value reaches here unvalidated (a newline in the value once
+  # injected an extra manifest key through this heredoc), so the
+  # manifest writer validates: a non-empty value must be a positive int.
   _deliverables_line=""
-  if [[ -n "${TARGET_DELIVERABLES:-}" ]]; then
-    _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n'
-  fi
+  case "${TARGET_DELIVERABLES:-}" in
+    "") ;;
+    *[!0-9]* | 0 | 0[0-9]*)
+      rm -f "$local_temp"
+      echo "init-target-state: refusing TARGET_DELIVERABLES='${TARGET_DELIVERABLES}': expected a positive integer." >&2
+      exit 1
+      ;;
+    *) _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n' ;;
+  esac
   # Turn mode (`TARGET_TURN_MODE=steps`): a non-looping target run. Omitted
   # unless set, so absence is the looping default the stop gate already serves;
   # ordinary|regular are input synonyms for steps, never stamped values.

@@ -43,6 +43,8 @@ hooks when prompted. `SessionStart` injects project vision, `fno whoami`, worktr
 hygiene, and setup nudges through `hookSpecificOutput.additionalContext`; the other
 packaged hooks provide the supported target-loop and safety lifecycle described below.
 
+At start, a Codex session pins its hooks to one plugin version folder. An fno update deletes the old folder, so each hook in a session that was already open then exits 127. Each command in `hooks/codex-hooks.json` carries a tail that turns exit 127 into a warning. The warning names the hook and says to start a new session. That hook did not run, so a gate among them is off until you do. Every other exit code passes through unchanged.
+
 ## Codex App Worktrees
 
 Codex app worktrees are managed under `$CODEX_HOME/worktrees` and start from tracked files in the selected Git branch.
@@ -151,14 +153,7 @@ Custom agents and target loop hooks are separate surfaces. The files under
 `.codex/agents/` make footnote's specialist agents available to Codex; they do not
 make `/fno:target` continue autonomously.
 
-Target continuation is driven by hook events. `hooks/codex-hooks.json` wires the
-Codex-supported subset needed for target loops: `Stop` first runs the synchronous
-`hooks/code-review-attest.sh` producer, which recognizes a clean `/review` from
-an exact-turn `exited_review_mode` or `item_completed`/`ExitedReviewMode`
-transcript marker, then runs
-`hooks/target-stop-hook.sh` (`fno-agents loop-check` + `finalize`). `PostToolUse`
-carries claim heartbeat/context monitoring, compact handoff hooks, subagent
-guards, and the PreToolUse state/git protection guards.
+Target continuation is driven by hook events. `hooks/codex-hooks.json` wires the Codex-supported subset needed for target loops. `Stop` first runs the synchronous `hooks/code-review-attest.sh` producer. It recognizes a clean `/review` from an exact-turn `exited_review_mode` or `item_completed`/`ExitedReviewMode` transcript marker, then runs `hooks/target-stop-hook.sh` (`fno-agents loop-check` + `finalize`). `PostToolUse` carries the gh merge-capture backstop, claim heartbeat/context monitoring, compact handoff hooks, subagent guards, and the PreToolUse state/git protection guards.
 
 Codex provider goals are a separate controller surface. The provider goal receipt proves the objective and continuation owner; the Footnote `Stop` receipt separately proves that the loop hook can drive the next turn. Treat the verified provider goal as primary continuation state, but never infer Stop from it. A readable quiet state parks by pausing the goal and preserving its objective; it does not clear the goal or create a replacement session. Codex returns the thread id, objective, and status; Footnote derives the continuation owner from the exact role scope or target session in its controller receipt.
 

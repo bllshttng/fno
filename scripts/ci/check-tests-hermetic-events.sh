@@ -9,7 +9,6 @@
 set -euo pipefail
 
 files=(
-  "cli/tests/agents/test_rust_runtime.py"
   "cli/tests/unit/test_epic_status.py"
 )
 

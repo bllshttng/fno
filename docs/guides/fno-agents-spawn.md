@@ -6,7 +6,7 @@ Use this guide when an orchestrator (script, LLM session, CI job) needs to launc
 
 ## Prerequisites
 
-- `fno` CLI installed; the compiled `fno-agents` binary for the default (Rust) runtime, or `FNO_AGENTS_RUNTIME=python` for the fallback.
+- `fno` CLI installed, with the compiled `fno-agents` binary.
 - The provider CLI (`claude` / `codex` / `gemini`) on `$PATH`, signed in.
 
 ## The three axes: harness, provider, model

@@ -558,8 +558,11 @@ event_types:
           description: "The WORD is the gate: `covered` means the review obligation is satisfied (the chain tiles with no open finding, or the configured rounds are spent), and every consumer keys on this string, never on the count beside it. `uncovered` is a real, known zero below the cap; `unknown` means the review read failed and no local evidence confirmed a review (fail closed for autonomy, honest in the receipt). A covered row CAN carry passed_count 0: a spent budget discharges the obligation whatever the rounds concluded."
         review_state:
           type: string
-          enum: [reviewed, unreviewed, reviewer_refused]
-          description: "Known review outcome when the evidence read succeeded. reviewed wins when any current non-human verdict counts; otherwise reviewer_refused wins when a configured reviewer refused; otherwise unreviewed. Omitted when coverage is unknown so transport failure never becomes a known review outcome."
+          enum: [reviewed, unreviewed, reviewer_refused, findings_open]
+          description: "Known review outcome when the evidence read succeeded. reviewed wins when any current non-human verdict counts; otherwise reviewer_refused wins when a configured reviewer refused; otherwise findings_open when a fail round still describes the head; otherwise unreviewed. Omitted when coverage is unknown so transport failure never becomes a known review outcome."
+        fail_at_head:
+          type: boolean
+          description: "True when a reviewer's latest attestation concluded fail and still describes this head. Absent means false."
         reviewed_count:
           type: integer
           description: "Count of reviewed verdicts EXCLUDING human approvals (whether a human approval counts is the operator's deferred call; lean exclude). A verdict counts only while its freshness is not `stale`. A review that concluded FAIL counts here too: the reviewer read the head, and the round-cap ruling counts the round whatever it concluded. Present on every row, unknown included - the coverage word can be unmeasured while the review count is not."
@@ -4137,7 +4140,7 @@ event_types:
 
   - name: control_plane_tick
     retention: telemetry
-    description: "One tick of one control-plane arm (lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire): what it did, or why it did nothing. The arms readout (`fno agents status`, `fno doctor`) folds these into one row per arm, newest first, red when the newest tick is older than 2x interval_s. Shape owned by crates/fno-agents/src/tick_ledger.rs; Python arms emit through fno.control_plane."
+    description: "One tick of one control-plane arm (lead_wake, watchdog, pr_watch_merge, active_backlog, auto_continue, stop_hook, notify_watch, reap, retire): what it did, or why it did nothing. The arms readout (`fno agents status`, `fno doctor`) folds these into one row per arm, newest first, red when the newest tick is older than 2x interval_s. Shape owned by crates/fno-agents/src/tick_ledger.rs."
     sources: [daemon, loop, hook, test, pr-heal]
     data:
       required: [arm, scheduler, acted, interval_s]
@@ -8848,6 +8851,24 @@ event_types:
         run:
           type: object
           description: "The row as written, keyed by fno_id or session_id."
+    consumers: [operator]
+  - name: run_imported
+    retention: durable
+    description: "One ledger history row imported once: a ledger.json row no run_recorded carrier covers, moved into the store at this machine's import day. The row rides as written, so reconcile-backstop rows keep their node and PR join with cost_usd null."
+    sources: [migration]
+    data:
+      required: [run]
+      properties:
+        run:
+          type: object
+          description: "The imported row as written, keyed by fno_id, session_id, or the backstop's node and PR."
+    consumers: [operator]
+  - name: run_history_imported
+    retention: durable
+    description: "The ledger history import ran once for this machine: the imported row count, the earliest run start the import covers, and the import time. Readers that show history name the earliest start as the day history begins; a second import run refuses on this row."
+    sources: [migration]
+    data:
+      required: [count, earliest_started, imported_at]
     consumers: [operator]
   - name: session_finalized
     description: "Every finalize sub-step succeeded: the terminal event naming the termination reason, the ship receipt, and the auto-merge posture."

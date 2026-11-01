@@ -24,23 +24,41 @@ PYPI = "https://pypi.org/pypi/fno/{}/json"
 # giving up instead of failing a release leg on the race.
 TRIES = 10
 DELAY_SECONDS = 30
-# Arch substrings as they appear in the wheel filenames + the formula url lines.
+# Arch discriminators as they appear in the wheel filenames + the formula url
+# lines. X64 is pinned by the wheel job (wheel-platform: macosx_10_12_x86_64);
+# the arm tag tracks the macos runner the arm wheel is built on (macosx_14_0
+# on macos-14, macosx_15_0 on macos-15), so it matches any macosx release: a
+# runner bump must surface as a wheel-listing miss at fetch time, never as a
+# tap step that fails after publish and silently strands the tap (the 0.4.5
+# stable release failed this way with the old macosx_14_0_arm64 pin).
 X64 = "macosx_10_12_x86_64"
-ARM = "macosx_14_0_arm64"
-_URL_RE = re.compile(r'url "([^"]*?(' + re.escape(X64) + "|" + re.escape(ARM) + r')[^"]*\.whl)"')
+ARM = re.compile(r"macosx_\d+_\d+_arm64")
+X86_64 = "x86_64"
+ARM64 = "arm64"
+_URL_RE = re.compile(
+    r'url "([^"]*?(' + re.escape(X64) + "|" + ARM.pattern + r')[^"]*\.whl)"'
+)
+
+
+def arch_of(text: str) -> str | None:
+    """The arch class a macOS wheel tag names, else None."""
+    if X64 in text:
+        return X86_64
+    if ARM.search(text):
+        return ARM64
+    return None
 
 
 def _fetch_wheels_once(version: str) -> dict[str, tuple[str, str]]:
-    """{arch_substr: (url, sha256)} for the two macOS wheels of <version>."""
+    """{arch_class: (url, sha256)} for the two macOS wheels of <version>."""
     with urllib.request.urlopen(PYPI.format(version), timeout=30) as r:
         data = json.load(r)
     out: dict[str, tuple[str, str]] = {}
     for u in data["urls"]:
         fn = u["filename"]
-        if fn.endswith(".whl"):
-            for arch in (X64, ARM):
-                if arch in fn:
-                    out[arch] = (u["url"], u["digests"]["sha256"])
+        arch = arch_of(fn) if fn.endswith(".whl") else None
+        if arch:
+            out[arch] = (u["url"], u["digests"]["sha256"])
     return out
 
 
@@ -67,7 +85,7 @@ def fetch_wheels(
         except (OSError, ValueError) as e:  # network error, bad status, or non-JSON body
             last_err = e
         else:
-            missing = [a for a in (X64, ARM) if a not in wheels]
+            missing = [a for a in (X86_64, ARM64) if a not in wheels]
             if not missing:
                 return wheels
         if attempt < tries:
@@ -96,9 +114,15 @@ def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
     for line in text.splitlines(keepends=True):
         m = _URL_RE.search(line)
         if m:
-            url, _ = wheels[m.group(2)]
+            # The url line may carry a tag the wheel job no longer produces
+            # (the tap was pinned to macosx_14_0_arm64 when the arm wheel
+            # moved to macosx_15_0), so key the wheels dict by arch class and
+            # read the class off the matched tag, never by tag equality.
+            arch = arch_of(m.group(2))
+            assert arch is not None and arch in wheels, (m.group(2), sorted(wheels))
+            url, _ = wheels[arch]
             line = line[: m.start(1)] + url + line[m.end(1) :]
-            pending = m.group(2)
+            pending = arch
         elif pending and 'sha256 "' in line:
             _, sha = wheels[pending]
             line = re.sub(r'sha256 "[^"]*"', f'sha256 "{sha}"', line)
@@ -119,7 +143,7 @@ def self_check() -> None:
         '      url "https://old/fno-0.1.0-py3-none-macosx_14_0_arm64.whl", using: :nounzip\n'
         '      sha256 "' + "cafebabe" * 8 + '"\n'
     )
-    wheels = {X64: ("https://new/x64.whl", "1" * 64), ARM: ("https://new/arm.whl", "2" * 64)}
+    wheels = {X86_64: ("https://new/x64.whl", "1" * 64), ARM64: ("https://new/arm.whl", "2" * 64)}
     got = rewrite(sample, "0.2.1", wheels)
     assert 'version "0.2.1"' in got, got
     assert 'url "https://new/x64.whl"' in got and f'sha256 "{"1" * 64}"' in got, got
@@ -133,11 +157,11 @@ def self_check() -> None:
     def flaky(v: str) -> dict[str, tuple[str, str]]:
         calls.append(v)
         if len(calls) < 3:
-            return {X64: ("https://new/x64.whl", "1" * 64)}
-        return {X64: ("https://new/x64.whl", "1" * 64), ARM: ("https://new/arm.whl", "2" * 64)}
+            return {X86_64: ("https://new/x64.whl", "1" * 64)}
+        return {X86_64: ("https://new/x64.whl", "1" * 64), ARM64: ("https://new/arm.whl", "2" * 64)}
 
     got = fetch_wheels("0.2.1", tries=5, delay=0, fetch=flaky, sleep=lambda _s: None)
-    assert got is not None and ARM in got, got
+    assert got is not None and ARM64 in got, got
     assert len(calls) == 3, calls
     assert fetch_wheels("0.2.1", tries=3, delay=0, fetch=lambda v: {}, sleep=lambda _s: None) is None
 

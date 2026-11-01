@@ -137,6 +137,8 @@ When its subject resolves, an open question closes by itself. Three rules, first
 - `superseded`: the subject is head-scoped. Another open question on the same node re-asked the family at a different head later. Ties go to the larger id. This rule ignores `why_user`. The reason reads `superseded: <id> re-asks at head <head>`.
 - `node-closed` / `moot`: a node the question points at reads done or superseded. A user-only `why_user` closes `moot`, every other question closes `node-closed`. The reason reads `node-closed: N done` or `moot: N done`.
 
+The node-closed rule waits on any PR the question names, in its subject or its text. A node can close under a different feature while its PR stays open, and that PR still needs the answer. The closing doors read each such PR through the asker's cwd. A PR that reads merged or closed lets the rule close. A PR that reads open holds the question. The sweep then moves it to the node's lead once, with a wake and an `open-pr` hop in `via`. A user-only `why_user` keeps it on the user's board instead. A PR the sweep cannot read also holds the question, with no move. The attention read makes no PR reads, so a held row never shows `settled`.
+
 A head-scoped subject names one commit. Its last token, after the last space or `@`, is 7 to 40 lowercase hex characters with at least one digit. `visual approval PR 7 at 05ea5bcc` and `merge-grant:footnote#3354@d2ad514d` are the two shipped spellings.
 
 The derived close claims no authority. The row keeps the answer empty and puts the outcome in `reason`, so the page reads `closed`, not `answered`. No decision row, no grant, no answer mail. The machine close never answers for the user. It never touches a question whose subject has not resolved. A taste ask about rules on a live node stays open.
@@ -160,6 +162,22 @@ The body holds the title and the question body. `## Options` carries one `- [ ] 
 ## The arm
 
 The `attention` arm beats every 30 s, reads the projection, routes each item to its role, writes pages, settles, records and closes. The settle state lives at `~/.fno/state/attention/questions.json`. The projection cache at `~/.fno/state/attention/items.json` gains `questions_dir`, which the lead check-in reads. `attention.enabled = false` is the kill switch: it stops every page write and answer read, checked on every beat. The arm computes routing once at page-write time and never refreshes it: a role titled later never sees older pages in its check-in. When the graph is unreadable the beat delivers nothing (`skip_reason: routing_unreadable`) and the next beat retries.
+
+## The judge
+
+A verdict closes nothing. The judge runs in shadow: it writes verdicts to `~/.fno/state/judge/verdicts.jsonl`, and it never writes to a question store, a page or the mail.
+
+A one-shot reader with no tools reads a batch of open questions beside the record: the live law rows and the answered pages under `done/`. A chat ruling reaches it only through a law row whose `rationale` quotes the user. It gives each question one of three outcomes.
+
+- `decided`: the record answers it. The verdict names one law or answered page and quotes it. The check finds that quote in the source, or the verdict reads `held` with `citation_failed`.
+- `sent_back`: the question goes back to its filer. A row that is not ready needs no model and names what is missing.
+- `held`: the user answers it. The reason names why: `deny_class:<class>`, `irreversible`, `law_conflict`, `citation_failed`, `unclassified`, `no_answer`, `bad_outcome` or `no_record`.
+
+A deny class never reads `decided`, whatever the reader says. A question with no class goes to the reader, which must name one. Most open questions carry no class, so holding them would leave nothing to measure. A decided verdict on the reader's class counts under `decided_on_read_class`, because that class has no filer behind it.
+
+Turn it on in `config.toml` with `enabled = true` under `[questions.judge]`. `fno config set` refuses this key, because the `[questions]` table sits outside the config model. It is off by default because it spends tokens. It runs each hour. `questions.judge.model` (default `sonnet`) and `questions.judge.batch` (default 10) tune it. `fno inbox outstanding judge --once` runs one batch by hand.
+
+Read it with `fno inbox outstanding judge --report --since 24h`. `agreement` compares each decided verdict with the answer the row later got, and each miss goes into the next prompt as a correction. `board_writes` counts closes by a judge run and must read 0.
 
 ## Config keys
 

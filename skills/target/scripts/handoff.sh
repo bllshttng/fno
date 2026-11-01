@@ -451,7 +451,7 @@ _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
 # sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
 # is distinguishable from a manual t- worker. The generation rides as the
 # never-shaved discriminator. A mint refusal parks the handoff loudly.
-_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents registry name --source sh --command t \
+_CHILD_NAME_OUT="$(fno agents registry name --source sh --command t \
   "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
 _CHILD_NAME_RC=$?
 if [ "$_CHILD_NAME_RC" -ne 0 ]; then

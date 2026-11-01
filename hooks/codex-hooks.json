@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/write-gate.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/write-gate.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook write-gate.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "checking protected write surfaces"
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/worktree-write-protect.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/worktree-write-protect.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook worktree-write-protect.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "checking worktree location"
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/plan-location-guard.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/plan-location-guard.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook plan-location-guard.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "checking plan save location"
           }
         ]
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook pretooluse-bash-dispatch.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "checking Bash tool guards"
           }
         ]
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/rules-dispatch.sh\" pre-tool",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/rules-dispatch.sh\" pre-tool || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook rules-dispatch.sh pre-tool exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 4
           }
         ]
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/lead-delegation-guard.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/lead-delegation-guard.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook lead-delegation-guard.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "checking role delegation"
           }
         ]
@@ -67,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex PreToolUse"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex PreToolUse || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook session-state.sh codex PreToolUse exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           }
         ]
       }
@@ -78,41 +78,41 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex UserPromptSubmit"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex UserPromptSubmit || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook session-state.sh codex UserPromptSubmit exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex bash \"${PLUGIN_ROOT}/hooks/session-join-prompt.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex bash \"${PLUGIN_ROOT}/hooks/session-join-prompt.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook session-join-prompt.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook born-with-why-offer-inject.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook friction-offer-inject.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/inject-mail-notify.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/inject-mail-notify.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook inject-mail-notify.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" prompt",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" prompt || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook inject-announce.sh prompt exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/prompt-outstanding.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/prompt-outstanding.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook prompt-outstanding.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/rules-dispatch.sh\" prompt",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/rules-dispatch.sh\" prompt || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook rules-dispatch.sh prompt exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 4
           }
         ]
@@ -123,23 +123,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/code-review-attest.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/code-review-attest.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook code-review-attest.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/codex-review-findings.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/codex-review-findings.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook codex-review-findings.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex Stop"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex Stop || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook session-state.sh codex Stop exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-stop-hook.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook target-stop-hook.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/context-nudge.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/context-nudge.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook context-nudge.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           }
         ]
       }
@@ -150,12 +150,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/format-on-edit.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/format-on-edit.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook format-on-edit.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "formatting the edited file"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/edit-integrity.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/edit-integrity.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook edit-integrity.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "checking the edited file",
             "timeout": 10
           }
@@ -166,13 +166,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/diff-budget-commit.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/merge-capture.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook merge-capture.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
+            "statusMessage": "capturing gh merge provenance",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/diff-budget-commit.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook diff-budget-commit.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "reading the diff budget and task boundary",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/refusal-streak-record.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook refusal-streak-record.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "statusMessage": "recording the refusal streak",
             "timeout": 4
           }
@@ -183,15 +189,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook spend-drift-monitor.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/claim-heartbeat.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/claim-heartbeat.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook claim-heartbeat.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/friction-offer-inject.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook friction-offer-inject.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 3
           }
         ]
@@ -202,7 +208,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook target-subagent-guard.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           }
         ]
       }
@@ -212,7 +218,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/target-subagent-guard.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook target-subagent-guard.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           }
         ]
       }
@@ -222,11 +228,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/lib/run-python.sh\" \"${PLUGIN_ROOT}/scripts/save-session.py\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/lib/run-python.sh\" \"${PLUGIN_ROOT}/scripts/save-session.py\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook save-session.py exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/precompact-canon-doc.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/precompact-canon-doc.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook precompact-canon-doc.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           }
         ]
       }
@@ -236,17 +242,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-post-compact",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-post-compact || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook context-run.sh codex-post-compact exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 50
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" compact",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/inject-announce.sh\" compact || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook inject-announce.sh compact exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/session-start-using-fno.sh\" PostCompact",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/session-start-using-fno.sh\" PostCompact || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook session-start-using-fno.sh PostCompact exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 5
           }
         ]
@@ -258,20 +264,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-session-start"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-session-start || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook context-run.sh codex-session-start exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/session-start-using-fno.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/session-start-using-fno.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook session-start-using-fno.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/codex-app-server-nudge-session-start.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/codex-app-server-nudge-session-start.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook codex-app-server-nudge-session-start.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook operator-capture-nudge.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           }
         ]
       },
@@ -280,7 +286,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-whoami"
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 env FNO_PLATFORM=codex \"${PLUGIN_ROOT}/hooks/context-run.sh\" codex-whoami || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook context-run.sh codex-whoami exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           }
         ]
       }

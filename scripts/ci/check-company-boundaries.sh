@@ -252,16 +252,11 @@ for path, source, tree in parsed:
         for imported in imported_modules(
             node, source_module, source_is_package=path.name == "__init__.py"
         ):
-            # Control edge (was fno.roles.models -> contracts); re-point when
-            # these modules retire.
-            if (
-                source_module == "fno.agents.history"
-                and imported == "fno.graph._reconcile"
-            ):
-                positive_control = True
             target_layer = layer_for(imported)
             if target_layer is None:
                 continue
+            if source_layer[1] == "runtime" and target_layer[1] == "core":
+                positive_control = True
             if target_layer[0] in seen_target_layers:
                 continue
             seen_target_layers.add(target_layer[0])

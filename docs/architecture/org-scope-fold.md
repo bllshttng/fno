@@ -86,7 +86,7 @@ Live PR state is deliberately out of scope. `merge_status` on a graph entry is a
 
 ## Epic load
 
-Each `ok` fold also carries `epics` and `epic_cap`. `epic_cap` is `backlog.epic_max_open_children` as resolved beside the graph. With no cap set, it reads null. `epics` lists the epics of the scope that hold at least one open direct child, fullest first, as `{"id", "open_children", "full"}`.
+Each `ok` fold also carries `epics` and `epic_cap`. `epic_cap` is `backlog.epic_max_open_children` as the graph store resolves it: global config first, then a config.toml beside the store. With no cap set, it reads null. `epics` lists the epics of the scope that hold at least one open direct child, fullest first, as `{"id", "open_children", "full"}`.
 
 The count is `epic_cap::open_child_count`, the same function the write-time refusal counts with, so the read and the refusal cannot disagree. Children are direct: a sub-epic is one child of its parent and carries its own row. An epic with no open child is left out. `full` means the next open child is refused at the current cap.
 
@@ -94,7 +94,7 @@ A fold whose `status` is not `ok` carries neither key, so an unread scope never 
 
 ## Unplanned idea load
 
-Each `ok` fold also carries `idea_cap` and `ideas`. `idea_cap` is `backlog.max_open_ideas` as resolved beside the graph. It reports `{"cap": 25, "source": "default"}`, `{"cap": N, "source": "config"}`, or `{"cap": null, "source": "off"}`. `ideas` lists each nearest-epic or project scope with at least one capped idea as `{"scope", "open_ideas", "full"}`. It uses the same capped-row predicate and scope walk as the write-time refusal. A fold whose status is not `ok` carries neither field.
+Each `ok` fold also carries `idea_cap` and `ideas`. `idea_cap` is `backlog.max_open_ideas` as the graph store resolves it: global config first, then a config.toml beside the store. It reports `{"cap": 25, "source": "default"}`, `{"cap": N, "source": "config"}`, or `{"cap": null, "source": "off"}`. `ideas` lists each nearest-epic or project scope with at least one capped idea as `{"scope", "open_ideas", "full"}`. It uses the same capped-row predicate and scope walk as the write-time refusal. A fold whose status is not `ok` carries neither field.
 
 ## Session ids on a row
 
