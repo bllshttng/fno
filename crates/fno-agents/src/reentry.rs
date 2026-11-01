@@ -118,9 +118,9 @@ pub struct ReentryPlan {
     pub substrate: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mux: Option<MuxRef>,
-    /// The provider invocation, shell-safe. Contains ids and file PATHS
-    /// only; a route's credential stays inside the 0600 settings file the
-    /// argv names.
+    /// The provider invocation, shell-safe. Contains ids, axes, the row's
+    /// permission mode and file PATHS only; a route's credential stays inside
+    /// the 0600 settings file the argv names.
     pub argv: Vec<String>,
     /// Env the caller must apply for the argv to land in the right
     /// namespace. Only ever `CLAUDE_CONFIG_DIR`; a value is a path, never a
