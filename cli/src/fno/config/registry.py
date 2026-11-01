@@ -308,6 +308,10 @@ FIELD_META: dict[str, Meta] = {
     "preflight.required": Meta(
         "advanced", "Require a full local preflight receipt before opening a PR. Default false: CI is the merge gate and preflight is an opt-in rehearsal.",
     ),
+    # --- config.ci_tier.* ---
+    "ci_tier.enabled": Meta(
+        "advanced", "Run the CI tier on this machine: the daemon keeps at most six merge-queue runs in flight per repo, ranking the open PRs, cancelling the overflow, and rerunning a run it cancelled once a slot frees (a cancelled run cannot rerun failed jobs, so the rerun is full). Default false. Opt in on ONE machine per repo: two clones of a repo are one tier, two machines are two arms that would cancel and rerun each other's work.",
+    ),
     # --- config.target.* ---
     "target.dedupe_dead_duplicates": Meta("never", "Opt-in cleanup of provably-dead duplicate state files."),
     "target.handoff.enabled": Meta("advanced", "Enable explicit target capability escalation."),

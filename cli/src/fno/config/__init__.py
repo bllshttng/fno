@@ -3850,6 +3850,24 @@ class PreflightBlock(BaseModel):
     required: bool = False
 
 
+class CiTierBlock(BaseModel):
+    """The CI tier (nested under 'config.ci_tier').
+
+    ``enabled`` turns on the daemon arm that keeps at most six merge-queue
+    runs in flight per repo across every clone on this machine: it ranks the
+    open PRs, cancels the overflow, and reruns a run it cancelled once a
+    slot frees (a cancelled run has no failed job to select, so the rerun is
+    full). Default false: the tier is opt-in per MACHINE, never per repo.
+    Two clones of one repo are one tier; two machines are two arms that
+    would cancel and rerun each other's work. Enable it on exactly one
+    machine per repo.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+
+
 class ConfigBlock(BaseModel):
     """Top-level config block (nested under 'config:' in settings.yaml)."""
 
@@ -3901,6 +3919,7 @@ class ConfigBlock(BaseModel):
     auto_merge: AutoMergeBlock = Field(default_factory=AutoMergeBlock)
     auto_heal: AutoHealBlock = Field(default_factory=AutoHealBlock)
     pr_watch: PrWatchBlock = Field(default_factory=PrWatchBlock)
+    ci_tier: CiTierBlock = Field(default_factory=CiTierBlock)
     groom: GroomBlock = Field(default_factory=GroomBlock)
     evals: EvalsBlock = Field(default_factory=EvalsBlock)
     recovery: RecoveryBlock = Field(default_factory=RecoveryBlock)

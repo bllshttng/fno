@@ -574,6 +574,10 @@ graphql_min_remaining = 200
 # Consecutive broken tick ends (timeout/error) at a fresh watermark before the watcher reads `wedged` and auto-heal re-renders its plist via `fno do pr watch refresh`.
 wedged_after_ticks = 3
 
+[ci_tier]
+# Run the CI tier on this machine: the daemon keeps at most six merge-queue runs in flight per repo, ranking the open PRs, cancelling the overflow, and rerunning a run it cancelled once a slot frees (a cancelled run cannot rerun failed jobs, so the rerun is full). Default false. Opt in on ONE machine per repo: two clones of a repo are one tier, two machines are two arms that would cancel and rerun each other's work.
+enabled = false
+
 [groom]
 # Enable the daily backlog-grooming worker spawn (fno backlog groom). Defaults true.
 enabled = true
