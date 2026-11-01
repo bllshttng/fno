@@ -129,8 +129,8 @@ pub struct ReentryPlan {
 }
 
 impl ReentryPlan {
-    /// Copy this plan's `--model`/`--effort` pin onto `argv`, the argv a door
-    /// built itself, and hand the plan back.
+    /// Copy this plan's `--model`/`--effort` pin and `--permission-mode` onto
+    /// `argv`, the argv a door built itself, and hand the plan back.
     pub fn carry_pins(self, argv: &mut Vec<String>) -> Self {
         let value_after = |flag: &str| -> Option<String> {
             self.argv
@@ -142,6 +142,12 @@ impl ReentryPlan {
         let model = value_after("--model");
         let effort = value_after("--effort");
         crate::resume_pin::append_axes(argv, model.as_deref(), effort.as_deref());
+        if !argv.iter().any(|t| t == "--permission-mode") {
+            if let Some(mode) = value_after("--permission-mode") {
+                argv.push("--permission-mode".into());
+                argv.push(mode);
+            }
+        }
         self
     }
 }
@@ -658,6 +664,17 @@ fn resolve_reentry_inner(
                 // retasked row has outgrown: the row's name is the truth.
                 argv.push("--name".into());
                 argv.push(entry.name.clone());
+                // A resume lands on the ambient mode, not the launched one.
+                // Replay only what the row recorded at its own spawn; a saved
+                // job's respawn flags already hold it.
+                if let Some(mode) = entry
+                    .requested_permission_mode
+                    .as_deref()
+                    .filter(|m| !m.is_empty())
+                {
+                    argv.push("--permission-mode".into());
+                    argv.push(mode.to_string());
+                }
             }
         }
     }
@@ -1657,6 +1674,76 @@ mod tests {
             .into_iter()
             .collect();
         revive_with(ClaudeAgentsSnapshot::known(rows)).unwrap()
+    }
+
+    #[test]
+    fn resume_replays_only_the_recorded_mode() {
+        let plan_for = |mode: Option<&str>, listed: &[&str]| {
+            let rows = listed
+                .iter()
+                .map(|short| ClaudeAgentRow::new(short, Some("done")))
+                .collect();
+            revive_with_row(ClaudeAgentsSnapshot::known(rows), |e| {
+                e.requested_permission_mode = mode.map(str::to_string);
+            })
+            .unwrap()
+        };
+        let flag = "--permission-mode";
+        let carried = |plan: ReentryPlan| {
+            let mut door = vec!["claude".to_string(), "--resume".to_string()];
+            plan.carry_pins(&mut door);
+            door
+        };
+
+        let bypass = plan_for(Some("bypassPermissions"), &[]);
+        assert_eq!(bypass.mechanism, "bg-resume");
+        assert!(bypass
+            .argv
+            .join(" ")
+            .contains("--permission-mode bypassPermissions"));
+
+        let accept = plan_for(Some("acceptEdits"), &[]);
+        assert!(accept
+            .argv
+            .join(" ")
+            .contains("--permission-mode acceptEdits"));
+        assert!(!accept.argv.join(" ").contains("bypassPermissions"));
+
+        let none = plan_for(None, &[]);
+        assert!(!none.argv.join(" ").contains(flag));
+        assert!(!carried(none).iter().any(|t| t == flag));
+
+        // Respawn replays the saved launch and ignores extra arguments.
+        let respawn = plan_for(Some("bypassPermissions"), &["9a1b2c3d"]);
+        assert_eq!(respawn.mechanism, "respawn");
+        assert!(!respawn.argv.join(" ").contains(flag));
+    }
+
+    #[test]
+    fn carry_pins_copies_the_mode_to_a_door_argv() {
+        let e = {
+            let mut e = row("door");
+            e.harness_session_id = Some("9a1b2c3d-eeee-ffff-0000-111122223333".into());
+            e.short_id = "9a1b2c3d".into();
+            e.launch_account = Some("default".into());
+            e.status = crate::AgentStatus::Exited;
+            e.requested_permission_mode = Some("acceptEdits".into());
+            e
+        };
+        let (_tmp, home) = staged_home(&[]);
+        let plan = resolve_reentry_with(
+            &reg(vec![e]),
+            "door",
+            ReentryTransition::Resume,
+            None,
+            &binding_ok,
+            &home,
+            None,
+        )
+        .unwrap();
+        let mut door = vec!["claude".to_string(), "--resume".to_string()];
+        plan.carry_pins(&mut door);
+        assert!(door.join(" ").ends_with("--permission-mode acceptEdits"));
     }
 
     #[test]
