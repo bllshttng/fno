@@ -6,8 +6,8 @@
 //! windowed alarm and `regressed` through `--mode summary`.
 //!
 //! Semantics are the Python fold they replace (`cli/src/fno/evals/report.py`
-//! at this PR's base): tier-segment stats, half-open windows, modal-rev
-//! variant compare, graduation candidates.
+//! at this PR's base): tier-segment stats, half-open windows, graduation
+//! candidates. The per-task compare of two runs lives in `evals_compare`.
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -18,7 +18,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare V] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
@@ -28,9 +28,9 @@ const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode rep
 pub(crate) struct Row {
     pub(crate) task_id: String,
     tier: String,
-    pass: bool,
+    pub(crate) pass: bool,
     ts: Option<DateTime<Utc>>,
-    variant: Option<String>,
+    pub(crate) variant: Option<String>,
     pub(crate) bank_rev: Option<String>,
     pub(crate) experiment_id: Option<String>,
     raw: Value,
@@ -450,86 +450,15 @@ fn report_fold(
     report
 }
 
-fn modal_rev(rows: &[&Row]) -> Option<String> {
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for r in rows.iter().filter_map(|r| r.bank_rev.as_deref()) {
-        *counts.entry(r).or_default() += 1;
-    }
-    counts
-        .into_iter()
-        .max_by_key(|(rev, n)| (*n, std::cmp::Reverse(*rev)))
-        .map(|(rev, _)| rev.to_string())
-}
-
-fn compare_variants(rows: &[Row], variant: &str) -> Value {
-    let baseline: Vec<&Row> = rows
-        .iter()
-        .filter(|r| r.variant.as_deref().unwrap_or("baseline") == "baseline")
-        .collect();
-    let side: Vec<&Row> = rows
-        .iter()
-        .filter(|r| r.variant.as_deref() == Some(variant))
-        .collect();
-    let base_rev = modal_rev(&baseline);
-    let var_rev = modal_rev(&side);
-    fn at<'a>(rs: &[&'a Row], rev: &Option<String>) -> Vec<&'a Row> {
-        rs.iter()
-            .filter(|r| r.bank_rev.as_ref() == rev.as_ref())
-            .cloned()
-            .collect()
-    }
-    let mut by_task: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
-    for r in rows {
-        by_task.entry(r.task_id.clone()).or_default().push(r);
-    }
-    let mut tasks = Map::new();
-    let mut missing_in_variant = Vec::new();
-    let mut missing_in_baseline = Vec::new();
-    for (tid, task_rows) in &by_task {
-        let b = at(
-            &task_rows
-                .iter()
-                .filter(|r| r.variant.as_deref().unwrap_or("baseline") == "baseline")
-                .cloned()
-                .collect::<Vec<_>>(),
-            &base_rev,
-        );
-        let v = at(
-            &task_rows
-                .iter()
-                .filter(|r| r.variant.as_deref() == Some(variant))
-                .cloned()
-                .collect::<Vec<_>>(),
-            &var_rev,
-        );
-        if b.is_empty() {
-            missing_in_baseline.push(tid.clone());
-        }
-        if v.is_empty() {
-            missing_in_variant.push(tid.clone());
-        }
-        if b.is_empty() || v.is_empty() {
-            continue;
-        }
-        let (br, bp1, vr, vp1, delta, verdict) = pair_verdict(&b, &v);
-        tasks.insert(
-            tid.clone(),
-            json!({
-                "baseline": {"runs": br, "pass_at_1": round4(bp1)},
-                "variant": {"runs": vr, "pass_at_1": round4(vp1)},
-                "delta": round4(delta),
-                "verdict": verdict,
-            }),
-        );
-    }
-    json!({
-        "variant": variant,
-        "tasks": tasks,
-        "missing_in_variant": missing_in_variant,
-        "missing_in_baseline": missing_in_baseline,
-        "baseline_rev": base_rev,
-        "variant_rev": var_rev,
-    })
+/// A valid grade the lane evidence does not exclude. Everything else is
+/// counted by reason and never scored.
+pub(crate) fn is_scored(r: &Row) -> bool {
+    r.raw.get("status").and_then(Value::as_str) == Some("graded")
+        && r.raw.get("lane_status").and_then(Value::as_str) != Some("substituted")
+        && r.raw
+            .get("excluded_reason")
+            .and_then(Value::as_str)
+            .is_none()
 }
 
 /// The per-cohort fold behind `--mode report --by-cohort`: one row list per
@@ -577,7 +506,7 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             .unwrap_or("unverified");
         *lane_statuses.entry(lane_status.to_string()).or_default() += 1;
         let reason = r.raw.get("excluded_reason").and_then(Value::as_str);
-        if status == "graded" && lane_status != "substituted" && reason.is_none() {
+        if is_scored(r) {
             scored.push(r);
         } else {
             excluded += 1;
@@ -946,6 +875,8 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut consecutive_n: usize = 3;
     let mut json_out = false;
     let mut compare: Option<String> = None;
+    let mut compare_to: Option<String> = None;
+    let mut repeats: usize = 3;
     let mut planned: Option<BTreeMap<String, usize>> = None;
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
@@ -1033,6 +964,17 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             "--compare" => match value("--compare") {
                 Ok(v) => compare = Some(v),
                 Err(()) => return EXIT_USAGE,
+            },
+            "--to" => match value("--to") {
+                Ok(v) => compare_to = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--repeats" => match value("--repeats").map(|v| v.parse::<usize>()) {
+                Ok(Ok(v)) => repeats = v,
+                _ => {
+                    eprintln!("evals-trend: --repeats needs an integer");
+                    return EXIT_USAGE;
+                }
             },
             "--planned" => match value("--planned")
                 .and_then(|v| serde_json::from_str::<BTreeMap<String, usize>>(&v).map_err(|_| ()))
@@ -1248,53 +1190,18 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         }
         return 0;
     }
-    if let Some(v) = &compare {
-        let ok = v == "baseline"
-            || (v.starts_with('v') && v[1..].bytes().all(|b| b.is_ascii_digit()) && v.len() > 1);
-        if !ok {
-            eprintln!("Error: --compare must be 'baseline' or 'v<N>', got '{v}'");
-            return 1;
-        }
-        let rows = read_rows(&history, None, since);
-        let cmp = compare_variants(&rows, v);
-        if json_out {
-            println!("{}", serde_json::to_string_pretty(&cmp).unwrap_or_default());
-        } else {
-            if let Some(tasks) = cmp["tasks"].as_object() {
-                for (tid, t) in tasks {
-                    let base_pct = t["baseline"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
-                    let base_runs = t["baseline"]["runs"].to_string();
-                    let variant_name = cmp["variant"].as_str().unwrap_or_default();
-                    let var_pct = t["variant"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
-                    let var_runs = t["variant"]["runs"].to_string();
-                    let delta = t["delta"].as_f64().unwrap_or(0.0);
-                    let verdict = t["verdict"].as_str().unwrap_or_default();
-                    println!(
-                        "  {tid}  baseline {base_pct:.0}% ({base_runs})  {variant_name} {var_pct:.0}% ({var_runs})  delta={delta:+.2}  {verdict}"
-                    );
-                }
-            }
-            let variant_label = cmp["variant"].as_str().unwrap_or_default().to_string();
-            for (label, miss) in [
-                ("baseline".to_string(), cmp["missing_in_baseline"].clone()),
-                (variant_label, cmp["missing_in_variant"].clone()),
-            ] {
-                let ids: Vec<&str> = miss
-                    .as_array()
-                    .map(|a| a.iter().filter_map(Value::as_str).collect())
-                    .unwrap_or_default();
-                if !ids.is_empty() {
-                    let id_list = ids.join(", ");
-                    println!("  missing in {label}: {id_list}");
-                }
-            }
-            println!(
-                "  diff: git diff {} {}",
-                cmp["baseline_rev"].as_str().unwrap_or("None"),
-                cmp["variant_rev"].as_str().unwrap_or("None")
-            );
-        }
-        return 0;
+    if let Some(a) = &compare {
+        let Some(b) = &compare_to else {
+            eprintln!("evals-trend: --compare needs --to <cohort or variant>");
+            return EXIT_USAGE;
+        };
+        return crate::evals_compare::run(&crate::evals_compare::CompareArgs {
+            history: &history,
+            a,
+            b,
+            repeats,
+            json_out,
+        });
     }
 
     if !PathBuf::from(&history).exists() {

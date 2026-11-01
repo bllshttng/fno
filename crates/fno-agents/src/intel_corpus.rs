@@ -395,6 +395,11 @@ fn scrub_string(s: &str, counts: &mut ScrubCounts) -> String {
     out
 }
 
+/// The corpus scrub for one quote read outside an export.
+pub(crate) fn scrub_quote(s: &str) -> String {
+    scrub_string(s, &mut ScrubCounts::default())
+}
+
 fn scrub_value(v: &mut Value, counts: &mut ScrubCounts) {
     match v {
         Value::String(s) => *s = scrub_string(s, counts),
