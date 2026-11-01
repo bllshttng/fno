@@ -940,6 +940,7 @@ pub(crate) fn retry(rest: &[String]) -> i32 {
 mod tests {
     use super::*;
     use crate::gate_probes::Run;
+    use chrono::TimeZone;
     use serde_json::json;
     use std::cell::RefCell;
     use std::io::Write as _;
@@ -1204,7 +1205,9 @@ mod tests {
         let dir = state_dir(&w.history());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(MAIN_LOG), "Error: unknown lane\n\n").unwrap();
-        let now = Utc::now();
+        // The cohort name carries the date, so a live clock that starts late in
+        // the UTC day draws a fresh cohort mid-test and relaunches. Pin midday.
+        let now = Utc.with_ymd_and_hms(2026, 6, 15, 12, 0, 0).unwrap();
         let hour = chrono::Duration::seconds(MAIN_RETRY_S + 1);
         let at = |tries: i32| now + hour * tries;
 
@@ -1239,7 +1242,7 @@ mod tests {
     #[test]
     fn a_main_run_with_a_grade_is_the_baseline_and_ends_the_day() {
         let w = World::new("crates/x.rs\n");
-        let now = Utc::now();
+        let now = Utc.with_ymd_and_hms(2026, 6, 15, 12, 0, 0).unwrap();
         w.tick(true, now);
         let cohort = load_state(&state_dir(&w.history())).main_tried.unwrap();
         w.rows(&cohort, "g2", [true, true, true]);
