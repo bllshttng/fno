@@ -538,6 +538,7 @@ struct NeedsArgs {
     delegate: bool,
     archive: Vec<String>,
     sink: Option<String>,
+    email: Option<String>,
     events_override: Vec<PathBuf>,
     ledger_override: Option<PathBuf>,
 }
@@ -555,6 +556,7 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
     let mut delegate = false;
     let mut archive: Vec<String> = Vec::new();
     let mut sink: Option<String> = None;
+    let mut email: Option<String> = None;
     let mut events_override: Vec<PathBuf> = Vec::new();
     let mut ledger_override: Option<PathBuf> = None;
 
@@ -591,6 +593,7 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
             "--delegate" => delegate = true,
             "--archive" => archive.push(it.next().ok_or("--archive needs an item id")?),
             "--sink" => sink = Some(it.next().ok_or("--sink needs a sink name")?),
+            "--email" => email = Some(it.next().ok_or("--email needs a login")?),
             "--events" => {
                 events_override.push(PathBuf::from(it.next().ok_or("--events needs a path")?))
             }
@@ -613,6 +616,7 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
         delegate,
         archive,
         sink,
+        email,
         events_override,
         ledger_override,
     })
@@ -942,16 +946,33 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         );
         return 2;
     }
-    match args.sink.as_deref() {
-        Some("mux") => {}
-        other => {
+    // The mux stamps no login. The command page stamps the invited login it
+    // authenticated, and a login is legal only there.
+    let (sink, email) = match (args.sink.as_deref(), args.email.as_deref()) {
+        (Some("mux"), None) => ("mux", None),
+        (Some("mux"), Some(_)) => {
+            eprintln!("fno-agents: needs --email is legal only with --sink command_page");
+            return 2;
+        }
+        (Some("command_page"), Some(login)) if !login.trim().is_empty() => {
+            if args.delegate {
+                eprintln!("fno-agents: --delegate stays in the mux; the page cannot delegate");
+                return 2;
+            }
+            ("command_page", Some(login.trim()))
+        }
+        (Some("command_page"), _) => {
+            eprintln!("fno-agents: needs --sink command_page requires --email <login>");
+            return 2;
+        }
+        (other, _) => {
             eprintln!(
-                "fno-agents: needs --answer accepts only --sink mux (got {})",
+                "fno-agents: needs --answer accepts only --sink mux or command_page (got {})",
                 other.unwrap_or("none")
             );
             return 2;
         }
-    }
+    };
     let fno_dir = home
         .root()
         .parent()
@@ -1007,14 +1028,16 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
     } else {
         crate::attention_file::FileAnswer::Words(args.words.clone().unwrap_or_default())
     };
-    match crate::attention_arm::append_answer_row(
+    let attested_by = email.map_or_else(|| "mux".to_string(), |e| format!("command_page:{e}"));
+    match crate::attention_arm::append_answer_row_stamped(
         home,
         item_id,
-        "mux",
+        sink,
         &answer,
         "sink",
         "needs_door",
-        "mux",
+        &attested_by,
+        email,
     ) {
         Ok((_, superseded)) => {
             println!(
@@ -2797,6 +2820,7 @@ mod tests {
             delegate: false,
             archive: vec![],
             sink: Some("mux".to_string()),
+            email: None,
             events_override: vec![],
             ledger_override: None,
         };
@@ -2871,6 +2895,55 @@ mod tests {
             !raw.contains("attention_answer"),
             "refusals write nothing: {raw}"
         );
+    }
+
+    #[test]
+    fn needs_door_command_page_stamps_the_login_and_refuses_the_rest() {
+        let (dir, _root, mut args) = door_setup("needs_door_cmd_page_");
+        let cwd = dir.path().join("repo");
+        let home = crate::paths::AgentsHome::from_env();
+        let row_count = || {
+            let home = crate::paths::AgentsHome::from_env();
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home), &[])
+                .matches("attention_answer")
+                .count()
+        };
+        // A page answer with no login, a login beside the mux sink, and a
+        // delegate from the page each refuse and write nothing.
+        args.sink = Some("command_page".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.email = Some("  ".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.sink = Some("mux".to_string());
+        args.email = Some("ann@example.com".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.sink = Some("command_page".to_string());
+        args.option = None;
+        args.delegate = true;
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        assert_eq!(row_count(), 0);
+        // The real answer lands one row naming the login and the machine.
+        args.delegate = false;
+        args.option = Some(2);
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 0);
+        let home2 = crate::paths::AgentsHome::from_env();
+        let raw =
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home2), &[]);
+        let row = raw
+            .lines()
+            .find(|l| l.contains("attention_answer"))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(row).unwrap();
+        let data = &v["data"];
+        assert_eq!(data["sink"], "command_page", "{row}");
+        assert_eq!(data["email"], "ann@example.com", "{row}");
+        assert_eq!(data["person"], "ann@example.com", "{row}");
+        assert_eq!(data["authority"], "sink", "{row}");
+        assert_eq!(data["attested_by"], "command_page:ann@example.com", "{row}");
+        assert!(data.get("machine_id").is_some(), "{row}");
+        // A second click is refused as not open: the first answer closed it.
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        assert_eq!(row_count(), 1);
     }
 
     #[test]

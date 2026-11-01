@@ -25,6 +25,7 @@
 .panel{border:1px solid var(--surface0);background:var(--mantle);padding:10px 12px;display:flex;flex-direction:column;gap:6px}.panel h2,.panel h3{margin:4px 0 2px;font-size:11px;color:var(--overlay1);font-weight:700}.panel h2::before,.panel h3::before{content:"## "}
 .lk{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--surface0);background:var(--base)}.lt{display:flex;flex-direction:column;min-width:0;gap:2px;flex:1}.lt b{font-weight:600;overflow-wrap:anywhere}.lt code{font:inherit;font-size:11px;color:var(--yellow);overflow-wrap:anywhere}
 .empty{color:var(--overlay1);margin:0}.qrow{cursor:pointer}
+.ans{display:flex;flex-direction:column;gap:8px}.ans .opts{display:flex;flex-direction:column;gap:6px}.ans .lkb{text-align:left;min-height:30px;padding:4px 10px}.ans .lkb[disabled]{opacity:.5;cursor:default}.ans textarea{width:100%;box-sizing:border-box;min-height:56px;resize:vertical;background:var(--base);border:1px solid var(--surface1);color:var(--text);padding:6px 8px;font:12px var(--mono)}.ans .note{margin:0;font-size:11.5px;color:var(--subtext0);overflow-wrap:anywhere}.ans .note.err{color:var(--red);border-left:2px solid var(--red);padding-left:8px}.ans .note.ok{color:var(--text)}
 .filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.filters label{font-size:12px;color:var(--overlay1);margin-right:2px}
 .chip{border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);font-size:12px;padding:3px 10px;cursor:pointer;min-height:26px}.chip:hover{border-color:var(--text)}.chip[aria-pressed="true"]{color:var(--text);border-color:var(--text)}.chip[aria-checked="true"]{background:var(--text);color:var(--base);border-color:var(--text)}
 .view{display:flex;flex-direction:column;gap:12px}.view[hidden]{display:none}
@@ -138,7 +139,7 @@ function waiting(model) {
   box.replaceChildren();
   const w = model.waiting;
   if (w.questions_error) box.append(el("p", "empty", "questions not read: " + w.questions_error));
-  const qs = w.questions || [];
+  const qs = (w.questions || []).filter((x) => !answered.has(x.id));
   const hosts = [...new Set(qs.map((q) => q.host))].sort((a, b) => (a != null) - (b != null) || String(a).localeCompare(String(b)));
   for (const host of hosts) {
     box.append(el("h3", null, host == null ? "this machine" : host));
@@ -165,6 +166,68 @@ function waiting(model) {
     box.append(r);
   }
   if (!qs.length && !prs.length && !w.questions_error && !w.prs_error) box.append(el("p", "empty", "Nothing waits on you (read " + ago(model.age_s) + " ago)"));
+}
+
+// The drawer's answer controls. A read-only bridge draws none. One POST per
+// click: the buttons disable while it runs, and a refusal prints the bridge's
+// own line and frees them. Every string reaches the page through textContent.
+function answerSection(q) {
+  if (!canAnswer) return null;
+  const opts = q.options || [];
+  const rec = q.recommendation && q.recommendation.option;
+  const sec = el("div", "sec ans"), note = el("p", "note");
+  const controls = [];
+  const send = async (body) => {
+    controls.forEach((c) => { c.disabled = true; });
+    note.textContent = "Sending";
+    note.className = "note";
+    note.removeAttribute("role");
+    let res = null, text = "";
+    try {
+      res = await fetch((nav ? nav.dataset.base : "./") + "command/answer/" + encodeURIComponent(q.id) + "?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)});
+      text = (await res.text()).trim();
+    } catch (e) { text = String(e.message || e); }
+    if (res && res.ok) {
+      let receipt = {};
+      try { receipt = JSON.parse(text); } catch (e) { /* the 200 is the fact */ }
+      note.textContent = receipt.superseded ? "An earlier answer stands" : "Recorded. The row leaves Waiting on you.";
+      note.className = "note ok";
+      toast("Recorded");
+      answered.add(q.id);
+      if (lastModel) waiting(lastModel);
+      return;
+    }
+    note.textContent = text || "Refused (" + (res ? res.status : "no reply") + ")";
+    note.className = "note err";
+    note.setAttribute("role", "alert");
+    controls.forEach((c) => { c.disabled = false; });
+  };
+  const add = (c) => { controls.push(c); return c; };
+  sec.append(el("h3", null, "Answer"));
+  if (q.recommendation) sec.append(el("p", "note", "Recommended: option " + rec + (q.recommendation.why ? ". " + q.recommendation.why : "")));
+  const list = el("div", "opts");
+  const ordered = opts.slice().sort((a, b) => (b.n === rec) - (a.n === rec) || a.n - b.n);
+  for (const o of ordered) {
+    const b = add(el("button", "lkb", o.n + ". " + o.text + (o.n === rec ? " (recommended)" : "")));
+    b.onclick = () => send({option: o.n});
+    list.append(b);
+  }
+  if (q.kind === "pin") {
+    const b = add(el("button", "lkb", "Done"));
+    b.onclick = () => send({done: true});
+    list.append(b);
+  }
+  sec.append(list);
+  if (q.kind !== "pin") {
+    const words = add(el("textarea"));
+    words.setAttribute("aria-label", "Answer in words");
+    words.placeholder = opts.length ? "Or answer in your own words" : "Your answer";
+    const go = add(el("button", "lkb", "Send"));
+    go.onclick = () => { if (words.value.trim()) send({words: words.value}); };
+    sec.append(words, go);
+  }
+  sec.append(note);
+  return sec;
 }
 
 function openQuestion(q) {
@@ -197,7 +260,18 @@ function openQuestion(q) {
   // A row with a link offers Open, which opens it, and Copy, which copies
   // that same link minus the bridge token, never a command. A row with no
   // link reads as plain text with no buttons.
-  const row = (title, code, href) => {
+  const copyTo = (value, t) => {
+    const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(value) : Promise.reject(new Error("no clipboard"));
+    write.then(() => toast("Link copied"), () => {
+      const code = t.querySelector("code"), range = document.createRange();
+      code.textContent = value;
+      range.selectNodeContents(code);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      toast("Copy failed");
+    });
+  };
+  const row = (title, code, href, cmd) => {
     const d = el("div", "lk"), t = el("span", "lt");
     t.append(el("b", null, title), el("code", null, code));
     d.append(t);
@@ -207,18 +281,12 @@ function openQuestion(q) {
       if (u.protocol.startsWith("http")) u.searchParams.delete("t");
       const shared = u.href;
       if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
-      copy.onclick = () => {
-        const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(shared) : Promise.reject(new Error("no clipboard"));
-        write.then(() => toast("Link copied"), () => {
-          const code = t.querySelector("code"), range = document.createRange();
-          code.textContent = shared;
-          range.selectNodeContents(code);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          toast("Copy failed");
-        });
-      };
+      copy.onclick = () => copyTo(shared, t);
       d.append(open, copy);
+    } else if (cmd) {
+      const copy = el("button", "lkb", "Copy");
+      copy.onclick = () => copyTo(cmd, t);
+      d.append(copy);
     }
     links.append(d);
   };
@@ -226,12 +294,21 @@ function openQuestion(q) {
   // pane here the row says so, and the attach command still shows.
   if (q.watch_pane != null) row("Watch the session", "pane " + q.watch_pane, (nav ? nav.dataset.base : "./") + "?t=" + encodeURIComponent(token) + "&pane=" + q.watch_pane);
   else row("Watch the session", "session not on this bridge");
+  // The session the node came from, apart from the asker above: the live
+  // pane when this bridge serves it, else the copyable command or the reason.
+  const no = q.node_origin;
+  if (no) {
+    const what = "came from " + (no.harness || "session") + " " + no.session_id.slice(0, 8);
+    if (no.pane != null) row("Node origin session", what, (nav ? nav.dataset.base : "./") + "?t=" + encodeURIComponent(token) + "&pane=" + no.pane);
+    else row("Node origin session", no.command || (what + (no.reason ? " · " + no.reason : "")), null, no.command);
+  }
   const asker = o.name || o.handle;
   if (asker) row("Attach" + (q.host == null ? "" : " on " + q.host), "fno agents session attach " + asker);
   if (q.node) row("Trace", "trace · " + q.node, (nav ? nav.dataset.base : "./") + "trace?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(q.node));
   const open_sec = el("div", "sec");
   open_sec.append(el("h3", null, "Open"), links);
   document.getElementById("dbody").replaceChildren(...[
+    answerSection(q),
     sec("What was tried", q.tried),
     sec("Evidence", q.evidence),
     sec("Default on silence", [q.on_silence, q.deadline ? "at " + q.deadline : ""].filter(Boolean).join(" ")),
@@ -680,6 +757,8 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
+let canAnswer = false, lastModel = null;
+const answered = new Set();
 const nav = document.querySelector("nav.fno-nav");
 const token = new URLSearchParams(location.search).get("t") || "";
 const url = (nav ? nav.dataset.base : "./") + "command/model.json?t=" + encodeURIComponent(token);
@@ -691,6 +770,8 @@ async function load() {
     return;
   }
   const model = await res.json();
+  canAnswer = model.writable === true;
+  lastModel = model;
   header(model); banners(model); waiting(model); machines(model); seats(model);
   // A /command?question=<id> link opens that card once, after the first read.
   if (wantQuestion) {

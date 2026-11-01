@@ -1120,7 +1120,10 @@ pub(crate) fn global_settings_yaml_sibling() -> Option<PathBuf> {
 /// `None` walks on to the next. The FNO_CONFIG read is `var_os` so a
 /// non-UTF-8 pin reaches the reader exactly as it reaches every other
 /// consumer of that variable.
-fn resolve_config_key(cwd: &Path, from_file: &dyn Fn(&Path) -> Option<String>) -> Option<String> {
+pub(crate) fn resolve_config_key(
+    cwd: &Path,
+    from_file: &dyn Fn(&Path) -> Option<String>,
+) -> Option<String> {
     if let Some(explicit) = non_empty_env_os("FNO_CONFIG") {
         return from_file(&PathBuf::from(explicit));
     }

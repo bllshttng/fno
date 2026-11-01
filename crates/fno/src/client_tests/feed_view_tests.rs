@@ -339,7 +339,7 @@ fn hit_rows() {
     assert!(
         actions.iter().any(
             |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
-            if line == "fno agents adopt s-ghost")
+            if line == "fno agents registry adopt s-ghost")
         ),
         "the ghost session's link takes the adopt door: {actions:?}"
     );
@@ -481,10 +481,12 @@ fn click_rows() {
     let m = v.feed_detail.as_ref().unwrap();
     assert!(m.actions.iter().any(
         |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
-            if line == "fno agents adopt s-3")
+            if line == "fno agents registry adopt s-3")
     ));
     assert!(
-        m.values.iter().any(|v| v == "fno agents adopt s-3"),
+        m.values
+            .iter()
+            .any(|v| v == "fno agents registry adopt s-3"),
         "y copies the adopt command: {:?}",
         m.values
     );

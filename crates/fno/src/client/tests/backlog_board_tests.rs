@@ -1147,7 +1147,7 @@ fn detail_field_labels_go_dim_and_values_stay_normal() {
     );
     assert_eq!(field.roles[colon + 2], BRole::Body, "value stays normal");
     let sid = "4d4ea752-1063-4515-8366-b9946ed8f64d";
-    let adopt = format!("$ fno agents adopt {sid}");
+    let adopt = format!("$ fno agents registry adopt {sid}");
     assert!(
         lines.iter().any(|l| l.trim() == sid),
         "the session row shows the full id"

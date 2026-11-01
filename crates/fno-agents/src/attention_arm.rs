@@ -1762,6 +1762,31 @@ pub(crate) fn append_answer_row(
     mapped_by: &str,
     attested_by: &str,
 ) -> Result<(String, bool), String> {
+    append_answer_row_stamped(
+        home,
+        item_id,
+        sink,
+        answer,
+        authority,
+        mapped_by,
+        attested_by,
+        None,
+    )
+}
+
+/// [`append_answer_row`] with the answering login. A row from the command
+/// page carries `email`, and `person` is that login, since an invite has no
+/// other name. Without a login the row keeps the machine's own person.
+pub(crate) fn append_answer_row_stamped(
+    home: &crate::paths::AgentsHome,
+    item_id: &str,
+    sink: &str,
+    answer: &crate::attention_file::FileAnswer,
+    authority: &str,
+    mapped_by: &str,
+    attested_by: &str,
+    email: Option<&str>,
+) -> Result<(String, bool), String> {
     let (option, words, done) = match answer {
         crate::attention_file::FileAnswer::Option(n) => (Some(*n as i64), String::new(), false),
         crate::attention_file::FileAnswer::Words(w) => (None, w.clone(), false),
@@ -1841,6 +1866,11 @@ pub(crate) fn append_answer_row(
         )),
     );
     fields.insert("decision_id".into(), serde_json::Value::Null);
+    if let Some(login) = email {
+        fields.insert("email".into(), serde_json::Value::from(login));
+        fields.insert("person".into(), serde_json::Value::from(login));
+    }
+    crate::identity::stamp_person(&mut fields);
     // The row is the durable half of the contract: a commit that fails must
     // fail the record so the settle state never marks it recorded.
     crate::events::EventEmitter::new(&path, "daemon")

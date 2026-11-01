@@ -425,6 +425,25 @@ pub struct SessionView {
     pub command: Option<String>,
 }
 
+/// The session a node was filed from, with the one way to reach it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct OriginSession {
+    pub session_id: String,
+    pub harness: Option<String>,
+    pub cwd: Option<String>,
+    /// The session that spawned the origin session, when the row names one.
+    pub parent_session: Option<String>,
+    /// The joined roster row's name, when the join held.
+    pub agent: Option<String>,
+    /// The live pane serving this session on the local roster. The web page
+    /// links its own pane view with it; `None` means no live view here.
+    pub pane: Option<u64>,
+    /// `attach`, `resume` or `none`, as for a [`SessionView`].
+    pub action: String,
+    pub reason: Option<String>,
+    pub command: Option<String>,
+}
+
 /// A PR bound to a node.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Pr {
@@ -482,6 +501,8 @@ pub struct NodeView {
     /// The row's `source_kind` (who asked for it) and its evidence line.
     pub origin: Option<String>,
     pub origin_evidence: Option<String>,
+    /// The session the node came from (`source_session_id`).
+    pub origin_session: Option<OriginSession>,
     pub children: Vec<Link>,
     pub contained: Vec<Link>,
     pub blocked_by: Vec<Link>,
@@ -1373,24 +1394,7 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
                     .iter()
                     .find(|a| a.harness_session_id.as_deref() == Some(sid))
             });
-            let act = session_action(joined);
-            let (action, reason) = match &act {
-                SessionAction::Attach => ("attach", None),
-                SessionAction::Resume => ("resume", None),
-                SessionAction::Dim(why) => ("none", Some(why.clone())),
-            };
-            let command = match &act {
-                SessionAction::Attach => joined.map(|a| format!("fno agents attach {}", a.name)),
-                SessionAction::Resume => {
-                    sid.map(|sid| session_command("resume", sid, node_cwd.as_deref()))
-                }
-                // A session the registry lacks: adopt is the reach that
-                // heals the row from the harness stores.
-                SessionAction::Dim(_) if joined.is_none() => {
-                    sid.map(|sid| session_command("adopt", sid, None))
-                }
-                SessionAction::Dim(_) => None,
-            };
+            let (action, reason, command) = session_reach(joined, sid, node_cwd.as_deref());
             let model = s
                 .get("observed_model")
                 .and_then(|m| m.get("model"))
@@ -1411,7 +1415,7 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 agent: joined.map(|a| a.name.clone()),
-                action: action.to_string(),
+                action,
                 reason,
                 command,
             }
@@ -1555,6 +1559,7 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
         completed_at: str_field("completed_at"),
         origin: str_field("source_kind"),
         origin_evidence: str_field("origin_evidence"),
+        origin_session: origin_session_of(inp, e),
     })
 }
 
@@ -1768,6 +1773,64 @@ pub(crate) fn session_action(a: Option<&AgentRow>) -> SessionAction {
     SessionAction::Dim("not resumable".into())
 }
 
+/// The action cell for one session: `(action, dim reason, shell line)`.
+/// Attach a live row, resume a registry row that is not live, adopt a
+/// session the registry lacks.
+fn session_reach(
+    joined: Option<&AgentRow>,
+    sid: Option<&str>,
+    cwd: Option<&str>,
+) -> (String, Option<String>, Option<String>) {
+    let act = session_action(joined);
+    let (action, reason) = match &act {
+        SessionAction::Attach => ("attach", None),
+        SessionAction::Resume => ("resume", None),
+        SessionAction::Dim(why) => ("none", Some(why.clone())),
+    };
+    let command = match &act {
+        SessionAction::Attach => joined.map(|a| format!("fno agents session attach {}", a.name)),
+        SessionAction::Resume => sid.map(|sid| session_command("resume", sid, cwd)),
+        SessionAction::Dim(_) if joined.is_none() => {
+            sid.map(|sid| session_command("adopt", sid, None))
+        }
+        SessionAction::Dim(_) => None,
+    };
+    (action.to_string(), reason, command)
+}
+
+/// The session a row was filed from, or `None` when the row names none.
+pub(crate) fn origin_session_of(inp: &Inputs, e: &Value) -> Option<OriginSession> {
+    let field = |k: &str| {
+        e.get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let sid = field("source_session_id")?;
+    let joined = inp
+        .agents
+        .iter()
+        .find(|a| a.harness_session_id.as_deref() == Some(sid.as_str()));
+    let cwd = field("source_cwd").or_else(|| field("cwd"));
+    let (action, reason, command) = session_reach(joined, Some(&sid), cwd.as_deref());
+    Some(OriginSession {
+        harness: field("source_harness"),
+        parent_session: field("source_parent_session"),
+        agent: joined.map(|a| a.name.clone()),
+        pane: joined.filter(|a| !a.exited).and_then(|a| a.pane_id),
+        cwd,
+        action,
+        reason,
+        command,
+        session_id: sid,
+    })
+}
+
+/// The origin session of the row `id` names.
+pub(crate) fn origin_session_for(inp: &Inputs, id: &str) -> Option<OriginSession> {
+    origin_session_of(inp, resolve_row(inp, id)?)
+}
+
 /// What opening one session does, the ONE answer every surface shares (the
 /// provenance popup today; the backlog board, the questions overlay and
 /// the sideline are the surfaces wired to the same step next). Derived from
@@ -1788,7 +1851,12 @@ pub(crate) enum OpenSession {
 /// pinned to `cwd` when the caller knows one. The ONE
 /// spelling both [`SessionView`] and [`open_session`] print.
 fn session_command(command: &str, sid: &str, cwd: Option<&str>) -> String {
-    let mut cmd = format!("fno agents {command} {sid}");
+    let group = if command == "adopt" {
+        "registry"
+    } else {
+        "session"
+    };
+    let mut cmd = format!("fno agents {group} {command} {sid}");
     if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
         cmd.push_str(&format!(" --cwd {}", sh_quote(cwd)));
     }
