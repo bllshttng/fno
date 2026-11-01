@@ -155,3 +155,7 @@ What the column still does not answer is whether a pane is idle or safe to reuse
 **Making `live-miss` say busy versus absent.** Measured: two sends to one codex worker both returned `live-miss`. `fno mux pane read` showed that same worker `Working`. The receipt conflates a busy peer with an unreachable one, and those demand opposite responses. It changes what the liveness PROBE MEASURES, upstream of every transport, so it belongs in its own node. What lands here against that finding is `--force`. A reader who misreads `live-miss` as dead now reaches for a command that keeps the envelope, the id, the reply handle, and the outbox row.
 
 **A cryptographic trust boundary on the envelope.** The envelope is metadata. A model can ignore it. This is prompt-level enforcement, which is what is being bought.
+
+## Latency
+
+Keypress-to-echo numbers, and what a flooding sibling pane costs, live in [mux feel](mux-feel.md).
