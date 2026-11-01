@@ -671,6 +671,28 @@ pub fn read_all_agents_union() -> ClaudeAgentsSnapshot {
     }
 }
 
+/// The short ids whose harness row reads `blocked` - claude's usage-lockout
+/// state. Positive readings only: a row FOUND carrying that state is
+/// evidence, but a failed root poisons absence, never presence, so the
+/// union's rows are read even when a root failed to parse.
+pub fn read_blocked_short_ids() -> std::collections::HashSet<String> {
+    blocked_short_ids_from_rows(&read_all_agents_union())
+}
+
+pub(crate) fn blocked_short_ids_from_rows(
+    snapshot: &ClaudeAgentsSnapshot,
+) -> std::collections::HashSet<String> {
+    let rows = match snapshot {
+        ClaudeAgentsSnapshot::Known { rows, .. } | ClaudeAgentsSnapshot::Unknown { rows, .. } => {
+            rows
+        }
+    };
+    rows.iter()
+        .filter(|row| row.state.as_deref() == Some("blocked"))
+        .map(|row| row.short_id.clone())
+        .collect()
+}
+
 /// Env override that redirects the whole Claude daemon dir (tests, and operators
 /// who run Claude with a non-default home). When unset, `$HOME/.claude/daemon`.
 pub const DAEMON_DIR_ENV: &str = "FNO_CLAUDE_DAEMON_DIR";
@@ -1377,6 +1399,32 @@ config_dir = "dir-c"
         assert_eq!(
             out[2],
             ("gamma".to_string(), std::path::PathBuf::from("dir-c"))
+        );
+    }
+
+    // The blocked join reads only POSITIVE evidence: a row found carrying
+    // state `blocked` enters the set. A failed root (Unknown) still carries
+    // parsed rows, and a blocked row in them is still positive evidence;
+    // absence never manufactures a member.
+    #[test]
+    fn blocked_short_ids_read_positive_only() {
+        let snapshot = ClaudeAgentsSnapshot::known(vec![
+            ClaudeAgentRow::new("deadbeef", Some("blocked")),
+            ClaudeAgentRow::new("c0ffee00", Some("working")),
+        ]);
+        let blocked = blocked_short_ids_from_rows(&snapshot);
+        assert_eq!(blocked.len(), 1);
+        assert!(blocked.contains("deadbeef"));
+
+        let snapshot = ClaudeAgentsSnapshot::Unknown {
+            rows: vec![ClaudeAgentRow::new("deadbeef", Some("blocked"))],
+            warnings: vec!["a root failed".into()],
+        };
+        let blocked = blocked_short_ids_from_rows(&snapshot);
+        assert_eq!(
+            blocked.len(),
+            1,
+            "a found row counts whatever the union verdict is"
         );
     }
 }

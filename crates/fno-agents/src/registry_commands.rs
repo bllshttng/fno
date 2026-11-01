@@ -94,7 +94,11 @@ pub(crate) fn role_text(row: &Value) -> Option<String> {
 fn live_status_word(state: &str) -> String {
     match state.trim().to_ascii_lowercase().as_str() {
         "working" | "busy" | "live" | "spawning" | "restarting" => "Working".into(),
-        "blocked" | "needs input" => "Needs input".into(),
+        "needs input" => "Needs input".into(),
+        // claude's usage-lockout state renders as itself: the census and
+        // the slot count read the same word, so two surfaces cannot
+        // disagree about the same session.
+        "blocked" => "blocked".into(),
         "idle" | "ready" => "Idle".into(),
         "done" | "failed" | "stopped" => "Done".into(),
         _ => state.to_string(),

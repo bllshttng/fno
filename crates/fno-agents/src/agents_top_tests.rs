@@ -55,7 +55,14 @@ fn the_census_dedups_the_roster_and_keeps_each_liveness_arm() {
         _ => Some(false),
     };
     let claim = |name: &str| name == "t-x-1234-sol";
-    let c = census(&roster, &rows, &state, &claim, chrono::Utc::now());
+    let c = census(
+        &roster,
+        &rows,
+        &state,
+        &claim,
+        &HashSet::new(),
+        chrono::Utc::now(),
+    );
 
     let names: Vec<&str> = c.workers.iter().map(|w| w.name.as_str()).collect();
     assert_eq!(
@@ -200,6 +207,7 @@ fn worker_rows_carry_seat_facts_and_null_when_unread() {
         crate::truth_probe::BatchOutcome::Measured,
         &Map::new(),
         &BTreeMap::new(),
+        &HashSet::new(),
     );
     let seat = out.iter().find(|r| r["name"] == "sorrel").unwrap();
     assert_eq!(seat["model"], "sonnet");
@@ -288,6 +296,7 @@ fn the_row_takes_the_registry_name_it_joins() {
         crate::truth_probe::BatchOutcome::Measured,
         &Map::new(),
         &BTreeMap::new(),
+        &HashSet::new(),
     );
     let joined = &out[0];
     assert_eq!(joined["name"], "lenore");
@@ -296,4 +305,74 @@ fn the_row_takes_the_registry_name_it_joins() {
         "the handle never repeats the display name"
     );
     assert_eq!(out[1]["name"], "zzzz9999", "unjoined keeps the short id");
+}
+
+/// A roster session the harness reports blocked keeps its pid and its row,
+/// but its stored token reads blocked, not live: the census no longer
+/// scores the retry loop as activity.
+#[test]
+fn a_harness_blocked_roster_row_reads_blocked_not_live() {
+    let roster = vec![roster_worker(
+        "aaaa1111-0000-0000-0000-000000000000",
+        100,
+        101,
+    )];
+    let rows: Vec<RegistryEntry> = Vec::new();
+    let state = |pid: u32, _: Option<u64>| (pid == 100).then_some(true);
+    let claim = |_: &str| false;
+    let mut blocked = HashSet::new();
+    blocked.insert("aaaa1111".to_string());
+    let c = census(&roster, &rows, &state, &claim, &blocked, chrono::Utc::now());
+    assert_eq!(
+        c.workers.len(),
+        1,
+        "the row stays: its pid exists and is reap-exempt"
+    );
+    assert_eq!(c.workers[0].stored_status, "blocked");
+    assert_eq!(
+        c.workers[0].status_basis.as_deref(),
+        Some("claude agents state"),
+    );
+}
+
+/// The STATUS column says blocked for a harness-blocked row even when the
+/// transcript age is fresh: the retry's limit error must not read as
+/// writing. The stored-live word alone would render writing here.
+#[test]
+fn the_status_column_says_blocked_over_a_fresh_transcript_age() {
+    let mut entry = row("sorrel", AgentStatus::Live);
+    entry.short_id = "aaaa1111".into();
+    let worker = Worker {
+        source: "fno",
+        name: "sorrel".into(),
+        harness: "claude".into(),
+        substrate: "pane".into(),
+        pid: None,
+        session_pid: None,
+        stored_status: "live".into(),
+        status_basis: None,
+        session_id: Some("aaaa1111-0000-0000-0000-000000000000".into()),
+        spawned_by: None,
+        entry: Some(0),
+    };
+    let mut blocked = HashSet::new();
+    blocked.insert("aaaa1111".to_string());
+    let c = Census {
+        workers: vec![worker],
+        ..Default::default()
+    };
+    let out = worker_rows(
+        &c,
+        &[entry],
+        &HashMap::new(),
+        crate::truth_probe::BatchOutcome::Measured,
+        &Map::new(),
+        &BTreeMap::new(),
+        &blocked,
+    );
+    assert_eq!(out[0]["status"], "blocked");
+    assert_eq!(
+        out[0]["stored_status"], "live",
+        "the stored token is untouched; the render arm carries the override"
+    );
 }
